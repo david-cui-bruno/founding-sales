@@ -35,6 +35,7 @@ export const JOB_KINDS = [
   'sourcing.check',
   'sourcing.qualify',
   'outreach.reply',
+  'outreach.email_admit',
   'social.draft',
   'social.assets_cleanup',
   'sourcing.monitor',
@@ -117,6 +118,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'sourcing.check': 'business_uniqueness',
   'sourcing.qualify': 'outbound_fence',
   'outreach.reply': 'outbound_fence',
+  'outreach.email_admit': 'outbound_fence',
   'social.draft': 'outbound_fence',
   'social.assets_cleanup': 'business_uniqueness',
   'sourcing.discover': 'outbound_fence',
@@ -169,6 +171,7 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
+  automaticEmail: (revision:number,at:string):string => `automatic-email:${String(revision)}:${hourOf(at)}`,
   sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
   meetingAnalyze: (meetingId: string, notes: number, transcript: number): string => `meeting-analyze:${meetingId}:n${String(notes)}:t${String(transcript)}`,
@@ -334,6 +337,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'sourcing.check': 'bulk',
   'sourcing.qualify': 'bulk',
   'outreach.reply': 'urgent',
+  'outreach.email_admit': 'bulk',
   'social.draft': 'bulk',
   'social.assets_cleanup': 'bulk',
   'sourcing.monitor': 'bulk',

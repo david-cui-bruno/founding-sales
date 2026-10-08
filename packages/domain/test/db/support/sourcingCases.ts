@@ -51,7 +51,7 @@ async function admissionRow(f:Fixture,overrides:Record<string,unknown>={}) {
  return f.session.query(`INSERT INTO sourcing_admissions(${Object.keys(row).join(',')}) VALUES($1,$2,$3,$4,$5)`,Object.values(row));
 }
 const qualificationChecks:readonly [string,Record<string,unknown>][]=[
- ['candidate_revision_check',{candidate_revision:0}],['fingerprint_check',{fingerprint:'bad'}],
+ ['candidate_revision_check',{candidate_revision:0}],['email_admission_attempts_check',{email_admission_attempts:8}],['fingerprint_check',{fingerprint:'bad'}],
  ['prompt_version_check',{prompt_version:''}],['policy_version_check',{policy_version:''}],
  ['state_check',{state:'approved'}],['reason_check',{reason:''}],
  ['observations_check',{observations:'{}'}],['observations_check',{observations:JSON.stringify(['x'.repeat(131073)])}],

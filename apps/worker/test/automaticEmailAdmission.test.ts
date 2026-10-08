@@ -4,8 +4,8 @@ import {createTestDatabase,type TestDatabase} from '@fss/domain/db/testing/testD
 import {seedTwoWorkspaces,type TwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {listFirmsForActor} from '@fss/domain/crm/dto.ts';
-import {admitAutomaticEmailProspect} from '../src/handlers/emailAdmission.ts';
-import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {admitAutomaticEmailProspect,runAutomaticEmailBatch} from '../src/handlers/emailAdmission.ts';
+import {withTransaction,type QueryResultRowLike} from '@fss/domain/db/queryable.ts';
 import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
 import {requestQualification,finishQualification} from '@fss/domain/sourcing/qualificationStore.ts';
 import {evaluateQualification} from '@fss/domain/sourcing/qualificationDecision.ts';
@@ -40,15 +40,17 @@ async function configureFutureActivation(){
  await db.session.query('ALTER TABLE outreach_email_admission_settings DROP CONSTRAINT outreach_email_admission_settings_enabled_check');
  await db.session.query('UPDATE outreach_email_admission_settings SET enabled=true WHERE workspace_id=$1',[seeded.alpha.workspaceId]);
 }
-async function qualified(name:string,options:{need?:string;retrievedAt?:string;truncated?:boolean}={}){
+async function qualified(name:string,options:{need?:string;needKind?:string;publishedAt?:string|null;retrievedAt?:string;truncated?:boolean;phone?:boolean;named?:boolean}={}){
  const website=`https://${name.toLowerCase().replaceAll(' ','')}.example.test/`;
  const candidate=await tx(()=>saveCandidate(admin(),{firmName:name,website,locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Residential management',sourceUrl:website,observedOn:new Date().toISOString().slice(0,10),preparedBy:'Fixture'}));if(!candidate.ok)throw new Error(candidate.reason);
  const request=await tx(()=>requestQualification(admin(),{candidateId:candidate.value.id,expectedRevision:1}));if(!request.ok)throw new Error(request.reason);
- const id=randomUUID(),blocks=[{id:'firm',text:`${name} is a residential property management company in Dallas, Texas.`},{id:'email',text:`${name} Dallas TX office info@${new URL(website).hostname}`}];
- if(options.need)blocks.push({id:'need',text:options.need});
+ const id=randomUUID(),blocks=[{id:'firm',text:`${name} is a residential property management company in Dallas, Texas.`},{id:'email',text:`${name} Dallas TX ${options.named?'contact Jane Smith at jane@':'office info@'}${new URL(website).hostname}`}];
+ if(options.phone)blocks.push({id:'phone',text:`${name} Dallas TX office (214) 555-0100`});
+ if(options.need)blocks.push({id:'need',text:options.need+(options.publishedAt?' Published '+options.publishedAt.slice(0,10):'')});
  const facts=[['firm_identity','firm'],['residential_management','firm'],['service_area','firm'],['business_email','email']].map(([kind,blockId])=>({kind,blockId,observationId:id,value:blocks.find(b=>b.id===blockId)!.text}));
- if(options.need)facts.push({kind:'operational_burden',blockId:'need',observationId:id,value:options.need});
- const finished=await tx(()=>finishQualification(admin(),{runId:request.value.runId,reason:null,observations:[{id,url:website,contentHash:'c'.repeat(64),relevantTextHash:'d'.repeat(64),retrievedAt:options.retrievedAt??new Date().toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:options.truncated??false,blocks}],facts}));if(!finished.ok)throw new Error(finished.reason);
+ if(options.phone)facts.push({kind:'business_phone',blockId:'phone',observationId:id,value:blocks.find(b=>b.id==='phone')!.text});
+ if(options.need)facts.push({kind:options.needKind??'operational_burden',blockId:'need',observationId:id,value:options.need});
+ const finished=await tx(()=>finishQualification(admin(),{runId:request.value.runId,reason:null,observations:[{id,url:website,contentHash:'c'.repeat(64),relevantTextHash:'d'.repeat(64),retrievedAt:options.retrievedAt??new Date().toISOString(),publishedAt:options.publishedAt??null,publishedAtBlockId:options.publishedAt?'need':null,firstParty:true,truncated:options.truncated??false,blocks}],facts}));if(!finished.ok)throw new Error(finished.reason);
  await tx(()=>evaluateQualification(admin(),{runId:request.value.runId}));
  return {candidateId:candidate.value.id,qualificationRunId:request.value.runId,expectedRevision:1,expectedControlRevision:2};
 }
@@ -272,4 +274,181 @@ it('serializes sequence retirement with admission through the entire enrollment 
  }finally{await db.session.query('SELECT pg_advisory_unlock(420)');await Promise.allSettled([admission,...(retirement?[retirement]:[])]);}
  expect(await admission).toMatchObject({ok:true});expect(await retirement).toMatchObject({ok:true});
  expect(await listEnrollments(worker())).toHaveLength(1);
+});
+
+it('runs no automatic batch while activation is disabled',async()=>{
+ const before=await listFirmsForActor(worker());
+ expect(await runAutomaticEmailBatch(worker(),0)).toMatchObject({reason:'automatic_email_disabled',admitted:[]});
+ expect(await listFirmsForActor(worker())).toEqual(before);
+});
+it('ranks email fit before spending the last slot, including call-review prospects',async()=>{
+ await configureFutureActivation();
+ await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=1,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
+ await qualified('A Fit Office');
+ const burden=await qualified('Z Burden Office',{need:'Our maintenance team is overwhelmed by work orders and vendor follow-up.'});
+ const batch=await runAutomaticEmailBatch(worker(),2);
+ expect(batch.admitted).toMatchObject([{candidateId:burden.candidateId}]);
+ expect(batch.reason).toBe('mailbox_capacity_exhausted');
+ expect(await listEnrollments(worker())).toHaveLength(1);
+});
+it('does not keep retrying permanent uncertainty on unchanged evidence',async()=>{
+ await configureFutureActivation();await qualified('Contrary Batch',{need:'We do not need maintenance help.'});
+ const first=await runAutomaticEmailBatch(worker(),2);
+ expect(first).toMatchObject({checked:1,deferred:[{reason:'need_evidence_conflicts'}],admitted:[]});
+ expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
+});
+it('schedules one workspace batch on repeated passes and runs it without a research provider',async()=>{
+ await configureFutureActivation();const prospect=await qualified('Scheduled Review Fit');
+ const {runSchedulerPass}=await import('../src/scheduler/schedulerPass.ts');
+ const {automaticEmailSource}=await import('../src/handlers/emailAdmission.ts');
+ const {HandlerRegistry}=await import('@fss/domain/jobs/handlerRegistry.ts');
+ const {registerHandlers}=await import('../src/bootstrap/main.ts');
+ const {runOnce}=await import('../src/runner/jobRunner.ts');
+ const now=new Date().toISOString();
+ const options={sources:[automaticEmailSource()],now};
+ expect(await runSchedulerPass(db.session,options)).toMatchObject({inserted:1,externalActions:0});
+ expect(await runSchedulerPass(db.session,options)).toMatchObject({inserted:0,externalActions:0});
+ const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
+ expect(await runOnce(db.session,{registry,owner:'email-test',classes:['bulk'],limit:1})).toMatchObject({completed:1});
+ expect(await listEnrollments(worker())).toHaveLength(1);
+ expect((await runAutomaticEmailBatch(worker(),2)).admitted).toEqual([]);
+ expect(prospect.candidateId).toBeTruthy();
+});
+it('does not build a second batch behind a queued or retryable worker job',async()=>{
+ await configureFutureActivation();await qualified('Pending Batch Fit');
+ const {runSchedulerPass}=await import('../src/scheduler/schedulerPass.ts');
+ const {automaticEmailSource}=await import('../src/handlers/emailAdmission.ts');
+ const now=new Date().toISOString();
+ expect(await runSchedulerPass(db.session,{sources:[automaticEmailSource()],now})).toMatchObject({inserted:1});
+ const later=new Date(Date.now()+2*3600000).toISOString();
+ expect(await runSchedulerPass(db.session,{sources:[automaticEmailSource()],now:later})).toMatchObject({inserted:0});
+});
+it.each([null,new Date(Date.now()-100*86400000).toISOString()])('downgrades unknown or expired help dates before ranking despite a supported phone (%s)',async publishedAt=>{
+ await configureFutureActivation();
+ await qualified('A Undated Help',{need:'We need help with maintenance coordination.',needKind:'help_request',phone:true,publishedAt});
+ const burden=await qualified('Z Current Burden',{need:'Our maintenance team is overwhelmed by work orders.'});
+ await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=1,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
+ expect((await runAutomaticEmailBatch(worker(),2)).admitted).toMatchObject([{candidateId:burden.candidateId}]);
+});
+it('bounds temporary refusal checks and permits recovery when the hold is released',async()=>{
+ await configureFutureActivation();const prospect=await qualified('Held Batch Office');
+ const {openHold,releaseHold}=await import('@fss/domain/policy/holds.ts');
+ const hold=await tx(()=>openHold(worker(),{scopeKind:'workspace',reasonCode:'scoped_pause',blockedActionKinds:['email_send'],sourceEventKind:'administrative_pause'}));
+ expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:1,reason:'sender_unhealthy',admitted:[]});
+ expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
+ await tx(()=>releaseHold(worker(),hold));
+ await db.session.query("UPDATE sourcing_qualification_runs SET email_admission_next_at=now()-interval '1 minute' WHERE id=$1",[prospect.qualificationRunId]);
+ expect((await runAutomaticEmailBatch(worker(),2)).admitted).toMatchObject([{candidateId:prospect.candidateId}]);
+});
+
+async function preparedAutomaticSender(){
+ await configureFutureActivation();const input=await qualified('Sender Office PM');
+ const result=await admitAutomaticEmailProspect(worker(),input);if(!result.ok)throw new Error(result.reason);
+ const {recordEmailRouteValidation}=await import('@fss/domain/crm/routes.ts');
+ await tx(()=>recordEmailRouteValidation(admin(),{routeId:result.value.routeId,routeVersion:1,technicalValidation:'passed',vouchedConfidence:null,detail:{fixture:true}}));
+ const [step]=await listStepExecutions(worker(),{enrollmentId:result.value.enrollmentId});if(!step)throw new Error('missing step');
+ const at=new Date(Date.parse(step.dueAt)+60000).toISOString();
+ const {storeFixtureCiGateRecord,FIXTURE_WORKER_DIGEST,FIXTURE_CI_COMMIT}=await import('@fss/domain/test/release/support/releaseRecords.ts');
+ const {ciGateReleaseReference}=await import('@fss/contracts');
+ await storeFixtureCiGateRecord(db.session,'41000000921');
+ await db.session.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note,changed_by_user_id) VALUES($1,'sending_enabled',1,$2::jsonb,'sender fixture',$3)",[seeded.alpha.workspaceId,JSON.stringify({enabled:true,releaseGateReference:ciGateReleaseReference('41000000921',FIXTURE_CI_COMMIT)}),seeded.alpha.admin.userId]);
+ const {recordedGmailClient}=await import('@fss/domain/mail/gmailClientFake.ts');
+ const {localEnvelopeCipher}=await import('@fss/domain/mail/envelope.ts');
+ const {storeRefreshToken}=await import('@fss/domain/mail/tokens.ts');
+ const {mailConfig}=await import('@fss/domain/test/mail/support/mailWorld.ts');
+ const cipher=localEnvelopeCipher();
+ await storeRefreshToken(worker(),{mailboxId,plaintext:randomUUID(),cipher});
+ const gmail=recordedGmailClient({emailAddress:'owner@example.test',historyId:'123',messages:[]});
+ const deps={gmail,cipher,oauth:{...mailConfig(),clientSecret:randomUUID()},deploymentSendingEnabled:true,workerImageDigest:FIXTURE_WORKER_DIGEST,now:()=>new Date(at)};
+ const {outboundSendHandoff}=await import('../src/handlers/outboundSendHandoff.ts');
+ const {runDueStepExecution}=await import('@fss/domain/sequences/executions.ts');
+ const {composeEligibility}=await import('@fss/domain/sequences/eligibility.ts');
+ // Freeze only the database clock query; every business query still uses the real session.
+ const timed=repositoryContext(worker().scope,{query:async <Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[])=>sql==='SELECT now() AS now'?{rows:[{now:new Date(at)} as unknown as Row],rowCount:1}:db.session.query<Row>(sql,values)});
+ const prepared=await tx(()=>runDueStepExecution(timed,{stepExecutionId:step.id,now:at,eligibility:composeEligibility(),sendHandoff:outboundSendHandoff({deps})}));
+ expect(prepared,JSON.stringify(prepared)).toMatchObject({kind:'handed_to_send'});
+ if(prepared.kind!=='handed_to_send')throw new Error(prepared.kind);
+ return {...result.value,step,at,gmail,deps,timed,fenceId:prepared.outboundMessageId};
+}
+it('dispatches an automatically admitted enrollment once through the existing sender',async()=>{
+ const f=await preparedAutomaticSender();
+ const {dispatchOutboundMessage}=await import('@fss/domain/outbound/send.ts');
+ const sent=await dispatchOutboundMessage(f.timed,f.deps,{outboundMessageId:f.fenceId});
+ expect(sent,JSON.stringify(sent)).toMatchObject({outcome:'sent'});
+ await dispatchOutboundMessage(f.timed,f.deps,{outboundMessageId:f.fenceId});
+ expect(f.gmail.sends).toHaveLength(1);
+});
+it.each(['route','cap','sending_disabled'] as const)('rechecks %s at dispatch for an automatic enrollment and makes zero Gmail calls',async change=>{
+ const f=await preparedAutomaticSender();
+ if(change==='route'){
+  const {verifyRoute}=await import('@fss/domain/crm/routes.ts');
+  expect(await tx(()=>verifyRoute(admin(),{routeKind:'email',routeId:f.routeId,technicalValidation:'failed'}))).toMatchObject({ok:true});
+ }else if(change==='cap')await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=0,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
+ else await db.session.query('UPDATE sending_domains SET automated_sending_enabled=false,automated_sending_enabled_at=NULL WHERE workspace_id=$1',[seeded.alpha.workspaceId]);
+ const {dispatchOutboundMessage}=await import('@fss/domain/outbound/send.ts');
+ const sent=await dispatchOutboundMessage(f.timed,f.deps,{outboundMessageId:f.fenceId});
+ expect(sent,JSON.stringify(sent)).toMatchObject({outcome:'held',refusal:change==='route'?'route_invalid':change==='cap'?'daily_cap':'automated_sending_disabled'});
+ expect(f.gmail.sends).toHaveLength(0);
+});
+it.each(['reply','booking','opt_out'] as const)('interrupts automatic enrollment on %s before dispatch, with zero Gmail calls',async change=>{
+ const f=await preparedAutomaticSender();
+ if(change==='booking'){
+  const {receiveCalcomEvent}=await import('@fss/domain/meetings/calcom.ts');
+  const body={triggerEvent:'BOOKING_CREATED',createdAt:new Date().toISOString(),payload:{uid:randomUUID(),startTime:f.at,endTime:new Date(Date.parse(f.at)+1800000).toISOString(),organizer:{email:'owner@example.test'},attendees:[{email:'info@senderofficepm.example.test',name:'Office'}]}};
+  await tx(()=>receiveCalcomEvent(db.session,{workspaceId:seeded.alpha.workspaceId,rawBody:Buffer.from(JSON.stringify(body)),body}));
+  expect(await readOutreachPlan(worker(),f.planId)).toMatchObject({state:'booked'});
+ }else{
+  const {recordMessage}=await import('@fss/domain/mail/messages.ts');
+  const {findMatchCandidates,recordMatches}=await import('@fss/domain/mail/matching.ts');
+  const {applyClassificationEffects,recordDeterministicClassification}=await import('@fss/domain/mail/effects.ts');
+  const {recordingSuppressionJournal}=await import('@fss/domain/suppression/journal.ts');
+  const {recordingReplyPromoter}=await import('@fss/domain/mail/replyLane.ts');
+  const metadata={providerMessageId:randomUUID(),providerThreadId:randomUUID(),rfcMessageId:`${randomUUID()}@example.test`,direction:'incoming' as const,internalDate:new Date().toISOString(),headerFrom:'info@senderofficepm.example.test',headerTo:['owner@example.test'],headerCc:[],subject:'Re: Maintenance',referenceMessageIds:[],inReplyTo:null,autoSubmitted:null,listId:null,labelIds:[],attachments:[]};
+  const m=await tx(()=>recordMessage(worker(),{mailboxId,metadata}));
+  const candidates=await findMatchCandidates(worker(),{mailboxId,messageId:m.message.id,metadata});
+  const classification={messageId:m.message.id,class:change==='reply'?'human' as const:'opt_out' as const,suggestedDisposition:null,signals:[],requiresConfirmation:false};
+  await tx(async()=>{await recordMatches(worker(),{messageId:m.message.id,candidates});await recordDeterministicClassification(worker(),{messageId:m.message.id,classification});await applyClassificationEffects(worker(),{message:m.message,classification,candidates,journal:recordingSuppressionJournal(),replyPromoter:recordingReplyPromoter()});});
+ }
+ const {dispatchOutboundMessage}=await import('@fss/domain/outbound/send.ts');
+ expect(await dispatchOutboundMessage(f.timed,f.deps,{outboundMessageId:f.fenceId})).toMatchObject({outcome:'held'});
+ expect(f.gmail.sends).toHaveLength(0);
+ if(change!=='opt_out')expect(await readEnrollment(worker(),{enrollmentId:f.enrollmentId})).toMatchObject({endReason:change==='reply'?'human_reply':'engaged_call'});
+});
+it('exhausts seven hourly capacity checks without buying research or accumulating new enrollments',async()=>{
+ await configureFutureActivation();const prospect=await qualified('Bounded Capacity');
+ await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=0,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
+ for(let i=0;i<7;i++){
+  const report=await runAutomaticEmailBatch(worker(),2);
+  expect(report).toMatchObject({checked:1,admitted:[],deferred:[{reason:i===6?'rechecks_exhausted':'mailbox_capacity_exhausted'}]});
+  await db.session.query("UPDATE sourcing_qualification_runs SET email_admission_next_at=CASE WHEN email_admission_next_at IS NOT NULL THEN now()-interval '1 minute' ELSE NULL END WHERE id=$1",[prospect.qualificationRunId]);
+ }
+ expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
+ expect(await listEnrollments(worker())).toHaveLength(0);
+});
+it('prefers a supported named contact after equal rank, corroboration, and recency',async()=>{
+ await configureFutureActivation();const retrievedAt=new Date().toISOString();
+ await qualified('A Office Tie',{retrievedAt});
+ const named=await qualified('Z Named Tie',{retrievedAt,named:true});
+ await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=1,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
+ const batch=await runAutomaticEmailBatch(worker(),2);
+ expect(batch.admitted).toMatchObject([{candidateId:named.candidateId}]);
+ const [enrollment]=await listEnrollments(worker());if(!enrollment)throw new Error('missing enrollment');
+ expect(await listContacts(worker(),enrollment.firmId)).toMatchObject([{full_name:'Jane Smith'}]);
+});
+it('selects only the newest qualification for the current candidate revision',async()=>{
+ await configureFutureActivation();const old=await qualified('Changed Batch Evidence');
+ await db.session.query(`INSERT INTO sourcing_qualification_runs(workspace_id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,requested_at)
+ SELECT workspace_id,candidate_id,candidate_revision,$2,prompt_version,policy_version,model_name,requested_at+interval '1 second' FROM sourcing_qualification_runs WHERE id=$1`,[old.qualificationRunId,'e'.repeat(64)]);
+ expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
+});
+it('waits for the next business-day allowance instead of exhausting capacity checks overnight',async()=>{
+ await configureFutureActivation();await qualified('Reset Capacity Fit');
+ await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=0,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
+ const day=new Intl.DateTimeFormat('sv-SE',{timeZone:'America/New_York'});
+ const tomorrow=new Date(`${day.format(new Date())}T12:00:00Z`);tomorrow.setUTCDate(tomorrow.getUTCDate()+1);
+ const report=await runAutomaticEmailBatch(worker(),2),wake=report.deferred[0]?.retryAt;
+ expect(report).toMatchObject({deferred:[{reason:'mailbox_capacity_exhausted'}]});
+ if(!wake)throw new Error('missing capacity wake');
+ expect(day.format(new Date(wake))).toBe(tomorrow.toISOString().slice(0,10));
+ expect(new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(wake))).toBe('00:05');
 });
