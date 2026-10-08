@@ -15,7 +15,7 @@ import {sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateListSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema } from '@fss/contracts';
-import { meetingFollowThroughViewSchema } from '@fss/contracts';
+import { meetingFollowThroughViewV2Schema } from '@fss/contracts';
 import { meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
 import {
   applyCallProposalsResultSchema,
@@ -33,7 +33,7 @@ import {
   firmMeetingsResponseSchema,
   firmRecordingsResponseSchema,
   meetingAttendanceSetSchema,
-  meetingBriefResponseSchema,
+  meetingPreparationResponseSchema,
   loggedCallResultSchema,
   meetingMatchedSchema,
   unmatchedMeetingsResponseSchema,
@@ -608,13 +608,13 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
     'meetings.followThrough': async (input:OperationInput<'meetings.followThrough'>) => {
       const generation=deps.recordings.identity.current();
-      const answer=await deps.api.read(`/meetings/follow-through?meetingId=${encodeURIComponent(input.meetingId)}`,value=>meetingFollowThroughViewSchema.parse(value));
+      const answer=await deps.api.read(`/meetings/follow-through?meetingId=${encodeURIComponent(input.meetingId)}&version=2`,value=>meetingFollowThroughViewV2Schema.parse(value));
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
       return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
     },
     'meetings.editRecap': async (input:OperationInput<'meetings.editRecap'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
-      const answer=await deps.api.command('/meetings/recap/edit',body,value=>meetingFollowThroughViewSchema.parse(value),{commandId});
+      const answer=await deps.api.command('/meetings/recap/edit?version=2',body,value=>meetingFollowThroughViewV2Schema.parse(value),{commandId});
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
       return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
     },
@@ -649,9 +649,11 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return answer.ok ? { task: answer.value, reason: null } : { task: null, reason: answer.reason.slice(0,80) };
     },
     'meetings.brief': async (input: { readonly meetingId: string }) => {
-      const answer = await deps.api.read(`/meetings/brief?meetingId=${encodeURIComponent(input.meetingId)}&include=meeting_tasks`, value =>
-        meetingBriefResponseSchema.parse(value),
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.read(`/meetings/brief?meetingId=${encodeURIComponent(input.meetingId)}&include=meeting_tasks&version=2`, value =>
+        meetingPreparationResponseSchema.parse(value),
       );
+      if (generation !== deps.recordings.identity.current()) return { brief: null, reason: 'not_found' };
       return answer.ok ? { brief: answer.value, reason: null } : { brief: null, reason: answer.reason.slice(0, 80) };
     },
     'meetings.unmatched': async () => {

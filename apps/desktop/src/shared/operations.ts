@@ -15,7 +15,7 @@ import {sourcingFeedbackSchema,sourcingFeedbackSavedSchema} from '@fss/contracts
 import { qualificationReadSchema, qualificationViewSchema, qualificationRequestSchema, qualificationQueuedSchema, qualificationAdmissionSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateInputSchema, candidateListInputSchema, candidateListSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
-import { meetingDraftEditSchema,meetingFollowThroughViewSchema } from '@fss/contracts';
+import { meetingDraftEditSchema,meetingFollowThroughViewV2Schema } from '@fss/contracts';
 import { z } from 'zod';
 import { saveMeetingNotesSchema, changeMeetingTaskSchema, meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
 import {
@@ -50,7 +50,7 @@ import {
   instant,
   meetingAttendanceSetSchema,
   MEETING_ATTENDANCE_CHOICES,
-  meetingBriefResponseSchema,
+  meetingPreparationResponseSchema,
   meetingMatchedSchema,
   stageSuggestionSchema,
   unmatchedMeetingDtoSchema,
@@ -1682,13 +1682,13 @@ export const OPERATIONS = {
     output:z.strictObject({view:meetingRecordingSetupViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'audited versioned retry with retained command identity',
   },
   'meetings.followThrough': {
-    kind:'read', calls:[{method:'GET',path:'/meetings/follow-through?meetingId={uuid}'}],input:z.strictObject({meetingId:uuid}),
-    output:z.strictObject({view:meetingFollowThroughViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'current recap and follow-through, never cached on disk',
+    kind:'read', calls:[{method:'GET',path:'/meetings/follow-through?meetingId={uuid}&version=2'}],input:z.strictObject({meetingId:uuid}),
+    output:z.strictObject({view:meetingFollowThroughViewV2Schema.nullable(),reason:z.string().max(80).nullable()}),transform:'current recap and follow-through, never cached on disk',
   },
   'meetings.editRecap': {
-    kind:'command',calls:[{method:'POST',path:'/meetings/recap/edit'}],
-    input:z.discriminatedUnion('action',[meetingDraftEditSchema.options[0].extend({commandId:uuid}),meetingDraftEditSchema.options[1].extend({commandId:uuid}),meetingDraftEditSchema.options[2].extend({commandId:uuid}),meetingDraftEditSchema.options[3].extend({commandId:uuid})]),
-    output:z.strictObject({view:meetingFollowThroughViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'durable edit hold and versioned save, discard or cancellation',
+    kind:'command',calls:[{method:'POST',path:'/meetings/recap/edit?version=2'}],
+    input:z.discriminatedUnion('action',[meetingDraftEditSchema.options[0].extend({commandId:uuid}),meetingDraftEditSchema.options[1].extend({commandId:uuid}),meetingDraftEditSchema.options[2].extend({commandId:uuid}),meetingDraftEditSchema.options[3].extend({commandId:uuid}),meetingDraftEditSchema.options[4].extend({commandId:uuid})]),
+    output:z.strictObject({view:meetingFollowThroughViewV2Schema.nullable(),reason:z.string().max(80).nullable()}),transform:'durable edit hold and versioned save, discard or cancellation',
   },
   'meetings.qualification': {
     kind:'read',calls:[{method:'GET',path:'/meetings/qualification?meetingId={uuid}'}],input:z.strictObject({meetingId:uuid}),
@@ -1718,9 +1718,9 @@ export const OPERATIONS = {
   },
   'meetings.brief': {
     kind: 'read',
-    calls: [{ method: 'GET', path: '/meetings/brief?meetingId={uuid}&include=meeting_tasks' }],
+    calls: [{ method: 'GET', path: '/meetings/brief?meetingId={uuid}&include=meeting_tasks&version=2' }],
     input: z.strictObject({ meetingId: uuid }),
-    output: z.strictObject({ brief: meetingBriefResponseSchema.nullable(), reason: z.string().max(80).nullable() }),
+    output: z.strictObject({ brief: meetingPreparationResponseSchema.nullable(), reason: z.string().max(80).nullable() }),
     transform: 'none: the brief, or null with the reason when the read did not answer (not_found for a meeting the caller may not read)',
   },
   'meetings.unmatched': {
