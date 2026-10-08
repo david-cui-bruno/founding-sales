@@ -1,3 +1,4 @@
+import {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
 import {readRampStanding,readSendDayHealth,rampHealthFailure} from '../outbound/ramp.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
@@ -61,7 +62,7 @@ async function admit(ctx:RepositoryContext,input:AutomaticEmailInput):Promise<Re
   if(!plan.ok)return await rollback(plan);
   const enrollment=await enrollContact(ctx,{originKind:'prospecting',sequenceVersionId:binding.sequenceVersionId,subject:{kind:'outreach',outreachPlanId:plan.value.id},firmId:admission.value.firmId,contactId:admission.value.contactId});
   if(!enrollment.ok)return await rollback(enrollment);
-  await recordCrmAuditEvent(ctx,{action:'outreach.email_automatically_enrolled',subjectKind:'outreach_plan',subjectId:plan.value.id,detail:{...config.value,firmId:admission.value.firmId,contactId:admission.value.contactId,routeId:admission.value.routeId,planId:plan.value.id,candidateId:input.candidateId,runId:input.qualificationRunId,candidateRevision:input.expectedRevision,controlRevision:config.value.revision,evaluationSha256:config.value.evaluationSha256,mailboxId:binding.mailboxId,sequenceVersionId:binding.sequenceVersionId,enrollmentId:enrollment.value.enrollmentId,policyVersion:'outreach-email-fit-v1',authority:'automatic_email',reviewed:false}});
+  await recordCrmAuditEvent(ctx,{action:'outreach.email_automatically_enrolled',subjectKind:'outreach_plan',subjectId:plan.value.id,detail:{...config.value,firmId:admission.value.firmId,contactId:admission.value.contactId,routeId:admission.value.routeId,planId:plan.value.id,candidateId:input.candidateId,runId:input.qualificationRunId,candidateRevision:input.expectedRevision,controlRevision:config.value.revision,evaluationSha256:config.value.evaluationSha256,mailboxId:binding.mailboxId,sequenceVersionId:binding.sequenceVersionId,enrollmentId:enrollment.value.enrollmentId,policyVersion:EMAIL_FIT_POLICY_VERSION,authority:'automatic_email',reviewed:false}});
   await ctx.db.query('RELEASE SAVEPOINT automatic_email_prospect');
   return {ok:true,value:{firmId:admission.value.firmId,contactId:admission.value.contactId,routeId:admission.value.routeId,planId:plan.value.id,enrollmentId:enrollment.value.enrollmentId}};
  }catch(error){await ctx.db.query('ROLLBACK TO SAVEPOINT automatic_email_prospect');await ctx.db.query('RELEASE SAVEPOINT automatic_email_prospect');throw error;}

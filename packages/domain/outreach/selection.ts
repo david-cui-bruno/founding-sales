@@ -1,3 +1,5 @@
+import {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
+export {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
 import {existingEmailRoute} from './existingEmail.ts';
 import {officeContactContext} from './contactContext.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -45,7 +47,6 @@ export function supportedBusinessEmail(input:{facts:readonly QualificationFact[]
 /** This email policy is evaluated separately from the call-first policy. An
  * email-fit pass establishes contact eligibility, never an unmet maintenance need.
  */
-export const EMAIL_FIT_POLICY_VERSION = 'outreach-email-fit-v1';
 export function qualifyEmailCandidate(input: Parameters<typeof qualifyCandidate>[0]) {
  const phoneVerdict=qualifyCandidate(input);
  const optional=new Set(['business_phone_unresolved','maintenance_need_unconfirmed','help_date_unknown','help_needs_revalidation','job_date_unknown','growth_date_unknown','event_needs_revalidation']);

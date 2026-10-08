@@ -1896,5 +1896,401 @@
     "expectedAdmission": true,
     "expectedRank": "fit_only",
     "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "suite-office-card",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Synthetic boundary for the recorded eight-block office layout; not a new real lead."
+    },
+    "candidate": {
+      "firmName": "Evaluation Suite Office Card PM",
+      "website": "https://suite-office-card.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://suite-office-card.example.test/contact",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "404dd8db-9375-481a-a36f-9ceda7563c6b",
+        "url": "https://suite-office-card.example.test/contact",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Suite Office Card PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "b0",
+            "text": "Evaluation Suite Office Card PM"
+          },
+          {
+            "id": "b1",
+            "text": "221 Main Avenue"
+          },
+          {
+            "id": "b2",
+            "text": "Suite 402"
+          },
+          {
+            "id": "b3",
+            "text": "Dallas, TX 75201"
+          },
+          {
+            "id": "b4",
+            "text": "Contact Information"
+          },
+          {
+            "id": "b5",
+            "text": "(214) 424-0775"
+          },
+          {
+            "id": "b6",
+            "text": "(214) 424-0771"
+          },
+          {
+            "id": "b7",
+            "text": "admin@suite-office-card.example.test"
+          }
+        ],
+        "contentHash": "978ca3600b09ffd6803a913ffd5b71f0f8b6e2fe9c66305ff331e5e98d2a5f7e",
+        "relevantTextHash": "978ca3600b09ffd6803a913ffd5b71f0f8b6e2fe9c66305ff331e5e98d2a5f7e",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Card PM manages residential properties in Dallas, TX.",
+        "observationId": "404dd8db-9375-481a-a36f-9ceda7563c6b"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Card PM manages residential properties in Dallas, TX.",
+        "observationId": "404dd8db-9375-481a-a36f-9ceda7563c6b"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Card PM manages residential properties in Dallas, TX.",
+        "observationId": "404dd8db-9375-481a-a36f-9ceda7563c6b"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "b7",
+        "value": "admin@suite-office-card.example.test",
+        "observationId": "404dd8db-9375-481a-a36f-9ceda7563c6b"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "suite-office-other-city",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Synthetic boundary for the recorded eight-block office layout; not a new real lead."
+    },
+    "candidate": {
+      "firmName": "Evaluation Suite Office Other City PM",
+      "website": "https://suite-office-other-city.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://suite-office-other-city.example.test/contact",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "f300a95d-cd81-435a-9d53-afae7c8b49f4",
+        "url": "https://suite-office-other-city.example.test/contact",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Suite Office Other City PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "b0",
+            "text": "Evaluation Suite Office Other City PM"
+          },
+          {
+            "id": "b1",
+            "text": "221 Main Avenue"
+          },
+          {
+            "id": "b2",
+            "text": "Suite 402"
+          },
+          {
+            "id": "b3",
+            "text": "Dallas, TX 75201"
+          },
+          {
+            "id": "b4",
+            "text": "Contact Information"
+          },
+          {
+            "id": "b5",
+            "text": "(214) 424-0775"
+          },
+          {
+            "id": "b6",
+            "text": "Houston, TX 77001"
+          },
+          {
+            "id": "b7",
+            "text": "admin@suite-office-other-city.example.test"
+          }
+        ],
+        "contentHash": "9a1426e3503949da93b0db35c287b4471e1a7dbbde6d01b068def7ec2615770b",
+        "relevantTextHash": "9a1426e3503949da93b0db35c287b4471e1a7dbbde6d01b068def7ec2615770b",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Other City PM manages residential properties in Dallas, TX.",
+        "observationId": "f300a95d-cd81-435a-9d53-afae7c8b49f4"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Other City PM manages residential properties in Dallas, TX.",
+        "observationId": "f300a95d-cd81-435a-9d53-afae7c8b49f4"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Other City PM manages residential properties in Dallas, TX.",
+        "observationId": "f300a95d-cd81-435a-9d53-afae7c8b49f4"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "b7",
+        "value": "admin@suite-office-other-city.example.test",
+        "observationId": "f300a95d-cd81-435a-9d53-afae7c8b49f4"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "suite-office-investor-label",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Synthetic boundary for the recorded eight-block office layout; not a new real lead."
+    },
+    "candidate": {
+      "firmName": "Evaluation Suite Office Investor Label PM",
+      "website": "https://suite-office-investor-label.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://suite-office-investor-label.example.test/contact",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "74dadd69-2f7d-4a39-bb74-24d6feecd40f",
+        "url": "https://suite-office-investor-label.example.test/contact",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Suite Office Investor Label PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "b0",
+            "text": "Evaluation Suite Office Investor Label PM"
+          },
+          {
+            "id": "b1",
+            "text": "221 Main Avenue"
+          },
+          {
+            "id": "b2",
+            "text": "Suite 402"
+          },
+          {
+            "id": "b3",
+            "text": "Dallas, TX 75201"
+          },
+          {
+            "id": "b4",
+            "text": "Investor Contact Information"
+          },
+          {
+            "id": "b5",
+            "text": "(214) 424-0775"
+          },
+          {
+            "id": "b6",
+            "text": "(214) 424-0771"
+          },
+          {
+            "id": "b7",
+            "text": "admin@suite-office-investor-label.example.test"
+          }
+        ],
+        "contentHash": "3d264c6784e96e4bfb7b42ec08724d3ebcad889d9f425adf8e88fc5a37f82e2a",
+        "relevantTextHash": "3d264c6784e96e4bfb7b42ec08724d3ebcad889d9f425adf8e88fc5a37f82e2a",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Investor Label PM manages residential properties in Dallas, TX.",
+        "observationId": "74dadd69-2f7d-4a39-bb74-24d6feecd40f"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Investor Label PM manages residential properties in Dallas, TX.",
+        "observationId": "74dadd69-2f7d-4a39-bb74-24d6feecd40f"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Investor Label PM manages residential properties in Dallas, TX.",
+        "observationId": "74dadd69-2f7d-4a39-bb74-24d6feecd40f"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "b7",
+        "value": "admin@suite-office-investor-label.example.test",
+        "observationId": "74dadd69-2f7d-4a39-bb74-24d6feecd40f"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "suite-office-second-email",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Synthetic boundary for the recorded eight-block office layout; not a new real lead."
+    },
+    "candidate": {
+      "firmName": "Evaluation Suite Office Second Email PM",
+      "website": "https://suite-office-second-email.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://suite-office-second-email.example.test/contact",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "a1554a27-56d6-4bde-a035-98515ae872b2",
+        "url": "https://suite-office-second-email.example.test/contact",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Suite Office Second Email PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "b0",
+            "text": "Evaluation Suite Office Second Email PM"
+          },
+          {
+            "id": "b1",
+            "text": "221 Main Avenue"
+          },
+          {
+            "id": "b2",
+            "text": "Suite 402"
+          },
+          {
+            "id": "b3",
+            "text": "Dallas, TX 75201"
+          },
+          {
+            "id": "b4",
+            "text": "Contact Information"
+          },
+          {
+            "id": "b5",
+            "text": "(214) 424-0775"
+          },
+          {
+            "id": "b6",
+            "text": "(214) 424-0771"
+          },
+          {
+            "id": "b7",
+            "text": "admin@suite-office-second-email.example.test"
+          },
+          {
+            "id": "b8",
+            "text": "another@suite-office-second-email.example.test"
+          }
+        ],
+        "contentHash": "753652d050663ef57a036cb50adf92bcaff6c6f03c946e465f1b16a0afd1885d",
+        "relevantTextHash": "753652d050663ef57a036cb50adf92bcaff6c6f03c946e465f1b16a0afd1885d",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Second Email PM manages residential properties in Dallas, TX.",
+        "observationId": "a1554a27-56d6-4bde-a035-98515ae872b2"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Second Email PM manages residential properties in Dallas, TX.",
+        "observationId": "a1554a27-56d6-4bde-a035-98515ae872b2"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Suite Office Second Email PM manages residential properties in Dallas, TX.",
+        "observationId": "a1554a27-56d6-4bde-a035-98515ae872b2"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "b7",
+        "value": "admin@suite-office-second-email.example.test",
+        "observationId": "a1554a27-56d6-4bde-a035-98515ae872b2"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
   }
 ]
