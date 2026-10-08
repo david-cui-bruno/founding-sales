@@ -3,7 +3,7 @@ import {afterEach,it,expect,vi} from 'vitest';
 import {render,screen,fireEvent,cleanup,waitFor} from '@testing-library/react';
 import {OutreachSection,type OutreachPorts} from '../src/renderer/outreach/OutreachSection.tsx';
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
-import type {OutreachControl,OutreachSenderStandingResponse} from '@fss/contracts';
+import type {AnswerBlock,OutreachControl,OutreachSenderStandingResponse} from '@fss/contracts';
 afterEach(cleanup);
 const id='11111111-1111-4111-8111-111111111111';
 const view:OutreachControl={emailAdmission:{revision:0,enabled:false,ownerUserId:null,mailboxId:null,sequenceVersionId:null,evaluation:null,configurationSha256:null,ready:false,reasons:['configuration_required']},settings:{revision:0,enabled:false,sequenceVersionId:null,bookingUrl:null},blocks:[],senders:[{id,address:'david@usecallie.com',ownerUserId:id,connected:true,authorized:false,authorizationRevision:0,sendingEnabled:false,dailyCap:5}],sequences:[],candidates:[],replies:[]};
@@ -45,6 +45,54 @@ it('keeps a fact draft across navigation and saving does not approve it',async()
  fireEvent.click(screen.getByRole('button',{name:'Save fact draft'}));
  await waitFor(()=>expect(p.mutate).toHaveBeenCalledWith(expect.objectContaining({action:'fact_save',text:'Callie integrates with AppFolio.'})));
  expect(p.mutate).toHaveBeenCalledTimes(1);
+});
+it('retains a stale fact draft, compares the current version and saves only after explicit adoption',async()=>{
+ const approvedAt='2026-10-08T12:00:00Z';
+ let current:AnswerBlock={id,version:1,kind:'product',text:'Callie coordinates maintenance requests.',approvedAt,retiredAt:null};
+ const p=ports();
+ p.read=async()=>({view:{...view,blocks:[current]},reason:null});
+ p.mutate=async input=>{
+  if(input.action!=='fact_save')throw new Error('Only an unapproved save is authorized by this interaction.');
+  if(input.expectedVersion!==current.version)return {accepted:false,view:null,reason:'stale_version'};
+  current={...current,version:current.version+1,text:input.text,approvedAt:null};
+  return {accepted:true,view:{...view,blocks:[current]},reason:null};
+ };
+ render(<OutreachSection enabled ports={p}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Outreach setup'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Edit fact'}));
+ fireEvent.change(screen.getByLabelText('Answer fact'),{target:{value:'Callie helps small property teams coordinate maintenance.'}});
+ current={...current,version:2,text:'Callie coordinates requests with the existing team.'};
+ fireEvent.click(screen.getByRole('button',{name:'Save fact draft'}));
+ await screen.findByText('This fact changed elsewhere. Refresh and compare it with your draft.');
+ expect((screen.getByLabelText('Answer fact') as HTMLTextAreaElement).value).toBe('Callie helps small property teams coordinate maintenance.');
+ expect((screen.getByRole('button',{name:'Save fact draft'}) as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'Refresh outreach'}));
+ await screen.findByText('Your draft is based on version 1. Compare it with current version 2 before saving.');
+ expect(screen.getByRole('region',{name:'Current fact version'}).textContent).toContain('Callie coordinates requests with the existing team.');
+ expect((screen.getByLabelText('Answer fact') as HTMLTextAreaElement).value).toBe('Callie helps small property teams coordinate maintenance.');
+ fireEvent.click(screen.getByRole('button',{name:'Use current version as base'}));
+ fireEvent.click(screen.getByRole('button',{name:'Save fact draft'}));
+ await screen.findByText('Current · Draft · version 3');
+ expect(current.text).toBe('Callie helps small property teams coordinate maintenance.');
+ expect(current.approvedAt).toBeNull();
+ expect((screen.getByLabelText('Automatically answer supported replies') as HTMLInputElement).checked).toBe(false);
+});
+it('retires an unapproved fact without approving its unsupported claim first',async()=>{
+ let current:AnswerBlock={id,version:1,kind:'pricing',text:'A discount proposal awaiting review.',approvedAt:null,retiredAt:null};
+ const p=ports();
+ p.read=async()=>({view:{...view,blocks:[current]},reason:null});
+ p.mutate=async input=>{
+  if(input.action!=='fact_retire')throw new Error('This draft must never be approved.');
+  current={...current,retiredAt:'2026-10-08T12:00:00Z'};
+  return {accepted:true,view:{...view,blocks:[current]},reason:null};
+ };
+ render(<OutreachSection enabled ports={p}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Outreach setup'}));
+ await screen.findByText('Current · Draft · version 1');
+ fireEvent.click(screen.getByRole('button',{name:'Retire fact'}));
+ await screen.findByText('Current · Retired · version 1');
+ expect(current.approvedAt).toBeNull();
+ expect(screen.queryByRole('button',{name:'Approve exact text'})).toBeNull();
 });
 it('does not report a previous allowance as current when both standing and control refresh are unavailable',async()=>{
  const p=Object.assign(ports(),{standing:vi.fn(async()=>({view:null,reason:'unavailable'}))});
