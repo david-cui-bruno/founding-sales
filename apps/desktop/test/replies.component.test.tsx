@@ -126,3 +126,13 @@ describe('the Replies view', () => {
     for (const word of ['reviewed', 'you reviewed', 'checked by']) expect(text.toLowerCase()).not.toContain(word);
   });
 });
+
+it('a Today link opens its exact reply rather than the first queue card', async () => {
+  const target = '22222222-2222-4222-8222-222222222222';
+  install({
+    'replies.state': async () => state({ open: null }),
+    'replies.open': async input => state({ open: replyCard({ messageId: (input as { messageId: string }).messageId, body: { text: 'Exact linked conversation', truncated: false } }) }),
+  });
+  render(<RepliesRoute column={column} messageId={target} />);
+  expect(await screen.findByText('Exact linked conversation')).toBeTruthy();
+});

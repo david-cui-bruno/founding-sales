@@ -13,8 +13,8 @@
  * owner's Mac and menu items people have learned — and each maps onto the tab that holds
  * what it used to open.
  *
- * `firm/<id>` is the one route with an argument, and only the page sets it — never the
- * main process.
+ * Today can name an exact reply, meeting or owned sender setting. Those identities
+ * survive route serialization; the destination reads the current authorized context.
  *
  * Since 1.0.14 the board and the firms are two routes rather than one (David, 29
  * September 2026). `pipeline` is the board of opportunities being worked; `firms` is
@@ -32,8 +32,9 @@ const ADMIN_SECTIONS = ['calling-number', 'sending-admin', 'alerts'] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =
-  | { readonly name: 'today' | 'replies' | 'pipeline' | 'firms' | 'sequences' | 'social' }
-  | { readonly name: 'firm'; readonly firmId: string }
+  | { readonly name: 'today' | 'pipeline' | 'firms' | 'sequences' | 'social' }
+  | { readonly name: 'replies'; readonly messageId?: string }
+  | { readonly name: 'firm'; readonly firmId: string; readonly meetingId?: string }
   | {
       readonly name: 'settings';
       readonly tab: SettingsTab;
@@ -43,6 +44,7 @@ export type Route =
        * somebody arrived at it pointed at the calling-number section.
        */
       readonly section?: AdminSection;
+      readonly mailboxId?: string;
     };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -61,6 +63,9 @@ const sectionOf = (value: string | undefined): AdminSection | null =>
 /** `today`, `firm/<uuid>`, `settings/diagnostics`, an old `admin/alerts`, or null. */
 export function routeOf(text: string): Route | null {
   const [head, tail, ...rest] = text.split('/');
+  if (head === 'settings' && tail === 'administration' && rest.length === 2 && rest[0] === 'sending-admin' && rest[1] !== undefined && UUID.test(rest[1])) return { name: 'settings', tab: tail, section: 'sending-admin', mailboxId: rest[1] };
+  if (head === 'replies' && tail !== undefined && rest.length === 0) return UUID.test(tail) ? { name: 'replies', messageId: tail } : null;
+  if (head === 'firm' && rest.length === 2 && rest[0] === 'meeting' && tail !== undefined && UUID.test(tail) && rest[1] !== undefined && UUID.test(rest[1])) return { name: 'firm', firmId: tail, meetingId: rest[1] };
   if (rest.length > 0) return null;
   if (head === 'firm') return tail !== undefined && UUID.test(tail) ? { name: 'firm', firmId: tail } : null;
   if (head === 'settings') {
@@ -83,8 +88,9 @@ export function routeOf(text: string): Route | null {
 }
 
 export function routeText(route: Route): string {
-  if (route.name === 'firm') return `firm/${route.firmId}`;
-  if (route.name === 'settings') return `settings/${route.tab}`;
+  if (route.name === 'firm') return `firm/${route.firmId}${route.meetingId === undefined ? '' : `/meeting/${route.meetingId}`}`;
+  if (route.name === 'replies' && route.messageId !== undefined) return `replies/${route.messageId}`;
+  if (route.name === 'settings') return `settings/${route.tab}${route.mailboxId !== undefined && route.section === 'sending-admin' ? `/sending-admin/${route.mailboxId}` : ''}`;
   return route.name;
 }
 

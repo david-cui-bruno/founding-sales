@@ -1,3 +1,4 @@
+import { todayActionsResponseSchema, todayActionOpenResponseSchema } from '@fss/contracts';
 import type {SocialAccountsBridge} from './social/accountsBridge.ts';
 import {socialWeeklySchema} from '@fss/contracts';
 import {socialDraftWorkspaceSchema} from '@fss/contracts';
@@ -135,6 +136,16 @@ async function readAnalysis(api: AuthedClient, callSessionId: string): Promise<{
 
 export function operationHandlers(deps: OperationHostDeps): Readonly<Record<OperationName, Handler>> {
   const handlers = {
+    'today.actions': async () => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.read('/today/actions', value => todayActionsResponseSchema.parse(value));
+      return generation === deps.recordings.identity.current() && answer.ok ? answer.value : null;
+    },
+    'today.openAction': async (input: OperationInput<'today.openAction'>) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.read('/today/actions/open', value => todayActionOpenResponseSchema.parse(value), input);
+      return generation === deps.recordings.identity.current() && answer.ok ? answer.value : null;
+    },
     'today.state': async () => await deps.today.state(),
     'today.refresh': async (input: { readonly quiet?: boolean }) =>
       await deps.today.refresh({ quiet: input.quiet === true }),

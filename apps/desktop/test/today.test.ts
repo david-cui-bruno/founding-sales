@@ -1092,10 +1092,12 @@ describe('the Today bridge', () => {
     expect(answer.cards).toHaveLength(2);
   });
 
-  it('names one operation per method, and nothing else', () => {
+  it('names the live action reads and one operation per Today bridge method', () => {
     // Since 1.0.12 the view has no channels of its own: every method is an operation of
     // the registry, and dialling is the one named channel beside it.
     expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
+      'today.actions',
+      'today.openAction',
       'today.state',
       'today.refresh',
       'today.expand',

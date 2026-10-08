@@ -14,7 +14,7 @@ import type {
   StageChange,
   ValueChange,
 } from '../firmWorkspaceContract.ts';
-import { routeShown, type Route } from '../routes.ts';
+import { routeShown, routeText, type Route } from '../routes.ts';
 
 /**
  * The CRM view's reads and commands: Pipeline, Firms and a firm's page (1.0.14).
@@ -235,12 +235,14 @@ export function useCrm(
   const shown = useRef<string | null>(null);
   useEffect(() => {
     if (state === null) return;
-    const next = routeOfState(state, from, route.name === 'pipeline' && !fullPage);
-    const text = next.name === 'firm' ? `firm/${next.firmId}` : next.name;
+    const shownRoute = routeOfState(state, from, route.name === 'pipeline' && !fullPage);
+    const next: Route = shownRoute.name === 'firm' && route.name === 'firm' && shownRoute.firmId === route.firmId && route.meetingId !== undefined
+      ? { ...shownRoute, meetingId: route.meetingId } : shownRoute;
+    const text = routeText(next);
     if (shown.current === text) return;
     shown.current = text;
     routeShown(next);
-  }, [state, from, route.name, fullPage]);
+  }, [state, from, route, fullPage]);
 
   return useMemo(() => ({ ...view, actions, origin: from }), [view, actions, from]);
 }

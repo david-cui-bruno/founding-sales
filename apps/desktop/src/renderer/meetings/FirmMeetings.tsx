@@ -81,6 +81,7 @@ interface Shown {
 
 export function FirmMeetings({
   firmId,
+  initialMeetingId,
   ports = registryMeetingPorts(),
   actionsEnabled = true,
   refreshKey = '',
@@ -89,6 +90,7 @@ export function FirmMeetings({
   recordingPorts = registryRecordingPorts(),
 }: {
   readonly firmId: string;
+  readonly initialMeetingId?: string;
   readonly ports?: FirmMeetingsPorts | null;
   /** Commands are offered only while the session may change things. */
   readonly actionsEnabled?: boolean;
@@ -112,6 +114,18 @@ export function FirmMeetings({
   portsRef.current = ports;
   const { memory, touch } = useAttendanceMemory();
   const briefs = useBriefMemory();
+  const linked = useRef<string | null>(null);
+  useEffect(() => {
+    if (initialMeetingId === undefined || meetings == null) return;
+    const key = `${firmId}:${initialMeetingId}`;
+    if (linked.current === key) return;
+    const current = meetings.find(meeting => meeting.meetingId === initialMeetingId);
+    if (current === undefined || !briefOffered(current)) return;
+    linked.current = key;
+    briefs.memory.open.add(initialMeetingId);
+    briefs.touch();
+  }, [firmId, initialMeetingId, meetings, briefs]);
+
   const recordings = useRecordings(recordingPorts);
   const successes = memory.successes.get(firmId) ?? 0;
   // R4: the firm's registered recordings, from the server, with the firm they were read for.

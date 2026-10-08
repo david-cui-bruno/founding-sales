@@ -134,6 +134,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'sourcing.delete': {id:UUID,expectedRevision:1,commandId:UUID},
   'meetings.transcript': { meetingId: UUID },
   'recordings.reupload': { recordingId: UUID },
+  'today.openAction': { actionId: `reply-message:${UUID}`, target: { kind: 'reply', firmId: UUID, messageId: UUID } },
   'today.expand': { firmId: UUID },
   'today.snooze': { itemId: UUID, reason: 'later', returnAt: '2026-09-28T09:00' },
   'today.recordOutcome': { itemId: UUID, outcome: 'no_answer', note: '', callback: null },
@@ -319,7 +320,10 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       }),
     });
   return {
-    today: today as unknown as Host,
+    today: { ...today, ...(() => {
+      const handlers = operationHandlers({ api, recordings: { identity: { current: () => 0 } } } as unknown as OperationHostDeps);
+      return { actions: async () => await handlers['today.actions'](undefined as never), openAction: async (input: unknown) => await handlers['today.openAction'](input as never) };
+    })() } as unknown as Host,
     // Slice C1: the calling operations are the Today bridge's dial path, under their own names.
     calling: {
       ...Object.fromEntries(

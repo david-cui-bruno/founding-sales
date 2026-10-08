@@ -82,7 +82,7 @@ const CONFIRM_SUCCESS: ReadonlySet<string> = new Set(['confirmed', 'suggests_los
 
 type Kind = 'read' | 'open' | 'confirm' | 'resolve';
 
-export function useReplies(): Replies {
+export function useReplies(initialMessageId?: string): Replies {
   const [state, setState] = useState<ReplyState | null>(null);
   const [pending, setPending] = useState(0);
   /** One count per card on the wire, so a card waits for its own call only. */
@@ -170,6 +170,11 @@ export function useReplies(): Replies {
     const first = api()?.read('replies.state', {});
     if (first === undefined) setFailed(true);
     apply(first);
+    if (initialMessageId !== undefined) {
+      latest.current.setSelected(initialMessageId);
+      restored.current = true;
+      apply(api()?.read('replies.open', { messageId: initialMessageId }), 'open', initialMessageId);
+    }
     return () => {
       generation.current += 1;
       // Nothing a reply card carried outlives the view: not the body, not the sender's
@@ -180,7 +185,7 @@ export function useReplies(): Replies {
       setState(null);
       setOutcome(null);
     };
-  }, [apply]);
+  }, [apply, initialMessageId]);
 
   // The first lane of a mount: reopen the reply that was open when the person left, and
   // forget a selection whose message is no longer in the lane.
@@ -192,7 +197,7 @@ export function useReplies(): Replies {
       return;
     }
     const present = state.cards.some(card => card.messageId === wanted);
-    if (!present) {
+    if (!present && state.open?.messageId !== wanted && initialMessageId !== wanted) {
       latest.current.setSelected('');
       restored.current = true;
       return;
@@ -202,7 +207,7 @@ export function useReplies(): Replies {
       apply(api()?.read('replies.open', { messageId: wanted }), 'open', wanted);
     }
     restored.current = true;
-  }, [state, apply]);
+  }, [state, apply, initialMessageId]);
 
   /**
    * ⚠ D5.1: the card opens with Callie's guess already chosen, and a person's pick
