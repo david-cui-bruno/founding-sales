@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it } from 'vitest';
 import { BusinessReview, type BusinessReviewPorts } from '../src/renderer/firms/BusinessReview.tsx';
-import type { BusinessPolicy } from '@fss/contracts';
+import type { BusinessPolicy, BusinessReviewPage } from '@fss/contracts';
 afterEach(cleanup);
 const ID = '11111111-1111-4111-8111-111111111111';
 it('shows capture off and requires explicit metadata-only acknowledgement before preparing review', async () => {
@@ -39,4 +39,25 @@ expect(await screen.findByText('Private old-account subject')).toBeTruthy();
 await user.click(screen.getByRole('button',{name:'Show more conversations'}));
 await screen.findByText('Metadata review is unavailable. Prepare consent for the current mailbox connection.');
 expect(screen.queryByText('Private old-account subject')).toBeNull();
+});
+
+function deferred<T>(){let resolve:(value:T)=>void=()=>{throw new Error('Deferred promise not initialized');};const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
+const REVIEW_POLICY:BusinessPolicy={mailboxId:ID,ownerUserId:ID,emailAddress:'owner@example.test',generation:2,accountBinding:'a'.repeat(64),revision:1,enabled:false,scopeDays:90,classificationMode:'metadata_only',disclosure:{version:'business-metadata-review-v1',sha256:'b'.repeat(64)},ready:false,reasons:['activation_not_available'],metadataReviewDisclosureText:'Metadata only.',metadataReviewDisclosure:{version:'business-metadata-review-v1',sha256:'b'.repeat(64)}};
+function reviewPage(subject:string):BusinessReviewPage{return {available:true,reasons:[],mailboxId:ID,accountBinding:'a'.repeat(64),generation:2,policyRevision:1,captureAllowed:false,nextAfter:ID,conversations:[{conversationId:ID,subject,participants:['private@example.test'],latestProviderAt:'2026-10-09T12:00:00.000Z',category:'uncertain',reason:'unclassified_metadata',metadataRevision:1,decisionRevision:0,humanDecision:null,effectiveDecision:'needs_review',captureAllowed:false}]};}
+it('does not publish an older account page after a newer unavailable response',async()=>{
+ const user=userEvent.setup();const older=deferred<BusinessReviewPage>();const newer=deferred<BusinessReviewPage>();let calls=0;
+ const ports:BusinessReviewPorts={policy:async()=>REVIEW_POLICY,savePolicy:async()=>({revision:2}),review:async(_mailbox,after)=>after===undefined?reviewPage('Initial private metadata'):++calls===1?older.promise:newer.promise};
+ render(<BusinessReview enabled ports={ports}/>);await screen.findByText('Initial private metadata');
+ await user.click(screen.getByRole('button',{name:'Show more conversations'}));await user.click(screen.getByRole('button',{name:'Show more conversations'}));
+ await act(async()=>{newer.resolve({...reviewPage(''),available:false,reasons:['mailbox_binding_changed'],accountBinding:'c'.repeat(64),generation:3,nextAfter:null,conversations:[]});});
+ expect(screen.queryByText('Initial private metadata')).toBeNull();
+ await act(async()=>{older.resolve(reviewPage('Stale private metadata'));});
+ expect(screen.queryByText('Stale private metadata')).toBeNull();expect(screen.queryByText('Initial private metadata')).toBeNull();expect(screen.queryByText('private@example.test')).toBeNull();
+});
+it('invalidates a pending page when a newer exclusion refresh replaces the review',async()=>{
+ const user=userEvent.setup();const pending=deferred<BusinessReviewPage>();let excluded=false;
+ const ports:BusinessReviewPorts={policy:async()=>REVIEW_POLICY,savePolicy:async()=>({revision:2}),review:async(_mailbox,after)=>after===undefined?{...reviewPage('Current conversation'),nextAfter:excluded?null:ID,conversations:reviewPage('Current conversation').conversations.map(row=>({...row,decisionRevision:excluded?1:0,humanDecision:excluded?'exclude':null,effectiveDecision:excluded?'excluded':'needs_review'}))}:pending.promise,decide:async()=>{excluded=true;return{decisionRevision:1,captureAllowed:false};}};
+ render(<BusinessReview enabled ports={ports}/>);await screen.findByText('Current conversation');await user.click(screen.getByRole('button',{name:'Show more conversations'}));await user.click(screen.getByRole('button',{name:'Exclude conversation'}));await screen.findByText('Excluded by you');
+ await act(async()=>{pending.resolve(reviewPage('Stale pre-exclusion page'));});
+ expect(screen.queryByText('Stale pre-exclusion page')).toBeNull();expect(screen.getByText('Excluded by you')).toBeTruthy();
 });
