@@ -1,0 +1,63 @@
+{
+  "version": "ask-evaluation-fake-decision-v1",
+  "state": "frozen_fake_only_configuration",
+  "purpose": "crm_retrieval_evaluation",
+  "realCallsAllowed": false,
+  "activationAllowed": false,
+  "calibration": {
+    "reportSha256": "e7b5da7bac35c51401d5eb6a9cfb065934241991aaec0faf5016ad494666db40",
+    "freezeSha256": "cfe0e201b4caa21f63789b40522e34801f06535d158ff53749206e090a8530d5",
+    "labelsSha256": "308a72e1eb617ea0c02fec1ae962321162f72952cb986c6eaaf925b8aaa8cbe8",
+    "baselineSourceCommit": "03666797bc770c9a6f6b005efd3dc6717b5c3d77"
+  },
+  "logicalGoldSha256": "6b1ab3cee6241c7f316b94e8e1e42902cb198382fd070c44151f43b8dee4bb71",
+  "sealedHoldoutLabelFileSha256": "06fe80a1d2e54b1229a3177571868ba57a072e749b0e02913da81504d7479865",
+  "vectorNumericConfigurationSha256": "39b665313b10286ed0421cd6fa933529a2bef82608280e0d66149c36814eebd9",
+  "candidateScriptSha256": "5ccc4e8ee981ff6db01cbd661b98cc09b4f4c6ed7f1138d1290c379a52e3fcb3",
+  "candidate": {
+    "embeddingId": "fake_embedding",
+    "embeddingVersion": "v1",
+    "dimensions": 2,
+    "answerId": "fake_answer",
+    "answerVersion": "controlled-abstention-v1",
+    "vectorMetric": "cosine",
+    "fusion": "rrf",
+    "rrfConstant": 60,
+    "k": 10,
+    "textConfiguration": "simple"
+  },
+  "envelope": {
+    "version": "synthetic-orchestration-v1",
+    "criticalFailureCeiling": 0,
+    "exactMismatchCeiling": 0,
+    "canonicalCitationFailureCeiling": 0,
+    "duplicatePublicationCeiling": 0,
+    "maxCallsPerRun": 5000,
+    "maxInputTokensPerRun": 1000000,
+    "maxOutputTokensPerRun": 100000,
+    "maxSpendCents": 0,
+    "maxCaseWallTimeMs": 10000,
+    "maxRunWallTimeMs": 600000,
+    "maxWindowsPerCorpus": 1000,
+    "maxScoredWindowsPerCorpus": 50,
+    "maxSourcesPerCorpus": 10
+  },
+  "correctness": {
+    "criticalControlFailureCeiling": 0,
+    "exactStateMismatchCeiling": 0,
+    "invalidCanonicalCitationCeiling": 0,
+    "forbiddenTextPublicationCeiling": 0,
+    "duplicatePublicationCeiling": 0,
+    "unexpectedMutationCeiling": 0,
+    "productionOrPaidCallCeiling": 0,
+    "positiveControlPassFraction": 1,
+    "expectedRefusalExactMatchFraction": 1,
+    "knownGoldClaimSupportFraction": 1,
+    "unknownParaphraseTreatment": "unjudged_pending_not_supported",
+    "literalVectorAndRrfAssertionsPassFraction": 1
+  },
+  "executionBindingRule": "fresh_full_suite_and_canonical_source_manifests_frozen_before_any_output",
+  "semanticSelection": "forbidden_from_scripted_fakes",
+  "realQualityState": "pending_verified_purpose_budget_and_preregistration",
+  "configurationSha256": "2703b8dc9227314a51f6266e6e768316d4e615497113b7e9be07281a67638268"
+}
