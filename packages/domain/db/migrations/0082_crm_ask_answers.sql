@@ -50,6 +50,9 @@ CREATE FUNCTION crm_ask_initial_identity_immutable() RETURNS trigger LANGUAGE pl
 BEGIN
  IF ROW(NEW.workspace_id,NEW.id,NEW.owner_user_id,NEW.created_at) IS DISTINCT FROM ROW(OLD.workspace_id,OLD.id,OLD.owner_user_id,OLD.created_at)
  OR OLD.state='deleted' AND NEW.state<>'deleted'
+ OR OLD.state='stale' AND NEW.state NOT IN ('stale','deleted')
+ OR NEW.version<OLD.version OR NEW.epoch<OLD.epoch
+ OR NEW.question IS DISTINCT FROM OLD.question AND NOT (OLD.question IS NOT NULL AND NEW.question IS NULL AND NEW.state IN ('stale','deleted'))
  OR NEW.state<>'deleted' AND ROW(NEW.scope,NEW.initial_contexts,NEW.initial_access_closure) IS DISTINCT FROM ROW(OLD.scope,OLD.initial_contexts,OLD.initial_access_closure) THEN
  RAISE EXCEPTION USING ERRCODE='23514',CONSTRAINT='crm_ask_initial_identity_immutable',MESSAGE='Ask initial identity is immutable';
  END IF;

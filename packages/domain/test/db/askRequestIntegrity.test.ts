@@ -57,3 +57,9 @@ it('refuses rewriting the priced proof of a conserved financial attempt',async()
  const receipt=(await database.session.query<{id:string}>(`INSERT INTO crm_ask_financial_receipts(workspace_id,request_id,request_version,request_epoch,stage,attempt,reservation_id,job_id,fencing_token,purpose_revision,purpose_snapshot,config_fingerprint,evaluation_fingerprint,authorization_fingerprint,input_hash,input_price_micros,output_price_micros,max_input_tokens,max_output_tokens,dispatch_state) VALUES($1,$2,1,1,'answer',1,$3,$4,1,1,$5::jsonb,$6,$6,$6,$6,1,1,1000,100,'reserved') RETURNING id`,[seeded.alpha.workspaceId,requestId,reservationId,jobId,JSON.stringify(purpose),'a'.repeat(64)])).rows[0]!;
  await expect(database.session.query('UPDATE crm_ask_financial_receipts SET input_price_micros=2 WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,receipt.id])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_financial_immutable'});
 });
+it('cannot restore private question text on a stale request',async()=>{
+ const id=randomUUID(),sourceId=randomUUID();
+ const scope={sources:[{workspaceId:seeded.alpha.workspaceId,sourceId,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null}]};
+ await database.session.query(`INSERT INTO crm_ask_requests(workspace_id,id,owner_user_id,question,scope,initial_contexts,initial_access_closure,state,reason) VALUES($1,$2,$3,NULL,$4::jsonb,'[{"personId":null,"firmIds":[],"relationships":[],"review":"current"}]','{"firmIds":[],"personIds":[]}','stale','source_changed')`,[seeded.alpha.workspaceId,id,seeded.alpha.admin.userId,JSON.stringify(scope)]);
+ await expect(database.session.query("UPDATE crm_ask_requests SET question='Private question restored',state='pending',reason=NULL WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_initial_identity_immutable'});
+});
