@@ -125,7 +125,7 @@ export async function bindCrmEvidenceWork(
 export async function readCrmEvidenceWork(
   context: RepositoryContext,
   input: CrmEvidenceWorkRead,
-  mail: CrmMailEvidencePort = createNativeCrmMailEvidence(),
+  _mail: CrmMailEvidencePort = createNativeCrmMailEvidence(),
 ) {
   const actor = context.scope.actor;
   if (actor.kind !== "user" || !(await activeIdentityActor(context)))

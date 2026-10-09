@@ -14,6 +14,7 @@ import {
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 import { dispatch } from "../src/server.ts";
+import { seedFirm } from "./support/crmSeed.ts";
 async function approveCaptureFixture(
   fixture: Awaited<ReturnType<typeof createAuthFixture>>,
   ownerUserId = fixture.alpha.admin.userId,
@@ -170,6 +171,29 @@ it("reviews conflicts across two actual copied mailboxes after disconnect withou
         locator: null,
       });
     }
+    const firmA = await seedFirm(fixture, {
+      name: "Original mail A",
+      assignedUserId: fixture.alpha.admin.userId,
+    });
+    const firmB = await seedFirm(fixture, {
+      name: "Independent mail B",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    for (const [index, firmId] of [firmA, firmB].entries()) {
+      const source = sources[index]!;
+      const associated = await post(
+        "/crm/business/mail/associate",
+        command({
+          sourceId: source.sourceId,
+          expectedRevision: source.revision,
+          firmId,
+        }),
+      );
+      expect(associated.status).toBe(200);
+      source.revision = (
+        associated.body as { result: { sourceRevision: number } }
+      ).result.sourceRevision;
+    }
     expect(
       (
         await post(
@@ -309,7 +333,10 @@ it("reviews conflicts across two actual copied mailboxes after disconnect withou
       (
         await post(
           "/crm/business/mail/delete",
-          command({ sourceId: target.source.sourceId, expectedRevision: 1 }),
+          command({
+            sourceId: target.source.sourceId,
+            expectedRevision: target.source.revision,
+          }),
         )
       ).status,
     ).toBe(200);
@@ -334,6 +361,34 @@ it("reviews conflicts across two actual copied mailboxes after disconnect withou
       ],
     });
     expect(JSON.stringify(deletedHistory.body)).not.toContain("Mail-specific");
+    const preview = await post(
+      "/retention/deletions/preview",
+      command({ targetKind: "firm", firmId: firmA }),
+    );
+    expect(preview.status).toBe(200);
+    const receipt = (
+      preview.body as { result: { requestId: string; previewHash: string } }
+    ).result;
+    const deleted = await post(
+      "/retention/deletions/commit",
+      command({
+        requestId: receipt.requestId,
+        previewHash: receipt.previewHash,
+      }),
+    );
+    expect(deleted.status).toBe(200);
+    const survivingCopy = await post("/crm/business/mail/read", {
+      sourceId: sources[1]!.sourceId,
+      sourceRevision: sources[1]!.revision,
+      contentHash: sources[1]!.contentHash,
+    });
+    expect(survivingCopy.status).toBe(200);
+    expect(JSON.stringify(survivingCopy.body)).toContain(
+      "Could we discuss maintenance next week?",
+    );
+    expect(
+      (await post("/crm/evidence/decision/history/read", historyInput)).status,
+    ).toBe(404);
     expect(checks).toBe(baselineChecks);
   } finally {
     await fixture.stop();

@@ -1165,6 +1165,7 @@ export async function readCrmDecisionHistory(
         exceptionalAdminRead: true,
       },
     });
+  if (!(await activeIdentityActor(context))) return null;
   return {
     anchorId: input.anchorId,
     sourceId: input.sourceId,

@@ -363,7 +363,7 @@ describe('source-backed relationships and endpoint identity', () => {
   it('lets the owner restore explicitly contextualized B evidence after legacy A authority is lost', async () => {
     const oldFirmId = await seedFirm(fixture, { name: 'Legacy default A', assignedUserId: fixture.alpha.salesperson.userId });
     const firmId = await seedFirm(fixture, { name: 'Surviving explicit B', assignedUserId: fixture.alpha.salesperson.userId });
-    const personId = await seedContact(fixture, { firmId: oldFirmId, fullName: 'B context owner person' });
+    const personId = await seedContact(fixture, { firmId, fullName: 'B context owner person' });
     await post('/crm/people/bridge', command({ contactIds: [personId] }));
     await post('/crm/people/source/add', command({ personId, sourceKey: randomUUID(), excerpt: 'Explicit B selected content', occurredAt: '2026-09-15T14:00:00.000Z' }));
     const source = ((await post('/crm/people/read', { personId })).body as {
@@ -384,6 +384,9 @@ describe('source-backed relationships and endpoint identity', () => {
     }).result.relationshipId;
     await post('/crm/relationships/context/save', command({ personId, relationshipId, relationshipRevision: 1, evidence }));
     await post('/crm/endpoints/claim', command({ personId, firmId: null, shared: false, kind: 'email', value: 'restored@bcontext.example.test', status: 'current', startDate: '2026-01-01', endDate: null, evidence }));
+    // Copy captured under B; the current legacy pointer later moves to A.
+    // A-captured refusal remains covered by crmEvidenceOriginalAcl.
+    await fixture.db.query('UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2', [fixture.alpha.workspaceId, personId, oldFirmId]);
     await reassignFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: oldFirmId, toUserId: fixture.alpha.admin.userId });
     expect((await post('/crm/people/read', { personId })).body).toMatchObject({ person: { firm: null }, sources: [{ excerpt: 'Explicit B selected content' }] });
     expect((await post('/crm/people/source/add', command({ personId, sourceKey: randomUUID(), excerpt: 'Unauthorized default A new capture', occurredAt: '2026-09-16T14:00:00.000Z' }))).status).toBe(409);

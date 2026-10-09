@@ -57,12 +57,6 @@ it("flags dependent open meeting work after correction while preserving complete
       clientVersion: CURRENT_CLIENT_VERSION,
       ...fields,
     });
-    const created = await post(
-      "/crm/people/create",
-      command({ fullName: "Human decision correspondent" }),
-    );
-    const personId = (created.body as { result: { personId: string } }).result
-      .personId;
     const firmId = await seedFirm(fixture, {
       name: "Supported work firm",
       assignedUserId: fixture.alpha.admin.userId,
@@ -441,12 +435,6 @@ it("keeps equivalent reprocessing stable and flags open call work after a materi
       clientVersion: CURRENT_CLIENT_VERSION,
       ...fields,
     });
-    const created = await post(
-      "/crm/people/create",
-      command({ fullName: "Human decision correspondent" }),
-    );
-    const personId = (created.body as { result: { personId: string } }).result
-      .personId;
     const firmId = await seedFirm(fixture, {
       name: "Supported work firm",
       assignedUserId: fixture.alpha.admin.userId,

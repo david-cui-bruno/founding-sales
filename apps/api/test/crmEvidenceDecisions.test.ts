@@ -1,3 +1,7 @@
+import type {
+  SessionQueryable,
+  QueryResultRowLike,
+} from "@fss/domain/db/queryable.ts";
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { crmProcessingResultSchema } from "@fss/contracts";
@@ -187,6 +191,59 @@ it("preserves a dated human confirmation on equivalent reprocessing with a new p
         },
       ],
     });
+    for (
+      let expectedDecisionRevision = 1;
+      expectedDecisionRevision <= 50;
+      expectedDecisionRevision++
+    ) {
+      const next = await post(
+        "/crm/evidence/decide",
+        command({
+          source,
+          claimId: second.claim.claimId,
+          claimRevision: second.claim.claimRevision,
+          claimHash: second.claim.claimHash,
+          contextHash: second.generation.contextHash,
+          expectedDecisionRevision,
+          action: expectedDecisionRevision % 2 === 0 ? "confirm" : "dismiss",
+        }),
+      );
+      expect(next.status).toBe(200);
+    }
+    const historyInput = {
+      kind: source.kind,
+      sourceId: source.sourceId,
+      anchorId: dated.claims[0]!.anchorId,
+    };
+    const history = await post(
+      "/crm/evidence/decision/history/read",
+      historyInput,
+    );
+    expect(history.status).toBe(200);
+    const historyBody = history.body as {
+      decisions: { revision: number }[];
+      nextBeforeRevision: number | null;
+    };
+    expect(historyBody.decisions.map((value) => value.revision)).toEqual(
+      Array.from({ length: 50 }, (_, offset) => 51 - offset),
+    );
+    expect(historyBody.nextBeforeRevision).toBe(2);
+    const finalPage = await post("/crm/evidence/decision/history/read", {
+      ...historyInput,
+      beforeRevision: historyBody.nextBeforeRevision,
+    });
+    expect(finalPage.body).toMatchObject({
+      decisions: [{ revision: 1 }],
+      nextBeforeRevision: null,
+    });
+    expect(
+      (
+        await post("/crm/evidence/decision/history/read", {
+          ...historyInput,
+          limit: 51,
+        })
+      ).status,
+    ).toBe(400);
   } finally {
     await fixture.stop();
   }
@@ -198,6 +255,26 @@ it("refuses replay of a human decision after its exact source is deleted", async
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
+    let leaveDuringHistoryAudit = false;
+    const wrapped: SessionQueryable = {
+      async query<Row extends QueryResultRowLike>(
+        sql: string,
+        values?: readonly unknown[],
+      ) {
+        const result = await fixture.db.query<Row>(sql, values);
+        if (
+          leaveDuringHistoryAudit &&
+          values?.[3] === "crm.evidence_decision_history_admin_read"
+        ) {
+          leaveDuringHistoryAudit = false;
+          await fixture.db.query(
+            "UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2",
+            [fixture.alpha.workspaceId, fixture.alpha.admin.userId],
+          );
+        }
+        return result;
+      },
+    };
     const post = (path: string, body: unknown) =>
       dispatch(
         {
@@ -208,8 +285,8 @@ it("refuses replay of a human decision after its exact source is deleted", async
           body,
         },
         {
-          session: fixture.db,
-          auth: fixture.deps,
+          session: wrapped,
+          auth: { ...fixture.deps, db: wrapped },
           supportedClientVersions: fixture.deps.config.supportedClientVersions,
           sendingEnabled: false,
         },
@@ -455,6 +532,14 @@ it("refuses replay of a human decision after its exact source is deleted", async
         },
       ],
     });
+    await fixture.db.query(
+      "UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",
+      [fixture.alpha.workspaceId, fixture.alpha.salesperson.userId],
+    );
+    leaveDuringHistoryAudit = true;
+    expect(
+      (await post("/crm/evidence/decision/history/read", historyInput)).status,
+    ).toBe(404);
   } finally {
     await fixture.stop();
   }

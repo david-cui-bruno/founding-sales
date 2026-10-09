@@ -13,7 +13,7 @@ async function insert(f: Fixture, table: string, row: Row) {
     Object.values(row),
   );
 }
-function anchor(f: Fixture, patch: Row = {}): Row {
+function anchor(f: Fixture, patch: Row = {}) {
   return {
     workspace_id: f.seeded.alpha.workspaceId,
     id: randomUUID(),
@@ -41,7 +41,7 @@ function anchor(f: Fixture, patch: Row = {}): Row {
     ...patch,
   };
 }
-async function decision(f: Fixture, patch: Row = {}): Promise<Row> {
+async function decision(f: Fixture, patch: Row = {}) {
   const a = anchor(f);
   await insert(f, "crm_claim_review_anchors", a);
   return {
@@ -53,7 +53,7 @@ async function decision(f: Fixture, patch: Row = {}): Promise<Row> {
     ...patch,
   };
 }
-function group(f: Fixture, patch: Row = {}): Row {
+function group(f: Fixture, patch: Row = {}) {
   return {
     workspace_id: f.seeded.alpha.workspaceId,
     id: randomUUID(),
@@ -61,7 +61,7 @@ function group(f: Fixture, patch: Row = {}): Row {
     ...patch,
   };
 }
-async function conflictRevision(f: Fixture, patch: Row = {}): Promise<Row> {
+async function conflictRevision(f: Fixture, patch: Row = {}) {
   const g = group(f);
   await insert(f, "crm_claim_conflicts", g);
   return {
@@ -73,7 +73,7 @@ async function conflictRevision(f: Fixture, patch: Row = {}): Promise<Row> {
     ...patch,
   };
 }
-async function member(f: Fixture, patch: Row = {}): Promise<Row> {
+async function member(f: Fixture, patch: Row = {}) {
   const r = await conflictRevision(f);
   await insert(f, "crm_claim_conflict_revisions", r);
   const a = anchor(f);
@@ -86,7 +86,7 @@ async function member(f: Fixture, patch: Row = {}): Promise<Row> {
     ...patch,
   };
 }
-async function work(f: Fixture, patch: Row = {}): Promise<Row> {
+async function work(f: Fixture, patch: Row = {}) {
   const a = anchor(f);
   await insert(f, "crm_claim_review_anchors", a);
   return {
@@ -217,8 +217,8 @@ export const CRM_EVIDENCE_CONSTRAINT_CASES: readonly Case[] = [
       return f.session.query(
         "UPDATE crm_claim_review_anchors SET original_access_closure=$3::jsonb WHERE workspace_id=$1 AND id=$2",
         [
-          row.workspace_id,
-          row.id,
+          row["workspace_id"],
+          row["id"],
           JSON.stringify({ firmIds: [absent], personIds: [] }),
         ],
       );
@@ -279,7 +279,7 @@ export const CRM_EVIDENCE_CONSTRAINT_CASES: readonly Case[] = [
       await insert(f, "crm_claim_decision_revisions", row);
       return f.session.query(
         "UPDATE crm_claim_decision_revisions SET action='dismiss' WHERE workspace_id=$1 AND anchor_id=$2",
-        [row.workspace_id, row.anchor_id],
+        [row["workspace_id"], row["anchor_id"]],
       );
     },
   },
@@ -346,7 +346,7 @@ export const CRM_EVIDENCE_CONSTRAINT_CASES: readonly Case[] = [
       await insert(f, "crm_claim_conflict_revisions", row);
       return f.session.query(
         "UPDATE crm_claim_conflict_revisions SET actor_user_id=$3 WHERE workspace_id=$1 AND conflict_id=$2",
-        [row.workspace_id, row.conflict_id, f.seeded.alpha.admin.userId],
+        [row["workspace_id"], row["conflict_id"], f.seeded.alpha.admin.userId],
       );
     },
   },
@@ -375,7 +375,7 @@ export const CRM_EVIDENCE_CONSTRAINT_CASES: readonly Case[] = [
       await insert(f, "crm_claim_conflict_members", row);
       return f.session.query(
         "DELETE FROM crm_claim_conflict_members WHERE workspace_id=$1 AND conflict_id=$2",
-        [row.workspace_id, row.conflict_id],
+        [row["workspace_id"], row["conflict_id"]],
       );
     },
   },
