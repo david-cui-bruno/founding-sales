@@ -149,7 +149,10 @@ BEGIN
  OR OLD.state='deleted' OR NEW.revision<>OLD.revision+1 OR NEW.observed_at<OLD.observed_at
  THEN RAISE EXCEPTION 'Recovery bindings and epochs are immutable' USING ERRCODE='23514',CONSTRAINT='crm_mail_recovery_immutable'; END IF;
  IF NEW.state='deleted' THEN RETURN NEW; END IF;
- IF NEW.from_at IS DISTINCT FROM OLD.from_at OR (OLD.to_at IS NOT NULL AND ROW(NEW.to_at,NEW.history_anchor,NEW.total_days) IS DISTINCT FROM ROW(OLD.to_at,OLD.history_anchor,OLD.total_days))
+ IF (OLD.state='pending_profile' AND NEW.state NOT IN ('pending_profile','enumerating','blocked'))
+ OR (OLD.state='enumerating' AND NEW.state NOT IN ('enumerating','draining','blocked'))
+ OR (OLD.to_at IS NULL AND NEW.to_at IS NOT NULL AND (NEW.next_day_ordinal<>0 OR NEW.history_cursor IS DISTINCT FROM NEW.history_anchor OR NEW.history_page_token IS NOT NULL OR NEW.next_day_page_token IS NOT NULL))
+ OR NEW.from_at IS DISTINCT FROM OLD.from_at OR (OLD.to_at IS NOT NULL AND ROW(NEW.to_at,NEW.history_anchor,NEW.total_days) IS DISTINCT FROM ROW(OLD.to_at,OLD.history_anchor,OLD.total_days))
  OR NEW.next_day_ordinal<OLD.next_day_ordinal OR NEW.next_day_ordinal>OLD.next_day_ordinal+1
  OR (OLD.history_cursor IS NOT NULL AND NEW.history_cursor::numeric<OLD.history_cursor::numeric)
  OR (OLD.state='complete' AND NEW.state<>'complete') OR (OLD.state='blocked' AND NEW.state<>'blocked')
