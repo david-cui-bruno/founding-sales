@@ -152,3 +152,17 @@ export const mailSourceRecaptureQueuedSchema = z.strictObject({
   sourceRevision: z.number().int().positive(),
   status: z.literal('queued'),
 });
+
+/** Last verified provider-original state; connection freshness never claims current Gmail availability. */
+export const originalMailObservationSchema=z.strictObject({
+ state:z.enum(['unknown','available','trashed','confirmed_missing','transient_unavailable']),
+ revision:z.string().regex(/^(0|[1-9][0-9]{0,18})$/u),observedAt:z.string().datetime().nullable(),
+ observedGeneration:z.number().int().positive().nullable(),observedAccountBinding:z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
+ reason:z.enum(['verified_metadata','verified_trash_label','verified_message_not_found','grant_unavailable','rate_limited','provider_unavailable']).nullable(),
+ connectionState:z.enum(['current','disconnected','changed']),
+}).refine(value=>value.state==='unknown'?value.observedAt===null&&value.observedGeneration===null&&value.observedAccountBinding===null&&value.reason===null:value.revision!=='0'&&value.observedAt!==null&&value.observedGeneration!==null&&value.observedAccountBinding!==null&&value.reason!==null);
+export const mailConversationV2Schema=z.discriminatedUnion('state',[
+ mailConversationSchema.options[0],
+ mailConversationSchema.options[1].extend({source:mailConversationSchema.options[1].shape.source.extend({originalObservation:originalMailObservationSchema})}),
+]);
+export type MailConversationV2=z.infer<typeof mailConversationV2Schema>;

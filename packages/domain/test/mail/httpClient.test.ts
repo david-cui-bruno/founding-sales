@@ -334,6 +334,23 @@ describe('the Gmail HTTP client', () => {
     expect(new URL(lastRequest().url, origin).searchParams.get('pageToken')).toBe('page-1');
   });
 
+  it('opts bounded CRM reconciliation into deleted-message and removed-label history without changing operational defaults', async () => {
+    const lifecyclePage={history:[{id:'1010',messagesAdded:[{message:{id:'new',threadId:'thread'}}],labelsAdded:[{message:{id:'added-label',threadId:'thread'},labelIds:['TRASH']}],messagesDeleted:[{message:{id:'deleted',threadId:'thread'}}],labelsRemoved:[{message:{id:'removed-label',threadId:'thread'},labelIds:['TRASH']}]}],historyId:'1020'};
+    answer('/gmail/v1/users/me/history',200,lifecyclePage);
+    const request={startHistoryId:'1000',maxResults:25,includeLifecycleChanges:true};
+    const page=await client.listHistory(access,request);
+    expect(new URL(lastRequest().url,origin).searchParams.getAll('historyTypes')).toEqual(['messageAdded','labelAdded','messageDeleted','labelRemoved']);
+    expect(page.ok&&page.records[0]?.changes).toEqual([
+      {messageId:'new',threadId:'thread',kind:'message_added',labelIds:[]},
+      {messageId:'added-label',threadId:'thread',kind:'label_added',labelIds:['TRASH']},
+      {messageId:'deleted',threadId:'thread',kind:'message_deleted',labelIds:[]},
+      {messageId:'removed-label',threadId:'thread',kind:'label_removed',labelIds:['TRASH']},
+    ]);
+    const operational=await client.listHistory(access,{startHistoryId:'1000'});
+    expect(new URL(lastRequest().url,origin).searchParams.getAll('historyTypes')).toEqual(['messageAdded','labelAdded']);
+    expect(operational.ok&&operational.records[0]?.changes.map(change=>change.kind)).toEqual(['message_added','label_added']);
+  });
+
   it('keeps a uint64 history id exactly, digit for digit', async () => {
     answer('/gmail/v1/users/me/history', 200, {
       history: [
