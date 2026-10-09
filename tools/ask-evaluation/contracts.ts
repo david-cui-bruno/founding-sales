@@ -169,6 +169,15 @@ export const purposeGateSchema = z.discriminatedUnion('state', [
     maxSpendCents: z.literal(0), reason: z.literal('purpose_configuration_unverified') }),
 ]);
 
+/** Guard tests use the same bounded fake-call ledger; no credential or granting fields. */
+export const guardConfigurationSchema = z.strictObject({
+  purpose: purposeGateSchema,
+  reservation: z.strictObject({calls:z.literal(1),inputTokens:count,outputTokens:count.max(100_000)}),
+  priorUsage: usageSchema,
+});
+export type PurposeGate = z.infer<typeof purposeGateSchema>;
+export type EvaluationGuardConfiguration = z.infer<typeof guardConfigurationSchema>;
+
 // Shared vector/fusion contracts. IDs are join keys, never source permissions.
 export const evidenceGroupSchema = z.strictObject({
   groupId: fixtureId,
@@ -276,7 +285,7 @@ export const reportSchema = z.strictObject({
   syntheticControlsPassed:z.boolean().optional(),
   criticalControlFailureCount:count.optional(),expectedRefusalCount:count.optional(),
   modelEvaluationState: z.enum(['not_run', 'fake_only_complete',
-    'fake_only_unjudged_claims']),
+    'fake_only_unjudged_claims', 'guard_only']),
   caseResults: z.array(measurementSchema).max(600),
   categorySummaries: z.array(z.strictObject({ category: categorySchema,
     caseCount: count.max(120), failures: count,
@@ -320,6 +329,7 @@ export interface EvaluationAnswerAdapter {
   answer(input: {query: string; windows: readonly PermittedWindow[]}, signal: AbortSignal):
     Promise<z.infer<typeof answerOutputSchema>>;
 }
+export type EvaluationGuard = EvaluationGuardConfiguration & {answer:EvaluationAnswerAdapter};
 export type EvaluationRankingInput = z.infer<typeof rankingInputSchema>;
 export type EvaluationRankingOutput = z.infer<typeof rankingOutputSchema>;
 export interface EvaluationVectorPort {
