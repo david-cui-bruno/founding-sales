@@ -66,6 +66,14 @@ it('explicitly commits a human note from current keyword evidence without enabli
   const cancelled=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:undatedId,expectedVersion:1,action:'cancel_task'});
   expect(cancelled.status).toBe(200);
   expect(cancelled.body).toMatchObject({result:{actionId:undatedId,version:2,status:'cancelled',completedAt:null}});
+  const pastDateTask=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Overdue date follow-up',due:{kind:'date',date:'2000-01-01',zone:'Pacific/Kiritimati',expression:'January 1, 2000'},target:{kind:'person',personId}}});
+  expect(pastDateTask.status).toBe(200);
+  const pastInstantTask=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Overdue instant follow-up',due:{kind:'instant',at:'2000-01-02T01:00:00Z',zone:'America/Los_Angeles',expression:'January 1, 2000 evening'},target:{kind:'person',personId}}});
+  expect(pastInstantTask.status).toBe(200);
+  const overdue=await post('/ask/actions/read',{scope:{kind:'today'}});
+  expect(overdue.status).toBe(200);
+  expect((overdue.body as {items:unknown[]}).items).toHaveLength(2);
+  expect(overdue.body).toMatchObject({items:expect.arrayContaining([expect.objectContaining({actionId:(pastDateTask.body as {result:{actionId:string}}).result.actionId,status:'open',label:'Overdue date follow-up'}),expect.objectContaining({actionId:(pastInstantTask.body as {result:{actionId:string}}).result.actionId,status:'open',label:'Overdue instant follow-up'})]),nextAfterId:null});
   const adminToken=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
   const adminRead=await dispatch({method:'POST',path:'/ask/actions/read',body:{scope:{kind:'history'}},query:new URLSearchParams(),headers:{authorization:`Bearer ${adminToken}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
   expect(adminRead.status).toBe(200);
