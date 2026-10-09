@@ -55,6 +55,26 @@ it('refuses a fabricated citation window instead of publishing a source-shaped c
   }
 });
 
+it('refuses configured unevaluated retrieval and support adapters before any content transfer', async () => {
+  for (const port of ['retrieval', 'support'] as const) {
+    const selected = await selectedAnswer();
+    try {
+      let transfers = 0;
+      const extras: Pick<AskAnswerComposition, 'retrieval' | 'support'> = port === 'retrieval'
+        ? { retrieval: { async rank() { transfers++; throw new Error('Unevaluated retrieval must not receive private inputs'); } } }
+        : { support: { endpointId: 'unapproved-support', modelVersion: 'unevaluated-v1', providerKey: 'fixture.ask.support', async run() { transfers++; throw new Error('Unevaluated support must not receive private inputs'); } } };
+      await selected.run(async () => { transfers++; throw new Error('Answer must not receive content when a configured port is unevaluated'); }, extras);
+      const read = await selected.post('/ask/answers/read', { requestId: selected.requestId });
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({ state: 'unavailable', reason: 'processing_authority_unavailable', answer: null, fallback: { passages: [{ text: selected.text }] } });
+      expect(transfers).toBe(0);
+      expect((await selected.post('/research/firm', { firmId: selected.firmId })).body).toMatchObject({ spend: { todayCents: 0, monthToDateCents: 0 } });
+    } finally {
+      await selected.fixture.stop();
+    }
+  }
+});
+
 it('does not publish inference as verified evidence even when its citation is a current original', async () => {
   const selected = await selectedAnswer();
   try {
