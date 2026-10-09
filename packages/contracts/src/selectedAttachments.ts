@@ -13,3 +13,5 @@ export const selectedAttachmentCommitSchema=selectedAttachmentCommitPayloadSchem
 export const selectedAttachmentReadSchema=z.object({sourceId:z.uuid()}).strict();
 export const selectedAttachmentAnalyzePayloadSchema=z.object({source:crmSourceLookupSchema.refine(value=>value.kind==='selected_note'&&value.locator===null),fileHash:z.string().regex(/^[a-f0-9]{64}$/u)}).strict();
 export const selectedAttachmentAnalyzeSchema=selectedAttachmentAnalyzePayloadSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
+export const selectedAttachmentReselectPayloadSchema=selectedImportInputSchema.pick({participants:true,occurredAt:true}).extend({file:selectedAttachmentFileSchema,sourceId:z.uuid(),expectedSourceRevision:z.number().int().positive(),expectedMetadataRevision:z.number().int().positive(),previewHash:z.string().regex(/^[a-f0-9]{64}$/u)}).strict();
+export const selectedAttachmentReselectSchema=selectedAttachmentReselectPayloadSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});

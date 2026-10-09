@@ -87,4 +87,44 @@ describe('explicit selected attachment analysis',()=>{
   expect(read.status).toBe(200);
   expect(read.body).toMatchObject({file:{state:'awaiting_selection',fileName:null,fileHash:null},source:{revision:3,contentHash:null,availability:'awaiting_recapture'}});
  });
+ it('reports truncated selected bytes before analysis even if the supplied completeness label says complete',async()=>{
+  const result=await post('/crm/attachments/preview',{fileName:'repairs.txt',declaredByteLength:29,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'});
+  expect(result.status).toBe(200);
+  expect(result.body).toMatchObject({state:'unsupported',reason:'incomplete_selection',processing:'unavailable'});
+  expect(result.body).not.toHaveProperty('fileHash');
+ });
+ it('does not treat an edited source excerpt as the unchanged original selected file',async()=>{
+  const person=await post('/crm/people/create',command({fullName:'Edited file correspondent'}));
+  const personId=(person.body as {result:{personId:string}}).result.personId;
+  const file={fileName:'repairs.txt',declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'};
+  const preview=await post('/crm/attachments/preview',file);
+  const committed=await post('/crm/attachments/commit',command({file,personId,firmId:null,participants:[],occurredAt:null,importKey:'edited-file-selection',previewHash:(preview.body as {previewHash:string}).previewHash}));
+  const sourceId=(committed.body as {result:{sourceId:string}}).result.sourceId;
+  const correction={text:'Edited original excerpt.',subtype:'selected_file',label:'repairs.txt',direction:'unknown',participants:[],occurredAt:null,attachments:[]};
+  const correctedPreview=await post('/crm/imports/preview',correction);
+  expect((await post('/crm/imports/correct',command({...correction,sourceId,expectedSourceRevision:1,expectedMetadataRevision:1,previewHash:(correctedPreview.body as {previewHash:string}).previewHash,parserVersion:'selected-v1'}))).status).toBe(200);
+  const read=await post('/crm/attachments/read',{sourceId});
+  expect(read.status).toBe(200);
+  expect(read.body).toMatchObject({file:{state:'stale',sourceRevision:1,metadataRevision:2},source:{revision:2,availability:'available'}});
+  const reference=(read.body as {source:{workspaceId:string;sourceId:string;kind:string;revision:number;contentHash:string}}).source;
+  const denied=await post('/crm/attachments/analyze',command({source:{workspaceId:reference.workspaceId,sourceId:reference.sourceId,kind:reference.kind,revision:reference.revision,contentHash:reference.contentHash,locator:null},fileHash:'25ee8c81049e3d9309107bf3b7b9b807b1a7ed83121acb6c43b978889d86d3b1'}));
+  expect(denied.status).toBe(409);
+  expect(denied.body).toMatchObject({reason:'file_selection_changed'});
+ });
+ it('reselects restored bytes explicitly at a newer source revision without reviving the old selection',async()=>{
+  const person=await post('/crm/people/create',command({fullName:'Reselected file correspondent'}));
+  const personId=(person.body as {result:{personId:string}}).result.personId;
+  const file={fileName:'repairs.txt',declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'};
+  const preview=await post('/crm/attachments/preview',file);
+  const committed=await post('/crm/attachments/commit',command({file,personId,firmId:null,participants:[],occurredAt:null,importKey:'reselected-file-selection',previewHash:(preview.body as {previewHash:string}).previewHash}));
+  const sourceId=(committed.body as {result:{sourceId:string}}).result.sourceId;
+  await post('/crm/imports/delete',command({sourceId,expectedSourceRevision:1,expectedMetadataRevision:1}));
+  await post('/crm/imports/restore',command({sourceId,expectedSourceRevision:2,expectedMetadataRevision:2}));
+  const freshFile={...file,fileName:'repairs-v2.txt'};
+  const fresh=await post('/crm/attachments/preview',freshFile);
+  const result=await post('/crm/attachments/reselect',command({sourceId,expectedSourceRevision:3,expectedMetadataRevision:2,file:freshFile,participants:[],occurredAt:null,previewHash:(fresh.body as {previewHash:string}).previewHash}));
+  expect(result.status).toBe(200);
+  expect(result.body).toMatchObject({result:{sourceId,sourceRevision:4,metadataRevision:3}});
+  expect((await post('/crm/attachments/read',{sourceId})).body).toMatchObject({file:{state:'selected',fileName:'repairs-v2.txt',sourceRevision:4,metadataRevision:3},source:{revision:4,availability:'available'},processing:{state:'not_requested'}});
+ });
 });

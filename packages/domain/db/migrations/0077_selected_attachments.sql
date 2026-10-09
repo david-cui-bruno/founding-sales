@@ -22,6 +22,8 @@ BEGIN
   UPDATE crm_selected_file_receipts SET state='deleted',source_revision=NEW.revision,file_hash=NULL,source_content_hash=NULL,file_name=NULL,byte_length=NULL,format=NULL,parser_version=NULL,origin=NULL WHERE workspace_id=NEW.workspace_id AND source_id=NEW.id;
  ELSIF NEW.availability='awaiting_recapture' THEN
   UPDATE crm_selected_file_receipts SET state='awaiting_selection',source_revision=NEW.revision WHERE workspace_id=NEW.workspace_id AND source_id=NEW.id;
+ ELSIF NEW.revision IS DISTINCT FROM OLD.revision OR NEW.content_hash IS DISTINCT FROM OLD.content_hash THEN
+  UPDATE crm_selected_file_receipts SET state='stale' WHERE workspace_id=NEW.workspace_id AND source_id=NEW.id AND state='selected';
  END IF;
  RETURN NEW;
 END $$;
