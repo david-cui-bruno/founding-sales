@@ -405,3 +405,56 @@ it('reads Ask through strict authenticated transport',async()=>{
  };
  expect(await answerOperation(operationHandlers(deps),'read','ask.read',{operation:'opportunities',scope:{firmId:FIRM_ID},status:'open',limit:20})).toEqual(response);
 });
+it('previews an explicitly selected original file through the authenticated host and rejects late identity changes',async()=>{
+ const deps=hosts();let generation=0;let finish!:()=>void;
+ deps.recordings.identity.current=()=>generation;
+ deps.api.read=async(path,parse)=>{expect(path).toBe('/crm/attachments/preview');await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse({state:'unsupported',reason:'unsupported_format',processing:'unavailable',supportedFormats:['utf8_text','utf8_markdown','utf8_csv','utf8_srt','utf8_vtt'],maxBytes:80000,maxCharacters:20000})};};
+ const pending=answerOperation(operationHandlers(deps),'read','crm.selectedAttachmentPreview',{fileName:'lease.pdf',declaredByteLength:8,bytesBase64:'JVBERi0xLjc=',completeness:'complete'});
+ void pending.catch(()=>undefined);
+ await new Promise<void>(resolve=>setTimeout(resolve,0));
+ expect(finish).toBeTypeOf('function');
+ generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
+});
+it('reads exact selected-file state and processing through the authenticated host',async()=>{
+ const deps=hosts();
+ deps.api.read=async(path,parse)=>{expect(path).toBe('/crm/attachments/read');return {ok:true,value:parse({file:{state:'selected',sourceRevision:1,metadataRevision:1,fileName:'original.txt',byteLength:13,fileHash:'a'.repeat(64),format:'utf8_text',origin:'user_selected_original'},source:{workspaceId:ITEM_ID,sourceId:FIRM_ID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-09T00:00:00Z',completeness:'selected_excerpt',availability:'available'},processing:{state:'not_requested',claims:[]}})};};
+ const result=await answerOperation(operationHandlers(deps),'read','crm.selectedAttachmentRead',{sourceId:FIRM_ID});
+ expect(result).toMatchObject({file:{state:'selected',fileName:'original.txt'},processing:{state:'not_requested'}});
+});
+it('imports one explicitly selected original file through a closed command without starting analysis',async()=>{
+ const deps=hosts();const requests:{path:string;payload:unknown}[]=[];
+ deps.api.command=async(path,payload,parse)=>{requests.push({path,payload});return {ok:true,value:parse({sourceId:ITEM_ID,sourceRevision:1,metadataRevision:1})};};
+ const input={file:{fileName:'original.txt',declaredByteLength:13,bytesBase64:'U2VsZWN0ZWQgdGV4dA==',completeness:'complete'},personId:null,firmId:FIRM_ID,participants:[],occurredAt:null,importKey:'selected-original',previewHash:'a'.repeat(64)};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.selectedAttachmentCommit',input)).toEqual({sourceId:ITEM_ID,sourceRevision:1,metadataRevision:1});
+ expect(requests).toEqual([{path:'/crm/attachments/commit',payload:input}]);
+});
+it('requests analysis only for the explicit current file proof through the authenticated host',async()=>{
+ const deps=hosts();const requests:{path:string;payload:unknown}[]=[];
+ deps.api.command=async(path,payload,parse)=>{requests.push({path,payload});return {ok:true,value:parse({sourceId:ITEM_ID,sourceRevision:1,generationId:FIRM_ID,state:'pending',reason:'adapter_unavailable'})};};
+ const input={source:{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:1,contentHash:'b'.repeat(64),locator:null},fileHash:'a'.repeat(64)};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.selectedAttachmentAnalyze',input)).toEqual({sourceId:ITEM_ID,sourceRevision:1,generationId:FIRM_ID,state:'pending',reason:'adapter_unavailable'});
+ expect(requests).toEqual([{path:'/crm/attachments/analyze',payload:input}]);
+});
+it('reselects a fresh original file at the inspected source and metadata revisions',async()=>{
+ const deps=hosts();const requests:{path:string;payload:unknown}[]=[];
+ deps.api.command=async(path,payload,parse)=>{requests.push({path,payload});return {ok:true,value:parse({sourceId:ITEM_ID,sourceRevision:3,metadataRevision:2})};};
+ const input={file:{fileName:'corrected.md',declaredByteLength:13,bytesBase64:'U2VsZWN0ZWQgdGV4dA==',completeness:'complete'},sourceId:ITEM_ID,expectedSourceRevision:2,expectedMetadataRevision:1,participants:[],occurredAt:null,previewHash:'a'.repeat(64)};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.selectedAttachmentReselect',input)).toEqual({sourceId:ITEM_ID,sourceRevision:3,metadataRevision:2});
+ expect(requests).toEqual([{path:'/crm/attachments/reselect',payload:input}]);
+});
+it.each(['crm.selectedAttachmentCommit','crm.selectedAttachmentAnalyze','crm.selectedAttachmentReselect'] as const)('refuses late identity changes and additional source content for %s',async(name)=>{
+ const deps=hosts();let generation=0;let finish!:()=>void;
+ deps.recordings.identity.current=()=>generation;
+ const file={fileName:'original.txt',declaredByteLength:13,bytesBase64:'U2VsZWN0ZWQgdGV4dA==',completeness:'complete'};
+ const input=name==='crm.selectedAttachmentCommit'?{file,personId:null,firmId:FIRM_ID,participants:[],occurredAt:null,importKey:'original',previewHash:'a'.repeat(64)}:name==='crm.selectedAttachmentReselect'?{file,sourceId:ITEM_ID,expectedSourceRevision:1,expectedMetadataRevision:1,participants:[],occurredAt:null,previewHash:'a'.repeat(64)}:{source:{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:1,contentHash:'b'.repeat(64),locator:null},fileHash:'a'.repeat(64)};
+ const result=name==='crm.selectedAttachmentAnalyze'?{sourceId:ITEM_ID,sourceRevision:1,generationId:FIRM_ID,state:'pending',reason:'adapter_unavailable'}:{sourceId:ITEM_ID,sourceRevision:1,metadataRevision:1};
+ deps.api.command=async(_path,_input,parse)=>{await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse(result)};};
+ const pending=answerOperation(operationHandlers(deps),'command',name,input);void pending.catch(()=>undefined);
+ await new Promise<void>(resolve=>setTimeout(resolve,0));generation++;finish();
+ await expect(pending).rejects.toThrow('identity_changed');
+ deps.api.command=async(_path,_input,parse)=>({ok:true,value:parse({...result,bytesBase64:'private'})});
+ await expect(answerOperation(operationHandlers(deps),'command',name,input)).rejects.toThrow();
+ const command=vi.fn();deps.api.command=command;
+ await expect(answerOperation(operationHandlers(deps),'command',name,{...input,path:'/arbitrary',commandId:ITEM_ID})).rejects.toThrow();
+ expect(command).not.toHaveBeenCalled();
+});

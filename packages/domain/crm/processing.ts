@@ -38,10 +38,15 @@ export async function readCrmProcessing(context: RepositoryContext, source: Sour
   const financial=(await context.db.query<{dispatch_state:string;settled_cents:number;settlement_state:string}>(`SELECT f.dispatch_state,p.settled_cents,p.state AS settlement_state FROM crm_extraction_financial_receipts f JOIN provider_reservations p ON p.workspace_id=f.workspace_id AND p.id=f.reservation_id WHERE f.workspace_id=$1 AND f.generation_id=$2`,[context.scope.workspaceId,row.id])).rows[0];
   return {...dto(row),claims,financial:financial===undefined?null:{dispatchState:financial.dispatch_state,settlementState:financial.settlement_state,settledCents:financial.settled_cents}};
 }
-export async function requestCrmProcessing(context: RepositoryContext, source: SourceLookup,mailEvidence:CrmMailEvidencePort=unavailableMailEvidence) {
+export async function requestCrmProcessing(context: RepositoryContext, source: SourceLookup,mailEvidence:CrmMailEvidencePort=unavailableMailEvidence,selection: {selectedFileHash:string}|undefined=undefined) {
   const actor = context.scope.actor;
   if (actor.kind !== 'user' || await resolveCrmSource(context, { ...source, locator: null },mailEvidence) === null)
     return { ok: false as const, reason: 'source_unavailable' };
+  if(source.kind==='selected_note'){
+    const file=(await context.db.query<{state:string;file_hash:string|null;source_revision:number;source_content_hash:string|null;metadata_revision:number;current_metadata_revision:number}>(`SELECT f.state,f.file_hash,f.source_revision,f.source_content_hash,f.metadata_revision,m.revision AS current_metadata_revision FROM crm_selected_file_receipts f JOIN crm_selected_imports m ON m.workspace_id=f.workspace_id AND m.source_id=f.source_id WHERE f.workspace_id=$1 AND f.source_id=$2 FOR SHARE OF f,m`,[context.scope.workspaceId,source.sourceId])).rows[0];
+    // Generic extraction requests cannot manufacture selected-original authority.
+    if(file!==undefined&&(selection===undefined||file.state!=='selected'||file.file_hash!==selection.selectedFileHash||file.source_revision!==source.revision||file.source_content_hash!==source.contentHash||file.metadata_revision!==file.current_metadata_revision))return {ok:false as const,reason:'selected_file_analysis_required'};
+  }
   const mailAuthority=source.kind==='mail'&&context.scope.actor.kind==='user'?await mailEvidence.prepareProcessing(context,source,context.scope.actor.userId):null;
   const authorizationHash=source.kind==='mail'?(mailAuthority?.authorizationFingerprint??UNAVAILABLE_MAIL_AUTHORIZATION_HASH):NATIVE_PROCESSING_AUTHORIZATION_HASH;
   const purpose = await readCrmExtractionPurpose(context);
