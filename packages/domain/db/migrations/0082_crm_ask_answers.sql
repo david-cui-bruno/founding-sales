@@ -126,3 +126,18 @@ ALTER TABLE provider_reservations DROP CONSTRAINT provider_reservations_subject_
  (model_name IS NOT NULL AND max_input_tokens IS NOT NULL AND max_output_tokens IS NOT NULL AND priced_unit IS NULL AND max_units IS NULL AND unit_price_micros IS NULL))
  AND (subject_kind NOT IN ('call_session','call_transcription','meeting_transcription') OR
  (model_name IS NULL AND max_input_tokens IS NULL AND max_output_tokens IS NULL AND priced_unit='minute' AND priced_unit IS NOT NULL AND max_units IS NOT NULL AND max_units BETWEEN 1 AND 240 AND unit_price_micros IS NOT NULL AND unit_price_micros BETWEEN 0 AND 10000000)));
+
+-- A selected copy deletion erases the entire private question and answer.
+CREATE FUNCTION invalidate_crm_ask_selected_copy() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE erased boolean;
+BEGIN
+ IF TG_OP='DELETE' OR OLD.availability IS DISTINCT FROM NEW.availability OR OLD.revision IS DISTINCT FROM NEW.revision OR OLD.content_hash IS DISTINCT FROM NEW.content_hash THEN
+  erased:=TG_OP='DELETE' OR NEW.availability='deleted';
+  DELETE FROM crm_ask_request_windows w USING crm_ask_requests a WHERE w.workspace_id=a.workspace_id AND w.request_id=a.id AND a.workspace_id=OLD.workspace_id AND a.state<>'deleted' AND EXISTS(SELECT 1 FROM jsonb_array_elements(a.scope->'sources') src WHERE src->>'kind'='selected_note' AND src->>'sourceId'=OLD.id::text);
+  UPDATE crm_ask_requests a SET question=NULL,result=NULL,result_at=NULL,scope=CASE WHEN erased THEN NULL ELSE scope END,initial_contexts=CASE WHEN erased THEN NULL ELSE initial_contexts END,initial_access_closure=CASE WHEN erased THEN NULL ELSE initial_access_closure END,state=CASE WHEN erased THEN 'deleted' ELSE 'stale' END,reason=CASE WHEN erased THEN 'deleted' ELSE 'source_changed' END,version=version+1,epoch=epoch+1,updated_at=now() WHERE a.workspace_id=OLD.workspace_id AND a.state<>'deleted' AND EXISTS(SELECT 1 FROM jsonb_array_elements(a.scope->'sources') src WHERE src->>'kind'='selected_note' AND src->>'sourceId'=OLD.id::text);
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER crm_ask_selected_invalidation AFTER UPDATE OR DELETE ON crm_selected_sources FOR EACH ROW EXECUTE FUNCTION invalidate_crm_ask_selected_copy();
