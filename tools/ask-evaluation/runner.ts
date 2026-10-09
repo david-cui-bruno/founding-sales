@@ -6,9 +6,13 @@ import type {
   FrozenManifest,
   EvaluationReport,
   DevelopmentSuite,
+  EvaluationGuard,
+  PermittedWindow,
 } from "./contracts.ts";
 import {
   developmentSuiteSchema,
+  guardConfigurationSchema,
+  answerOutputSchema,
   groupEvaluationWindows,
   evaluationTextGroupId,
 } from "./contracts.ts";
@@ -41,17 +45,40 @@ export interface DevelopmentEvaluationInput {
   development: FrozenCorpus;
   publicReads: EvaluationPublicReads;
 }
+export interface GuardEvaluationInput extends Omit<
+  DevelopmentEvaluationInput,
+  "phase"
+> {
+  phase: "guard_only";
+  guard: EvaluationGuard;
+}
+export type EvaluationInput = DevelopmentEvaluationInput | GuardEvaluationInput;
 export async function runEvaluation(
-  input: DevelopmentEvaluationInput,
+  input: EvaluationInput,
 ): Promise<EvaluationReport> {
   return runBoundedEvaluation(input, performance.now());
 }
 async function runBoundedEvaluation(
-  input: DevelopmentEvaluationInput,
+  input: EvaluationInput,
   runStarted: number,
 ): Promise<EvaluationReport> {
-  const { manifest, corpus, windows } = validateDevelopment(input);
+  if (input.phase !== "development_baseline" && input.phase !== "guard_only")
+    throw new RangeError("manifest_mismatch");
+  const { manifest, corpus, windows } = validateDevelopment({
+    ...input,
+    phase: "development_baseline",
+  });
+  const guard = input.phase === "guard_only" ? input.guard : null;
+  const config =
+    guard === null
+      ? null
+      : guardConfigurationSchema.parse({
+          purpose: guard.purpose,
+          reservation: guard.reservation,
+          priorUsage: guard.priorUsage,
+        });
   const results: CaseMeasurement[] = [];
+  let guardUsage = config === null ? null : structuredClone(config.priorUsage);
   for (const item of corpus.cases) {
     const started = performance.now();
     const result: CaseMeasurement = {
@@ -91,14 +118,18 @@ async function runBoundedEvaluation(
       code: CaseMeasurement["failures"][number]["code"],
       stage: CaseMeasurement["failures"][number]["stage"],
     ) => {
-      result.failures.push({ code, stage });
+      if (
+        !result.failures.some(
+          (failure) => failure.code === code && failure.stage === stage,
+        )
+      )
+        result.failures.push({ code, stage });
     };
     const permitted: { id: string; ordinal: number; text: string }[] = [];
     const observed = new Map<string, { extent: number; text: string }>();
-    const readPublic = async (
+    const awaitStage = async <T>(
       stage: CaseMeasurement["failures"][number]["stage"],
-      path: "/ask/read" | "/crm/processing/source/read",
-      body: unknown,
+      work: (signal: AbortSignal) => Promise<T>,
     ) => {
       const caseDeadline = started + manifest.envelope.maxCaseWallTimeMs;
       const runDeadline = runStarted + manifest.envelope.maxRunWallTimeMs;
@@ -111,9 +142,10 @@ async function runBoundedEvaluation(
       const remaining = deadline - performance.now();
       if (remaining <= 0) throw timeout();
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const controller = new AbortController();
       try {
         const response = await Promise.race([
-          input.publicReads.read(item.actorFixtureId, path, body),
+          work(controller.signal),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(timeout()), remaining);
           }),
@@ -122,25 +154,44 @@ async function runBoundedEvaluation(
         return response;
       } finally {
         if (timer !== undefined) clearTimeout(timer);
+        controller.abort();
       }
     };
+    const readPublic = (
+      stage: CaseMeasurement["failures"][number]["stage"],
+      path: "/ask/read" | "/crm/processing/source/read",
+      body: unknown,
+    ) =>
+      awaitStage(stage, () =>
+        input.publicReads.read(item.actorFixtureId, path, body),
+      );
 
     const readWindow = async (
       window: (typeof windows)[number],
       final: boolean,
     ) => {
-      const raw = await readPublic(
-        final ? "final_read" : "canonical_read",
-        "/crm/processing/source/read",
-        {
+      const stage = final ? "final_read" : "canonical_read";
+      let raw: { status: number; body: unknown };
+      try {
+        raw = await readPublic(stage, "/crm/processing/source/read", {
           workspaceId: window.source.workspaceId,
           sourceId: window.source.sourceId,
           kind: window.source.kind,
           revision: window.source.revision,
           contentHash: window.source.contentHash,
           locator: window.source.locator,
-        },
-      );
+        });
+      } catch (error) {
+        if (error instanceof EvaluationTimeout) throw error;
+        fail("adapter_unavailable", stage);
+        if (final)
+          result.finalReadObservations.push({
+            windowId: window.id,
+            observedAt: new Date().toISOString(),
+            state: "unavailable",
+          });
+        return null;
+      }
       const parsed = crmResolvedSourceSchema.safeParse(raw.body);
       const matched =
         raw.status === 200 &&
@@ -166,11 +217,32 @@ async function runBoundedEvaluation(
         });
       return parsed.data.passage!.text;
     };
+    if (guard !== null && config !== null) {
+      result.path = "fake_answer";
+      result.usage = structuredClone(guardUsage!);
+      if (config.purpose.state !== "fake_only")
+        fail("real_purpose_unverified", "answer");
+      else if (
+        guard.answer.kind !== "fake" ||
+        guard.answer.id !== manifest.candidate.answerId ||
+        guard.answer.version !== manifest.candidate.answerVersion
+      )
+        fail("invalid_adapter_output", "answer");
+      else if (result.usage.outcome === "unknown")
+        fail("unknown_acceptance", "answer");
+    }
+    if (
+      result.failures.length === 0 &&
+      windows.length > manifest.envelope.maxScoredWindowsPerCorpus
+    ) {
+      result.qualityScoringState = "censored_source_or_result_cap";
+      fail("corpus_bound", "canonical_read");
+    }
     try {
-      for (const window of windows) {
+      for (const window of result.failures.length === 0 ? windows : []) {
         const text = await readWindow(window, false);
-        if (text !== null)
-          permitted.push({ id: window.id, ordinal: window.ordinal, text });
+        if (text === null) break;
+        permitted.push({ id: window.id, ordinal: window.ordinal, text });
       }
       if (
         result.failures.length === 0 &&
@@ -197,7 +269,104 @@ async function runBoundedEvaluation(
           fail("corpus_bound", "canonical_read");
         }
       }
-      if (result.failures.length === 0) {
+      if (result.failures.length === 0 && guard !== null && config !== null) {
+        const before = structuredClone(result.usage);
+        const charged = {
+          calls: before.calls + 1,
+          inputTokens: before.inputTokens + config.reservation.inputTokens,
+          outputTokens: before.outputTokens + config.reservation.outputTokens,
+        };
+        if (charged.calls > manifest.envelope.maxCallsPerRun)
+          fail("call_limit", "answer");
+        else if (
+          charged.inputTokens > manifest.envelope.maxInputTokensPerRun ||
+          charged.outputTokens > manifest.envelope.maxOutputTokensPerRun
+        )
+          fail("token_limit", "answer");
+        else {
+          result.usage = {
+            outcome: "unknown",
+            ...charged,
+            reservedCents: "0",
+            observedCents: null,
+          };
+          const inputWindows: PermittedWindow[] = windows.map((window) => ({
+            id: window.id,
+            source: window.source,
+            text: observed.get(window.id)!.text,
+          }));
+          try {
+            const raw = await awaitStage("answer", (signal) =>
+              guard.answer.answer(
+                {
+                  query:
+                    item.request.operation === "passages"
+                      ? item.request.query
+                      : "",
+                  windows: inputWindows,
+                },
+                signal,
+              ),
+            );
+            const output = answerOutputSchema.safeParse(raw);
+            if (!output.success) fail("invalid_adapter_output", "answer");
+            else if (output.data.usage.outcome === "unknown")
+              fail("unknown_acceptance", "answer");
+            else if (output.data.usage.calls !== 1)
+              fail("invalid_adapter_output", "answer");
+            else {
+              const settled = {
+                outcome: "observed" as const,
+                calls: charged.calls,
+                inputTokens:
+                  before.inputTokens +
+                  Math.max(
+                    config.reservation.inputTokens,
+                    output.data.usage.inputTokens,
+                  ),
+                outputTokens:
+                  before.outputTokens +
+                  Math.max(
+                    config.reservation.outputTokens,
+                    output.data.usage.outputTokens,
+                  ),
+                observedCents: "0" as const,
+                reservedCents: "0" as const,
+              };
+              if (
+                !Number.isSafeInteger(settled.inputTokens) ||
+                !Number.isSafeInteger(settled.outputTokens) ||
+                !Number.isSafeInteger(settled.calls)
+              )
+                fail("invalid_adapter_output", "answer");
+              else result.usage = settled;
+              if (
+                Number.isSafeInteger(settled.inputTokens) &&
+                Number.isSafeInteger(settled.outputTokens) &&
+                (output.data.usage.inputTokens >
+                  config.reservation.inputTokens ||
+                  output.data.usage.outputTokens >
+                    config.reservation.outputTokens)
+              )
+                fail("token_limit", "answer");
+              if (
+                output.data.claims.some((claim) =>
+                  claim.windowIds.some((id) => !observed.has(id)),
+                )
+              )
+                fail("unknown_citation", "answer");
+            }
+          } catch (error) {
+            if (error instanceof EvaluationTimeout)
+              fail(error.code, error.stage);
+            else fail("unknown_acceptance", "answer");
+          }
+          // All adapter outputs are discarded in guard-only mode; no ranking or gold judgment.
+          for (const window of windows) {
+            if ((await readWindow(window, true)) === null) break;
+          }
+        }
+      } else if (result.failures.length === 0) {
         const response = await readPublic(
           "baseline",
           "/ask/read",
@@ -217,7 +386,9 @@ async function runBoundedEvaluation(
             JSON.stringify(parsed.data) !== JSON.stringify(item.exactExpected)
           )
             fail("exact_state_mismatch", "baseline");
-          for (const window of windows) await readWindow(window, true);
+          for (const window of windows) {
+            if ((await readWindow(window, true)) === null) break;
+          }
           if (result.failures.length === 0)
             result.qualityScoringState = "scored";
         } else {
@@ -263,7 +434,9 @@ async function runBoundedEvaluation(
                 fail("canonical_quote_mismatch", "baseline");
               else if (!ranked.includes(groupId)) ranked.push(groupId);
             }
-            for (const window of windows) await readWindow(window, true);
+            for (const window of windows) {
+              if ((await readWindow(window, true)) === null) break;
+            }
             if (result.failures.length === 0) {
               const grades = new Map(
                 groups.map((group) => [
@@ -328,9 +501,19 @@ async function runBoundedEvaluation(
       result.controlOutcome =
         result.failures.length === 0 && !item.mustAbstain ? "passed" : "failed";
     result.durationMs = performance.now() - started;
+    if (guard !== null) guardUsage = structuredClone(result.usage);
     results.push(result);
   }
-  return baselineReport(manifest, results);
+  const report = baselineReport(manifest, results);
+  return guard === null
+    ? report
+    : {
+        ...report,
+        baselineMeasured: false,
+        modelEvaluationState: "guard_only",
+        syntheticOrchestrationPassed: false,
+        syntheticControlsPassed: false,
+      };
 }
 
 export interface DevelopmentCaseRuntime {

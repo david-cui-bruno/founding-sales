@@ -1,3 +1,8 @@
+import type {
+  EvaluationGuard,
+  EvaluationUsage,
+  EvaluationAnswerAdapter,
+} from "../../../tools/ask-evaluation/contracts.ts";
 import { setupEvaluationCase } from "./support/askEvaluationFixture.ts";
 import type { DevelopmentCaseRuntime } from "../../../tools/ask-evaluation/runner.ts";
 import { writeFile } from "node:fs/promises";
@@ -267,6 +272,533 @@ it("measures a frozen development selected-note lexical baseline through authent
     expect(report.realVectorMeasured).toBe(false);
     expect(report.realModelMeasured).toBe(false);
     expect(report.activationAllowed).toBe(false);
+    let fakeAttempts = 0;
+    const unknownGuard = await runEvaluation({
+      phase: "guard_only",
+      manifest,
+      development,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: {
+        purpose: {
+          state: "fake_only",
+          purpose: "crm_retrieval_evaluation",
+          realCallsAllowed: false,
+          maxSpendCents: 0,
+          reason: "fake_only",
+        },
+        reservation: { calls: 1, inputTokens: 100, outputTokens: 50 },
+        priorUsage: {
+          outcome: "observed",
+          calls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+        answer: {
+          kind: "fake",
+          id: "fake_answer",
+          version: "v1",
+          answer: async () => {
+            fakeAttempts++;
+            return {
+              claims: [],
+              abstained: true,
+              usage: {
+                outcome: "unknown",
+                calls: 1,
+                inputTokens: 1,
+                outputTokens: 0,
+                reservedCents: "0",
+                observedCents: null,
+              },
+            };
+          },
+        },
+      },
+    });
+    expect(fakeAttempts).toBe(1);
+    expect(unknownGuard).toMatchObject({
+      modelEvaluationState: "guard_only",
+      baselineMeasured: false,
+    });
+    expect(unknownGuard.caseResults[0]).toMatchObject({
+      qualityScoringState: "failed",
+      recallAt10: null,
+      publishedClaimCount: 0,
+      publishedCitationCount: 0,
+      usage: {
+        outcome: "unknown",
+        calls: 1,
+        inputTokens: 100,
+        outputTokens: 50,
+        observedCents: null,
+      },
+      failures: [{ code: "unknown_acceptance", stage: "answer" }],
+    });
+    const fakeGuard = (
+      answer: EvaluationAnswerAdapter["answer"],
+      priorUsage: EvaluationUsage = {
+        outcome: "observed",
+        calls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        reservedCents: "0",
+        observedCents: "0",
+      },
+    ): EvaluationGuard => ({
+      purpose: {
+        state: "fake_only",
+        purpose: "crm_retrieval_evaluation",
+        realCallsAllowed: false,
+        maxSpendCents: 0,
+        reason: "fake_only",
+      },
+      reservation: { calls: 1, inputTokens: 100, outputTokens: 50 },
+      priorUsage,
+      answer: { kind: "fake", id: "fake_answer", version: "v1", answer },
+    });
+    for (const [prior, code] of [
+      [
+        {
+          outcome: "observed",
+          calls: 5000,
+          inputTokens: 0,
+          outputTokens: 0,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+        "call_limit",
+      ],
+      [
+        {
+          outcome: "observed",
+          calls: 0,
+          inputTokens: 1000000,
+          outputTokens: 0,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+        "token_limit",
+      ],
+      [
+        {
+          outcome: "observed",
+          calls: 0,
+          inputTokens: 0,
+          outputTokens: 100000,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+        "token_limit",
+      ],
+      [unknownGuard.caseResults[0]!.usage, "unknown_acceptance"],
+    ] satisfies [EvaluationUsage, string][]) {
+      let called = 0;
+      const refused = await runEvaluation({
+        phase: "guard_only",
+        manifest,
+        development,
+        publicReads: { read: async (actor, path, body) => post(path, body) },
+        guard: fakeGuard(async () => {
+          called++;
+          throw new Error("must_not_call");
+        }, prior),
+      });
+      expect(called).toBe(0);
+      expect(refused.caseResults[0]!.usage).toEqual(prior);
+      expect(refused.caseResults[0]!.failures).toEqual([
+        { code, stage: "answer" },
+      ]);
+    }
+    const invalidReceipt = await runEvaluation({
+      phase: "guard_only",
+      manifest,
+      development,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: fakeGuard(async () => ({
+        claims: [],
+        abstained: true,
+        usage: {
+          outcome: "observed",
+          calls: 1,
+          inputTokens: Number.NaN,
+          outputTokens: 0,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+      })),
+    });
+    expect(invalidReceipt.caseResults[0]).toMatchObject({
+      usage: {
+        outcome: "unknown",
+        calls: 1,
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+      failures: [{ code: "invalid_adapter_output", stage: "answer" }],
+      publishedClaimCount: 0,
+    });
+    const overshoot = await runEvaluation({
+      phase: "guard_only",
+      manifest,
+      development,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: fakeGuard(async () => ({
+        claims: [],
+        abstained: true,
+        usage: {
+          outcome: "observed",
+          calls: 1,
+          inputTokens: 200,
+          outputTokens: 0,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+      })),
+    });
+    expect(overshoot.caseResults[0]).toMatchObject({
+      usage: {
+        outcome: "observed",
+        calls: 1,
+        inputTokens: 200,
+        outputTokens: 50,
+      },
+      failures: [{ code: "token_limit", stage: "answer" }],
+      publishedClaimCount: 0,
+    });
+    const unrepresentable = await runEvaluation({
+      phase: "guard_only",
+      manifest,
+      development,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: fakeGuard(
+        async () => ({
+          claims: [],
+          abstained: true,
+          usage: {
+            outcome: "observed",
+            calls: 1,
+            inputTokens: Number.MAX_SAFE_INTEGER,
+            outputTokens: 0,
+            reservedCents: "0",
+            observedCents: "0",
+          },
+        }),
+        {
+          outcome: "observed",
+          calls: 1,
+          inputTokens: 1000,
+          outputTokens: 0,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+      ),
+    });
+    expect(unrepresentable.caseResults[0]).toMatchObject({
+      usage: {
+        outcome: "unknown",
+        calls: 2,
+        inputTokens: 1100,
+        outputTokens: 50,
+      },
+      failures: [{ code: "invalid_adapter_output", stage: "answer" }],
+      publishedClaimCount: 0,
+    });
+    const repeatedDefinition = {
+      ...fixtureDefinition,
+      cases: [
+        fixtureDefinition.cases[0]!,
+        { ...fixtureDefinition.cases[0]!, id: "dev_second_guard_case" },
+      ],
+    };
+    const repeatedCanonical = frozenCorpusSchema
+      .omit({ corpusSha256: true })
+      .parse(repeatedDefinition);
+    const repeatedCorpus = frozenCorpusSchema.parse({
+      ...repeatedCanonical,
+      corpusSha256: hash(repeatedCanonical),
+    });
+    let repeatedCalls = 0;
+    const repeatedGuard = fakeGuard(async () => {
+      repeatedCalls++;
+      return {
+        claims: [],
+        abstained: true,
+        usage: {
+          outcome: "observed",
+          calls: 1,
+          inputTokens: 100,
+          outputTokens: 0,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+      };
+    });
+    repeatedGuard.reservation.outputTokens = 60000;
+    const repeated = await runEvaluation({
+      phase: "guard_only",
+      manifest: {
+        ...manifest,
+        corpusSha256: repeatedCorpus.corpusSha256,
+        splitSha256: hash(repeatedCorpus.cases.map((item) => item.id)),
+      },
+      development: repeatedCorpus,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: repeatedGuard,
+    });
+    expect(repeatedCalls).toBe(1);
+    expect(repeated.caseResults[1]).toMatchObject({
+      usage: {
+        outcome: "observed",
+        calls: 1,
+        inputTokens: 100,
+        outputTokens: 60000,
+      },
+      failures: [{ code: "token_limit", stage: "answer" }],
+      publishedClaimCount: 0,
+    });
+    let guardClockValue = 0;
+    let abortedSignal: AbortSignal | undefined;
+    const guardClock = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => guardClockValue);
+    try {
+      const timed = await runEvaluation({
+        phase: "guard_only",
+        manifest,
+        development,
+        publicReads: { read: async (actor, path, body) => post(path, body) },
+        guard: fakeGuard(async (input, signal) => {
+          abortedSignal = signal;
+          guardClockValue = 10001;
+          return {
+            claims: [],
+            abstained: true,
+            usage: {
+              outcome: "observed",
+              calls: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              reservedCents: "0",
+              observedCents: "0",
+            },
+          };
+        }),
+      });
+      expect(abortedSignal?.aborted).toBe(true);
+      expect(timed.caseResults[0]).toMatchObject({
+        durationMs: 10001,
+        usage: {
+          outcome: "unknown",
+          calls: 1,
+          inputTokens: 100,
+          outputTokens: 50,
+        },
+        publishedClaimCount: 0,
+      });
+      expect(timed.caseResults[0]!.failures).toContainEqual({
+        code: "case_timeout",
+        stage: "answer",
+      });
+    } finally {
+      guardClock.mockRestore();
+    }
+    const revoked = await runEvaluation({
+      phase: "guard_only",
+      manifest,
+      development,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: fakeGuard(async () => {
+        await fixture.db.query(
+          "UPDATE crm_people SET owner_user_id=$3,revision=revision+1 WHERE workspace_id=$1 AND id=$2",
+          [fixture.alpha.workspaceId, personId, fixture.alpha.admin.userId],
+        );
+        return {
+          claims: [
+            {
+              text: "Do not publish this stale statement.",
+              windowIds: ["dev_window"],
+            },
+          ],
+          abstained: false,
+          usage: {
+            outcome: "observed",
+            calls: 1,
+            inputTokens: 0,
+            outputTokens: 0,
+            reservedCents: "0",
+            observedCents: "0",
+          },
+        };
+      }),
+    });
+    expect(revoked.caseResults[0]).toMatchObject({
+      failures: [{ code: "source_unavailable", stage: "final_read" }],
+      publishedClaimCount: 0,
+      publishedCitationCount: 0,
+      usage: { calls: 1, inputTokens: 100, outputTokens: 50 },
+    });
+    await fixture.db.query(
+      "UPDATE crm_people SET owner_user_id=$3,revision=revision+1 WHERE workspace_id=$1 AND id=$2",
+      [fixture.alpha.workspaceId, personId, fixture.alpha.salesperson.userId],
+    );
+    const adminToken = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
+    ).accessToken;
+    const adminPost = (path: string, body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path,
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${adminToken}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    await fixture.db.query(
+      `CREATE FUNCTION evaluation_refuse_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='crm.evidence_source_read' THEN RAISE EXCEPTION 'synthetic_audit_refused'; END IF; RETURN NEW; END $$`,
+    );
+    await fixture.db.query(
+      "CREATE TRIGGER evaluation_refuse_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION evaluation_refuse_audit()",
+    );
+    let auditAdapterCalls = 0;
+    try {
+      const audited = await runEvaluation({
+        phase: "guard_only",
+        manifest,
+        development,
+        publicReads: {
+          read: async (actor, path, body) => adminPost(path, body),
+        },
+        guard: fakeGuard(async () => {
+          auditAdapterCalls++;
+          throw new Error("must_not_call");
+        }),
+      });
+      expect(auditAdapterCalls).toBe(0);
+      expect(audited.caseResults[0]).toMatchObject({
+        failures: [{ code: "adapter_unavailable", stage: "canonical_read" }],
+        publishedClaimCount: 0,
+        usage: { calls: 0 },
+      });
+      expect(JSON.stringify(audited)).not.toContain(text);
+    } finally {
+      await fixture.db.query(
+        "DROP TRIGGER evaluation_refuse_audit ON audit_events",
+      );
+      await fixture.db.query("DROP FUNCTION evaluation_refuse_audit()");
+    }
+    const largeText = "x".repeat(1000);
+    const largeAdded = await post("/crm/people/source/add", {
+      commandId: randomUUID(),
+      clientVersion: CURRENT_CLIENT_VERSION,
+      personId,
+      sourceKey: randomUUID(),
+      excerpt: largeText,
+      occurredAt: "2026-10-01T14:00:00Z",
+    });
+    expect(largeAdded.status).toBe(200);
+    const largeSourceId = (largeAdded.body as { result: { sourceId: string } })
+      .result.sourceId;
+    const largeHash = hashText(largeText);
+    const largeRead = await post("/crm/processing/source/read", {
+      workspaceId: fixture.alpha.workspaceId,
+      sourceId: largeSourceId,
+      kind: "selected_note",
+      revision: 1,
+      contentHash: largeHash,
+      locator: "text:0:1",
+    });
+    expect(largeRead.status).toBe(200);
+    const largeRef = crmResolvedSourceSchema.parse(largeRead.body).source;
+    const largeDefinition = {
+      id: "dev_large_corpus",
+      fixtureVersion: "synthetic-v1",
+      sources: [
+        {
+          id: "dev_large_source",
+          kind: "selected_note",
+          setupId: "synthetic_selected_note",
+          originalSha256: largeHash,
+          windows: Array.from({ length: 1000 }, (_, ordinal) => ({
+            id: `dev_large_window_${ordinal}`,
+            source: { ...largeRef, locator: `text:${ordinal}:${ordinal + 1}` },
+            textSha256: hashText("x"),
+            chunkerVersion: "lexical-original-v1",
+            ordinal,
+          })),
+        },
+      ],
+      cases: [
+        {
+          ...fixtureDefinition.cases[0]!,
+          id: "dev_large_case",
+          corpusId: "dev_large_corpus",
+          relevance: [],
+          request: {
+            operation: "passages",
+            scope: {
+              sources: [
+                {
+                  workspaceId: largeRef.workspaceId,
+                  sourceId: largeRef.sourceId,
+                  kind: largeRef.kind,
+                  revision: largeRef.revision,
+                  contentHash: largeRef.contentHash,
+                  locator: null,
+                },
+              ],
+            },
+            query: "x",
+            limit: 50,
+          },
+        },
+      ],
+    };
+    const canonicalLarge = frozenCorpusSchema
+      .omit({ corpusSha256: true })
+      .parse(largeDefinition);
+    const largeCorpus = frozenCorpusSchema.parse({
+      ...canonicalLarge,
+      corpusSha256: hash(canonicalLarge),
+    });
+    expect(
+      (
+        await post("/crm/people/source/delete", {
+          commandId: randomUUID(),
+          clientVersion: CURRENT_CLIENT_VERSION,
+          personId,
+          sourceId: largeSourceId,
+          expectedRevision: 1,
+        })
+      ).status,
+    ).toBe(200);
+    const largeReport = await runEvaluation({
+      phase: "development_baseline",
+      development: largeCorpus,
+      manifest: {
+        ...manifest,
+        corpusSha256: largeCorpus.corpusSha256,
+        splitSha256: hash(["dev_large_case"]),
+        sourceManifestSha256: hash(largeCorpus.sources),
+        refWindowMappingSha256: hash(
+          largeCorpus.sources.flatMap((row) => row.windows),
+        ),
+      },
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+    });
+    expect(largeReport.caseResults[0]).toMatchObject({
+      qualityScoringState: "censored_source_or_result_cap",
+      recallAt10: null,
+      failures: [{ code: "corpus_bound", stage: "canonical_read" }],
+    });
     let releaseRead: (() => void) | undefined;
     const waiting = new Promise<void>((resolve) => {
       releaseRead = resolve;
@@ -306,7 +838,7 @@ it("measures a frozen development selected-note lexical baseline through authent
   } finally {
     await fixture.stop();
   }
-}, 20000);
+}, 40000);
 
 it("checks an independently seeded exact opportunity baseline without semantic inference", async () => {
   const fixture = await createAuthFixture();
