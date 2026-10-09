@@ -34,5 +34,12 @@ it('explicitly commits a human note from current keyword evidence without enabli
   const tasks=await post('/ask/actions/read',{scope:{kind:'today'}});
   expect(tasks.status).toBe(200);
   expect(tasks.body).toMatchObject({items:[{actionId:taskId,kind:'task',status:'open',label:'Discuss repair routing',text:null,due:{kind:'date',date:'2026-10-12',zone:'America/Chicago',expression:'October 12'},reviewRequired:false,supportState:'current'}],nextAfterId:null});
+  const proposal=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'preference',text:'Consider prioritizing repair routing examples.'}});
+  expect(proposal.status).toBe(200);
+  expect(proposal.body).toMatchObject({result:{actionId:expect.any(String),version:1,kind:'preference'}});
+  const proposalId=(proposal.body as {result:{actionId:string}}).result.actionId;
+  const history=await post('/ask/actions/read',{scope:{kind:'history'}});
+  expect(history.status).toBe(200);
+  expect(history.body).toMatchObject({items:expect.arrayContaining([{actionId:proposalId,version:1,kind:'preference',status:'proposed',provenance:'human',text:'Consider prioritizing repair routing examples.',label:null,due:null,target:null,supportState:'current',reviewRequired:false,createdAt:expect.any(String),updatedAt:expect.any(String),completedAt:null,sources:expect.any(Array)}])});
  }finally{await fixture.stop();}
 });

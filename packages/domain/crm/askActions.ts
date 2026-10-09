@@ -36,14 +36,13 @@ async function currentActionSupport(context:RepositoryContext,row:ActionProof){
 export async function createAskAction(context:RepositoryContext,input:AskActionCreate){
  const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return {ok:false as const,reason:'source_unavailable'};
  await lockAskLifecycle(context);
- if(input.action.kind==='preference')return {ok:false as const,reason:'invalid_input'};
  const current=await readAskAnswer(context,input.requestId);
  if(current===null||current.question===null||current.version!==input.expectedVersion)return {ok:false as const,reason:'source_unavailable'};
  const row=(await context.db.query<{scope:unknown;initial_contexts:unknown;initial_access_closure:unknown;version:number;epoch:number}>('SELECT scope,initial_contexts,initial_access_closure,version,epoch FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR SHARE',[context.scope.workspaceId,input.requestId,actor.userId])).rows[0];
  if(row===undefined||row.version!==input.expectedVersion)return {ok:false as const,reason:'source_unavailable'};
  const scope=askExplicitCorpusScopeSchema.parse(row.scope),contexts=crmClaimContextSchema.array().max(10).parse(row.initial_contexts),original=crmOriginalAccessClosureSchema.parse(row.initial_access_closure);
- const target=input.action.target;
- if(!contexts.some(value=>target.kind==='firm'?value.firmIds.includes(target.firmId):value.personId===target.personId))return {ok:false as const,reason:'source_unavailable'};
+ const target=input.action.kind==='preference'?null:input.action.target;
+ if(target!==null&&!contexts.some(value=>target.kind==='firm'?value.firmIds.includes(target.firmId):value.personId===target.personId))return {ok:false as const,reason:'source_unavailable'};
  let references:CanonicalSourceReference[];
  if(input.finding.kind==='keyword_passage')references=current.fallback?.passages[input.finding.index]?.sources??[];
  else{
@@ -53,9 +52,9 @@ export async function createAskAction(context:RepositoryContext,input:AskActionC
  }
  const support=supportSchema.safeParse(references.map(({workspaceId,sourceId,kind,revision,contentHash,locator})=>({workspaceId,sourceId,kind,revision,contentHash,locator})));
  if(!support.success)return {ok:false as const,reason:'input_bound_reached'};
- const checked=await currentActionSupport(context,{id:input.requestId,version:1,kind:'note',status:'active',private_state:'available',target_firm_id:target.kind==='firm'?target.firmId:null,target_person_id:target.kind==='person'?target.personId:null,input_scope:scope,initial_contexts:contexts,original_access_closure:original,support_refs:support.data,review_required:false,created_at:new Date(),updated_at:new Date(),completed_at:null});
+ const checked=await currentActionSupport(context,{id:input.requestId,version:1,kind:'note',status:'active',private_state:'available',target_firm_id:target?.kind==='firm'?target.firmId:null,target_person_id:target?.kind==='person'?target.personId:null,input_scope:scope,initial_contexts:contexts,original_access_closure:original,support_refs:support.data,review_required:false,created_at:new Date(),updated_at:new Date(),completed_at:null});
  if(checked.state!=='current')return {ok:false as const,reason:'source_unavailable'};
- const created=(await context.db.query<{id:string;version:number;kind:string}>(`INSERT INTO crm_ask_actions(workspace_id,owner_user_id,source_request_id,source_request_version,kind,status,target_firm_id,target_person_id,human_text,input_scope,initial_contexts,original_access_closure,support_refs,due) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb) RETURNING id,version,kind`,[context.scope.workspaceId,actor.userId,input.requestId,input.expectedVersion,input.action.kind,input.action.kind==='task'?'open':'active',target.kind==='firm'?target.firmId:null,target.kind==='person'?target.personId:null,input.action.kind==='task'?input.action.label:input.action.text,JSON.stringify(scope),JSON.stringify(contexts),JSON.stringify(original),JSON.stringify(support.data),input.action.kind==='task'?JSON.stringify(input.action.due):null])).rows[0]!;
+ const created=(await context.db.query<{id:string;version:number;kind:string}>(`INSERT INTO crm_ask_actions(workspace_id,owner_user_id,source_request_id,source_request_version,kind,status,target_firm_id,target_person_id,human_text,input_scope,initial_contexts,original_access_closure,support_refs,due) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb) RETURNING id,version,kind`,[context.scope.workspaceId,actor.userId,input.requestId,input.expectedVersion,input.action.kind,input.action.kind==='task'?'open':input.action.kind==='note'?'active':'proposed',target?.kind==='firm'?target.firmId:null,target?.kind==='person'?target.personId:null,input.action.kind==='task'?input.action.label:input.action.text,JSON.stringify(scope),JSON.stringify(contexts),JSON.stringify(original),JSON.stringify(support.data),input.action.kind==='task'?JSON.stringify(input.action.due):null])).rows[0]!;
  return {ok:true as const,value:askActionAcknowledgmentSchema.parse({actionId:created.id,version:created.version,kind:created.kind})};
 }
 /** Private note/task bodies are loaded only after all original input and support checks. */
