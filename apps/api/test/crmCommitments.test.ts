@@ -218,6 +218,19 @@ it("projects exactly one internal task from an explicit dated human promise revi
     expect(Object.values(finalProof)).toEqual(Array(10).fill(null));
     const history=await post("/crm/commitments/read",{scope:{kind:"history"},limit:50});expect(history.status).toBe(200);
     expect((history.body as {items:{taskId:string;status:string}[]}).items).toEqual(expect.arrayContaining([expect.objectContaining({taskId:originalTask,status:"done"}),expect.objectContaining({taskId:secondTask,status:"done"})]));
+    // Cycle8: imported obsolete promises remain quiet record history.
+    const historicalAdded=await post("/crm/people/source/add",command({personId,sourceKey:"historical-promise",excerpt:"I will prepare the repair summary by October 12.",occurredAt:"2000-01-01T14:00:00Z"}));expect(historicalAdded.status).toBe(200);
+    const historicalId=(historicalAdded.body as {result:{sourceId:string}}).result.sourceId;
+    const historicalPage=(await post("/crm/people/read",{personId})).body as {sources:typeof source[]};
+    const historicalSource=historicalPage.sources.find(value=>value.sourceId===historicalId)!;
+    source={workspaceId:historicalSource.workspaceId,sourceId:historicalId,kind:"selected_note",revision:historicalSource.revision,contentHash:historicalSource.contentHash,locator:null};
+    const historicalClaim=await process("fixture-v3",2);
+    const historicalReview=command({source,claimId:historicalClaim.claim.claimId,claimRevision:1,claimHash:historicalClaim.claim.claimHash,contextHash:historicalClaim.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Historical summary promise",due:{kind:"date",date:"2000-10-12",zone:"America/Chicago",expression:"by October 12"}});
+    expect((await post("/crm/commitments/review",historicalReview)).status).toBe(200);
+    await runOnce(fixture.db,{registry,owner:"historical-commitment-projector",limit:20});
+    expect((await read()).body).toMatchObject({items:[{actionLabel:"Historical summary promise",todayEligibility:"historical",task:{status:"open"}}]});
+    expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toEqual({items:[],nextAfterId:null});
+
 
 
 

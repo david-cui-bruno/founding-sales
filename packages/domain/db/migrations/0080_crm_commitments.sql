@@ -27,7 +27,7 @@ CREATE TABLE crm_commitment_reviews (
  target jsonb,context_snapshot jsonb,original_access_closure jsonb,
  classification text CHECK(classification IN ('internal_promise','commercial','ambiguous')),
  actor text CHECK(actor IN ('self','counterparty','unknown')),action_label text CHECK(length(btrim(action_label)) BETWEEN 1 AND 300),
- due jsonb,source_zone_receipt jsonb,
+ due jsonb,source_zone_receipt jsonb,today_eligibility text CONSTRAINT crm_commitment_today_eligibility CHECK(today_eligibility IN ('current','historical','unknown')),
  revision integer NOT NULL DEFAULT 1 CHECK(revision>0),projected_revision integer NOT NULL DEFAULT 0 CHECK(projected_revision>=0 AND projected_revision<=revision),
  projection_version integer NOT NULL DEFAULT 0 CHECK(projection_version>=0),projection_receipt jsonb CONSTRAINT crm_commitment_projection_shape CHECK(projection_receipt IS NULL OR (crm_commitment_projection_valid(projection_receipt) AND (projection_receipt->>'reviewRevision')::numeric=projected_revision)),
  state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','applied','suggestion','review_required','redacted')),
@@ -36,8 +36,8 @@ CREATE TABLE crm_commitment_reviews (
  FOREIGN KEY(workspace_id,owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
  FOREIGN KEY(workspace_id,anchor_id) REFERENCES crm_claim_review_anchors(workspace_id,id) ON DELETE SET NULL(anchor_id),
  CONSTRAINT crm_commitment_review_private_shape CHECK(
-  (state='redacted' AND anchor_id IS NULL AND target IS NULL AND context_snapshot IS NULL AND original_access_closure IS NULL AND classification IS NULL AND actor IS NULL AND action_label IS NULL AND due IS NULL AND source_zone_receipt IS NULL AND projection_receipt IS NULL)
-  OR (state<>'redacted' AND anchor_id IS NOT NULL AND target IS NOT NULL AND crm_extraction_context_valid(context_snapshot) AND crm_access_closure_valid(original_access_closure) AND classification IS NOT NULL AND actor IS NOT NULL AND action_label IS NOT NULL))
+  (state='redacted' AND anchor_id IS NULL AND target IS NULL AND context_snapshot IS NULL AND original_access_closure IS NULL AND classification IS NULL AND actor IS NULL AND action_label IS NULL AND due IS NULL AND source_zone_receipt IS NULL AND projection_receipt IS NULL AND today_eligibility IS NULL)
+  OR (state<>'redacted' AND anchor_id IS NOT NULL AND target IS NOT NULL AND crm_extraction_context_valid(context_snapshot) AND crm_access_closure_valid(original_access_closure) AND classification IS NOT NULL AND actor IS NOT NULL AND action_label IS NOT NULL AND today_eligibility IS NOT NULL))
 );
 CREATE TABLE crm_internal_tasks (
  workspace_id uuid NOT NULL,id uuid NOT NULL DEFAULT gen_random_uuid(),owner_user_id uuid NOT NULL,
@@ -56,7 +56,7 @@ BEGIN
  OR (NEW.state<>'redacted' AND NEW.original_access_closure IS DISTINCT FROM OLD.original_access_closure)
  OR OLD.state='redacted' AND NEW.state<>'redacted'
  OR NEW.revision<OLD.revision OR NEW.revision>OLD.revision+1
- OR (NEW.state<>'redacted' AND NEW.revision=OLD.revision AND ROW(NEW.anchor_id,NEW.target,NEW.context_snapshot,NEW.original_access_closure,NEW.classification,NEW.actor,NEW.action_label,NEW.due,NEW.source_zone_receipt,NEW.reviewed_at) IS DISTINCT FROM ROW(OLD.anchor_id,OLD.target,OLD.context_snapshot,OLD.original_access_closure,OLD.classification,OLD.actor,OLD.action_label,OLD.due,OLD.source_zone_receipt,OLD.reviewed_at))
+ OR (NEW.state<>'redacted' AND NEW.revision=OLD.revision AND ROW(NEW.anchor_id,NEW.target,NEW.context_snapshot,NEW.original_access_closure,NEW.classification,NEW.actor,NEW.action_label,NEW.due,NEW.source_zone_receipt,NEW.today_eligibility,NEW.reviewed_at) IS DISTINCT FROM ROW(OLD.anchor_id,OLD.target,OLD.context_snapshot,OLD.original_access_closure,OLD.classification,OLD.actor,OLD.action_label,OLD.due,OLD.source_zone_receipt,OLD.today_eligibility,OLD.reviewed_at))
  OR NEW.projection_version<OLD.projection_version OR NEW.projection_version>OLD.projection_version+1
  OR (NEW.revision=OLD.revision AND ROW(NEW.state,NEW.projected_revision,NEW.projection_receipt) IS DISTINCT FROM ROW(OLD.state,OLD.projected_revision,OLD.projection_receipt) AND NEW.projection_version<>OLD.projection_version+1)
  OR (NEW.projection_receipt IS DISTINCT FROM OLD.projection_receipt AND NEW.projection_receipt IS NOT NULL AND (NEW.revision<>OLD.revision OR NEW.projected_revision<>NEW.revision))
@@ -80,7 +80,7 @@ CREATE TRIGGER crm_internal_task_guard BEFORE UPDATE ON crm_internal_tasks FOR E
 CREATE FUNCTION crm_commitment_anchor_change() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.availability='deleted' THEN
-  UPDATE crm_commitment_reviews SET anchor_id=NULL,target=NULL,context_snapshot=NULL,original_access_closure=NULL,classification=NULL,actor=NULL,action_label=NULL,due=NULL,source_zone_receipt=NULL,projection_receipt=NULL,projection_version=projection_version+1,state='redacted' WHERE workspace_id=NEW.workspace_id AND anchor_id=NEW.id;
+  UPDATE crm_commitment_reviews SET anchor_id=NULL,target=NULL,context_snapshot=NULL,original_access_closure=NULL,classification=NULL,actor=NULL,action_label=NULL,due=NULL,source_zone_receipt=NULL,today_eligibility=NULL,projection_receipt=NULL,projection_version=projection_version+1,state='redacted' WHERE workspace_id=NEW.workspace_id AND anchor_id=NEW.id;
  ELSIF NEW.current_decision_revision<>OLD.current_decision_revision THEN
   UPDATE crm_commitment_reviews SET state='review_required',projection_version=projection_version+1 WHERE workspace_id=NEW.workspace_id AND anchor_id=NEW.id AND state<>'redacted';
  END IF;

@@ -1,3 +1,4 @@
+import { CRM_COMMITMENT_CONSTRAINT_CASES } from "./support/crmCommitmentCases.ts";
 import { CRM_EVIDENCE_CONSTRAINT_CASES } from "./support/crmEvidenceCases.ts";
 import {SELECTED_FILE_CONSTRAINT_CASES} from './support/selectedFileCases.ts';
 import {CRM_PROGRESS_CONSTRAINT_CASES} from './support/crmProgressCases.ts';
@@ -792,6 +793,7 @@ const relationshipConstraintCases: readonly Case[] = [
 
 const cases: readonly Case[] = [
   ...CRM_EVIDENCE_CONSTRAINT_CASES,
+  ...CRM_COMMITMENT_CONSTRAINT_CASES,
   // ---------------------------------------------------------------- workspaces
   {
     constraint: "workspaces_pkey",
