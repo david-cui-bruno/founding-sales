@@ -174,3 +174,14 @@ export async function readCrmCommitmentActionProofs(context:RepositoryContext){
  }
  return result;
 }
+
+/** Cached acknowledgements never stand in for current source or human review authority. */
+export async function validateCrmCommitmentReviewReceipt(context:RepositoryContext,input:CrmCommitmentReview,receipt:{commitmentId:string;revision:number},mail:CrmMailEvidencePort=createNativeCrmMailEvidence()){
+ const status=await readCrmCommitmentReviewStatus(context,input,mail);if(status===null)return 'unavailable' as const;
+ if(status.current?.commitmentId!==receipt.commitmentId||status.current.revision!==receipt.revision)return 'changed' as const;
+ const current=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.scope.workspaceId,receipt.commitmentId])).rows[0];
+ const target=crmEvidenceClaimTargetSchema.parse({source:input.source,claimId:input.claimId,claimRevision:input.claimRevision,claimHash:input.claimHash,contextHash:input.contextHash,expectedDecisionRevision:input.expectedDecisionRevision});
+ const stored=crmEvidenceClaimTargetSchema.safeParse(current?.target);
+ if(current===undefined||current.revision!==receipt.revision||!stored.success||JSON.stringify(stored.data)!==JSON.stringify(target))return 'changed' as const;
+ return await activeIdentityActor(context)?'current' as const:'unavailable' as const;
+}

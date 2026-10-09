@@ -11,7 +11,7 @@ import {
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 
-it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas"] as const)("preserves completed action identity across %s", async scenario => {
+it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict"] as const)("preserves completed action identity across %s", async scenario => {
   const fixture = await createAuthFixture();
   try {
     let token = (
@@ -122,6 +122,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
                   locator: "text:0:48",
                   quote: "I will prepare the repair summary by October 12.",
                 },
+                ...(scenario==='conflict'?[{kind:'need' as const,status:'inferred' as const,interpretation:'Timing may remain unsettled',locator:'text:0:48',quote:'I will prepare the repair summary by October 12.'}]:[]),
               ],
             }),
           },
@@ -137,7 +138,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       );
       if (!("generationId" in result) || result.claims[0] === undefined)
         throw new Error("Controlled extraction unavailable");
-      return { generation: result, claim: result.claims[0] };
+      return { generation: result, claim: result.claims.find(value=>value.kind==='commitment')! };
     }
 
     const first=await process("fixture-v1",0);
@@ -147,6 +148,15 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       const result=await post("/crm/commitments/review",{...review,due:{kind:"instant",at:"2026-10-12T14:00:00.000001Z",zone:"UTC",expression:"at 2pm UTC"}});
       expect(result.status).toBe(400);return;
     }
+    if(scenario==='ambiguous'||scenario==='commercial')review.classification=scenario;
+    if(scenario==='unknown')review.actor='unknown';
+    if(scenario==='undated')review.due=null;
+    if(scenario==='caller_precision'){
+      expect((await post('/crm/commitments/review',{...review,sourceZoneReceipt:{sourceRevision:source.revision,sourceHash:source.contentHash,zone:'UTC',eventAt:'2026-10-01T14:00:00.000001Z'}})).status).toBe(400);return;
+    }
+    if(scenario==='caller_event'){
+      expect((await post('/crm/commitments/review',{...review,sourceZoneReceipt:{sourceRevision:source.revision,sourceHash:source.contentHash,zone:'UTC',eventAt:'2026-10-02T14:00:00.000Z'}})).status).toBe(409);return;
+    }
     const target={source:review.source,claimId:review.claimId,claimRevision:review.claimRevision,claimHash:review.claimHash,contextHash:review.contextHash,expectedDecisionRevision:review.expectedDecisionRevision};
     expect((await post("/crm/commitments/review/status",target)).body).toEqual({current:null});
     const queued=await post("/crm/commitments/review",review);expect(queued.status).toBe(200);
@@ -154,7 +164,18 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
     const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
     await runOnce(fixture.db,{registry,owner:"commitment-projector",limit:20});
     const read=()=>post("/crm/commitments/read",{scope:{kind:"person",personId},limit:50});
+    if(scenario==='ambiguous'||scenario==='commercial'||scenario==='unknown'||scenario==='undated'){
+      expect((await read()).body).toMatchObject({items:[{state:'suggestion',task:null}]});
+      expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toEqual({items:[],nextAfterId:null});return;
+    }
     const task=((await read()).body as {items:{task:{taskId:string}}[]}).items[0]!.task;
+    if(scenario==='conflict'){
+      const other=first.generation.claims.find(value=>value.kind==='need')!;
+      const conflict=await post('/crm/evidence/conflict/save',command({expectedConflictRevision:0,members:[target,{source,claimId:other.claimId,claimRevision:1,claimHash:other.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0}]}));expect(conflict.status).toBe(200);
+      expect((await read()).body).toMatchObject({items:[{state:'review_required',actionLabel:null,due:null,quote:null,source:null}]});
+      expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toEqual({items:[],nextAfterId:null});
+      expect((await post('/crm/commitments/complete',command({taskId:task.taskId,expectedVersion:1}))).status).toBe(409);return;
+    }
     const activationReceipt=(await fixture.db.query<{activation_receipt:unknown}>("SELECT activation_receipt FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2",[source.workspaceId,task.taskId])).rows[0]!.activation_receipt;
     const runtime=await fixture.database.appRuntimeSession();
     await expect(runtime.query("UPDATE crm_internal_tasks SET activation_receipt=activation_receipt || '{\"activatedAt\":\"2026-10-01T00:00:00.000Z\"}'::jsonb,version=version+1 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,task.taskId])).rejects.toMatchObject({code:"23514",constraint:"crm_internal_task_guard"});
@@ -185,7 +206,9 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       const fresh=await process("fixture-v2",1);
       next={...next,source,claimId:fresh.claim.claimId,claimHash:fresh.claim.claimHash,contextHash:fresh.generation.contextHash,expectedCommitmentRevision:scenario==="restore"?0:1};
     }
+    if(scenario==="restore")expect((await post("/crm/commitments/review",review)).status).toBe(404);
     const reviewed=await post("/crm/commitments/review",next);expect(reviewed.status).toBe(200);
+    if(scenario==="action"||scenario==="due")expect((await post("/crm/commitments/review",review)).status).toBe(409);
     await runOnce(fixture.db,{registry,owner:"commitment-projector-next",limit:20});
     const result=await read();expect(result.status).toBe(200);
     const current=(result.body as {items:{task:{taskId:string;status:string}|null}[]}).items[0]!.task;
