@@ -101,3 +101,12 @@ it('loads another bounded identity page without treating a later match as global
  expect(screen.queryByRole('heading',{name:'Alex Later'})).toBeNull();
  expect(read).toHaveBeenLastCalledWith({operation:'records',query:'Alex',kind:'people',limit:20,afterId:one});
 });
+
+it('lets the user search the next bounded copied-source page',async()=>{
+ const read=vi.fn<AskPorts['read']>(async input=>input.operation==='records'?{operation:'records',selection:'single',records:[{recordId:one,kind:'person',name:'Alex',firmId:null}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:{operation:'passages',scope:{personId:one},passages:[],nextAfterSourceId:input.operation==='passages'&&'afterSourceId' in input.scope?null:two,truncated:false,coverage:{scope:'selected_person_copies',acquisition:'unverified',semantic:'not_requested',scanComplete:input.operation==='passages'&&'afterSourceId' in input.scope,unavailableSources:0,omittedSignatures:0,chunkerVersion:'lexical-original-v1'}});
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Alex'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Alex'}));
+ fireEvent.change(screen.getByLabelText('Search original passages'),{target:{value:'maintenance'}});fireEvent.click(screen.getByRole('button',{name:'Find passages'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Next copied-source page'}));
+ await waitFor(()=>expect(read).toHaveBeenLastCalledWith({operation:'passages',scope:{personId:one,afterSourceId:two},query:'maintenance',limit:20}));
+});
