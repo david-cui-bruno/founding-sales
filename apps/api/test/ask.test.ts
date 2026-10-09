@@ -128,6 +128,10 @@ it('finds permitted original passages by PostgreSQL keywords with dates and sour
   const passages=(read.body as {passages:{text:string;sources:unknown[]}[]}).passages;
   expect(passages).toHaveLength(1);expect(passages[0]?.text).toBe(selection.text);
   expect(passages[0]?.sources[0]).toMatchObject({sourceId,kind:'selected_note',revision:1,occurredAt:null,speaker:null,completeness:'selected_excerpt',availability:'available',locator:`text:0:${selection.text.length}`});
+  expect((await post('/crm/imports/delete',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,sourceId,expectedSourceRevision:1,expectedMetadataRevision:1})).status).toBe(200);
+  const afterDelete=await post('/ask/read',{operation:'passages',scope:{personId},query:'maintenance',limit:20});
+  expect(afterDelete.status).toBe(200);expect(afterDelete.body).toMatchObject({passages:[],coverage:{unavailableSources:1,acquisition:'unverified'}});
+  expect(JSON.stringify(afterDelete.body)).not.toContain('send all contacts');
  }finally{await fixture.stop();}
 });
 
