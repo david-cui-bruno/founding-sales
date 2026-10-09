@@ -172,7 +172,9 @@ export async function readCrmCommitments(context:RepositoryContext,input:CrmComm
  const live=candidates.filter(row=>row.state!=='redacted');const targets=live.map(row=>crmEvidenceClaimTargetSchema.parse(row.target));
  const taskRows=(await context.db.query<Task>(`SELECT * FROM crm_internal_tasks WHERE workspace_id=$1 AND task_key=ANY($2::text[])
  UNION SELECT prior.* FROM crm_commitment_reviews r CROSS JOIN LATERAL(SELECT * FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.review_id=r.id AND t.task_key IS DISTINCT FROM r.activation_key AND t.status='open' AND t.activation_receipt IS NOT NULL ORDER BY t.id LIMIT 11) prior WHERE r.workspace_id=$1 AND r.id=ANY($3::uuid[]) ORDER BY id`,[context.scope.workspaceId,live.map(row=>row.activation_key),live.map(row=>row.id)])).rows;
- if(!await lockConflictSources(context,targets.map(target=>target.source),reviewContexts(live,taskRows),reviewClosures(live,taskRows)))return null;
+ // A page is bounded to fifty reviews plus one sentinel; lock every current
+ // mail source before publishing any item rather than applying the default ten-source command cap.
+ if(!await lockConflictSources(context,targets.map(target=>target.source),reviewContexts(live,taskRows),reviewClosures(live,taskRows),{maxSources:100}))return null;
  const items=[];
  for(const row of candidates.slice(0,input.limit)){
   const locked=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.scope.workspaceId,row.id])).rows[0];
