@@ -110,7 +110,7 @@ const unmatchedGmailMetadata: RetentionTarget = {
   dataKind: 'unmatched_gmail_metadata',
   state: 'implemented',
   tables: ['mail_messages', 'mail_message_bodies', 'crm_business_conversations'],
-  note: 'Unmatched Gmail metadata follows its policy; compact business review metadata expires at the fixed ninety-day review horizon without resurrecting copied identity.',
+  note: 'Unmatched Gmail metadata follows its policy; compact business review metadata expires at the fixed ninety-day review horizon. An available, exactly linked approved business copy follows business correspondence retention without manufacturing an operational match.',
   sweep: async (context, input) => {
     const boundaryAt = requireBoundary(input, 'unmatched_gmail_metadata');
     const { rowCount } = await context.db.query(
@@ -118,6 +118,9 @@ const unmatchedGmailMetadata: RetentionTarget = {
         WHERE (workspace_id, id) IN (
           SELECT workspace_id, id FROM mail_messages
            WHERE workspace_id = $1 AND NOT matched AND recorded_at < $2::timestamptz
+             AND NOT (business_capture_authorized AND EXISTS(
+               SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=mail_messages.workspace_id
+               AND s.source_id=mail_messages.id AND s.availability='available'))
            ORDER BY recorded_at
            LIMIT $3
         )`,
