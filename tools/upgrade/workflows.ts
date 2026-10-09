@@ -1,3 +1,4 @@
+import {ASK_UPGRADE_WORKFLOW,runAskUpgradeWorkflow} from './askWorkflows.ts';
 import {createPerson} from '@fss/domain/crm/people.ts';
 import {previewSelectedAttachment,commitSelectedAttachment,readSelectedAttachment} from '@fss/domain/crm/selectedAttachments.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -282,6 +283,7 @@ export async function runWorkflows(
   const businessDate = await businessDateOf(admin, now);
 
   const steps: readonly Step[] = [
+    { name: ASK_UPGRADE_WORKFLOW, run: async () => await runAskUpgradeWorkflow(admin,handles) },
     {
       name: 'crm.selectedFile (explicit import)',
       run: async () => {
