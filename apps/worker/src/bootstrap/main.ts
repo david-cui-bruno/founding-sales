@@ -1,3 +1,5 @@
+import {crmCommitmentIntentJobHandler} from '../handlers/crmCommitmentIntent.ts';
+import {crmCommitmentJobHandler} from '../handlers/crmCommitments.ts';
 import {crmMailProgressSource} from '../scheduler/crmMailProgressSource.ts';
 import {crmMailProgressJobHandler} from '../handlers/crmMailProgress.ts';
 import {crmMailBackfillSource} from '../scheduler/crmMailBackfillSource.ts';
@@ -206,6 +208,8 @@ export function registerHandlers(
   const { classifier } = composition;
   registry.register(canaryHandler());
   registry.register(crmMailProgressJobHandler());
+  registry.register(crmCommitmentJobHandler());
+  registry.register(crmCommitmentIntentJobHandler(composition.crmExtraction?.mailEvidence));
   registry.register(crmMailBackfillJobHandler(composition.crmMailBackfill));
   registry.register(businessMailCaptureHandler(composition.crmMailCapture ?? { provider: { async read() { throw new Error('mail_capture_provider_unavailable'); } } }));
   registry.register(humanReplySendJobHandler(composition.send));

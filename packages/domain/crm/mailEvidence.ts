@@ -10,6 +10,9 @@ export interface MailProcessingAuthority {
 }
 /** Stored-copy read authority and current processing authority intentionally differ after disconnect. */
 export interface CrmMailEvidencePort {
+ /** Optional native-only stored original proof; absent adapters always abstain. No verifier/network. */
+ resolveCommitmentProof?(context:RepositoryContext,source:SourceLookup):Promise<{ownerUserId:string;sourceRevision:number;sourceHash:string;providerEventAt:string;observedAt:string;authored:true;actualOutgoing:true;passage:string}|null>;
+
  resolve(context:RepositoryContext,source:SourceLookup):Promise<{
   source:CanonicalSourceReference;
   ownerUserId:string;

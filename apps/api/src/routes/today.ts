@@ -1,3 +1,6 @@
+import {todayActionOpenV2RequestSchema,todayActionsV2ResponseSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
+import {readTodayActionsV2,openTodayActionV2} from '@fss/domain/today/actionsV2.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
 import { todayActionOpenRequestSchema } from '@fss/contracts';
 import { readTodayActions, openTodayAction } from '@fss/domain/today/actions.ts';
 import { TODAY_CARD_VERSION, completeCallTaskCommandSchema, todayFirmRequestSchema } from '@fss/contracts';
@@ -35,7 +38,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * from the scope's own role, because 8.2's "Admins see all entries; salespeople see their
  * own" is a property of the read and not of the transport.
  */
-export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed', '/today/tasks/complete', '/today/actions', '/today/actions/open'];
+export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed', '/today/tasks/complete', '/today/actions', '/today/actions/open', '/today/actions/v2', '/today/actions/open/v2'];
 
 /**
  * Slice 3a: `GET /today?include=tasks` (repeated or comma-separated; an unknown value is
@@ -69,6 +72,17 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
   if (!scoped.ok) return scoped.result;
   const context = scoped.context;
 
+  if(request.path==='/today/actions/v2'){
+    if(request.method!=='GET')return {status:405,body:redactError('method_not_allowed')};
+    const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV2(context,{now:await databaseNow(context)}));
+    return result===null?{status:404,body:redactError('not_found')}:{status:200,body:todayActionsV2ResponseSchema.parse(result)};
+  }
+  if(request.path==='/today/actions/open/v2'){
+    if(request.method!=='POST')return {status:405,body:redactError('method_not_allowed')};
+    const parsed=todayActionOpenV2RequestSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
+    const result=await withTransaction(deps.auth.db,async()=>openTodayActionV2(context,{...parsed.data,now:await databaseNow(context)}));
+    return result===null?{status:404,body:redactError('not_found')}:{status:200,body:todayActionOpenV2ResponseSchema.parse(result)};
+  }
   if (request.path === '/today/actions') {
     if (request.method !== 'GET') return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
     return { status: 200, body: await readTodayActions(context, { now: await databaseNow(context) }) };

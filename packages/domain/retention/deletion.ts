@@ -266,22 +266,41 @@ async function identityDeletionClosure(
       mailIdentitiesSelected: string[];
       humanAnchors: string[];
       humanVersions: string[];
+      humanReviews: string[];
+      humanTasks: string[];
       progressReceipts: string[];
     }>(
       `
     WITH selected AS (${CRM_SELECTED_SOURCE_IDS}),
     progress_selected AS (${CRM_PROGRESS_IDS}),
     human_selected AS (${CRM_HUMAN_ANCHOR_IDS}),
+    human_reviews AS (SELECT r.* FROM crm_commitment_reviews r WHERE r.workspace_id=$1 AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE}),
+    human_tasks AS (SELECT t.* FROM crm_internal_tasks t WHERE t.workspace_id=$1 AND ${CRM_COMMITMENT_TASK_IN_SCOPE}),
+    human_private_contexts AS (
+      SELECT initial_context_snapshot AS snapshot,original_access_closure AS closure FROM human_reviews
+      UNION ALL SELECT context_snapshot,original_access_closure FROM human_reviews
+      UNION ALL SELECT activation_receipt->'initialContextSnapshot',activation_receipt->'originalAccessClosure' FROM human_tasks
+      UNION ALL SELECT activation_receipt->'contextSnapshot',activation_receipt->'originalAccessClosure' FROM human_tasks
+    ),
+    human_private_sources AS (
+      SELECT target->'source'->>'kind' AS kind,(target->'source'->>'sourceId')::uuid AS id FROM human_reviews
+      UNION SELECT activation_receipt->>'sourceKind',(activation_receipt->>'sourceId')::uuid FROM human_tasks
+    ),
     human_groups AS (SELECT DISTINCT conflict_id FROM crm_claim_conflict_members WHERE workspace_id=$1 AND anchor_id IN(SELECT id FROM human_selected)),
     human_anchors AS (
       SELECT a.* FROM crm_claim_review_anchors a WHERE a.workspace_id=$1 AND (a.id IN(SELECT id FROM human_selected)
+        OR a.id IN(SELECT anchor_id FROM human_reviews)
+        OR a.id IN(SELECT (activation_receipt->>'anchorId')::uuid FROM human_tasks)
         OR a.id IN(SELECT anchor_id FROM crm_claim_conflict_members WHERE workspace_id=$1 AND conflict_id IN(SELECT conflict_id FROM human_groups)))
     ),
     mail_selected AS (${CRM_MAIL_MESSAGE_IDS}),
-    mail_locked AS (SELECT id FROM mail_selected UNION SELECT source_id FROM human_anchors WHERE source_kind='mail'),
+    mail_locked AS (SELECT id FROM mail_selected UNION SELECT source_id FROM human_anchors WHERE source_kind='mail' UNION SELECT id FROM human_private_sources WHERE kind='mail'),
     mail_identities AS (${CRM_MAIL_CAPTURE_IDS} UNION SELECT capture_identity_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN(SELECT id FROM mail_locked)),
     affected_people AS (
       ${CRM_TARGET_PEOPLE}
+      UNION SELECT captured.id::uuid FROM human_private_contexts c CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(c.closure->'personIds','[]'::jsonb)) captured(id)
+      UNION SELECT (snapshot->>'personId')::uuid FROM human_private_contexts WHERE snapshot->>'personId' IS NOT NULL
+      UNION SELECT (captured->>'personId')::uuid FROM human_private_contexts c CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.snapshot->'mailContexts','[]'::jsonb)) captured WHERE captured->>'personId' IS NOT NULL
       UNION SELECT unnest(original_person_ids) FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id IN(SELECT id FROM progress_selected)
       UNION SELECT captured.id::uuid FROM human_anchors a CROSS JOIN LATERAL jsonb_array_elements_text(a.original_access_closure->'personIds') captured(id)
       UNION SELECT (context_snapshot->>'personId')::uuid FROM human_anchors WHERE context_snapshot->>'personId' IS NOT NULL
@@ -298,6 +317,7 @@ async function identityDeletionClosure(
     sources AS (
       SELECT id FROM crm_selected_sources WHERE workspace_id=$1 AND (id IN (SELECT id FROM selected)
         OR id IN(SELECT source_id FROM human_anchors WHERE source_kind='selected_note')
+        OR id IN(SELECT id FROM human_private_sources WHERE kind='selected_note')
         OR person_id IN (SELECT person_id FROM affected_people)
         OR id IN (SELECT source_id FROM crm_relationships WHERE workspace_id=$1 AND person_id IN (SELECT person_id FROM affected_people))
         OR id IN (SELECT source_id FROM crm_endpoint_claims WHERE workspace_id=$1 AND person_id IN (SELECT person_id FROM affected_people))
@@ -305,6 +325,9 @@ async function identityDeletionClosure(
     ),
     firms_to_lock AS (
       SELECT $3::uuid AS id
+      UNION SELECT captured.id::uuid FROM human_private_contexts c CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(c.closure->'firmIds','[]'::jsonb)) captured(id)
+      UNION SELECT captured.id::uuid FROM human_private_contexts c CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(c.snapshot->'firmIds','[]'::jsonb)) captured(id)
+      UNION SELECT (captured->>'firmId')::uuid FROM human_private_contexts c CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.snapshot->'mailContexts','[]'::jsonb)) captured WHERE captured->>'firmId' IS NOT NULL
       UNION SELECT unnest(original_firm_ids) FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id IN(SELECT id FROM progress_selected)
       UNION SELECT captured.id::uuid FROM human_anchors a CROSS JOIN LATERAL jsonb_array_elements_text(a.original_access_closure->'firmIds') captured(id)
       UNION SELECT captured.id::uuid FROM human_anchors a CROSS JOIN LATERAL jsonb_array_elements_text(a.context_snapshot->'firmIds') captured(id)
@@ -334,8 +357,10 @@ async function identityDeletionClosure(
       ARRAY(SELECT id::text FROM mail_identities ORDER BY id) AS "mailIdentities",
       ARRAY(SELECT id::text FROM progress_selected ORDER BY id) AS "progressReceipts",
       ARRAY(SELECT id::text FROM human_anchors ORDER BY id) AS "humanAnchors",
+      ARRAY(SELECT id::text FROM human_reviews ORDER BY id) AS "humanReviews",
+      ARRAY(SELECT id::text FROM human_tasks ORDER BY id) AS "humanTasks",
       ARRAY(SELECT concat(id::text,':',source_revision,':',source_hash,':',context_hash,':',original_access_closure::text,':',current_decision_revision,':',availability) FROM human_anchors ORDER BY id) ||
-       ARRAY(SELECT concat(id::text,':',current_revision) FROM crm_claim_conflicts WHERE workspace_id=$1 AND id IN(SELECT conflict_id FROM human_groups) ORDER BY id) AS "humanVersions"`,
+       ARRAY(SELECT concat(id::text,':',current_revision) FROM crm_claim_conflicts WHERE workspace_id=$1 AND id IN(SELECT conflict_id FROM human_groups) ORDER BY id) || ARRAY(SELECT concat(id::text,':',revision,':',projection_version,':',state,':',initial_context_snapshot::text,':',context_snapshot::text,':',original_access_closure::text,':',activation_key) FROM human_reviews ORDER BY id) || ARRAY(SELECT concat(t.id::text,':',t.version,':',t.review_id::text,':',t.activation_receipt::text) FROM human_tasks t ORDER BY t.id) AS "humanVersions"`,
       [context.scope.workspaceId, scope.contactId, scope.firmId],
     )
   ).rows[0];
@@ -375,6 +400,21 @@ const CRM_HUMAN_ANCHOR_IN_SCOPE = `(
  OR (a.source_kind='meeting_transcript' AND a.source_id IN(SELECT t.id FROM meeting_transcripts t JOIN meeting_recordings r ON r.workspace_id=t.workspace_id AND r.id=t.recording_id JOIN meetings m ON m.workspace_id=r.workspace_id AND m.id=r.meeting_id WHERE t.workspace_id=$1 AND ${MEETING_IN_SCOPE}))
 )`;
 const CRM_HUMAN_ANCHOR_IDS = `SELECT a.id FROM crm_claim_review_anchors a WHERE a.workspace_id=$1 AND ${CRM_HUMAN_ANCHOR_IN_SCOPE}`;
+/** A commitment keeps both its original attestation and explicitly reviewed current semantics. */
+function commitmentAuthorityInScope(snapshot:string,closure:string){
+ return `(
+  (${closure}->'firmIds' ? $3::uuid::text AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(COALESCE(${closure}->'personIds','[]'::jsonb)) original_person(id) WHERE original_person.id IN(SELECT person_id::text FROM (${CRM_TARGET_PEOPLE}) target_people))))
+  OR (($2::uuid IS NULL OR ${snapshot}->>'personId' IN(SELECT person_id::text FROM (${CRM_TARGET_PEOPLE}) target_people)) AND ${snapshot}->'firmIds' ? $3::uuid::text)
+  OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(${snapshot}->'mailContexts','[]'::jsonb)) cx WHERE cx->>'firmId'=$3::uuid::text AND ($2::uuid IS NULL OR cx->>'personId' IN(SELECT person_id::text FROM (${CRM_TARGET_PEOPLE}) target_people)))
+ )`;
+}
+const CRM_COMMITMENT_REVIEW_IN_SCOPE=`(r.state<>'redacted' AND (r.anchor_id IN(${CRM_HUMAN_ANCHOR_IDS}) OR ${commitmentAuthorityInScope('r.initial_context_snapshot','r.original_access_closure')} OR ${commitmentAuthorityInScope('r.context_snapshot','r.original_access_closure')}))`;
+const CRM_COMMITMENT_TASK_IN_SCOPE=`(t.activation_receipt IS NOT NULL AND (
+ (t.activation_receipt->>'anchorId')::uuid IN(${CRM_HUMAN_ANCHOR_IDS})
+ OR EXISTS(SELECT 1 FROM crm_commitment_reviews r WHERE r.workspace_id=t.workspace_id AND r.id=t.review_id AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE})
+ OR ${commitmentAuthorityInScope("(t.activation_receipt->'initialContextSnapshot')","(t.activation_receipt->'originalAccessClosure')")}
+ OR ${commitmentAuthorityInScope("(t.activation_receipt->'contextSnapshot')","(t.activation_receipt->'originalAccessClosure')")}
+))`;
 const CRM_HUMAN_CONFLICT_IN_SCOPE = `EXISTS(SELECT 1 FROM crm_claim_conflict_members members WHERE members.workspace_id=r.workspace_id AND members.conflict_id=r.conflict_id AND members.anchor_id IN (${CRM_HUMAN_ANCHOR_IDS}))`;
 
 const MEETING_REVIEW_IN_SCOPE = `((evidence_kind = 'meeting.booked' AND evidence_id IN (
@@ -641,6 +681,8 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    crm_commitment_reviews: await countOf(context,`SELECT count(*) AS count FROM crm_commitment_reviews r WHERE r.workspace_id=$1 AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE}`,byContact),
+    crm_internal_tasks: await countOf(context,`SELECT count(*) AS count FROM crm_internal_tasks t WHERE t.workspace_id=$1 AND ${CRM_COMMITMENT_TASK_IN_SCOPE}`,byContact),
     crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE} AND (request_provider_at IS NOT NULL OR sent_receipt_id IS NOT NULL)`,byContact),
     crm_selected_file_receipts: await countOf(context,`SELECT count(*) AS count FROM crm_selected_file_receipts f WHERE f.workspace_id=$1 AND f.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (f.file_name IS NOT NULL OR f.file_hash IS NOT NULL OR f.source_content_hash IS NOT NULL OR f.byte_length IS NOT NULL OR f.format IS NOT NULL OR f.origin IS NOT NULL OR f.parser_version IS NOT NULL)`,byContact),
     crm_claim_review_anchors: await countOf(
@@ -799,6 +841,8 @@ async function measure(
   };
 
   const retains: Record<string, number> = {
+    crm_commitment_reviews: await countOf(context,`SELECT count(*) AS count FROM crm_commitment_reviews r WHERE r.workspace_id=$1 AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE}`,byContact),
+    crm_internal_tasks: await countOf(context,`SELECT count(*) AS count FROM crm_internal_tasks t WHERE t.workspace_id=$1 AND ${CRM_COMMITMENT_TASK_IN_SCOPE}`,byContact),
     crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE}`,byContact),
     crm_claim_review_anchors: await countOf(
       context,
@@ -1193,6 +1237,8 @@ export async function commitDeletion(
       "SELECT id FROM crm_claim_review_anchors WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
       [context.scope.workspaceId, anchorId],
     );
+  for(const reviewId of closure.humanReviews)await context.db.query('SELECT id FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,reviewId]);
+  for(const taskId of closure.humanTasks)await context.db.query('SELECT id FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,taskId]);
   if (
     JSON.stringify(await identityDeletionClosure(context, scope)) !==
     JSON.stringify(closure)
@@ -1259,6 +1305,10 @@ export async function commitDeletion(
       byContact,
     )
   ).rows.map((value) => value.id);
+  // Clear only each affected private attestation, before deleting leaf anchors.
+  // Unrelated promises on the same retained copy keep their own exact proof.
+  redacted["crm_internal_tasks"] = (await context.db.query("UPDATE crm_internal_tasks SET review_id=NULL,activation_receipt=NULL,review_required=true,version=version+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND activation_receipt IS NOT NULL",[workspace,closure.humanTasks])).rowCount??0;
+  redacted["crm_commitment_reviews"] = (await context.db.query("UPDATE crm_commitment_reviews SET anchor_id=NULL,target=NULL,activation_key=NULL,initial_context_snapshot=NULL,context_snapshot=NULL,original_access_closure=NULL,basis=NULL,classification=NULL,actor=NULL,action_label=NULL,due=NULL,source_zone_receipt=NULL,today_eligibility=NULL,projection_receipt=NULL,projection_version=projection_version+1,state='redacted' WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state<>'redacted'",[workspace,closure.humanReviews])).rowCount??0;
   redacted["crm_claim_review_anchors"] =
     (
       await context.db.query(

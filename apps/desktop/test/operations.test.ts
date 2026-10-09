@@ -159,6 +159,8 @@ describe('the operation registry', () => {
       'calling.transcript',
     ]);
     expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
+      'today.actionsV2',
+      'today.openActionV2',
       'today.actions',
       'today.openAction',
       'today.state',
