@@ -25,8 +25,13 @@ it('upgrades67 to68 without replacing legacy notification history, and accepts a
     } };
     return await withTransaction(database.session, async () => await receiveCalcomEvent(database.session, { workspaceId: seeded.alpha.workspaceId, body, rawBody: Buffer.from(JSON.stringify(body)) }));
   }
-  const original = await book('call-upgrade-legacy');
-  if (original.meetingId === null) throw new Error('legacy booking fixture missing');
+  // Persist the historical schema67 shape directly. Current application code is
+  // pinned to schema74 and must never be run against the old fixture schema.
+  const original = { meetingId: randomUUID() };
+  await database.session.query(`INSERT INTO meetings
+    (workspace_id,id,booking_uid,current_booking_uid,firm_id,contact_id,opportunity_id,state,starts_at,ends_at,last_event_at,organizer_email,attendee_email)
+    VALUES($1,$2,'call-upgrade-legacy','call-upgrade-legacy',$3,$4,$5,'booked','2026-09-15T03:30:00Z','2026-09-15T04:00:00Z','2026-09-14T12:00:00Z',$6,$7)`,
+  [seeded.alpha.workspaceId,original.meetingId,crm.alpha.firmId,crm.alpha.contactId,crm.alpha.opportunityId,seeded.alpha.salesperson.email,crm.collidingEmail]);
   const attemptId = randomUUID(), legacyEvent = `meeting:${original.meetingId}:pre_call:2026-09-15T03:30:00.000Z`;
   // This is the exact pre-UID persisted shape. The migration must preserve it.
   await database.session.query(`INSERT INTO actionable_notification_attempts(workspace_id,attempt_id,user_id,device_id,event_key,action_id,phase,target,status,attempted_at,unknown_at)
@@ -42,10 +47,14 @@ it('upgrades67 to68 without replacing legacy notification history, and accepts a
   const legacyCandidate = (await readNotificationCandidates(context, { now }))[0]!;
   expect(await claimNotification(context, { deviceId, eventKey: legacyCandidate.eventKey, now })).toBeNull();
 
+  expect(await applyMigrations(database.session, { throughVersion: 68 })).toEqual([]);
+  // Exact schema68 preservation above remains tested; new business operations run
+  // only after the remaining migrations establish the current application pin.
+  await applyMigrations(database.session);
   await book('call-upgrade-current');
   const current = (await readNotificationCandidates(context, { now })).find(candidate => candidate.target.kind === 'meeting' && candidate.target.bookingUid === 'call-upgrade-current');
   if (current === undefined) throw new Error('current booking candidate missing');
   expect(await claimNotification(context, { deviceId, eventKey: current.eventKey, now })).toMatchObject({ target: { bookingUid: 'call-upgrade-current' }, receipt: { status: 'attempting', nativeShownAt: null } });
   expect(await claimNotification(context, { deviceId, eventKey: current.eventKey, now })).toBeNull();
-  expect(await applyMigrations(database.session, { throughVersion: 68 })).toEqual([]);
+  expect(await applyMigrations(database.session)).toEqual([]);
 });

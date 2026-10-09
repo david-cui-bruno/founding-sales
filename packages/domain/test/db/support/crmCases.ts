@@ -945,11 +945,19 @@ export const CRM_CONSTRAINT_CASES: readonly CrmCase[] = [
       ),
   },
   {
-    constraint: 'opportunities_one_open_per_firm',
+    constraint: 'opportunities_display_name_bounded',
     run: async f => {
-      const firmId = await aFirm(f);
-      await anOpportunity(f, firmId);
-      return await anOpportunity(f, firmId);
+      const opportunityId=await anOpportunity(f,await aFirm(f));
+      return await f.session.query('UPDATE opportunities SET display_name=$3 WHERE workspace_id=$1 AND id=$2',
+        [workspace(f),opportunityId,'   ']);
+    },
+  },
+  {
+    constraint: 'opportunities_stage_control_mode_known',
+    run: async f => {
+      const opportunityId=await anOpportunity(f,await aFirm(f));
+      return await f.session.query("UPDATE opportunities SET stage_control_mode='model_controlled' WHERE workspace_id=$1 AND id=$2",
+        [workspace(f),opportunityId]);
     },
   },
   {

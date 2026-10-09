@@ -98,6 +98,8 @@ export interface ContactRow {
 }
 
 export interface OpportunityRow {
+  readonly stage_control_mode?:'legacy_rules'|'human';
+  readonly display_name?: string | null;
   readonly id: string;
   readonly workspace_id: string;
   readonly firm_id: string;

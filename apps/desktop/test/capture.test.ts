@@ -140,6 +140,7 @@ describe('the CRM bridge: Add firm', () => {
     // The page, then its Sequences section's two reads (lane g88).
     expect(calls.map(call => call.path)).toEqual([
       '/crm/firms/add',
+      '/crm/firm-page-v3',
       '/crm/firm-page',
       '/sequences',
       '/enrollments',

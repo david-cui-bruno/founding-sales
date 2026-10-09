@@ -1,19 +1,11 @@
-import {attributeFirmInteraction} from '../sourcing/attribution.ts';
+import { attributeFirmInteraction } from '../sourcing/attribution.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent, isWritableManualModeOrigin, type WritableManualModeOrigin } from './events.ts';
 import { loadFirmForUpdate } from './firms.ts';
-import {
-  accept,
-  actorKind,
-  actorUserId,
-  refuse,
-  type CrmResult,
-  type OpportunityRow,
-  type PipelineStageRow,
-} from './types.ts';
+import { accept, actorKind, actorUserId, refuse, type CrmResult, type OpportunityRow, type PipelineStageRow } from './types.ts';
 
 /**
  * The pipeline: stages, stage changes, closing and reopening
@@ -39,7 +31,7 @@ import {
  * running when it closed, which is exactly the sentence's "silently".
  */
 
-const OPPORTUNITY_COLUMNS = `id, workspace_id, firm_id, stage_id, status, control_mode, control_mode_reason,
+const OPPORTUNITY_COLUMNS = `stage_control_mode, display_name, id, workspace_id, firm_id, stage_id, status, control_mode, control_mode_reason,
   control_mode_changed_at, control_mode_origin, opened_at, closed_at, close_reason,
   reopened_from_opportunity_id, created_at, updated_at`;
 
@@ -62,10 +54,7 @@ export async function readStageByKey(context: RepositoryContext, key: string): P
   return rows[0] ?? null;
 }
 
-export async function readOpportunity(
-  context: RepositoryContext,
-  opportunityId: string,
-): Promise<OpportunityRow | null> {
+export async function readOpportunity(context: RepositoryContext, opportunityId: string): Promise<OpportunityRow | null> {
   const { rows } = await context.db.query<OpportunityRow>(
     `SELECT ${OPPORTUNITY_COLUMNS} FROM opportunities WHERE workspace_id = $1 AND id = $2`,
     [context.scope.workspaceId, opportunityId],
@@ -73,22 +62,47 @@ export async function readOpportunity(
   return rows[0] ?? null;
 }
 
-export async function readOpenOpportunity(
-  context: RepositoryContext,
-  firmId: string,
-): Promise<OpportunityRow | null> {
+/** Explicit plural lookup; no address/name matching or sending authority. */
+export async function listFirmOpportunities(context: RepositoryContext, firmId: string): Promise<readonly OpportunityRow[]> {
+  return (
+    await context.db.query<OpportunityRow>(
+      `SELECT ${OPPORTUNITY_COLUMNS} FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 ORDER BY opened_at,id`,
+      [context.scope.workspaceId, firmId],
+    )
+  ).rows;
+}
+export async function ambiguousFirmOpportunities(context: RepositoryContext, firmId?: string): Promise<boolean> {
+  return (
+    (
+      await context.db.query(
+        `SELECT firm_id FROM opportunities WHERE workspace_id=$1 AND ($2::uuid IS NULL OR firm_id=$2) GROUP BY firm_id HAVING count(*) FILTER(WHERE status='open')>1 OR (count(*) FILTER(WHERE status='open')=0 AND count(*)>1) LIMIT 1`,
+        [context.scope.workspaceId, firmId ?? null],
+      )
+    ).rows.length > 0
+  );
+}
+
+export async function readOpenOpportunity(context: RepositoryContext, firmId: string): Promise<OpportunityRow | null> {
   const { rows } = await context.db.query<OpportunityRow>(
     `SELECT ${OPPORTUNITY_COLUMNS} FROM opportunities
       WHERE workspace_id = $1 AND firm_id = $2 AND status = 'open'`,
     [context.scope.workspaceId, firmId],
   );
-  return rows[0] ?? null;
+  return rows.length === 1 ? (rows[0] ?? null) : null;
 }
 
-export async function loadOpportunityForUpdate(
+/** Preserve explicit operational association; only a unique open deal is a fallback. */
+export async function readOperationalOpportunity(
   context: RepositoryContext,
-  opportunityId: string,
+  firmId: string,
+  opportunityId?: string | null,
 ): Promise<OpportunityRow | null> {
+  if (opportunityId === undefined || opportunityId === null) return readOpenOpportunity(context, firmId);
+  const selected = await readOpportunity(context, opportunityId);
+  return selected?.firm_id === firmId ? selected : null;
+}
+
+export async function loadOpportunityForUpdate(context: RepositoryContext, opportunityId: string): Promise<OpportunityRow | null> {
   const { rows } = await context.db.query<OpportunityRow>(
     `SELECT ${OPPORTUNITY_COLUMNS} FROM opportunities WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
     [context.scope.workspaceId, opportunityId],
@@ -97,31 +111,55 @@ export async function loadOpportunityForUpdate(
 }
 
 /**
- * Open the firm's opportunity. One per firm is the database's rule; this refuses with
- * a named reason rather than letting the partial unique index abort the transaction,
- * because an aborted transaction cannot write its command receipt.
+ * Legacy singleton creation refuses an existing open deal under the firm lock.
+ * Explicit plural creation records an independent initiative without enrolling anyone.
  */
 export async function openOpportunity(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly stageKey?: string | undefined },
+): Promise<CrmResult<OpportunityRow>> {
+  return createOpportunity(context, input, false);
+}
+/** A deliberate new commercial initiative, independent of existing deals and sending. */
+export async function openExplicitOpportunity(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly stageKey?: string | undefined; readonly name?: string | undefined },
+): Promise<CrmResult<OpportunityRow>> {
+  return createOpportunity(context, input, true);
+}
+
+async function createOpportunity(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly stageKey?: string | undefined; readonly name?: string | undefined },
+  explicit: boolean,
 ): Promise<CrmResult<OpportunityRow>> {
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
   const decision = decideFirmMutation(context, firm);
   if (!decision.permitted) return refuse(decision.reason);
 
-  const existing = await readOpenOpportunity(context, input.firmId);
-  if (existing !== null) return refuse('opportunity_open_exists');
+  if (input.name !== undefined && (input.name.trim().length < 1 || input.name.trim().length > 160)) return refuse('invalid_input');
+  const existing = (await listFirmOpportunities(context, input.firmId)).filter((opportunity) => opportunity.status === 'open');
+  if (!explicit && existing.length > 0) return refuse('opportunity_open_exists');
 
   const stage = await readStageByKey(context, input.stageKey ?? 'new');
   if (stage === null) return refuse('stage_unknown');
   if (stage.retired) return refuse('stage_retired');
 
   const { rows } = await context.db.query<OpportunityRow>(
-    `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at)
-     VALUES ($1, $2, $3, now())
+    `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at, control_mode,control_mode_reason,control_mode_origin,display_name,stage_control_mode)
+     VALUES ($1, $2, $3, now(),$4,$5,$6,$7,$8)
      RETURNING ${OPPORTUNITY_COLUMNS}`,
-    [context.scope.workspaceId, input.firmId, stage.id],
+    [
+      context.scope.workspaceId,
+      input.firmId,
+      stage.id,
+      explicit ? 'manual' : 'automated',
+      explicit ? 'explicit opportunity creation' : null,
+      explicit ? 'salesperson_command' : null,
+      explicit ? (input.name?.trim() ?? null) : null,
+      explicit ? 'human' : 'legacy_rules',
+    ],
   );
   const created = rows[0];
   if (created === undefined) return refuse('invalid_input');
@@ -159,10 +197,7 @@ export interface ChangeStageInput {
  * reason" is a refusal a person can act on rather than a constraint violation that
  * loses the whole command.
  */
-export async function changeStage(
-  context: RepositoryContext,
-  input: ChangeStageInput,
-): Promise<CrmResult<OpportunityRow>> {
+export async function changeStage(context: RepositoryContext, input: ChangeStageInput): Promise<CrmResult<OpportunityRow>> {
   // Won and Lost stop automation (8.1), so a stage change is a potential stop fact and
   // takes the send gate before the opportunity's row (`policy/sendGate.ts`).
   await lockSendGateForStopFact(context);
@@ -255,13 +290,7 @@ export async function moveOpportunityStage(
             updated_at = now()
       WHERE workspace_id = $1 AND id = $2
       RETURNING ${OPPORTUNITY_COLUMNS}`,
-    [
-      context.scope.workspaceId,
-      opportunity.id,
-      stage.id,
-      terminal ? stage.terminal_kind : null,
-      reason ?? null,
-    ],
+    [context.scope.workspaceId, opportunity.id, stage.id, terminal ? stage.terminal_kind : null, reason ?? null],
   );
   const updated = rows[0];
   if (updated === undefined) return null;
@@ -282,7 +311,7 @@ export async function moveOpportunityStage(
     });
   }
 
-  await attributeFirmInteraction(context,{firmId:updated.firm_id,kind:'deal',subjectId:updated.id});
+  await attributeFirmInteraction(context, { firmId: updated.firm_id, kind: 'deal', subjectId: updated.id });
   await recordCrmAuditEvent(context, {
     action: 'opportunity.stage_changed',
     subjectKind: 'opportunity',
@@ -356,9 +385,7 @@ export async function setManualControlMode(
     // direct-send escalation that stood here went with send-path v2: a direct send no
     // longer calls this function at all.)
     const escalation =
-      input.origin === 'salesperson_command' && opportunity['control_mode_origin'] !== 'salesperson_command'
-        ? 'salesperson_command'
-        : null;
+      input.origin === 'salesperson_command' && opportunity['control_mode_origin'] !== 'salesperson_command' ? 'salesperson_command' : null;
     if (escalation !== null) {
       const { rows: escalated } = await context.db.query<OpportunityRow>(
         `UPDATE opportunities
@@ -527,8 +554,8 @@ export async function classifyControlModeOrigin(
       return {
         ok: false,
         reason: 'live_work_present',
-        liveEnrollmentIds: live.map(row => row.id),
-        liveEnrollments: live.map(row => ({
+        liveEnrollmentIds: live.map((row) => row.id),
+        liveEnrollments: live.map((row) => ({
           id: row.id,
           sequenceName: row.sequence_name,
           stepNumber: row.step_number === null ? null : Number(row.step_number),
@@ -616,37 +643,63 @@ export async function reopenOpportunity(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly reason: string; readonly commandId?: string | undefined },
 ): Promise<CrmResult<ReopenOutcome>> {
+  return reopenSelectedOpportunity(context, input);
+}
+export async function reopenExplicitOpportunity(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly opportunityId: string; readonly reason: string; readonly commandId?: string | undefined },
+): Promise<CrmResult<ReopenOutcome>> {
+  return reopenSelectedOpportunity(context, input);
+}
+
+async function reopenSelectedOpportunity(
+  context: RepositoryContext,
+  input: {
+    readonly firmId: string;
+    readonly reason: string;
+    readonly commandId?: string | undefined;
+    readonly opportunityId?: string | undefined;
+  },
+): Promise<CrmResult<ReopenOutcome>> {
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
   const decision = decideFirmMutation(context, firm);
   if (!decision.permitted) return refuse(decision.reason);
   if (input.reason.trim().length === 0) return refuse('invalid_input');
 
-  const open = await readOpenOpportunity(context, input.firmId);
-  if (open !== null) return refuse('opportunity_open_exists');
+  const open = (await listFirmOpportunities(context, input.firmId)).filter((opportunity) => opportunity.status === 'open');
+  if (input.opportunityId === undefined && open.length > 0) return refuse('opportunity_open_exists');
 
   const { rows: closedRows } = await context.db.query<OpportunityRow>(
     `SELECT ${OPPORTUNITY_COLUMNS} FROM opportunities
-      WHERE workspace_id = $1 AND firm_id = $2 AND status <> 'open'
-      ORDER BY closed_at DESC
-      LIMIT 1
+      WHERE workspace_id = $1 AND firm_id = $2 AND status <> 'open' AND ($3::uuid IS NULL OR id=$3)
+      ORDER BY id
       FOR UPDATE`,
-    [context.scope.workspaceId, input.firmId],
+    [context.scope.workspaceId, input.firmId, input.opportunityId ?? null],
   );
+  if (closedRows.length > 1) return refuse('opportunity_ambiguous');
   const closed = closedRows[0];
   if (closed === undefined) return refuse('opportunity_not_closed');
 
   const stages = await listPipelineStages(context);
-  const first = stages.find(stage => stage.terminal_kind === null && !stage.retired);
+  const first = stages.find((stage) => stage.terminal_kind === null && !stage.retired);
   if (first === undefined) return refuse('stage_unknown');
 
   const { rows } = await context.db.query<OpportunityRow>(
     `INSERT INTO opportunities
        (workspace_id, firm_id, stage_id, control_mode, control_mode_reason, control_mode_changed_at,
-        reopened_from_opportunity_id)
-     VALUES ($1, $2, $3, 'manual', $4, now(), $5)
+        reopened_from_opportunity_id,display_name,stage_control_mode)
+     VALUES ($1, $2, $3, 'manual', $4, now(), $5,$6,$7)
      RETURNING ${OPPORTUNITY_COLUMNS}`,
-    [context.scope.workspaceId, input.firmId, first.id, `reopened: ${input.reason.trim()}`, closed.id],
+    [
+      context.scope.workspaceId,
+      input.firmId,
+      first.id,
+      `reopened: ${input.reason.trim()}`,
+      closed.id,
+      closed.display_name ?? null,
+      input.opportunityId === undefined ? (closed.stage_control_mode ?? 'legacy_rules') : 'human',
+    ],
   );
   const reopened = rows[0];
   if (reopened === undefined) return refuse('invalid_input');

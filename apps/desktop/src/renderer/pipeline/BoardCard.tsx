@@ -170,6 +170,7 @@ export const feedbackText = (feedback: CardFeedback): string => noticeText(feedb
 
 export function BoardCard({
   firm,
+  dealLabel,
   card,
   stage,
   stages,
@@ -187,6 +188,7 @@ export function BoardCard({
   feedback,
 }: {
   readonly firm: FirmIdentityDto;
+  readonly dealLabel?:string;
   readonly card: BoardCardData | undefined;
   readonly stage: PipelineStageDto;
   readonly stages: readonly PipelineStageDto[];
@@ -245,6 +247,7 @@ export function BoardCard({
         selected ? 'border-link/60 shadow-md' : 'border-border hover:border-strong hover:shadow-sm focus-within:border-strong',
       )}
     >
+      {dealLabel===undefined?null:<p className="text-sm font-medium">{dealLabel}</p>}
       <div className="flex items-start justify-between gap-2">
         <Button
           variant="link"

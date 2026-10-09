@@ -62,37 +62,13 @@ interface CandidateRow {
 }
 
 /** The candidate a row describes, mapped on to the firm's open opportunity if needed. */
-async function resolveToOpenOpportunity(
-  context: RepositoryContext,
-  row: CandidateRow,
-  rule: MailMatchRule,
-): Promise<MatchCandidate | null> {
-  if (row.outreach_plan_id !== null && row.outreach_plan_id !== undefined) {
-    return {firmId:row.firm_id,opportunityId:null,outreachPlanId:row.outreach_plan_id,contactId:row.contact_id,rule,viaClosedOpportunity:false};
-  }
-  if (row.status === 'open') {
-    return {
-      firmId: row.firm_id,
-      opportunityId: row.opportunity_id,
-      contactId: row.contact_id,
-      rule,
-      viaClosedOpportunity: false,
-    };
-  }
-  // Appendix G 15: a reply to a closed opportunity holds the firm's current open one.
-  const { rows } = await context.db.query<{ id: string }>(
-    "SELECT id FROM opportunities WHERE workspace_id = $1 AND firm_id = $2 AND status = 'open'",
-    [context.scope.workspaceId, row.firm_id],
-  );
-  const open = rows[0]?.id;
-  if (open === undefined) return null;
-  return {
-    firmId: row.firm_id,
-    opportunityId: open,
-    contactId: row.contact_id,
-    rule,
-    viaClosedOpportunity: true,
-  };
+async function resolveToOpenOpportunity(context:RepositoryContext,row:CandidateRow,rule:MailMatchRule):Promise<readonly MatchCandidate[]> {
+ if(row.outreach_plan_id!==null&&row.outreach_plan_id!==undefined)return [{firmId:row.firm_id,opportunityId:null,outreachPlanId:row.outreach_plan_id,contactId:row.contact_id,rule,viaClosedOpportunity:false}];
+ if(row.status==='open')return [{firmId:row.firm_id,opportunityId:row.opportunity_id,contactId:row.contact_id,rule,viaClosedOpportunity:false}];
+ // A historical thread identifies the firm, not one of its distinct new initiatives.
+ // Keep every eligible deal as a candidate so existing ambiguity holds remain effective.
+ const {rows}=await context.db.query<{id:string}>("SELECT id FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND status='open' ORDER BY id",[context.scope.workspaceId,row.firm_id]);
+ return rows.map(open=>({firmId:row.firm_id,opportunityId:open.id,contactId:row.contact_id,rule,viaClosedOpportunity:true}));
 }
 
 async function byThread(
@@ -204,7 +180,7 @@ export async function findMatchCandidates(
     const resolved: MatchCandidate[] = [];
     for (const row of rows) {
       const candidate = await resolveToOpenOpportunity(context, row, rule);
-      if (candidate !== null) resolved.push(candidate);
+      resolved.push(...candidate);
     }
     return distinct(resolved);
   };
@@ -266,7 +242,7 @@ export async function withOutgoingRecipientConflicts(
   const named: MatchCandidate[] = [];
   for (const row of rows) {
     const candidate = await resolveToOpenOpportunity(context, row, 'participant');
-    if (candidate !== null) named.push(candidate);
+    named.push(...candidate);
   }
   return distinct([...input.candidates, ...named]);
 }

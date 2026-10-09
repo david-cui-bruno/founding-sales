@@ -12,7 +12,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
-import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
+import { readOperationalOpportunity, setManualControlMode } from '../crm/pipeline.ts';
 import { grantFollowUpPermission } from '../sequences/followUpPermissions.ts';
 import { retireRoute } from '../crm/routes.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -80,6 +80,7 @@ import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep
  */
 
 export interface LogCallOutcomeInput {
+  readonly opportunityId?: string | undefined;
   readonly firmId: string;
   readonly contactId?: string | undefined;
   readonly routeId?: string | undefined;
@@ -400,6 +401,7 @@ export async function logCallOutcome(
   // C04, C17, C13: the Today task the call was placed from, and what is behind it.
   let bound: BoundStep | null = null;
   let boundCallbackId: string | null = null;
+  let boundItemOpportunityId: string | null | undefined;
   let boundNeedsTimeKey: string | null = null;
   if (input.itemId !== undefined) {
     const item = await readTodayItem(context, input.itemId);
@@ -411,9 +413,25 @@ export async function logCallOutcome(
       bound = await loadBoundCallStep(context, { stepExecutionId: item.sourceId, firmId: input.firmId });
       if (bound === null) return refusePolicy('item_unknown');
     } else if (item.sourceKind === 'callback' && item.sourceId !== null) {
+      const callback = (
+        await context.db.query<{ opportunity_id: string | null }>(
+          'SELECT opportunity_id FROM callbacks WHERE workspace_id=$1 AND id=$2 AND firm_id=$3',
+          [context.scope.workspaceId, item.sourceId, input.firmId],
+        )
+      ).rows[0];
+      if (callback === undefined) return refusePolicy('item_unknown');
       boundCallbackId = item.sourceId;
+      boundItemOpportunityId = callback.opportunity_id;
     } else if (callLogIdOfItemKey(item.itemKey) !== null) {
+      const original = (
+        await context.db.query<{ opportunity_id: string | null }>(
+          'SELECT opportunity_id FROM call_logs WHERE workspace_id=$1 AND id::text=$2 AND firm_id=$3',
+          [context.scope.workspaceId, callLogIdOfItemKey(item.itemKey), input.firmId],
+        )
+      ).rows[0];
+      if (original === undefined) return refusePolicy('item_unknown');
       boundNeedsTimeKey = item.itemKey;
+      boundItemOpportunityId = original.opportunity_id;
     }
   }
 
@@ -468,7 +486,15 @@ export async function logCallOutcome(
     followUps.push({ kind: 'route_not_named', reason: input.outcome });
   }
 
-  const opportunity = await readOpenOpportunity(context, input.firmId);
+  if (bound !== null && input.opportunityId !== undefined && input.opportunityId !== bound.enrollment.opportunityId)
+    return refusePolicy('invalid_input');
+  if (boundItemOpportunityId !== undefined && input.opportunityId !== undefined && input.opportunityId !== boundItemOpportunityId)
+    return refusePolicy('invalid_input');
+  const selectedOpportunityId =
+    bound !== null ? bound.enrollment.opportunityId : boundItemOpportunityId !== undefined ? boundItemOpportunityId : input.opportunityId;
+  const opportunity =
+    selectedOpportunityId === null ? null : await readOperationalOpportunity(context, input.firmId, selectedOpportunityId);
+  if (input.opportunityId !== undefined && opportunity === null) return refusePolicy('invalid_input');
 
   // ---- 2. Record ----------------------------------------------------------
   //
@@ -860,6 +886,7 @@ export async function recordCallFollowUp(
   }
   const { rows } = await context.db.query<{
     firm_id: string;
+    opportunity_id: string | null;
     contact_id: string | null;
     outcome: string;
     agreed_follow_up: string | null;
@@ -867,7 +894,7 @@ export async function recordCallFollowUp(
     occurred_at: Date;
     recorded_at: Date;
   }>(
-    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at, recorded_at
+    `SELECT firm_id, opportunity_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at, recorded_at
        FROM call_logs WHERE workspace_id = $1 AND id = $2
        FOR UPDATE`,
     [context.scope.workspaceId, input.callLogId],
@@ -896,7 +923,7 @@ export async function recordCallFollowUp(
     if (version.state !== 'published') return refusePolicy('version_not_published');
   }
 
-  const opportunity = await readOpenOpportunity(context, log.firm_id);
+  const opportunity = log.opportunity_id===null ? null : await readOperationalOpportunity(context,log.firm_id,log.opportunity_id);
   const agreed = await applyAgreedFollowUp(context, {
     firmId: log.firm_id,
     contactId: log.contact_id,
@@ -968,13 +995,14 @@ export async function confirmCapturedFollowUp(
   }
   const { rows } = await context.db.query<{
     firm_id: string;
+    opportunity_id: string | null;
     contact_id: string | null;
     outcome: CallOutcome;
     agreed_follow_up: string | null;
     actor_user_id: string;
     occurred_at: Date;
   }>(
-    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at
+    `SELECT firm_id, opportunity_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at
        FROM call_logs WHERE workspace_id = $1 AND id = $2
        FOR UPDATE`,
     [context.scope.workspaceId, input.callLogId],
@@ -996,7 +1024,7 @@ export async function confirmCapturedFollowUp(
   if (callStarted === undefined) return refusePolicy('invalid_input');
   if (!(await withinCapturedFollowUpWindow(context, callStarted))) return refusePolicy('follow_up_expired');
 
-  const opportunity = await readOpenOpportunity(context, log.firm_id);
+  const opportunity = log.opportunity_id===null ? null : await readOperationalOpportunity(context,log.firm_id,log.opportunity_id);
   const agreed = await applyAgreedFollowUp(context, {
     firmId: log.firm_id,
     contactId: log.contact_id,
@@ -1296,6 +1324,7 @@ async function withinSavepoint<T>(
 }
 
 export interface CallLogRow {
+  readonly opportunityId?: string | null;
   readonly id: string;
   readonly firmId: string;
   readonly contactId: string | null;
@@ -1326,11 +1355,12 @@ export interface CallLogRow {
  */
 export async function listCallLogs(
   context: RepositoryContext,
-  options: { readonly firmId: string; readonly limit?: number },
+  options: { readonly firmId: string; readonly limit?: number; readonly includeOpportunityContext?: boolean },
 ): Promise<readonly CallLogRow[]> {
   const { rows } = await context.db.query<{
     id: string;
     firm_id: string;
+    opportunity_id: string | null;
     contact_id: string | null;
     outcome: CallOutcome;
     step_effect: CallStepEffect;
@@ -1341,7 +1371,7 @@ export async function listCallLogs(
     duration_seconds: number | null;
     call_session_id: string | null;
   }>(
-    `SELECT l.id, l.firm_id, l.contact_id, l.outcome, l.step_effect, l.occurred_at, l.actor_user_id, l.note,
+    `SELECT l.id, l.firm_id, l.opportunity_id, l.contact_id, l.outcome, l.step_effect, l.occurred_at, l.actor_user_id, l.note,
             l.direction, l.duration_seconds,
             (SELECT s.id FROM call_sessions s
               WHERE s.workspace_id = l.workspace_id AND s.call_log_id = l.id
@@ -1355,6 +1385,7 @@ export async function listCallLogs(
   return rows.map(row => ({
     id: row.id,
     firmId: row.firm_id,
+    ...(options.includeOpportunityContext ? { opportunityId: row.opportunity_id } : {}),
     contactId: row.contact_id,
     outcome: row.outcome,
     stepEffect: row.step_effect,

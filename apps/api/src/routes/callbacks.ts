@@ -1,4 +1,7 @@
-import { completeCallbackCommandSchema, scheduleCallbackCommandSchema } from '@fss/contracts';
+import {
+  completeCallbackCommandSchema, scheduleCallbackCommandSchema,
+  callbacksOpportunityContextResponseSchema, OPPORTUNITY_CONTEXT_INCLUDE,
+} from '@fss/contracts';
 import { completeCallback, listCallbacks, scheduleCallbackForCall } from '@fss/domain/dial/callbacks.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
@@ -50,15 +53,19 @@ export async function routeCallbacks(request: ApiRequest, options: RoutingOption
     if (!scoped.ok) return scoped.result;
     const requested = request.query.get('assignedUserId');
     const assignedUserId = deps.principal.role === 'admin' ? (requested ?? undefined) : deps.principal.userId;
-    return {
-      status: 200,
-      body: {
-        callbacks: await listCallbacks(scoped.context, {
-          ...(assignedUserId === undefined ? {} : { assignedUserId }),
-          openOnly: request.query.get('open') === 'true',
-        }),
-      },
+    const withOpportunityContext = request.query
+      .getAll('include')
+      .flatMap((value) => value.split(','))
+      .map((value) => value.trim())
+      .includes(OPPORTUNITY_CONTEXT_INCLUDE);
+    const body = {
+      callbacks: await listCallbacks(scoped.context, {
+        ...(assignedUserId === undefined ? {} : { assignedUserId }),
+        openOnly: request.query.get('open') === 'true',
+        includeOpportunityContext: withOpportunityContext,
+      }),
     };
+    return { status: 200, body: withOpportunityContext ? callbacksOpportunityContextResponseSchema.parse(body) : body };
   }
 
   if (request.method !== 'POST') {

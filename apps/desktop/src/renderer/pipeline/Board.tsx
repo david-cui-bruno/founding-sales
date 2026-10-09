@@ -38,6 +38,7 @@ export function Board({
   onSetValue,
   onOpenFirm,
   selectedFirmId = null,
+  selectedOpportunityId = null,
   cardEditors = {},
   onCardEditor,
   feedback = {},
@@ -54,9 +55,10 @@ export function Board({
   onShowLost(show: boolean): void;
   onChangeStage(change: StageChange): void;
   onSetValue(change: ValueChange): void;
-  onOpenFirm(firmId: string): void;
+  onOpenFirm(firmId: string, opportunityId?: string): void;
   /** The firm open in the side panel. */
   readonly selectedFirmId?: string | null;
+  readonly selectedOpportunityId?: string | null;
   /** Which editor is open on each card, by opportunity, and the answer to its last command. */
   readonly cardEditors?: Readonly<Record<string, CardEditor | undefined>>;
   onCardEditor?(opportunityId: string, editor: CardEditor | null): void;
@@ -71,12 +73,12 @@ export function Board({
   const needle = search.trim().toLowerCase();
   const columns = pipeline.columns
     // A retired stage with nothing in it is history nobody needs on screen.
-    .filter(column => !(column.stage.retired && column.firms.length === 0));
+    .filter((column) => !(column.stage.retired && column.firms.length === 0));
   const includeLost = pipeline.includeLost === true;
 
   const visible = (column: PipelineView['columns'][number]) =>
     column.firms.filter(
-      firm =>
+      (firm) =>
         (needle === '' || firm.name.toLowerCase().includes(needle)) &&
         (!onlyWithoutValue || (pipeline.cards?.[firm.id]?.value ?? null) === null),
     );
@@ -92,7 +94,25 @@ export function Board({
     // otherwise run on the Enter that follows J or K (rule K4).
     const focused = document.activeElement;
     if (focused instanceof HTMLButtonElement) focused.blur();
-    const order = columns.flatMap(column => visible(column).map(firm => firm.id));
+    if (pipeline.plural !== undefined) {
+      const board = pipeline.plural;
+      const ids = board.columns
+        .flatMap((column) => column.opportunityIds)
+        .filter((id) => {
+          const card = board.cards[id];
+          return (
+            card !== undefined &&
+            (needle === '' || `${card.firm.name} ${card.displayName ?? ''}`.toLowerCase().includes(needle)) &&
+            (!onlyWithoutValue || card.value === null)
+          );
+        });
+      const at = selectedOpportunityId === null ? -1 : ids.indexOf(selectedOpportunityId);
+      const next = ids[Math.min(ids.length - 1, Math.max(0, at === -1 ? (delta === 1 ? 0 : ids.length - 1) : at + delta))];
+      const card = next === undefined ? undefined : board.cards[next];
+      if (card !== undefined) onOpenFirm(card.firm.id, card.opportunityId);
+      return;
+    }
+    const order = columns.flatMap((column) => visible(column).map((firm) => firm.id));
     if (order.length === 0) return;
     const at = selectedFirmId === null ? -1 : order.indexOf(selectedFirmId);
     const next = order[Math.min(order.length - 1, Math.max(0, at === -1 ? (delta === 1 ? 0 : order.length - 1) : at + delta))];
@@ -119,6 +139,31 @@ export function Board({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  if (pipeline.plural !== undefined)
+    return (
+      <PluralBoard
+        pipeline={pipeline}
+        actionsEnabled={actionsEnabled}
+        stageBusy={stageBusy}
+        valueBusy={valueBusy}
+        search={search}
+        memory={memory}
+        onSearch={onSearch}
+        onShowLost={onShowLost}
+        onChangeStage={onChangeStage}
+        onSetValue={onSetValue}
+        onOpenFirm={onOpenFirm}
+        selectedFirmId={selectedFirmId}
+        selectedOpportunityId={selectedOpportunityId}
+        refs={{ scroller, searchBox, columnNodes }}
+        cardEditors={cardEditors}
+        {...(onCardEditor === undefined ? {} : { onCardEditor })}
+        feedback={feedback}
+        onlyWithoutValue={onlyWithoutValue}
+        {...(onOnlyWithoutValue === undefined ? {} : { onOnlyWithoutValue })}
+      />
+    );
+
   return (
     <div data-testid="pipeline-board" className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-5 py-1.5">
@@ -132,7 +177,7 @@ export function Board({
             placeholder="Search firms"
             autoComplete="off"
             value={search}
-            onChange={event => {
+            onChange={(event) => {
               onSearch(event.target.value);
             }}
             className="h-7 border-border pl-7 text-sm"
@@ -143,7 +188,7 @@ export function Board({
             type="checkbox"
             data-testid="show-lost"
             checked={includeLost}
-            onChange={event => {
+            onChange={(event) => {
               onShowLost(event.target.checked);
             }}
           />
@@ -183,13 +228,13 @@ export function Board({
         ref={scroller}
         data-testid="pipeline-scroller"
         className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4"
-        onScroll={event => {
+        onScroll={(event) => {
           memory.current.left = event.currentTarget.scrollLeft;
         }}
       >
-        {columns.map(column => {
+        {columns.map((column) => {
           const firms = visible(column);
-          const sums = totalsOf(firms.map(firm => pipeline.cards?.[firm.id]));
+          const sums = totalsOf(firms.map((firm) => pipeline.cards?.[firm.id]));
           const money = valueSummary(sums);
           return (
             <section
@@ -222,19 +267,19 @@ export function Board({
               )}
               <ul
                 data-testid="pipeline-firms"
-                ref={node => {
+                ref={(node) => {
                   if (node === null) columnNodes.current.delete(column.stage.key);
                   else columnNodes.current.set(column.stage.key, node);
                 }}
                 className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto"
-                onScroll={event => {
+                onScroll={(event) => {
                   memory.current.columns[column.stage.key] = event.currentTarget.scrollTop;
                 }}
               >
                 {firms.length === 0 ? (
                   <li className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-faint">Nothing here.</li>
                 ) : (
-                  firms.map(firm => {
+                  firms.map((firm) => {
                     const opportunityId = pipeline.opportunityIdByFirmId[firm.id];
                     return (
                       <BoardCard
@@ -242,7 +287,7 @@ export function Board({
                         firm={firm}
                         card={pipeline.cards?.[firm.id]}
                         stage={column.stage}
-                        stages={pipeline.stages ?? pipeline.columns.map(column => column.stage)}
+                        stages={pipeline.stages ?? pipeline.columns.map((column) => column.stage)}
                         opportunityId={opportunityId}
                         actionsEnabled={actionsEnabled}
                         stageBusy={opportunityId !== undefined && stageBusy(opportunityId)}
@@ -268,6 +313,125 @@ export function Board({
             </section>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function PluralBoard({
+  pipeline,
+  actionsEnabled,
+  stageBusy,
+  valueBusy,
+  search,
+  memory,
+  onSearch,
+  onShowLost,
+  onChangeStage,
+  onSetValue,
+  onOpenFirm,
+  selectedOpportunityId,
+  refs,
+  cardEditors = {},
+  onCardEditor,
+  feedback = {},
+  onlyWithoutValue = false,
+  onOnlyWithoutValue,
+}: Parameters<typeof Board>[0] & {
+  refs: {
+    scroller: MutableRefObject<HTMLDivElement | null>;
+    searchBox: MutableRefObject<HTMLInputElement | null>;
+    columnNodes: MutableRefObject<Map<string, HTMLElement>>;
+  };
+}): JSX.Element {
+  const board = pipeline.plural;
+  if (board === undefined) throw new Error('plural board required');
+  const needle = search.trim().toLowerCase();
+  const totals = openTotals(pipeline);
+  const summary = valueSummary(totals);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-3 px-5 py-3">
+        <Input
+          ref={refs.searchBox}
+          aria-label="Search the board"
+          type="search"
+          value={search}
+          onChange={(event) => onSearch(event.target.value)}
+          placeholder="Search firms and deals"
+        />
+        <label>
+          <input type="checkbox" checked={pipeline.includeLost === true} onChange={(event) => onShowLost(event.target.checked)} /> Show lost
+        </label>
+        <p data-testid="board-totals">
+          Open opportunities: {totals.firms}
+          {summary ? ` · ${summary}` : ''}
+        </p>
+        {onOnlyWithoutValue ? (
+          <Button onClick={() => onOnlyWithoutValue(!onlyWithoutValue)} aria-pressed={onlyWithoutValue}>
+            {totals.withoutValue} without a value
+          </Button>
+        ) : null}
+      </div>
+      <div
+        ref={refs.scroller}
+        className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-5"
+        onScroll={(event) => {
+          memory.current.left = event.currentTarget.scrollLeft;
+        }}
+      >
+        {board.columns.map((column) => (
+          <section key={column.stage.id} className="flex w-[260px] shrink-0 flex-col rounded-lg bg-sidebar p-2">
+            <h2>
+              {column.stage.displayName} · {column.opportunityIds.length}
+            </h2>
+            <ul
+              ref={(node) => {
+                if (node === null) refs.columnNodes.current.delete(column.stage.key);
+                else refs.columnNodes.current.set(column.stage.key, node);
+              }}
+              className="min-h-0 overflow-y-auto"
+              onScroll={(event) => {
+                memory.current.columns[column.stage.key] = event.currentTarget.scrollTop;
+              }}
+            >
+              {column.opportunityIds.map((id) => {
+                const card = board.cards[id];
+                if (
+                  card === undefined ||
+                  (needle && !`${card.firm.name} ${card.displayName ?? ''}`.toLowerCase().includes(needle)) ||
+                  (onlyWithoutValue && card.value !== null)
+                )
+                  return null;
+                return (
+                  <BoardCard
+                    key={id}
+                    dealLabel={
+                      card.displayName ??
+                      `Deal opened ${card.firm.openedAt === null ? 'previously' : new Date(card.firm.openedAt).toLocaleString()}`
+                    }
+                    firm={card.firm}
+                    card={card}
+                    stage={column.stage}
+                    stages={board.stages}
+                    opportunityId={card.mayChangeStage ? id : undefined}
+                    actionsEnabled={actionsEnabled}
+                    stageBusy={stageBusy(id)}
+                    valueBusy={valueBusy(id)}
+                    onChangeStage={onChangeStage}
+                    onSetValue={onSetValue}
+                    onOpenFirm={(firmId) => onOpenFirm(firmId, id)}
+                    selected={selectedOpportunityId === id}
+                    {...(onCardEditor === undefined
+                      ? {}
+                      : { editor: cardEditors[id] ?? null, onEditor: (next: CardEditor | null) => onCardEditor(id, next) })}
+                    feedback={feedback[id]}
+                  />
+                );
+              })}
+            </ul>
+          </section>
+        ))}
       </div>
     </div>
   );

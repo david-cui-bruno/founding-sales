@@ -242,10 +242,7 @@ export async function mergeFirms(
   // finding 6). Its unique key is per call, not per firm, so there is no twin to skip.
   await move('call_tasks');
 
-  // The opportunities need care: the target may already have an open one, and only
-  // one open opportunity per firm is allowed. The source's open opportunity is closed
-  // as part of the merge rather than moved on top of it. Its stage events cascade.
-  await closeOpenOpportunityForMerge(context, source.id, target.id);
+  // Identity merging preserves distinct commercial initiatives and their histories.
   await move('opportunities');
   // Every meeting that named a contact or an opportunity has followed it by now; the
   // key is checked here rather than at commit, so a merge that broke it fails as itself.
@@ -383,61 +380,6 @@ async function demoteSourcePrimaryIfTargetHasOne(
            WHERE t.workspace_id = $1 AND t.firm_id = $3 AND t.is_primary AND t.status = 'active')`,
     [context.scope.workspaceId, sourceFirmId, targetFirmId],
   );
-}
-
-/**
- * The source's open opportunity, if it has one and the target does too.
- *
- * Only one open opportunity per firm is allowed, and moving a second one onto the
- * target would break that index mid-merge. The source's is closed as Lost with a
- * reason naming the merge — a recorded outcome rather than a row that quietly
- * disappears — and its terminal stop is signalled like any other close.
- */
-async function closeOpenOpportunityForMerge(
-  context: RepositoryContext,
-  sourceFirmId: string,
-  targetFirmId: string,
-): Promise<void> {
-  const { rows } = await context.db.query<{ id: string; target_open: string | null }>(
-    `SELECT s.id,
-            (SELECT t.id FROM opportunities t
-              WHERE t.workspace_id = $1 AND t.firm_id = $3 AND t.status = 'open') AS target_open
-       FROM opportunities s
-      WHERE s.workspace_id = $1 AND s.firm_id = $2 AND s.status = 'open'
-        FOR UPDATE OF s`,
-    [context.scope.workspaceId, sourceFirmId, targetFirmId],
-  );
-  const open = rows[0];
-  if (open === undefined || open.target_open === null) return;
-
-  const lost = await context.db.query<{ id: string }>(
-    "SELECT id FROM pipeline_stages WHERE workspace_id = $1 AND terminal_kind = 'lost'",
-    [context.scope.workspaceId],
-  );
-  const lostStageId = lost.rows[0]?.id;
-  if (lostStageId === undefined) return;
-
-  await context.db.query(
-    `INSERT INTO opportunity_stage_events
-       (workspace_id, opportunity_id, firm_id, from_stage_id, to_stage_id, actor_kind, actor_user_id, reason)
-     SELECT $1, o.id, o.firm_id, NULLIF(o.stage_id, $3), $3, 'system', NULL, 'merged into another firm'
-       FROM opportunities o WHERE o.workspace_id = $1 AND o.id = $2`,
-    [context.scope.workspaceId, open.id, lostStageId],
-  );
-  await context.db.query(
-    `UPDATE opportunities
-        SET status = 'lost', stage_id = $3, closed_at = now(), close_reason = 'merged into another firm',
-            updated_at = now()
-      WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, open.id, lostStageId],
-  );
-  await emitCrmDomainEvent(context, {
-    kind: 'opportunity.terminal_stop',
-    firmId: sourceFirmId,
-    opportunityId: open.id,
-    dedupeKey: `${open.id}:merge`,
-    detail: { terminalKind: 'lost', cause: 'merge' },
-  });
 }
 
 /** The source's canonical name, website and external ids become the target's aliases. */

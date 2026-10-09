@@ -7,6 +7,9 @@ import {
   enrollmentsResponseSchema,
   firmListResponseSchema,
   firmPageResponseSchema,
+  pluralFirmPageResponseSchema,
+  explicitOpportunityResultSchema,
+  pluralPipelineBoardResponseSchema,
   heldOutgoingResponseSchema,
   importCommitResponseSchema,
   importFileRefusalResponseSchema,
@@ -106,7 +109,7 @@ export interface CrmBridgeHost {
   /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
   forget(): Promise<CrmState>;
   state(): Promise<CrmState>;
-  openFirm(input: { readonly firmId: string }): Promise<CrmState>;
+  openFirm(input: { readonly firmId: string; readonly opportunityId?: string | undefined }): Promise<CrmState>;
   /**
    * S4F: one older page of a firm's timeline. Held by nothing: it is not a screen, so it
    * never moves the window, and it answers null when the read did not.
@@ -235,9 +238,9 @@ export function pipelineViewOf(
   opportunityIdByFirmId: Readonly<Record<string, string>> = {},
 ): PipelineView {
   return {
-    columns: stages.map(stage => ({
+    columns: stages.map((stage) => ({
       stage,
-      firms: firms.filter(firm => firm.stageKey === stage.key),
+      firms: firms.filter((firm) => firm.stageKey === stage.key),
     })),
     opportunityIdByFirmId: { ...opportunityIdByFirmId },
   };
@@ -246,6 +249,9 @@ export function pipelineViewOf(
 export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   let screen: CrmScreen = 'pipeline';
   let firm: CrmState['firm'] = null;
+  let opportunities: NonNullable<CrmState['opportunities']> = [];
+  let pluralFirmAvailable = false;
+  let readGeneration = 0;
   let pipeline: PipelineView | null = null;
   let merge: CrmState['merge'] = null;
   let notice: string | null = null;
@@ -273,10 +279,10 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     if (merge?.sourceFirmId === firmId) return merge.sourceName;
     if (merge?.targetFirmId === firmId) return merge.targetName;
     if (firm?.read.firm.id === firmId) return firm.read.firm.name;
-    const onBoard = pipeline?.columns.flatMap(column => column.firms).find(entry => entry.id === firmId);
+    const onBoard = pipeline?.columns.flatMap((column) => column.firms).find((entry) => entry.id === firmId);
     if (onBoard !== undefined) return onBoard.name;
-    const firms = await deps.api.read('/firms', value => firmListResponseSchema.parse(value));
-    return (firms.ok ? firms.value.firms.find(entry => entry.id === firmId)?.name : undefined) ?? firmId;
+    const firms = await deps.api.read('/firms', (value) => firmListResponseSchema.parse(value));
+    return (firms.ok ? firms.value.firms.find((entry) => entry.id === firmId)?.name : undefined) ?? firmId;
   };
 
   const snapshot = async (): Promise<CrmState> => {
@@ -288,6 +294,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       mayMutate: session.mayMutate,
       notice,
       firm,
+      ...(pluralFirmAvailable ? { opportunities } : {}),
       pipeline,
       merge,
       addFirm: addFirmView,
@@ -305,8 +312,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
    * fails leaves the section saying so, never an empty list that reads as "none".
    */
   const loadSequences = async (firmId: string): Promise<void> => {
-    const list = await deps.api.read('/sequences', value => sequencesResponseSchema.parse(value));
-    const enrolled = await deps.api.read('/enrollments', value => enrollmentsResponseSchema.parse(value), { firmId });
+    const list = await deps.api.read('/sequences', (value) => sequencesResponseSchema.parse(value));
+    const enrolled = await deps.api.read('/enrollments', (value) => enrollmentsResponseSchema.parse(value), { firmId });
     if (!list.ok || !enrolled.ok) {
       sequences = { published: [], enrollments: [], readError: list.ok ? (enrolled.ok ? null : enrolled.reason) : list.reason };
       return;
@@ -320,7 +327,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     }[] = [];
     for (const sequence of list.value.sequences.slice(0, FIRM_PAGE_SEQUENCE_LIMIT)) {
       if (sequence.archivedAt !== null) continue;
-      const versions = await deps.api.read('/sequences/versions', value => sequenceVersionsResponseSchema.parse(value), {
+      const versions = await deps.api.read('/sequences/versions', (value) => sequenceVersionsResponseSchema.parse(value), {
         sequenceId: sequence.id,
       });
       if (!versions.ok) {
@@ -332,14 +339,12 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         labels.set(version.id, label);
         // A version with a LinkedIn step stored before 25 September 2026 (lane A2) is not
         // offered: `enrollContact` refuses it (`step_unknown`).
-        const enrollable = version.state === 'published' && version.steps.every(step => step.channel !== 'removed');
+        const enrollable = version.state === 'published' && version.steps.every((step) => step.channel !== 'removed');
         if (enrollable) {
           published.push({
             sequenceVersionId: version.id,
             label,
-            templateVersionIds: version.steps
-              .map(step => step.templateVersionId)
-              .filter((id): id is string => id !== null),
+            templateVersionIds: version.steps.map((step) => step.templateVersionId).filter((id): id is string => id !== null),
             stepCount: version.steps.length,
           });
         }
@@ -347,7 +352,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     }
     sequences = {
       published,
-      enrollments: enrolled.value.enrollments.map(entry => ({
+      enrollments: enrolled.value.enrollments.map((entry) => ({
         enrollmentId: entry.id,
         contactId: entry.contactId,
         label: labels.get(entry.sequenceVersionId) ?? 'A sequence',
@@ -363,17 +368,64 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     addFirmView = null;
   };
 
-  const loadFirm = async (firmId: string): Promise<void> => {
+  const loadFirm = async (firmId: string, selectedId?: string): Promise<void> => {
+    const generation = readGeneration;
+    const plural = await deps.api.read('/crm/firm-page-v3', (value) => pluralFirmPageResponseSchema.parse(value), {
+      firmId,
+      pageVersion: FIRM_PAGE_VERSION,
+      include: ['stops', 'preparedBrief', 'tasks', 'timeline', 'meeting_tasks'],
+    });
+    if (generation !== readGeneration) return;
+    if (plural.ok) {
+      pluralFirmAvailable = true;
+      const { version: _version, ...page } = plural.value;
+      opportunities = page.visibility === 'assigned_or_admin' ? page.opportunities : [];
+      if (page.visibility === 'assigned_or_admin') {
+        const { opportunities: entries, ...common } = page;
+        const previous = firm?.read.firm.id === firmId && firm.visibility === 'assigned_or_admin' ? firm.opportunity?.id : undefined;
+        const chosen = selectedId ?? previous;
+        const selected =
+          chosen === undefined ? (entries.length === 1 ? entries[0] : undefined) : entries.find((entry) => entry.opportunity.id === chosen);
+        firm = { ...common, opportunity: selected?.opportunity ?? null, stageHistory: selected?.stageHistory ?? [] };
+        delete opportunityIdByFirmId[firmId];
+        if (entries.filter((entry) => entry.opportunity.status === 'open').length === 1) {
+          const open = entries.find((entry) => entry.opportunity.status === 'open');
+          if (open) opportunityIdByFirmId[firmId] = open.opportunity.id;
+        }
+        screen = 'firm';
+        sequences = null;
+        heldOutgoing = [];
+        await loadSequences(firmId);
+        if (generation !== readGeneration) return;
+        const held = await deps.api.read('/messages/held-outgoing', (value) => heldOutgoingResponseSchema.parse(value), { firmId });
+        if (generation === readGeneration && held.ok) heldOutgoing = held.value.messages;
+      } else {
+        firm = page;
+        screen = 'firm';
+        sequences = null;
+        heldOutgoing = [];
+      }
+      return;
+    }
+    pluralFirmAvailable = false;
+    if (plural.reason !== 'not_found') {
+      opportunities = [];
+      firm = null;
+      notice = plural.reason;
+      return;
+    }
+    opportunities = [];
     // Lane g90: the second version, whose routes carry their technical validation.
     // Migration 0037: `include: ['stops']` adds the facts behind "Email stopped", "Calls
     // stopped" and "All contact stopped".
-    const page = await deps.api.read('/crm/firm-page', value => firmPageResponseSchema.parse(value), {
+    const page = await deps.api.read('/crm/firm-page', (value) => firmPageResponseSchema.parse(value), {
       firmId,
       pageVersion: FIRM_PAGE_VERSION,
       // Lane PB (migration 0038): and the firm's prepared brief, or null.
       // S4F: the firm's open work and the newest page of its timeline.
       include: ['stops', 'preparedBrief', 'tasks', 'timeline', 'meeting_tasks'],
     });
+    if (generation !== readGeneration) return;
     if (!page.ok) {
       notice = page.reason;
       return;
@@ -390,7 +442,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       // Send-path v2 (S1 review P1-C): the salesperson's own messages this firm is one
       // candidate of, waiting for a person to name the firm. A failed read shows none
       // rather than refusing the page: the messages stay held either way.
-      const held = await deps.api.read('/messages/held-outgoing', value => heldOutgoingResponseSchema.parse(value), {
+      const held = await deps.api.read('/messages/held-outgoing', (value) => heldOutgoingResponseSchema.parse(value), {
         firmId: page.value.read.firm.id,
       });
       if (held.ok) heldOutgoing = held.value.messages;
@@ -398,17 +450,54 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   };
 
   const loadPipeline = async (): Promise<void> => {
+    const generation = readGeneration;
+    const plural = await deps.api.read('/pipeline/board-v2', (value) => pluralPipelineBoardResponseSchema.parse(value), { includeLost });
+    if (generation !== readGeneration) return;
+    if (plural.ok) {
+      const cards = Object.values(plural.value.cards);
+      const counts = new Map<string, number>();
+      for (const card of cards) counts.set(card.firm.id, (counts.get(card.firm.id) ?? 0) + 1);
+      pipeline = {
+        plural: plural.value,
+        columns: plural.value.columns.map((column) => ({
+          stage: column.stage,
+          firms: column.opportunityIds.flatMap((id) => {
+            const card = plural.value.cards[id];
+            return card === undefined
+              ? []
+              : [
+                  (counts.get(card.firm.id) ?? 0) > 1
+                    ? { ...card.firm, stageKey: null, opportunityStatus: null, controlMode: null, openedAt: null }
+                    : card.firm,
+                ];
+          }),
+        })),
+        opportunityIdByFirmId: {},
+        unplacedFirms: plural.value.unplacedFirms,
+        stages: plural.value.stages,
+        includeLost,
+      };
+      screen = 'pipeline';
+      return;
+    }
+    pluralFirmAvailable = false;
+    if (plural.reason !== 'not_found') {
+      pipeline = null;
+      notice = plural.reason;
+      return;
+    }
+
     // One read. The API decides which firms are in it, which columns exist and which
     // ids this caller may act on; nothing here adds to any of the three.
     const board = await deps.api.read(
       '/pipeline/board',
-      value => pipelineBoardResponseSchema.parse(value),
+      (value) => pipelineBoardResponseSchema.parse(value),
       // Always explicit: an absent field means "include Lost" to the API (old desktops).
       { includeLost },
     );
     if (board.ok) {
       pipeline = {
-        columns: board.value.columns.map(column => ({ stage: column.stage, firms: column.firms })),
+        columns: board.value.columns.map((column) => ({ stage: column.stage, firms: column.firms })),
         // The server's map first, then anything a Firm page told this window. The
         // two agree for a firm in both; the fallback only ever adds a firm the
         // person has already opened, which is a firm they were already permitted
@@ -426,12 +515,12 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     // The board endpoint is not answering. Rather than show nothing, fall back to
     // the two reads that built this view before it existed; every column then
     // renders `stage-change-unavailable` except the firms already opened.
-    const stages = await deps.api.read('/pipeline/stages', value => pipelineStagesResponseSchema.parse(value));
+    const stages = await deps.api.read('/pipeline/stages', (value) => pipelineStagesResponseSchema.parse(value));
     if (!stages.ok) {
       notice = stages.reason;
       return;
     }
-    const firms = await deps.api.read('/firms', value => firmListResponseSchema.parse(value));
+    const firms = await deps.api.read('/firms', (value) => firmListResponseSchema.parse(value));
     pipeline = pipelineViewOf(stages.value.stages, firms.ok ? firms.value.firms : [], opportunityIdByFirmId);
     screen = 'pipeline';
   };
@@ -445,6 +534,9 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
      * work shown to somebody else.
      */
     async forget() {
+      readGeneration += 1;
+      pluralFirmAvailable = false;
+      opportunities = [];
       includeLost = false;
       screen = 'pipeline';
       firm = null;
@@ -470,7 +562,15 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     },
 
     async firmTimeline(input) {
-      const page = await deps.api.read('/crm/firm-page', value => firmPageResponseSchema.parse(value), {
+      const plural = await deps.api.read('/crm/firm-page-v3', (value) => pluralFirmPageResponseSchema.parse(value), {
+        firmId: input.firmId,
+        pageVersion: FIRM_PAGE_VERSION,
+        include: ['timeline'],
+        timelineBefore: input.before,
+      });
+      if (plural.ok) return { timeline: plural.value.visibility === 'assigned_or_admin' ? (plural.value.timeline ?? null) : null };
+      if (plural.reason !== 'not_found') return { timeline: null };
+      const page = await deps.api.read('/crm/firm-page', (value) => firmPageResponseSchema.parse(value), {
         firmId: input.firmId,
         pageVersion: FIRM_PAGE_VERSION,
         include: ['timeline'],
@@ -483,7 +583,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     async openFirm(input) {
       notice = null;
       leaveCapture();
-      await loadFirm(input.firmId);
+      await loadFirm(input.firmId, input.opportunityId);
       return await snapshot();
     },
 
@@ -507,7 +607,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     },
 
     async addFirm(input) {
-      const answer = await deps.api.command('/crm/firms/add', addFirmBody(input), value => addFirmResultSchema.parse(value));
+      const answer = await deps.api.command('/crm/firms/add', addFirmBody(input), (value) => addFirmResultSchema.parse(value));
       if (answer.ok) {
         // Added: the window moves to the new firm's page, which is the proof it exists.
         addFirmView = null;
@@ -547,7 +647,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         notice = 'import_file_too_large';
         return await snapshot();
       }
-      const answer = await deps.api.read('/import/preview', value => importPreviewResponseSchema.parse(value), {
+      const answer = await deps.api.read('/import/preview', (value) => importPreviewResponseSchema.parse(value), {
         csv: input.csv,
       });
       if (answer.ok) {
@@ -556,8 +656,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         // the same preview replays what landed rather than importing it twice (5.3).
         importCommandIds = new Map(
           answer.value.rows
-            .filter(row => row.outcome === 'create' || row.outcome === 'attach')
-            .map(row => [row.rowNumber, randomUUID()] as const),
+            .filter((row) => row.outcome === 'create' || row.outcome === 'attach')
+            .map((row) => [row.rowNumber, randomUUID()] as const),
         );
         importView = { fileName: input.fileName, preview: answer.value, fileRefusal: null, results: null };
         return await snapshot();
@@ -576,8 +676,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         preview === null
           ? []
           : preview.rows
-              .filter(row => row.outcome === 'create' || row.outcome === 'attach')
-              .map(row => ({ rowNumber: row.rowNumber, commandId: importCommandIds.get(row.rowNumber) ?? randomUUID() }));
+              .filter((row) => row.outcome === 'create' || row.outcome === 'attach')
+              .map((row) => ({ rowNumber: row.rowNumber, commandId: importCommandIds.get(row.rowNumber) ?? randomUUID() }));
       if (importCsv === null || importView === null || rows.length === 0) {
         notice = 'import_nothing_to_commit';
         return await snapshot();
@@ -585,7 +685,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       const committingView = importView;
       // Not `command`: the envelope is one command id per row, which the server hashes
       // each row's receipt under, and a request-level id would be refused as malformed.
-      const answer = await deps.api.read('/import/commit', value => importCommitResponseSchema.parse(value), {
+      const answer = await deps.api.read('/import/commit', (value) => importCommitResponseSchema.parse(value), {
         clientVersion: deps.clientVersion,
         csv: importCsv,
         rows,
@@ -623,10 +723,11 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         notice = 'firm_unknown';
         return await snapshot();
       }
+      const explicit = pluralFirmAvailable;
       const answer = await deps.api.command(
-        '/opportunities/open',
+        explicit ? '/opportunities/v2/open' : '/opportunities/open',
         { firmId, ...(input.stageKey === undefined ? {} : { stageKey: input.stageKey }) },
-        () => null,
+        (value) => (explicit ? explicitOpportunityResultSchema.parse(value) : null),
       );
       notice = answer.ok ? 'opportunity_opened' : answer.reason;
       await loadFirm(firmId);
@@ -670,18 +771,29 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
      */
     async resolveOutgoing(input) {
       const page = firm;
-      const message = heldOutgoing.find(entry => entry.messageId === input.messageId);
+      const message = heldOutgoing.find((entry) => entry.messageId === input.messageId);
       if (page === null || page.visibility !== 'assigned_or_admin' || message === undefined) {
         notice = 'message_unknown';
         return await snapshot();
       }
-      if (!message.candidates.some(candidate => input.opportunityId!==undefined?candidate.opportunityId===input.opportunityId:input.outreachPlanId!==undefined&&candidate.outreachPlanId===input.outreachPlanId)) {
+      if (
+        !message.candidates.some((candidate) =>
+          input.opportunityId !== undefined
+            ? candidate.opportunityId === input.opportunityId
+            : input.outreachPlanId !== undefined && candidate.outreachPlanId === input.outreachPlanId,
+        )
+      ) {
         notice = 'match_unknown';
         return await snapshot();
       }
       const answer = await deps.api.command(
         '/messages/resolve-ambiguity',
-        { messageId: input.messageId, ...(input.opportunityId===undefined?{}:{selectedOpportunityId:input.opportunityId}),...(input.outreachPlanId===undefined?{}:{selectedOutreachPlanId:input.outreachPlanId}), human: false },
+        {
+          messageId: input.messageId,
+          ...(input.opportunityId === undefined ? {} : { selectedOpportunityId: input.opportunityId }),
+          ...(input.outreachPlanId === undefined ? {} : { selectedOutreachPlanId: input.outreachPlanId }),
+          human: false,
+        },
         () => null,
       );
       notice = answer.ok ? 'outgoing_resolved' : answer.reason;
@@ -708,7 +820,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       // server refuses a second prospecting contact at the firm with
       // `firm_already_enrolled`. No new control, which is what "the minimum that lets
       // David grant a permission from the flows he already uses" asks for.
-      const plan = sequences?.published.find(entry => entry.sequenceVersionId === input.sequenceVersionId);
+      const plan = sequences?.published.find((entry) => entry.sequenceVersionId === input.sequenceVersionId);
       const permission =
         plan === undefined
           ? null
@@ -841,7 +953,7 @@ export function livePermissionFor(
   },
 ): string | null {
   const now = Date.now();
-  const usable = page.followUpPermissions.find(permission => {
+  const usable = page.followUpPermissions.find((permission) => {
     if (permission.contactId !== contactId) return false;
     if (permission.revokedAt !== null || permission.consumedAt !== null) return false;
     if (Date.parse(permission.expiresAt) <= now) return false;

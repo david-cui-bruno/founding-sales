@@ -1,3 +1,4 @@
+import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSchema,explicitOpportunityResultSchema} from '@fss/contracts';
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
 import {businessPolicySchema,businessPolicyReadSchema,businessPolicySavePayloadSchema,businessReviewSchema,businessReviewReadSchema,businessReviewDecidePayloadSchema} from '@fss/contracts';
 import {endpointClaimPayloadSchema,endpointCorrectPayloadSchema} from '@fss/contracts';
@@ -1141,9 +1142,24 @@ export const OPERATIONS = {
   'crm.personSourceDelete': {kind:'command',calls:[{method:'POST',path:'/crm/people/source/delete'}],input:personSourceChangeSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'deletion receipt without copied text'},
   'crm.personSourceRecapture': {kind:'command',calls:[{method:'POST',path:'/crm/people/source/recapture'}],input:personSourceRecaptureSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'explicit selected recapture by source identity and current revision'},
   'crm.personSourceRestore': {kind:'command',calls:[{method:'POST',path:'/crm/people/source/restore'}],input:personSourceChangeSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'explicit restore requires selected recapture'},
+  'crm.dealCreate': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/opportunities/v2/open' }],
+    input: openExplicitOpportunityCommandSchema.omit({ commandId: true, clientVersion: true }),
+    output: explicitOpportunityResultSchema,
+    transform: 'explicit independent deal; no enrollment',
+  },
+  'crm.dealReopen': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/opportunities/v2/reopen' }],
+    input: reopenExplicitOpportunityCommandSchema.omit({ commandId: true, clientVersion: true }),
+    output: explicitOpportunityResultSchema,
+    transform: 'explicit closed deal; preserves original label',
+  },
   'crm.state': {
     kind: 'read',
     calls: [
+      {method:'POST',path:'/pipeline/board-v2'},
       { method: 'POST', path: '/pipeline/board' },
       { method: 'GET', path: '/pipeline/stages' },
     ],
@@ -1154,13 +1170,14 @@ export const OPERATIONS = {
   'crm.openFirm': {
     kind: 'read',
     calls: [
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
       { method: 'POST', path: '/sequences/versions' },
       { method: 'POST', path: '/enrollments' },
     ],
-    input: firmId,
+    input:z.strictObject({firmId:uuid,opportunityId:uuid.optional()}),
     output: crmStateSchema,
     transform: 'the firm page at its declared version, plus the sequences it could be enrolled in; a failed slice says so rather than reading as none',
   },
@@ -1168,7 +1185,7 @@ export const OPERATIONS = {
   // alone (or null when the read did not answer), and nothing the bridge holds changes.
   'crm.firmTimeline': {
     kind: 'read',
-    calls: [{ method: 'POST', path: '/crm/firm-page' }],
+    calls: [{method:'POST',path:'/crm/firm-page-v3'},{ method: 'POST', path: '/crm/firm-page' }],
     input: z.strictObject({ firmId: uuid, before: z.string().min(1).max(120) }),
     output: z.strictObject({ timeline: firmTimelineSchema.nullable() }),
     transform: 'the firm page read with only the timeline negotiated, and only its timeline kept; null when the caller is not the firm\'s assignee or an admin',
@@ -1176,6 +1193,7 @@ export const OPERATIONS = {
   'crm.openPipeline': {
     kind: 'read',
     calls: [
+      {method:'POST',path:'/pipeline/board-v2'},
       { method: 'POST', path: '/pipeline/board' },
       { method: 'GET', path: '/pipeline/stages' },
       { method: 'GET', path: '/firms' },
@@ -1202,6 +1220,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/crm/firms/add' },
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
     ],
@@ -1220,6 +1239,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/contacts/update' },
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
     ],
@@ -1231,6 +1251,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/opportunities/stage' },
+      {method:'POST',path:'/pipeline/board-v2'},
       { method: 'POST', path: '/pipeline/board' },
       { method: 'GET', path: '/pipeline/stages' },
     ],
@@ -1242,6 +1263,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/opportunities/value' },
+      {method:'POST',path:'/pipeline/board-v2'},
       { method: 'POST', path: '/pipeline/board' },
       { method: 'GET', path: '/pipeline/stages' },
     ],
@@ -1254,6 +1276,7 @@ export const OPERATIONS = {
     calls: [
       { method: 'POST', path: '/merges/firms' },
       { method: 'GET', path: '/firms' },
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
@@ -1267,7 +1290,9 @@ export const OPERATIONS = {
   'crm.openOpportunity': {
     kind: 'command',
     calls: [
+      { method: 'POST', path: '/opportunities/v2/open' },
       { method: 'POST', path: '/opportunities/open' },
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
@@ -1289,6 +1314,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/opportunities/manual' },
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
@@ -1303,6 +1329,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/messages/resolve-ambiguity' },
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
@@ -1317,6 +1344,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/enrollments/enroll' },
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
@@ -1331,6 +1359,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/contacts/routes/check' },
+      {method:'POST',path:'/crm/firm-page-v3'},
       { method: 'POST', path: '/crm/firm-page' },
       { method: 'POST', path: '/messages/held-outgoing' },
     ],

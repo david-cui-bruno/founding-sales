@@ -5,6 +5,8 @@ import {
   enrollmentDtoSchema,
   firmIdentityDtoSchema,
   firmPageResponseSchema,
+  pluralFirmPageResponseSchema,
+  pluralPipelineBoardResponseSchema,
   importCommitResponseSchema,
   importIssueSchema,
   importPreviewResponseSchema,
@@ -57,6 +59,7 @@ export const pipelineColumnSchema = z.object({
 export type PipelineColumn = z.infer<typeof pipelineColumnSchema>;
 
 export const pipelineViewSchema = z.object({
+  plural: pluralPipelineBoardResponseSchema.optional(),
   columns: z.array(pipelineColumnSchema),
   /** The open opportunity of each firm on the board, so a stage change can name it. */
   opportunityIdByFirmId: z.record(uuid, uuid),
@@ -183,6 +186,7 @@ export const crmStateSchema = z.strictObject({
   /** A stable code, never a sentence composed here. */
   notice: z.string().max(200).nullable(),
   firm: firmPageResponseSchema.nullable(),
+  opportunities: pluralFirmPageResponseSchema.options[1].shape.opportunities.optional(),
   pipeline: pipelineViewSchema.nullable(),
   merge: mergeViewSchema.nullable(),
   /** The Add firm form, while the window shows it (lane g84). */

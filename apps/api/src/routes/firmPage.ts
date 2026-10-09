@@ -1,5 +1,5 @@
 import { FIRM_PAGE_VERSION, firmPageRequestSchema } from '@fss/contracts';
-import { readFirmPage } from '@fss/domain/crm/firmPage.ts';
+import { readFirmPage,readPluralFirmPage } from '@fss/domain/crm/firmPage.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -19,7 +19,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * would say there is nothing to show rather than that this caller may not see it.
  */
 
-export const FIRM_PAGE_PATHS = ['/crm/firm-page'] as const;
+export const FIRM_PAGE_PATHS = ['/crm/firm-page','/crm/firm-page-v3'] as const;
 
 export async function routeFirmPage(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!(FIRM_PAGE_PATHS as readonly string[]).includes(request.path)) return null;
@@ -39,7 +39,7 @@ export async function routeFirmPage(request: ApiRequest, options: RoutingOptions
 
   // `pageVersion: 2` puts each route's technical validation on it. Without it
   // the answer is the shape an installed 1.0.5 parses strictly.
-  const page = await readFirmPage(scoped.context, {
+  const page = await (request.path==='/crm/firm-page-v3'?readPluralFirmPage:readFirmPage)(scoped.context, {
     firmId: parsed.data.firmId,
     routeValidation: parsed.data.pageVersion === FIRM_PAGE_VERSION,
     // Migration 0037: the stop badges, only when asked for, so the installed 1.0.29's

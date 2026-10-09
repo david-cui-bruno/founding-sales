@@ -8,6 +8,7 @@ import {
   moveOpportunityStage,
   openOpportunity,
   readOpenOpportunity,
+  ambiguousFirmOpportunities,
   readStageByKey,
 } from './pipeline.ts';
 import type { OpportunityRow, PipelineStageRow } from './types.ts';
@@ -63,17 +64,12 @@ export type StageEvidenceOutcome =
   | {
       readonly kind: 'unchanged';
       readonly opportunityId: string;
-      readonly reason: 'not_forward' | 'pinned' | 'already_applied';
+      readonly reason: 'not_forward' | 'pinned' | 'already_applied' | 'manual_stage';
     }
   | { readonly kind: 'review'; readonly reviewItemId: string; readonly reason: StageReviewReason };
 
 export type StageReviewReason =
-  | 'opportunity_closed'
-  | 'no_opportunity'
-  | 'stage_missing'
-  | 'rule_missing'
-  | 'firm_unmatched'
-  | 'firm_ambiguous';
+  'opportunity_closed' | 'no_opportunity' | 'stage_missing' | 'rule_missing' | 'firm_unmatched' | 'firm_ambiguous';
 
 interface RuleRow {
   readonly evidence_kind: string;
@@ -84,10 +80,7 @@ interface RuleRow {
 
 const REASON_PREFIX = 'evidence:';
 
-export async function applyStageEvidence(
-  context: RepositoryContext,
-  input: StageEvidenceInput,
-): Promise<StageEvidenceOutcome> {
+export async function applyStageEvidence(context: RepositoryContext, input: StageEvidenceInput): Promise<StageEvidenceOutcome> {
   await lockSendGateForStopFact(context);
 
   const { rows: rules } = await context.db.query<RuleRow>(
@@ -107,6 +100,7 @@ export async function applyStageEvidence(
   if (input.opportunityId !== undefined) {
     opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
   } else if (input.firmId !== undefined) {
+    if(await ambiguousFirmOpportunities(context,input.firmId))return await openReviewItem(context,input,'firm_ambiguous',{firmId:input.firmId,opportunityId:null});
     const open = await readOpenOpportunity(context, input.firmId);
     opportunity = open === null ? null : await loadOpportunityForUpdate(context, open.id);
   }
@@ -163,6 +157,7 @@ export async function applyStageEvidence(
       opportunityId: opportunity.id,
     });
   }
+  if (opportunity.stage_control_mode === 'human') return { kind: 'unchanged', opportunityId: opportunity.id, reason: 'manual_stage' };
   // `open_if_none` found one open: that is the existing path's answer, nothing to do.
   if (rule.action === 'open_if_none') {
     return { kind: 'unchanged', opportunityId: opportunity.id, reason: 'not_forward' };

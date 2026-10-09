@@ -2,6 +2,8 @@ import {
   changeStageCommandSchema,
   classifyControlModeOriginCommandSchema,
   openOpportunityCommandSchema,
+  openExplicitOpportunityCommandSchema,
+  reopenExplicitOpportunityCommandSchema,
   recordOpportunityValueCommandSchema,
   takeOverOpportunityCommandSchema,
 } from '@fss/contracts';
@@ -9,6 +11,8 @@ import {
   changeStage,
   classifyControlModeOrigin,
   openOpportunity,
+  openExplicitOpportunity,
+  reopenExplicitOpportunity,
   takeOverOpportunity,
 } from '@fss/domain/crm/pipeline.ts';
 import { setOpportunityValue } from '@fss/domain/crm/opportunityValue.ts';
@@ -53,6 +57,10 @@ export async function routeOpportunities(request: ApiRequest, options: RoutingOp
   }
 
   switch (request.path) {
+    case '/opportunities/v2/open':
+      return await runRouteCommand(deps,openExplicitOpportunityCommandSchema,'opportunity.opened',async(repository,body)=>{const result=await openExplicitOpportunity(repository,{firmId:body.firmId,stageKey:body.stageKey,name:body.name});return result.ok?{ok:true,value:{opportunityId:result.value.id}}:result;});
+    case '/opportunities/v2/reopen':
+      return await runRouteCommand(deps,reopenExplicitOpportunityCommandSchema,'opportunity.reopened',async(repository,body)=>{const result=await reopenExplicitOpportunity(repository,body);return result.ok?{ok:true,value:{opportunityId:result.value.opportunityId}}:result;});
     case '/opportunities/open':
       return await runRouteCommand(deps, openOpportunityCommandSchema, 'opportunity.opened', async (repository, body) =>
         await openOpportunity(repository, { firmId: body.firmId, stageKey: body.stageKey }),

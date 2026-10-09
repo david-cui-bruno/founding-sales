@@ -46,6 +46,8 @@ export function valueSummary(totals: Pick<Totals, 'agreedCents' | 'estimatedCent
 
 /** Every firm in a column that is not Lost: what is on the board now. */
 export function openTotals(pipeline: PipelineView): Totals {
+  if (pipeline.plural !== undefined)
+    return totalsOf(Object.values(pipeline.plural.cards).filter((card) => card.firm.opportunityStatus === 'open'));
   const cards: (BoardCard | undefined)[] = [];
   for (const column of pipeline.columns) {
     if (column.stage.terminalKind === 'lost') continue;

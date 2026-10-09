@@ -14,7 +14,8 @@ import type { FirmReadDto } from './dto.ts';
 import { readFirmForActor } from './dto.ts';
 import { readPreparedBrief } from './preparedBriefs.ts';
 import { readFirmTasks, readFirmTimeline } from './firmActivity.ts';
-import { accept, type CrmResult } from './types.ts';
+import { listFirmOpportunities } from './pipeline.ts';
+import { accept, refuse, type CrmResult } from './types.ts';
 
 /**
  * Everything the desktop Firm page shows, in one read (specification 7.2, 7.3, 8.1,
@@ -65,13 +66,7 @@ export interface OpportunitySummaryDto {
   readonly stageKey: string;
   readonly controlMode: 'automated' | 'manual';
   readonly controlModeReason: string | null;
-  readonly controlModeOrigin:
-    | 'human_reply'
-    | 'engaged_call'
-    | 'direct_send'
-    | 'salesperson_command'
-    | 'direct_send_keep_automation'
-    | null;
+  readonly controlModeOrigin: 'human_reply' | 'engaged_call' | 'direct_send' | 'salesperson_command' | 'direct_send_keep_automation' | null;
   readonly openedAt: string;
   readonly closedAt: string | null;
   readonly closeReason: string | null;
@@ -128,7 +123,7 @@ interface OpportunityRowShape {
   readonly [column: string]: unknown;
 }
 
-export async function readFirmPage(
+async function readPage(
   context: RepositoryContext,
   input: {
     readonly firmId: string;
@@ -146,26 +141,39 @@ export async function readFirmPage(
     /** The timeline cursor (`timelineBefore`): the page older than it. */
     readonly timelineBefore?: string | undefined;
   },
+  selectedOpportunityId?: string,
+  plural = false,
 ): Promise<CrmResult<FirmPageDto>> {
-  const read = await readFirmForActor(context, { firmId: input.firmId, routeValidation: input.routeValidation });
+  const read = await readFirmForActor(context, { firmId: input.firmId, routeValidation: input.routeValidation }, plural);
   if (!read.ok) return read;
   if (read.value.visibility === 'any_active_member') {
     return accept({ visibility: 'any_active_member', read: read.value });
   }
 
   const workspace = context.scope.workspaceId;
-  // The most recent opportunity, open or closed: a Firm page after a loss still has
-  // to show what was lost and why, which is what `closeReason` is for.
+  // Legacy reads may represent one open deal, or exactly one closed deal.
+  // Read all candidates in one statement before selecting; plural reads name their exact id.
   const opportunity = await context.db.query<OpportunityRowShape>(
     `SELECT o.id::text AS id, o.status, s.key AS stage_key, o.control_mode, o.control_mode_reason,
             o.control_mode_origin, o.opened_at, o.closed_at, o.close_reason
        FROM opportunities o
        JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id
-      WHERE o.workspace_id = $1 AND o.firm_id = $2
-      ORDER BY (o.status = 'open') DESC, o.opened_at DESC
-      LIMIT 1`,
-    [workspace, input.firmId],
+      WHERE o.workspace_id = $1 AND o.firm_id = $2 AND ($3::uuid IS NULL OR o.id=$3)
+      ORDER BY o.opened_at,o.id`,
+    [workspace, input.firmId, selectedOpportunityId ?? null],
   );
+
+  const openRows = opportunity.rows.filter((row) => row.status === 'open');
+  if (!plural && selectedOpportunityId === undefined && opportunity.rows.length > 1 && openRows.length !== 1)
+    return refuse('opportunity_ambiguous');
+  const selectedOpportunity =
+    selectedOpportunityId === undefined
+      ? openRows.length === 1
+        ? openRows[0]
+        : opportunity.rows.length === 1
+          ? opportunity.rows[0]
+          : undefined
+      : opportunity.rows[0];
 
   const history = await context.db.query<StageEventRow>(
     `SELECT e.id::text AS id, e.occurred_at, e.actor_kind, e.reason,
@@ -175,9 +183,9 @@ export async function readFirmPage(
             ON becomes.workspace_id = e.workspace_id AND becomes.id = e.to_stage_id
        LEFT JOIN pipeline_stages was
             ON was.workspace_id = e.workspace_id AND was.id = e.from_stage_id
-      WHERE e.workspace_id = $1 AND e.firm_id = $2
+      WHERE e.workspace_id = $1 AND e.firm_id = $2 AND e.opportunity_id=$3
       ORDER BY e.occurred_at, e.id`,
-    [workspace, input.firmId],
+    [workspace, input.firmId, selectedOpportunity?.id ?? null],
   );
 
   const holds = await context.db.query<HoldRow>(
@@ -188,8 +196,11 @@ export async function readFirmPage(
     [workspace, input.firmId],
   );
 
-  const enrollmentsOfHolds = await holdEnrollments(context, holds.rows.map(hold => hold.id));
-  const row = opportunity.rows[0];
+  const enrollmentsOfHolds = await holdEnrollments(
+    context,
+    holds.rows.map((hold) => hold.id),
+  );
+  const row = selectedOpportunity;
   return accept({
     visibility: 'assigned_or_admin',
     read: read.value,
@@ -207,7 +218,7 @@ export async function readFirmPage(
             closedAt: row.closed_at === null ? null : row.closed_at.toISOString(),
             closeReason: row.close_reason,
           },
-    stageHistory: history.rows.map(event => ({
+    stageHistory: history.rows.map((event) => ({
       id: event.id,
       occurredAt: event.occurred_at.toISOString(),
       fromStageKey: event.from_stage_key,
@@ -215,7 +226,7 @@ export async function readFirmPage(
       actorKind: event.actor_kind,
       reason: event.reason,
     })),
-    holds: holds.rows.map(hold => ({
+    holds: holds.rows.map((hold) => ({
       id: hold.id,
       reasonCode: hold.reason_code,
       blockedActionKinds: knownBlockedActionKinds(hold.blocked_action_kinds),
@@ -225,12 +236,12 @@ export async function readFirmPage(
     })),
     // Migration 0025. Read after the holds because it is the same kind of fact: what
     // the automation may and may not do about this firm, and on whose authority.
-    followUpPermissions: (await listFollowUpPermissions(context, { firmId: input.firmId })).map(
-      followUpPermissionDto,
-    ),
+    followUpPermissions: (await listFollowUpPermissions(context, { firmId: input.firmId })).map(followUpPermissionDto),
     ...(input.includeStops === true ? { stops: await readFirmStops(context, input.firmId) } : {}),
     ...(input.includePreparedBrief === true ? { preparedBrief: await readPreparedBrief(context, input.firmId) } : {}),
-    ...(input.includeTasks === true ? { tasks: [...(await readFirmTasks(context, input.firmId, input.includeMeetingTasks === true))] } : {}),
+    ...(input.includeTasks === true
+      ? { tasks: [...(await readFirmTasks(context, input.firmId, input.includeMeetingTasks === true))] }
+      : {}),
     ...(input.includeTimeline === true ? { timeline: await readFirmTimeline(context, input.firmId, input.timelineBefore) } : {}),
   });
 }
@@ -274,7 +285,49 @@ export async function readFirmStops(context: RepositoryContext, firmId: string):
     [workspace, firmId],
   );
   return {
-    firm: firm.rows.map(row => row.channel),
-    contacts: contacts.rows.map(row => ({ contactId: row.contact_id, email: row.email, phone: row.phone })),
+    firm: firm.rows.map((row) => row.channel),
+    contacts: contacts.rows.map((row) => ({ contactId: row.contact_id, email: row.email, phone: row.phone })),
   };
+}
+
+type PageInput = Parameters<typeof readPage>[1];
+type DetailedPage = Extract<FirmPageDto, { visibility: 'assigned_or_admin' }>;
+export type PluralFirmPageDto =
+  | (Omit<DetailedPage, 'opportunity' | 'stageHistory'> & {
+      readonly version: 3;
+      readonly opportunities: readonly {
+        opportunity: OpportunitySummaryDto;
+        displayName: string | null;
+        stageControlMode: 'legacy_rules' | 'human';
+        stageHistory: readonly StageEventDto[];
+      }[];
+    })
+  | (Extract<FirmPageDto, { visibility: 'any_active_member' }> & { readonly version: 3 });
+export async function readFirmPage(context: RepositoryContext, input: PageInput): Promise<CrmResult<FirmPageDto>> {
+  return readPage(context, input);
+}
+export async function readPluralFirmPage(context: RepositoryContext, input: PageInput): Promise<CrmResult<PluralFirmPageDto>> {
+  const base = await readPage(context, input, undefined, true);
+  if (!base.ok) return base;
+  if (base.value.visibility === 'any_active_member') return accept({ ...base.value, version: 3 });
+  const entries: {
+    opportunity: OpportunitySummaryDto;
+    displayName: string | null;
+    stageControlMode: 'legacy_rules' | 'human';
+    stageHistory: readonly StageEventDto[];
+  }[] = [];
+  for (const opportunity of await listFirmOpportunities(context, input.firmId)) {
+    const selected = await readPage(context, input, opportunity.id, true);
+    if (!selected.ok) return selected;
+    if (selected.value.visibility !== 'assigned_or_admin') return accept({ ...selected.value, version: 3 });
+    if (selected.value.opportunity !== null)
+      entries.push({
+        opportunity: selected.value.opportunity,
+        displayName: opportunity.display_name ?? null,
+        stageControlMode: opportunity.stage_control_mode ?? 'legacy_rules',
+        stageHistory: selected.value.stageHistory,
+      });
+  }
+  const { opportunity: _opportunity, stageHistory: _history, ...page } = base.value;
+  return accept({ ...page, version: 3, opportunities: entries });
 }

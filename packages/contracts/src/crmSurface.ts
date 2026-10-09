@@ -103,7 +103,12 @@ export const IMPORT_FILE_REFUSALS = [
 export type ImportFileRefusal = (typeof IMPORT_FILE_REFUSALS)[number];
 
 /** One mebibyte of body is the API's limit; a file is bounded well below it. */
-export const importPreviewRequestSchema = z.strictObject({ csv: z.string().min(1).max(512 * 1024) });
+export const importPreviewRequestSchema = z.strictObject({
+  csv: z
+    .string()
+    .min(1)
+    .max(512 * 1024),
+});
 
 /** `create` makes the firm; `attach` adds the row's contact to a firm that is here or made above. */
 const IMPORT_ROW_OUTCOMES = ['create', 'attach', 'duplicate', 'invalid'] as const;
@@ -179,7 +184,10 @@ export const importFileRefusalResponseSchema = z.object({
  */
 export const importCommitRequestSchema = z.strictObject({
   clientVersion: semanticVersionSchema,
-  csv: z.string().min(1).max(512 * 1024),
+  csv: z
+    .string()
+    .min(1)
+    .max(512 * 1024),
   rows: z
     .array(z.strictObject({ rowNumber: z.number().int().min(2), commandId: commandIdSchema }))
     .min(1)
@@ -342,7 +350,10 @@ export const firmPageRequestSchema = z.strictObject({
    * Lane PB (migration 0038): `['preparedBrief']` adds `preparedBrief`, the firm's prepared
    * brief or null. Negotiated for the same reason.
    */
-  include: z.array(z.enum(['stops', 'preparedBrief', 'tasks', 'timeline', 'meeting_tasks'])).max(5).optional(),
+  include: z
+    .array(z.enum(['stops', 'preparedBrief', 'tasks', 'timeline', 'meeting_tasks']))
+    .max(5)
+    .optional(),
   /**
    * S4F: with `include: ['timeline']`, the page of the activity timeline older than this
    * cursor (an opaque `nextBefore` from an earlier answer). Absent: the newest page.
@@ -502,3 +513,21 @@ export const firmPageResponseSchema = z.discriminatedUnion('visibility', [
   }),
 ]);
 export type FirmPageResponse = z.infer<typeof firmPageResponseSchema>;
+
+export const pluralFirmPageResponseSchema = z.discriminatedUnion('visibility', [
+  firmPageResponseSchema.options[0].extend({ version: z.literal(3) }),
+  firmPageResponseSchema.options[1]
+    .omit({ opportunity: true, stageHistory: true })
+    .extend({
+      version: z.literal(3),
+      opportunities: z.array(
+        z.strictObject({
+          opportunity: opportunitySummaryDtoSchema,
+          displayName: z.string().max(160).nullable(),
+          stageControlMode: z.enum(['legacy_rules', 'human']),
+          stageHistory: z.array(stageEventDtoSchema),
+        }),
+      ),
+    }),
+]);
+export type PluralFirmPageResponse = z.infer<typeof pluralFirmPageResponseSchema>;

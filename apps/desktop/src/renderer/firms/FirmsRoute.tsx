@@ -1,12 +1,22 @@
+import { DealChoices } from './DealChoices.tsx';
+import { dealPorts } from './dealPorts.ts';
+import { FirmAddresses } from './FirmAddresses.tsx';
+import { People } from './People.tsx';
+import {
+  peoplePorts,
+  relationshipPorts,
+  relationshipEditingPorts,
+  endpointPorts,
+  endpointEditingPorts,
+  firmAddressPorts,
+  sourceContextPorts,
+} from './peoplePorts.ts';
+import { BookingCapacity } from '../meetings/BookingCapacity.tsx';
+import { bookingCapacityPorts } from '../meetings/bookingCapacityPorts.ts';
+import { FirmQualification } from '../sourcing/FirmQualification.tsx';
 import { selectedImportPorts } from './selectedImportPorts.ts';
 import {BusinessReview} from './BusinessReview.tsx';
 import {businessReviewPorts} from './businessReviewPorts.ts';
-import {FirmAddresses} from './FirmAddresses.tsx';
-import {People} from './People.tsx';
-import {peoplePorts,relationshipPorts,relationshipEditingPorts,endpointPorts,endpointEditingPorts,firmAddressPorts,sourceContextPorts} from './peoplePorts.ts';
-import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
-import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
-import {FirmQualification} from '../sourcing/FirmQualification.tsx';
 import { Candidates } from '../sourcing/Candidates.tsx';
 import { useKept } from '../replies/kept.ts';
 import { useEffect, useLayoutEffect, useRef, type JSX } from 'react';
@@ -130,7 +140,7 @@ export function FirmsRoute({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, crm.pending, panelFirmId]);
 
-  const hasEditors = Object.values(memory.cardEditor).some(editor => editor !== undefined);
+  const hasEditors = Object.values(memory.cardEditor).some((editor) => editor !== undefined);
   useShortcuts({
     close: () => {
       if (!onPipelineRow) return;
@@ -170,7 +180,7 @@ export function FirmsRoute({
           </h1>
         </header>
         <div className="flex min-h-0 flex-1 gap-3 overflow-hidden p-4">
-          {[0, 1, 2, 3].map(column => (
+          {[0, 1, 2, 3].map((column) => (
             <div key={column} className="flex w-[248px] shrink-0 flex-col gap-2 rounded-lg bg-sidebar p-3">
               <Skeleton className="w-24" />
               <Skeleton className="h-16 w-full" />
@@ -186,7 +196,11 @@ export function FirmsRoute({
     );
   }
 
-  const stageNames = new Map((state.pipeline?.stages ?? state.pipeline?.columns.map(column => column.stage) ?? []).map(stage => [stage.key, stage.displayName] as const));
+  const stageNames = new Map(
+    (state.pipeline?.stages ?? state.pipeline?.columns.map((column) => column.stage) ?? []).map(
+      (stage) => [stage.key, stage.displayName] as const,
+    ),
+  );
   const stageName = (key: string): string => stageNames.get(key) ?? inWords(key);
   // On the board, a stage or value answer is said next to its card (criterion 6), so it is
   // not also a banner across the page. Offline and "update required" stay: they block everything.
@@ -203,7 +217,12 @@ export function FirmsRoute({
   const onCapture = state.screen === 'add_firm' || state.screen === 'import' || state.screen === 'merge';
   // A fresh route also fences late command answers from the screen being left.
   const backToFirms = (): void => navigate({ name: 'firms' });
-  const cardOf = (id: string) => state.pipeline?.cards?.[id];
+  const cardOf = (id: string, opportunityId?: string) =>
+    state.pipeline?.plural === undefined
+      ? state.pipeline?.cards?.[id]
+      : opportunityId === undefined
+        ? undefined
+        : state.pipeline.plural.cards[opportunityId];
 
   /** David opened or closed this card's editor: a late answer must leave it alone. */
   function touchPending(opportunityId: string): void {
@@ -221,19 +240,21 @@ export function FirmsRoute({
    * clears the draft when it went through, and when it was refused it brings the editor back
    * only if David has not touched that card's editor since he sent it.
    */
-  const settle = (opportunityId: string, commandId: number, editor: CardEditor) => (notice: string | null): void => {
-    const pending = memory.pending[opportunityId];
-    if (pending?.commandId !== commandId) return;
-    delete memory.pending[opportunityId];
-    const code = notice ?? 'malformed_body';
-    memory.feedback[opportunityId] = { code };
-    if (code === 'stage_changed' || code === 'value_recorded') {
-      clearKeptText(`${editor}:${opportunityId}`);
-    } else if (!pending.touched && memory.cardEditor[opportunityId] === undefined) {
-      memory.cardEditor[opportunityId] = editor;
-    }
-    touch();
-  };
+  const settle =
+    (opportunityId: string, commandId: number, editor: CardEditor) =>
+    (notice: string | null): void => {
+      const pending = memory.pending[opportunityId];
+      if (pending?.commandId !== commandId) return;
+      delete memory.pending[opportunityId];
+      const code = notice ?? 'malformed_body';
+      memory.feedback[opportunityId] = { code };
+      if (code === 'stage_changed' || code === 'value_recorded') {
+        clearKeptText(`${editor}:${opportunityId}`);
+      } else if (!pending.touched && memory.cardEditor[opportunityId] === undefined) {
+        memory.cardEditor[opportunityId] = editor;
+      }
+      touch();
+    };
   const send = (opportunityId: string, editor: CardEditor, run: (onAnswer: (notice: string | null) => void) => void): void => {
     delete memory.feedback[opportunityId];
     const commandId = nextCommandId();
@@ -242,74 +263,94 @@ export function FirmsRoute({
     touch();
   };
   const changeStage = (change: StageChange): void => {
-    send(change.opportunityId, 'move', onAnswer => {
+    send(change.opportunityId, 'move', (onAnswer) => {
       crm.actions.changeStage(change, onAnswer);
     });
   };
   const setValue = (change: ValueChange): void => {
-    send(change.opportunityId, 'value', onAnswer => {
+    send(change.opportunityId, 'value', (onAnswer) => {
       crm.actions.setValue(change, onAnswer);
     });
   };
 
   const firmBody = (variant: 'page' | 'panel', firm: NonNullable<CrmState['firm']>): JSX.Element => (
-    <FirmPage
-      page={firm}
-      {...(route.name === 'firm' && route.firmId === firm.read.firm.id && route.meetingId !== undefined ? { initialMeetingId: route.meetingId } : {})}
-      sequences={state.sequences}
-      actionsEnabled={view.actionsEnabled}
-      busy={crm.busy}
-      redactionNotice={view.redactionNotice}
-      onSaveContact={crm.actions.saveContact}
-      onCheckRoute={crm.actions.checkRoute}
-      onOpenOpportunity={crm.actions.openOpportunity}
-      onApplyStageSuggestion={(suggestion, suggestedFirmId) => {
-        // Lane M1: the ordinary manual commands — a move of the open deal from the stage the
-        // suggestion was read at, or opening one at the stage for the firm it was read for.
-        if (suggestion.opportunityId !== null) {
-          changeStage({
-            opportunityId: suggestion.opportunityId,
-            toStageKey: suggestion.stageKey,
-            reason: null,
-            ...(typeof suggestion.fromStageKey === 'string' ? { expectedStageKey: suggestion.fromStageKey } : {}),
-          });
-        } else crm.actions.openOpportunityAt(suggestedFirmId, suggestion.stageKey);
-      }}
-      onEnroll={crm.actions.enroll}
-      onTakeOver={crm.actions.takeOver}
-      heldOutgoing={state.heldOutgoing}
-      notice={state.notice}
-      onResolveOutgoing={crm.actions.resolveOutgoing}
-      onBasicsSaved={() => {
-        if (variant === 'page') crm.actions.openFirm(firm.read.firm.id);
-        else crm.actions.openPanel(firm.read.firm.id);
-      }}
-      card={cardOf(firm.read.firm.id)}
-      stageName={stageName}
-      variant={variant}
-      guard={guard}
-      research={
-        <>
-          {/* Lane PB: the prepared brief, negotiated on the firm page read
+    <>
+      {firm.visibility === 'assigned_or_admin' && state.opportunities !== undefined ? (
+        <DealChoices
+          key={`deals:${identity}:${generation}:${firm.read.firm.id}`}
+          firmId={firm.read.firm.id}
+          entries={state.opportunities}
+          selectedId={firm.opportunity?.id ?? null}
+          enabled={view.actionsEnabled}
+          ports={dealPorts}
+          onSelect={(id) => (variant === 'panel' ? crm.actions.openPanel : crm.actions.openFirm)(firm.read.firm.id, id)}
+        />
+      ) : null}
+      <FirmPage
+        opportunitySelectionRequired={
+          firm.visibility === 'assigned_or_admin' && (state.opportunities?.length ?? 0) > 0 && firm.opportunity === null
+        }
+        page={firm}
+        {...(route.name === 'firm' && route.firmId === firm.read.firm.id && route.meetingId !== undefined
+          ? { initialMeetingId: route.meetingId }
+          : {})}
+        sequences={state.sequences}
+        actionsEnabled={view.actionsEnabled}
+        busy={crm.busy}
+        redactionNotice={view.redactionNotice}
+        onSaveContact={crm.actions.saveContact}
+        onCheckRoute={crm.actions.checkRoute}
+        onOpenOpportunity={crm.actions.openOpportunity}
+        onApplyStageSuggestion={(suggestion, suggestedFirmId) => {
+          // Lane M1: the ordinary manual commands — a move of the open deal from the stage the
+          // suggestion was read at, or opening one at the stage for the firm it was read for.
+          if (suggestion.opportunityId !== null) {
+            changeStage({
+              opportunityId: suggestion.opportunityId,
+              toStageKey: suggestion.stageKey,
+              reason: null,
+              ...(typeof suggestion.fromStageKey === 'string' ? { expectedStageKey: suggestion.fromStageKey } : {}),
+            });
+          } else crm.actions.openOpportunityAt(suggestedFirmId, suggestion.stageKey);
+        }}
+        onEnroll={crm.actions.enroll}
+        onTakeOver={crm.actions.takeOver}
+        heldOutgoing={state.heldOutgoing}
+        notice={state.notice}
+        onResolveOutgoing={crm.actions.resolveOutgoing}
+        onBasicsSaved={() => {
+          if (variant === 'page') crm.actions.openFirm(firm.read.firm.id);
+          else crm.actions.openPanel(firm.read.firm.id);
+        }}
+        card={cardOf(firm.read.firm.id, firm.visibility === 'assigned_or_admin' ? firm.opportunity?.id : undefined)}
+        stageName={stageName}
+        variant={variant}
+        guard={guard}
+        research={
+          <>
+            {/* Lane PB: the prepared brief, negotiated on the firm page read
               (`include: ['preparedBrief']`), beside Callie's own research. */}
-          {state.role==='admin'?<FirmQualification key={`qualification:${firm.read.firm.id}`} firmId={firm.read.firm.id} enabled={view.actionsEnabled}/>:null}
-          {firm.visibility === 'assigned_or_admin' && firm.preparedBrief != null ? (
-            <div className="mb-4">
-              <PreparedBrief key={firm.read.firm.id} brief={firm.preparedBrief} />
-            </div>
-          ) : null}
-          {/* Its own read, because the firm page's contract is strict behind
+            {state.role === 'admin' ? (
+              <FirmQualification key={`qualification:${firm.read.firm.id}`} firmId={firm.read.firm.id} enabled={view.actionsEnabled} />
+            ) : null}
+            {firm.visibility === 'assigned_or_admin' && firm.preparedBrief != null ? (
+              <div className="mb-4">
+                <PreparedBrief key={firm.read.firm.id} brief={firm.preparedBrief} />
+              </div>
+            ) : null}
+            {/* Its own read, because the firm page's contract is strict behind
               `pageVersion` and a key added to it is a wire break (lane R). */}
-          <FirmResearch
-            firmId={firm.read.firm.id}
-            identity={identity}
-            generation={generation}
-            guard={guard}
-            enabled={view.actionsEnabled}
-          />
-        </>
-      }
-    />
+            <FirmResearch
+              firmId={firm.read.firm.id}
+              identity={identity}
+              generation={generation}
+              guard={guard}
+              enabled={view.actionsEnabled}
+            />
+          </>
+        }
+      />
+    </>
   );
 
   // ----- The Pipeline: the board, and beside it the open firm ---------------------------
@@ -317,7 +358,7 @@ export function FirmsRoute({
     const shown = state.firm !== null && state.firm.read.firm.id === panelFirmId ? state.firm : null;
     const panelName =
       shown?.read.firm.name ??
-      state.pipeline.columns.flatMap(column => column.firms).find(entry => entry.id === panelFirmId)?.name ??
+      state.pipeline.columns.flatMap((column) => column.firms).find((entry) => entry.id === panelFirmId)?.name ??
       'Firm';
     return (
       <div data-testid="firms" aria-busy={crm.pending > 0} className="callie-v2 flex h-screen flex-col">
@@ -331,7 +372,13 @@ export function FirmsRoute({
             <Banners notices={view.banners} />
           </div>
         )}
-        <div className="shrink-0 max-h-64 overflow-y-auto px-5"><BookingCapacity key={`booking:${identity}:${String(generation)}`} ports={bookingCapacityPorts} onOpenFirm={crm.actions.openFirm} /></div>
+        <div className="shrink-0 max-h-64 overflow-y-auto px-5">
+          <BookingCapacity
+            key={`booking:${identity}:${String(generation)}`}
+            ports={bookingCapacityPorts}
+            onOpenFirm={crm.actions.openFirm}
+          />
+        </div>
         {/* Slice M1: Cal.com bookings Callie could not attach to a firm. Nothing while there are none. */}
         <BookingsToMatch
           firms={firmsOf(state.pipeline)}
@@ -344,24 +391,25 @@ export function FirmsRoute({
           <PipelineBoard
             pipeline={state.pipeline}
             actionsEnabled={view.actionsEnabled}
-            stageBusy={opportunityId => crm.busy(`stage:${opportunityId}`)}
-            valueBusy={opportunityId => crm.busy(`value:${opportunityId}`)}
+            stageBusy={(opportunityId) => crm.busy(`stage:${opportunityId}`)}
+            valueBusy={(opportunityId) => crm.busy(`value:${opportunityId}`)}
             search={memory.search}
             memory={boardMemory}
-            onSearch={text => {
+            onSearch={(text) => {
               memory.search = text;
               touch();
             }}
             onShowLost={crm.actions.openPipeline}
             onChangeStage={changeStage}
             onSetValue={setValue}
-            onOpenFirm={id => {
+            onOpenFirm={(id, opportunityId) => {
               memory.panelScroll = id === memory.panelFirmId ? memory.panelScroll : 0;
               memory.panelFirmId = id;
-              crm.actions.openPanel(id);
+              crm.actions.openPanel(id, opportunityId);
               touch();
             }}
             selectedFirmId={panelFirmId}
+            selectedOpportunityId={shown?.visibility==='assigned_or_admin'?shown.opportunity?.id??null:null}
             cardEditors={memory.cardEditor}
             onCardEditor={(opportunityId, editor) => {
               touchPending(opportunityId);
@@ -371,7 +419,7 @@ export function FirmsRoute({
             }}
             feedback={memory.feedback}
             onlyWithoutValue={memory.onlyWithoutValue}
-            onOnlyWithoutValue={on => {
+            onOnlyWithoutValue={(on) => {
               memory.onlyWithoutValue = on;
               touch();
             }}
@@ -380,7 +428,7 @@ export function FirmsRoute({
             <FirmPanel
               name={panelName}
               scroll={memory.panelScroll}
-              onScroll={offset => {
+              onScroll={(offset) => {
                 memory.panelScroll = offset;
               }}
               onOpenFull={() => {
@@ -424,18 +472,12 @@ export function FirmsRoute({
   // ----- Everything else: Firms, the firm's page, Add firm, Import, merge ----------------
   const firmSummary =
     onFirm && state.firm !== null
-      ? [state.firm.read.firm.locality, state.firm.read.firm.regionCode].filter(part => part !== null && part !== '').join(', ') || null
+      ? [state.firm.read.firm.locality, state.firm.read.firm.regionCode].filter((part) => part !== null && part !== '').join(', ') || null
       : null;
   return (
-    <Page
-      data-testid="firms"
-      aria-busy={crm.pending > 0}
-      className={onFirm ? 'callie-v2 max-w-[1180px] px-10 pt-5' : 'callie-v2'}
-    >
+    <Page data-testid="firms" aria-busy={crm.pending > 0} className={onFirm ? 'callie-v2 max-w-[1180px] px-10 pt-5' : 'callie-v2'}>
       <ViewHeader
-        title={
-          onFirm && state.firm !== null ? state.firm.read.firm.name : state.screen === 'pipeline' ? rowHeading : view.heading
-        }
+        title={onFirm && state.firm !== null ? state.firm.read.firm.name : state.screen === 'pipeline' ? rowHeading : view.heading}
         summary={firmSummary}
         above={
           onFirm ? (

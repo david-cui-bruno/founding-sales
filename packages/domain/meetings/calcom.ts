@@ -8,7 +8,7 @@ import { CALCOM_APPLIED_TRIGGERS, type CalcomAppliedTrigger, type MeetingAttenda
 import type { Queryable } from '../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
-import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
+import { readOperationalOpportunity, setManualControlMode } from '../crm/pipeline.ts';
 import { openReviewItem } from '../crm/stageEvidence.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
@@ -1050,7 +1050,8 @@ export async function applyBooked(context: RepositoryContext, meeting: BookedMee
   await context.db.query("UPDATE outreach_plans SET state='booked',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND state IN ('active','reply_pending','manual')",[context.scope.workspaceId,firmId]);
   const obsolete = (await context.db.query<{ meeting_id: string }>(`SELECT p.meeting_id FROM meeting_follow_through p JOIN meetings old ON old.workspace_id=p.workspace_id AND old.id=p.meeting_id JOIN meetings newer ON newer.workspace_id=p.workspace_id AND newer.id=$3 WHERE p.workspace_id=$1 AND p.firm_id=$2 AND p.meeting_id<>$3 AND newer.starts_at>old.ends_at AND p.status NOT IN ('cancelled','completed') ORDER BY p.meeting_id`, [context.scope.workspaceId, firmId, meeting.id])).rows;
   for (const plan of obsolete) await invalidateMeetingFollowThrough(context, { meetingId: plan.meeting_id, reason: 'new_meeting', eventId: meeting.id });
-  const opportunity = await readOpenOpportunity(context, firmId);
+  const recorded=(await context.db.query<{opportunity_id:string|null}>('SELECT opportunity_id FROM meetings WHERE workspace_id=$1 AND id=$2 AND firm_id=$3',[context.scope.workspaceId,meeting.id,firmId])).rows[0];
+  const opportunity = recorded===undefined ? null : await readOperationalOpportunity(context,firmId,recorded.opportunity_id);
   if (opportunity !== null) {
     await context.db.query('UPDATE meetings SET opportunity_id = $3, updated_at = now() WHERE workspace_id = $1 AND id = $2', [
       context.scope.workspaceId,
@@ -1061,7 +1062,7 @@ export async function applyBooked(context: RepositoryContext, meeting: BookedMee
     // prospecting and cold_legacy enrollments only (review fold 1, finding 3): the
     // firm-wide snapshot 7.3 uses for every other cause would owe one to the agreed
     // follow-up too, and the terminal-stop drain would end it a minute later.
-    await setManualControlMode(context, {
+    if(opportunity.status==='open') await setManualControlMode(context, {
       opportunityId: opportunity.id,
       reason: 'meeting booked',
       origin: 'engaged_call',

@@ -21,7 +21,7 @@ import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate, readFirm } from '../crm/firms.ts';
-import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
+import { readOperationalOpportunity, setManualControlMode } from '../crm/pipeline.ts';
 import { retireRoute } from '../crm/routes.ts';
 import {
   CALLBACK_CANCELLED_BY_CORRECTION,
@@ -786,7 +786,7 @@ export async function correctCallOutcome(
     // 3. What the new outcome itself means, as `logCallOutcome` applies it.
     const effectsOf = callOutcomeEffects(input.outcome);
     if (effectsOf.setsManual) {
-      const opportunity = await readOpenOpportunity(context, log.firm_id);
+      const opportunity = log.opportunity_id===null ? null : await readOperationalOpportunity(context,log.firm_id,log.opportunity_id);
       if (opportunity !== null && opportunity.control_mode !== 'manual') {
         const changed = await setManualControlMode(context, {
           opportunityId: opportunity.id,

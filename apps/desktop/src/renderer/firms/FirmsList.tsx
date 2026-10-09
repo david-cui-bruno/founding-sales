@@ -28,13 +28,14 @@ export const NOT_IN_PIPELINE = 'Not in the pipeline';
 /** Every active firm the board read carried, in the order the server sent them. */
 export function firmsOf(pipeline: PipelineView): readonly FirmIdentityDto[] {
   const placed = pipeline.columns.flatMap(column => column.firms);
-  const all = [...placed, ...(pipeline.unplacedFirms ?? [])];
+  const all = [...new Map([...placed, ...(pipeline.unplacedFirms ?? [])].map(firm=>[firm.id,firm])).values()];
   // The board's own order is by name; the columns re-sliced it, so it is restored here.
   return all.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 }
 
 /** The stage's own name, or null when this firm is in no column. */
 export function stageNameOf(pipeline: PipelineView, firm: FirmIdentityDto): string | null {
+  if(pipeline.plural!==undefined&&Object.values(pipeline.plural.cards).filter(card=>card.firm.id===firm.id).length>1)return 'Multiple deals';
   if (firm.stageKey === null) return null;
   return pipeline.columns.find(column => column.stage.key === firm.stageKey)?.stage.displayName ?? firm.stageKey;
 }
