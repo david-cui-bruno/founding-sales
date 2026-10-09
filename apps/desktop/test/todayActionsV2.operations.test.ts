@@ -3,7 +3,7 @@ import {createAuthedClient} from '../src/main/authedClient.ts';
 import {answerOperation,operationHandlers,type OperationHostDeps} from '../src/main/operationHost.ts';
 import {operationOf} from '../src/shared/operations.ts';
 const id='11111111-1111-4111-8111-111111111111';
-const page={version:2,workspaceId:id,businessTimeZone:'America/Chicago',asOf:'2026-10-09T12:00:00.000Z',actions:[]};
+const page={version:2,workspaceId:id,businessTimeZone:'America/Chicago',asOf:'2026-10-09T12:00:00.000Z',actions:[],promiseCoverage:{scope:'current_authorized_work',truncated:false,nextAfterId:null}};
 it('reads and opens explicit Today V2 through the authenticated closed host without V1 fallback',async()=>{
  expect(operationOf('today.actionsV2')).toBe('today.actionsV2');
  const requests:{path:string;method:string;body:unknown}[]=[];

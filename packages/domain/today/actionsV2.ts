@@ -27,14 +27,14 @@ export async function readTodayActionsV2(context:RepositoryContext,input:{now:st
   }
   actions.push(action);
  }
- for(const promise of promises){
+ for(const promise of promises.items){
   const due=promise.due;if(due===null)continue;
   const overdue=due.kind==='instant'?Date.parse(input.now)>=Date.parse(due.at):calendarDate(input.now,due.zone)>due.date;
   actions.push({actionId:`crm-promise:${promise.target.taskId}:${promise.target.expectedVersion}`,kind:'promise',subject:promise.subject,reason:'dated_promise',due,state:overdue?'overdue':'open',target:promise.target});
  }
  actions.sort((a,b)=>rank(a)-rank(b)||dateKey(a).localeCompare(dateKey(b))||a.actionId.localeCompare(b.actionId));
  if(!await activeIdentityActor(context))return null;
- return {version:2,workspaceId:context.scope.workspaceId,businessTimeZone:legacy.businessTimeZone,asOf:input.now,actions};
+ return {version:2,workspaceId:context.scope.workspaceId,businessTimeZone:legacy.businessTimeZone,asOf:input.now,actions,promiseCoverage:promises.coverage};
 }
 /** Opening verifies the current receipt; only the separate Complete command changes work. */
 export async function openTodayActionV2(context:RepositoryContext,input:{actionId:string;target:TodayTargetV2;now:string}){

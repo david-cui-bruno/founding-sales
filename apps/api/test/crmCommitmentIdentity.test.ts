@@ -11,7 +11,7 @@ import {
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 
-it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict", "equivalent_open", "identical_open"] as const)("preserves completed action identity across %s", async scenario => {
+it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict", "equivalent_open", "identical_open", "open_action", "open_due"] as const)("preserves completed action identity across %s", async scenario => {
   const fixture = await createAuthFixture();
   try {
     let token = (
@@ -169,6 +169,23 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toEqual({items:[],nextAfterId:null});return;
     }
     const task=((await read()).body as {items:{task:{taskId:string}}[]}).items[0]!.task;
+    if(scenario==='open_action'||scenario==='open_due'){
+      const changed=command({...review,commandId:randomUUID(),expectedCommitmentRevision:1,...(scenario==='open_action'?{actionLabel:'Review the repair summary'}:{due:{kind:'date' as const,date:'2026-10-13',zone:'America/Chicago',expression:'by October 13'}})});
+      expect((await post('/crm/commitments/review',changed)).status).toBe(200);
+      await runOnce(fixture.db,{registry,owner:'changed-open-projector',limit:20});
+      const currentPage=await read();expect(currentPage.status).toBe(200);
+      const current=((currentPage.body as {items:{task:{taskId:string}}[]}).items[0]!).task;
+      expect(current.taskId).not.toBe(task.taskId);
+      expect(currentPage.body).toMatchObject({items:[{supersededOpenTasks:[{taskId:task.taskId,status:'open',version:2,reviewRequired:true,reason:'human_action_changed'}],supersededOpenTasksTruncated:false}]});
+      const today=(await post('/crm/commitments/read',{scope:{kind:'today'},limit:50}));expect(today.body).toMatchObject({items:[{task:{taskId:current.taskId,status:'open'}}]});
+      expect((await post('/crm/commitments/complete',command({taskId:task.taskId,expectedVersion:2}))).status).toBe(409);
+      expect((await post('/crm/commitments/read',{scope:{kind:'history'},limit:50})).body).toEqual({items:[],nextAfterId:null});
+      expect((await post('/crm/commitments/review',command({...review,commandId:randomUUID(),expectedCommitmentRevision:2}))).status).toBe(200);
+      await runOnce(fixture.db,{registry,owner:'reaffirmed-open-projector',limit:20});
+      expect((await read()).body).toMatchObject({items:[{task:{taskId:task.taskId,status:'open',version:3}}]});
+      expect((await post('/crm/commitments/complete',command({taskId:task.taskId,expectedVersion:3}))).status).toBe(200);
+      return;
+    }
     if(scenario==='equivalent_open'||scenario==='identical_open'){
       await process('fixture-v2',1);
       expect((await read()).body).toMatchObject({items:[{state:'applied',actionLabel:'Prepare the repair summary',quote:'I will prepare the repair summary by October 12.',task:{taskId:task.taskId,status:'open',version:1}}]});
