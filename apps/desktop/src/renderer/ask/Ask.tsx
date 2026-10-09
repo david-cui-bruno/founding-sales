@@ -238,17 +238,21 @@ export function Ask({
     }
   }
   return (
-    <section aria-label="Ask" className="space-y-4 p-6">
+    <section
+      aria-label="Ask"
+      className="max-w-5xl space-y-5 p-6 [&_button]:mr-2 [&_button]:mt-2 [&_button]:inline-flex [&_button]:items-center [&_button]:rounded-md [&_button]:border [&_button]:border-border [&_button]:bg-background [&_button]:px-3 [&_button]:py-2 [&_button]:text-sm [&_button:hover]:bg-muted [&_button:disabled]:opacity-50 [&_button:focus-visible]:outline-2 [&_button:focus-visible]:outline-ring [&_p]:text-sm [&_p]:leading-6"
+    >
       <h1 className="text-xl font-semibold">Ask</h1>
       <p>
         Retrieve records and original evidence. Conversation coverage may be
         incomplete.
       </p>
       {selected === null && (
-        <div>
-          <label>
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="block text-sm font-medium">
             Find a person or firm
             <input
+              className="mt-1 block h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm"
               aria-label="Find a person or firm"
               value={query}
               onChange={(event) => {
@@ -262,9 +266,10 @@ export function Ask({
               }}
             />
           </label>
-          <label>
+          <label className="block text-sm font-medium">
             Record kind
             <select
+              className="mt-1 block h-9 rounded-md border border-input bg-background px-3 text-sm"
               value={kind}
               onChange={(event) => {
                 epoch.current++;
@@ -346,15 +351,18 @@ export function Ask({
         </button>
       )}
       {selected?.kind === "firm" && (
-        <fieldset>
-          <legend>Date scope (UTC)</legend>
-          <p>
+        <fieldset className="flex flex-wrap gap-x-6 gap-y-3 rounded-lg border border-border p-4">
+          <legend className="px-1 text-sm font-semibold">
+            Date scope (UTC)
+          </legend>
+          <p className="w-full text-muted-foreground">
             Optional range: opportunity opening, work due, activity event or
             reply event dates.
           </p>
-          <label>
+          <label className="block text-sm font-medium">
             From (UTC, inclusive)
             <input
+              className="mt-1 block h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm"
               type="datetime-local"
               aria-label="From (UTC, inclusive)"
               value={fromDate}
@@ -366,9 +374,10 @@ export function Ask({
               }}
             />
           </label>
-          <label>
+          <label className="block text-sm font-medium">
             Until (UTC, exclusive)
             <input
+              className="mt-1 block h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm"
               type="datetime-local"
               aria-label="Until (UTC, exclusive)"
               value={toDate}
@@ -424,6 +433,7 @@ export function Ask({
           {result.sources.map((source) => (
             <label key={`${source.kind}:${source.sourceId}`}>
               <input
+                className="mr-2 h-4 w-4 align-middle"
                 type="checkbox"
                 aria-label={`Include ${sourceKindLabels[source.kind]} version ${source.revision}`}
                 disabled={
@@ -462,7 +472,7 @@ export function Ask({
       )}
       {selected?.kind === "firm" && (
         <div>
-          <h2>{selected.name}</h2>
+          <h2 className="text-lg font-semibold">{selected.name}</h2>
           <button
             disabled={!enabled || !validDates}
             onClick={() => {
@@ -562,10 +572,11 @@ export function Ask({
       )}
       {selected?.kind === "person" && selectedSources.length === 0 && (
         <div>
-          <h2>{selected.name}</h2>
-          <label>
+          <h2 className="text-lg font-semibold">{selected.name}</h2>
+          <label className="block text-sm font-medium">
             Search original passages
             <input
+              className="mt-1 block h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm"
               aria-label="Search original passages"
               value={passageQuery}
               onChange={(event) => {
@@ -588,9 +599,10 @@ export function Ask({
       {selectedSources.length > 0 && (
         <div>
           <p>{selectedSources.length} selected copies (maximum 10)</p>
-          <label>
+          <label className="block text-sm font-medium">
             Search selected copies
             <input
+              className="mt-1 block h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm"
               aria-label="Search selected copies"
               value={copyQuery}
               onChange={(event) => {
@@ -631,7 +643,10 @@ export function Ask({
             </button>
           )}
           {result.passages.map((passage, index) => (
-            <article key={index}>
+            <article
+              key={index}
+              className="space-y-3 rounded-lg border border-border bg-card p-4"
+            >
               <pre className="whitespace-pre-wrap break-words">
                 {passage.text}
               </pre>
@@ -648,7 +663,9 @@ export function Ask({
                     · Version {source.revision}
                   </p>
                   <details>
-                    <summary>Source details</summary>
+                    <summary className="cursor-pointer text-sm text-muted-foreground">
+                      Source details
+                    </summary>
                     <p>
                       {sourceKindLabels[source.kind]} · Source {source.sourceId}{" "}
                       · {source.locator ?? "Location unknown"} ·{" "}
