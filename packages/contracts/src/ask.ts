@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {canonicalSourceReferenceSchema} from './people.ts';
 import {firmTaskDtoSchema} from './crmSurface.ts';
 export const askScopeSchema=z.strictObject({firmId:z.uuid(),from:z.iso.datetime().optional(),to:z.iso.datetime().optional()}).refine(value=>value.from===undefined||value.to===undefined||Date.parse(value.from)<Date.parse(value.to));
 const askOpportunitiesReadSchema=z.strictObject({operation:z.literal('opportunities'),scope:askScopeSchema,status:z.enum(['open','all']).default('open'),limit:z.number().int().min(1).max(50).default(20)});
@@ -7,7 +8,9 @@ const askOpportunitiesResponseSchema=z.strictObject({operation:z.literal('opport
 
 const askRecordsReadSchema=z.strictObject({operation:z.literal('records'),query:z.string().trim().min(1).max(160),kind:z.enum(['people','firms']),afterId:z.uuid().optional(),limit:z.number().int().min(1).max(50).default(20)});
 const askTasksReadSchema=z.strictObject({operation:z.literal('tasks'),scope:askScopeSchema,limit:z.number().int().min(1).max(50).default(20)});
-export const askReadSchema=z.discriminatedUnion('operation',[askOpportunitiesReadSchema,askRecordsReadSchema,askTasksReadSchema]);
+const askPassagesReadSchema=z.strictObject({operation:z.literal('passages'),scope:z.strictObject({personId:z.uuid(),afterSourceId:z.uuid().optional()}),query:z.string().trim().min(1).max(300),limit:z.number().int().min(1).max(50).default(20)});
+export const askReadSchema=z.discriminatedUnion('operation',[askOpportunitiesReadSchema,askRecordsReadSchema,askTasksReadSchema,askPassagesReadSchema]);
 const askRecordsResponseSchema=z.strictObject({operation:z.literal('records'),selection:z.enum(['none','single','ambiguous','unresolved']),records:z.array(z.strictObject({recordId:z.uuid(),kind:z.enum(['person','firm']),name:z.string(),firmId:z.uuid().nullable()})).max(50),nextAfterId:z.uuid().nullable(),scanComplete:z.boolean(),coverage:askCoverageSchema});
 const askTasksResponseSchema=z.strictObject({operation:z.literal('tasks'),scope:askScopeSchema,dateBasis:z.literal('task_due_at'),count:z.string().regex(/^(0|[1-9]\d*)$/u),records:z.array(firmTaskDtoSchema).max(50),truncated:z.boolean(),coverage:askCoverageSchema});
-export const askResponseSchema=z.discriminatedUnion('operation',[askOpportunitiesResponseSchema,askRecordsResponseSchema,askTasksResponseSchema]);
+const askPassagesResponseSchema=z.strictObject({operation:z.literal('passages'),scope:askPassagesReadSchema.shape.scope,passages:z.array(z.strictObject({text:z.string().min(1).max(2000),sources:z.array(canonicalSourceReferenceSchema).min(1).max(50)})).max(50),nextAfterSourceId:z.uuid().nullable(),truncated:z.boolean(),coverage:z.strictObject({scope:z.literal('selected_person_copies'),acquisition:z.literal('unverified'),semantic:z.literal('not_requested'),scanComplete:z.boolean(),unavailableSources:z.number().int().min(0).max(50)})});
+export const askResponseSchema=z.discriminatedUnion('operation',[askOpportunitiesResponseSchema,askRecordsResponseSchema,askTasksResponseSchema,askPassagesResponseSchema]);

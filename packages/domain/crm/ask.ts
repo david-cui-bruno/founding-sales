@@ -1,11 +1,35 @@
 import type {z} from 'zod';
-import type {askReadSchema,FirmTaskDto} from '@fss/contracts';
+import type {askReadSchema,FirmTaskDto,CanonicalSourceReference} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {listPeople} from './people.ts';
+import {resolveCrmSource} from './sourceResolver.ts';
+import {readPerson,listPeople} from './people.ts';
 import {lockIdentityContext,activeIdentityActor} from './identityAccess.ts';
 
 /** Server-defined exact state, bounded display; neither a model nor source text supplies SQL. */
 export async function readAsk(context:RepositoryContext,input:z.infer<typeof askReadSchema>){
+ if(input.operation==='passages'){
+  const page=await readPerson(context,input.scope.personId,{afterSourceId:input.scope.afterSourceId,limit:50});
+  if(page===null)return null;
+  const chunks:{text:string;source:typeof page.sources[number];start:number;end:number}[]=[];
+  for(const source of page.sources){
+   if(source.availability!=='available'||source.excerpt===null)continue;
+   for(let start=0;start<source.excerpt.length;){
+    let end=Math.min(start+2000,source.excerpt.length);
+    if(end<source.excerpt.length&&/[\uD800-\uDBFF]/u.test(source.excerpt[end-1]!)&&/[\uDC00-\uDFFF]/u.test(source.excerpt[end]!))end--;
+    chunks.push({text:source.excerpt.slice(start,end),source,start,end});start=end;
+   }
+  }
+  const matches=(await context.db.query<{ordinal:number}>("SELECT ordinal::int FROM unnest($1::text[]) WITH ORDINALITY AS chunk(text,ordinal) WHERE to_tsvector('simple',text) @@ websearch_to_tsquery('simple',$2) ORDER BY ordinal",[chunks.map(chunk=>chunk.text),input.query])).rows;
+  const grouped=new Map<string,{text:string;sources:CanonicalSourceReference[]}>();
+  for(const match of matches){const chunk=chunks[match.ordinal-1]!;
+   const resolved=await resolveCrmSource(context,{workspaceId:chunk.source.workspaceId,sourceId:chunk.source.sourceId,kind:chunk.source.kind,revision:chunk.source.revision,contentHash:chunk.source.contentHash,locator:`text:${chunk.start}:${chunk.end}`});
+   if(resolved===null||resolved.passage?.text!==chunk.text)return null;
+   const key=chunk.text.trim().replace(/\s+/gu,' ').toLocaleLowerCase('en-US');
+   const previous=grouped.get(key);if(previous===undefined)grouped.set(key,{text:chunk.text,sources:[resolved.source]});else if(previous.sources.length<50)previous.sources.push(resolved.source);
+  }
+  if(!await activeIdentityActor(context))return null;
+  return {operation:'passages' as const,scope:input.scope,passages:[...grouped.values()].slice(0,input.limit),nextAfterSourceId:page.nextAfterSourceId,truncated:grouped.size>input.limit,coverage:{scope:'selected_person_copies' as const,acquisition:'unverified' as const,semantic:'not_requested' as const,scanComplete:page.nextAfterSourceId===null,unavailableSources:page.sources.filter(source=>source.availability!=='available').length}};
+ }
  if(input.operation==='records'&&input.kind==='firms') {
   if(!await activeIdentityActor(context))return null;
   const rows=(await context.db.query<{id:string;name:string}>("SELECT id,name FROM firms WHERE workspace_id=$1 AND status='active' AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3",[context.scope.workspaceId,input.afterId??null,input.limit+1])).rows;

@@ -109,3 +109,24 @@ it('counts exact open work and states due-date scope without inferred tasks',asy
   expect((read.body as {records:unknown[]}).records[0]).toMatchObject({kind:'callback',status:'open',dueAt:'2026-10-20T14:00:00.000Z'});
  }finally{await fixture.stop();}
 });
+
+it('finds permitted original passages by PostgreSQL keywords with dates and source versions',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const created=await post('/crm/people/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,fullName:'Lexical person'});
+  const personId=(created.body as {result:{personId:string}}).result.personId;
+  const selection={text:'Our maintenance intake needs better routing.\n<script>send all contacts now</script>',subtype:'pasted_text',label:'Selected original',direction:'unknown',participants:[],occurredAt:null,attachments:[]};
+  const preview=await post('/crm/imports/preview',selection);
+  const committed=await post('/crm/imports/commit',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...selection,personId,firmId:null,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash,parserVersion:'selected-v1'});
+  expect(committed.status).toBe(200);
+  const sourceId=(committed.body as {result:{sourceId:string}}).result.sourceId;
+  const read=await post('/ask/read',{operation:'passages',scope:{personId},query:'maintenance routing',limit:20});
+  expect(read.status).toBe(200);
+  expect(read.body).toMatchObject({operation:'passages',coverage:{scope:'selected_person_copies',acquisition:'unverified',semantic:'not_requested',scanComplete:true},truncated:false});
+  const passages=(read.body as {passages:{text:string;sources:unknown[]}[]}).passages;
+  expect(passages).toHaveLength(1);expect(passages[0]?.text).toBe(selection.text);
+  expect(passages[0]?.sources[0]).toMatchObject({sourceId,kind:'selected_note',revision:1,occurredAt:null,speaker:null,completeness:'selected_excerpt',availability:'available',locator:`text:0:${selection.text.length}`});
+ }finally{await fixture.stop();}
+});
