@@ -141,3 +141,12 @@ it('pages operational activity using the exact returned cursor',async()=>{
  fireEvent.click(await screen.findByRole('button',{name:'Older activity page'}));
  await waitFor(()=>expect(read).toHaveBeenLastCalledWith({operation:'activity',scope:{firmId:one},before}));
 });
+
+it('pages source discovery through its exact kind and identity cursor',async()=>{
+ const after={kind:'selected_note' as const,sourceId:two};
+ const read=vi.fn<AskPorts['read']>(async input=>input.operation==='records'?{operation:'records',selection:'single',records:[{recordId:one,kind:'firm',name:'Orion',firmId:one}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:{operation:'sources',scope:{firmId:one},sources:[],nextAfter:input.operation==='sources'&&input.after!==undefined?null:after,coverage:{scope:'record_copied_sources',acquisition:'unverified',semantic:'not_requested',scanComplete:input.operation==='sources'&&input.after!==undefined,candidateCeiling:50}});
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));fireEvent.click(screen.getByRole('button',{name:'Copied sources'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Next source page'}));
+ await waitFor(()=>expect(read).toHaveBeenLastCalledWith({operation:'sources',scope:{firmId:one},limit:20,after}));
+});
