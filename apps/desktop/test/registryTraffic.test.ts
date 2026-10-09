@@ -102,6 +102,7 @@ const session = {
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
   'ask.read':{operation:'records',query:'Example',kind:'people',limit:20},
   'ask.answerRequest':{question:'Why?',scope:{sources:[{workspaceId:UUID,sourceId:UUID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null}]}},
+  'ask.actionCreate':{requestId:UUID,expectedVersion:1,finding:{kind:'answer_claim',index:0},action:{kind:'preference',text:'Prefer weekday planning calls.'}},
   'ask.historyChange':{requestId:UUID,expectedRevision:1,action:{kind:'pin',pinned:true}},
   'ask.historyList':{limit:20},
   'ask.answerRead':{requestId:UUID},
@@ -408,7 +409,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       }),
     });
   return {
-    ask:Object.fromEntries(['read','historyList','historyChange','answerRequest','answerRead','answerSourceRead'].map(method=>[method,async(input:unknown)=>await operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps)[`ask.${method}` as OperationName](input as never)])),
+    ask:Object.fromEntries(['read','historyList','historyChange','actionCreate','answerRequest','answerRead','answerSourceRead'].map(method=>[method,async(input:unknown)=>await operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps)[`ask.${method}` as OperationName](input as never)])),
     today: { ...today, ...(() => {
       const handlers = operationHandlers({ api, recordings: { identity: { current: () => 0 } } } as unknown as OperationHostDeps);
       return { actionsV2: async () => await handlers['today.actionsV2'](undefined as never), openActionV2: async (input: unknown) => await handlers['today.openActionV2'](input as never), actions: async () => await handlers['today.actions'](undefined as never), openAction: async (input: unknown) => await handlers['today.openAction'](input as never) };

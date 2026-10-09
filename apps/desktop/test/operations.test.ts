@@ -613,3 +613,9 @@ it('changes Ask history through a metadata-only current-revision command',async(
  const deps=hosts();deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/ask/history/change');expect(payload).toEqual({requestId:ITEM_ID,expectedRevision:2,action:{kind:'pin',pinned:true}});return {ok:true,value:parse({requestId:ITEM_ID,historyRevision:3,requestVersion:1,state:'complete'})};};
  expect(await answerOperation(operationHandlers(deps),'command','ask.historyChange',{requestId:ITEM_ID,expectedRevision:2,action:{kind:'pin',pinned:true}})).toMatchObject({historyRevision:3});
 });
+
+it('saves a manual preference proposal through the explicit current-finding command with a body-free receipt',async()=>{
+ const deps=hosts();const payload={requestId:ITEM_ID,expectedVersion:4,finding:{kind:'answer_claim',index:0},action:{kind:'preference',text:'Prefer weekday planning calls.'}};
+ deps.api.command=async(path,input,parse)=>{expect(path).toBe('/ask/actions/create');expect(input).toEqual(payload);return {ok:true,value:parse({actionId:FIRM_ID,version:1,kind:'preference'})};};
+ expect(await answerOperation(operationHandlers(deps),'command','ask.actionCreate',payload)).toEqual({actionId:FIRM_ID,version:1,kind:'preference'});
+});

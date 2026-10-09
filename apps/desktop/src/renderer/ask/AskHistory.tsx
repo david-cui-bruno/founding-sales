@@ -1,3 +1,4 @@
+import type {AskFollowOnPorts} from "./AskFollowOn.tsx";
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {askHistoryPageSchema,askHistoryChangedSchema,type askHistoryChangePayloadSchema,type AskHistoryList} from '@fss/contracts';
 import type {z} from 'zod';
@@ -17,7 +18,7 @@ function HistoryDelete({enabled,remove}:{enabled:boolean;remove:()=>void}){
  return <div><label><input type='checkbox' checked={confirmed} onChange={event=>setConfirmed(event.target.checked)}/>Confirm deleting this investigation</label><button disabled={!enabled||!confirmed} onClick={remove}>Delete investigation</button><p>Deleting history preserves separately saved tasks, notes and preference proposals.</p></div>;
 }
 const status={pending:'Pending',complete:'Complete',unavailable:'Unavailable',unknown_acceptance:'Processing acceptance unknown',stale:'Stale',deleted:'Deleted'};
-export function AskHistory({ports,enabled}:{ports:Partial<AskHistoryPorts>&Partial<AskAnswerPorts>;enabled:boolean}){
+export function AskHistory({ports,enabled}:{ports:Partial<AskHistoryPorts>&Partial<AskAnswerPorts>&Partial<AskFollowOnPorts>;enabled:boolean}){
  const [page,setPage]=useState<z.infer<typeof askHistoryPageSchema>|null>(null);
  const [opened,setOpened]=useState<{requestId:string;epoch:number}|null>(null);
  const [notice,setNotice]=useState<string|null>(null);

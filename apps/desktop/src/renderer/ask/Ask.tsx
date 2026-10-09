@@ -1,3 +1,4 @@
+import type {AskFollowOnPorts} from "./AskFollowOn.tsx";
 import { useEffect, useRef, useState } from "react";
 import { AskHistory, type AskHistoryPorts } from "./AskHistory.tsx";
 import { AskAnswer, type AskAnswerPorts } from "./AskAnswer.tsx";
@@ -5,7 +6,7 @@ import type { z } from "zod";
 import type { askReadSchema, askResponseSchema } from "@fss/contracts";
 export type AskRead = z.infer<typeof askReadSchema>;
 export type AskResponse = z.infer<typeof askResponseSchema>;
-export interface AskPorts extends Partial<AskAnswerPorts>, Partial<AskHistoryPorts> {
+export interface AskPorts extends Partial<AskAnswerPorts>, Partial<AskHistoryPorts>, Partial<AskFollowOnPorts> {
   read(input: AskRead): Promise<AskResponse>;
 }
 const sourceKindLabels = {
