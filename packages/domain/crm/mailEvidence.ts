@@ -19,6 +19,8 @@ export interface CrmMailEvidencePort {
  readContext(context:RepositoryContext,source:SourceLookup):Promise<CrmClaimContext|null>;
  readState(context:RepositoryContext,input:{sourceId:string}):Promise<{revision:number;availability:string}|null>;
  loadOriginalInput(context:RepositoryContext,authority:MailProcessingAuthority):Promise<string|null>;
+ prepareProcessing(context:RepositoryContext,source:SourceLookup,purposeOwner:string):Promise<MailProcessingAuthority|null>;
+ revalidatePrepared(context:RepositoryContext,authority:MailProcessingAuthority):Promise<boolean>;
  authorizeProcessing(context:RepositoryContext,source:SourceLookup,purposeOwner:string):Promise<MailProcessingAuthority|null>;
  revalidateProcessing(context:RepositoryContext,authority:MailProcessingAuthority):Promise<boolean>;
 }
@@ -28,6 +30,8 @@ export const unavailableMailEvidence:CrmMailEvidencePort={
  readContext:async()=>null,
  readState:async()=>null,
  loadOriginalInput:async()=>null,
+ prepareProcessing:async()=>null,
+ revalidatePrepared:async()=>false,
  authorizeProcessing:async()=>null,
  revalidateProcessing:async()=>false,
 };

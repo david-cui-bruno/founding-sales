@@ -1,6 +1,6 @@
-import {unavailableMailEvidence,type CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
+import {unavailableMailEvidence,type CrmMailEvidencePort,type MailProcessingAuthority} from '@fss/domain/crm/mailEvidence.ts';
 import {createHash} from 'node:crypto';
-import {readProcessingContext,parsedProcessingContext,sameProcessingContext,processingContextHash,NATIVE_PROCESSING_AUTHORIZATION_HASH} from '@fss/domain/crm/processingContext.ts';
+import {readProcessingContext,parsedProcessingContext,sameProcessingContext,processingContextHash,NATIVE_PROCESSING_AUTHORIZATION_HASH,UNAVAILABLE_MAIL_AUTHORIZATION_HASH} from '@fss/domain/crm/processingContext.ts';
 import { z } from 'zod';
 import type { JobHandler, JobHandlerInput } from '@fss/domain/jobs/handlerRegistry.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
@@ -62,16 +62,23 @@ async function recoverDispatched(input:JobHandlerInput):Promise<boolean>{
 /** The external wait is outside every database transaction. Dispatch is a durable at-most-once marker. */
 export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
  const mailEvidence=options.mailEvidence??unavailableMailEvidence;
+ async function verifyMail(input:JobHandlerInput):Promise<MailProcessingAuthority|null>{
+  try{const located=await locate(input);if(located===null||located.source.kind!=='mail')return null;
+  const verified=await mailEvidence.authorizeProcessing(located.context,located.source,located.row.requested_by);
+  return verified?.authorizationFingerprint===located.row.authorization_hash?verified:null;}catch{return null;}
+ }
  return {kind:'crm.extract',protection:'outbound_fence',maxAttempts:3,leaseSeconds:120,async handle(input){
   if(await withTransaction(input.session,()=>recoverDispatched(input)))return;
+  const reserveAuthority=await verifyMail(input);
   const reserved=await withTransaction(input.session,async()=>{
    const located=await locate(input);if(located===null)return null;
    const {row,context,source}=located;
-   const mailAuthority=source.kind==='mail'?await mailEvidence.authorizeProcessing(context,source,row.requested_by):null;
+   const mailAuthority=source.kind==='mail'&&reserveAuthority!==null&&await mailEvidence.revalidatePrepared(context,reserveAuthority)?reserveAuthority:null;
    const authorizationHash=source.kind==='mail'?mailAuthority?.authorizationFingerprint:NATIVE_PROCESSING_AUTHORIZATION_HASH;
    const resolved=await resolveCrmSource(context,source,mailEvidence);if(resolved===null)return null;
    await context.db.query('SELECT id FROM crm_extraction_generations WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,row.id]);
    if(!await fenced(input))return null;
+   if(source.kind==='mail'&&mailAuthority===null){await setState(context,row.id,row.authorization_hash===UNAVAILABLE_MAIL_AUTHORIZATION_HASH?'unavailable':'stale',row.authorization_hash===UNAVAILABLE_MAIL_AUTHORIZATION_HASH?'mail_processing_authority_unavailable':'source_or_authority_changed');return null;}
    const currentContext=await readProcessingContext(context,source,mailEvidence);if(currentContext===null)return null;if(row.authorization_hash!==authorizationHash||processingContextHash(currentContext)!==row.context_hash){await setState(context,row.id,'stale','source_context_changed');return null;}
    const capturedContext=parsedProcessingContext(row.context_snapshot);if(capturedContext!==null&&!sameProcessingContext(capturedContext,currentContext)){await setState(context,row.id,'stale','source_context_changed');return null;}
    if(capturedContext===null){await context.db.query('UPDATE crm_extraction_generations SET context_snapshot=$3::jsonb WHERE workspace_id=$1 AND id=$2 AND context_snapshot IS NULL',[context.scope.workspaceId,row.id,JSON.stringify(currentContext)]);row.context_snapshot=currentContext;}
@@ -91,9 +98,10 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    await setState(context,row.id,'pending',null);return {...located,reservationId:attempt.id};
   });
   if(reserved===null)return;
+  const dispatchAuthority=await verifyMail(input);
   const dispatch=await withTransaction(input.session,async()=>{
    const {context,source,row,reservationId}=reserved;
-   const mailAuthority=source.kind==='mail'?await mailEvidence.authorizeProcessing(context,source,row.requested_by):null;
+   const mailAuthority=source.kind==='mail'&&dispatchAuthority!==null&&await mailEvidence.revalidatePrepared(context,dispatchAuthority)?dispatchAuthority:null;
    const authorizationHash=source.kind==='mail'?mailAuthority?.authorizationFingerprint:NATIVE_PROCESSING_AUTHORIZATION_HASH;
    const resolved=await resolveCrmSource(context,source,mailEvidence);
    await context.db.query('SELECT id FROM crm_extraction_generations WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,row.id]);
@@ -117,9 +125,10 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
     timer=setTimeout(()=>{controller.abort();resolve({acceptance:'unknown',usage:null,claims:[]});},Math.max(1,Math.min(60000,options.providerTimeoutMs??60000)));
   });
   try{answer=await Promise.race([options.adapter.run({source:reserved.source,text:dispatch.text,maxOutputTokens:4096,signal:controller.signal}),timeout]);}catch{answer={acceptance:'unknown',usage:null,claims:[]};}finally{if(timer!==undefined)clearTimeout(timer);} 
+  const publicationAuthority=await verifyMail(input);
   await withTransaction(input.session,async()=>{
    const {context,source,row,reservationId}=reserved;
-   const mailAuthority=source.kind==='mail'?await mailEvidence.authorizeProcessing(context,source,row.requested_by):null;
+   const mailAuthority=source.kind==='mail'&&publicationAuthority!==null&&await mailEvidence.revalidatePrepared(context,publicationAuthority)?publicationAuthority:null;
    const authorizationHash=source.kind==='mail'?mailAuthority?.authorizationFingerprint:NATIVE_PROCESSING_AUTHORIZATION_HASH;
    const resolved=await resolveCrmSource(context,source,mailEvidence);
    await context.db.query('SELECT id FROM crm_extraction_generations WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,row.id]);

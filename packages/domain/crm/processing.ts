@@ -16,7 +16,7 @@ function dto(row: Generation) {
 }
 export async function readCrmProcessing(context: RepositoryContext, source: SourceLookup,mailEvidence:CrmMailEvidencePort=unavailableMailEvidence) {
   if (await resolveCrmSource(context, { ...source, locator: null },mailEvidence) === null) return null;
-  const mailAuthority=source.kind==='mail'&&context.scope.actor.kind==='user'?await mailEvidence.authorizeProcessing(context,source,context.scope.actor.userId):null;
+  const mailAuthority=source.kind==='mail'&&context.scope.actor.kind==='user'?await mailEvidence.prepareProcessing(context,source,context.scope.actor.userId):null;
   const authorizationHash=source.kind==='mail'?(mailAuthority?.authorizationFingerprint??UNAVAILABLE_MAIL_AUTHORIZATION_HASH):NATIVE_PROCESSING_AUTHORIZATION_HASH;
   const purpose = await readCrmExtractionPurpose(context);
   const liveContext=await readProcessingContext(context,source,mailEvidence);if(liveContext===null)return null;
@@ -42,7 +42,7 @@ export async function requestCrmProcessing(context: RepositoryContext, source: S
   const actor = context.scope.actor;
   if (actor.kind !== 'user' || await resolveCrmSource(context, { ...source, locator: null },mailEvidence) === null)
     return { ok: false as const, reason: 'source_unavailable' };
-  const mailAuthority=source.kind==='mail'&&context.scope.actor.kind==='user'?await mailEvidence.authorizeProcessing(context,source,context.scope.actor.userId):null;
+  const mailAuthority=source.kind==='mail'&&context.scope.actor.kind==='user'?await mailEvidence.prepareProcessing(context,source,context.scope.actor.userId):null;
   const authorizationHash=source.kind==='mail'?(mailAuthority?.authorizationFingerprint??UNAVAILABLE_MAIL_AUTHORIZATION_HASH):NATIVE_PROCESSING_AUTHORIZATION_HASH;
   const purpose = await readCrmExtractionPurpose(context);
   const capturedContext=await readProcessingContext(context,source,mailEvidence);if(capturedContext===null)return {ok:false as const,reason:'source_unavailable'};
