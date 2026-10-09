@@ -54,7 +54,7 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
  const row=(await context.db.query<PrivateRequest>('SELECT * FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3',[context.scope.workspaceId,requestId,actor.userId])).rows[0];
  if(row===undefined)return null;
  const metadata={requestId:row.id,version:row.version,createdAt:row.created_at.toISOString(),state:row.state,reason:row.reason};
- const unavailable=()=>askAnswerReadResultSchema.parse({...metadata,state:row.state==='complete'?'stale':row.state,reason:row.state==='deleted'?'deleted':'source_unavailable',question:null,fallback:null,answer:null});
+ const unavailable=()=>askAnswerReadResultSchema.parse({...metadata,state:row.state==='complete'?'stale':row.state,reason:row.state==='deleted'?'deleted':row.state==='stale'?(row.reason??'source_changed'):'source_unavailable',question:null,fallback:null,answer:null});
  if(row.state==='deleted'||row.state==='stale')return unavailable();
  const input=askAnswerRequestPayloadSchema.safeParse({question:row.question,scope:row.scope});
  const originals=crmOriginalAccessClosureSchema.safeParse(row.initial_access_closure);

@@ -4,7 +4,7 @@ import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {repositoryContext,workspaceScope,type RepositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {readCurrentAskInput} from '@fss/domain/crm/askAnswerInput.ts';
-import {verifyAskPurpose} from '@fss/domain/crm/askAnswerAuthority.ts';
+import {verifyAskPurpose,readAskPurpose,askFingerprint} from '@fss/domain/crm/askAnswerAuthority.ts';
 import type {AskAnswerComposition,AskAnswerAdapter,AskPurposeSnapshot} from '@fss/domain/crm/askAnswerPorts.ts';
 import {reserveAttempt,markCalling,settleAttempt} from '@fss/domain/research/reservations.ts';
 import {lockMonthlySpend,workspaceBusinessZone} from '@fss/domain/research/ledger.ts';
@@ -97,7 +97,7 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
    await context.db.query('UPDATE crm_ask_financial_receipts SET dispatch_state=$3 WHERE workspace_id=$1 AND id=$2 AND dispatch_state=\'calling\'',[context.scope.workspaceId,reserved.receiptId,unknown?'unknown_acceptance':'settled']);
    if(!await fenced(input))return;
    if(unknown){await setState(context,requestId,version,epoch,'unknown_acceptance','provider_acceptance_unknown');return;}
-   if(current===null||finalProof===null||current.inputHash!==reserved.inputHash||Date.parse(finalProof.validUntil)<=Date.parse(await now(context))){await setState(context,requestId,version,epoch,'stale','source_changed');return;}
+   if(current===null||finalProof===null||current.inputHash!==reserved.inputHash||Date.parse(finalProof.validUntil)<=Date.parse(await now(context))){const livePurpose=await readAskPurpose(context,'answer');await setState(context,requestId,version,epoch,'stale',livePurpose===null||askFingerprint(livePurpose)!==initial.proofInput.configFingerprint?'purpose_changed':'source_changed');return;}
    const candidate=candidateSchema.safeParse(outcome.answer);
    if(outcome.acceptance!=='accepted'||!candidate.success||!usage.success||usage.data.inputTokens>reserved.inputTokens||usage.data.outputTokens>reserved.maxOutputTokens){await setState(context,requestId,version,epoch,'unavailable','processing_failed');return;}
    const permitted=new Map(current.windows.map(window=>[window.id,window]));

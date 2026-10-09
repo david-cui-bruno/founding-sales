@@ -83,5 +83,17 @@ it('answers through the registered controlled-purpose worker and navigates a cur
    expect((await post('/research/firm',{firmId})).body).toMatchObject({spend:{monthToDateCents:2}});
    expect(calls).toBe(1);
   }finally{release();await running;}
+  const changed=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
+  const changedId=(changed.body as {result:{requestId:string}}).result.requestId;
+  let continueAnswer!:()=>void,answerEntered!:()=>void;
+  const blockedAnswer=new Promise<void>(resolve=>{continueAnswer=resolve;}),paidEntered=new Promise<void>(resolve=>{answerEntered=resolve;});
+  const changedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>({configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const}),answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>{answerEntered();await blockedAnswer;return {acceptance:'accepted' as const,usage:{inputTokens:20,outputTokens:10},answer:{claims:[{text,kind:'extractive',citationWindowIds:[input.windows[0]!.id]}],abstained:false}};}}}});
+  const changedSession=await fixture.database.appRuntimeSession();
+  const changedRunning=runOnce(changedSession,{registry:changedRegistry,owner:'ask-purpose-change',limit:20});
+  await paidEntered;
+  try{await fixture.db.query("UPDATE crm_ask_purposes SET revision=2 WHERE workspace_id=$1 AND purpose='answer'",[fixture.alpha.workspaceId]);}finally{continueAnswer();await changedRunning;}
+  expect((await post('/ask/answers/read',{requestId:changedId})).body).toMatchObject({state:'stale',reason:'purpose_changed',question:null,fallback:null,answer:null});
+  const spendFirm=await seedFirm(fixture,{name:'Truthful purpose-change spend',assignedUserId:fixture.alpha.salesperson.userId});
+  expect((await post('/research/firm',{firmId:spendFirm})).body).toMatchObject({spend:{monthToDateCents:3}});
  }finally{await fixture.stop();}
 });
