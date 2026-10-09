@@ -260,3 +260,18 @@ it("discloses a bounded incomplete promise page without inventing total work", a
     ),
   ).toBeTruthy();
 });
+it("opens an exhausted projection blocker as protected evidence without a completion or retry control", async () => {
+  const original = response.actions[0]!;
+  if(original.kind !== "promise") throw new Error("fixture");
+  const target = {kind: "commitment_blocker" as const, review: {commitmentId:id,revision:1},support:original.target.support};
+  const blocked: TodayActionsV2Response = {...response,actions:[{actionId:`crm-promise-blocker:${id}:1`,kind:"problem",subject:"Prepare the maintenance outline",reason:"commitment_projection_failed",dueAt:response.asOf,state:"open",target}]};
+  const complete = vi.fn();
+  globalThis.callieApi={read:async(operation:string)=>operation==="today.actionsV2"?blocked:operation==="today.openActionV2"?{version:2,target}:null,command:async()=>{throw new Error("No implicit retry");}} as unknown as OperationApi;
+  render(<ActionQueue refreshKey="blocked" enabled={true} promisePorts={{read:async()=>({...promisePage,items:[{...promisePage.items[0]!,state:"pending",task:null}]}),complete}}/>);
+  fireEvent.click(await screen.findByRole("button",{name:"Open blocked promise"}));
+  expect(await screen.findByText("I will send the outline on Monday.")).toBeTruthy();
+  expect(screen.getByText("This promise remains pending after processing failed.")).toBeTruthy();
+  expect(screen.queryByRole("button",{name:"Mark promise complete"})).toBeNull();
+  expect(screen.queryByRole("button",{name:/Retry/u})).toBeNull();
+  expect(complete).not.toHaveBeenCalled();
+});

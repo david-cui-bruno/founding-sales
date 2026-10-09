@@ -20,6 +20,7 @@ import type {
   crmCommitmentReadSchema,
   crmCommitmentCompleteSchema,
   TodayPromiseTarget,
+  TodayCommitmentBlockerTarget,
 } from "@fss/contracts";
 import { promiseActionPorts } from "./promiseActionPorts.ts";
 import { Button } from "../ui/button.tsx";
@@ -51,7 +52,7 @@ export function ActionQueue({
   );
   const [busy, setBusy] = useState<string | null>(null);
   const [promise, setPromise] = useState<{
-    target: TodayPromiseTarget;
+    target: TodayPromiseTarget | TodayCommitmentBlockerTarget;
     item: PromiseItem;
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -122,9 +123,9 @@ export function ActionQueue({
         refresh();
         return;
       }
-      if (target.kind === "internal_task") {
+      if (target.kind === "internal_task" || target.kind === "commitment_blocker") {
         if (
-          action.target.kind !== "internal_task" ||
+          action.target.kind !== target.kind ||
           JSON.stringify(target) !== JSON.stringify(action.target) ||
           promisePorts === undefined
         )
@@ -147,11 +148,10 @@ export function ActionQueue({
         );
         if (
           item === undefined ||
-          item.state !== "applied" ||
           item.todayEligibility !== "current" ||
-          item.task?.taskId !== target.taskId ||
-          item.task.version !== target.expectedVersion ||
-          item.task.status !== "open" ||
+          (target.kind === "internal_task"
+            ? item.state !== "applied" || item.task?.taskId !== target.taskId || item.task.version !== target.expectedVersion || item.task.status !== "open"
+            : item.state !== "pending") ||
           item.source === null ||
           item.source.workspaceId !== read?.workspaceId ||
           item.source.kind !== target.support.sourceKind ||
@@ -180,6 +180,7 @@ export function ActionQueue({
     if (
       !enabled ||
       promise === null ||
+      promise.target.kind !== "internal_task" ||
       promisePorts === undefined ||
       busy !== null
     )
@@ -256,7 +257,7 @@ export function ActionQueue({
                           : "Substantive reply"
                       : action.kind === "call"
                         ? `Upcoming call · ${new Date(action.dueAt).toLocaleString(undefined, { timeZone: read.businessTimeZone })}`
-                        : reasonSentence(action.reason)}
+                        : action.reason === "commitment_projection_failed" ? "Promise processing failed" : reasonSentence(action.reason)}
                 </p>
               </div>
               <Button
@@ -267,7 +268,9 @@ export function ActionQueue({
                   void open(action);
                 }}
               >
-                {action.kind === "promise"
+                {action.target.kind === "commitment_blocker"
+                  ? "Open blocked promise"
+                  : action.kind === "promise"
                   ? "Open promise"
                   : action.kind === "reply"
                     ? "Open reply"
@@ -303,7 +306,9 @@ export function ActionQueue({
             Supporting {promise.item.source?.kind.replaceAll("_", " ")} ·
             revision {promise.item.source?.revision}
           </p>
-          <Button
+          {promise.target.kind === "commitment_blocker" ? (
+            <p className="text-sm">This promise remains pending after processing failed.</p>
+          ) : <Button
             variant="outline"
             size="sm"
             disabled={busy !== null}
@@ -312,7 +317,7 @@ export function ActionQueue({
             }}
           >
             Mark promise complete
-          </Button>
+          </Button>}
           <Button variant="quiet" size="sm" onClick={() => setPromise(null)}>
             Close promise
           </Button>

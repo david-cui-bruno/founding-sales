@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import type {CrmCommitmentRead,CrmCommitmentReview,CrmCommitmentComplete,TodayPromiseTarget} from '@fss/contracts';
+import type {CrmCommitmentRead,CrmCommitmentReview,CrmCommitmentComplete,TodayPromiseTarget,TodayCommitmentBlockerTarget} from '@fss/contracts';
 import {crmEvidenceClaimTargetSchema,crmCommitmentDueSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
@@ -11,7 +11,7 @@ import {createNativeCrmMailEvidence} from './nativeMailEvidence.ts';
 import {readProcessingContext,processingContextHash} from './processingContext.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
 import type {CrmMailEvidencePort} from './mailEvidence.ts';
-interface Review extends Record<string,unknown>{id:string;basis:'human'|'verified_original'|null;owner_user_id:string;family_key:string;activation_key:string|null;initial_context_snapshot:unknown;anchor_id:string|null;target:unknown;context_snapshot:unknown;original_access_closure:unknown;classification:CrmCommitmentReview['classification']|null;actor:CrmCommitmentReview['actor']|null;action_label:string|null;due:unknown;revision:number;projected_revision:number;today_eligibility:'current'|'historical'|'unknown'|null;projection_version:number;state:'pending'|'applied'|'suggestion'|'review_required'|'redacted'}
+interface Review extends Record<string,unknown>{reviewed_at:Date;id:string;basis:'human'|'verified_original'|null;owner_user_id:string;family_key:string;activation_key:string|null;initial_context_snapshot:unknown;anchor_id:string|null;target:unknown;context_snapshot:unknown;original_access_closure:unknown;classification:CrmCommitmentReview['classification']|null;actor:CrmCommitmentReview['actor']|null;action_label:string|null;due:unknown;revision:number;projected_revision:number;today_eligibility:'current'|'historical'|'unknown'|null;projection_version:number;state:'pending'|'applied'|'suggestion'|'review_required'|'redacted'}
 async function supported(context:RepositoryContext,target:ReturnType<typeof crmEvidenceClaimTargetSchema.parse>,mail:CrmMailEvidencePort,durableAnchorId?:string|null){
  const page=await readCrmEvidence(context,{source:target.source,limit:50},mail);
  if(page===null)return null;
@@ -136,6 +136,7 @@ export async function projectCrmCommitment(context:RepositoryContext,input:{comm
 // A known reassignment can omit only this owner's inaccessible Today work.
 // Missing/inconsistent proof and exceptional audit failures still reach the strict
 // authority path and refuse the operation; no private IDs/counts are published.
+const pendingProjectionFailure=`r.state='pending' AND r.classification='internal_promise' AND r.actor IN ('self','counterparty') AND r.due IS NOT NULL AND EXISTS(SELECT 1 FROM jobs j WHERE j.workspace_id=r.workspace_id AND j.kind='crm.commitments_project' AND j.payload->>'commitmentId'=r.id::text AND j.payload->>'revision'=r.revision::text AND j.state='dead' AND j.attempt_count>=j.max_attempts) AND NOT EXISTS(SELECT 1 FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND t.status IN ('done','cancelled'))`;
 const todayKnownFirmAccess=`NOT EXISTS(WITH task_proofs AS (
  SELECT * FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key
  UNION SELECT * FROM (SELECT t.* FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.review_id=r.id AND t.task_key IS DISTINCT FROM r.activation_key AND t.status='open' AND t.activation_receipt IS NOT NULL ORDER BY t.id LIMIT 11) prior
@@ -172,7 +173,7 @@ export async function readCrmCommitments(context:RepositoryContext,input:CrmComm
  WHEN 'person' THEN context_snapshot->>'personId'=$5
  WHEN 'firm' THEN context_snapshot->'firmIds' ? $5
  WHEN 'source' THEN target->'source'->>'sourceId'=$5 AND target->'source'->>'kind'=$6
- ELSE state='applied' AND today_eligibility='current' AND EXISTS(SELECT 1 FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND t.status='open') END
+ ELSE today_eligibility='current' AND ((state='applied' AND EXISTS(SELECT 1 FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND t.status='open')) OR (${pendingProjectionFailure})) END
  ORDER BY id LIMIT $7`,[context.scope.workspaceId,actor.userId,input.afterId??null,scope.kind,scope.kind==='person'?scope.personId:scope.kind==='firm'?scope.firmId:scope.kind==='source'?scope.sourceId:null,scope.kind==='source'?scope.sourceKind:null,input.limit+1,actor.role==='admin'])).rows;
  const candidates=rows.filter(row=>{if(row.state==='redacted')return false;const parsed=crmEvidenceClaimTargetSchema.safeParse(row.target);if(!parsed.success)return false;const contextView=row.context_snapshot as {personId?:string;firmIds?:string[]};return scope.kind==='source'?parsed.data.source.sourceId===scope.sourceId&&parsed.data.source.kind===scope.sourceKind:scope.kind==='person'?contextView.personId===scope.personId:scope.kind==='firm'?contextView.firmIds?.includes(scope.firmId)===true:true;});
  const live=candidates.filter(row=>row.state!=='redacted');const targets=live.map(row=>crmEvidenceClaimTargetSchema.parse(row.target));
@@ -195,7 +196,7 @@ export async function readCrmCommitments(context:RepositoryContext,input:CrmComm
   const earlierBefore=taskRows.filter(task=>task.review_id===row.id&&task.task_key!==row.activation_key&&task.status==='open'&&task.activation_receipt!==null);
   const earlier=(await context.db.query<Task>("SELECT * FROM crm_internal_tasks WHERE workspace_id=$1 AND review_id=$2 AND task_key IS DISTINCT FROM $3 AND status='open' AND activation_receipt IS NOT NULL ORDER BY id LIMIT 11 FOR SHARE",[context.scope.workspaceId,row.id,row.activation_key])).rows;
   if(JSON.stringify(earlier)!==JSON.stringify(earlierBefore))return null;
-  if(scope.kind==='today'&&(support===null||row.state!=='applied'||tasks[0]?.status!=='open'||row.due===null||row.today_eligibility!=='current'))continue;
+  if(scope.kind==='today'&&(support===null||(row.state==='applied'?tasks[0]?.status!=='open':row.state!=='pending')||row.due===null||row.today_eligibility!=='current'))continue;
   items.push({supersededOpenTasks:earlier.slice(0,10).map(task=>({taskId:task.id,status:'open' as const,version:task.version,reviewRequired:true as const,reason:'human_action_changed' as const})),supersededOpenTasksTruncated:earlier.length>10,commitmentId:row.id,revision:row.revision,basis:row.basis,state:support===null?'review_required' as const:row.state,todayEligibility:support===null?null:row.today_eligibility,actor:support===null?null:row.actor,actionLabel:support===null?null:row.action_label,due:support===null?null:crmCommitmentDueSchema.parse(row.due),quote:support?.claim.quote??null,source:support?.source??null,task:tasks[0]===undefined?null:{taskId:tasks[0].id,status:tasks[0].status,version:tasks[0].version,completedAt:tasks[0].completed_at?.toISOString()??null}});
  }
  if(!await activeIdentityActor(context))return null;
@@ -227,7 +228,19 @@ export async function readCrmCommitmentActionProofs(context:RepositoryContext){
  if(page===null||page.items.some(item=>!('commitmentId' in item)))return null;
  const items=page.items.filter(item=>'commitmentId' in item);
  const result=[];
+ const blockers=[];
  for(const item of items){
+  if(item.state==='pending'&&item.due!==null&&item.actionLabel!==null&&item.source!==null&&item.quote!==null){
+   const row=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.scope.workspaceId,item.commitmentId])).rows[0];
+   if(row===undefined||row.revision!==item.revision||row.state!=='pending')return null;
+   const dead=(await context.db.query("SELECT id FROM jobs WHERE workspace_id=$1 AND kind='crm.commitments_project' AND payload->>'commitmentId'=$2 AND payload->>'revision'=$3 AND state='dead' AND attempt_count>=max_attempts ORDER BY id LIMIT 1",[context.scope.workspaceId,row.id,String(row.revision)])).rows.length===1;
+   if(!dead)continue;
+   const target=crmEvidenceClaimTargetSchema.parse(row.target);
+   if(!(row.reviewed_at instanceof Date))return null;
+   const proof:TodayCommitmentBlockerTarget={kind:'commitment_blocker',review:{commitmentId:row.id,revision:row.revision},support:{sourceKind:target.source.kind,sourceId:target.source.sourceId,sourceRevision:target.source.revision,sourceHash:target.source.contentHash!,contextHash:target.contextHash,decisionRevision:target.expectedDecisionRevision}};
+   blockers.push({target:proof,subject:item.actionLabel,observedAt:row.reviewed_at.toISOString()});
+   continue;
+  }
   if(item.task===null||item.task.status!=='open'||item.due===null||item.actionLabel===null)continue;
   const row=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.scope.workspaceId,item.commitmentId])).rows[0];
   if(row===undefined||row.revision!==item.revision||row.state!=='applied')return null;
@@ -235,7 +248,7 @@ export async function readCrmCommitmentActionProofs(context:RepositoryContext){
   const proof:TodayPromiseTarget={kind:'internal_task',taskId:item.task.taskId,expectedVersion:item.task.version,review:{commitmentId:row.id,revision:row.revision,projectionVersion:row.projection_version},support:{sourceKind:target.source.kind,sourceId:target.source.sourceId,sourceRevision:target.source.revision,sourceHash:target.source.contentHash!,contextHash:target.contextHash,decisionRevision:target.expectedDecisionRevision}};
   result.push({target:proof,subject:item.actionLabel,due:item.due});
  }
- return {items:result,coverage:{scope:'current_authorized_work' as const,truncated:page.nextAfterId!==null,nextAfterId:page.nextAfterId}};
+ return {items:result,blockers,coverage:{scope:'current_authorized_work' as const,truncated:page.nextAfterId!==null,nextAfterId:page.nextAfterId}};
 }
 
 /** Cached acknowledgements never stand in for current source or human review authority. */

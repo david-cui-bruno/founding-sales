@@ -9,7 +9,7 @@ function calendarDate(at:string,zone:string){
  const parts=new Intl.DateTimeFormat('en',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(at));
  return ['year','month','day'].map(kind=>parts.find(part=>part.type===kind)!.value).join('-');
 }
-function rank(action:TodayActionV2){return action.kind==='reply'?0:action.kind==='promise'?1:action.kind==='call'?2:3;}
+function rank(action:TodayActionV2){return action.kind==='reply'?0:action.kind==='promise'||action.reason==='commitment_projection_failed'?1:action.kind==='call'?2:3;}
 function dateKey(action:TodayActionV2){return action.kind==='promise'?action.due===null?'':action.due.kind==='date'?action.due.date:action.due.at:action.dueAt;}
 
 /** Additive current action projection; V1 and its notifications retain their wire shape. */
@@ -26,6 +26,9 @@ export async function readTodayActionsV2(context:RepositoryContext,input:{now:st
    if(!obstructs)continue;
   }
   actions.push(action);
+ }
+ for(const blocker of promises.blockers){
+  actions.push({actionId:`crm-promise-blocker:${blocker.target.review.commitmentId}:${blocker.target.review.revision}`,kind:'problem',subject:blocker.subject,reason:'commitment_projection_failed',dueAt:blocker.observedAt,state:'open',target:blocker.target});
  }
  for(const promise of promises.items){
   const due=promise.due;if(due===null)continue;
