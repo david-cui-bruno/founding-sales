@@ -1,9 +1,9 @@
 import {canonicalSourceReferenceSchema} from './people.ts';
 import {z} from 'zod';
-import {selectedImportInputSchema} from './selectedImports.ts';
+import {selectedImportInputSchema,selectedImportResultSchema} from './selectedImports.ts';
 import {commandIdSchema} from './auth.ts';
 import {semanticVersionSchema} from './clientVersion.ts';
-import {crmSourceLookupSchema,crmProcessingResultSchema,crmProcessingHealthSchema} from './crmProcessing.ts';
+import {crmSourceLookupSchema,crmProcessingResultSchema,crmProcessingHealthSchema,crmExtractionGenerationSchema} from './crmProcessing.ts';
 export const selectedAttachmentFileSchema=z.object({fileName:z.string().min(1).max(240),declaredByteLength:z.number().int().min(0).max(100000000),bytesBase64:z.string().max(106668),completeness:z.enum(['complete','partial'])}).strict();
 export const SELECTED_ATTACHMENT_FORMATS=['utf8_text','utf8_markdown','utf8_csv','utf8_srt','utf8_vtt'] as const;
 export const selectedAttachmentSupportedPreviewSchema=z.object({state:z.literal('supported'),fileName:z.string().max(240),byteLength:z.number().int().positive().max(80000),fileHash:z.string().regex(/^[a-f0-9]{64}$/u),sourceContentHash:z.string().regex(/^[a-f0-9]{64}$/u),format:z.enum(SELECTED_ATTACHMENT_FORMATS),origin:z.literal('user_selected_original'),completeness:z.literal('complete'),processing:z.literal('not_requested'),previewHash:z.string().regex(/^[a-f0-9]{64}$/u)}).strict();
@@ -23,3 +23,10 @@ export const selectedAttachmentPageSchema=z.object({
  processing:z.union([crmProcessingResultSchema,z.object({state:z.literal('source_unavailable'),reason:z.enum(['source_deleted','source_unavailable'])}).strict()]),
  processingHealth:crmProcessingHealthSchema.optional(),
 }).strict();
+
+/** A selected-file commit returns versioned identity only, never file bytes. */
+export const selectedAttachmentCommitResultSchema=selectedImportResultSchema;
+
+export const selectedAttachmentAnalyzeResultSchema=crmExtractionGenerationSchema.pick({generationId:true,state:true,reason:true}).extend({sourceId:z.uuid(),sourceRevision:z.number().int().positive()}).strict();
+
+export const selectedAttachmentReselectResultSchema=selectedImportResultSchema;
