@@ -1,5 +1,7 @@
 import {setTimeout as delay} from 'node:timers/promises';
 import {createHash} from 'node:crypto';
+import type {z} from 'zod';
+import type {selectedAttachmentCommitPayloadSchema} from '@fss/contracts';
 import {seedContact} from './support/crmSeed.ts';
 import {seedFirm} from './support/crmSeed.ts';
 import {recordingSuppressionJournal} from '@fss/domain/suppression/journal.ts';
@@ -313,7 +315,7 @@ describe('explicit selected attachment analysis',()=>{
  });
 
  it('refuses simultaneous cross-person file replay without acquiring candidate locks before import keys',async()=>{
-  const selections=[];
+  const selections:{payload:z.infer<typeof selectedAttachmentCommitPayloadSchema>;sourceId:string}[]=[];
   for(const label of ['first','second']){
    const firmId=await seedFirm(fixture,{name:`${label} file replay firm`,assignedUserId:fixture.alpha.salesperson.userId});
    const personId=await seedContact(fixture,{firmId,fullName:`${label} file replay person`});
@@ -322,9 +324,9 @@ describe('explicit selected attachment analysis',()=>{
    const identity=(await post('/crm/people/read',{personId})).body as {sources:{sourceId:string;revision:number;contentHash:string}[]};
    const evidence=identity.sources[0]!;const endpoint=`${label}@replay.example.test`;
    expect((await post('/crm/endpoints/claim',command({personId,firmId:null,shared:false,kind:'email',value:endpoint,status:'current',startDate:'2026-01-01',endDate:null,evidence:{sourceId:evidence.sourceId,sourceRevision:evidence.revision,contentHash:evidence.contentHash}}))).status).toBe(200);
-   const file={fileName:`${label}.txt`,declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'};
+   const file={fileName:`${label}.txt`,declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete' as const};
    const preview=await post('/crm/attachments/preview',file);
-   const payload={file,personId,firmId:null,participants:[{label,endpoint,provenance:'user_supplied'}],occurredAt:null,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash};
+   const payload:z.infer<typeof selectedAttachmentCommitPayloadSchema>={file,personId,firmId:null,participants:[{label,endpoint,provenance:'user_supplied'}],occurredAt:null,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash};
    const committed=await post('/crm/attachments/commit',command(payload));expect(committed.status).toBe(200);
    selections.push({payload,sourceId:(committed.body as {result:{sourceId:string}}).result.sourceId});
   }

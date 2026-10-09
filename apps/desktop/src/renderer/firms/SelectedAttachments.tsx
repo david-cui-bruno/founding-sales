@@ -58,7 +58,7 @@ export function SelectedAttachments({ports,personId,firmId,enabled,privacyKey,so
   {sources.map(source=><Button key={source.sourceId} disabled={busy} onClick={()=>void run(async ticket=>{setFile(null);setPreview(null);setPage(null);await read(source.sourceId,ticket);})}>Inspect file {source.label}</Button>)}
   {page?<section aria-label="Current file evidence">
    <p>{page.file.fileName??'Original file unavailable'} · {page.file.state} · source revision {page.source.revision}</p>
-   <p>{page.source.occurredAt===null?'Original date unknown':`User-supplied original date: ${page.source.occurredAt}`}</p>
+   <p>{page.source.occurredAt===null?'Original date unknown':`Original evidence date: ${page.source.occurredAt}`}</p>
    <p>{page.processing.state==='not_requested'?'Analysis not requested':`Processing: ${page.processing.state}`}</p>
    {analysis?<p>{analysis}</p>:null}
    {page.processingHealth?<p>Processing coverage: {page.processingHealth.generations.length} generations{page.processingHealth.truncated?' · more history exists':''}{page.processingHealth.unknownAcceptance?' · provider acceptance unknown; cost accounting retained':''}</p>:null}
