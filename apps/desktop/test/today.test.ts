@@ -1171,7 +1171,9 @@ describe('the CRM bridge G3b was waiting for', () => {
     // the GPT-6 review of PR 332) — and `operations.test.ts` holds the list.
     // The fifteenth is `crm.resolveOutgoing`, a held outgoing message's firm (S1 review P1-C).
     // The sixteenth is `crm.setValue`, a person's monthly value for an opportunity (Kanban, slice K).
-    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(17);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toEqual([
+'crm.personList','crm.personRead','crm.personCreate','crm.personSourceAdd','crm.personSourceDelete','crm.personSourceRecapture','crm.personSourceRestore',
+'crm.state','crm.openFirm','crm.firmTimeline','crm.openPipeline','crm.openAddFirm','crm.openImport','crm.addFirm','crm.commitImport','crm.saveContact','crm.changeStage','crm.setValue','crm.resolveMerge','crm.openOpportunity','crm.takeOver','crm.resolveOutgoing','crm.enroll','crm.checkRoute']);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {

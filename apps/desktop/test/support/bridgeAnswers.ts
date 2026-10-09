@@ -246,6 +246,13 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
+ '/crm/people/list':{people:[],nextAfterId:null},
+ '/crm/people/read':{person:{personId:FIXTURE_IDS.firm,fullName:'Alex Example',firm:null,revision:1},sources:[],nextAfterSourceId:null},
+ '/crm/people/create':{status:'accepted',replayed:false,result:{personId:FIXTURE_IDS.firm}},
+ '/crm/people/source/add':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm}},
+ '/crm/people/source/delete':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm,revision:2}},
+ '/crm/people/source/restore':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm,revision:3}},
+ '/crm/people/source/recapture':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm,revision:4}},
   '/social':{accounts:[{id:'11111111-1111-4111-8111-111111111111',platform:'linkedin',externalId:'https://www.linkedin.com/in/example/',displayName:'Example',accountKind:'profile',state:'unsupported',adapterVersion:null,verifiedAt:null}],posts:[]},
   '/calls/log': staleCallBody,
   '/calls/follow-up-preview': followUpPreviewBody,

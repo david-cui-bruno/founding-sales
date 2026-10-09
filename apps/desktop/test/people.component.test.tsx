@@ -362,3 +362,68 @@ it('does not retain an earlier page excerpt when continuing after that source wa
   await userEvent.click(screen.getByRole('button', { name: 'More notes' }));
   expect(screen.queryByText('Deleted while moving between pages.')).toBeNull();
 });
+it('clears a recapture draft when opening another person', async () => {
+  const other = '22222222-2222-4222-8222-222222222222';
+  const ports: PeoplePorts = {
+    list: async () => ({
+      people: [
+        { personId: PERSON, fullName: 'Alex Example', firm: null, revision: 1 },
+        { personId: other, fullName: 'Beth Example', firm: null, revision: 1 },
+      ],
+      nextAfterId: null,
+    }),
+    create: async () => ({ personId: other }),
+    read: async (id) => ({
+      person: {
+        personId: id,
+        fullName: id === PERSON ? 'Alex Example' : 'Beth Example',
+        firm: null,
+        revision: 1,
+      },
+      nextAfterSourceId: null,
+      sources:
+        id === PERSON
+          ? [
+              {
+                workspaceId: PERSON,
+                sourceId: PERSON,
+                kind: 'selected_note',
+                revision: 3,
+                contentHash: null,
+                locator: null,
+                speaker: null,
+                occurredAt: null,
+                observedAt: '2026-10-08T15:00:00.000Z',
+                completeness: 'unavailable',
+                availability: 'awaiting_recapture',
+                excerpt: null,
+              },
+            ]
+          : [],
+    }),
+    add: async () => ({ sourceId: PERSON }),
+    remove: async () => {},
+    restore: async () => {},
+    recapture: async () => {},
+  };
+  render(<People enabled ports={ports} />);
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Alex Example' }),
+  );
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Recapture this note' }),
+  );
+  await userEvent.type(
+    screen.getByLabelText('Selected note'),
+    'A private draft for Alex.',
+  );
+  await userEvent.click(screen.getByRole('button', { name: 'Beth Example' }));
+  await screen.findByRole('heading', { name: 'Beth Example' });
+  expect(
+    (screen.getByLabelText('Selected note') as HTMLTextAreaElement).value,
+  ).toBe('');
+  expect(screen.getByLabelText('Note reference')).toBeTruthy();
+  expect(
+    screen.getByRole('button', { name: 'Save selected note' }),
+  ).toBeTruthy();
+});

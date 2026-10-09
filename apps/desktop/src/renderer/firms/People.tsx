@@ -101,6 +101,11 @@ export function People({
         disabled={!enabled || busy || !name.trim()}
         onClick={() =>
           void run(async () => {
+            setRecapturing(null);
+            setKey('');
+            setExcerpt('');
+            setDate('');
+            setPage(null);
             const created = await ports.create(name.trim());
             setPage(await ports.read(created.personId));
             setPeople((await ports.list()).people);
@@ -115,8 +120,16 @@ export function People({
           <li key={person.personId}>
             <Button
               variant="quiet"
+              disabled={busy}
               onClick={() =>
-                void run(async () => setPage(await ports.read(person.personId)))
+                void run(async () => {
+                  setRecapturing(null);
+                  setKey('');
+                  setExcerpt('');
+                  setDate('');
+                  setPage(null);
+                  setPage(await ports.read(person.personId));
+                })
               }
             >
               {person.fullName}
