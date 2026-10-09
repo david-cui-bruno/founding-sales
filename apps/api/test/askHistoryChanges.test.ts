@@ -25,5 +25,13 @@ it('explicitly renames a current private investigation with revision-bound metad
   expect(JSON.stringify(changed.body)).not.toContain('Maintenance investigation');
   const history=await post('/ask/history/list',{});
   expect(history.body).toMatchObject({items:[{requestId,title:'Maintenance investigation',historyRevision:2}]});
+  const pinCommand={commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedRevision:2,action:{kind:'pin',pinned:true}};
+  const pinned=await post('/ask/history/change',pinCommand);
+  expect(pinned.status).toBe(200);
+  expect(pinned.body).toMatchObject({result:{requestId,historyRevision:3,requestVersion:1,state:'unavailable'}});
+  expect((await post('/ask/history/change',pinCommand)).body).toMatchObject({replayed:true,result:{requestId,historyRevision:3,requestVersion:1,state:'unavailable'}});
+  expect((await post('/ask/history/list',{})).body).toMatchObject({items:[{requestId,title:'Maintenance investigation',pinned:true,historyRevision:3}]});
+  expect((await post('/ask/history/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedRevision:2,action:{kind:'rename',title:'Stale overwrite'}})).status).toBe(409);
+
  }finally{await fixture.stop();}
 });
