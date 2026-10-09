@@ -1,3 +1,6 @@
+import {setTimeout as delay} from 'node:timers/promises';
+import {createHash} from 'node:crypto';
+import {seedContact} from './support/crmSeed.ts';
 import {seedFirm} from './support/crmSeed.ts';
 import {recordingSuppressionJournal} from '@fss/domain/suppression/journal.ts';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
@@ -306,6 +309,40 @@ describe('explicit selected attachment analysis',()=>{
    expect(removed.body).toMatchObject({file:{state:'deleted',fileName:null,fileHash:null},source:{availability:'deleted',contentHash:null},processingHealth:{availability:'deleted',generations:[{state:'deleted',claims:[],financial:{dispatchState:'settled',settledCents:1}}]}});
    expect(JSON.stringify(removed.body)).not.toContain('We need repair coordination.');
   }finally{await fixture.stop();}
+ });
+
+ it('refuses simultaneous cross-person file replay without acquiring candidate locks before import keys',async()=>{
+  const selections=[];
+  for(const label of ['first','second']){
+   const firmId=await seedFirm(fixture,{name:`${label} file replay firm`,assignedUserId:fixture.alpha.salesperson.userId});
+   const personId=await seedContact(fixture,{firmId,fullName:`${label} file replay person`});
+   expect((await post('/crm/people/bridge',command({contactIds:[personId]}))).status).toBe(200);
+   expect((await post('/crm/people/source/add',command({personId,sourceKey:randomUUID(),excerpt:`${label} endpoint evidence`,occurredAt:'2026-09-15T14:00:00.000Z'}))).status).toBe(200);
+   const identity=(await post('/crm/people/read',{personId})).body as {sources:{sourceId:string;revision:number;contentHash:string}[]};
+   const evidence=identity.sources[0]!;const endpoint=`${label}@replay.example.test`;
+   expect((await post('/crm/endpoints/claim',command({personId,firmId:null,shared:false,kind:'email',value:endpoint,status:'current',startDate:'2026-01-01',endDate:null,evidence:{sourceId:evidence.sourceId,sourceRevision:evidence.revision,contentHash:evidence.contentHash}}))).status).toBe(200);
+   const file={fileName:`${label}.txt`,declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'};
+   const preview=await post('/crm/attachments/preview',file);
+   const payload={file,personId,firmId:null,participants:[{label,endpoint,provenance:'user_supplied'}],occurredAt:null,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash};
+   const committed=await post('/crm/attachments/commit',command(payload));expect(committed.status).toBe(200);
+   selections.push({payload,sourceId:(committed.body as {result:{sourceId:string}}).result.sourceId});
+  }
+  const holder=await fixture.database.appRuntimeSession(),observer=await fixture.database.appRuntimeSession();
+  const pid=(await holder.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+  await holder.query('BEGIN');
+  for(const selection of selections)await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${fixture.alpha.workspaceId}:${fixture.alpha.salesperson.userId}:import:${createHash('sha256').update(`attachment:${selection.payload.importKey}`).digest('hex')}`]);
+  const sessions=await Promise.all([fixture.database.appRuntimeSession(),fixture.database.appRuntimeSession()]);
+  const pending=Promise.allSettled(selections.map((selection,index)=>dispatch({method:'POST',path:'/crm/attachments/commit',query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body:command({...selection.payload,personId:selections[1-index]!.payload.personId})},{session:sessions[index]!,auth:{...fixture.deps,db:sessions[index]!},supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false})));
+  try{
+   let reached=false;
+   for(let attempt=0;attempt<200;attempt++){
+    const waiting=(await observer.query<{n:number}>('SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))',[pid])).rows[0]!.n;
+    if(waiting>=2){reached=true;break;}await delay(5);
+   }
+   expect(reached).toBe(true);
+  }finally{await holder.query('COMMIT');}
+  for(const result of await pending){expect(result.status,result.status==='rejected'?String(result.reason):'Both commands refuse cleanly').toBe('fulfilled');if(result.status!=='fulfilled')throw result.reason;expect(result.value.status).toBe(409);expect(result.value.body).toMatchObject({reason:'import_identity_conflict'});}
+  for(const selection of selections)expect((await post('/crm/attachments/read',{sourceId:selection.sourceId})).body).toMatchObject({file:{state:'selected'},source:{revision:1,availability:'available'}});
  });
 
 });

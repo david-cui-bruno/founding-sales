@@ -3,7 +3,7 @@ import type {z} from 'zod';
 import type {selectedAttachmentFileSchema} from '@fss/contracts';
 import {SELECTED_ATTACHMENT_FORMATS} from '@fss/contracts';
 import type {selectedAttachmentCommitSchema,selectedAttachmentAnalyzeSchema,selectedAttachmentReselectSchema} from '@fss/contracts';
-import {previewSelectedImport,commitSelectedImport,prepareSelectedImport,changeSelectedImport} from './selectedImports.ts';
+import {commitSelectedImport,prepareSelectedImport,changeSelectedImport} from './selectedImports.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
 import {readCrmProcessing,readCrmProcessingHealth,requestCrmProcessing} from './processing.ts';
 import {activeIdentityActor,lockIdentityContext} from './identityAccess.ts';
@@ -33,7 +33,7 @@ export async function commitSelectedAttachment(context:RepositoryContext,input:z
  if(preview===null||preview.state!=='supported'||preview.previewHash!==input.previewHash)return {ok:false as const,reason:'file_selection_changed'};
  const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Buffer.from(input.file.bytesBase64,'base64'));
  const selection={text,subtype:'selected_file' as const,label:input.file.fileName,direction:'unknown' as const,participants:input.participants,occurredAt:input.occurredAt,attachments:[]};
- const importPreview=await previewSelectedImport(context,selection);if(importPreview===null)return {ok:false as const,reason:'file_selection_unavailable'};
+ const importPreview=await prepareSelectedImport(context,selection);if(importPreview===null)return {ok:false as const,reason:'file_selection_unavailable'};
  const result=await commitSelectedImport(context,{...selection,personId:input.personId,firmId:input.firmId,importKey:`attachment:${input.importKey}`,previewHash:importPreview.previewHash,parserVersion:'selected-v1',commandId:input.commandId,clientVersion:input.clientVersion});
  if(!result.ok)return result;
  await context.db.query(`INSERT INTO crm_selected_file_receipts(workspace_id,source_id,source_revision,metadata_revision,file_hash,source_content_hash,file_name,byte_length,format,parser_version,origin,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'selected-file-utf8-v1','user_selected_original','selected') ON CONFLICT DO NOTHING`,[context.scope.workspaceId,result.value.sourceId,result.value.sourceRevision,result.value.metadataRevision,preview.fileHash,preview.sourceContentHash,preview.fileName,preview.byteLength,preview.format]);
