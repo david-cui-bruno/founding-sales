@@ -20,6 +20,7 @@ export function crmMailBackfillSource(enabled=false):DueWorkSource{return {name:
   const slice=(await session.query<{ordinal:number;next_page_token:string|null}>("SELECT ordinal,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' ORDER BY ordinal LIMIT 1",[row.workspace_id,row.id])).rows[0];
   const allocation=await readBackfillAllocation(context,hint.proof.mailboxId);if(allocation===null)continue;
   const recovery=await readHistoryRecovery(context,row.id);
+  if(recovery?.state==='complete'||recovery?.state==='deleted'||recovery?.state==='blocked')continue;
   const hashes=backfillAttemptHashes(hint,allocation,slice,recovery);
   const payload={importId:row.id,accountBinding:hint.proof.accountBinding,generation:hint.proof.generation,controlsRevision:hint.proof.controlsRevision,policyRevision:hint.proof.policyRevision};
   const key=backfillWorkKey(hashes);

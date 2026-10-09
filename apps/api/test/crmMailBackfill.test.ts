@@ -401,12 +401,16 @@ it('persists bounded recovery after actual cursor expiry and freezes a fresh anc
   await fixture.db.query("INSERT INTO crm_mail_import_allocations(workspace_id,mailbox_id,revision,owner_user_id,account_binding,generation,project_hash,user_hash,user_limit_units,project_limit_units,user_headroom_units,project_headroom_units,profile_units,list_units,history_units,metadata_units,body_units,verification_sha256,verified_until) VALUES($1,$2,1,$3,$4,1,repeat('c',64),repeat('d',64),1000,1000,100,100,1,1,1,1,1,repeat('e',64),clock_timestamp()+interval '1 hour')",[workspaceId,mailbox.id,admin.userId,binding]);
   const gmail=recordedGmailClient({emailAddress:'recovery@example.test',historyId:'100',messages:[]});
   let profiles=0;
+  let gapMessageAt:number|null=null;
+  let gapMetadataReads=0;
   const source=workerDueWorkSources({crmMailBackfill:true}).find(value=>value.name==='crm-mail-backfill')!;
-  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...gmail,getProfile:async()=>({emailAddress:'recovery@example.test',historyId:++profiles===1?'100':'500'}),listHistory:async()=>({ok:false as const,reason:'history_expired' as const})},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'recovery-account',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:{observe:async()=>{}}}});
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...gmail,getProfile:async()=>({emailAddress:'recovery@example.test',historyId:++profiles===1?'100':'500'}),listMessageIds:async(...args)=>gapMessageAt===null?await gmail.listMessageIds(...args):{ok:true as const,messageIds:['during-gap'],nextPageToken:null},getMetadata:async()=>{gapMetadataReads++;return {id:'during-gap',threadId:'gap-thread',internalDateEpochMilliseconds:gapMessageAt!,labelIds:['INBOX'],headers:{From:'new-business@example.test',To:'recovery@example.test',Subject:'Business during gap'},attachments:[],sizeEstimate:10};},listHistory:async(_access,request)=>request.startHistoryId==='100'?{ok:false as const,reason:'history_expired' as const}:{ok:true as const,records:[{id:'501',changes:[{messageId:'during-gap',threadId:'gap-thread',kind:'message_added' as const,labelIds:['INBOX']}]}],nextPageToken:null,historyId:'501'}},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'recovery-account',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver({categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'fixture-recovery-v1'})})}});
   const runtime=await fixture.database.appRuntimeSession();
   const first=(await claimJobs(runtime,{owner:'initial-recovery-import',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(runtime,{registry,job:first})).toBe('completed');
   const original=(await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body as {importId:string;fromAt:string;toAt:string};
+  gapMessageAt=Date.parse(original.toAt)+1;
+  await fixture.db.query('UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id,METADATA_REVIEW_DISCLOSURE.version,METADATA_REVIEW_DISCLOSURE.sha256]);
   // The already enumerated original scope is fixture state; this test measures cursor recovery.
   await fixture.db.query("UPDATE crm_mail_import_slices SET state='complete' WHERE workspace_id=$1 AND import_id=$2",[workspaceId,original.importId]);
   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});
@@ -421,6 +425,18 @@ it('persists bounded recovery after actual cursor expiry and freezes a fresh anc
   expect(recovered).toMatchObject({fromAt:original.fromAt,toAt:original.toAt,historyAnchor:'100',historyComplete:false,gapCoverage:{state:'enumerating',epoch:1,originalCursor:'unavailable',windowFrozen:true,historyComplete:false,completedDays:0}});
   expect(recovered.gapCoverage.fromAt).toBe(original.toAt);
   expect(Date.parse(recovered.gapCoverage.toAt)).toBeGreaterThanOrEqual(Date.parse(recovered.gapCoverage.fromAt));
+  expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});
+  const gapEnumeration=(await claimJobs(runtime,{owner:'recovery-gap-enumeration',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:gapEnumeration})).toBe('completed');
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyComplete:false,gapCoverage:{state:'draining',epoch:1,totalDays:1,completedDays:1,historyComplete:false},metadataCoverage:{retainedUniqueMessages:'1',availableMetadataMessages:'1'}});
+  expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});
+  const freshHistory=(await claimJobs(runtime,{owner:'recovery-fresh-history',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:freshHistory})).toBe('completed');
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({fromAt:original.fromAt,toAt:original.toAt,historyAnchor:'100',historyComplete:false,gapCoverage:{state:'complete',epoch:1,totalDays:1,completedDays:1,historyComplete:true},metadataCoverage:{retainedUniqueMessages:'1',availableMetadataMessages:'1'},copyCoverage:{retainedCopiedBodies:'0',uncapturedMetadata:'1'},quotaAccounting:{reservedUnits:'8',observedUnits:'8',unknownUnits:'0'}});
+  expect(gapMetadataReads).toBe(2);
+  expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
+  expect(gmail.bodyReads).toEqual([]);
+
   expect(gmail.sends).toEqual([]);
  }finally{await fixture.stop();}
 });

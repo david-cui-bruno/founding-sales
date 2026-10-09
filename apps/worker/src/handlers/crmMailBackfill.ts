@@ -1,4 +1,4 @@
-import {readHistoryRecovery,beginExpiredHistoryRecovery,freezeHistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
+import {readHistoryRecovery,beginExpiredHistoryRecovery,freezeHistoryRecovery,advanceHistoryRecovery,type HistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
 import {backfillConfigurationHash} from '@fss/domain/mail/crmBackfillWork.ts';
 import {recordRetainedOriginalMetadata} from '@fss/domain/mail/crmMailOriginals.ts';
 import {z} from 'zod';
@@ -34,12 +34,13 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   let authority=await readBackfillAuthority(context,importId);
   if(authority===null||authority.proof.accountBinding!==parsed.data.accountBinding||authority.proof.generation!==parsed.data.generation||authority.proof.controlsRevision!==parsed.data.controlsRevision||authority.proof.policyRevision!==parsed.data.policyRevision){await block('acquisition_binding_changed');return;}
   if(await readBackfillAllocation(context,authority.proof.mailboxId)===null){await block('quota_configuration_required');return;}
+  let recoveryScope:HistoryRecovery|undefined;
   async function providerRead<T>(method:BackfillReadMethod,bound:BackfillAuthority,read:(access:GmailAccessGrant)=>Promise<T>):Promise<T>{
    if(!await adapters.proofVerifier.verify(bound.proof))throw new BackfillFailure('acquisition_verification_required');
    const proofInput={mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation};
    const access=await adapters.resolveAccess(proofInput);
    if(access===null||access.mailboxId!==proofInput.mailboxId||access.providerAccountId!==proofInput.providerAccountId||access.generation!==proofInput.generation)throw new BackfillFailure('acquisition_binding_changed');
-   const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
+   const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,...recoveryScope===undefined?{}:{expectedRecovery:{id:recoveryScope.id,revision:recoveryScope.revision,epoch:recoveryScope.epoch,configurationHash:recoveryScope.configuration_hash}},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
    if(reservation===null)throw new BackfillFailure('quota_or_authority_unavailable');
    let result:T;
    try{result=await read(access.access);}catch{throw new BackfillFailure('provider_read_unavailable');}
@@ -71,12 +72,24 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   }
   try{
    const recovery=await readHistoryRecovery(context,importId);
+   recoveryScope=recovery;
    if(recovery!==undefined){
     if(recovery.state==='pending_profile'){
      const allocation=await readBackfillAllocation(context,authority.proof.mailboxId);
      if(allocation===null||backfillConfigurationHash(authority,allocation)!==recovery.configuration_hash){await block('recovery_configuration_changed');return;}
      const profile=await providerRead('profile',authority,access=>adapters.gmail.getProfile(access));
      await freezeHistoryRecovery(context,{authority,recovery,historyAnchor:profile.historyId,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    }else if(recovery.state==='enumerating'||recovery.state==='draining'){
+     const bound=authority;
+     const outcome=await advanceHistoryRecovery(context,{authority:bound,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},{
+      list:async request=>await providerRead('list',bound,access=>adapters.gmail.listMessageIds(access,request)),
+      history:async request=>await providerRead('history',bound,access=>adapters.gmail.listHistory(access,request)),
+      metadata:async messageId=>await providerMetadata(bound,messageId),observer:adapters.observer,
+     });
+     if(outcome==='provider_unavailable')throw new BackfillFailure('provider_read_unavailable');
+     if(outcome==='invalid_evidence')throw new BackfillFailure('provider_evidence_invalid');
+     if(outcome==='authority_changed')throw new BackfillFailure('acquisition_binding_changed');
+     if(outcome==='history_expired'){await beginExpiredHistoryRecovery(context,{authority:bound,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);throw new BackfillFailure('history_coverage_expired');}
     }
     return;
    }
