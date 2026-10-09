@@ -22,7 +22,7 @@ export async function enqueueNativeCrmExtraction(context:RepositoryContext,input
  // Its exact body-free successor acquires the ordinary authority closure separately.
  await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'crm.capture_extraction',idempotencyKey:`crm-capture:${createHash('sha256').update(JSON.stringify([input.kind,input.sourceId,row.revision,source.contentHash,row.owner,configured.revision,contextHash])).digest('hex')}`,payload:{source,ownerUserId:row.owner,originalFirmId:row.firm_id,contextHash,purposeRevision:configured.revision}});
 }
-export async function materializeNativeCrmExtraction(context:RepositoryContext,input:{source:SourceLookup;ownerUserId:string;originalFirmId:string;contextHash:string;purposeRevision:number}):Promise<void>{
+export async function materializeNativeCrmExtraction(context:RepositoryContext,input:{source:SourceLookup;ownerUserId:string;originalFirmId:string;contextHash:string;purposeRevision:number},fence:()=>Promise<boolean>=async()=>true):Promise<void>{
  const membership=(await context.db.query<{role:'admin'|'salesperson';status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2',[context.scope.workspaceId,input.ownerUserId])).rows[0];
  if(membership?.status!=='active')return;
  const authorized=repositoryContext(workspaceScope(context.scope.workspaceId,{kind:'user',userId:input.ownerUserId,role:membership.role}),context.db);
@@ -32,5 +32,6 @@ export async function materializeNativeCrmExtraction(context:RepositoryContext,i
  if(!configured?.enabled||configured.revision!==input.purposeRevision)return;
  const current=await readProcessingContext(authorized,input.source);
  if(current===null||processingContextHash(current)!==input.contextHash||current.firmIds.length!==1||current.firmIds[0]!==input.originalFirmId)return;
+ if(!await fence())return;
  await requestCrmProcessing(authorized,input.source);
 }

@@ -1,3 +1,5 @@
+import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
+import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
 import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
 import {crmCaptureExtractionJobHandler} from '../handlers/crmCaptureExtraction.ts';
 import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts';
@@ -224,7 +226,7 @@ export function registerHandlers(
   );
   registry.register(retentionBatchJobHandler());
   registry.register(crmExtractJobHandler(composition.crmExtraction??{}));
-  registry.register(crmCaptureExtractionJobHandler());
+  registry.register(crmCaptureExtractionJobHandler(composition.crmExtraction?.mailEvidence));
   registry.register(socialAssetsHandler(composition.socialAssets??null));
   // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,
   // so like `retention.batch` the deployment has nothing to say about them: one drains
@@ -446,7 +448,8 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'classifier'>>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'classifier'|'crmExtraction'>>): {
+  readonly crmMailProcessing?:CrmMailEvidencePort;
   readonly socialDraft: boolean;
   readonly qualification: boolean;
   readonly discovery: boolean;
@@ -461,6 +464,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    ...composition.crmExtraction?.mailEvidence===undefined?{}:{crmMailProcessing:composition.crmExtraction.mailEvidence},
     socialDraft: composition.classifier?.processEnabled===true,
     qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
     discovery: composition.discovery !== undefined,
@@ -491,6 +495,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly crmMailProcessing?:CrmMailEvidencePort;
     readonly socialDraft?: boolean;
     readonly qualification?: boolean;
     readonly discovery?: boolean;
@@ -509,6 +514,7 @@ export function workerDueWorkSources(
 ): readonly DueWorkSource[] {
   return [
     crmExtractionRecoverySource(),
+    ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
     outreachReplySource(),
     meetingAnalysesSource(options.meetingAnalysis === true),

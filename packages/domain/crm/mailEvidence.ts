@@ -16,22 +16,22 @@ export interface CrmMailEvidencePort {
   extent:{unit:'utf16';length:number};
   passage:{text:string;locator:string;speaker:string|null}|null;
  }|null>;
+ snapshotProcessing(context:RepositoryContext,source:SourceLookup,purposeOwner:string):Promise<{authorizationFingerprint:string;context:CrmClaimContext}|null>;
  readContext(context:RepositoryContext,source:SourceLookup):Promise<CrmClaimContext|null>;
  readState(context:RepositoryContext,input:{sourceId:string}):Promise<{revision:number;availability:string}|null>;
  loadOriginalInput(context:RepositoryContext,authority:MailProcessingAuthority):Promise<string|null>;
  prepareProcessing(context:RepositoryContext,source:SourceLookup,purposeOwner:string):Promise<MailProcessingAuthority|null>;
  revalidatePrepared(context:RepositoryContext,authority:MailProcessingAuthority):Promise<boolean>;
  authorizeProcessing(context:RepositoryContext,source:SourceLookup,purposeOwner:string):Promise<MailProcessingAuthority|null>;
- revalidateProcessing(context:RepositoryContext,authority:MailProcessingAuthority):Promise<boolean>;
 }
 /** Composition cannot make legacy rows available or infer account lineage. #483 must provide the implementation. */
 export const unavailableMailEvidence:CrmMailEvidencePort={
  resolve:async()=>null,
+ snapshotProcessing:async()=>null,
  readContext:async()=>null,
  readState:async()=>null,
  loadOriginalInput:async()=>null,
  prepareProcessing:async()=>null,
  revalidatePrepared:async()=>false,
  authorizeProcessing:async()=>null,
- revalidateProcessing:async()=>false,
 };

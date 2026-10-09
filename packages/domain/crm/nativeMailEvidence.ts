@@ -1,18 +1,31 @@
-import {readMailConversation,resolveMailSource,readMailSourceState,authorizeMailProcessing,revalidateMailProcessing,prepareMailProcessingAuthority,revalidatePreparedMailProcessing,loadPreparedMailSourceInput,type CapturedMailProcessingAuthority,type MailCaptureProofVerifier} from '../mail/crmSources.ts';
+import {snapshotMailProcessingSourceContexts,readMailConversation,resolveMailSource,readMailSourceState,prepareMailProcessingAuthority,revalidatePreparedMailProcessing,loadPreparedMailSourceInput,type CapturedMailProcessingAuthority,type MailCaptureProofVerifier} from '../mail/crmSources.ts';
 import {crmClaimContextSchema} from '@fss/contracts';
 import {unavailableMailEvidence,type CrmMailEvidencePort,type MailProcessingAuthority} from './mailEvidence.ts';
 /** Actual native lineage owns copy authority; absent processing proof remains unavailable. */
 export function createNativeCrmMailEvidence(verifier?:MailCaptureProofVerifier):CrmMailEvidencePort {
  const authorities=new WeakMap<MailProcessingAuthority,CapturedMailProcessingAuthority>();
- return {...unavailableMailEvidence,async prepareProcessing(context,source,purposeOwner){
+ const verified=new WeakSet<MailProcessingAuthority>();
+ return {...unavailableMailEvidence,async snapshotProcessing(context,source,purposeOwner){
+  if(verifier===undefined||source.kind!=='mail'||source.contentHash===null||source.workspaceId!==context.scope.workspaceId)return null;
+  const hint=await snapshotMailProcessingSourceContexts(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash},purposeOwner);
+  if(!hint.ok)return null;
+  const refs=hint.contexts;const people=[...new Set(refs.flatMap(cx=>cx.personId===null?[]:[cx.personId]))];
+  const parsed=crmClaimContextSchema.safeParse({personId:people.length===1?people[0]:null,firmIds:[...new Set(refs.flatMap(cx=>cx.firmId===null?[]:[cx.firmId]))].sort(),relationships:[],review:people.length!==1||refs.some(cx=>cx.review==='review_required')?'required':'current',mailContexts:refs.map(cx=>({contextId:cx.contextId,sourceRevision:cx.sourceRevision,personId:cx.personId,firmId:cx.firmId,opportunityId:cx.opportunityId,operationalMatchId:cx.operationalMatchId,operationalMatchHash:cx.operationalMatchHash,kind:cx.contextKind}))});
+  return parsed.success?{authorizationFingerprint:hint.authority.authorizationFingerprint,context:parsed.data}:null;
+ },async prepareProcessing(context,source,purposeOwner){
   if(verifier===undefined||source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
   const prepared=await prepareMailProcessingAuthority(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash},purposeOwner);
   if(!prepared.ok)return null;
   const authority={source,authorizationFingerprint:prepared.authority.authorizationFingerprint,nativeAuthority:prepared.authority};authorities.set(authority,prepared.authority);return authority;
- },async revalidatePrepared(context,authority){const native=authorities.get(authority);return native!==undefined&&await revalidatePreparedMailProcessing(context,native);},async revalidateProcessing(context,authority){const native=authorities.get(authority);return native!==undefined&&await revalidateMailProcessing(context,native,verifier);},async loadOriginalInput(context,authority){const native=authorities.get(authority);if(native===undefined)return null;const read=await loadPreparedMailSourceInput(context,native.exact,native);return read.state==='available'?JSON.stringify({text:read.text,representation:read.representation,completeness:read.completeness,ranges:read.ranges}):null;},readState:readMailSourceState,async authorizeProcessing(context,source,purposeOwner){
+ },async revalidatePrepared(context,authority){const native=authorities.get(authority);return native!==undefined&&await revalidatePreparedMailProcessing(context,native);},async loadOriginalInput(context,authority){const native=authorities.get(authority);if(native===undefined||!verified.has(authority))return null;const read=await loadPreparedMailSourceInput(context,native.exact,native);return read.state==='available'?JSON.stringify({text:read.text,representation:read.representation,completeness:read.completeness,ranges:read.ranges}):null;},readState:readMailSourceState,async authorizeProcessing(context,source,purposeOwner){
   if(source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
-  const checked=await authorizeMailProcessing(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash},purposeOwner,verifier);
-  if(!checked.ok)return null;const authority={source,authorizationFingerprint:checked.authority.authorizationFingerprint,nativeAuthority:checked.authority};authorities.set(authority,checked.authority);return authority;
+  if(verifier===undefined)return null;
+  const exact={sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash};
+  const before=await prepareMailProcessingAuthority(context,exact,purposeOwner);
+  if(!before.ok||!await verifier.verify(before.authority.proof))return null;
+  const checked=await prepareMailProcessingAuthority(context,exact,purposeOwner);
+  if(!checked.ok||checked.authority.authorizationFingerprint!==before.authority.authorizationFingerprint)return null;
+  const authority={source,authorizationFingerprint:checked.authority.authorizationFingerprint,nativeAuthority:checked.authority};authorities.set(authority,checked.authority);verified.add(authority);return authority;
  },async readContext(context,source){
   if(source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
   const read=await readMailConversation(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash});
