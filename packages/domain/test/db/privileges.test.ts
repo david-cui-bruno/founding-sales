@@ -1,3 +1,4 @@
+import {seedAskAction} from './support/askActionCases.ts';
 import {seedAskFinancialReceipt,seedAskRequest} from './support/askAnswerCases.ts';
 import {randomUUID} from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -48,6 +49,17 @@ describe('append-only privileges', () => {
     await runtime.query('DELETE FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=$2',[workspaceId,receipts[0]]);
     await expect(runtime.query('UPDATE crm_mail_reply_resolutions SET sent_receipt_id=$3 WHERE workspace_id=$1 AND request_message_id=$2',[workspaceId,requestId,receipts[1]])).rejects.toMatchObject({code:'23514'});
     await expect(runtime.query("UPDATE crm_mail_reply_resolutions SET request_provider_at='2026-09-24T14:00:00Z' WHERE workspace_id=$1 AND request_message_id=$2",[workspaceId,requestId])).rejects.toMatchObject({code:'23514'});
+  });
+
+  it('allows explicit manual Ask action state changes while preserving its private human instruction and identity', async () => {
+    const id=await seedAskAction({session:runtime,seeded});
+    expect((await runtime.query<{human_text:string;status:string}>('SELECT human_text,status FROM crm_ask_actions WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,id])).rows).toEqual([{human_text:'Prefer explicit maintenance evidence',status:'proposed'}]);
+    await expect(runtime.query("UPDATE crm_ask_actions SET human_text='Unapproved changed instruction' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_action_immutable'});
+    await runtime.query("UPDATE crm_ask_actions SET status='dismissed',version=version+1 WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id]);
+    expect((await runtime.query<{status:string;version:number}>('SELECT status,version FROM crm_ask_actions WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,id])).rows).toEqual([{status:'dismissed',version:2}]);
+    await expect(runtime.query("UPDATE crm_ask_actions SET status='proposed',version=version+1 WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_action_immutable'});
+    await expect(runtime.query('DELETE FROM crm_ask_actions WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,id])).rejects.toMatchObject({code:'42501'});
+    await expect(runtime.query('TRUNCATE crm_ask_actions')).rejects.toMatchObject({code:'42501'});
   });
 
   it('allows bounded Ask history metadata changes while preserving the request and its owner', async () => {
