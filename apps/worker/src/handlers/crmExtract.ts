@@ -142,7 +142,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    if(p!==null)await centsWithin(context,p,await databaseNow(context),await workspaceBusinessZone(context),0,options.adapter?.providerKey??'unavailable');
    const representableCharge=charged!==null&&Number.isSafeInteger(charged)&&charged>=0&&charged<=2147483647?charged:null;
    await lockMonthlySpend(context);
-   await settleAttempt(context,{reservationId,at:await databaseNow(context),outcome:answer.acceptance==='not_accepted'?{kind:'settled',cents:0}:representableCharge===null?{kind:'estimated'}:{kind:'settled',cents:representableCharge}});
+   await settleAttempt(context,{reservationId,at:await databaseNow(context),outcome:answer.acceptance==='not_accepted'?{kind:'settled',cents:0}:answer.acceptance==='unknown'||representableCharge===null?{kind:'estimated'}:{kind:'settled',cents:representableCharge}});
    const unknown=answer.acceptance==='unknown';
    await context.db.query('UPDATE crm_extraction_financial_receipts SET dispatch_state=$3 WHERE workspace_id=$1 AND generation_id=$2',[context.scope.workspaceId,row.id,unknown?'unknown_acceptance':'settled']);
    if(unknown){await setState(context,row.id,'unknown_acceptance','provider_acceptance_unknown');return;}

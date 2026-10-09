@@ -450,3 +450,39 @@ it('fairly reaches a fresh eligible source after more than one bounded page of r
   expect((await post('/crm/processing/read',{source})).body).toMatchObject({state:'complete',claims:[{quote:'Could we'}]});
  }finally{await fixture.stop();}
 });
+
+it('retains the conservative charge and replay blocker when unknown acceptance reports zero usage',async()=>{
+ const fixture=await createAuthFixture();
+ try {
+  const {workspaceId,mailbox,binding,job}=await approveCaptureFixture(fixture);
+  const passage='Could we discuss maintenance next week?';
+  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
+  const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
+  if(!capture)throw new Error('capture unavailable');
+  const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  const sourceId=captured?.progress['sourceId'];if(typeof sourceId!=='string')throw new Error('native source unavailable');
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken,port=createNativeCrmMailEvidence(verifier);
+  const source={workspaceId,sourceId,kind:'mail' as const,revision:1,contentHash:createHash('sha256').update(passage).digest('hex'),locator:null};
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,crmMailEvidence:port});
+  const command=(fields:object)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...fields});
+  expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:'mail-evaluation',modelVersion:'fixture-mail-v1',accessGrantVersion:'fixture-mail-grant',dataHandlingVersion:'fixture-mail-partial-policy',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
+  await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[workspaceId]);
+  await post('/crm/processing/request',command({source}));
+  let calls=0;
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{mailEvidence:port,adapter:{endpointId:'mail-evaluation',modelVersion:'fixture-mail-v1',accessGrantVersion:'fixture-mail-grant',dataHandlingVersion:'fixture-mail-partial-policy',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{calls++;return {acceptance:'unknown',usage:{inputTokens:0,outputTokens:0},claims:[]};}}}});
+  await runOnce(fixture.db,{registry,owner:'mail-unknown-evaluation',limit:20});
+  expect((await post('/crm/processing/read',{source})).body).toMatchObject({state:'unknown_acceptance',financial:{dispatchState:'unknown_acceptance',settlementState:'estimated',settledCents:1}});
+  await fixture.db.query("UPDATE mailboxes SET status='disconnected',disconnected_at=now(),generation=generation+1 WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
+  expect((await post('/crm/processing/source/read',source)).status).toBe(200);
+  await fixture.db.query("UPDATE mailboxes SET status='connected',disconnected_at=NULL WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
+  await fixture.db.query('UPDATE crm_mail_capture_controls SET generation=2,revision=revision+1 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
+  await fixture.db.query('UPDATE crm_business_policies SET generation=2 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
+  const fresh=await post('/crm/processing/request',command({source}));expect(fresh.status).toBe(200);
+  await runOnce(fixture.db,{registry,owner:'mail-reconnected-evaluation',limit:20});
+  expect(calls).toBe(1);
+  expect((await post('/crm/processing/read',{source})).body).toMatchObject({state:'unknown_acceptance',reason:'prior_acceptance_unknown'});
+  expect((await post('/crm/business/mail/delete',command({sourceId,expectedRevision:1}))).status).toBe(200);
+  expect((await post('/crm/processing/health/read',{sourceId,kind:'mail'})).body).toMatchObject({availability:'deleted',unknownAcceptance:true,generations:expect.arrayContaining([expect.objectContaining({state:'deleted',financial:expect.objectContaining({dispatchState:'unknown_acceptance',settlementState:'estimated',settledCents:1})})])});
+ }finally{await fixture.stop();}
+});
+

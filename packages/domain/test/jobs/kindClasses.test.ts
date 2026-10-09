@@ -51,8 +51,10 @@ describe('job kind classes', () => {
     ]);
     expect(kindsOfClass('bulk')).toEqual([
       'crm.extract',
+      'crm.capture_extraction',
       'sequence.action',
       'sequence.terminal_stop',
+      'crm.mail_capture',
       'retention.batch',
       'route.validate',
       // Lane R: a page fetch and a sweep. Nobody is watching the clock on either, and

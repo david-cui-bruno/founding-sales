@@ -1,6 +1,14 @@
 import {snapshotMailProcessingSourceContexts,readMailConversation,resolveMailSource,readMailSourceState,prepareMailProcessingAuthority,revalidatePreparedMailProcessing,loadPreparedMailSourceInput,type CapturedMailProcessingAuthority,type MailCaptureProofVerifier} from '../mail/crmSources.ts';
 import {crmClaimContextSchema} from '@fss/contracts';
 import {unavailableMailEvidence,type CrmMailEvidencePort,type MailProcessingAuthority} from './mailEvidence.ts';
+interface NativeContextInput {contextId:string;sourceRevision:number;personId:string|null;firmId:string|null;opportunityId:string|null;operationalMatchId:string|null;operationalMatchHash:string|null;review:string;contextKind:string}
+/** One conversion keeps scheduler hints and locked worker context hashes identical. */
+function processingContext(refs:readonly NativeContextInput[]){
+ if(refs.length>100)return null;
+ const people=[...new Set(refs.flatMap(cx=>cx.personId===null?[]:[cx.personId]))];
+ const parsed=crmClaimContextSchema.safeParse({personId:people.length===1?people[0]:null,firmIds:[...new Set(refs.flatMap(cx=>cx.firmId===null?[]:[cx.firmId]))].sort(),relationships:[],review:people.length!==1||refs.some(cx=>cx.review==='review_required')?'required':'current',mailContexts:refs.map(cx=>({contextId:cx.contextId,sourceRevision:cx.sourceRevision,personId:cx.personId,firmId:cx.firmId,opportunityId:cx.opportunityId,operationalMatchId:cx.operationalMatchId,operationalMatchHash:cx.operationalMatchHash,kind:cx.contextKind}))});
+ return parsed.success?parsed.data:null;
+}
 /** Actual native lineage owns copy authority; absent processing proof remains unavailable. */
 export function createNativeCrmMailEvidence(verifier?:MailCaptureProofVerifier):CrmMailEvidencePort {
  const authorities=new WeakMap<MailProcessingAuthority,CapturedMailProcessingAuthority>();
@@ -9,9 +17,8 @@ export function createNativeCrmMailEvidence(verifier?:MailCaptureProofVerifier):
   if(verifier===undefined||source.kind!=='mail'||source.contentHash===null||source.workspaceId!==context.scope.workspaceId)return null;
   const hint=await snapshotMailProcessingSourceContexts(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash},purposeOwner);
   if(!hint.ok)return null;
-  const refs=hint.contexts;const people=[...new Set(refs.flatMap(cx=>cx.personId===null?[]:[cx.personId]))];
-  const parsed=crmClaimContextSchema.safeParse({personId:people.length===1?people[0]:null,firmIds:[...new Set(refs.flatMap(cx=>cx.firmId===null?[]:[cx.firmId]))].sort(),relationships:[],review:people.length!==1||refs.some(cx=>cx.review==='review_required')?'required':'current',mailContexts:refs.map(cx=>({contextId:cx.contextId,sourceRevision:cx.sourceRevision,personId:cx.personId,firmId:cx.firmId,opportunityId:cx.opportunityId,operationalMatchId:cx.operationalMatchId,operationalMatchHash:cx.operationalMatchHash,kind:cx.contextKind}))});
-  return parsed.success?{authorizationFingerprint:hint.authority.authorizationFingerprint,context:parsed.data}:null;
+  const converted=processingContext(hint.contexts);
+  return converted===null?null:{authorizationFingerprint:hint.authority.authorizationFingerprint,context:converted};
  },async prepareProcessing(context,source,purposeOwner){
   if(verifier===undefined||source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
   const prepared=await prepareMailProcessingAuthority(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash},purposeOwner);
@@ -30,11 +37,7 @@ export function createNativeCrmMailEvidence(verifier?:MailCaptureProofVerifier):
   if(source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
   const read=await readMailConversation(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash});
   if(read.state!=='available')return null;
-  const refs=[...read.source.originalContexts.map(cx=>({...cx,kind:'acquired' as const})),...read.source.reviewedContexts.map(cx=>({...cx,kind:'reviewed' as const}))];
-  if(refs.length>100)return null;
-  const people=[...new Set(refs.flatMap(cx=>cx.personId===null?[]:[cx.personId]))];
-  const value={personId:people.length===1?people[0]:null,firmIds:[...new Set(refs.flatMap(cx=>cx.firmId===null?[]:[cx.firmId]))].sort(),relationships:[],review:people.length!==1||refs.some(cx=>cx.review==='review_required')?'required':'current',mailContexts:refs.map(cx=>({contextId:cx.contextId,sourceRevision:cx.sourceRevision,personId:cx.personId,firmId:cx.firmId,opportunityId:cx.opportunityId,operationalMatchId:cx.operationalMatchId,operationalMatchHash:cx.operationalMatchHash,kind:cx.kind}))};
-  const parsed=crmClaimContextSchema.safeParse(value);return parsed.success?parsed.data:null;
+  return processingContext([...read.source.originalContexts.map(cx=>({...cx,contextKind:'acquired'})),...read.source.reviewedContexts.map(cx=>({...cx,contextKind:'reviewed'}))]);
  },async resolve(context,source){
   if(source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
   const exact={sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash};
