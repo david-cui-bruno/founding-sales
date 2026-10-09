@@ -1,3 +1,5 @@
+import {readHistoryRecovery,beginExpiredHistoryRecovery,freezeHistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
+import {backfillConfigurationHash} from '@fss/domain/mail/crmBackfillWork.ts';
 import {recordRetainedOriginalMetadata} from '@fss/domain/mail/crmMailOriginals.ts';
 import {z} from 'zod';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -68,6 +70,16 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    }
   }
   try{
+   const recovery=await readHistoryRecovery(context,importId);
+   if(recovery!==undefined){
+    if(recovery.state==='pending_profile'){
+     const allocation=await readBackfillAllocation(context,authority.proof.mailboxId);
+     if(allocation===null||backfillConfigurationHash(authority,allocation)!==recovery.configuration_hash){await block('recovery_configuration_changed');return;}
+     const profile=await providerRead('profile',authority,access=>adapters.gmail.getProfile(access));
+     await freezeHistoryRecovery(context,{authority,recovery,historyAnchor:profile.historyId,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    }
+    return;
+   }
    if(authority.historyAnchor===null){
     const profile=await providerRead('profile',authority,access=>adapters.gmail.getProfile(access));
     if(!/^[0-9]{1,20}$/u.test(profile.historyId))throw new BackfillFailure('provider_evidence_invalid');
@@ -86,7 +98,10 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     const bound=authority;
     if(bound.historyCursor===null)return;
     const history=await providerRead('history',bound,access=>adapters.gmail.listHistory(access,{startHistoryId:bound.historyCursor!,maxResults:25,includeLifecycleChanges:true,...bound.historyPageToken===null?{}:{pageToken:bound.historyPageToken}}));
-    if(!history.ok)throw new BackfillFailure(history.reason==='history_expired'?'history_coverage_expired':'provider_read_unavailable');
+    if(!history.ok){
+     if(history.reason==='history_expired')await beginExpiredHistoryRecovery(context,{authority:bound,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
+     throw new BackfillFailure(history.reason==='history_expired'?'history_coverage_expired':'provider_read_unavailable');
+    }
     if(!/^[0-9]{1,20}$/u.test(history.historyId)||BigInt(history.historyId)<BigInt(bound.historyCursor)||history.nextPageToken!==null&&history.nextPageToken.length>2000)throw new BackfillFailure('provider_evidence_invalid');
     let previous=BigInt(bound.historyCursor);
     for(const record of history.records){

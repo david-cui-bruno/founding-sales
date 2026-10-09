@@ -386,3 +386,41 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
   expect(gmail.sends).toEqual([]);
  }finally{await fixture.db.query('SELECT pg_advisory_unlock_all()');await fixture.stop();}
 });
+
+it('persists bounded recovery after actual cursor expiry and freezes a fresh anchor without moving the original window',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const {workspaceId,admin}=fixture.alpha;
+  const token=(await issueSessionFor(fixture,fixture.alpha,admin)).accessToken;
+  const mailbox=(await fixture.db.query<{id:string;owner_user_id:string;email_address:string;provider_account_id:string;generation:number;status:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status,history_id,history_id_updated_at,sync_state,baseline_from_at,baseline_completed_at) VALUES($1,$2,'recovery@example.test','recovery-account','connected','900',clock_timestamp(),'ready',clock_timestamp()-interval '30 days',clock_timestamp()) RETURNING *",[workspaceId,admin.userId])).rows[0]!;
+  const binding=businessAccountBinding(workspaceId,mailbox)!;
+  await fixture.db.query("INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled) VALUES($1,$2,$3,'recovery-account',$4,1,1,true)",[workspaceId,mailbox.id,admin.userId,binding]);
+  await fixture.db.query("INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'recovery-account',$4,1,1,true,1,'fixture',repeat('b',64),'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')",[workspaceId,mailbox.id,admin.userId,binding]);
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,suppressionJournal:recordingSuppressionJournal()});
+  expect((await post('/crm/business/mail/import/request',{commandId:randomUUID(),clientVersion:'1.4.0',mailboxId:mailbox.id})).status).toBe(200);
+  await fixture.db.query("INSERT INTO crm_mail_import_allocations(workspace_id,mailbox_id,revision,owner_user_id,account_binding,generation,project_hash,user_hash,user_limit_units,project_limit_units,user_headroom_units,project_headroom_units,profile_units,list_units,history_units,metadata_units,body_units,verification_sha256,verified_until) VALUES($1,$2,1,$3,$4,1,repeat('c',64),repeat('d',64),1000,1000,100,100,1,1,1,1,1,repeat('e',64),clock_timestamp()+interval '1 hour')",[workspaceId,mailbox.id,admin.userId,binding]);
+  const gmail=recordedGmailClient({emailAddress:'recovery@example.test',historyId:'100',messages:[]});
+  let profiles=0;
+  const source=workerDueWorkSources({crmMailBackfill:true}).find(value=>value.name==='crm-mail-backfill')!;
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...gmail,getProfile:async()=>({emailAddress:'recovery@example.test',historyId:++profiles===1?'100':'500'}),listHistory:async()=>({ok:false as const,reason:'history_expired' as const})},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'recovery-account',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:{observe:async()=>{}}}});
+  const runtime=await fixture.database.appRuntimeSession();
+  const first=(await claimJobs(runtime,{owner:'initial-recovery-import',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:first})).toBe('completed');
+  const original=(await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body as {importId:string;fromAt:string;toAt:string};
+  // The already enumerated original scope is fixture state; this test measures cursor recovery.
+  await fixture.db.query("UPDATE crm_mail_import_slices SET state='complete' WHERE workspace_id=$1 AND import_id=$2",[workspaceId,original.importId]);
+  expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});
+  const expired=(await claimJobs(runtime,{owner:'expired-original-cursor',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:expired})).toBe('completed');
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyAnchor:'100',historyComplete:false,gapCoverage:{state:'pending_profile',originalCursor:'unavailable',windowFrozen:false,toAt:null}});
+  expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
+  const recovery=(await claimJobs(runtime,{owner:'fresh-recovery-anchor',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:recovery})).toBe('completed');
+  expect(profiles).toBe(2);
+  const recovered=(await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body as {fromAt:string;toAt:string;gapCoverage:{fromAt:string;toAt:string}};
+  expect(recovered).toMatchObject({fromAt:original.fromAt,toAt:original.toAt,historyAnchor:'100',historyComplete:false,gapCoverage:{state:'enumerating',epoch:1,originalCursor:'unavailable',windowFrozen:true,historyComplete:false,completedDays:0}});
+  expect(recovered.gapCoverage.fromAt).toBe(original.toAt);
+  expect(Date.parse(recovered.gapCoverage.toAt)).toBeGreaterThanOrEqual(Date.parse(recovered.gapCoverage.fromAt));
+  expect(gmail.sends).toEqual([]);
+ }finally{await fixture.stop();}
+});

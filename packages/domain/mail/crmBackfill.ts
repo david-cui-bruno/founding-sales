@@ -1,3 +1,4 @@
+import {readHistoryRecoveryCoverage} from './crmHistoryRecovery.ts';
 import {readBackfillCopyCoverage} from './crmBackfillCoverage.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -35,7 +36,7 @@ export async function readCrmMailImport(context: RepositoryContext, input: { mai
     ORDER BY i.observed_at DESC,i.id DESC LIMIT 1`, [context.scope.workspaceId, input.mailboxId, actor.userId])).rows[0];
   if(row===undefined)return null;
   const copyCoverage=await readBackfillCopyCoverage(context,row.id,row.metadata_counts.retainedUniqueMessages);
-  return {...health(row),copyCoverage};
+  return {...health(row),copyCoverage,gapCoverage:await readHistoryRecoveryCoverage(context,row.id)};
 }
 /** Caller owns the command transaction. This persists scope, never enables capture. */
 export async function requestCrmMailImport(context: RepositoryContext, input: { mailboxId: string }) {

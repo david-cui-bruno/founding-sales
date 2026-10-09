@@ -1,4 +1,5 @@
-import {backfillAttemptHashes} from './crmBackfillWork.ts';
+import {readHistoryRecovery} from './crmHistoryRecovery.ts';
+import {backfillAttemptHashes,backfillConfigurationHash} from './crmBackfillWork.ts';
 import {readBackfillAuthority} from './crmBackfillAuthority.ts';
 import type {MailCaptureProof} from './crmSources.ts';
 import {createHash} from 'node:crypto';
@@ -39,8 +40,10 @@ export async function reserveBackfillRead(context:RepositoryContext,input:{impor
   for(const key of [`crm-mail-project:${current.project_hash}`,`crm-mail-user:${current.user_hash}`].sort())await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[key]);
   const sums=(await context.db.query<{project:string;user:string}>(`SELECT COALESCE(sum(units) FILTER(WHERE project_hash=$1),0)::text AS project,COALESCE(sum(units) FILTER(WHERE user_hash=$2),0)::text AS "user" FROM crm_mail_import_read_reservations WHERE reserved_at>clock_timestamp()-interval '60 seconds' AND (project_hash=$1 OR user_hash=$2)`,[current.project_hash,current.user_hash])).rows[0]!;
   if(leased.rows[0]?.['kind']==='crm.mail_backfill'){
+   const recovery=await readHistoryRecovery(context,input.importId);
+   if(recovery!==undefined&&['pending_profile','enumerating','draining'].includes(recovery.state)&&recovery.configuration_hash!==backfillConfigurationHash(authority,current))return null;
    const slice=(await context.db.query<{ordinal:number;next_page_token:string|null}>("SELECT ordinal,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' ORDER BY ordinal LIMIT 1",[context.scope.workspaceId,input.importId])).rows[0];
-   await context.db.query('UPDATE jobs SET payload=payload||$3::jsonb WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.jobId,JSON.stringify(backfillAttemptHashes(authority,current,slice))]);
+   await context.db.query('UPDATE jobs SET payload=payload||$3::jsonb WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.jobId,JSON.stringify(backfillAttemptHashes(authority,current,slice,recovery))]);
   }
   const units=current[`${input.method}_units`];
   if(typeof units!=='number'||BigInt(sums.project)+BigInt(units)>BigInt(current.project_limit_units-current.project_headroom_units)||BigInt(sums.user)+BigInt(units)>BigInt(current.user_limit_units-current.user_headroom_units))return null;

@@ -1,3 +1,4 @@
+import {readHistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
 import {backfillAttemptHashes,backfillWorkKey} from '@fss/domain/mail/crmBackfillWork.ts';
 import {readBackfillAllocation} from '@fss/domain/mail/crmBackfillBudget.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
@@ -18,7 +19,8 @@ export function crmMailBackfillSource(enabled=false):DueWorkSource{return {name:
   const hint=await readBackfillAuthority(context,row.id);if(hint===null)continue;
   const slice=(await session.query<{ordinal:number;next_page_token:string|null}>("SELECT ordinal,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' ORDER BY ordinal LIMIT 1",[row.workspace_id,row.id])).rows[0];
   const allocation=await readBackfillAllocation(context,hint.proof.mailboxId);if(allocation===null)continue;
-  const hashes=backfillAttemptHashes(hint,allocation,slice);
+  const recovery=await readHistoryRecovery(context,row.id);
+  const hashes=backfillAttemptHashes(hint,allocation,slice,recovery);
   const payload={importId:row.id,accountBinding:hint.proof.accountBinding,generation:hint.proof.generation,controlsRevision:hint.proof.controlsRevision,policyRevision:hint.proof.policyRevision};
   const key=backfillWorkKey(hashes);
   if((await session.query("SELECT 1 FROM jobs WHERE workspace_id=$1 AND kind='crm.mail_backfill' AND state='dead' AND payload->>'importId'=$2 AND payload->>'attemptConfigurationHash'=$3 AND payload->>'attemptProgressHash'=$4",[row.workspace_id,row.id,hashes.attemptConfigurationHash,hashes.attemptProgressHash])).rows.length)continue;
