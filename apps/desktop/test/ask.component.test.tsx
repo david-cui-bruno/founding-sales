@@ -51,3 +51,12 @@ it('reads exact open opportunities for an explicitly selected firm without invok
  expect(screen.getByText('Exact CRM state. Conversation coverage is unverified.')).toBeTruthy();
  expect(read).toHaveBeenLastCalledWith({operation:'opportunities',scope:{firmId:one},status:'open',limit:20});
 });
+
+it('shows exact task counts without claiming the acquired conversations are complete',async()=>{
+ const read=vi.fn<AskPorts['read']>(async input=>input.operation==='records'?{operation:'records',selection:'single',records:[{recordId:one,kind:'firm',name:'Orion',firmId:one}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:{operation:'tasks',scope:{firmId:one},dateBasis:'task_due_at',count:'1',records:[{key:`callback:${two}`,kind:'callback',label:'callback',dueAt:'2026-10-20T14:00:00.000Z',status:'open'}],truncated:false,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}});
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));fireEvent.click(screen.getByRole('button',{name:'Open work'}));
+ expect(await screen.findByText('1 open tasks')).toBeTruthy();expect(screen.getByText(/callback · 2026-10-20/u)).toBeTruthy();
+ expect(read).toHaveBeenLastCalledWith({operation:'tasks',scope:{firmId:one},limit:20});
+});
