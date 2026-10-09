@@ -95,5 +95,15 @@ it('answers through the registered controlled-purpose worker and navigates a cur
   expect((await post('/ask/answers/read',{requestId:changedId})).body).toMatchObject({state:'stale',reason:'purpose_changed',question:null,fallback:null,answer:null});
   const spendFirm=await seedFirm(fixture,{name:'Truthful purpose-change spend',assignedUserId:fixture.alpha.salesperson.userId});
   expect((await post('/research/firm',{firmId:spendFirm})).body).toMatchObject({spend:{monthToDateCents:3}});
+  const competingText=Array.from({length:10},(_,index)=>{const prefix=`repairs group ${index} `;return prefix+'x'.repeat(2000-prefix.length);}).join('');
+  const competitor=await post('/crm/people/source/add',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,personId,sourceKey:'eleven-group-source',excerpt:competingText,occurredAt:'2026-10-01T14:00:00Z'});
+  expect(competitor.status).toBe(200);
+  const competingPage=await post('/crm/people/read',{personId});
+  const competingSource=(competingPage.body as {sources:{workspaceId:string;sourceId:string;revision:number;contentHash:string}[]}).sources.find(value=>value.sourceId!==source.sourceId)!;
+  const bounded=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source,{workspaceId:competingSource.workspaceId,sourceId:competingSource.sourceId,revision:competingSource.revision,contentHash:competingSource.contentHash,kind:'selected_note',locator:null}]}});
+  const boundedId=(bounded.body as {result:{requestId:string}}).result.requestId;
+  const boundedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>({configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const}),answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>({acceptance:'accepted' as const,usage:{inputTokens:50,outputTokens:10},answer:{claims:[{text:'repairs',kind:'extractive',citationWindowIds:[input.windows[0]!.id]}],abstained:false}})}}});
+  await runOnce(fixture.db,{registry:boundedRegistry,owner:'ask-bounded-groups',limit:20});
+  expect((await post('/ask/answers/read',{requestId:boundedId})).body).toMatchObject({state:'complete',answer:{coverage:{input:'partial',semantic:'unverified'},missingEvidence:['input_partial']}});
  }finally{await fixture.stop();}
 });

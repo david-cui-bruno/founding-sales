@@ -39,10 +39,15 @@ export async function readCurrentAskInput(context:RepositoryContext,requestId:st
  }
  const grouped=new Map<string,AskInputGroup>();
  for(const window of windows){const id=askGroupHash(window.text);const previous=grouped.get(id);grouped.set(id,{id,windowIds:[...(previous?.windowIds??[]),window.id],earliestOrdinal:previous?.earliestOrdinal??window.ordinal,score:0});}
+ const matching=(await context.db.query<{ordinal:number}>("SELECT ordinal::int FROM unnest($1::text[]) WITH ORDINALITY AS chunk(text,ordinal) WHERE to_tsvector('simple',text) @@ websearch_to_tsquery('simple',$2) ORDER BY ordinal",[windows.map(window=>window.text),read.question])).rows;
+ const matchingGroups=new Set(matching.map(row=>askGroupHash(windows[row.ordinal-1]!.text)));
+ const groups=[...grouped.values()].filter(group=>matchingGroups.has(group.id)).slice(0,10);
+ const selectedIds=new Set(groups.flatMap(group=>group.windowIds));
+ const selectedWindows=windows.filter(window=>selectedIds.has(window.id));
  const inputScopeFingerprint=askFingerprint(scope),contextFingerprint=askFingerprint(contexts),initialAccessFingerprint=askFingerprint(access);
  const configFingerprint=askFingerprint(purpose);
  const authorizationFingerprint=askFingerprint({workspaceId:context.scope.workspaceId,ownerUserId:row['owner_user_id'],inputScopeFingerprint,contextFingerprint,initialAccessFingerprint});
  const proofInput:AskPurposeProofInput={stage:'answer',purpose,configFingerprint,authorizationFingerprint,workspaceId:context.scope.workspaceId,ownerUserId:String(row['owner_user_id']),inputScopeFingerprint,contextFingerprint,initialAccessFingerprint};
- const inputHash=askFingerprint({question:read.question,windows:windows.map(window=>({id:window.id,source:window.source,textHash:window.textHash})),configFingerprint,authorizationFingerprint});
- return {question:read.question,windows,groups:[...grouped.values()].slice(0,10),proofInput,inputHash,coverage:census.coverage};
+ const inputHash=askFingerprint({question:read.question,windows:windows.map(window=>({id:window.id,source:window.source,textHash:window.textHash})),selectedWindowIds:[...selectedIds],configFingerprint,authorizationFingerprint});
+ return {question:read.question,windows:selectedWindows,groups,proofInput,inputHash,coverage:census.coverage,retrievalPartial:grouped.size>groups.length};
 }
