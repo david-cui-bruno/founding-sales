@@ -269,21 +269,27 @@ async function identityDeletionClosure(
       humanReviews: string[];
       humanTasks: string[];
       progressReceipts: string[];
+      askRequests: string[];
+      askWindows: string[];
     }>(
       `
     WITH selected AS (${CRM_SELECTED_SOURCE_IDS}),
+    ask_selected AS (${CRM_ASK_REQUEST_IDS}),
     progress_selected AS (${CRM_PROGRESS_IDS}),
     human_selected AS (${CRM_HUMAN_ANCHOR_IDS}),
     human_reviews AS (SELECT r.* FROM crm_commitment_reviews r WHERE r.workspace_id=$1 AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE}),
     human_tasks AS (SELECT t.* FROM crm_internal_tasks t WHERE t.workspace_id=$1 AND ${CRM_COMMITMENT_TASK_IN_SCOPE}),
     human_private_contexts AS (
-      SELECT initial_context_snapshot AS snapshot,original_access_closure AS closure FROM human_reviews
+      SELECT cx AS snapshot,a.initial_access_closure AS closure FROM crm_ask_requests a CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.initial_contexts,'[]'::jsonb)) cx WHERE a.workspace_id=$1 AND a.id IN(SELECT id FROM ask_selected)
+      UNION ALL SELECT context_snapshot,original_access_closure FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id IN(SELECT id FROM ask_selected)
+      UNION ALL SELECT initial_context_snapshot AS snapshot,original_access_closure AS closure FROM human_reviews
       UNION ALL SELECT context_snapshot,original_access_closure FROM human_reviews
       UNION ALL SELECT activation_receipt->'initialContextSnapshot',activation_receipt->'originalAccessClosure' FROM human_tasks
       UNION ALL SELECT activation_receipt->'contextSnapshot',activation_receipt->'originalAccessClosure' FROM human_tasks
     ),
     human_private_sources AS (
-      SELECT target->'source'->>'kind' AS kind,(target->'source'->>'sourceId')::uuid AS id FROM human_reviews
+      SELECT src->>'kind' AS kind,(src->>'sourceId')::uuid AS id FROM crm_ask_requests a CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.scope->'sources','[]'::jsonb)) src WHERE a.workspace_id=$1 AND a.id IN(SELECT id FROM ask_selected)
+      UNION SELECT target->'source'->>'kind' AS kind,(target->'source'->>'sourceId')::uuid AS id FROM human_reviews
       UNION SELECT activation_receipt->>'sourceKind',(activation_receipt->>'sourceId')::uuid FROM human_tasks
     ),
     human_groups AS (SELECT DISTINCT conflict_id FROM crm_claim_conflict_members WHERE workspace_id=$1 AND anchor_id IN(SELECT id FROM human_selected)),
@@ -355,6 +361,8 @@ async function identityDeletionClosure(
       ARRAY(SELECT id::text FROM mail_selected ORDER BY id) AS "mailSelected",
       ARRAY(SELECT id::text FROM (${CRM_MAIL_CAPTURE_IDS}) selected_identities ORDER BY id) AS "mailIdentitiesSelected",
       ARRAY(SELECT id::text FROM mail_identities ORDER BY id) AS "mailIdentities",
+      ARRAY(SELECT id::text FROM ask_selected ORDER BY id) AS "askRequests",
+      ARRAY(SELECT id::text FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id IN(SELECT id FROM ask_selected) ORDER BY id) AS "askWindows",
       ARRAY(SELECT id::text FROM progress_selected ORDER BY id) AS "progressReceipts",
       ARRAY(SELECT id::text FROM human_anchors ORDER BY id) AS "humanAnchors",
       ARRAY(SELECT id::text FROM human_reviews ORDER BY id) AS "humanReviews",
@@ -408,6 +416,14 @@ function commitmentAuthorityInScope(snapshot:string,closure:string){
   OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(${snapshot}->'mailContexts','[]'::jsonb)) cx WHERE cx->>'firmId'=$3::uuid::text AND ($2::uuid IS NULL OR cx->>'personId' IN(SELECT person_id::text FROM (${CRM_TARGET_PEOPLE}) target_people)))
  )`;
 }
+const CRM_ASK_REQUEST_IN_SCOPE=`(a.state<>'deleted' AND (
+ ${commitmentAuthorityInScope("'{}'::jsonb",'a.initial_access_closure')}
+ OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(a.initial_contexts,'[]'::jsonb)) cx WHERE ${commitmentAuthorityInScope('cx','a.initial_access_closure')})
+ OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(a.scope->'sources','[]'::jsonb)) src WHERE
+  (src->>'kind'='selected_note' AND (src->>'sourceId')::uuid IN(${CRM_SELECTED_SOURCE_IDS}))
+  OR (src->>'kind'='mail' AND (src->>'sourceId')::uuid IN(${CRM_MAIL_MESSAGE_IDS})))
+))`;
+const CRM_ASK_REQUEST_IDS=`SELECT a.id FROM crm_ask_requests a WHERE a.workspace_id=$1 AND ${CRM_ASK_REQUEST_IN_SCOPE}`;
 const CRM_COMMITMENT_REVIEW_IN_SCOPE=`(r.state<>'redacted' AND (r.anchor_id IN(${CRM_HUMAN_ANCHOR_IDS}) OR ${commitmentAuthorityInScope('r.initial_context_snapshot','r.original_access_closure')} OR ${commitmentAuthorityInScope('r.context_snapshot','r.original_access_closure')}))`;
 const CRM_COMMITMENT_TASK_IN_SCOPE=`(t.activation_receipt IS NOT NULL AND (
  (t.activation_receipt->>'anchorId')::uuid IN(${CRM_HUMAN_ANCHOR_IDS})
@@ -477,6 +493,7 @@ async function measure(
   const byContact = [workspace, contact, firm] as const;
 
   const removes: Record<string, number> = {
+    crm_ask_request_windows:await countOf(context,`SELECT count(*) AS count FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id IN(${CRM_ASK_REQUEST_IDS})`,byContact),
     crm_mail_progress_receipts:await countOf(context,`SELECT count(*) AS count FROM crm_mail_progress_receipts r WHERE ${CRM_PROGRESS_IN_SCOPE}`,byContact),
     email_addresses: await countOf(
       context,
@@ -748,6 +765,7 @@ async function measure(
           ).rows.map((row) => row.id),
         )
       ).length,
+    crm_ask_requests:await countOf(context,`SELECT count(*) AS count FROM crm_ask_requests a WHERE a.workspace_id=$1 AND ${CRM_ASK_REQUEST_IN_SCOPE}`,byContact),
     crm_selected_sources: await countOf(
       context,
       `SELECT count(*) AS count FROM crm_selected_sources s
@@ -841,6 +859,7 @@ async function measure(
   };
 
   const retains: Record<string, number> = {
+    crm_ask_financial_receipts:await countOf(context,`SELECT count(*) AS count FROM crm_ask_financial_receipts WHERE workspace_id=$1 AND request_id IN(${CRM_ASK_REQUEST_IDS})`,byContact),
     crm_commitment_reviews: await countOf(context,`SELECT count(*) AS count FROM crm_commitment_reviews r WHERE r.workspace_id=$1 AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE}`,byContact),
     crm_internal_tasks: await countOf(context,`SELECT count(*) AS count FROM crm_internal_tasks t WHERE t.workspace_id=$1 AND ${CRM_COMMITMENT_TASK_IN_SCOPE}`,byContact),
     crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE}`,byContact),
@@ -961,6 +980,7 @@ async function measure(
     UNION ALL SELECT 'business_metadata',b.id::text,b.metadata_revision,b.metadata_hash,b.metadata_availability
       FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}
     UNION ALL SELECT 'mail_import_metadata',x.id::text,x.revision,encode(sha256(convert_to(concat_ws(':',x.message_hash,x.provider_message_id,x.provider_thread_id,x.provider_at::text,x.scope,x.reason),'UTF8')),'hex'),x.state FROM crm_mail_import_messages x WHERE x.workspace_id=$1 AND ${IMPORT_METADATA_IN_SCOPE}
+    UNION ALL SELECT 'ask_request',a.id::text,a.version,encode(sha256(convert_to(concat_ws(':',a.epoch::text,a.scope::text,a.initial_contexts::text,a.initial_access_closure::text,a.question,a.result::text),'UTF8')),'hex'),a.state FROM crm_ask_requests a WHERE a.workspace_id=$1 AND ${CRM_ASK_REQUEST_IN_SCOPE}
     ORDER BY kind,id`,
       byContact,
     )
@@ -1244,6 +1264,8 @@ export async function commitDeletion(
     JSON.stringify(closure)
   )
     return refuse("preview_stale");
+  for(const requestId of closure.askRequests)await context.db.query('SELECT id FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,requestId]);
+  for(const windowId of closure.askWindows)await context.db.query('SELECT id FROM crm_ask_request_windows WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,windowId]);
   for(const receiptId of closure.progressReceipts)await context.db.query('SELECT id FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,receiptId]);
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
@@ -1806,6 +1828,9 @@ export async function commitDeletion(
     [...byContact, REDACTED_NAME],
   );
   redacted["crm_people"] = (people.rowCount ?? 0) + observedMailNamesRedacted;
+  const erasedAsk = await context.db.query(`UPDATE crm_ask_requests a SET question=NULL,scope=NULL,initial_contexts=NULL,initial_access_closure=NULL,result=NULL,result_at=NULL,state='deleted',reason='deleted',version=version+1,epoch=epoch+1,updated_at=now() WHERE a.workspace_id=$1 AND a.id=ANY($2::uuid[]) AND a.state<>'deleted'`,[workspace,closure.askRequests]);
+  redacted['crm_ask_requests']=erasedAsk.rowCount??0;
+  await remove('crm_ask_request_windows',`DELETE FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id=ANY($2::uuid[])`,[workspace,closure.askRequests]);
   const selectedSources = await context.db.query<{ id: string }>(
     `UPDATE crm_selected_sources s SET availability='deleted',excerpt=NULL,content_hash=NULL,occurred_at=NULL,revision=revision+1
       WHERE s.workspace_id=$1 AND s.availability <> 'deleted' AND ${CRM_SOURCE_IN_SCOPE} RETURNING s.id`,
