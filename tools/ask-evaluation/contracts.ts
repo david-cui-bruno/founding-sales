@@ -152,12 +152,14 @@ export const permittedWindowSchema = z.strictObject({
   source: evaluationSourceSchema,
   text: z.string().min(1).max(2000), // UTF16; aggregate UTF8 checks below
 });
+// Observation is distinct from admission limits; refused overshoot remains measurable.
+const observedUsageCount=z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 export const usageSchema = z.discriminatedUnion('outcome', [
-  z.strictObject({ outcome: z.literal('observed'), calls: count.max(5000),
-    inputTokens: count, outputTokens: count.max(100_000),
+  z.strictObject({ outcome: z.literal('observed'), calls: observedUsageCount,
+    inputTokens: observedUsageCount, outputTokens: observedUsageCount,
     reservedCents: z.literal('0'), observedCents: z.literal('0') }),
-  z.strictObject({ outcome: z.literal('unknown'), calls: count.max(5000),
-    inputTokens: count, outputTokens: count.max(100_000),
+  z.strictObject({ outcome: z.literal('unknown'), calls: observedUsageCount,
+    inputTokens: observedUsageCount, outputTokens: observedUsageCount,
     reservedCents: z.literal('0'), observedCents: z.null() }),
 ]);
 export const purposeGateSchema = z.discriminatedUnion('state', [
