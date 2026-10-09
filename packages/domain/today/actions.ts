@@ -43,6 +43,7 @@ export async function readTodayActions(context: RepositoryContext, input: { now:
                AND (x.selected IS TRUE OR (x.selected IS NULL AND NOT x.ambiguous
                  AND NOT EXISTS (SELECT 1 FROM mail_message_matches other WHERE other.workspace_id=x.workspace_id AND other.mail_message_id=x.mail_message_id AND other.id<>x.id))))
              AND EXISTS (SELECT 1 FROM mail_message_classifications c WHERE c.workspace_id=newer.workspace_id AND c.mail_message_id=newer.id AND c.layer='deterministic' AND c.class IN ('human','uncertain','opt_out')))
+        AND NOT EXISTS (SELECT 1 FROM crm_mail_reply_resolutions resolved WHERE resolved.workspace_id=m.workspace_id AND resolved.request_message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM outreach_reply_requests r WHERE r.workspace_id=m.workspace_id AND r.original_message_id=m.id AND r.state='delivered')
       ORDER BY m.internal_date,m.id`, [context.scope.workspaceId, assignee]);
   const actions: TodayAction[] = rows.map(row => {
