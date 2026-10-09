@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   bindCrmEvidenceWork,
   readCrmEvidenceWork,
+  listCrmEvidenceWork,
   validateCrmEvidenceWorkReceipt,
 } from "@fss/domain/crm/evidenceWork.ts";
 import {
@@ -12,10 +13,16 @@ import {
   crmConflictResolveSchema,
   crmConflictReadSchema,
   crmConflictPageSchema,
+  crmConflictListSchema,
+  crmConflictListPageSchema,
   crmDecisionHistoryReadSchema,
+  crmDecisionHistoryListSchema,
+  crmDecisionHistoryListPageSchema,
   crmDecisionHistoryPageSchema,
   crmEvidenceWorkBindSchema,
   crmEvidenceWorkReadSchema,
+  crmEvidenceWorkListSchema,
+  crmEvidenceWorkListPageSchema,
   crmEvidenceWorkPageSchema,
 } from "@fss/contracts";
 import {
@@ -24,7 +31,9 @@ import {
   saveCrmConflict,
   resolveCrmConflict,
   readCrmConflict,
+  listCrmConflicts,
   readCrmDecisionHistory,
+  listCrmDecisionHistory,
 } from "@fss/domain/crm/evidenceDecisions.ts";
 import { withTransaction } from "@fss/domain/db/queryable.ts";
 import {
@@ -40,9 +49,12 @@ export const CRM_EVIDENCE_PATHS = [
   "/crm/evidence/conflict/save",
   "/crm/evidence/conflict/resolve",
   "/crm/evidence/conflict/read",
+  "/crm/evidence/conflict/list",
   "/crm/evidence/decision/history/read",
+  "/crm/evidence/decision/history/list",
   "/crm/evidence/work/bind",
   "/crm/evidence/work/read",
+  "/crm/evidence/work/list",
 ] as const;
 export async function routeCrmEvidence(
   request: ApiRequest,
@@ -58,6 +70,43 @@ export async function routeCrmEvidence(
   if (!scoped.ok) return scoped.result;
   if (request.method !== "POST")
     return { status: 405, body: redactError("method_not_allowed") };
+  if (request.path === "/crm/evidence/conflict/list") {
+    const parsed = crmConflictListSchema.safeParse(request.body);
+    if (!parsed.success)
+      return { status: 400, body: redactError("malformed_body") };
+    const result = await withTransaction(options.auth.db, () =>
+      listCrmConflicts(scoped.context, parsed.data, options.crmMailEvidence),
+    );
+    return result === null
+      ? { status: 404, body: redactError("not_found") }
+      : { status: 200, body: crmConflictListPageSchema.parse(result) };
+  }
+  if (request.path === "/crm/evidence/decision/history/list") {
+    const parsed = crmDecisionHistoryListSchema.safeParse(request.body);
+    if (!parsed.success)
+      return { status: 400, body: redactError("malformed_body") };
+    const result = await withTransaction(options.auth.db, () =>
+      listCrmDecisionHistory(
+        scoped.context,
+        parsed.data,
+        options.crmMailEvidence,
+      ),
+    );
+    return result === null
+      ? { status: 404, body: redactError("not_found") }
+      : { status: 200, body: crmDecisionHistoryListPageSchema.parse(result) };
+  }
+  if (request.path === "/crm/evidence/work/list") {
+    const parsed = crmEvidenceWorkListSchema.safeParse(request.body);
+    if (!parsed.success)
+      return { status: 400, body: redactError("malformed_body") };
+    const result = await withTransaction(options.auth.db, () =>
+      listCrmEvidenceWork(scoped.context, parsed.data, options.crmMailEvidence),
+    );
+    return result === null
+      ? { status: 404, body: redactError("not_found") }
+      : { status: 200, body: crmEvidenceWorkListPageSchema.parse(result) };
+  }
   if (request.path === "/crm/evidence/work/read") {
     const parsed = crmEvidenceWorkReadSchema.safeParse(request.body);
     if (!parsed.success)

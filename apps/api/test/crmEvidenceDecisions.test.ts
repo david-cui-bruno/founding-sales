@@ -159,6 +159,7 @@ it("preserves a dated human confirmation on equivalent reprocessing with a new p
       claims: [
         {
           claimId: first.claim.claimId,
+          contextHash: first.generation.contextHash,
           effectiveState: "confirmed",
           decisionRevision: 1,
           decision: { action: "confirm" },
@@ -371,6 +372,18 @@ it("refuses replay of a human decision after its exact source is deleted", async
         )
       ).status,
     ).toBe(200);
+    const historyIndex = await post("/crm/evidence/decision/history/list", {
+      kind: source.kind,
+      sourceId: source.sourceId,
+      limit: 1,
+    });
+    expect(historyIndex.status).toBe(200);
+    expect(historyIndex.body).toMatchObject({
+      anchors: [
+        { anchorId, currentDecisionRevision: 1, basis: "deleted_redacted" },
+      ],
+      nextAfterId: null,
+    });
     expect((await post("/crm/evidence/read", { source })).status).toBe(404);
     expect((await post("/crm/evidence/decide", decision)).status).toBe(404);
     const deletedHistory = await post(
@@ -1037,6 +1050,16 @@ it("resolves an explicit conflicting group without erasing either dated source",
     expect(saved.status).toBe(200);
     const conflictId = (saved.body as { result: { conflictId: string } }).result
       .conflictId;
+    const discovered = await post("/crm/evidence/conflict/list", {
+      kind: firstSource.kind,
+      sourceId: firstSource.sourceId,
+      limit: 1,
+    });
+    expect(discovered.status).toBe(200);
+    expect(discovered.body).toMatchObject({
+      conflicts: [{ conflictId, revision: 1, state: "open" }],
+      nextAfterId: null,
+    });
     const opened = await post("/crm/evidence/conflict/read", { conflictId });
     expect(opened.status).toBe(200);
     expect(opened.body).toMatchObject({

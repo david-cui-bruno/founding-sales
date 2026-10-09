@@ -225,6 +225,29 @@ it("flags dependent open meeting work after correction while preserving complete
         )
       ).status,
     ).toBe(200);
+    const discover = await post("/crm/evidence/work/list", {
+      kind: source.kind,
+      sourceId: source.sourceId,
+    });
+    expect(discover.status).toBe(200);
+    expect(discover.body).toMatchObject({
+      works: expect.arrayContaining([
+        expect.objectContaining({
+          work: open,
+          status: "open",
+          version: "1",
+          reviewRequired: false,
+        }),
+        expect.objectContaining({
+          work: done,
+          status: "done",
+          version: "2",
+          completedAt,
+          reviewRequired: false,
+        }),
+      ]),
+      nextAfter: null,
+    });
     expect(
       (
         await post(

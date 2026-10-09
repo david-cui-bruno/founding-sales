@@ -276,6 +276,7 @@ export async function readCrmEvidence(
       claimId: claim.id,
       claimRevision: 1,
       claimHash: claim.claim_hash,
+      contextHash: claim.context_hash,
       context: current.context,
       kind: claim.kind,
       interpretation: claim.interpretation,
@@ -482,6 +483,7 @@ export async function lockConflictSources(
   sources: SourceLookup[],
   snapshots: unknown[] = [],
   accessSnapshots: unknown[] = [],
+  options: { allowUnavailable?: boolean } = {},
 ) {
   if (
     sources.some((source) => source.workspaceId !== context.scope.workspaceId)
@@ -536,14 +538,46 @@ export async function lockConflictSources(
   };
   const nativeBefore = await nativeSnapshot();
   const mailSources = sources.filter((source) => source.kind === "mail");
-  const mail = await snapshotMailCopyAuthorityBatch(
-    context,
-    mailSources.map((source) => ({
-      sourceId: source.sourceId,
-      sourceRevision: source.revision,
-      contentHash: source.contentHash ?? "",
-    })),
-  );
+  const mailRefs =
+    options.allowUnavailable === true
+      ? (
+          await context.db.query<{
+            source_id: string;
+            source_revision: number;
+            content_hash: string | null;
+          }>(
+            "SELECT source_id,source_revision,content_hash FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) ORDER BY source_id",
+            [
+              context.scope.workspaceId,
+              [...new Set(mailSources.map((source) => source.sourceId))].sort(),
+            ],
+          )
+        ).rows.map((row) => ({
+          sourceId: row.source_id,
+          sourceRevision: row.source_revision,
+          contentHash: row.content_hash ?? "",
+        }))
+      : [
+          ...new Map(
+            mailSources.map((source) => [
+              source.sourceId,
+              {
+                sourceId: source.sourceId,
+                sourceRevision: source.revision,
+                contentHash: source.contentHash ?? "",
+              },
+            ]),
+          ).values(),
+        ];
+  if (
+    options.allowUnavailable === true &&
+    mailRefs.length !==
+      new Set(mailSources.map((source) => source.sourceId)).size
+  )
+    return false;
+  const mail = await snapshotMailCopyAuthorityBatch(context, mailRefs, {
+    allowUnavailable: options.allowUnavailable === true,
+  });
   if (mail === null) return false;
   const firmIds = [
     ...new Set([
@@ -1194,4 +1228,150 @@ export async function flagPublishedCrmEvidence(
       semanticHashes,
     ],
   );
+}
+
+/** Discover only all-member-authorized conflict references, without exposing source text. */
+export async function listCrmConflicts(
+  context: RepositoryContext,
+  input: {
+    kind: SourceLookup["kind"];
+    sourceId: string;
+    afterId?: string | undefined;
+    limit: number;
+  },
+  mail: CrmMailEvidencePort = createNativeCrmMailEvidence(),
+) {
+  const query = () =>
+    context.db.query<{ id: string }>(
+      `SELECT DISTINCT g.id FROM crm_claim_conflicts g JOIN crm_claim_conflict_members m ON m.workspace_id=g.workspace_id AND m.conflict_id=g.id JOIN crm_claim_review_anchors a ON a.workspace_id=m.workspace_id AND a.id=m.anchor_id WHERE g.workspace_id=$1 AND a.source_kind=$2 AND a.source_id=$3 AND ($4::uuid IS NULL OR g.id>$4) ORDER BY g.id LIMIT $5`,
+      [
+        context.scope.workspaceId,
+        input.kind,
+        input.sourceId,
+        input.afterId ?? null,
+        input.limit + 1,
+      ],
+    );
+  const before = (await query()).rows;
+  const ids = before.slice(0, input.limit).map((row) => row.id);
+  const anchors = (
+    await context.db.query<ConflictAnchor>(
+      `SELECT DISTINCT a.* FROM crm_claim_conflict_members m JOIN crm_claim_review_anchors a ON a.workspace_id=m.workspace_id AND a.id=m.anchor_id WHERE m.workspace_id=$1 AND m.conflict_id=ANY($2::uuid[]) ORDER BY a.id LIMIT 501`,
+      [context.scope.workspaceId, ids],
+    )
+  ).rows;
+  if (
+    anchors.length > 500 ||
+    !(await lockConflictSources(
+      context,
+      anchors.map((a) => sourceForAnchor(context, a)),
+      anchors.map((a) => a.context_snapshot),
+      anchors.map((a) => a.original_access_closure),
+    ))
+  )
+    return null;
+  const health = await readCrmProcessingHealth(
+    context,
+    { kind: input.kind, sourceId: input.sourceId },
+    mail,
+  );
+  if (health === null) return null;
+  if (JSON.stringify((await query()).rows) !== JSON.stringify(before))
+    return null;
+  const conflicts = [];
+  for (const conflictId of ids) {
+    const group = await readCrmConflict(
+      context,
+      { conflictId, limit: 1 },
+      mail,
+    );
+    if (group === null) return null;
+    conflicts.push({
+      conflictId,
+      revision: group.revision,
+      state: group.state,
+    });
+  }
+  return {
+    conflicts,
+    nextAfterId: before.length > input.limit ? (ids.at(-1) ?? null) : null,
+  };
+}
+
+/** Body-free discovery does not resurrect a removed quote or acquisition date. */
+export async function listCrmDecisionHistory(
+  context: RepositoryContext,
+  input: {
+    kind: SourceLookup["kind"];
+    sourceId: string;
+    afterId?: string | undefined;
+    limit: number;
+  },
+  mail: CrmMailEvidencePort = createNativeCrmMailEvidence(),
+) {
+  const actor = context.scope.actor;
+  if (actor.kind !== "user") return null;
+  const query = () =>
+    context.db.query<ConflictAnchor>(
+      "SELECT * FROM crm_claim_review_anchors WHERE workspace_id=$1 AND source_kind=$2 AND source_id=$3 AND current_decision_revision>0 AND ($4::uuid IS NULL OR id>$4) ORDER BY id LIMIT $5",
+      [
+        context.scope.workspaceId,
+        input.kind,
+        input.sourceId,
+        input.afterId ?? null,
+        input.limit + 1,
+      ],
+    );
+  const before = (await query()).rows;
+  if (
+    before.some(
+      (row) => actor.role !== "admin" && row.owner_user_id !== actor.userId,
+    )
+  )
+    return null;
+  const page = before.slice(0, input.limit);
+  if (
+    !(await lockConflictSources(
+      context,
+      page.map((row) => sourceForAnchor(context, row)),
+      page.map((row) => row.context_snapshot),
+      page.map((row) => row.original_access_closure),
+      { allowUnavailable: true },
+    ))
+  )
+    return null;
+  const health = await readCrmProcessingHealth(
+    context,
+    { kind: input.kind, sourceId: input.sourceId },
+    mail,
+  );
+  if (health === null) return null;
+  const anchors = [];
+  for (const anchor of page) {
+    const history = await readCrmDecisionHistory(
+      context,
+      {
+        kind: input.kind,
+        sourceId: input.sourceId,
+        anchorId: anchor.id,
+        limit: 1,
+      },
+      mail,
+    );
+    if (history === null) return null;
+    anchors.push({
+      anchorId: anchor.id,
+      currentDecisionRevision: history.currentDecisionRevision,
+      basis: history.basis,
+    });
+  }
+  if (
+    JSON.stringify((await query()).rows) !== JSON.stringify(before) ||
+    !(await activeIdentityActor(context))
+  )
+    return null;
+  return {
+    anchors,
+    nextAfterId: before.length > input.limit ? (page.at(-1)?.id ?? null) : null,
+  };
 }

@@ -7,6 +7,7 @@ import { crmClaimContextSchema } from "@fss/contracts";
 import type { RepositoryContext } from "../db/workspaceScope.ts";
 import type { SourceLookup } from "./sourceResolver.ts";
 import { lockIdentityContext, activeIdentityActor } from "./identityAccess.ts";
+import { readCrmProcessingHealth } from "./processing.ts";
 import { lockConflictSources, targetAnchor } from "./evidenceDecisions.ts";
 import { createNativeCrmMailEvidence } from "./nativeMailEvidence.ts";
 import type { CrmMailEvidencePort } from "./mailEvidence.ts";
@@ -20,6 +21,8 @@ interface Work extends Record<string, unknown> {
 }
 interface Dependency extends Record<string, unknown> {
   id: string;
+  work_kind: "call_task" | "meeting_task";
+  work_id: string;
   anchor_id: string;
   owner_user_id: string;
   source_kind: SourceLookup["kind"];
@@ -155,6 +158,7 @@ export async function readCrmEvidenceWork(
         ...dependencies.map((row) => row.context_snapshot),
       ],
       dependencies.map((row) => row.original_access_closure),
+      { allowUnavailable: true },
     ))
   )
     return null;
@@ -241,4 +245,103 @@ export async function validateCrmEvidenceWorkReceipt(
     dependency.invalidation_revision === input.revision
     ? ("current" as const)
     : ("changed" as const);
+}
+
+/** Real source-dependent task references, never an arbitrary task-ID entry point. */
+export async function listCrmEvidenceWork(
+  context: RepositoryContext,
+  input: {
+    kind: SourceLookup["kind"];
+    sourceId: string;
+    after?: { kind: "call_task" | "meeting_task"; id: string } | undefined;
+    limit: number;
+  },
+  mail: CrmMailEvidencePort = createNativeCrmMailEvidence(),
+) {
+  const query = () =>
+    context.db.query<{
+      kind: "call_task" | "meeting_task";
+      id: string;
+      firm_id: string;
+    }>(
+      `SELECT DISTINCT d.work_kind AS kind,d.work_id AS id,coalesce(ct.firm_id,mt.firm_id) AS firm_id FROM crm_claim_work_dependencies d JOIN crm_claim_review_anchors a ON a.workspace_id=d.workspace_id AND a.id=d.anchor_id LEFT JOIN call_tasks ct ON ct.workspace_id=d.workspace_id AND ct.id=d.work_id AND d.work_kind='call_task' LEFT JOIN meeting_tasks mt ON mt.workspace_id=d.workspace_id AND mt.id=d.work_id AND d.work_kind='meeting_task' WHERE d.workspace_id=$1 AND a.source_kind=$2 AND a.source_id=$3 AND coalesce(ct.id,mt.id) IS NOT NULL AND ($4::text IS NULL OR (d.work_kind,d.work_id)>($4::text,$5::uuid)) ORDER BY kind,id LIMIT $6`,
+      [
+        context.scope.workspaceId,
+        input.kind,
+        input.sourceId,
+        input.after?.kind ?? null,
+        input.after?.id ?? null,
+        input.limit + 1,
+      ],
+    );
+  const before = (await query()).rows;
+  const page = before.slice(0, input.limit);
+  const dependencies = (
+    await context.db.query<Dependency>(
+      `SELECT d.*,a.owner_user_id,a.source_kind,a.source_id,a.source_revision,a.source_hash,a.context_snapshot,a.original_access_closure FROM crm_claim_work_dependencies d JOIN crm_claim_review_anchors a ON a.workspace_id=d.workspace_id AND a.id=d.anchor_id WHERE d.workspace_id=$1 AND ((d.work_kind='call_task' AND d.work_id=ANY($2::uuid[])) OR (d.work_kind='meeting_task' AND d.work_id=ANY($3::uuid[]))) ORDER BY d.id LIMIT 501`,
+      [
+        context.scope.workspaceId,
+        page.filter((row) => row.kind === "call_task").map((row) => row.id),
+        page.filter((row) => row.kind === "meeting_task").map((row) => row.id),
+      ],
+    )
+  ).rows;
+  if (
+    dependencies.length > 500 ||
+    !(await lockConflictSources(
+      context,
+      dependencies.map((row) => sourceFor(context, row)),
+      [
+        ...page.map((row) => workContext(row.firm_id)),
+        ...dependencies.map((row) => row.context_snapshot),
+      ],
+      dependencies.map((row) => row.original_access_closure),
+      { allowUnavailable: true },
+    ))
+  )
+    return null;
+  if (
+    (await readCrmProcessingHealth(
+      context,
+      { kind: input.kind, sourceId: input.sourceId },
+      mail,
+    )) === null
+  )
+    return null;
+  const works = [];
+  for (const row of page) {
+    const detail = await readCrmEvidenceWork(
+      context,
+      { work: { kind: row.kind, id: row.id }, limit: 50 },
+      mail,
+    );
+    if (detail === null) return null;
+    works.push({
+      work: { kind: row.kind, id: row.id },
+      version: detail.work.version,
+      status: detail.work.status,
+      completedAt: detail.work.completedAt,
+      dependencyCount: dependencies.filter(
+        (value) => value.work_kind === row.kind && value.work_id === row.id,
+      ).length,
+      reviewRequired: dependencies.some(
+        (value) =>
+          value.work_kind === row.kind &&
+          value.work_id === row.id &&
+          value.review_required,
+      ),
+    });
+  }
+  if (
+    JSON.stringify((await query()).rows) !== JSON.stringify(before) ||
+    !(await activeIdentityActor(context))
+  )
+    return null;
+  return {
+    works,
+    nextAfter:
+      before.length > input.limit && page.at(-1) !== undefined
+        ? { kind: page.at(-1)!.kind, id: page.at(-1)!.id }
+        : null,
+  };
 }

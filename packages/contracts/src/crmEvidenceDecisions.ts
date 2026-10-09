@@ -68,6 +68,7 @@ export const crmEvidenceClaimSchema = crmExtractionClaimSchema
   .extend({
     anchorId: z.uuid().nullable(),
     semanticHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    contextHash: z.string().regex(/^[a-f0-9]{64}$/u),
     decisionRevision: z.number().int().min(0),
     reviewRequired: z.boolean(),
     effectiveState: z.enum([
@@ -269,3 +270,118 @@ export const crmEvidenceWorkPageSchema = z.strictObject({
 });
 export type CrmEvidenceWorkBind = z.infer<typeof crmEvidenceWorkBindSchema>;
 export type CrmEvidenceWorkRead = z.infer<typeof crmEvidenceWorkReadSchema>;
+
+// Main-host command envelopes are never part of renderer payloads.
+export const crmEvidenceDecidePayloadSchema = z.discriminatedUnion("action", [
+  crmEvidenceDecideSchema.options[0].omit({
+    commandId: true,
+    clientVersion: true,
+  }),
+  crmEvidenceDecideSchema.options[1].omit({
+    commandId: true,
+    clientVersion: true,
+  }),
+]);
+export const crmConflictResolvePayloadSchema = z.discriminatedUnion(
+  "resolution",
+  [
+    crmConflictResolveSchema.options[0].omit({
+      commandId: true,
+      clientVersion: true,
+    }),
+    crmConflictResolveSchema.options[1].omit({
+      commandId: true,
+      clientVersion: true,
+    }),
+  ],
+);
+export const crmConflictSavePayloadSchema = z
+  .strictObject({
+    conflictId: crmConflictSaveSchema.shape.conflictId,
+    expectedConflictRevision:
+      crmConflictSaveSchema.shape.expectedConflictRevision,
+    members: crmConflictSaveSchema.shape.members,
+  })
+  .refine(
+    (value) =>
+      new Set(value.members.map((member) => member.claimId)).size ===
+      value.members.length,
+    { message: "Conflict members must be distinct claims" },
+  );
+export const crmEvidenceWorkBindPayloadSchema = crmEvidenceWorkBindSchema.omit({
+  commandId: true,
+  clientVersion: true,
+});
+export const crmEvidenceDecidedSchema = z.strictObject({
+  anchorId: z.uuid(),
+  decisionRevision: z.number().int().positive(),
+});
+export const crmConflictSavedSchema = z.strictObject({
+  conflictId: z.uuid(),
+  revision: z.number().int().positive(),
+});
+export const crmEvidenceWorkBoundSchema = z.strictObject({
+  dependencyId: z.uuid(),
+  revision: z.number().int().positive(),
+});
+
+const sourceIdentity = {
+  kind: crmSourceLookupSchema.shape.kind,
+  sourceId: z.uuid(),
+};
+export const crmConflictListSchema = z.strictObject({
+  ...sourceIdentity,
+  afterId: z.uuid().optional(),
+  limit: z.number().int().min(1).max(50).default(50),
+});
+export const crmConflictListPageSchema = z.strictObject({
+  conflicts: z
+    .array(
+      z.strictObject({
+        conflictId: z.uuid(),
+        revision: z.number().int().positive(),
+        state: z.enum(["open", "resolved"]),
+      }),
+    )
+    .max(50),
+  nextAfterId: z.uuid().nullable(),
+});
+
+export const crmDecisionHistoryListSchema = z.strictObject({
+  ...sourceIdentity,
+  afterId: z.uuid().optional(),
+  limit: z.number().int().min(1).max(50).default(50),
+});
+export const crmDecisionHistoryListPageSchema = z.strictObject({
+  anchors: z
+    .array(
+      z.strictObject({
+        anchorId: z.uuid(),
+        currentDecisionRevision: z.number().int().positive(),
+        basis: z.enum(["available", "source_unavailable", "deleted_redacted"]),
+      }),
+    )
+    .max(50),
+  nextAfterId: z.uuid().nullable(),
+});
+
+export const crmEvidenceWorkListSchema = z.strictObject({
+  ...sourceIdentity,
+  after: crmEvidenceWorkIdentitySchema.optional(),
+  limit: z.number().int().min(1).max(50).default(50),
+});
+export const crmEvidenceWorkListPageSchema = z.strictObject({
+  works: z
+    .array(
+      z.strictObject({
+        work: crmEvidenceWorkIdentitySchema,
+        version: z.string().min(1).max(40),
+        status: z.enum(["open", "done", "cancelled"]),
+        completedAt: z.iso.datetime().nullable(),
+        dependencyCount: z.number().int().min(1).max(500),
+        reviewRequired: z.boolean(),
+      }),
+    )
+    .max(50),
+  nextAfter: crmEvidenceWorkIdentitySchema.nullable(),
+});
