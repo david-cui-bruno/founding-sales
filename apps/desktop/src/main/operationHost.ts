@@ -413,8 +413,22 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'crm.personSourceDelete': async (input:OperationInput<'crm.personSourceDelete'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/people/source/delete',input,value=>OPERATIONS['crm.personSourceDelete'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.personSourceRecapture': async (input:OperationInput<'crm.personSourceRecapture'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/people/source/recapture',input,value=>OPERATIONS['crm.personSourceRecapture'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.personSourceRestore': async (input:OperationInput<'crm.personSourceRestore'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/people/source/restore',input,value=>OPERATIONS['crm.personSourceRestore'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+    'crm.dealCreate': async (input: OperationInput<'crm.dealCreate'>) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command('/opportunities/v2/open', input, value => OPERATIONS['crm.dealCreate'].output.parse(value));
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    'crm.dealReopen': async (input: OperationInput<'crm.dealReopen'>) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command('/opportunities/v2/reopen', input, value => OPERATIONS['crm.dealReopen'].output.parse(value));
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
     'crm.state': async () => await deps.crm.state(),
-    'crm.openFirm': async (input: { readonly firmId: string }) => await deps.crm.openFirm(input),
+    'crm.openFirm': async (input:OperationInput<'crm.openFirm'>) => await deps.crm.openFirm(input),
     'crm.firmTimeline': async (input: { readonly firmId: string; readonly before: string }) => await deps.crm.firmTimeline(input),
     'crm.openPipeline': async (input?: Parameters<CrmBridgeHost['openPipeline']>[0]) => await deps.crm.openPipeline(input),
     'crm.openAddFirm': async () => await deps.crm.openAddFirm(),

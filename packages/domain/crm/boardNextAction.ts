@@ -41,10 +41,7 @@ interface Candidate {
   readonly [column: string]: unknown;
 }
 
-export async function readNextActions(
-  context: RepositoryContext,
-  now: Date = new Date(),
-): Promise<Readonly<Record<string, NextAction>>> {
+export async function readNextActions(context: RepositoryContext, now: Date = new Date()): Promise<Readonly<Record<string, NextAction>>> {
   const workspaceId = context.scope.workspaceId;
   const { rows } = await context.db.query<Candidate>(
     `SELECT firm_id, 'callback' AS kind, due_at, 0 AS src
@@ -77,4 +74,25 @@ export async function readNextActions(
     out[firmId] = { kind: candidate.kind, label: LABELS[candidate.kind], dueAt: candidate.due_at.toISOString() };
   }
   return out;
+}
+
+/** Deal cards show only work carrying that exact commercial context. Firm-only work stays on Today. */
+export async function readOpportunityNextActions(
+  context: RepositoryContext,
+  now: Date = new Date(),
+): Promise<Readonly<Record<string, NextAction>>> {
+  const { rows } = await context.db.query<Candidate & { opportunity_id: string }>(
+    `SELECT opportunity_id,firm_id,'callback' AS kind,due_at,0 AS src FROM callbacks WHERE workspace_id=$1 AND status='open' AND opportunity_id IS NOT NULL
+ UNION ALL SELECT e.opportunity_id,x.firm_id,CASE x.channel WHEN 'email' THEN 'follow_up_email' ELSE 'call' END,x.due_at,1 FROM step_executions x JOIN sequence_enrollments e ON e.workspace_id=x.workspace_id AND e.id=x.enrollment_id WHERE x.workspace_id=$1 AND x.state='pending' AND e.state='active' AND e.opportunity_id IS NOT NULL
+ UNION ALL SELECT opportunity_id,firm_id,'demo',starts_at,2 FROM meetings WHERE workspace_id=$1 AND opportunity_id IS NOT NULL AND state IN('booked','rescheduled') AND starts_at>$2`,
+    [context.scope.workspaceId, now.toISOString()],
+  );
+  const best = new Map<string, Candidate & { opportunity_id: string }>();
+  for (const row of [...rows].sort((a, b) => a.src - b.src)) {
+    const held = best.get(row.opportunity_id);
+    if (held === undefined || row.due_at < held.due_at) best.set(row.opportunity_id, row);
+  }
+  return Object.fromEntries(
+    [...best].map(([id, row]) => [id, { kind: row.kind, label: LABELS[row.kind], dueAt: row.due_at.toISOString() }]),
+  );
 }

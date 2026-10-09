@@ -1165,13 +1165,13 @@ describe('the CRM bridge G3b was waiting for', () => {
     const answer = await bridge.state();
     expect(answer.screen).toBe('pipeline');
     expect(answer.role).toBe('salesperson');
-    expect(calls.map(call => call.path)).toEqual(['/pipeline/board']);
+    expect(calls.map(call => call.path)).toEqual(['/pipeline/board-v2','/pipeline/board']);
     // Fifteen named channels until 1.0.13; the CRM bridge is fourteen operations of the
     // registry now — the fourteenth is `crm.takeOver`, the explicit takeover (P1-1 of
     // the GPT-6 review of PR 332) — and `operations.test.ts` holds the list.
     // The fifteenth is `crm.resolveOutgoing`, a held outgoing message's firm (S1 review P1-C).
     // The sixteenth is `crm.setValue`, a person's monthly value for an opportunity (Kanban, slice K).
-    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toEqual(['crm.relationshipSave','crm.relationshipCorrect','crm.relationshipFirms','crm.endpointList','crm.endpointMatch','crm.endpointClaim','crm.endpointCorrect','crm.firmSourceRead','crm.firmSourceAdd','crm.firmSourceDelete','crm.firmSourceRestore','crm.firmSourceRecapture','crm.sourceContextRead','crm.sourceContextSave','crm.relationshipRead','crm.personList','crm.personRead','crm.personCreate','crm.personSourceAdd','crm.personSourceDelete','crm.personSourceRecapture','crm.personSourceRestore','crm.state','crm.openFirm','crm.firmTimeline','crm.openPipeline','crm.openAddFirm','crm.openImport','crm.addFirm','crm.commitImport','crm.saveContact','crm.changeStage','crm.setValue','crm.resolveMerge','crm.openOpportunity','crm.takeOver','crm.resolveOutgoing','crm.enroll','crm.checkRoute']);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toEqual(['crm.relationshipSave','crm.relationshipCorrect','crm.relationshipFirms','crm.endpointList','crm.endpointMatch','crm.endpointClaim','crm.endpointCorrect','crm.firmSourceRead','crm.firmSourceAdd','crm.firmSourceDelete','crm.firmSourceRestore','crm.firmSourceRecapture','crm.sourceContextRead','crm.sourceContextSave','crm.relationshipRead','crm.personList','crm.personRead','crm.personCreate','crm.personSourceAdd','crm.personSourceDelete','crm.personSourceRecapture','crm.personSourceRestore','crm.dealCreate','crm.dealReopen','crm.state','crm.openFirm','crm.firmTimeline','crm.openPipeline','crm.openAddFirm','crm.openImport','crm.addFirm','crm.commitImport','crm.saveContact','crm.changeStage','crm.setValue','crm.resolveMerge','crm.openOpportunity','crm.takeOver','crm.resolveOutgoing','crm.enroll','crm.checkRoute']);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {
@@ -1233,7 +1233,7 @@ describe('the CRM bridge G3b was waiting for', () => {
     expect(answer.screen).toBe('pipeline');
     // Showing the columns with no stage controls beats showing nothing; an older
     // API that has not been deployed yet is a deployment order, not an outage.
-    expect(calls.map(call => call.path)).toEqual(['/pipeline/board', '/pipeline/stages', '/firms']);
+    expect(calls.map(call => call.path)).toEqual(['/pipeline/board-v2','/pipeline/board', '/pipeline/stages', '/firms']);
     expect(answer.pipeline?.opportunityIdByFirmId).toEqual({});
   });
 

@@ -1,3 +1,4 @@
+import { changeStage,openExplicitOpportunity } from '../../crm/pipeline.ts';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
@@ -6,8 +7,8 @@ import { GmailClientError, type GmailClient } from '../../mail/gmailClient.ts';
 import { createGmailHttpClient } from '../../mail/gmailClientHttp.ts';
 import { pushTokenPolicyOf } from '../../mail/config.ts';
 import { advanceCursor, readMailbox } from '../../mail/mailboxes.ts';
-import { listHeldOutgoingForFirm, listMatches, resolveAmbiguity } from '../../mail/matching.ts';
-import { listMessagesForOpportunity, readMessageBody } from '../../mail/messages.ts';
+import { findMatchCandidates, listHeldOutgoingForFirm, listMatches, resolveAmbiguity } from '../../mail/matching.ts';
+import { normalizeMetadata, listMessagesForOpportunity, readMessageBody } from '../../mail/messages.ts';
 import { completeGmailGrant, signGrantState } from '../../mail/oauth.ts';
 import { fixturePushTokens, type PushTokenClaims } from '../../mail/pushToken.ts';
 import { runMailRecovery } from '../../mail/recover.ts';
@@ -1854,4 +1855,20 @@ describe('a mailbox switched to another account (call-to-booking A2)', () => {
       (await w.database.session.query('SELECT 1 FROM mailbox_accounts WHERE workspace_id = $1', [workspaceId])).rows,
     ).toEqual([]);
   });
+});
+
+it('a closed conversation with two open deals retains both candidates and holds both without choosing one',async()=>{
+ world=await createMailWorld(); const w=world; await completeBaseline(w,w.alpha);
+ const context=w.systemContext(w.alpha.workspace.workspaceId);
+ w.alpha.messages.push(fixtureMessage({id:'plural-old',threadId:'plural-conversation',historyId:'1011',from:PROSPECT,to:w.alpha.address,body:'Discuss the original pilot'}));
+ await runMailSync(context,w.syncDeps(w.alpha),{mailboxId:w.alpha.mailboxId});
+ expect((await changeStage(context,{opportunityId:w.crm.alpha.opportunityId,toStageKey:'lost',reason:'old pilot ended'})).ok).toBe(true);
+ const a=await openExplicitOpportunity(context,{firmId:w.crm.alpha.firmId}),b=await openExplicitOpportunity(context,{firmId:w.crm.alpha.firmId});
+ if(!a.ok||!b.ok)throw new Error('open deal fixture failed');
+ const candidates=await findMatchCandidates(context,{mailboxId:w.alpha.mailboxId,messageId:randomUUID(),metadata:normalizeMetadata({id:'new-thread-check',threadId:'plural-conversation',internalDateEpochMilliseconds:Date.parse('2026-09-10T14:00:00Z'),labelIds:['INBOX'],headers:{From:PROSPECT,To:w.alpha.address},attachments:[],sizeEstimate:10})});
+ expect(candidates.map(candidate=>candidate.opportunityId)).toEqual(expect.arrayContaining([a.value.id,b.value.id]));
+ w.alpha.messages.push(fixtureMessage({id:'plural-later',threadId:'plural-conversation',historyId:'1012',from:PROSPECT,to:w.alpha.address,body:'Which new pilot should we discuss?'}));
+ const synced=await runMailSync(context,w.syncDeps(w.alpha),{mailboxId:w.alpha.mailboxId});
+ expect(synced.ambiguous).toBe(2);
+ for(const id of [a.value.id,b.value.id]) expect((await listApplicableHolds(context,{actionKind:'email_send',opportunityId:id})).map(hold=>hold.reasonCode)).toContain('ambiguous_match');
 });

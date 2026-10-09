@@ -1,10 +1,10 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { readNextActions, type NextAction } from './boardNextAction.ts';
+import { readNextActions, readOpportunityNextActions, type NextAction } from './boardNextAction.ts';
 import { firmIdentityDtoOf, type FirmIdentityDto } from './dto.ts';
-import { listPipelineStages } from './pipeline.ts';
+import { listPipelineStages, ambiguousFirmOpportunities } from './pipeline.ts';
 import type { FirmRow, PipelineStageRow } from './types.ts';
 import type { MeetingState, StageSuggestion } from '@fss/contracts';
-import { readDemoBookedSuggestions } from '../meetings/stageSuggestion.ts';
+import { readDemoBookedSuggestions, readDemoBookedSuggestionsByOpportunity } from '../meetings/stageSuggestion.ts';
 
 /**
  * The pipeline board, as one read (specification 8.1, Appendix F, Appendix G 7).
@@ -89,6 +89,39 @@ export interface PipelineBoardDto {
   readonly cards: Readonly<Record<string, PipelineBoardCard>>;
 }
 
+export interface PluralPipelineBoardDto {
+  readonly version: 2;
+  readonly columns: readonly { stage: PipelineBoardColumn['stage']; opportunityIds: readonly string[] }[];
+  readonly cards: Readonly<
+    Record<
+      string,
+      PipelineBoardCard & {
+        firm: FirmIdentityDto;
+        opportunityId: string;
+        displayName: string | null;
+        stageControlMode: 'legacy_rules' | 'human';
+        mayChangeStage: boolean;
+      }
+    >
+  >;
+  readonly unplacedFirms: readonly FirmIdentityDto[];
+  readonly stages: readonly PipelineBoardColumn['stage'][];
+}
+export async function readPipelineBoardForActor(
+  context: RepositoryContext,
+  options: { readonly limit?: number; readonly includeLost?: boolean } = {},
+): Promise<PipelineBoardDto> {
+  if (await ambiguousFirmOpportunities(context)) throw new Error('opportunity_ambiguous');
+  const { plural: _plural, ...legacy } = await readBoard(context, options, false);
+  return legacy;
+}
+export async function readPluralPipelineBoardForActor(
+  context: RepositoryContext,
+  options: { readonly limit?: number; readonly includeLost?: boolean } = {},
+): Promise<PluralPipelineBoardDto> {
+  return (await readBoard(context, options, true)).plural;
+}
+
 function columnOf(stage: PipelineStageRow, firms: readonly FirmIdentityDto[]): PipelineBoardColumn {
   return {
     stage: {
@@ -99,13 +132,16 @@ function columnOf(stage: PipelineStageRow, firms: readonly FirmIdentityDto[]): P
       terminalKind: stage.terminal_kind,
       retired: stage.retired,
     },
-    firms: firms.filter(firm => firm.stageKey === stage.key),
+    firms: firms.filter((firm) => firm.stageKey === stage.key),
   };
 }
 
 type BoardRow = FirmRow & {
+  readonly legacy_ambiguous: boolean;
   readonly stage_key: string | null;
   readonly opportunity_id: string | null;
+  readonly display_name: string | null;
+  readonly stage_control_mode: 'legacy_rules' | 'human' | null;
   readonly opportunity_status: 'open' | 'won' | 'lost' | null;
   readonly control_mode: 'automated' | 'manual' | null;
   readonly opened_at: Date | null;
@@ -153,14 +189,15 @@ export function mayChangeStage(context: RepositoryContext, assignedUserId: strin
  * opportunity still sits in one (after 0028's remap none does). A closed opportunity's
  * id is never in `opportunityIdByFirmId`: closed opportunities are not moved from here.
  */
-export async function readPipelineBoardForActor(
+async function readBoard(
   context: RepositoryContext,
-  options: { readonly limit?: number; readonly includeLost?: boolean } = {},
-): Promise<PipelineBoardDto> {
+  options: { readonly limit?: number; readonly includeLost?: boolean },
+  plural: boolean,
+): Promise<PipelineBoardDto & { plural: PluralPipelineBoardDto }> {
   const includeLost = options.includeLost !== false;
   const stages = await listPipelineStages(context);
   const { rows } = await context.db.query<BoardRow>(
-    `SELECT f.*, s.key AS stage_key, o.id AS opportunity_id, o.status AS opportunity_status,
+    `SELECT f.*, (SELECT count(*) FILTER(WHERE status='open')>1 OR (count(*) FILTER(WHERE status='open')=0 AND count(*)>1) FROM opportunities lc WHERE lc.workspace_id=f.workspace_id AND lc.firm_id=f.id) AS legacy_ambiguous, o.display_name,o.stage_control_mode, s.key AS stage_key, o.id AS opportunity_id, o.status AS opportunity_status,
             o.control_mode, o.opened_at,
             v.monthly_cents AS value_cents, v.kind AS value_kind,
             m.id AS meeting_id, m.state AS meeting_state, m.starts_at AS meeting_starts_at,
@@ -169,12 +206,16 @@ export async function readPipelineBoardForActor(
             CASE WHEN o.status = 'lost' THEN o.close_reason END AS close_reason,
             (p.opportunity_id IS NOT NULL) AS pinned
        FROM firms f
-       LEFT JOIN LATERAL (
+       ${
+         plural
+           ? 'LEFT JOIN opportunities o ON o.workspace_id=f.workspace_id AND o.firm_id=f.id'
+           : `LEFT JOIN LATERAL (
          SELECT * FROM opportunities x
           WHERE x.workspace_id = f.workspace_id AND x.firm_id = f.id
           ORDER BY (x.status = 'open') DESC, x.closed_at DESC NULLS LAST, x.id
           LIMIT 1
-       ) o ON true
+       ) o ON true`
+       }
        LEFT JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id
        LEFT JOIN LATERAL (
          SELECT monthly_cents, kind FROM opportunity_values y
@@ -183,7 +224,7 @@ export async function readPipelineBoardForActor(
        ) v ON true
        LEFT JOIN LATERAL (
          SELECT id, state, starts_at FROM meetings z
-          WHERE z.workspace_id = f.workspace_id AND z.firm_id = f.id
+          WHERE z.workspace_id = f.workspace_id AND z.firm_id = f.id AND (${plural ? 'z.opportunity_id=o.id' : 'true'})
           ORDER BY z.updated_at DESC, z.id DESC LIMIT 1
        ) m ON true
        LEFT JOIN LATERAL (
@@ -205,22 +246,22 @@ export async function readPipelineBoardForActor(
     [context.scope.workspaceId, Math.trunc(options.limit ?? 500)],
   );
 
-  const nextActions = await readNextActions(context);
-  const suggestions = await readDemoBookedSuggestions(
+  if (!plural && rows.some((row) => row.legacy_ambiguous)) throw new Error('opportunity_ambiguous');
+  const nextActions = plural ? await readOpportunityNextActions(context) : await readNextActions(context);
+  const suggestions = await (plural ? readDemoBookedSuggestionsByOpportunity : readDemoBookedSuggestions)(
     context,
-    rows.filter(row => row.opportunity_status === 'open' && mayChangeStage(context, row.assigned_user_id)).map(row => row.id),
+    rows.filter((row) => row.opportunity_status === 'open' && mayChangeStage(context, row.assigned_user_id)).map((row) => row.id),
   );
   const opportunityIdByFirmId: Record<string, string> = {};
   const cards: Record<string, PipelineBoardCard> = {};
   const placed: FirmIdentityDto[] = [];
+  const pluralCards: Record<string, PluralPipelineBoardDto['cards'][string]> = {};
   const unplacedFirms: FirmIdentityDto[] = [];
 
   for (const row of rows) {
     const shown =
       row.stage_key !== null &&
-      (row.opportunity_status === 'open' ||
-        row.opportunity_status === 'won' ||
-        (row.opportunity_status === 'lost' && includeLost));
+      (row.opportunity_status === 'open' || row.opportunity_status === 'won' || (row.opportunity_status === 'lost' && includeLost));
     const dto = firmIdentityDtoOf(row, {
       stageKey: shown ? row.stage_key : null,
       status: shown ? row.opportunity_status : null,
@@ -248,19 +289,49 @@ export async function readPipelineBoardForActor(
               fromStageKey: row.evidence_from_stage_key,
             },
       pinned: row.pinned,
-      nextAction: nextActions[row.id] ?? null,
+      nextAction: nextActions[plural ? (row.opportunity_id ?? '') : row.id] ?? null,
       closeReason: row.close_reason,
-      stageSuggestion: suggestions.get(row.id) ?? null,
+      stageSuggestion: suggestions.get(plural ? (row.opportunity_id ?? row.id) : row.id) ?? null,
     };
+    if (row.opportunity_id !== null)
+      pluralCards[row.opportunity_id] = {
+        ...cards[row.id]!,
+        firm: dto,
+        opportunityId: row.opportunity_id,
+        displayName: row.display_name,
+        stageControlMode: row.stage_control_mode ?? 'legacy_rules',
+        mayChangeStage: row.opportunity_status === 'open' && mayChangeStage(context, row.assigned_user_id),
+      };
     if (row.opportunity_status === 'open' && row.opportunity_id !== null && mayChangeStage(context, row.assigned_user_id)) {
       opportunityIdByFirmId[row.id] = row.opportunity_id;
     }
   }
 
-  const occupied = new Set(placed.map(firm => firm.stageKey));
+  const placedFirmIds = new Set(placed.map((firm) => firm.id));
+  const unplaced = [...new Map(unplacedFirms.filter((firm) => !placedFirmIds.has(firm.id)).map((firm) => [firm.id, firm])).values()];
+  const occupied = new Set(placed.map((firm) => firm.stageKey));
   const columns = stages
-    .filter(stage => (stage.terminal_kind === 'lost' ? includeLost : !stage.retired || occupied.has(stage.key)))
-    .map(stage => columnOf(stage, placed));
+    .filter((stage) => (stage.terminal_kind === 'lost' ? includeLost : !stage.retired || occupied.has(stage.key)))
+    .map((stage) => columnOf(stage, placed));
 
-  return { columns, opportunityIdByFirmId, unplacedFirms, cards, stages: stages.map(stage => columnOf(stage, []).stage) };
+  const stageDtos = stages.map((stage) => columnOf(stage, []).stage);
+  return {
+    columns,
+    opportunityIdByFirmId,
+    unplacedFirms: unplaced,
+    cards,
+    stages: stageDtos,
+    plural: {
+      version: 2,
+      columns: columns.map((column) => ({
+        stage: column.stage,
+        opportunityIds: Object.values(pluralCards)
+          .filter((card) => card.firm.stageKey === column.stage.key)
+          .map((card) => card.opportunityId),
+      })),
+      cards: pluralCards,
+      unplacedFirms: unplaced,
+      stages: stageDtos,
+    },
+  };
 }

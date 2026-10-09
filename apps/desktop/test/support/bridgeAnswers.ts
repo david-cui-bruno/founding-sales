@@ -274,6 +274,9 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   '/calls/follow-up-preview': followUpPreviewBody,
   '/today/firm': todayFirmBody,
   '/replies': { businessDate: '2026-09-21', cards: [replyCardBody] },
+  '/crm/firm-page-v3':(()=>{const {opportunity,stageHistory,...common}=firmPageBody;return {...common,version:3,opportunities:[{opportunity,stageHistory,stageControlMode:'legacy_rules',displayName:'Test pilot'}]};})(),
+  '/opportunities/v2/open':{status:'accepted',replayed:false,result:{opportunityId:FIXTURE_IDS.opportunity}},
+  '/opportunities/v2/reopen':{status:'accepted',replayed:false,result:{opportunityId:FIXTURE_IDS.opportunity}},
   '/crm/firm-page': firmPageBody,
   // One held outgoing message, so `crm.resolveOutgoing` reaches the server (S1 review P1-C).
   '/messages/held-outgoing': {
@@ -287,6 +290,7 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   },
   // The board as the server sends it for somebody else: no opportunity of this firm's,
   // because this caller may not change its stage.
+  '/pipeline/board-v2':{version:2,columns:[],cards:{},unplacedFirms:[firmIdentity],stages:[]},
   '/pipeline/board': { columns: [], opportunityIdByFirmId: {}, unplacedFirms: [firmIdentity] },
   '/settings': settingsBody,
   '/sequences': {

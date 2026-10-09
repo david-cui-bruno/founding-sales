@@ -922,9 +922,11 @@ export function FirmPage({
   timelinePorts,
   onApplyStageSuggestion,
   initialMeetingId,
+  opportunitySelectionRequired=false,
 }: {
   readonly page: FirmPageResponse;
   readonly initialMeetingId?: string;
+  readonly opportunitySelectionRequired?:boolean;
   readonly sequences: FirmSequencesView | null;
   readonly actionsEnabled: boolean;
   /** Whether one named form's own command is on the wire (1.0.13, after the review). */
@@ -1025,14 +1027,14 @@ export function FirmPage({
     <div className="callie-v2 mt-5 grid gap-x-12 gap-y-6 min-[1100px]:grid-cols-[minmax(0,1fr)_300px]">
       <div className="min-w-0 max-w-[760px]">
         {page.tasks === undefined ? <NextAction card={card} timeZone={page.read.firm.timeZone} /> : <FirmTasks tasks={page.tasks} />}
-        <Opportunity
+        {opportunitySelectionRequired?<p>Choose a deal to see its stage and history.</p>:<Opportunity
           page={page}
           card={card}
           stageName={stageName}
           actionsEnabled={actionsEnabled}
           busy={busy}
           onTakeOver={onTakeOver}
-        />
+        />}
         <div className="mt-7">{calls}</div>
         {page.timeline === undefined || guard === undefined ? null : (
           <FirmTimeline
@@ -1045,7 +1047,7 @@ export function FirmPage({
           />
         )}
         {research}
-        {sequences === null ? null : (
+        {opportunitySelectionRequired?<p>Choose a deal before enrolling anyone.</p>:sequences === null ? null : (
           <Sequences
             page={page}
             contacts={detail.contacts}

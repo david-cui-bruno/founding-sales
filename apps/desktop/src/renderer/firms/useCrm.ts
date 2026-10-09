@@ -44,12 +44,12 @@ import { routeShown, routeText, type Route } from '../routes.ts';
 
 export interface CrmActions {
   /** The firm's own page: the route follows to it. */
-  openFirm(firmId: string): void;
+  openFirm(firmId: string, opportunityId?:string): void;
   /**
    * The firm in the Pipeline's side panel (S4). The same read as `openFirm`, but the route
    * stays Pipeline and the board is not replaced: the bridge keeps the board beside the firm.
    */
-  openPanel(firmId: string): void;
+  openPanel(firmId: string, opportunityId?:string): void;
   openPipeline(includeLost?: boolean): void;
   openAddFirm(): void;
   openImport(): void;
@@ -143,13 +143,13 @@ export function useCrm(
   const { read, command } = view;
   const actions = useMemo<CrmActions>(
     () => ({
-      openFirm: firmId => {
+      openFirm: (firmId,opportunityId) => {
         setFullPage(true);
-        read(api => api.read('crm.openFirm', { firmId }));
+        read(api => api.read('crm.openFirm', { firmId,...(opportunityId===undefined?{}:{opportunityId}) }));
       },
-      openPanel: firmId => {
+      openPanel: (firmId,opportunityId) => {
         setFullPage(false);
-        read(api => api.read('crm.openFirm', { firmId }));
+        read(api => api.read('crm.openFirm', { firmId,...(opportunityId===undefined?{}:{opportunityId}) }));
       },
       openPipeline: includeLost => {
         setFullPage(false);

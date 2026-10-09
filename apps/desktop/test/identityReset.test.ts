@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 async function eventually(condition: () => boolean, what: string): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (condition()) return;
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`timed out waiting for ${what}`);
 }
@@ -36,8 +36,6 @@ const UUID = FIXTURE_IDS.firm;
 const OPPORTUNITY_ID = FIXTURE_IDS.opportunity;
 const SEQUENCE_ID = FIXTURE_IDS.sequence;
 
-
-
 const session = {
   state: async () =>
     await Promise.resolve({
@@ -65,7 +63,10 @@ const session = {
  * `generation` is a box a test moves by hand: the session manager's counter in
  * production, and the one fact both mechanisms turn on.
  */
-function bridgesUnder(generation: { value: number }): {
+function bridgesUnder(
+  generation: { value: number },
+  legacyCrm = false,
+): {
   readonly named: ReadonlyMap<string, Forgettable & Record<string, unknown>>;
   readonly answered: string[];
   /**
@@ -92,21 +93,19 @@ function bridgesUnder(generation: { value: number }): {
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.0.13',
     accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
-    send: async url => {
+    send: async (url) => {
       const path = new URL(url).pathname;
       answered.push(path);
       if (holdNext > 0) {
         holdNext -= 1;
-        await new Promise<void>(resolve => {
+        await new Promise<void>((resolve) => {
           waiting.push(resolve);
         });
       }
-      const body = serving ? BRIDGE_ANSWERS[path] : undefined;
+      const body = serving && !(legacyCrm && ['/crm/firm-page-v3', '/pipeline/board-v2'].includes(path)) ? BRIDGE_ANSWERS[path] : undefined;
       // Anything this file has not written an answer for is a refusal, so a bridge that
       // needed it fails its own "before" assertion rather than looking empty by accident.
-      return await Promise.resolve(
-        body === undefined ? { status: 404, body: { error: 'not_found' } } : { status: 200, body },
-      );
+      return await Promise.resolve(body === undefined ? { status: 404, body: { error: 'not_found' } } : { status: 200, body });
     },
   });
   const guard = <H extends Forgettable>(host: H): H => guardIdentity(host, () => generation.value);
@@ -128,17 +127,13 @@ function bridgesUnder(generation: { value: number }): {
       ) as unknown as Forgettable & Record<string, unknown>,
     ],
     ['replies', guard(createReplyBridge({ api, session })) as unknown as Forgettable & Record<string, unknown>],
-    [
-      'crm',
-      guard(createCrmBridge({ api, session, clientVersion: '1.0.13' })) as unknown as Forgettable & Record<string, unknown>,
-    ],
+    ['crm', guard(createCrmBridge({ api, session, clientVersion: '1.0.13' })) as unknown as Forgettable & Record<string, unknown>],
     ['sequences', guard(createSequenceBridge({ api, session })) as unknown as Forgettable & Record<string, unknown>],
     ['settings', guard(createAdminBridge({ api, session })) as unknown as Forgettable & Record<string, unknown>],
     [
       'mailbox',
-      guard(
-        createMailboxBridge({ api, session, openExternally: async () => await Promise.resolve() }),
-      ) as unknown as Forgettable & Record<string, unknown>,
+      guard(createMailboxBridge({ api, session, openExternally: async () => await Promise.resolve() })) as unknown as Forgettable &
+        Record<string, unknown>,
     ],
   ]);
   return {
@@ -177,7 +172,7 @@ const FIRST_READ: Readonly<
   sequences: {
     method: 'openSequence',
     input: { sequenceId: SEQUENCE_ID },
-    holds: state => (state as { selectedSequenceId?: unknown } | null)?.selectedSequenceId === SEQUENCE_ID,
+    holds: (state) => (state as { selectedSequenceId?: unknown } | null)?.selectedSequenceId === SEQUENCE_ID,
   },
   settings: { method: 'show', input: { screen: 'settings' }, holds: field('settings') },
   mailbox: { method: 'state', input: undefined, holds: field('status') },
@@ -185,7 +180,7 @@ const FIRST_READ: Readonly<
 
 /** Whether a state's named field is holding something. */
 function field(name: string): (state: unknown) => boolean {
-  return state => {
+  return (state) => {
     const value = (state as Record<string, unknown> | null)?.[name];
     if (value === null || value === undefined) return false;
     return Array.isArray(value) ? value.length > 0 : true;
@@ -270,7 +265,8 @@ describe('every bridge forgets when the person changes (P0-A)', () => {
      * that is not theirs.
      */
     const generation = { value: 1 };
-    const { named } = bridgesUnder(generation);
+    // Explicitly exercise the installed-server fallback and its legacy cache.
+    const { named } = bridgesUnder(generation, true);
     const crm = named.get('crm');
     if (crm === undefined) throw new Error('no crm bridge');
     const opened = (await (crm['openFirm'] as (input: unknown) => Promise<unknown>).call(crm, { firmId: UUID })) as {
@@ -392,7 +388,7 @@ describe('guardIdentity (P0-A)', () => {
       forget: async (): Promise<string> => {
         clears.push(generation);
         // Held open, so the test can move the session while this clear is running.
-        await new Promise<void>(resolve => {
+        await new Promise<void>((resolve) => {
           held.release = resolve;
         });
         return 'empty';

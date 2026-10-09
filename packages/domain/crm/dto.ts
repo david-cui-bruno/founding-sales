@@ -4,7 +4,7 @@ import { recordCrmAuditEvent } from './audit.ts';
 import { listContacts } from './contacts.ts';
 import { readFirm } from './firms.ts';
 import { listFirmAliases } from './merges.ts';
-import { readOpenOpportunity, listPipelineStages } from './pipeline.ts';
+import { readOpenOpportunity, listPipelineStages, ambiguousFirmOpportunities } from './pipeline.ts';
 import { listRoutes } from './routes.ts';
 import { accept, refuse, type CrmResult, type FirmRow } from './types.ts';
 
@@ -133,11 +133,13 @@ export async function readFirmForActor(
     /** Put each route's `technicalValidation` on it. Absent is the first shape exactly. */
     readonly routeValidation?: boolean | undefined;
   },
+plural = false,
 ): Promise<CrmResult<FirmReadDto>> {
   const firm = await readFirm(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
 
-  const open = await readOpenOpportunity(context, firm.id);
+  if (!plural && await ambiguousFirmOpportunities(context,firm.id)) return refuse('opportunity_ambiguous');
+  const open = plural ? null : await readOpenOpportunity(context, firm.id);
   const stages = await listPipelineStages(context);
   const stageKey = open === null ? null : (stages.find(stage => stage.id === open.stage_id)?.key ?? null);
   const openedAtValue = open?.['opened_at'];

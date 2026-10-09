@@ -6,8 +6,8 @@ import {
   reorderPipelineStagesCommandSchema,
   retirePipelineStageCommandSchema,
 } from '@fss/contracts';
-import { readPipelineBoardForActor } from '@fss/domain/crm/board.ts';
-import { listPipelineStages } from '@fss/domain/crm/pipeline.ts';
+import { readPipelineBoardForActor,readPluralPipelineBoardForActor } from '@fss/domain/crm/board.ts';
+import { listPipelineStages,ambiguousFirmOpportunities } from '@fss/domain/crm/pipeline.ts';
 import {
   createPipelineStage,
   renamePipelineStage,
@@ -40,6 +40,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * refuses a terminal stage.
  */
 export const PIPELINE_PATHS: readonly string[] = [
+  '/pipeline/board-v2',
   '/pipeline/stages',
   '/pipeline/stages/create',
   '/pipeline/stages/rename',
@@ -86,7 +87,7 @@ export async function routePipeline(request: ApiRequest, options: RoutingOptions
   if (!prepared.ok) return prepared.result;
   const deps = prepared.deps;
 
-  if (request.path === '/pipeline/board') {
+  if (request.path === '/pipeline/board' || request.path === '/pipeline/board-v2') {
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
     // Lost is shown unless the request says `includeLost: false` (call-to-booking, 0028).
@@ -94,7 +95,11 @@ export async function routePipeline(request: ApiRequest, options: RoutingOptions
     // default keeps Lost; the new desktop sends `false` to hide it.
     const filter = pipelineBoardRequestSchema.safeParse(request.body ?? {});
     if (!filter.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
-    const board = await readPipelineBoardForActor(scoped.context, { includeLost: filter.data.includeLost !== false });
+    if(request.path==='/pipeline/board-v2')return {status:200,body:await readPluralPipelineBoardForActor(scoped.context,{includeLost:filter.data.includeLost!==false})};
+    if(await ambiguousFirmOpportunities(scoped.context))return {status:409,body:{status:'refused',reason:'opportunity_ambiguous'}};
+    let board;
+    try {board=await readPipelineBoardForActor(scoped.context,{includeLost:filter.data.includeLost!==false});}
+    catch(error){if(error instanceof Error&&error.message==='opportunity_ambiguous')return {status:409,body:{status:'refused',reason:'opportunity_ambiguous'}};throw error;}
     // A session opened by 1.0.35 reads the shape it parses (lane M1, review M1F finding 4).
     return { status: 200, body: readsLegacyMeetings(deps.principal) ? legacyBoard(board) : board };
   }

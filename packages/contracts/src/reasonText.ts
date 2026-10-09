@@ -165,6 +165,7 @@ export const CRM_REFUSAL_SENTENCES: Readonly<Record<CrmRefusalCode, string>> = O
   stage_last_active: 'This is the last active stage, and deals need somewhere to start. Add another stage first.',
   opportunity_unknown: 'Callie cannot find that deal. Refresh the page.',
   opportunity_closed: 'That deal is already closed. Reopen it first if you want to change it.',
+  opportunity_ambiguous: 'Choose the specific deal before continuing.',
   opportunity_open_exists: 'This firm already has an open deal. Finish that one first.',
   opportunity_not_closed: 'That deal is still open, so there is nothing to reopen.',
   lost_reason_required: 'Say why the deal was lost, then save.',

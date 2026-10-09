@@ -12,7 +12,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
-import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
+import { readOperationalOpportunity, setManualControlMode } from '../crm/pipeline.ts';
 import { grantFollowUpPermission } from '../sequences/followUpPermissions.ts';
 import { retireRoute } from '../crm/routes.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -80,6 +80,7 @@ import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep
  */
 
 export interface LogCallOutcomeInput {
+  readonly opportunityId?: string | undefined;
   readonly firmId: string;
   readonly contactId?: string | undefined;
   readonly routeId?: string | undefined;
@@ -468,7 +469,10 @@ export async function logCallOutcome(
     followUps.push({ kind: 'route_not_named', reason: input.outcome });
   }
 
-  const opportunity = await readOpenOpportunity(context, input.firmId);
+  if (bound!==null && input.opportunityId!==undefined && input.opportunityId!==bound.enrollment.opportunityId) return refusePolicy('invalid_input');
+  const selectedOpportunityId=bound===null ? input.opportunityId : bound.enrollment.opportunityId;
+  const opportunity=bound!==null && selectedOpportunityId===null ? null : await readOperationalOpportunity(context,input.firmId,selectedOpportunityId);
+  if(input.opportunityId!==undefined && opportunity===null)return refusePolicy('invalid_input');
 
   // ---- 2. Record ----------------------------------------------------------
   //
@@ -860,6 +864,7 @@ export async function recordCallFollowUp(
   }
   const { rows } = await context.db.query<{
     firm_id: string;
+    opportunity_id: string | null;
     contact_id: string | null;
     outcome: string;
     agreed_follow_up: string | null;
@@ -867,7 +872,7 @@ export async function recordCallFollowUp(
     occurred_at: Date;
     recorded_at: Date;
   }>(
-    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at, recorded_at
+    `SELECT firm_id, opportunity_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at, recorded_at
        FROM call_logs WHERE workspace_id = $1 AND id = $2
        FOR UPDATE`,
     [context.scope.workspaceId, input.callLogId],
@@ -896,7 +901,7 @@ export async function recordCallFollowUp(
     if (version.state !== 'published') return refusePolicy('version_not_published');
   }
 
-  const opportunity = await readOpenOpportunity(context, log.firm_id);
+  const opportunity = log.opportunity_id===null ? null : await readOperationalOpportunity(context,log.firm_id,log.opportunity_id);
   const agreed = await applyAgreedFollowUp(context, {
     firmId: log.firm_id,
     contactId: log.contact_id,
@@ -968,13 +973,14 @@ export async function confirmCapturedFollowUp(
   }
   const { rows } = await context.db.query<{
     firm_id: string;
+    opportunity_id: string | null;
     contact_id: string | null;
     outcome: CallOutcome;
     agreed_follow_up: string | null;
     actor_user_id: string;
     occurred_at: Date;
   }>(
-    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at
+    `SELECT firm_id, opportunity_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at
        FROM call_logs WHERE workspace_id = $1 AND id = $2
        FOR UPDATE`,
     [context.scope.workspaceId, input.callLogId],
@@ -996,7 +1002,7 @@ export async function confirmCapturedFollowUp(
   if (callStarted === undefined) return refusePolicy('invalid_input');
   if (!(await withinCapturedFollowUpWindow(context, callStarted))) return refusePolicy('follow_up_expired');
 
-  const opportunity = await readOpenOpportunity(context, log.firm_id);
+  const opportunity = log.opportunity_id===null ? null : await readOperationalOpportunity(context,log.firm_id,log.opportunity_id);
   const agreed = await applyAgreedFollowUp(context, {
     firmId: log.firm_id,
     contactId: log.contact_id,
@@ -1331,6 +1337,7 @@ export async function listCallLogs(
   const { rows } = await context.db.query<{
     id: string;
     firm_id: string;
+    opportunity_id: string | null;
     contact_id: string | null;
     outcome: CallOutcome;
     step_effect: CallStepEffect;

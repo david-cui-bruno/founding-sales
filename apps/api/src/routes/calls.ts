@@ -180,6 +180,7 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
   // not passed on: what a no-answer does is the frozen step's decision (9.1).
   return await runPolicyCommand(deps, logCallOutcomeCommandSchema, 'log_call_outcome', async (repository, body) =>
     await logCallOutcome(repository, {
+      opportunityId:body.opportunityId,
       firmId: body.firmId,
       ...(body.contactId === undefined ? {} : { contactId: body.contactId }),
       ...(body.routeId === undefined ? {} : { routeId: body.routeId }),

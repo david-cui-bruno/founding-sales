@@ -55,6 +55,7 @@ export const CRM_REFUSAL_CODES = [
   'stage_terminal',
   'stage_last_active',
   'opportunity_unknown',
+  'opportunity_ambiguous',
   'opportunity_closed',
   'opportunity_open_exists',
   'opportunity_not_closed',
@@ -92,12 +93,7 @@ const controlModeSchema = z.enum(['automated', 'manual']);
 const opportunityStatusSchema = z.enum(['open', 'won', 'lost']);
 
 /** Why a firm has no established zone. `authorizeDial` refuses every one of them (9.2). */
-const zoneUnresolvedReasonSchema = z.enum([
-  'no_location',
-  'state_spans_zones',
-  'state_unknown',
-  'no_default_for_state',
-]);
+const zoneUnresolvedReasonSchema = z.enum(['no_location', 'state_spans_zones', 'state_unknown', 'no_default_for_state']);
 
 // ---------------------------------------------------------------------------
 // Read DTOs — Appendix F
@@ -372,3 +368,32 @@ export const mergeRefusalSchema = z.object({
 
 /** Kept exported so a caller can assert a value is really an E.164 route. */
 export { e164 as phoneRouteValueSchema };
+
+export const reopenExplicitOpportunityCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  firmId: uuid,
+  opportunityId: uuid,
+  reason: z.string().trim().min(1).max(300),
+});
+export const pluralPipelineBoardResponseSchema = z.strictObject({
+  version: z.literal(2),
+  columns: z.array(z.strictObject({ stage: pipelineStageDtoSchema, opportunityIds: z.array(uuid) })),
+  cards: z.record(
+    uuid,
+    boardCardSchema.extend({
+      firm: firmIdentityDtoSchema,
+      opportunityId: uuid,
+      displayName: z.string().max(160).nullable(),
+      stageControlMode: z.enum(['legacy_rules', 'human']),
+      mayChangeStage: z.boolean(),
+    }),
+  ),
+  unplacedFirms: z.array(firmIdentityDtoSchema),
+  stages: z.array(pipelineStageDtoSchema),
+});
+
+export const openExplicitOpportunityCommandSchema = openOpportunityCommandSchema.extend({
+  name: z.string().trim().min(1).max(160).optional(),
+});
+
+export const explicitOpportunityResultSchema=z.strictObject({opportunityId:uuid});

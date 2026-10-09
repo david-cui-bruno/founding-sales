@@ -165,7 +165,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('devices', { paths: DEVICE_PATHS }, routeDevices, routing),
     moduleOf('firms', { prefixes: ['/firms'] }, routeFirms, routing),
     moduleOf('contacts', { prefixes: ['/contacts'] }, routeContacts, routing),
-    moduleOf('opportunities', { prefixes: ['/opportunities'] }, routeOpportunities, routing),
+    moduleOf('opportunities', { paths:['/opportunities/v2/open','/opportunities/v2/reopen'],prefixes: ['/opportunities'] }, routeOpportunities, routing),
     moduleOf('pipeline', { paths: PIPELINE_PATHS }, routePipeline, routing),
     moduleOf('merges', { prefixes: ['/merges'] }, routeMerges, routing),
     // The CRM surface. Exact paths, which is what every new endpoint should be: the

@@ -536,6 +536,7 @@ const agreedFollowUpSchema = z
  *    the client (audit item C04).
  */
 export const logCallOutcomeCommandSchema = z.strictObject({
+  opportunityId: uuid.optional(),
   ...commandEnvelope,
   firmId: uuid,
   contactId: uuid.optional(),
