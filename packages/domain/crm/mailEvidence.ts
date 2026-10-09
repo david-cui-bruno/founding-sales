@@ -1,32 +1,32 @@
-import type {CanonicalSourceReference} from '@fss/contracts';
+import type {CanonicalSourceReference,CrmClaimContext} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {SourceLookup} from './sourceResolver.ts';
 /** #483 owns proven lineage and sole original body storage. Current mailbox identity is not historical proof. */
 export interface MailProcessingAuthority {
  source:SourceLookup;
  authorizationFingerprint:string;
- ownerUserId:string;
- accountBinding:string;
- connectionGeneration:number;
- policyRevision:number;
- metadataRevision:number;
- decisionRevision:number;
- parserVersion:string;
+ /** Actual native proof token, transient only: never a job/database payload. */
+ nativeAuthority:unknown;
 }
 /** Stored-copy read authority and current processing authority intentionally differ after disconnect. */
 export interface CrmMailEvidencePort {
  resolve(context:RepositoryContext,source:SourceLookup):Promise<{
   source:CanonicalSourceReference;
+  ownerUserId:string;
   extent:{unit:'utf16';length:number};
   passage:{text:string;locator:string;speaker:string|null}|null;
  }|null>;
+ readContext(context:RepositoryContext,source:SourceLookup):Promise<CrmClaimContext|null>;
+ readState(context:RepositoryContext,input:{sourceId:string}):Promise<{revision:number;availability:string}|null>;
  loadOriginalInput(context:RepositoryContext,authority:MailProcessingAuthority):Promise<string|null>;
- authorizeProcessing(context:RepositoryContext,source:SourceLookup):Promise<MailProcessingAuthority|null>;
+ authorizeProcessing(context:RepositoryContext,source:SourceLookup,purposeOwner:string):Promise<MailProcessingAuthority|null>;
  revalidateProcessing(context:RepositoryContext,authority:MailProcessingAuthority):Promise<boolean>;
 }
 /** Composition cannot make legacy rows available or infer account lineage. #483 must provide the implementation. */
 export const unavailableMailEvidence:CrmMailEvidencePort={
  resolve:async()=>null,
+ readContext:async()=>null,
+ readState:async()=>null,
  loadOriginalInput:async()=>null,
  authorizeProcessing:async()=>null,
  revalidateProcessing:async()=>false,

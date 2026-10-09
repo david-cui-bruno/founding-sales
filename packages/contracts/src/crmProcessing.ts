@@ -29,7 +29,8 @@ export const crmExtractionFinancialSchema = z.object({
   settlementState: z.enum(['reserved','calling','settled','estimated','released']),
   settledCents: z.number().int().min(0),
 }).strict();
-export const crmClaimContextSchema=z.object({personId:z.uuid().nullable(),firmIds:z.array(z.uuid()).max(100),relationships:z.array(z.object({relationshipId:z.uuid(),revision:z.number().int().positive()}).strict()).max(100),review:z.enum(['current','required'])}).strict();
+export const crmMailContextReferenceSchema=z.object({contextId:z.uuid(),sourceRevision:z.number().int().positive().max(2147483647),personId:z.uuid().nullable(),firmId:z.uuid().nullable(),opportunityId:z.uuid().nullable(),operationalMatchId:z.uuid().nullable(),operationalMatchHash:z.string().regex(/^[a-f0-9]{64}$/u).nullable(),kind:z.enum(['acquired','reviewed'])}).strict().refine(value=>(value.operationalMatchId===null)===(value.operationalMatchHash===null),{message:'Operational match identity and hash must be paired'});
+export const crmClaimContextSchema=z.object({personId:z.uuid().nullable(),firmIds:z.array(z.uuid()).max(100),relationships:z.array(z.object({relationshipId:z.uuid(),revision:z.number().int().positive()}).strict()).max(100),review:z.enum(['current','required']),mailContexts:z.array(crmMailContextReferenceSchema).max(100).optional()}).strict();
 export type CrmClaimContext=z.infer<typeof crmClaimContextSchema>;
 
 export const crmExtractionClaimSchema = z.object({

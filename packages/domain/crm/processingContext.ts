@@ -18,9 +18,13 @@ export async function readProcessingContext(context:RepositoryContext,source:Sou
 }
 export function parsedProcessingContext(value:unknown):CrmClaimContext|null{const parsed=crmClaimContextSchema.safeParse(value);return parsed.success?parsed.data:null;}
 /** A correction may request context review, but cannot relabel original IDs/relationship revisions. */
-export function sameProcessingContext(original:CrmClaimContext,current:CrmClaimContext){return JSON.stringify({...original,review:'current'})===JSON.stringify({...current,review:'current'});}
+export function sameProcessingContext(original:CrmClaimContext,current:CrmClaimContext){return processingContextHash(original)===processingContextHash(current);}
 
 /** Stable IDs/revisions define generation identity; review flags never rebind a source. */
-export function processingContextHash(value:CrmClaimContext){return createHash('sha256').update(`${value.personId??''}|${value.firmIds.join(',')}|${value.relationships.map(row=>`${row.relationshipId}:${row.revision}`).join(',')}`).digest('hex');}
+export function processingContextHash(value:CrmClaimContext){
+ const base=`${value.personId??''}|${value.firmIds.join(',')}|${value.relationships.map(row=>`${row.relationshipId}:${row.revision}`).join(',')}`;
+ const mail=value.mailContexts?.map(row=>[row.contextId,row.sourceRevision,row.personId,row.firmId,row.opportunityId,row.operationalMatchId,row.operationalMatchHash,row.kind]).sort((a,b)=>JSON.stringify(a)<JSON.stringify(b)?-1:JSON.stringify(a)>JSON.stringify(b)?1:0);
+ return createHash('sha256').update(mail===undefined||mail.length===0?base:`${base}|mail:${JSON.stringify(mail)}`).digest('hex');
+}
 
 export const NATIVE_PROCESSING_AUTHORIZATION_HASH=createHash('sha256').update('none/native').digest('hex');

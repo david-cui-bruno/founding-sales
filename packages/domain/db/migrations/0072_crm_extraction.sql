@@ -179,13 +179,30 @@ REVOKE DELETE ON crm_extraction_financial_receipts FROM app_runtime,migration;
 -- Identity context has no arbitrary text slots, including nested relationship rows.
 CREATE FUNCTION crm_extraction_context_valid(value jsonb) RETURNS boolean
 LANGUAGE plpgsql IMMUTABLE AS $$
-DECLARE element jsonb; uuid_pattern text := '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$';
+DECLARE element jsonb; field text; uuid_pattern text := '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$';
 BEGIN
  IF value IS NULL THEN RETURN true; END IF;
- IF jsonb_typeof(value)<>'object' OR value-ARRAY['personId','firmIds','relationships','review']<>'{}'::jsonb
- OR NOT value ?& ARRAY['personId','firmIds','relationships','review'] OR octet_length(value::text)>20000
+ IF jsonb_typeof(value)<>'object' OR value-ARRAY['personId','firmIds','relationships','review','mailContexts']<>'{}'::jsonb
+ OR NOT value ?& ARRAY['personId','firmIds','relationships','review']
  OR jsonb_typeof(value->'firmIds')<>'array' OR jsonb_typeof(value->'relationships')<>'array'
  OR jsonb_typeof(value->'review')<>'string' OR value->>'review' NOT IN ('current','required') THEN RETURN false; END IF;
+ IF value ? 'mailContexts' THEN
+  IF jsonb_typeof(value->'mailContexts')<>'array' OR jsonb_array_length(value->'mailContexts')>100 THEN RETURN false; END IF;
+  FOR element IN SELECT jsonb_array_elements(value->'mailContexts') LOOP
+   IF jsonb_typeof(element)<>'object' OR element-ARRAY['contextId','sourceRevision','personId','firmId','opportunityId','operationalMatchId','operationalMatchHash','kind']<>'{}'::jsonb
+   OR NOT element ?& ARRAY['contextId','sourceRevision','personId','firmId','opportunityId','operationalMatchId','operationalMatchHash','kind']
+   OR jsonb_typeof(element->'contextId')<>'string' OR element->>'contextId' !~ uuid_pattern
+   OR jsonb_typeof(element->'sourceRevision')<>'number' OR element->>'sourceRevision' !~ '^[1-9][0-9]{0,9}$'
+   OR jsonb_typeof(element->'kind')<>'string' OR element->>'kind' NOT IN ('acquired','reviewed') THEN RETURN false; END IF;
+   IF (element->>'sourceRevision')::bigint>2147483647 THEN RETURN false; END IF;
+   FOREACH field IN ARRAY ARRAY['personId','firmId','opportunityId','operationalMatchId'] LOOP
+    IF element->field<>'null'::jsonb AND (jsonb_typeof(element->field)<>'string' OR element->>field !~ uuid_pattern) THEN RETURN false; END IF;
+   END LOOP;
+   IF element->'operationalMatchHash'<>'null'::jsonb AND (jsonb_typeof(element->'operationalMatchHash')<>'string' OR element->>'operationalMatchHash' !~ '^[a-f0-9]{64}$') THEN RETURN false; END IF;
+   IF (element->'operationalMatchId'='null'::jsonb)<>(element->'operationalMatchHash'='null'::jsonb) THEN RETURN false; END IF;
+  END LOOP;
+ END IF;
+ IF octet_length(value::text)>(CASE WHEN jsonb_typeof(value->'mailContexts')='array' AND jsonb_array_length(value->'mailContexts')>0 THEN 64000 ELSE 20000 END) THEN RETURN false; END IF;
  IF value->'personId'<>'null'::jsonb AND (jsonb_typeof(value->'personId')<>'string' OR value->>'personId' !~ uuid_pattern) THEN RETURN false; END IF;
  IF jsonb_array_length(value->'firmIds')>100 OR jsonb_array_length(value->'relationships')>100 THEN RETURN false; END IF;
  FOR element IN SELECT jsonb_array_elements(value->'firmIds') LOOP
@@ -206,7 +223,9 @@ ALTER TABLE crm_extraction_claims ADD COLUMN claim_hash text NOT NULL CHECK(clai
 CREATE FUNCTION crm_processing_context_hash(value jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
  SELECT encode(sha256(convert_to(coalesce(value->>'personId','')||'|'||
  coalesce((SELECT string_agg(element #>> '{}',',' ORDER BY element #>> '{}') FROM jsonb_array_elements(value->'firmIds') element),'')||'|'||
- coalesce((SELECT string_agg((element->>'relationshipId')||':'||(element->>'revision'),',' ORDER BY element->>'relationshipId',(element->>'revision')::bigint) FROM jsonb_array_elements(value->'relationships') element),''),'UTF8')),'hex');
+ coalesce((SELECT string_agg((element->>'relationshipId')||':'||(element->>'revision'),',' ORDER BY element->>'relationshipId',(element->>'revision')::bigint) FROM jsonb_array_elements(value->'relationships') element),'')||
+ CASE WHEN jsonb_typeof(value->'mailContexts')='array' AND jsonb_array_length(value->'mailContexts')>0 THEN '|mail:['||
+ (SELECT string_agg(tuple,',' ORDER BY tuple COLLATE "C") FROM (SELECT regexp_replace(jsonb_build_array(element->'contextId',element->'sourceRevision',element->'personId',element->'firmId',element->'opportunityId',element->'operationalMatchId',element->'operationalMatchHash',element->'kind')::text,'\s','','g') AS tuple FROM jsonb_array_elements(value->'mailContexts') element) refs)||']' ELSE '' END,'UTF8')),'hex');
 $$;
 CREATE FUNCTION crm_selected_processing_context(ws uuid,source uuid,rev integer,hash text) RETURNS jsonb LANGUAGE sql STABLE AS $$
  SELECT jsonb_build_object('personId',s.person_id,'firmIds',to_jsonb(ARRAY(SELECT firm_id::text FROM (SELECT s.firm_id UNION SELECT c.firm_id FROM crm_source_relationship_contexts c WHERE c.workspace_id=ws AND c.source_id=source AND c.source_revision=rev AND c.source_hash=hash) firms WHERE firm_id IS NOT NULL ORDER BY firm_id)),
