@@ -1,4 +1,5 @@
--- #490 provisional80; root assigns final81 after #48480. No copied quotation bodies.
+-- #490 final81 follows #48480. No copied quotation bodies.
+-- changes: jobs
 CREATE FUNCTION crm_commitment_projection_valid(value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE key text;
 BEGIN
