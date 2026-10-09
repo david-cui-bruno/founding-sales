@@ -1,4 +1,4 @@
-import {useRef,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import type {z} from 'zod';
 import type {askReadSchema,askResponseSchema} from '@fss/contracts';
 export type AskRead=z.infer<typeof askReadSchema>;
@@ -8,7 +8,9 @@ export function Ask({ports,privacyKey,enabled}:{ports:AskPorts;privacyKey:string
  const [selected,setSelected]=useState<Extract<AskResponse,{operation:'records'}>['records'][number]|null>(null);const [passageQuery,setPassageQuery]=useState('');
  const [query,setQuery]=useState('');const [kind,setKind]=useState<'people'|'firms'>('people');
  const [result,setResult]=useState<AskResponse|null>(null);const [error,setError]=useState<string|null>(null);
- const epoch=useRef(0);const current=useRef(privacyKey);if(current.current!==privacyKey){current.current=privacyKey;epoch.current++;}
+ const epoch=useRef(0);const key=`${privacyKey}:${enabled}`;const current=useRef(key);if(current.current!==key){current.current=key;epoch.current++;}
+ useEffect(()=>{setResult(null);setSelected(null);setQuery('');setPassageQuery('');setError(null);},[key]);
+ useEffect(()=>()=>{epoch.current++;},[]);
  async function passages(){if(selected?.kind!=='person')return;const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'passages',scope:{personId:selected.recordId},query:passageQuery,limit:20});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Passages are unavailable. Try reading again.');}}
  async function find(){const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'records',query,kind,limit:20});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Records are unavailable. Try reading again.');}}
  return <section aria-label="Ask" className="space-y-4 p-6"><h1 className="text-xl font-semibold">Ask</h1><p>Retrieve records and original evidence. Conversation coverage may be incomplete.</p>

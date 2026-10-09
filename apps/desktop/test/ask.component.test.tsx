@@ -26,3 +26,18 @@ it('retrieves selected original passages and renders hostile excerpts as text',a
  expect(read).toHaveBeenLastCalledWith({operation:'passages',scope:{personId:one},query:'contacts',limit:20});
  expect(screen.getByText('Selected copies only. Inbox coverage is unverified.')).toBeTruthy();
 });
+
+it('clears selected records on privacy change and discards late reads',async()=>{
+ let finish!:(value:Awaited<ReturnType<AskPorts['read']>>)=>void;
+ const response={operation:'records' as const,selection:'single' as const,records:[{recordId:one,kind:'person' as const,name:'Private Person',firmId:null}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
+ const read=vi.fn<AskPorts['read']>(async()=>response);
+ const view=render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Private'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));
+ expect(await screen.findByRole('button',{name:'Select Private Person'})).toBeTruthy();
+ view.rerender(<Ask ports={{read}} privacyKey="owner:2" enabled/>);
+ expect(screen.queryByRole('button',{name:'Select Private Person'})).toBeNull();
+ read.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+ fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Private'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));
+ view.rerender(<Ask ports={{read}} privacyKey="owner:3" enabled={false}/>);finish(response);
+ await waitFor(()=>expect(screen.queryByRole('button',{name:'Select Private Person'})).toBeNull());
+});
