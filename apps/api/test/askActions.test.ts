@@ -88,5 +88,17 @@ it('explicitly commits a human note from current keyword evidence without enabli
   expect(preservedNotes.body).toMatchObject({items:expect.arrayContaining([expect.objectContaining({actionId,kind:'note',text:'Ask about the repair routing process.',supportState:'current'}),expect.objectContaining({actionId:taskId,status:'done',completedAt:expect.any(String)})])});
   const forbiddenCreation=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'note',text:'Do not restore the deleted investigation.',target:{kind:'person',personId}}});
   expect(forbiddenCreation.status).toBe(409);
+  const erasedSource=await post('/crm/people/source/delete',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,personId,sourceId,expectedRevision:1});
+  expect(erasedSource.status).toBe(200);
+  const erasedActions=await post('/ask/actions/read',{scope:{kind:'history'}});
+  expect(erasedActions.status).toBe(200);
+  const erasedItems=(erasedActions.body as {items:{supportState:string;text:null;label:null;target:null;due:null;sources:unknown[]}[]}).items;
+  expect(erasedItems).toHaveLength(6);
+  for(const item of erasedItems)expect(item).toMatchObject({supportState:'deleted',text:null,label:null,target:null,due:null,sources:[]});
+  expect(erasedActions.body).toMatchObject({items:expect.arrayContaining([expect.objectContaining({actionId:taskId,status:'done',completedAt:(completion.body as {result:{completedAt:string}}).result.completedAt,reviewRequired:false}),expect.objectContaining({actionId:(pastDateTask.body as {result:{actionId:string}}).result.actionId,status:'open',reviewRequired:true})])});
+  const restoredSource=await post('/crm/people/source/restore',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,personId,sourceId,expectedRevision:2});
+  expect(restoredSource.status).toBe(200);
+  const afterRestore=await post('/ask/actions/read',{scope:{kind:'history'}});
+  expect(afterRestore.body).toEqual(erasedActions.body);
  }finally{await fixture.stop();}
 });
