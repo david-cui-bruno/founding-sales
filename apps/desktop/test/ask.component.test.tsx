@@ -118,7 +118,7 @@ it('discovers actual copied sources for a selected firm without guessing associa
  fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));
  fireEvent.click(screen.getByRole('button',{name:'Copied sources'}));
  expect(await screen.findByText('Selected note · Version 3 · Date unknown · available')).toBeTruthy();
- expect(screen.getByText('Available copied sources for this record. Acquisition coverage is unverified.')).toBeTruthy();
+ expect(screen.getByText('Bounded copied sources for this record. Acquisition coverage is unverified.')).toBeTruthy();
  expect(read).toHaveBeenLastCalledWith({operation:'sources',scope:{firmId:one},limit:20});
 });
 
@@ -131,4 +131,13 @@ it('searches only explicitly selected current copies with their exact versions',
  fireEvent.change(screen.getByLabelText('Search selected copies'),{target:{value:'maintenance'}});fireEvent.click(screen.getByRole('button',{name:'Search selected copies'}));
  await waitFor(()=>expect(read).toHaveBeenLastCalledWith({operation:'passages',scope:{sources:[{workspaceId:two,sourceId:one,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]},query:'maintenance',limit:20}));
  expect(screen.getByText('Explicit selected copies only. Acquisition coverage is unverified.')).toBeTruthy();
+});
+
+it('pages operational activity using the exact returned cursor',async()=>{
+ const before='2026-10-08T15:00:00.000000|call|example';
+ const read=vi.fn<AskPorts['read']>(async input=>input.operation==='records'?{operation:'records',selection:'single',records:[{recordId:one,kind:'firm',name:'Orion',firmId:one}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:{operation:'activity',scope:{firmId:one},dateBasis:'operational_event_at',events:[],nextBefore:input.operation==='activity'&&input.before!==undefined?null:before,scanComplete:input.operation==='activity'&&input.before!==undefined,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}});
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));fireEvent.click(screen.getByRole('button',{name:'Activity'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Older activity page'}));
+ await waitFor(()=>expect(read).toHaveBeenLastCalledWith({operation:'activity',scope:{firmId:one},before}));
 });
