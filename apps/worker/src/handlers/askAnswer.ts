@@ -29,7 +29,7 @@ async function withinBudget(context:RepositoryContext,purpose:AskPurposeSnapshot
  const totals=(await context.db.query<{daily:string;monthly:string}>(`SELECT coalesce(sum(CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END) FILTER(WHERE business_date=$2::date),0)::text daily,coalesce(sum(CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END) FILTER(WHERE date_trunc('month',business_date)=date_trunc('month',$2::date)),0)::text monthly FROM provider_reservations WHERE workspace_id=$1 AND subject_kind='crm_ask_answer'`,[context.scope.workspaceId,date])).rows[0]!;
  return Number(totals.daily)+extra<=purpose.dailyCeilingCents&&Number(totals.monthly)+extra<=purpose.monthlyCeilingCents&&(providerFunding(providerKey)==='credits'||(extra===0?await monthWithinCeiling(context,{at,zone}):await clearMonthlyCash(context,{at,zone,cents:extra})));
 }
-/** Reclaimed calling is an unknown financial result, even after private authority disappears. */
+/** Durable dispatch state distinguishes proven not-called reservations from unknown calls. */
 async function recoverCalling(input:JobHandlerInput){
  const payload=z.strictObject({requestId:z.uuid(),version:z.number().int().positive(),epoch:z.number().int().positive()}).safeParse(input.job.payload);if(!payload.success)return false;
  const {requestId,version,epoch}=payload.data;
@@ -38,10 +38,16 @@ async function recoverCalling(input:JobHandlerInput){
   await context.db.query('SELECT id FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[input.scope.workspaceId,requestId]);
   if(!await fenced(input))return true;
   const previous=(await context.db.query<{id:string;reservation_id:string;dispatch_state:string;job_id:string;fencing_token:string}>('SELECT id,reservation_id,dispatch_state,job_id,fencing_token FROM crm_ask_financial_receipts WHERE workspace_id=$1 AND request_id=$2 AND request_version=$3 AND request_epoch=$4 AND stage=\'answer\'',[input.scope.workspaceId,requestId,version,epoch])).rows[0];
-  if(previous===undefined||previous.dispatch_state!=='calling'&&previous.dispatch_state!=='unknown_acceptance')return false;
+  if(previous===undefined||previous.dispatch_state!=='reserved'&&previous.dispatch_state!=='calling'&&previous.dispatch_state!=='unknown_acceptance')return false;
   if(previous.dispatch_state==='calling'&&previous.job_id===input.job.id&&previous.fencing_token===input.job.fencingToken)return false;
   await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${context.scope.workspaceId}:crm-ask-budget:answer`]);
   await lockMonthlySpend(context);
+  if(previous.dispatch_state==='reserved'){
+   await settleAttempt(context,{reservationId:previous.reservation_id,at:await now(context),outcome:{kind:'released'}});
+   await context.db.query("UPDATE crm_ask_financial_receipts SET dispatch_state='released' WHERE workspace_id=$1 AND id=$2 AND dispatch_state='reserved'",[input.scope.workspaceId,previous.id]);
+   await setState(context,requestId,version,epoch,'unavailable','processing_authority_unavailable');
+   return true;
+  }
   await settleAttempt(context,{reservationId:previous.reservation_id,at:await now(context),outcome:{kind:'estimated'}});
   await context.db.query("UPDATE crm_ask_financial_receipts SET dispatch_state='unknown_acceptance' WHERE workspace_id=$1 AND id=$2 AND dispatch_state='calling'",[context.scope.workspaceId,previous.id]);
   await setState(context,requestId,version,epoch,'unknown_acceptance','provider_acceptance_unknown');
@@ -64,7 +70,7 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
   if(adapter===undefined){await withTransaction(input.session,async()=>{if(await fenced(input))await setState(context,requestId,version,epoch,'unavailable','processing_authority_unavailable');});return;}
   const initial=await snapshot();if(initial===null)return;
   const proof=await verifyAskPurpose(runtime,initial.proofInput);
-  if(adapter===undefined||proof===null||composition.retrieval!==undefined||composition.support!==undefined||adapter.endpointId!==initial.proofInput.purpose.endpointId||adapter.modelVersion!==initial.proofInput.purpose.modelVersion){await withTransaction(input.session,async()=>{if(await fenced(input))await setState(context,requestId,version,epoch,'unavailable','processing_authority_unavailable');});return;}
+  if(adapter===undefined||proof===null||runtime.retrieval!==undefined||runtime.support!==undefined||adapter.endpointId!==initial.proofInput.purpose.endpointId||adapter.modelVersion!==initial.proofInput.purpose.modelVersion){await withTransaction(input.session,async()=>{if(await fenced(input))await setState(context,requestId,version,epoch,'unavailable','processing_authority_unavailable');});return;}
   if(initial.windows.length===0){await withTransaction(input.session,async()=>{if(await fenced(input))await setState(context,requestId,version,epoch,'unavailable','unsupported_answer');});return;}
   const reserved=await withTransaction(input.session,async()=>{
    const current=await readCurrentAskInput(context,requestId,version,epoch,route!);if(current===null||!await fenced(input)||current.inputHash!==initial.inputHash||Date.parse(proof.validUntil)<=Date.parse(await now(context)))return null;
@@ -90,7 +96,7 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
   if(dispatch===null)return;
   let outcome:Awaited<ReturnType<AskAnswerAdapter['run']>>;
   const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
-  const timed=new Promise<Awaited<ReturnType<AskAnswerAdapter['run']>>>(resolve=>{timer=setTimeout(()=>{controller.abort();resolve({acceptance:'unknown',usage:null,answer:null});},Math.max(1,Math.min(60000,composition.providerTimeoutMs??60000)));});
+  const timed=new Promise<Awaited<ReturnType<AskAnswerAdapter['run']>>>(resolve=>{timer=setTimeout(()=>{controller.abort();resolve({acceptance:'unknown',usage:null,answer:null});},Math.max(1,Math.min(60000,runtime.providerTimeoutMs??60000)));});
   try{outcome=!unchanged()?{acceptance:'not_accepted',usage:{inputTokens:0,outputTokens:0},answer:null}:structuredClone(await Promise.race([adapter.run({question:dispatch.question,windows:structuredClone(dispatch.windows),groups:structuredClone(dispatch.groups),maxOutputTokens:reserved.maxOutputTokens,signal:controller.signal}),timed]));}catch{outcome={acceptance:'unknown',usage:null,answer:null};}finally{if(timer!==undefined)clearTimeout(timer);}
   const finalProof=await verifyAskPurpose(runtime,initial.proofInput);
   await withTransaction(input.session,async()=>{

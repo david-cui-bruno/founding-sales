@@ -120,6 +120,35 @@ it('answers through the registered controlled-purpose worker and navigates a cur
   const outcomeRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>{if(++outcomeVerifications===3){mutableOutcome.answer.claims[0]!.text='repairs';mutableOutcome.usage.inputTokens=99999;}return {configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const};},answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>{mutableOutcome.answer.claims[0]!.citationWindowIds=[input.windows[0]!.id];return mutableOutcome;}}}});
   await runOnce(fixture.db,{registry:outcomeRegistry,owner:'ask-mutable-outcome',limit:20});
   expect((await post('/ask/answers/read',{requestId:mutatedOutcomeId})).body).toMatchObject({state:'complete',answer:{claims:[{text}],coverage:{semantic:'unverified'}}});
+  const reservedRequest=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
+  const reservedId=(reservedRequest.body as {result:{requestId:string}}).result.requestId;
+  let reservedVerifications=0,reservedCalls=0,releaseReserved!:()=>void,reservedEntered!:()=>void;
+  const reservedWait=new Promise<void>(resolve=>{releaseReserved=resolve;}),reservationReady=new Promise<void>(resolve=>{reservedEntered=resolve;});
+  const reservedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>{if(++reservedVerifications===2){reservedEntered();await reservedWait;}return {configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const};},answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>{reservedCalls++;return {acceptance:'accepted' as const,usage:{inputTokens:50,outputTokens:10},answer:{claims:[{text,kind:'extractive',citationWindowIds:[input.windows[0]!.id]}],abstained:false}};}}}});
+  const reservedFirst=await fixture.database.appRuntimeSession(),reservedSecond=await fixture.database.appRuntimeSession();
+  const reservedRunning=runOnce(reservedFirst,{registry:reservedRegistry,owner:'ask-reserved-first',limit:20});
+  await reservationReady;
+  try{
+   const beforeReservation=(await post('/research/firm',{firmId:spendFirm})).body as {spend:{monthToDateCents:number}};
+   await fixture.db.query("UPDATE jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND payload->>'requestId'=$2 AND state='running'",[fixture.alpha.workspaceId,reservedId]);
+   await runOnce(reservedSecond,{registry:reservedRegistry,owner:'ask-reserved-reclaim',limit:20});
+   await fixture.db.query("UPDATE jobs SET not_before=clock_timestamp()-interval '1 second',run_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND payload->>'requestId'=$2 AND state='queued'",[fixture.alpha.workspaceId,reservedId]);
+   await runOnce(reservedSecond,{registry:reservedRegistry,owner:'ask-reserved-second',limit:20});
+   expect((await post('/ask/answers/read',{requestId:reservedId})).body).toMatchObject({state:'unavailable',reason:'processing_authority_unavailable',answer:null});
+   expect((await post('/research/firm',{firmId:spendFirm})).body).toMatchObject({spend:{monthToDateCents:beforeReservation.spend.monthToDateCents-1}});
+   expect(reservedCalls).toBe(0);
+  }finally{releaseReserved();await reservedRunning;}
+  const beforeDispatchChange=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
+  const beforeDispatchId=(beforeDispatchChange.body as {result:{requestId:string}}).result.requestId;
+  let beforeDispatchProofs=0,beforeDispatchCalls=0;
+  const beforeDispatchSpend=(await post('/research/firm',{firmId:spendFirm})).body as {spend:{monthToDateCents:number}};
+  const beforeDispatchRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>{if(++beforeDispatchProofs===2)await fixture.db.query("UPDATE crm_ask_purposes SET revision=3 WHERE workspace_id=$1 AND purpose='answer'",[fixture.alpha.workspaceId]);return {configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const};},answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async()=>{beforeDispatchCalls++;return {acceptance:'unknown' as const,usage:null,answer:null};}}}});
+  await runOnce(fixture.db,{registry:beforeDispatchRegistry,owner:'ask-purpose-before-dispatch',limit:20});
+  expect((await post('/ask/answers/read',{requestId:beforeDispatchId})).body).toMatchObject({state:'unavailable',reason:'processing_authority_unavailable',answer:null});
+  expect((await post('/research/firm',{firmId:spendFirm})).body).toMatchObject({spend:{monthToDateCents:beforeDispatchSpend.spend.monthToDateCents}});
+  expect(beforeDispatchCalls).toBe(0);
+
+
 
  }finally{await fixture.stop();}
 });
