@@ -28,3 +28,15 @@ BEGIN
  RETURN NEW;
 END $$;
 CREATE TRIGGER selected_file_receipt_deletion AFTER UPDATE ON crm_selected_sources FOR EACH ROW EXECUTE FUNCTION redact_selected_file_receipt();
+CREATE FUNCTION enforce_selected_file_provenance() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF EXISTS(SELECT 1 FROM crm_selected_file_receipts f WHERE f.workspace_id=NEW.workspace_id AND f.source_id=NEW.source_id AND f.state='selected'
+  AND NOT EXISTS(SELECT 1 FROM crm_selected_sources s JOIN crm_selected_imports m ON m.workspace_id=s.workspace_id AND m.source_id=s.id
+   WHERE s.workspace_id=f.workspace_id AND s.id=f.source_id AND s.availability='available' AND s.revision=f.source_revision AND s.content_hash=f.source_content_hash
+   AND m.revision=f.metadata_revision AND m.subtype='selected_file')) THEN
+  RAISE EXCEPTION 'Selected file provenance changed' USING ERRCODE='23514',CONSTRAINT=TG_NAME;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE CONSTRAINT TRIGGER crm_selected_file_current_provenance AFTER INSERT OR UPDATE ON crm_selected_file_receipts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION enforce_selected_file_provenance();
+CREATE CONSTRAINT TRIGGER crm_selected_file_current_metadata AFTER UPDATE ON crm_selected_imports DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION enforce_selected_file_provenance();

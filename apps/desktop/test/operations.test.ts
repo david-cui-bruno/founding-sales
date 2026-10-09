@@ -395,3 +395,19 @@ it('reads durable extraction health through a closed authenticated operation and
  const pending=answerOperation(operationHandlers(deps),'read','crm.processingHealth',{sourceId:ITEM_ID,kind:'selected_note'});
  generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
 });
+it('previews an explicitly selected original file through the authenticated host and rejects late identity changes',async()=>{
+ const deps=hosts();let generation=0;let finish!:()=>void;
+ deps.recordings.identity.current=()=>generation;
+ deps.api.read=async(path,parse)=>{expect(path).toBe('/crm/attachments/preview');await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse({state:'unsupported',reason:'unsupported_format',processing:'unavailable',supportedFormats:['utf8_text','utf8_markdown','utf8_csv','utf8_srt','utf8_vtt'],maxBytes:80000,maxCharacters:20000})};};
+ const pending=answerOperation(operationHandlers(deps),'read','crm.selectedAttachmentPreview',{fileName:'lease.pdf',declaredByteLength:8,bytesBase64:'JVBERi0xLjc=',completeness:'complete'});
+ void pending.catch(()=>undefined);
+ await new Promise<void>(resolve=>setTimeout(resolve,0));
+ expect(finish).toBeTypeOf('function');
+ generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
+});
+it('reads exact selected-file state and processing through the authenticated host',async()=>{
+ const deps=hosts();
+ deps.api.read=async(path,parse)=>{expect(path).toBe('/crm/attachments/read');return {ok:true,value:parse({file:{state:'selected',sourceRevision:1,metadataRevision:1,fileName:'original.txt',byteLength:13,fileHash:'a'.repeat(64),format:'utf8_text',origin:'user_selected_original'},source:{workspaceId:ITEM_ID,sourceId:FIRM_ID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-09T00:00:00Z',completeness:'selected_excerpt',availability:'available'},processing:{state:'not_requested',claims:[]}})};};
+ const result=await answerOperation(operationHandlers(deps),'read','crm.selectedAttachmentRead',{sourceId:FIRM_ID});
+ expect(result).toMatchObject({file:{state:'selected',fileName:'original.txt'},processing:{state:'not_requested'}});
+});

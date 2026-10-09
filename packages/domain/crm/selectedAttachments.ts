@@ -5,7 +5,7 @@ import {SELECTED_ATTACHMENT_FORMATS} from '@fss/contracts';
 import type {selectedAttachmentCommitSchema,selectedAttachmentAnalyzeSchema,selectedAttachmentReselectSchema} from '@fss/contracts';
 import {previewSelectedImport,commitSelectedImport,prepareSelectedImport,changeSelectedImport} from './selectedImports.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
-import {readCrmProcessing,requestCrmProcessing} from './processing.ts';
+import {readCrmProcessing,readCrmProcessingHealth,requestCrmProcessing} from './processing.ts';
 import {activeIdentityActor,lockIdentityContext} from './identityAccess.ts';
 import {recordCrmAuditEvent} from './audit.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -15,12 +15,17 @@ export async function previewSelectedAttachment(context:RepositoryContext,input:
  if(input.completeness!=='complete')return {state:'unsupported' as const,reason:'incomplete_selection' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
  const bytes=Buffer.from(input.bytesBase64,'base64');
  if(bytes.length!==input.declaredByteLength)return {state:'unsupported' as const,reason:'incomplete_selection' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
- if(bytes.toString('base64')!==input.bytesBase64||bytes.length===0||bytes.length>80000)return null;
+ if(bytes.toString('base64')!==input.bytesBase64)return null;
+ if(bytes.length>80000)return {state:'unsupported' as const,reason:'selection_limit_exceeded' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
+ if(bytes.length===0)return {state:'unsupported' as const,reason:'empty_selection' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
+ if(bytes.subarray(0,5).equals(Buffer.from('%PDF-')))return {state:'unsupported' as const,reason:'unsupported_format' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
  const extension=/\.([^.]+)$/u.exec(input.fileName)?.[1]?.toLowerCase();
  const format=extension==='txt'?'utf8_text':extension==='md'?'utf8_markdown':extension==='csv'?'utf8_csv':extension==='srt'?'utf8_srt':extension==='vtt'?'utf8_vtt':null;
  if(format===null)return {state:'unsupported' as const,reason:'unsupported_format' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
- let text:string;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}catch{return null;}
- if(!text.trim()||text.includes('\0')||text.length>20000)return null;
+ let text:string;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}catch{return {state:'unsupported' as const,reason:'unreadable_text' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};}
+ if(text.includes('\0'))return {state:'unsupported' as const,reason:'unreadable_text' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
+ if(text.length>20000)return {state:'unsupported' as const,reason:'selection_limit_exceeded' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
+ if(!text.trim())return null;
  return {state:'supported' as const,fileName:input.fileName,byteLength:bytes.length,fileHash:hash(bytes),sourceContentHash:hash(text),format,origin:'user_selected_original' as const,completeness:'complete' as const,processing:'not_requested' as const,previewHash:hash(JSON.stringify(input))};
 }
 export async function commitSelectedAttachment(context:RepositoryContext,input:z.infer<typeof selectedAttachmentCommitSchema>){
@@ -42,7 +47,8 @@ export async function readSelectedAttachment(context:RepositoryContext,sourceId:
  if(head.availability!=='available'){
   const actor=context.scope.actor;
   if(actor.kind==='user'&&actor.role==='admin'&&actor.userId!==head.owner_user_id)await recordCrmAuditEvent(context,{action:'crm.selected_file_private_read',subjectKind:'selected_source',subjectId:sourceId,detail:{sourceRevision:head.revision,exceptionalAdminRead:true}});
-  return {file,source:{workspaceId:context.scope.workspaceId,sourceId,kind:'selected_note' as const,revision:head.revision,contentHash:head.content_hash,locator:null,speaker:null,occurredAt:head.occurred_at?.toISOString()??null,observedAt:head.observed_at.toISOString(),completeness:'unavailable' as const,availability:head.availability},processing:{state:'source_unavailable' as const,reason:head.availability==='deleted'?'source_deleted':'source_unavailable'}};
+  const processingHealth=await readCrmProcessingHealth(context,{sourceId,kind:'selected_note'});if(processingHealth===null)return null;
+  return {processingHealth,file,source:{workspaceId:context.scope.workspaceId,sourceId,kind:'selected_note' as const,revision:head.revision,contentHash:head.content_hash,locator:null,speaker:null,occurredAt:head.occurred_at?.toISOString()??null,observedAt:head.observed_at.toISOString(),completeness:'unavailable' as const,availability:head.availability},processing:{state:'source_unavailable' as const,reason:head.availability==='deleted'?'source_deleted':'source_unavailable'}};
  }
  const source={workspaceId:context.scope.workspaceId,sourceId,kind:'selected_note' as const,revision:head.revision,contentHash:head.content_hash,locator:null};
  const resolved=await resolveCrmSource(context,source);if(resolved===null)return null;
