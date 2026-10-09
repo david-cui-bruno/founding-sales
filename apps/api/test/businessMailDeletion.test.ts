@@ -939,3 +939,25 @@ it('retention waits for capture promotion and preserves the newly approved copy'
   await fixture.stop();
  }
 });
+
+it('reports the actual saved Ask question erasure before a public mail copy deletion hook runs', async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const {post, command, sourceId, contentHash, originalFirmId} = await copyWithOriginalAndReviewedFirms(fixture);
+    const requested = await post('/ask/answers/request', command({question:'private copied conversation',scope:{sources:[{workspaceId:fixture.alpha.workspaceId,kind:'mail',sourceId,revision:2,contentHash,locator:null}]}}));
+    expect(requested.status, JSON.stringify(requested.body)).toBe(200);
+    expect(requested.body).toMatchObject({result:{state:'unavailable'}});
+    const requestId = (requested.body as {result:{requestId:string}}).result.requestId;
+    expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({question:'private copied conversation',answer:null});
+    const preview = await post('/retention/deletions/preview', command({targetKind:'firm',firmId:originalFirmId}));
+    expect(preview.status).toBe(200);
+    expect(preview.body).toMatchObject({result:{redacts:{crm_ask_requests:1},removes:{crm_ask_request_windows:0}}});
+    const shown = (preview.body as {result:{requestId:string;previewHash:string}}).result;
+    const committed = await post('/retention/deletions/commit',command({requestId:shown.requestId,previewHash:shown.previewHash}));
+    expect(committed.status,JSON.stringify(committed.body)).toBe(200);
+    expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'deleted',question:null,fallback:null,answer:null});
+    expect(committed.body).toMatchObject({status:'accepted',result:{redacted:{crm_ask_requests:1},removed:{crm_ask_request_windows:0}}});
+  } finally {
+    await fixture.stop();
+  }
+});
