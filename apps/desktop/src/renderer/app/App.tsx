@@ -1,3 +1,5 @@
+import {Ask} from '../ask/Ask.tsx';
+import {askPorts} from '../ask/askPorts.ts';
 import {SocialRoute} from '../social/SocialRoute.tsx';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
@@ -204,6 +206,8 @@ function Column({
           />
         ) : route.name === 'replies' ? (
           <RepliesRoute key={key} column={columnRef} {...(route.messageId === undefined ? {} : { messageId: route.messageId })} />
+        ) : route.name === 'ask' ? (
+          <Ask key={key} ports={askPorts} privacyKey={`${session.identity}:${String(session.generation)}`} enabled={hasOperations} />
         ) : route.name === 'social' ? (
           <SocialRoute key={key}/>
         ) : route.name === 'sequences' ? (

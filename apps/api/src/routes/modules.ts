@@ -1,3 +1,4 @@
+import {ASK_PATHS,routeAsk} from './ask.ts';
 import {CRM_PROGRESS_PATHS,routeCrmProgress} from './crmProgress.ts';
 import {CRM_EVIDENCE_PATHS,routeCrmEvidence} from './crmEvidence.ts';
 import { CRM_MAIL_IMPORT_PATHS, routeCrmMailImport } from './crmMailImport.ts';
@@ -186,6 +187,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('selected-imports', { paths: SELECTED_IMPORT_PATHS }, routeSelectedImports, routing),
     moduleOf('selected-attachments', { paths: SELECTED_ATTACHMENT_PATHS }, routeSelectedAttachments, routing),
     moduleOf('people', { paths: PEOPLE_PATHS }, routePeople, routing),
+    moduleOf('ask', {paths:ASK_PATHS}, routeAsk, routing),
     moduleOf('crm-progress', { paths: CRM_PROGRESS_PATHS }, routeCrmProgress, routing),
     moduleOf('crm-evidence', {paths:CRM_EVIDENCE_PATHS},routeCrmEvidence,routing),
     moduleOf('crm-processing', { paths: CRM_PROCESSING_PATHS }, routeCrmProcessing, routing),

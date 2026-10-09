@@ -31,14 +31,15 @@ export const MENU_ROUTES: readonly { readonly target: NavigationTarget; readonly
     { target: 'firms', label: 'Firms', accelerator: 'CmdOrCtrl+4' },
     { target: 'sequences', label: 'Sequences', accelerator: 'CmdOrCtrl+5' },
     { target: 'social', label: 'Social', accelerator: 'CmdOrCtrl+6' },
+    { target: 'ask', label: 'Ask', accelerator: 'CmdOrCtrl+7' },
   ]);
 
 /** Settings and its three tabs, below a separator. ⌘, is where a Mac keeps this. */
 export const MENU_SETTINGS: readonly { readonly target: NavigationTarget; readonly label: string; readonly accelerator: string }[] =
   Object.freeze([
     { target: 'settings/administration', label: 'Settings', accelerator: 'CmdOrCtrl+,' },
-    { target: 'settings/dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+7' },
-    { target: 'settings/diagnostics', label: 'Diagnostics', accelerator: 'CmdOrCtrl+8' },
+    { target: 'settings/dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+8' },
+    { target: 'settings/diagnostics', label: 'Diagnostics', accelerator: 'CmdOrCtrl+9' },
   ]);
 
 export type MenuItem =

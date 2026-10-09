@@ -1,3 +1,4 @@
+import {askReadSchema,askResponseSchema} from '@fss/contracts';
 import {selectedAttachmentFileSchema,selectedAttachmentPreviewSchema,selectedAttachmentReadSchema,selectedAttachmentPageSchema,selectedAttachmentCommitPayloadSchema,selectedAttachmentCommitResultSchema,selectedAttachmentAnalyzePayloadSchema,selectedAttachmentAnalyzeResultSchema,selectedAttachmentReselectPayloadSchema,selectedAttachmentReselectResultSchema} from '@fss/contracts';
 import {crmProgressReadSchema,crmProgressResponseSchema} from '@fss/contracts';
 import { crmEvidenceWorkBindPayloadSchema, crmEvidenceWorkBoundSchema } from "@fss/contracts";
@@ -1170,6 +1171,7 @@ export const OPERATIONS = {
   'crm.evidenceRead':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/read'}],input:crmEvidenceReadSchema,output:crmEvidencePageSchema,transform:'bounded current and human-reviewed source evidence'},
   'crm.processingSource':{kind:'read',calls:[{method:'POST',path:'/crm/processing/source/read'}],input:crmSourceLookupSchema,output:crmResolvedSourceSchema,transform:'exact current source authority and bounded quote'},
   'crm.progressRead':{kind:'read',calls:[{method:'POST',path:'/crm/progress/read'}],input:crmProgressReadSchema,output:crmProgressResponseSchema,transform:'current verified evidence; imports do not send or change sales stages'},
+  'ask.read':{kind:'read',calls:[{method:'POST',path:'/ask/read'}],input:askReadSchema,output:askResponseSchema,transform:'exact current state and authorized lexical retrieval; no execution authority'},
   'crm.processingRead':{kind:'read',calls:[{method:'POST',path:'/crm/processing/read'}],input:crmProcessingReadSchema,output:crmProcessingResultSchema,transform:'versioned evidence and financial coverage'},
   'crm.processingRequest':{kind:'command',calls:[{method:'POST',path:'/crm/processing/request'}],input:crmProcessingRequestSchema.omit({commandId:true,clientVersion:true}),output:crmProcessingResultSchema,transform:'explicit processing request; no activation authority'},
   'crm.processingPurpose':{kind:'read',calls:[{method:'POST',path:'/crm/processing/purpose/read'}],input:z.strictObject({}),output:crmExtractionPurposeSchema,transform:'purpose-specific disabled configuration'},
