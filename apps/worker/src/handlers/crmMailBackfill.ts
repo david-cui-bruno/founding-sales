@@ -5,6 +5,7 @@ import {readBackfillAllocation,reserveBackfillRead,observeBackfillRead,type Back
 import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import type {GmailClient,GmailAccessGrant} from '@fss/domain/mail/gmailClient.ts';
 import type {MailCaptureProofVerifier} from '@fss/domain/mail/crmSources.ts';
+import {METADATA_HEADERS} from '@fss/domain/mail/types.ts';
 import type {BusinessMailMetadataObserver} from '@fss/domain/mail/pipeline.ts';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
 const importPayload=z.strictObject({importId:z.string().uuid()});
@@ -59,7 +60,20 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(slice===undefined)return;
    const listed=await providerRead('list',authority,access=>adapters.gmail.listMessageIds(access,{afterEpochSeconds:Number(slice.from_epoch_seconds)-1,beforeEpochSeconds:Number(slice.to_epoch_seconds)+1,maxResults:25,...slice.next_page_token===null?{}:{pageToken:slice.next_page_token}}));
    if(!listed.ok)throw new Error('provider_read_unavailable');
-   if(listed.messageIds.length!==0)return;
+   for(const messageId of listed.messageIds){
+    if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new Error('provider_evidence_invalid');
+    const metadata=await providerRead('metadata',authority,access=>adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS));
+    if(metadata===null)continue;
+    if(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds))throw new Error('provider_evidence_invalid');
+    if(metadata.internalDateEpochMilliseconds<Date.parse(authority.fromAt)||metadata.internalDateEpochMilliseconds>=Date.parse(authority.toAt))continue;
+    const expected=authority;
+    await withTransaction(input.session,async()=>{
+     if(!await fenced(input))throw new Error('acquisition_binding_changed');
+     const current=await readBackfillAuthority(context,importId,true);
+     if(current===null||JSON.stringify(current.proof)!==JSON.stringify(expected.proof)||current.fromAt!==expected.fromAt||current.toAt!==expected.toAt)throw new Error('acquisition_binding_changed');
+     await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
+    });
+   }
    const bound=authority;
    await withTransaction(input.session,async()=>{
     if(!await fenced(input))return;

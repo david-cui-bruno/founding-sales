@@ -6,7 +6,7 @@ import { claimJobs } from '@fss/domain/jobs/jobStore.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { registerHandlers } from '../../worker/src/bootstrap/main.ts';
-import { businessAccountBinding } from '@fss/domain/business/acquisition.ts';
+import { METADATA_REVIEW_DISCLOSURE,businessAccountBinding } from '@fss/domain/business/acquisition.ts';
 import { createAuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { dispatch } from '../src/server.ts';
@@ -48,8 +48,9 @@ it('configured acquisition without a verified read allocation calls no Gmail met
   await fixture.db.query("INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled) VALUES($1,$2,$3,'google-business',$4,1,1,true)",[workspaceId,mailbox.id,admin.userId,binding]);
   await fixture.db.query("INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'google-business',$4,1,1,true,1,'fixture',repeat('b',64),'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')",[workspaceId,mailbox.id,admin.userId,binding]);
   const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  await fixture.db.query('UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id,METADATA_REVIEW_DISCLOSURE.version,METADATA_REVIEW_DISCLOSURE.sha256]);
   expect((await post('/crm/business/mail/import/request',{commandId:randomUUID(),clientVersion:'1.4.0',mailboxId:mailbox.id})).status).toBe(200);
-  const gmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'100',messages:[]});
+  const gmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'100',messages:[{id:'historical-inquiry',threadId:'historical-thread',historyId:'99',internalDateEpochMilliseconds:Date.now()-89*86400000+3600000,headers:{From:'prospect@example.test',To:'business@example.test',Subject:'Historical inquiry'},body:'Must remain unfetched'}]});
   const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail,resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver()}});
   const job=(await claimJobs(fixture.db,{owner:'configured-backfill',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   await registry.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -58,5 +59,10 @@ it('configured acquisition without a verified read allocation calls no Gmail met
   await fixture.db.query("INSERT INTO crm_mail_import_allocations(workspace_id,mailbox_id,revision,owner_user_id,account_binding,generation,project_hash,user_hash,user_limit_units,project_limit_units,user_headroom_units,project_headroom_units,profile_units,list_units,history_units,metadata_units,body_units,verification_sha256,verified_until) VALUES($1,$2,1,$3,$4,1,repeat('c',64),repeat('d',64),1000,1000,100,100,1,1,1,1,1,repeat('e',64),clock_timestamp()+interval '1 hour')",[workspaceId,mailbox.id,admin.userId,binding]);
   await registry.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',historyAnchor:'100',windowFrozen:true,historyComplete:false,completedSlices:1});
+  await registry.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  expect((await post('/crm/business/review/read',{mailboxId:mailbox.id})).body).toMatchObject({conversations:[{subject:'Historical inquiry',category:'uncertain',effectiveDecision:'needs_review'}]});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',completedSlices:2,historyComplete:false});
+  expect(gmail.metadataReads).toEqual(['historical-inquiry']);
+  expect(gmail.bodyReads).toEqual([]);
  }finally{await fixture.stop();}
 });

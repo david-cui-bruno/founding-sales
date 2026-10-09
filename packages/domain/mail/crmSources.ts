@@ -97,6 +97,7 @@ const payloadSchema = z
     controlsRevision: z.number().int().positive(),
     policyRevision: z.number().int().positive(),
     decisionRevision: z.number().int().nonnegative(),
+    acquisitionOrigin:z.strictObject({importId:z.string().uuid()}).optional(),
     recapture: z
       .object({
         sourceId: z.string().uuid(),
@@ -299,6 +300,8 @@ export function businessMailCaptureHandler(deps: {
       if (!deps.proofVerifier) return done('acquisition_disabled');
       if (!parsed.success) return done('invalid_capture_payload');
       const payload = parsed.data;
+      // Historical reads require the separately reserved import adapter; never fall through to live reads.
+      if(payload.acquisitionOrigin)return done('historical_read_meter_required');
       const staged = await withTransaction(input.session, async () => {
         const original = await lockOriginalMailContexts(input, payload);
         if (!original) return null;
@@ -2185,6 +2188,7 @@ export const approvedBusinessMailObservationSchema = z
   .object({
     ownerUserId: z.string().uuid(),
     observation: businessMetadataObservationSchema,
+    acquisitionOrigin:z.strictObject({importId:z.string().uuid()}).optional(),
   })
   .strict();
 /** Metadata review is not body permission. This only creates a separately verified worker intent. */
@@ -2291,6 +2295,7 @@ export async function observeApprovedBusinessMail(
       controlsRevision: control.revision,
       policyRevision: control.policy_revision,
       decisionRevision: conversation.decision_revision,
+      ...parsed.data.acquisitionOrigin===undefined?{}:{acquisitionOrigin:parsed.data.acquisitionOrigin},
     },
   });
   return {
@@ -2341,6 +2346,7 @@ export function createApprovedBusinessMailObserver(
         return;
       await observeApprovedBusinessMail(context, {
         ownerUserId: input.ownerUserId,
+        ...input.acquisitionOrigin===undefined?{}:{acquisitionOrigin:input.acquisitionOrigin},
         observation: {
           mailboxId: input.mailboxId,
           providerAccountId: input.providerAccountId,

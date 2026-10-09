@@ -49,7 +49,7 @@ import { GmailClientError } from './gmailClient.ts';
  */
 
 export interface BusinessMailMetadataObserver {
-  observe(context: RepositoryContext, input: { readonly mailboxId:string; readonly ownerUserId:string; readonly providerAccountId:string; readonly generation:number; readonly metadata:GmailMessageMetadata }):Promise<void>;
+  observe(context: RepositoryContext, input: { readonly mailboxId:string; readonly ownerUserId:string; readonly providerAccountId:string; readonly generation:number; readonly metadata:GmailMessageMetadata; readonly acquisitionOrigin?:{readonly importId:string} }):Promise<void>;
 }
 export interface MessagePipelineDeps {
   /** Absent in production; the observation carries the run's captured binding. */

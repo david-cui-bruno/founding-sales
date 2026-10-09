@@ -8,7 +8,7 @@ export async function readBackfillAuthority(context:RepositoryContext,importId:s
  if(context.scope.actor.kind!=='system'||context.scope.actor.component!=='worker')return null;
  const identified=(await context.db.query<{mailbox_id:string}>('SELECT mailbox_id FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,importId])).rows[0];if(identified===undefined)return null;
  if(lock){
-  await context.db.query('SELECT id FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.scope.workspaceId,identified.mailbox_id]);
+  await context.db.query('SELECT id FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR NO KEY UPDATE',[context.scope.workspaceId,identified.mailbox_id]);
   await context.db.query('SELECT mailbox_id FROM crm_mail_capture_controls WHERE workspace_id=$1 AND mailbox_id=$2 FOR SHARE',[context.scope.workspaceId,identified.mailbox_id]);
   await context.db.query('SELECT mailbox_id FROM crm_business_policies WHERE workspace_id=$1 AND mailbox_id=$2 FOR SHARE',[context.scope.workspaceId,identified.mailbox_id]);
   await context.db.query('SELECT id FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,importId]);
