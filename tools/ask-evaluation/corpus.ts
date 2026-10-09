@@ -19,6 +19,17 @@ export function validateDevelopment(input: {
 }) {
   if (input.phase !== "development_baseline")
     throw new RangeError("manifest_mismatch");
+  return validateFrozenCorpus(input, "dev_");
+}
+
+/** Candidate callers reach this only after the full preregistered execution gate. */
+export function validateFrozenCorpus(
+  input: {
+    manifest: FrozenManifest;
+    development: FrozenCorpus;
+  },
+  prefix: "dev_" | "holdout_",
+) {
   const manifest = frozenManifestSchema.parse(input.manifest);
   const corpus = frozenCorpusSchema.parse(input.development);
   const { corpusSha256, ...definition } = corpus;
@@ -26,13 +37,13 @@ export function validateDevelopment(input: {
   if (
     manifest.mode !== "fake_only" ||
     corpus.cases.length > 80 ||
-    !corpus.id.startsWith("dev_") ||
+    !corpus.id.startsWith(prefix) ||
     corpus.cases.some(
       (row) =>
-        !row.id.startsWith("dev_") || !row.actorFixtureId.startsWith("dev_"),
+        !row.id.startsWith(prefix) || !row.actorFixtureId.startsWith(prefix),
     ) ||
-    corpus.sources.some((source) => !source.id.startsWith("dev_")) ||
-    windows.some((window) => !window.id.startsWith("dev_")) ||
+    corpus.sources.some((source) => !source.id.startsWith(prefix)) ||
+    windows.some((window) => !window.id.startsWith(prefix)) ||
     windows.length > manifest.envelope.maxWindowsPerCorpus ||
     new Set(windows.map((row) => row.id)).size !== windows.length ||
     new Set(windows.map((row) => row.ordinal)).size !== windows.length ||

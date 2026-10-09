@@ -5,15 +5,22 @@ import type {
 } from "../../../tools/ask-evaluation/contracts.ts";
 import { setupEvaluationCase } from "./support/askEvaluationFixture.ts";
 import type { DevelopmentCaseRuntime } from "../../../tools/ask-evaluation/runner.ts";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { performance } from "node:perf_hooks";
 import { crmResolvedSourceSchema } from "@fss/contracts";
-import { runEvaluation } from "../../../tools/ask-evaluation/runner.ts";
+import {
+  runEvaluation,
+  runFakeCandidateSuite,
+} from "../../../tools/ask-evaluation/runner.ts";
+import { prepareEvaluationSuite } from "./support/askEvaluationSealedFixture.ts";
+import { createEvaluationVectorPort } from "../../../tools/ask-evaluation/vectors.ts";
 import {
   frozenCorpusSchema,
   frozenManifestSchema,
+  fakeCandidateDecisionSchema,
+  fakeCandidateExecutionSchema,
 } from "../../../tools/ask-evaluation/contracts.ts";
 import { dispatch } from "../src/server.ts";
 import {
@@ -1648,6 +1655,77 @@ it("measures all eighty isolated development baselines without loading sealed ho
     } finally {
       clock.mockRestore();
     }
+  } finally {
+    await fixture.stop();
+  }
+}, 120000);
+
+it("runs one preregistered fake candidate on a fresh full-suite binding with no held-out output", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const { receipt, post } = await prepareEvaluationSuite(fixture);
+    const decision = fakeCandidateDecisionSchema.parse(
+      JSON.parse(
+        await readFile(
+          new URL(
+            "../../../tools/ask-evaluation/fakeCandidateDecision.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      ),
+    );
+    const execution = fakeCandidateExecutionSchema.parse({
+      version: "ask-evaluation-fake-execution-v1",
+      decisionConfigurationSha256: decision.configurationSha256,
+      candidateScriptSha256: decision.candidateScriptSha256,
+      fullSuite: receipt.suite,
+      sourceManifestSha256: receipt.sourceManifestSha256,
+      caseBindingsSha256: hash(receipt.suite.caseBindings),
+    });
+    const result = await runFakeCandidateSuite({
+      phase: "fake_candidate",
+      execution,
+      caseCorpora: receipt.caseCorpora,
+      caseIds: ["dev_topic_01"],
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      vector: createEvaluationVectorPort(fixture.database.session),
+    });
+    expect(result.executionSha256).toBe(hash(execution));
+    expect(result.development.caseResults.map((row) => row.path)).toEqual([
+      "lexical",
+      "fake_exact_vector",
+      "fake_hybrid",
+      "fake_answer",
+    ]);
+    expect(result.holdout.caseResults).toEqual([]);
+    expect(
+      result.development.caseResults.map((row) => ({
+        path: row.path,
+        failures: row.failures,
+      })),
+    ).toEqual([
+      { path: "lexical", failures: [] },
+      { path: "fake_exact_vector", failures: [] },
+      { path: "fake_hybrid", failures: [] },
+      { path: "fake_answer", failures: [] },
+    ]);
+    expect(
+      result.development.caseResults.find((row) => row.path === "fake_answer"),
+    ).toMatchObject({
+      abstained: true,
+      supportedClaims: 0,
+      unsupportedClaims: 0,
+      publishedClaimCount: 0,
+      publishedCitationCount: 0,
+    });
+    expect(
+      result.rankObservations[0]?.ranking.rawWindowScores.map(
+        (row) => row.score,
+      ),
+    ).toEqual([1, -1, 1, 0]);
+    expect(result.activationAllowed).toBe(false);
+    expect(result.semanticSelection).toBe(false);
   } finally {
     await fixture.stop();
   }
