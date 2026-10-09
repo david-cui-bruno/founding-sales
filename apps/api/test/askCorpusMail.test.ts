@@ -399,3 +399,140 @@ it("discovers more than ten explicitly associated permitted mail copies within t
     await fixture.stop();
   }
 });
+
+it("keeps useful owned passages when an explicit mixed request also names an inaccessible mail copy", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const approved = await approveCaptureFixture(fixture),
+      text = "Private mail drainage staffing.";
+    const registry = registerHandlers(new HandlerRegistry(), {
+      classifier: undefined,
+      mail: undefined,
+      send: undefined,
+      research: undefined,
+      crmMailCapture: {
+        proofVerifier: {
+          async verify() {
+            return true;
+          },
+        },
+        provider: {
+          async read(input) {
+            return {
+              providerAccountId: "google-business",
+              messageId: input.providerMessageId,
+              threadId: "approved-thread",
+              labels: ["INBOX"],
+              providerAt: "2026-10-08T15:00:00.000Z",
+              rawSenderDate: null,
+              from: "Unknown@business.test",
+              to: ["business@example.test"],
+              cc: [],
+              subject: "Business",
+              body: text,
+              parserVersion: "fixture-mime-v1",
+              representation: "plain_text" as const,
+              completeness: "partial" as const,
+              ranges: [
+                { start: 0, end: text.length, kind: "unknown" as const },
+              ],
+            };
+          },
+        },
+      },
+    });
+    const captured = await registry.get("crm.mail_capture")!.handle({
+      session: fixture.db,
+      scope: workspaceScope(approved.workspaceId, {
+        kind: "system",
+        component: "worker",
+      }),
+      job: approved.job,
+    });
+    expect(captured).toMatchObject({
+      done: true,
+      progress: { outcome: "captured" },
+    });
+    const token = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)
+    ).accessToken;
+    const post = (path: string, body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path,
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    const created = await post("/crm/people/create", {
+        commandId: randomUUID(),
+        clientVersion: CURRENT_CLIENT_VERSION,
+        fullName: "Owned corpus context",
+      }),
+      personId = (created.body as { result: { personId: string } }).result
+        .personId;
+    await post("/crm/people/source/add", {
+      commandId: randomUUID(),
+      clientVersion: CURRENT_CLIENT_VERSION,
+      personId,
+      sourceKey: randomUUID(),
+      excerpt: "Owned drainage coordination.",
+      occurredAt: "2026-10-01T14:00:00Z",
+    });
+    const page = await post("/crm/people/read", { personId }),
+      row = (
+        page.body as {
+          sources: {
+            workspaceId: string;
+            sourceId: string;
+            revision: number;
+            contentHash: string;
+          }[];
+        }
+      ).sources[0]!;
+    const sources = [
+      {
+        workspaceId: row.workspaceId,
+        sourceId: row.sourceId,
+        revision: row.revision,
+        contentHash: row.contentHash,
+        kind: "selected_note",
+        locator: null,
+      },
+      {
+        workspaceId: approved.workspaceId,
+        kind: "mail",
+        sourceId: captured!.progress["sourceId"],
+        revision: 1,
+        contentHash: createHash("sha256").update(text).digest("hex"),
+        locator: null,
+      },
+    ];
+    const read = await post("/ask/read", {
+      operation: "passages",
+      scope: { sources },
+      query: "drainage",
+    });
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({
+      passages: [{ text: "Owned drainage coordination." }],
+      coverage: {
+        requestedSources: 2,
+        inspectedSources: 1,
+        refusedSources: 1,
+        scanComplete: false,
+      },
+    });
+    expect(JSON.stringify(read.body)).not.toContain("Private mail");
+  } finally {
+    await fixture.stop();
+  }
+});

@@ -1382,3 +1382,137 @@ it("discovers an authorized deleted selected copy as a body-free unavailable ref
     await fixture.stop();
   }
 });
+
+it("keeps owned notes useful when a selected meeting belongs to another firm assignment", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const token = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)
+    ).accessToken;
+    const post = (path: string, body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path,
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    const firmId = await seedFirm(fixture, {
+      name: "Other assigned native copy",
+      assignedUserId: fixture.alpha.admin.userId,
+    });
+    const meetingId = randomUUID(),
+      recordingId = randomUUID(),
+      sourceId = randomUUID();
+    await fixture.db.query(
+      "INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,$2::uuid::text,$2::uuid::text,'booked','2026-10-01T14:00:00Z','2026-10-01T14:20:00Z',now())",
+      [fixture.alpha.workspaceId, meetingId, firmId],
+    );
+    await fixture.db.query(
+      "INSERT INTO meeting_recordings(workspace_id,id,meeting_id,segment,participant_label,sha256,size_bytes,s3_key,processing_status,crm_capture_owner_user_id) VALUES($1,$2,$3,1,'Private native copy',$4,100,$5,'ready',$6)",
+      [
+        fixture.alpha.workspaceId,
+        recordingId,
+        meetingId,
+        "b".repeat(64),
+        `meetings/${meetingId}/${"b".repeat(64)}.m4a`,
+        fixture.alpha.admin.userId,
+      ],
+    );
+    const utterances = [
+      {
+        startMs: 0,
+        endMs: 5000,
+        text: "Private drainage discussion.",
+        speaker: "Speaker 1",
+        attribution: "unknown",
+      },
+    ];
+    await fixture.db.query(
+      "INSERT INTO meeting_transcripts(workspace_id,id,recording_id,original_recording_id,version,duration_ms,language,utterances) VALUES($1,$2,$3,$3,1,5000,'en-US',$4::jsonb)",
+      [
+        fixture.alpha.workspaceId,
+        sourceId,
+        recordingId,
+        JSON.stringify(utterances),
+      ],
+    );
+    const person = await post("/crm/people/create", {
+      commandId: randomUUID(),
+      clientVersion: CURRENT_CLIENT_VERSION,
+      fullName: "Owned native corpus",
+    });
+    const personId = (person.body as { result: { personId: string } }).result
+      .personId;
+    await post("/crm/people/source/add", {
+      commandId: randomUUID(),
+      clientVersion: CURRENT_CLIENT_VERSION,
+      personId,
+      sourceKey: randomUUID(),
+      excerpt: "Owned drainage note.",
+      occurredAt: "2026-10-01T12:00:00Z",
+    });
+    const page = await post("/crm/people/read", { personId });
+    const note = (
+      page.body as {
+        sources: {
+          workspaceId: string;
+          sourceId: string;
+          revision: number;
+          contentHash: string;
+        }[];
+      }
+    ).sources[0]!;
+    const read = await post("/ask/read", {
+      operation: "passages",
+      scope: {
+        sources: [
+          { ...note, kind: "selected_note", locator: null },
+          {
+            workspaceId: fixture.alpha.workspaceId,
+            sourceId,
+            kind: "meeting_transcript",
+            revision: 1,
+            contentHash: createHash("sha256")
+              .update(JSON.stringify(utterances))
+              .digest("hex"),
+            locator: null,
+          },
+        ].map(
+          ({
+            workspaceId,
+            sourceId,
+            kind,
+            revision,
+            contentHash,
+            locator,
+          }) => ({
+            workspaceId,
+            sourceId,
+            kind,
+            revision,
+            contentHash,
+            locator,
+          }),
+        ),
+      },
+      query: "drainage",
+    });
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({
+      passages: [{ text: "Owned drainage note." }],
+      coverage: { refusedSources: 1, inspectedSources: 1, scanComplete: false },
+    });
+    expect(JSON.stringify(read.body)).not.toContain("Private drainage");
+  } finally {
+    await fixture.stop();
+  }
+});
