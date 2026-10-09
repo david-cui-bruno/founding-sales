@@ -458,3 +458,11 @@ it.each(['crm.selectedAttachmentCommit','crm.selectedAttachmentAnalyze','crm.sel
  await expect(answerOperation(operationHandlers(deps),'command',name,{...input,path:'/arbitrary',commandId:ITEM_ID})).rejects.toThrow();
  expect(command).not.toHaveBeenCalled();
 });
+
+it('does not release a late Ask result to a changed authenticated identity',async()=>{
+ const deps=hosts();let generation=0;let finish!:()=>void;
+ deps.recordings.identity.current=()=>generation;
+ deps.api.read=async(_path,parse)=>{await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse({operation:'records',selection:'single',records:[{recordId:ITEM_ID,kind:'person',name:'Private Person',firmId:null}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}})};};
+ const pending=answerOperation(operationHandlers(deps),'read','ask.read',{operation:'records',query:'Private',kind:'people',limit:20});
+ generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
+});
