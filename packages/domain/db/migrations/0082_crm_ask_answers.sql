@@ -107,6 +107,22 @@ CREATE TABLE crm_ask_request_windows (
  UNIQUE(workspace_id,request_id,request_version,request_epoch,ordinal)
 );
 GRANT SELECT,INSERT,DELETE ON crm_ask_request_windows TO app_runtime,migration;
+CREATE FUNCTION crm_ask_purpose_snapshot_valid(value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE key text; cap numeric;
+BEGIN
+ IF value IS NULL OR jsonb_typeof(value) IS DISTINCT FROM 'object' OR value-ARRAY['purpose','revision','endpointId','modelVersion','accessGrantVersion','dataHandlingVersion','evaluationFingerprint','processorVersion','retrievalVersion','answerVersion','supportVersion','chunkerVersion','inputTokenPriceMicros','outputTokenPriceMicros','dailyCeilingCents','monthlyCeilingCents']<>'{}'::jsonb OR NOT value ?& ARRAY['purpose','revision','endpointId','modelVersion','accessGrantVersion','dataHandlingVersion','evaluationFingerprint','processorVersion','retrievalVersion','answerVersion','supportVersion','chunkerVersion','inputTokenPriceMicros','outputTokenPriceMicros','dailyCeilingCents','monthlyCeilingCents'] THEN RETURN false; END IF;
+ IF jsonb_typeof(value->'purpose') IS DISTINCT FROM 'string' OR value->>'purpose' NOT IN ('answer','embedding','support') OR jsonb_typeof(value->'evaluationFingerprint') IS DISTINCT FROM 'string' OR value->>'evaluationFingerprint' !~ '^[a-f0-9]{64}$' THEN RETURN false; END IF;
+ FOREACH key IN ARRAY ARRAY['endpointId','modelVersion','accessGrantVersion','dataHandlingVersion','processorVersion','retrievalVersion','answerVersion','supportVersion','chunkerVersion'] LOOP
+  IF jsonb_typeof(value->key) IS DISTINCT FROM 'string' OR length(value->>key) NOT BETWEEN 1 AND (CASE WHEN key IN ('modelVersion','accessGrantVersion','dataHandlingVersion') THEN 200 ELSE 100 END) THEN RETURN false; END IF;
+ END LOOP;
+ FOREACH key IN ARRAY ARRAY['revision','inputTokenPriceMicros','outputTokenPriceMicros','dailyCeilingCents','monthlyCeilingCents'] LOOP
+  cap:=CASE WHEN key='revision' THEN 2147483647 WHEN key='dailyCeilingCents' THEN 100000 ELSE 1000000 END;
+  IF jsonb_typeof(value->key) IS DISTINCT FROM 'number' OR value->>key !~ '^[1-9][0-9]*$' THEN RETURN false; END IF;
+  IF (value->>key)::numeric>cap THEN RETURN false; END IF;
+ END LOOP;
+ RETURN true;
+END;
+$$;
 CREATE TABLE crm_ask_financial_receipts (
  workspace_id uuid NOT NULL,
  id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -119,7 +135,7 @@ CREATE TABLE crm_ask_financial_receipts (
  job_id uuid NOT NULL,
  fencing_token bigint NOT NULL CHECK(fencing_token>0),
  purpose_revision integer NOT NULL CHECK(purpose_revision>0),
- purpose_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb CHECK(jsonb_typeof(purpose_snapshot)='object'),
+ purpose_snapshot jsonb NOT NULL CHECK(jsonb_typeof(purpose_snapshot)='object'),
  config_fingerprint text NOT NULL CHECK(config_fingerprint ~ '^[a-f0-9]{64}$'),
  evaluation_fingerprint text NOT NULL CHECK(evaluation_fingerprint ~ '^[a-f0-9]{64}$'),
  authorization_fingerprint text NOT NULL CHECK(authorization_fingerprint ~ '^[a-f0-9]{64}$'),
@@ -134,6 +150,7 @@ CREATE TABLE crm_ask_financial_receipts (
  FOREIGN KEY(workspace_id,request_id) REFERENCES crm_ask_requests(workspace_id,id),
  FOREIGN KEY(workspace_id,reservation_id) REFERENCES provider_reservations(workspace_id,id),
  FOREIGN KEY(workspace_id,job_id) REFERENCES jobs(workspace_id,id),
+ CONSTRAINT crm_ask_financial_purpose_shape CHECK(crm_ask_purpose_snapshot_valid(purpose_snapshot)),
  CONSTRAINT crm_ask_financial_attempt UNIQUE(workspace_id,request_id,request_version,request_epoch,stage,attempt),
  CONSTRAINT crm_ask_financial_reservation UNIQUE(workspace_id,reservation_id)
 );
