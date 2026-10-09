@@ -58,5 +58,19 @@ it('explicitly commits a human note from current keyword evidence without enabli
   const cancelled=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:undatedId,expectedVersion:1,action:'cancel_task'});
   expect(cancelled.status).toBe(200);
   expect(cancelled.body).toMatchObject({result:{actionId:undatedId,version:2,status:'cancelled',completedAt:null}});
+  const adminToken=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+  const adminRead=await dispatch({method:'POST',path:'/ask/actions/read',body:{scope:{kind:'history'}},query:new URLSearchParams(),headers:{authorization:`Bearer ${adminToken}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  expect(adminRead.status).toBe(200);
+  expect(adminRead.body).toEqual({items:[],nextAfterId:null});
+  const saved=await post('/ask/history/list',{});
+  expect(saved.status).toBe(200);
+  const historyRevision=(saved.body as {items:{historyRevision:number}[]}).items[0]!.historyRevision;
+  const deletedHistory=await post('/ask/history/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedRevision:historyRevision,action:{kind:'delete'}});
+  expect(deletedHistory.status).toBe(200);
+  const preservedNotes=await post('/ask/actions/read',{scope:{kind:'person',personId}});
+  expect(preservedNotes.status).toBe(200);
+  expect(preservedNotes.body).toMatchObject({items:expect.arrayContaining([expect.objectContaining({actionId,kind:'note',text:'Ask about the repair routing process.',supportState:'current'}),expect.objectContaining({actionId:taskId,status:'done',completedAt:expect.any(String)})])});
+  const forbiddenCreation=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'note',text:'Do not restore the deleted investigation.',target:{kind:'person',personId}}});
+  expect(forbiddenCreation.status).toBe(409);
  }finally{await fixture.stop();}
 });
