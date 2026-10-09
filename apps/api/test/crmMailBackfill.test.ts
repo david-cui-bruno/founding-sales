@@ -64,5 +64,21 @@ it('configured acquisition without a verified read allocation calls no Gmail met
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',completedSlices:2,historyComplete:false});
   expect(gmail.metadataReads).toEqual(['historical-inquiry']);
   expect(gmail.bodyReads).toEqual([]);
+  const frozen=(await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body as {fromAt:string;historyAnchor:string};
+  const resumedGmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'200',messages:[{id:'interrupted-inquiry',threadId:'interrupted-thread',historyId:'150',internalDateEpochMilliseconds:Date.parse(frozen.fromAt)+2*86400000+3600000,headers:{From:'second@example.test',To:'business@example.test',Subject:'Interrupted inquiry'}}]});
+  let interrupted=true;
+  const resumedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...resumedGmail,getMetadata:async(...args)=>{if(interrupted){interrupted=false;throw new Error('simulated transport');}return resumedGmail.getMetadata(...args);}},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver()}});
+  await resumedRegistry.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'provider_read_unavailable',quotaAccounting:{scope:'callie_backfill_allocation',reservedUnits:'6',observedUnits:'5',unknownUnits:'1'},completedSlices:2,historyAnchor:frozen.historyAnchor,fromAt:frozen.fromAt});
+  await resumedRegistry.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',quotaAccounting:{scope:'callie_backfill_allocation',reservedUnits:'8',observedUnits:'7',unknownUnits:'1'},completedSlices:3,historyAnchor:frozen.historyAnchor,fromAt:frozen.fromAt});
+  expect((await post('/crm/business/review/read',{mailboxId:mailbox.id})).body).toMatchObject({conversations:expect.arrayContaining([{subject:'Interrupted inquiry',category:'uncertain',effectiveDecision:'needs_review',captureAllowed:false}].map(row=>expect.objectContaining(row)))});
+  expect(resumedGmail.calls.filter(call=>call.method==='getProfile')).toEqual([]);
+  expect(resumedGmail.bodyReads).toEqual([]);
+  const callsBeforeRevision=resumedGmail.calls.length;
+  await fixture.db.query('UPDATE crm_mail_import_allocations SET revision=2,user_limit_units=9,user_headroom_units=1 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
+  await resumedRegistry.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'quota_or_authority_unavailable',completedSlices:3,quotaAccounting:{reservedUnits:'8',observedUnits:'7',unknownUnits:'1'}});
+  expect(resumedGmail.calls).toHaveLength(callsBeforeRevision);
  }finally{await fixture.stop();}
 });

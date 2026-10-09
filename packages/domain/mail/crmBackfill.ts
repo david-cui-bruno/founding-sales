@@ -5,12 +5,13 @@ import { activeBusinessActor, businessAccountBinding } from '../business/acquisi
 interface ImportRow extends Record<string, unknown> {
   id: string; state: string; reason: string | null; generation: number;
   from_at: Date; to_at: Date; history_anchor: string | null; history_complete: boolean;
-  completed_slices: string;
+  completed_slices: string; reserved_units:string; observed_units:string; unknown_units:string;
 }
 const health = (row: ImportRow) => ({
   importId: row.id, state: row.state, reason: row.reason, generation: row.generation,
   fromAt: row.from_at.toISOString(), toAt: row.to_at.toISOString(),
   historyAnchor: row.history_anchor, windowFrozen:row.history_anchor!==null, historyComplete: row.history_complete,
+  quotaAccounting:{scope:'callie_backfill_allocation' as const,reservedUnits:row.reserved_units,observedUnits:row.observed_units,unknownUnits:row.unknown_units},
   coverageKind: 'enumeration' as const, bodyCoverage: 'not_measured' as const, totalSlices: 90, completedSlices: Number(row.completed_slices),
 });
 /** The operational sync watermark is not CRM import completion. No original bytes are read. */
@@ -19,7 +20,10 @@ export async function readCrmMailImport(context: RepositoryContext, input: { mai
   if (actor.kind !== 'user' || !await activeBusinessActor(context)) return null;
   const row = (await context.db.query<ImportRow>(`
     SELECT i.*, (SELECT count(*) FROM crm_mail_import_slices x
-      WHERE x.workspace_id=i.workspace_id AND x.import_id=i.id AND x.state='complete')::text AS completed_slices
+      WHERE x.workspace_id=i.workspace_id AND x.import_id=i.id AND x.state='complete')::text AS completed_slices,
+      (SELECT COALESCE(sum(q.units),0)::text FROM crm_mail_import_read_reservations q WHERE q.workspace_id=i.workspace_id AND q.import_id=i.id) AS reserved_units,
+      (SELECT COALESCE(sum(q.units),0)::text FROM crm_mail_import_read_reservations q WHERE q.workspace_id=i.workspace_id AND q.import_id=i.id AND q.state='observed') AS observed_units,
+      (SELECT COALESCE(sum(q.units),0)::text FROM crm_mail_import_read_reservations q WHERE q.workspace_id=i.workspace_id AND q.import_id=i.id AND q.state='unknown') AS unknown_units
     FROM crm_mail_imports i JOIN mailboxes m ON m.workspace_id=i.workspace_id AND m.id=i.mailbox_id
     WHERE i.workspace_id=$1 AND i.mailbox_id=$2 AND i.owner_user_id=$3 AND m.owner_user_id=$3
     ORDER BY i.observed_at DESC,i.id DESC LIMIT 1`, [context.scope.workspaceId, input.mailboxId, actor.userId])).rows[0];
