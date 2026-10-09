@@ -1,7 +1,8 @@
 import type { DevelopmentCaseRuntime } from "../../../tools/ask-evaluation/runner.ts";
 import { writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { performance } from "node:perf_hooks";
 import { crmResolvedSourceSchema } from "@fss/contracts";
 import { runEvaluation } from "../../../tools/ask-evaluation/runner.ts";
 import {
@@ -1182,6 +1183,46 @@ it("measures all eighty isolated development baselines without loading sealed ho
     expect(report.realVectorMeasured).toBe(false);
     expect(report.realModelMeasured).toBe(false);
     expect(report.activationAllowed).toBe(false);
+    let elapsed = 0;
+    const clock = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => elapsed);
+    const expiredCases = cases.map((runtime) => ({
+      ...runtime,
+      input: {
+        ...runtime.input,
+        publicReads: {
+          read: async (
+            actor: string,
+            path: "/ask/read" | "/crm/processing/source/read",
+            body: unknown,
+          ) => {
+            const response = await runtime.input.publicReads.read(
+              actor,
+              path,
+              body,
+            );
+            elapsed = 600000;
+            return response;
+          },
+        },
+      },
+    }));
+    try {
+      const exhausted = await runDevelopmentSuite({
+        suite,
+        cases: expiredCases,
+      });
+      expect(
+        exhausted.caseResults
+          .slice(1)
+          .every((result) =>
+            result.failures.some((failure) => failure.code === "run_timeout"),
+          ),
+      ).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
   } finally {
     await fixture.stop();
   }

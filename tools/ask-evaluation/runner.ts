@@ -43,9 +43,14 @@ export interface DevelopmentEvaluationInput {
 export async function runEvaluation(
   input: DevelopmentEvaluationInput,
 ): Promise<EvaluationReport> {
+  return runBoundedEvaluation(input, performance.now());
+}
+async function runBoundedEvaluation(
+  input: DevelopmentEvaluationInput,
+  runStarted: number,
+): Promise<EvaluationReport> {
   const { manifest, corpus, windows } = validateDevelopment(input);
   const results: CaseMeasurement[] = [];
-  const runStarted = performance.now();
   for (const item of corpus.cases) {
     const started = performance.now();
     const result: CaseMeasurement = {
@@ -340,8 +345,9 @@ export async function runDevelopmentSuite(input: {
     )
       throw new RangeError("manifest_mismatch");
     const results: CaseMeasurement[] = [];
+    const runStarted = performance.now();
     for (const runtime of input.cases) {
-      const report = await runEvaluation(runtime.input);
+      const report = await runBoundedEvaluation(runtime.input, runStarted);
       results.push(...report.caseResults);
     }
     return {
