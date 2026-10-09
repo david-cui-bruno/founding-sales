@@ -1,3 +1,4 @@
+import { selectedAttachmentPorts } from "./selectedAttachmentPorts.ts";
 import { operations } from "../app/bridges.ts";
 import type { SelectedImportPorts } from "./SelectedImports.tsx";
 export async function readSelectedTextFile(
@@ -18,6 +19,7 @@ function api() {
   return value;
 }
 export const selectedImportPorts: SelectedImportPorts = {
+  attachments: selectedAttachmentPorts,
   read: async (scope) =>
     await api().read("crm.selectedImportRead", {
       ...scope,

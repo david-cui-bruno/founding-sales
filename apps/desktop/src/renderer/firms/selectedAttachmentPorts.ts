@@ -13,3 +13,14 @@ export async function readSelectedOriginalFile(file:Pick<File,'name'|'size'|'arr
  let binary='';for(const byte of bytes) binary+=String.fromCharCode(byte);
  return {fileName:file.name,declaredByteLength:bytes.byteLength,bytesBase64:btoa(binary),completeness:'complete'};
 }
+import { operations } from '../app/bridges.ts';
+import type { SelectedAttachmentPorts } from './SelectedAttachments.tsx';
+function api(){const value=operations();if(value===undefined)throw new Error('unavailable');return value;}
+export const selectedAttachmentPorts:SelectedAttachmentPorts={
+ readFile:readSelectedOriginalFile,
+ preview:async input=>await api().read('crm.selectedAttachmentPreview',input),
+ commit:async input=>await api().command('crm.selectedAttachmentCommit',input),
+ reselect:async input=>await api().command('crm.selectedAttachmentReselect',input),
+ analyze:async input=>await api().command('crm.selectedAttachmentAnalyze',input),
+ read:async input=>await api().read('crm.selectedAttachmentRead',input),
+};
