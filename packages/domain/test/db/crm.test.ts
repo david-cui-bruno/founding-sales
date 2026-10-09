@@ -80,19 +80,22 @@ describe('CRM schema', () => {
     expect(rows.map(row => row.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
   });
 
-  // ------------------------------------------------- one open opportunity per firm
-  it('refuses a second open opportunity for the same firm', async () => {
+  // Distinct commercial initiatives can remain open together. Constraint tests
+  // control the schema; public v2 commands/reads cover the product behavior.
+  it('allows a second distinct open opportunity for the same firm', async () => {
     const stageId = await stageIdByKey(session, seeded.alpha.workspaceId, 'new');
-    await expect(
-      inTransaction(
-        async () =>
-          await session.query(
-            `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at)
-             VALUES ($1, $2, $3, now())`,
-            [seeded.alpha.workspaceId, crm.alpha.firmId, stageId],
-          ),
-      ),
-    ).rejects.toMatchObject({ constraint: 'opportunities_one_open_per_firm' });
+    await session.query('BEGIN');
+    try {
+      const inserted = await session.query<{ id: string }>(
+        `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at)
+         VALUES ($1, $2, $3, now()) RETURNING id`,
+        [seeded.alpha.workspaceId, crm.alpha.firmId, stageId],
+      );
+      expect(inserted.rows[0]?.id).toBeDefined();
+      expect(inserted.rows[0]?.id).not.toBe(crm.alpha.opportunityId);
+    } finally {
+      await session.query('ROLLBACK');
+    }
   });
 
   it('accepts a second opportunity once the first is closed', async () => {

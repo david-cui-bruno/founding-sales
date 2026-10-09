@@ -559,22 +559,50 @@ describe('C14: a refusal never leaves a partial write', () => {
   it('an effect refused after the log rolls every effect back, and the call stays recorded', async () => {
     const firm = await makeFirm();
     const enrolled = await enrolWithCallTask(firm, firm.contactId, await callFirstVersion('advance'));
-    // A callback task whose callback row is gone: completing it is refused part-way,
-    // after the step, the manual switch and the enrollment stop have been written.
+    // The callback exists during exact opportunity resolution. A controlled
+    // database failure removes it after recording, before effects. This preserves
+    // the post-record savepoint regression; a missing initial callback now refuses
+    // before any call history is written.
+    const callback = await createCallback(salesperson(), {
+      firmId: firm.firmId,
+      opportunityId: firm.opportunityId,
+      contactId: firm.contactId,
+      assignedUserId: seeded.alpha.salesperson.userId,
+      localDate: businessDate,
+      localTime: '15:00',
+      sourceTimeZone: 'America/New_York',
+    });
+    if (!callback.ok) throw new Error(`refused: ${callback.reason}`);
     const staleItem = await upsertTodayItem(worker(), {
       businessDate,
       firmId: firm.firmId,
       contactId: firm.contactId,
-      itemKey: `callback:${randomUUID()}`,
+      itemKey: `callback:${callback.value.id}`,
       kind: 'callback',
       dueAt: await databaseNow(salesperson()),
       sourceKind: 'callback',
-      sourceId: randomUUID(),
+      sourceId: callback.value.id,
     });
-
-    const logged = await inTransaction(async context =>
-      await logCallOutcome(context, { firmId: firm.firmId, itemId: staleItem, outcome: 'interested' }),
-    );
+    const failureName = `c14_callback_${firm.firmId.replaceAll('-', '')}`;
+    await database.session.query(`
+      CREATE FUNCTION ${failureName}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        DELETE FROM callbacks WHERE workspace_id=NEW.workspace_id AND id='${callback.value.id}'::uuid;
+        RETURN NEW;
+      END $$;
+      CREATE TRIGGER ${failureName} AFTER INSERT ON call_logs
+        FOR EACH ROW WHEN (NEW.firm_id='${firm.firmId}'::uuid)
+        EXECUTE FUNCTION ${failureName}();
+    `);
+    const logged = await (async () => {
+      try {
+        return await inTransaction(async context =>
+          await logCallOutcome(context, { firmId: firm.firmId, itemId: staleItem, outcome: 'interested' }),
+        );
+      } finally {
+        await database.session.query(`DROP TRIGGER ${failureName} ON call_logs; DROP FUNCTION ${failureName}();`);
+      }
+    })();
     if (!logged.ok) throw new Error(`refused: ${logged.reason}`);
     expect(logged.value.followUps).toEqual([{ kind: 'effects_not_applied', reason: 'callback_unknown' }]);
     expect(logged.value.setManual).toBe(false);
