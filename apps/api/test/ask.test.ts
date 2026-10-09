@@ -40,3 +40,23 @@ it('states the event basis and bounds exact opportunity counts by opening dates'
   expect(read.body).toMatchObject({count:'0',records:[],dateBasis:'opportunity_opened_at',scope,truncated:false,coverage:{acquisition:'unverified'}});
  }finally{await fixture.stop();}
 });
+
+
+it('keeps equal names as separate Ask records and requires explicit identity selection',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const ids=[];
+  for(let index=0;index<2;index++){
+   const created=await post('/crm/people/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,fullName:'Alex Lee'});
+   expect(created.status).toBe(200);ids.push((created.body as {result:{personId:string}}).result.personId);
+  }
+  const read=await post('/ask/read',{operation:'records',query:'Alex Lee',kind:'people',limit:20});
+  expect(read.status).toBe(200);
+  expect(read.body).toMatchObject({operation:'records',selection:'ambiguous',coverage:{acquisition:'unverified'}});
+  const records=(read.body as {records:{recordId:string;kind:string;name:string;firmId:null}[]}).records;
+  expect(records.map(row=>row.recordId).sort()).toEqual(ids.sort());
+  expect(records.every(row=>row.name==='Alex Lee'&&row.kind==='person'&&row.firmId===null)).toBe(true);
+ }finally{await fixture.stop();}
+});
