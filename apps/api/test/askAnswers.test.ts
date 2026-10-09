@@ -1,5 +1,6 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {expect, it} from 'vitest';
+import {crmProcessingResultSchema} from '@fss/contracts';
 import {dispatch} from '../src/server.ts';
 import {createAuthFixture, CURRENT_CLIENT_VERSION} from './support/authFixture.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
@@ -176,5 +177,42 @@ it('admits an uncached retained meeting original without inventing historical ex
   const historical=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
   expect(historical.status).toBe(409);
 
+ }finally{await fixture.stop();}
+});
+
+it('publishes only current server conflict receipts for fully selected originals and invalidates changed conflict status',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const command=(fields:object)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...fields});
+  const firmId=await seedFirm(fixture,{name:'Conflicting retained originals',assignedUserId:fixture.alpha.admin.userId});
+  const text='We need help coordinating repairs.';
+  expect((await post('/crm/firm-sources/add',command({firmId,sourceKey:'ask-conflicts',excerpt:text,occurredAt:'2026-10-01T14:00:00Z'}))).status).toBe(200);
+  const sourceRow=((await post('/crm/firm-sources/read',{firmId})).body as {sources:{workspaceId:string;sourceId:string;revision:number;contentHash:string}[]}).sources[0]!;
+  const source={workspaceId:sourceRow.workspaceId,sourceId:sourceRow.sourceId,revision:sourceRow.revision,contentHash:sourceRow.contentHash,kind:'selected_note' as const,locator:null};
+  async function process(modelVersion:string,expectedRevision:number,interpretation:string){
+   expect((await post('/crm/processing/purpose/save',command({expectedRevision,enabled:false,endpointId:'review-evaluation',modelVersion,accessGrantVersion:'fixture-review-grant',dataHandlingVersion:'fixture-review-policy',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
+   await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[fixture.alpha.workspaceId]);
+   expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
+   const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{adapter:{endpointId:'review-evaluation',modelVersion,accessGrantVersion:'fixture-review-grant',dataHandlingVersion:'fixture-review-policy',providerKey:'fixture.crm_review',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:[{kind:'need',status:'stated',interpretation,locator:'text:0:12',quote:'We need help'}]})}}});
+   await runOnce(fixture.db,{registry,owner:`ask-conflict-${modelVersion}`,limit:20});
+   const result=crmProcessingResultSchema.parse((await post('/crm/processing/read',{source})).body);
+   if(!('generationId' in result)||result.claims[0]===undefined)throw new Error('Controlled conflict extraction unavailable');
+   return {source,claimId:result.claims[0].claimId,claimRevision:1,claimHash:result.claims[0].claimHash,contextHash:result.contextHash,expectedDecisionRevision:0};
+  }
+  const first=await process('conflict-v1',0,'Needs regular repair help'),second=await process('conflict-v2',1,'Needs annual repair help');
+  const conflict=await post('/crm/evidence/conflict/save',command({expectedConflictRevision:0,members:[first,second]}));
+  expect(conflict.status).toBe(200);
+  const conflictId=(conflict.body as {result:{conflictId:string}}).result.conflictId;
+  await fixture.db.query(`INSERT INTO crm_ask_purposes(workspace_id,purpose,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,evaluation_fingerprint,processor_version,retrieval_version,answer_version,support_version,chunker_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,'answer',1,true,'controlled-answer','literal-v1','ask-only-fixture-grant','fixture-no-retention',$2,'ask-answer-v1','lexical-original-v1','literal-v1','exact-original-v1','lexical-original-v1',10,100,1,1,$3)`,[fixture.alpha.workspaceId,'a'.repeat(64),fixture.alpha.admin.userId]);
+  const requested=await post('/ask/answers/request',command({question:'repairs',scope:{sources:[source]}}));
+  expect(requested.status).toBe(200);
+  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>({configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const}),answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>({acceptance:'accepted' as const,usage:{inputTokens:50,outputTokens:10},answer:{claims:[{text,kind:'extractive',citationWindowIds:[input.windows[0]!.id]}],abstained:false}})}}});
+  await runOnce(fixture.db,{registry,owner:'ask-current-conflict',limit:20});
+  expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'complete',answer:{conflicts:[{conflictId,revision:1,state:'open',resolution:null}],missingEvidence:expect.arrayContaining(['conflict_unresolved'])}});
+  expect((await post('/crm/evidence/conflict/resolve',command({conflictId,expectedConflictRevision:1,resolution:'keep_both'}))).status).toBe(200);
+  expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'stale',reason:'source_changed',question:null,fallback:null,answer:null});
  }finally{await fixture.stop();}
 });

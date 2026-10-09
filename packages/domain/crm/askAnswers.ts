@@ -1,4 +1,4 @@
-import {askAnswerAcknowledgmentSchema,askAnswerRequestPayloadSchema,askAnswerReadResultSchema,askAnswerSourceResultSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAnswerRequest} from '@fss/contracts';
+import {askGroundedAnswerSchema,askAnswerAcknowledgmentSchema,askAnswerRequestPayloadSchema,askAnswerReadResultSchema,askAnswerSourceResultSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAnswerRequest} from '@fss/contracts';
 import {createHash} from 'node:crypto';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from './identityAccess.ts';
@@ -7,6 +7,7 @@ import {readProcessingContext} from './processingContext.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
 import {createNativeCrmMailEvidence} from './nativeMailEvidence.ts';
 import {readAskCorpus} from './askCorpus.ts';
+import {readAskInputConflicts} from './askAnswerConflicts.ts';
 import {readAskPurpose} from './askAnswerAuthority.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
 
@@ -73,6 +74,12 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
  }
  const locked=(await context.db.query<PrivateRequest>('SELECT * FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR SHARE',[context.scope.workspaceId,requestId,actor.userId])).rows[0];
  if(locked===undefined||locked.version!==row.version||locked.epoch!==row.epoch||locked.state!==row.state||JSON.stringify(locked.scope)!==JSON.stringify(row.scope)||locked.question!==row.question)return unavailable();
+ if(row.state==='complete'){
+  const conflicts=await readAskInputConflicts(context,input.data.scope,originals.data);
+  if(conflicts===null)return askAnswerReadResultSchema.parse({...metadata,state:'unavailable',reason:'input_bound_reached',question:null,fallback:null,answer:null});
+  const result=askGroundedAnswerSchema.safeParse(row.result);
+  if(!result.success||JSON.stringify(conflicts.map(value=>[value.conflictId,value.revision,value.state,value.resolution]))!==JSON.stringify(result.data.conflicts.map(value=>[value.conflictId,value.revision,value.state,value.resolution])))return askAnswerReadResultSchema.parse({...metadata,state:'stale',reason:'source_changed',question:null,fallback:null,answer:null});
+ }
  const fallback=await readAskCorpus(context,{scope:input.data.scope,query:input.data.question,limit:20});
  if(fallback===null||!await activeIdentityActor(context))return unavailable();
  return askAnswerReadResultSchema.parse({...metadata,question:input.data.question,fallback,answer:row.state==='complete'?row.result:null});

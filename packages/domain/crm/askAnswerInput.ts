@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {askExplicitCorpusScopeSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
+import {readAskInputConflicts} from './askAnswerConflicts.ts';
 import {readAskAnswer} from './askAnswers.ts';
 import {readAskCanonicalCorpus} from './askCorpus.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
@@ -46,10 +47,11 @@ export async function readCurrentAskInput(context:RepositoryContext,requestId:st
  const groups=[...grouped.values()].filter(group=>matchingGroups.has(group.id)).slice(0,10);
  const selectedIds=new Set(groups.flatMap(group=>group.windowIds));
  const selectedWindows=windows.filter(window=>selectedIds.has(window.id));
+ const conflicts=await readAskInputConflicts(context,scope,access);
  const inputScopeFingerprint=askFingerprint(scope),contextFingerprint=askFingerprint(contexts),initialAccessFingerprint=askFingerprint(access);
  const configFingerprint=askFingerprint({purpose,route});
  const authorizationFingerprint=askFingerprint({workspaceId:context.scope.workspaceId,ownerUserId:row['owner_user_id'],inputScopeFingerprint,contextFingerprint,initialAccessFingerprint});
  const proofInput:AskPurposeProofInput={stage:'answer',route:structuredClone(route),purpose,configFingerprint,authorizationFingerprint,workspaceId:context.scope.workspaceId,ownerUserId:String(row['owner_user_id']),inputScopeFingerprint,contextFingerprint,initialAccessFingerprint};
- const inputHash=askFingerprint({question:read.question,windows:windows.map(window=>({id:window.id,source:window.source,textHash:window.textHash})),selectedWindowIds:[...selectedIds],configFingerprint,authorizationFingerprint});
- return {question:read.question,windows:selectedWindows,groups,proofInput,inputHash,coverage:census.coverage,retrievalPartial:!originalsComplete||grouped.size>groups.length};
+ const inputHash=askFingerprint({question:read.question,windows:windows.map(window=>({id:window.id,source:window.source,textHash:window.textHash})),selectedWindowIds:[...selectedIds],conflicts,inputBoundReached:conflicts===null,configFingerprint,authorizationFingerprint});
+ return {question:read.question,windows:selectedWindows,groups,proofInput,inputHash,coverage:census.coverage,conflicts:conflicts??[],inputBoundReached:conflicts===null,retrievalPartial:!originalsComplete||grouped.size>groups.length};
 }
