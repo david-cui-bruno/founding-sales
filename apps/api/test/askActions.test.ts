@@ -70,10 +70,14 @@ it('explicitly commits a human note from current keyword evidence without enabli
   expect(pastDateTask.status).toBe(200);
   const pastInstantTask=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Overdue instant follow-up',due:{kind:'instant',at:'2000-01-02T01:00:00Z',zone:'America/Los_Angeles',expression:'January 1, 2000 evening'},target:{kind:'person',personId}}});
   expect(pastInstantTask.status).toBe(200);
+  const localToday=new Intl.DateTimeFormat('en-CA',{timeZone:'Pacific/Kiritimati',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const todayTask=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Explicit local-today follow-up',due:{kind:'date',date:localToday,zone:'Pacific/Kiritimati',expression:'Today'},target:{kind:'person',personId}}});
+  expect(todayTask.status).toBe(200);
   const overdue=await post('/ask/actions/read',{scope:{kind:'today'}});
   expect(overdue.status).toBe(200);
-  expect((overdue.body as {items:unknown[]}).items).toHaveLength(2);
+  expect((overdue.body as {items:unknown[]}).items).toHaveLength(3);
   expect(overdue.body).toMatchObject({items:expect.arrayContaining([expect.objectContaining({actionId:(pastDateTask.body as {result:{actionId:string}}).result.actionId,status:'open',label:'Overdue date follow-up'}),expect.objectContaining({actionId:(pastInstantTask.body as {result:{actionId:string}}).result.actionId,status:'open',label:'Overdue instant follow-up'})]),nextAfterId:null});
+  expect(overdue.body).toMatchObject({items:expect.arrayContaining([expect.objectContaining({actionId:(todayTask.body as {result:{actionId:string}}).result.actionId,label:'Explicit local-today follow-up',due:{kind:'date',date:localToday,zone:'Pacific/Kiritimati',expression:'Today'}})])});
   const adminToken=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
   const adminRead=await dispatch({method:'POST',path:'/ask/actions/read',body:{scope:{kind:'history'}},query:new URLSearchParams(),headers:{authorization:`Bearer ${adminToken}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
   expect(adminRead.status).toBe(200);
@@ -93,7 +97,7 @@ it('explicitly commits a human note from current keyword evidence without enabli
   const erasedActions=await post('/ask/actions/read',{scope:{kind:'history'}});
   expect(erasedActions.status).toBe(200);
   const erasedItems=(erasedActions.body as {items:{supportState:string;text:null;label:null;target:null;due:null;sources:unknown[]}[]}).items;
-  expect(erasedItems).toHaveLength(6);
+  expect(erasedItems).toHaveLength(7);
   for(const item of erasedItems)expect(item).toMatchObject({supportState:'deleted',text:null,label:null,target:null,due:null,sources:[]});
   expect(erasedActions.body).toMatchObject({items:expect.arrayContaining([expect.objectContaining({actionId:taskId,status:'done',completedAt:(completion.body as {result:{completedAt:string}}).result.completedAt,reviewRequired:false}),expect.objectContaining({actionId:(pastDateTask.body as {result:{actionId:string}}).result.actionId,status:'open',reviewRequired:true})])});
   const restoredSource=await post('/crm/people/source/restore',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,personId,sourceId,expectedRevision:2});
