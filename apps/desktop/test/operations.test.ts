@@ -619,3 +619,10 @@ it('saves a manual preference proposal through the explicit current-finding comm
  deps.api.command=async(path,input,parse)=>{expect(path).toBe('/ask/actions/create');expect(input).toEqual(payload);return {ok:true,value:parse({actionId:FIRM_ID,version:1,kind:'preference'})};};
  expect(await answerOperation(operationHandlers(deps),'command','ask.actionCreate',payload)).toEqual({actionId:FIRM_ID,version:1,kind:'preference'});
 });
+
+it('reads private manual work and changes a task through separate closed action operations',async()=>{
+ const deps=hosts();deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/ask/actions/read');expect(payload).toEqual({scope:{kind:'today'},limit:20});return {ok:true,value:parse({items:[],nextAfterId:null})};};
+ deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/ask/actions/change');expect(payload).toEqual({actionId:ITEM_ID,expectedVersion:2,action:'complete_task'});return {ok:true,value:parse({actionId:ITEM_ID,version:3,status:'done',completedAt:'2026-10-09T12:00:00Z'})};};
+ expect(await answerOperation(operationHandlers(deps),'read','ask.actionRead',{scope:{kind:'today'},limit:20})).toEqual({items:[],nextAfterId:null});
+ expect(await answerOperation(operationHandlers(deps),'command','ask.actionChange',{actionId:ITEM_ID,expectedVersion:2,action:'complete_task'})).toMatchObject({status:'done',version:3});
+});

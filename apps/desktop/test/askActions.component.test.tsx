@@ -67,3 +67,10 @@ it('evicts the finding and private drafts after a current-action refusal without
  expect(screen.queryByText('Investigation')).toBeNull();
  expect(actionCreate).toHaveBeenCalledTimes(1);
 });
+
+it('keeps separately saved private preference proposals accessible inside Ask',async()=>{
+ const actionRead=vi.fn(async()=>({items:[{actionId,version:1,kind:'preference' as const,status:'proposed' as const,provenance:'human' as const,createdAt:'2026-10-09T11:00:00.000Z',updatedAt:'2026-10-09T11:00:00.000Z',completedAt:null,target:null,label:null,text:'Prefer weekday planning calls.',due:null,reviewRequired:false,supportState:'current' as const,sources:[]}],nextAfterId:null}));
+ render(<Ask ports={{read,...{actionRead}}} privacyKey='owner:1' enabled/>);
+ expect(await screen.findByText('Prefer weekday planning calls.')).toBeTruthy();
+ expect(actionRead).toHaveBeenCalledWith({scope:{kind:'history'},limit:20});
+});

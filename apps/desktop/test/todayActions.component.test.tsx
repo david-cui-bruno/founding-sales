@@ -161,7 +161,7 @@ it('drops a resolved or stale action when the current open read refuses its old 
   fireEvent.click(button);
   expect(await screen.findByText('No actions need you.')).toBeTruthy();
   expect(navigated).not.toHaveBeenCalled();
-  expect(screen.getByRole('status').textContent).toContain('This action changed');
+  expect(screen.getByText('This action changed. Today has been refreshed.').getAttribute('role')).toBe('status');
 });
 it('distinguishes unavailable actions from an empty current queue', async () => {
   currentRead = null;

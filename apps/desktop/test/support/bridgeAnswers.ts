@@ -359,6 +359,8 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   },
   '/replies/card': replyCardBody,
   '/sequences/versions': sequenceVersionsBody,
+  '/ask/actions/read':{items:[],nextAfterId:null},
+  '/ask/actions/change':{status:'accepted',replayed:false,result:{actionId:'11111111-1111-4111-8111-111111111111',version:2,status:'done',completedAt:'2026-10-09T12:00:00Z'}},
   '/ask/actions/create':{status:'accepted',replayed:false,result:{actionId:'11111111-1111-4111-8111-111111111111',version:1,kind:'preference'}},
   '/ask/history/change':{status:'accepted',replayed:false,result:{requestId:'11111111-1111-4111-8111-111111111111',historyRevision:2,requestVersion:1,state:'complete'}},
   '/ask/history/list':{items:[],nextCursor:null},

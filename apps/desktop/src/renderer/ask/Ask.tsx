@@ -1,3 +1,4 @@
+import {ManualWork,type ManualWorkPorts} from "./ManualWork.tsx";
 import type {AskFollowOnPorts} from "./AskFollowOn.tsx";
 import { useEffect, useRef, useState } from "react";
 import { AskHistory, type AskHistoryPorts } from "./AskHistory.tsx";
@@ -6,7 +7,7 @@ import type { z } from "zod";
 import type { askReadSchema, askResponseSchema } from "@fss/contracts";
 export type AskRead = z.infer<typeof askReadSchema>;
 export type AskResponse = z.infer<typeof askResponseSchema>;
-export interface AskPorts extends Partial<AskAnswerPorts>, Partial<AskHistoryPorts>, Partial<AskFollowOnPorts> {
+export interface AskPorts extends Partial<AskAnswerPorts>, Partial<AskHistoryPorts>, Partial<AskFollowOnPorts>, Partial<ManualWorkPorts> {
   read(input: AskRead): Promise<AskResponse>;
 }
 const sourceKindLabels = {
@@ -247,6 +248,7 @@ export function Ask({
     >
       <h1 className="text-xl font-semibold">Ask</h1>
       <AskHistory key={key} ports={ports} enabled={enabled} />
+      <ManualWork scope={{kind:"history"}} ports={ports} privacyKey={key} enabled={enabled}/>
       <p>
         Retrieve records and original evidence. Conversation coverage may be
         incomplete.
