@@ -387,7 +387,8 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
  }finally{await fixture.db.query('SELECT pg_advisory_unlock_all()');await fixture.stop();}
 });
 
-it.each([false,true])('persists bounded recovery after actual cursor expiry without moving the original window (changed configuration=%s)',async changedConfiguration=>{
+it.each(['unchanged','changed','exhausted','disconnected_profile','changed_profile'])('persists bounded recovery after actual cursor expiry without moving the original window (%s)',async scenario=>{
+ const changedConfiguration=scenario==='changed'||scenario==='exhausted';
  const fixture=await createAuthFixture();
  try{
   const {workspaceId,admin}=fixture.alpha;
@@ -404,7 +405,12 @@ it.each([false,true])('persists bounded recovery after actual cursor expiry with
   let gapMessageAt:number|null=null;
   let gapMetadataReads=0;
   const source=workerDueWorkSources({crmMailBackfill:true}).find(value=>value.name==='crm-mail-backfill')!;
-  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...gmail,getProfile:async()=>({emailAddress:'recovery@example.test',historyId:++profiles===1?'100':'500'}),listMessageIds:async(...args)=>gapMessageAt===null?await gmail.listMessageIds(...args):{ok:true as const,messageIds:['during-gap'],nextPageToken:null},getMetadata:async()=>{gapMetadataReads++;return {id:'during-gap',threadId:'gap-thread',internalDateEpochMilliseconds:gapMessageAt!,labelIds:['INBOX'],headers:{From:'new-business@example.test',To:'recovery@example.test',Subject:'Business during gap'},attachments:[],sizeEstimate:10};},listHistory:async(_access,request)=>request.startHistoryId==='100'?{ok:false as const,reason:'history_expired' as const}:{ok:true as const,records:[{id:'501',changes:[{messageId:'during-gap',threadId:'gap-thread',kind:'message_added' as const,labelIds:['INBOX']}]}],nextPageToken:null,historyId:'501'}},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'recovery-account',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver({categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'fixture-recovery-v1'})})}});
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...gmail,getProfile:async()=>{
+ profiles++;
+ if(profiles===2&&scenario==='disconnected_profile')await fixture.db.query("UPDATE mailboxes SET status='disconnected',disconnected_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
+ if(profiles===2&&scenario==='changed_profile')await fixture.db.query("UPDATE mailboxes SET provider_account_id='replacement-account',generation=2 WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
+ return {emailAddress:'recovery@example.test',historyId:profiles===1?'100':'500'};
+} ,listMessageIds:async(...args)=>gapMessageAt===null?await gmail.listMessageIds(...args):{ok:true as const,messageIds:['during-gap'],nextPageToken:null},getMetadata:async()=>{gapMetadataReads++;return {id:'during-gap',threadId:'gap-thread',internalDateEpochMilliseconds:gapMessageAt!,labelIds:['INBOX'],headers:{From:'new-business@example.test',To:'recovery@example.test',Subject:'Business during gap'},attachments:[],sizeEstimate:10};},listHistory:async(_access,request)=>request.startHistoryId==='100'?{ok:false as const,reason:'history_expired' as const}:{ok:true as const,records:[{id:'501',changes:[{messageId:'during-gap',threadId:'gap-thread',kind:'message_added' as const,labelIds:['INBOX']}]}],nextPageToken:null,historyId:'501'}},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'recovery-account',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver({categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'fixture-recovery-v1'})})}});
   const runtime=await fixture.database.appRuntimeSession();
   const first=(await claimJobs(runtime,{owner:'initial-recovery-import',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(runtime,{registry,job:first})).toBe('completed');
@@ -426,10 +432,31 @@ it.each([false,true])('persists bounded recovery after actual cursor expiry with
    expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({gapCoverage:{epoch:2,state:'pending_profile',windowFrozen:false,toAt:null},quotaAccounting:{reservedUnits:'3',observedUnits:'3',unknownUnits:'0'}});
    expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
   }
+  if(scenario==='exhausted'){
+   for(const revision of [3,4,5]){
+    await fixture.db.query('UPDATE crm_mail_import_allocations SET revision=$3 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id,revision]);
+    const rotation=(await claimJobs(runtime,{owner:`rotation-${revision}`,kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+    expect(await runClaimedJob(runtime,{registry,job:rotation})).toBe('completed');
+    expect(profiles).toBe(1);
+    expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:revision===5?0:1});
+   }
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyComplete:false,gapCoverage:{epoch:4,state:'blocked',reason:'configuration_changed',windowFrozen:false},quotaAccounting:{reservedUnits:'3',observedUnits:'3',unknownUnits:'0'}});
+   await fixture.db.query('UPDATE crm_mail_import_allocations SET revision=6 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
+   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
+   return;
+  }
   const epoch=changedConfiguration?2:1;
   const recovery=(await claimJobs(runtime,{owner:'fresh-recovery-anchor',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(runtime,{registry,job:recovery})).toBe('completed');
   expect(profiles).toBe(2);
+  if(scenario==='disconnected_profile'||scenario==='changed_profile'){
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:scenario==='disconnected_profile'?'disconnected':'changed',historyComplete:false,gapCoverage:{epoch:1,state:'pending_profile',windowFrozen:false,toAt:null},quotaAccounting:{reservedUnits:'4',observedUnits:'4',unknownUnits:'0'}});
+   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
+   expect(gapMetadataReads).toBe(0);
+   expect(gmail.bodyReads).toEqual([]);
+   expect(gmail.sends).toEqual([]);
+   return;
+  }
   const recovered=(await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body as {fromAt:string;toAt:string;gapCoverage:{fromAt:string;toAt:string}};
   expect(recovered).toMatchObject({fromAt:original.fromAt,toAt:original.toAt,historyAnchor:'100',historyComplete:false,gapCoverage:{state:'enumerating',epoch,originalCursor:'unavailable',windowFrozen:true,historyComplete:false,completedDays:0}});
   expect(recovered.gapCoverage.fromAt).toBe(original.toAt);
