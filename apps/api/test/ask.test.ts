@@ -1516,3 +1516,315 @@ it("keeps owned notes useful when a selected meeting belongs to another firm ass
     await fixture.stop();
   }
 });
+
+it("refuses copied passages after assignment is lost while the public read waits for authority", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const token = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)
+    ).accessToken;
+    const post = (path: string, body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path,
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    const firmId = await seedFirm(fixture, {
+      name: "Authority race corpus",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    expect(
+      (
+        await post("/crm/firm-sources/add", {
+          commandId: randomUUID(),
+          clientVersion: CURRENT_CLIENT_VERSION,
+          firmId,
+          sourceKey: randomUUID(),
+          excerpt: "Private drainage coordination.",
+          occurredAt: "2026-10-01T12:00:00Z",
+        })
+      ).status,
+    ).toBe(200);
+    const page = await post("/crm/firm-sources/read", { firmId });
+    const note = (
+      page.body as {
+        sources: {
+          workspaceId: string;
+          sourceId: string;
+          revision: number;
+          contentHash: string;
+        }[];
+      }
+    ).sources[0]!;
+    const input = {
+      operation: "passages",
+      scope: {
+        sources: [
+          {
+            workspaceId: note.workspaceId,
+            sourceId: note.sourceId,
+            kind: "selected_note",
+            revision: note.revision,
+            contentHash: note.contentHash,
+            locator: null,
+          },
+        ],
+      },
+      query: "drainage",
+    };
+    expect((await post("/ask/read", input)).status).toBe(200);
+    const readerPid = (
+      await fixture.db.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0]!.pid;
+    const writer = await fixture.database.appRuntimeSession();
+    await writer.query("RESET ROLE");
+    await writer.query("BEGIN");
+    await writer.query(
+      "SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [fixture.alpha.workspaceId, firmId],
+    );
+    const pending = post("/ask/read", input);
+    let waited = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (
+        (
+          await writer.query<{ waiting: boolean }>(
+            "SELECT wait_event_type='Lock' AS waiting FROM pg_stat_activity WHERE pid=$1",
+            [readerPid],
+          )
+        ).rows[0]?.waiting === true
+      ) {
+        waited = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await writer.query(
+      "UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2",
+      [fixture.alpha.workspaceId, firmId, fixture.alpha.admin.userId],
+    );
+    await writer.query("COMMIT");
+    expect(waited).toBe(true);
+    const read = await pending;
+    expect(read.status).toBe(404);
+    expect(JSON.stringify(read.body)).not.toContain("Private drainage");
+  } finally {
+    await fixture.stop();
+  }
+});
+
+it("keeps Unicode passage boundaries exact and refuses citations after their source is deleted", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const token = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)
+    ).accessToken;
+    const post = (path: string, body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path,
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    const person = (
+      await post("/crm/people/create", {
+        commandId: randomUUID(),
+        clientVersion: CURRENT_CLIENT_VERSION,
+        fullName: "Unicode corpus",
+      })
+    ).body as { result: { personId: string } };
+    const personId = person.result.personId;
+    expect(
+      (
+        await post("/crm/people/source/add", {
+          commandId: randomUUID(),
+          clientVersion: CURRENT_CLIENT_VERSION,
+          personId,
+          sourceKey: randomUUID(),
+          excerpt: "x".repeat(1999) + "😀 Drainage",
+          occurredAt: "2026-10-01T12:00:00Z",
+        })
+      ).status,
+    ).toBe(200);
+    const page = (await post("/crm/people/read", { personId })).body as {
+      sources: {
+        workspaceId: string;
+        sourceId: string;
+        revision: number;
+        contentHash: string;
+      }[];
+    };
+    const note = page.sources[0]!;
+    const input = {
+      operation: "passages",
+      scope: {
+        sources: [
+          {
+            workspaceId: note.workspaceId,
+            sourceId: note.sourceId,
+            kind: "selected_note",
+            revision: note.revision,
+            contentHash: note.contentHash,
+            locator: null,
+          },
+        ],
+      },
+      query: "Drainage",
+    };
+    const read = await post("/ask/read", input);
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({
+      passages: [
+        {
+          text: "😀 Drainage",
+          sources: [
+            {
+              locator: "text:1999:2010",
+              occurredAt: "2026-10-01T12:00:00.000Z",
+            },
+          ],
+        },
+      ],
+      coverage: { inspectedWindows: 2, scanComplete: true },
+    });
+    expect(
+      (
+        await post("/crm/people/source/delete", {
+          commandId: randomUUID(),
+          clientVersion: CURRENT_CLIENT_VERSION,
+          personId,
+          sourceId: note.sourceId,
+          expectedRevision: note.revision,
+        })
+      ).status,
+    ).toBe(200);
+    const deleted = await post("/ask/read", input);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body).toMatchObject({
+      passages: [],
+      coverage: { refusedSources: 1, scanComplete: false },
+    });
+    expect(JSON.stringify(deleted.body)).not.toContain("Drainage");
+  } finally {
+    await fixture.stop();
+  }
+});
+
+it("reports partial copied-source coverage when a permitted native original exceeds the text ceiling", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const token = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)
+    ).accessToken;
+    const post = (body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path: "/ask/read",
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    const firmId = await seedFirm(fixture, {
+      name: "Bounded native corpus",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const meetingId = randomUUID(),
+      recordingId = randomUUID(),
+      sourceId = randomUUID();
+    await fixture.db.query(
+      "INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,$2::uuid::text,$2::uuid::text,'booked','2026-10-01T14:00:00Z','2026-10-01T14:20:00Z',now())",
+      [fixture.alpha.workspaceId, meetingId, firmId],
+    );
+    await fixture.db.query(
+      "INSERT INTO meeting_recordings(workspace_id,id,meeting_id,segment,participant_label,sha256,size_bytes,s3_key,processing_status,crm_capture_owner_user_id) VALUES($1,$2,$3,1,'Bounded native copy',$4,100,$5,'ready',$6)",
+      [
+        fixture.alpha.workspaceId,
+        recordingId,
+        meetingId,
+        "b".repeat(64),
+        `meetings/${meetingId}/${"b".repeat(64)}.m4a`,
+        fixture.alpha.salesperson.userId,
+      ],
+    );
+    const utterances = Array.from({ length: 40 }, (_, index) => ({
+      startMs: index * 1000,
+      endMs: (index + 1) * 1000,
+      text: "Drainage " + "x".repeat(3000),
+      speaker: "Speaker 1",
+      attribution: "unknown",
+    }));
+    await fixture.db.query(
+      "INSERT INTO meeting_transcripts(workspace_id,id,recording_id,original_recording_id,version,duration_ms,language,utterances) VALUES($1,$2,$3,$3,1,40000,'en-US',$4::jsonb)",
+      [
+        fixture.alpha.workspaceId,
+        sourceId,
+        recordingId,
+        JSON.stringify(utterances),
+      ],
+    );
+    const discovery = await post({ operation: "sources", scope: { firmId } });
+    expect(discovery.status).toBe(200);
+    expect(discovery.body).toMatchObject({
+      sources: [],
+      coverage: { sizeBoundReached: true, scanComplete: false },
+    });
+    const read = await post({
+      operation: "passages",
+      scope: {
+        sources: [
+          {
+            workspaceId: fixture.alpha.workspaceId,
+            sourceId,
+            kind: "meeting_transcript",
+            revision: 1,
+            contentHash: createHash("sha256")
+              .update(JSON.stringify(utterances))
+              .digest("hex"),
+            locator: null,
+          },
+        ],
+      },
+      query: "Drainage",
+    });
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({
+      passages: [],
+      coverage: {
+        scanComplete: false,
+        truncatedSources: 1,
+        inspectedSources: 0,
+        textBytes: 0,
+        sourceByteCeiling: 80000,
+      },
+    });
+  } finally {
+    await fixture.stop();
+  }
+});

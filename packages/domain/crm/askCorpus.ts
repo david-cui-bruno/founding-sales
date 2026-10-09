@@ -132,6 +132,40 @@ export async function readAskCorpus(
     textBytes = 0,
     omittedSignatures = 0;
   for (const source of sources) {
+    if (
+      source.kind === "call_transcript" ||
+      source.kind === "meeting_transcript"
+    ) {
+      if (
+        context.scope.actor.kind === "user" &&
+        context.scope.actor.role === "admin"
+      )
+        await recordCrmAuditEvent(context, {
+          action: "crm.evidence_source_read",
+          subjectKind: source.kind,
+          subjectId: source.sourceId,
+          detail: {
+            sourceRevision: source.revision,
+            exceptionalAdminRead: true,
+          },
+        });
+      const bounded = (
+        await context.db.query<{ bytes: number }>(
+          source.kind === "call_transcript"
+            ? "SELECT octet_length(utterances::text) AS bytes FROM call_transcripts WHERE workspace_id=$1 AND call_session_id=$2 AND crm_revision=$3 FOR SHARE"
+            : "SELECT octet_length(utterances::text) AS bytes FROM meeting_transcripts WHERE workspace_id=$1 AND id=$2 AND version=$3 FOR SHARE",
+          [context.scope.workspaceId, source.sourceId, source.revision],
+        )
+      ).rows[0];
+      if (bounded === undefined) {
+        refusedSources++;
+        continue;
+      }
+      if (bounded.bytes > 80000) {
+        truncatedSources++;
+        continue;
+      }
+    }
     const resolved = await resolveCrmSource(context, source, copiedMail);
     if (resolved === null) {
       refusedSources++;
