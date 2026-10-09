@@ -75,5 +75,8 @@ cases.push({constraint:'crm_ask_financial_immutable',run:async f=>{
  const row=await financial(f);await insert(f,'crm_ask_financial_receipts',row);
  return f.session.query('UPDATE crm_ask_financial_receipts SET input_price_micros=2 WHERE workspace_id=$1 AND id=$2',[row['workspace_id']!,row['id']!]);
 }});
+cases.push(bad('crm_ask_history_revision_positive','crm_ask_requests',{history_revision:0}));
+for(const history_title of ['', '   ', 'x'.repeat(101)])cases.push(bad('crm_ask_history_title_bound','crm_ask_requests',{history_title}));
+export async function seedAskRequest(f:Pick<Fixture,'session'|'seeded'>){const row=request(f);await insert(f,'crm_ask_requests',row);return String(row['id']);}
 export async function seedAskFinancialReceipt(f:Pick<Fixture,'session'|'seeded'>){const row=await financial(f);await insert(f,'crm_ask_financial_receipts',row);return String(row['id']);}
 export const ASK_ANSWER_CONSTRAINT_CASES:readonly Case[]=cases;
