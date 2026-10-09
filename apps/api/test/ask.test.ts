@@ -170,3 +170,15 @@ it('retrieves dated operational activity separately from copied conversation cov
   const events=(read.body as {events:unknown[]}).events;expect(events).toHaveLength(1);expect(events[0]).toMatchObject({kind:'call',code:'no_answer',at:'2026-10-01T12:00:00.000Z'});
  }finally{await fixture.stop();}
 });
+
+it('does not claim no reply when conversation acquisition is incomplete',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const firmId=await seedFirm(fixture,{name:'Unknown reply firm',assignedUserId:fixture.alpha.salesperson.userId});
+  const read=await post('/ask/read',{operation:'reply_status',scope:{firmId}});
+  expect(read.status).toBe(200);
+  expect(read.body).toMatchObject({operation:'reply_status',verifiedOutgoingCount:'0',withoutVerifiedReplyCount:'0',unanswered:'not_established',coverage:{scope:'authorized_progress_receipts',acquisition:'partial',semantic:'not_requested'}});
+ }finally{await fixture.stop();}
+});

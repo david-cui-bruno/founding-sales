@@ -1,6 +1,7 @@
 import type {z} from 'zod';
 import type {askReadSchema,FirmTaskDto,CanonicalSourceReference} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
+import {readCrmProgress} from './progress.ts';
 import {readFirmTimeline} from './firmActivity.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
 import {readPerson,listPeople} from './people.ts';
@@ -8,6 +9,14 @@ import {lockIdentityContext,activeIdentityActor} from './identityAccess.ts';
 
 /** Server-defined exact state, bounded display; neither a model nor source text supplies SQL. */
 export async function readAsk(context:RepositoryContext,input:z.infer<typeof askReadSchema>){
+ if(input.operation==='reply_status'){
+  const progress=await readCrmProgress(context,{firmId:input.scope.firmId,limit:50});if(progress===null)return null;
+  const contacted=progress.events.filter(event=>event.kind==='contacted'&&(input.scope.from===undefined||Date.parse(event.occurredAt)>=Date.parse(input.scope.from))&&(input.scope.to===undefined||Date.parse(event.occurredAt)<Date.parse(input.scope.to))).map(event=>event.id);
+  const replied=progress.events.filter(event=>event.kind==='replied').map(event=>event.id);
+  const counts=(await context.db.query<{verified_outgoing_count:string;without_verified_reply_count:string}>(`SELECT count(*)::text AS verified_outgoing_count,count(*) FILTER(WHERE NOT EXISTS(SELECT 1 FROM crm_mail_progress_receipts r WHERE r.workspace_id=c.workspace_id AND r.id=ANY($3::uuid[]) AND r.state='active' AND r.event_kind='replied' AND r.prerequisite_source_id=c.source_id AND r.prerequisite_source_revision=c.source_revision AND r.prerequisite_source_hash=c.source_hash))::text AS without_verified_reply_count FROM crm_mail_progress_receipts c WHERE c.workspace_id=$1 AND c.id=ANY($2::uuid[]) AND c.state='active' AND c.event_kind='contacted'`,[context.scope.workspaceId,contacted,replied])).rows[0]!;
+  if(!await activeIdentityActor(context))return null;
+  return {operation:'reply_status' as const,scope:input.scope,dateBasis:'provider_event_at' as const,verifiedOutgoingCount:counts.verified_outgoing_count,withoutVerifiedReplyCount:counts.without_verified_reply_count,unanswered:'not_established' as const,truncated:progress.truncated,coverage:{scope:'authorized_progress_receipts' as const,acquisition:'partial' as const,semantic:'not_requested' as const}};
+ }
  if(input.operation==='passages'){
   const page=await readPerson(context,input.scope.personId,{afterSourceId:input.scope.afterSourceId,limit:50});
   if(page===null)return null;
