@@ -63,7 +63,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(slice===undefined){
     const bound=authority;
     if(bound.historyCursor===null)return;
-    const history=await providerRead('history',bound,access=>adapters.gmail.listHistory(access,{startHistoryId:bound.historyCursor!,maxResults:25,...bound.historyPageToken===null?{}:{pageToken:bound.historyPageToken}}));
+    const history=await providerRead('history',bound,access=>adapters.gmail.listHistory(access,{startHistoryId:bound.historyCursor!,maxResults:25,includeLifecycleChanges:true,...bound.historyPageToken===null?{}:{pageToken:bound.historyPageToken}}));
     if(!history.ok)throw new BackfillFailure(history.reason==='history_expired'?'history_coverage_expired':'provider_read_unavailable');
     if(!/^[0-9]{1,20}$/u.test(history.historyId)||BigInt(history.historyId)<BigInt(bound.historyCursor)||history.nextPageToken!==null&&history.nextPageToken.length>2000)throw new BackfillFailure('provider_evidence_invalid');
     let previous=BigInt(bound.historyCursor);

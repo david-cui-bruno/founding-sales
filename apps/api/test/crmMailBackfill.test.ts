@@ -210,12 +210,12 @@ it('uses exact frozen microseconds for provider millisecond timestamps at the ad
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'provider_read_unavailable',historyComplete:false,metadataCoverage:{retainedUniqueMessages:'3'}});
   const samePage=(await claimJobs(scheduler,{owner:'history-page-replay',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(scheduler,{registry:historyRegistry,job:samePage})).toBe('completed');
-  expect(historyRequests).toEqual([{startHistoryId:'100',maxResults:25},{startHistoryId:'100',maxResults:25}]);
+  expect(historyRequests).toEqual([{startHistoryId:'100',maxResults:25,includeLifecycleChanges:true},{startHistoryId:'100',maxResults:25,includeLifecycleChanges:true}]);
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',completedSlices:90,historyComplete:false,metadataCoverage:{retainedUniqueMessages:'3',availableMetadataMessages:'2'}});
   expect(await runSchedulerPass(scheduler,{sources:[source!],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
   const historyTail=(await claimJobs(scheduler,{owner:'history-tail',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(scheduler,{registry:historyRegistry,job:historyTail})).toBe('completed');
-  expect(historyRequests).toEqual([{startHistoryId:'100',maxResults:25},{startHistoryId:'100',maxResults:25},{startHistoryId:'100',maxResults:25,pageToken:'history-page-two'}]);
+  expect(historyRequests).toEqual([{startHistoryId:'100',maxResults:25,includeLifecycleChanges:true},{startHistoryId:'100',maxResults:25,includeLifecycleChanges:true},{startHistoryId:'100',maxResults:25,includeLifecycleChanges:true,pageToken:'history-page-two'}]);
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'complete',completedSlices:90,historyComplete:true,metadataCoverage:{retainedUniqueMessages:'3',availableMetadataMessages:'2'}});
   expect(await runSchedulerPass(scheduler,{sources:[source!],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
   expect(overlap.bodyReads).toEqual([]);

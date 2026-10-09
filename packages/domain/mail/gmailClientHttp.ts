@@ -574,7 +574,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
         '/gmail/v1/users/me/history',
         {
           startHistoryId: request.startHistoryId,
-          historyTypes: ['messageAdded', 'labelAdded'],
+          historyTypes: request.includeLifecycleChanges===true?['messageAdded','labelAdded','messageDeleted','labelRemoved']:['messageAdded', 'labelAdded'],
           ...(request.maxResults === undefined ? {} : { maxResults: String(request.maxResults) }),
           ...(request.pageToken === undefined ? {} : { pageToken: request.pageToken }),
         },
@@ -607,6 +607,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
         for (const [key, kind] of [
           ['messagesAdded', 'message_added'],
           ['labelsAdded', 'label_added'],
+          ...(request.includeLifecycleChanges===true?[['messagesDeleted','message_deleted'],['labelsRemoved','label_removed']] as const:[]),
         ] as const) {
           for (const member of Array.isArray(item[key]) ? (item[key] as unknown[]) : []) {
             if (typeof member !== 'object' || member === null) continue;
@@ -615,8 +616,9 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
             const id = asString((message as Json)['id']);
             const threadId = asString((message as Json)['threadId']);
             if (id === null || threadId === null) continue;
-            const labelIds = Array.isArray((message as Json)['labelIds'])
-              ? ((message as Json)['labelIds'] as unknown[]).filter((label): label is string => typeof label === 'string')
+            const labels=request.includeLifecycleChanges===true&&(kind==='label_added'||kind==='label_removed')?(member as Json)['labelIds']:(message as Json)['labelIds'];
+            const labelIds = Array.isArray(labels)
+              ? labels.filter((label): label is string => typeof label === 'string')
               : [];
             changes.push({ messageId: id, threadId, kind, labelIds });
           }
