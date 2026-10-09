@@ -6,6 +6,15 @@ import {lockIdentityContext,activeIdentityActor} from './identityAccess.ts';
 
 /** Server-defined exact state, bounded display; neither a model nor source text supplies SQL. */
 export async function readAsk(context:RepositoryContext,input:z.infer<typeof askReadSchema>){
+ if(input.operation==='records'&&input.kind==='firms') {
+  if(!await activeIdentityActor(context))return null;
+  const rows=(await context.db.query<{id:string;name:string}>("SELECT id,name FROM firms WHERE workspace_id=$1 AND status='active' AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3",[context.scope.workspaceId,input.afterId??null,input.limit+1])).rows;
+  const query=input.query.normalize('NFKC').toLocaleLowerCase('en-US');
+  const records=rows.slice(0,input.limit).filter(row=>row.name.normalize('NFKC').toLocaleLowerCase('en-US').includes(query)).map(row=>({recordId:row.id,kind:'firm' as const,name:row.name,firmId:row.id}));
+  if(!await activeIdentityActor(context))return null;
+  const nextAfterId=rows.length>input.limit?rows[input.limit-1]!.id:null;
+  return {operation:'records' as const,selection:nextAfterId!==null?'unresolved' as const:records.length>1?'ambiguous' as const:records.length===1?'single' as const:'none' as const,records,nextAfterId,scanComplete:nextAfterId===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
+ }
  if(input.operation==='records') {
   const page=await listPeople(context,{afterId:input.afterId,limit:input.limit});
   const query=input.query.normalize('NFKC').toLocaleLowerCase('en-US');

@@ -78,3 +78,19 @@ it('keeps bounded identity scans unresolved until their remaining pages are chec
   expect((second.body as {records:{recordId:string}[]}).records[0]?.recordId).not.toBe(page.records[0]?.recordId);
  }finally{await fixture.stop();}
 });
+
+it('returns one firm identity despite multiple opportunities and preserves equal firm names',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const firmIds=[];
+  for(let index=0;index<2;index++)firmIds.push(await seedFirm(fixture,{name:'Orion Management',assignedUserId:fixture.alpha.salesperson.userId}));
+  for(const name of ['Repairs pilot','Portfolio rollout']) expect((await post('/opportunities/v2/open',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,firmId:firmIds[0],name,stageKey:'new'})).status).toBe(200);
+  const read=await post('/ask/read',{operation:'records',query:'Orion',kind:'firms',limit:20});
+  expect(read.status).toBe(200);expect(read.body).toMatchObject({selection:'ambiguous',scanComplete:true});
+  const records=(read.body as {records:{recordId:string;kind:string;name:string}[]}).records;
+  expect(records.map(row=>row.recordId).sort()).toEqual(firmIds.sort());
+  expect(records.every(row=>row.kind==='firm'&&row.name==='Orion Management')).toBe(true);
+ }finally{await fixture.stop();}
+});
