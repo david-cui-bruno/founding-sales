@@ -206,10 +206,40 @@ it("preserves capture-time legacy ACL after current association changes without 
       "UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2",
       [source.workspaceId, personId, firmB],
     );
-    await fixture.db.query(
+    // A real second connection holds the original authority while the protected
+    // public history read waits, then commits reassignment before publication.
+    const readerPid = (
+      await fixture.db.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0]!.pid;
+    const writer = await fixture.database.appRuntimeSession();
+    await writer.query("RESET ROLE");
+    await writer.query("BEGIN");
+    await writer.query(
+      "SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [source.workspaceId, firmA],
+    );
+    const pending = post("/crm/evidence/decision/history/read", historyInput);
+    let waited = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const state = (
+        await writer.query<{ waiting: boolean }>(
+          "SELECT wait_event_type='Lock' AS waiting FROM pg_stat_activity WHERE pid=$1",
+          [readerPid],
+        )
+      ).rows[0];
+      if (state?.waiting === true) {
+        waited = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await writer.query(
       "UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2",
       [source.workspaceId, firmA, fixture.alpha.admin.userId],
     );
+    await writer.query("COMMIT");
+    expect(waited).toBe(true);
+    expect((await pending).status).toBe(404);
     expect((await post("/crm/people/read", { personId })).body).toMatchObject({
       person: { firm: { firmId: firmB } },
       sources: [],

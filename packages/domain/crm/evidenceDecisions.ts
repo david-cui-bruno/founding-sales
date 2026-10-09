@@ -963,13 +963,14 @@ export async function readCrmConflict(
   const history = (
     await context.db.query<{
       revision: number;
+      member_anchor_ids: string[];
       state: string;
       resolution: string | null;
       preferred_anchor_id: string | null;
       decided_at: Date;
       rationale: string | null;
     }>(
-      "SELECT * FROM crm_claim_conflict_revisions WHERE workspace_id=$1 AND conflict_id=$2 AND ($3::integer IS NULL OR revision>$3) ORDER BY revision LIMIT $4",
+      "SELECT r.*, ARRAY(SELECT m.anchor_id FROM crm_claim_conflict_members m WHERE m.workspace_id=r.workspace_id AND m.conflict_id=r.conflict_id AND m.revision=r.revision ORDER BY m.anchor_id) AS member_anchor_ids FROM crm_claim_conflict_revisions r WHERE r.workspace_id=$1 AND r.conflict_id=$2 AND ($3::integer IS NULL OR r.revision>$3) ORDER BY r.revision LIMIT $4",
       [
         context.scope.workspaceId,
         input.conflictId,
@@ -989,6 +990,7 @@ export async function readCrmConflict(
     members,
     history: history.slice(0, input.limit).map((row) => ({
       revision: row.revision,
+      memberAnchorIds: row.member_anchor_ids,
       state: row.state,
       resolution: row.resolution,
       preferredAnchorId: row.preferred_anchor_id,

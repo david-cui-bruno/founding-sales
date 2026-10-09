@@ -1,3 +1,7 @@
+import type {
+  SessionQueryable,
+  QueryResultRowLike,
+} from "@fss/domain/db/queryable.ts";
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { crmProcessingResultSchema } from "@fss/contracts";
@@ -18,6 +22,20 @@ it("flags dependent open meeting work after correction while preserving complete
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
+    let workAuditUnavailable = false;
+    const wrapped: SessionQueryable = {
+      async query<Row extends QueryResultRowLike>(
+        sql: string,
+        values?: readonly unknown[],
+      ) {
+        if (
+          workAuditUnavailable &&
+          values?.[3] === "crm.evidence_work_admin_read"
+        )
+          throw new Error("Controlled work audit unavailable");
+        return fixture.db.query<Row>(sql, values);
+      },
+    };
     const post = (path: string, body: unknown) =>
       dispatch(
         {
@@ -28,8 +46,8 @@ it("flags dependent open meeting work after correction while preserving complete
           body,
         },
         {
-          session: fixture.db,
-          auth: fixture.deps,
+          session: wrapped,
+          auth: { ...fixture.deps, db: wrapped },
           supportedClientVersions: fixture.deps.config.supportedClientVersions,
           sendingEnabled: false,
         },
@@ -387,6 +405,10 @@ it("flags dependent open meeting work after correction while preserving complete
         }),
       ]),
     });
+    workAuditUnavailable = true;
+    await expect(
+      post("/crm/evidence/work/read", { work: done }),
+    ).rejects.toThrow("Controlled work audit unavailable");
   } finally {
     await fixture.stop();
   }

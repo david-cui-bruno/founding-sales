@@ -944,7 +944,11 @@ it("resolves an explicit conflicting group without erasing either dated source",
       contentHash: selected.contentHash,
       locator: null,
     };
-    async function process(modelVersion: string, expectedRevision: number) {
+    async function process(
+      modelVersion: string,
+      expectedRevision: number,
+      interpretation = "Needs repair coordination",
+    ) {
       expect(
         (
           await post(
@@ -990,7 +994,7 @@ it("resolves an explicit conflicting group without erasing either dated source",
                 {
                   kind: "need",
                   status: "stated",
-                  interpretation: "Needs repair coordination",
+                  interpretation,
                   locator: "text:0:12",
                   quote: "We need help",
                 },
@@ -1105,6 +1109,51 @@ it("resolves an explicit conflicting group without erasing either dated source",
     expect(
       (await post("/crm/evidence/conflict/save", saveCommand)).status,
     ).toBe(409);
+    const originalMemberIds = (
+      opened.body as { members: { anchorId: string }[] }
+    ).members
+      .map((value) => value.anchorId)
+      .sort();
+    const changed = await process(
+      "fixture-v3",
+      2,
+      "Requires a different repair policy",
+    );
+    const changedMembership = await post(
+      "/crm/evidence/conflict/save",
+      command({
+        conflictId,
+        expectedConflictRevision: 2,
+        members: [member(first, firstSource), member(changed, source)],
+      }),
+    );
+    expect(changedMembership.status).toBe(200);
+    const updated = await post("/crm/evidence/conflict/read", { conflictId });
+    expect(updated.status).toBe(200);
+    const updatedBody = updated.body as {
+      members: { anchorId: string }[];
+      history: { revision: number; memberAnchorIds: string[] }[];
+    };
+    const currentMemberIds = updatedBody.members
+      .map((value) => value.anchorId)
+      .sort();
+    expect(currentMemberIds).not.toEqual(originalMemberIds);
+    expect(updatedBody.history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          revision: 1,
+          memberAnchorIds: originalMemberIds,
+        }),
+        expect.objectContaining({
+          revision: 2,
+          memberAnchorIds: originalMemberIds,
+        }),
+        expect.objectContaining({
+          revision: 3,
+          memberAnchorIds: currentMemberIds,
+        }),
+      ]),
+    );
   } finally {
     await fixture.stop();
   }

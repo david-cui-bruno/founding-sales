@@ -171,7 +171,19 @@ export const crmConflictPageSchema = crmConflictHistorySchema
       .array(crmExtractionClaimSchema.extend({ anchorId: z.uuid() }).strict())
       .min(2)
       .max(10),
-    history: z.array(crmConflictHistorySchema).max(50),
+    history: z
+      .array(
+        crmConflictHistorySchema
+          .extend({
+            memberAnchorIds: z
+              .array(z.uuid())
+              .min(2)
+              .max(10)
+              .refine((ids) => new Set(ids).size === ids.length),
+          })
+          .strict(),
+      )
+      .max(50),
     nextAfterRevision: z.number().int().positive().nullable(),
   })
   .strict();

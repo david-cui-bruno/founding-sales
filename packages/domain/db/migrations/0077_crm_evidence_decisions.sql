@@ -41,6 +41,15 @@ BEGIN
  RETURN NEW;
 END $$;
 CREATE TRIGGER crm_selected_original_access_capture BEFORE INSERT OR UPDATE ON crm_selected_sources FOR EACH ROW EXECUTE FUNCTION capture_crm_selected_access_closure();
+CREATE FUNCTION crm_selected_original_identity_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF ROW(NEW.workspace_id,NEW.id,NEW.person_id,NEW.firm_id,NEW.owner_user_id,NEW.source_key_hash)
+ IS DISTINCT FROM ROW(OLD.workspace_id,OLD.id,OLD.person_id,OLD.firm_id,OLD.owner_user_id,OLD.source_key_hash)
+ THEN RAISE EXCEPTION 'Original selected source identity and owner are immutable' USING ERRCODE='23514',CONSTRAINT=TG_NAME; END IF;
+ RETURN NEW;
+END $$;
+CREATE CONSTRAINT TRIGGER crm_selected_original_identity_immutable AFTER UPDATE ON crm_selected_sources DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION crm_selected_original_identity_immutable();
+
 
 -- Source-bound equality and decisions are independent of disposable model claims.
 CREATE TABLE crm_claim_review_anchors (

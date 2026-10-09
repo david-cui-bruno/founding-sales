@@ -11,6 +11,7 @@ import { readCrmProcessingHealth } from "./processing.ts";
 import { lockConflictSources, targetAnchor } from "./evidenceDecisions.ts";
 import { createNativeCrmMailEvidence } from "./nativeMailEvidence.ts";
 import type { CrmMailEvidencePort } from "./mailEvidence.ts";
+import { recordCrmAuditEvent } from "./audit.ts";
 import { readProcessingContext } from "./processingContext.ts";
 interface Work extends Record<string, unknown> {
   id: string;
@@ -186,6 +187,14 @@ export async function readCrmEvidenceWork(
         row.id > input.afterDependencyId,
     ),
     page = after.slice(0, input.limit);
+  if (actor.role === "admin")
+    await recordCrmAuditEvent(context, {
+      action: "crm.evidence_work_admin_read",
+      subjectKind: input.work.kind,
+      subjectId: input.work.id,
+      detail: { exceptionalAdminRead: true, dependencyCount: rows.length },
+    });
+  if (!(await activeIdentityActor(context))) return null;
   return {
     work: {
       kind: input.work.kind,

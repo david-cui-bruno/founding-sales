@@ -111,6 +111,27 @@ function columnCases(
   }));
 }
 export const CRM_EVIDENCE_CONSTRAINT_CASES: readonly Case[] = [
+  {
+    constraint: "crm_selected_original_identity_immutable",
+    run: async (f) => {
+      const id = randomUUID();
+      await insert(f, "crm_selected_sources", {
+        workspace_id: f.seeded.alpha.workspaceId,
+        id,
+        firm_id: f.crm.alpha.firmId,
+        owner_user_id: f.seeded.alpha.salesperson.userId,
+        source_key_hash: hash,
+        excerpt: "Selected test",
+        content_hash: hash,
+        occurred_at: "2026-10-01",
+      });
+      return f.session.query(
+        "UPDATE crm_selected_sources SET owner_user_id=$3 WHERE workspace_id=$1 AND id=$2",
+        [f.seeded.alpha.workspaceId, id, f.seeded.alpha.admin.userId],
+      );
+    },
+  },
+
   ...columnCases("crm_claim_review_anchors", anchor, [
     [
       "crm_claim_anchor_original_access_closure",
