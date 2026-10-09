@@ -18,7 +18,7 @@ it('acknowledges a queued request separately from the next authenticated health 
  await waitFor(()=>expect(request).toHaveBeenCalledWith({mailboxId:MAILBOX}));expect(await screen.findByText('Import request queued. Coverage is reported separately after work runs.')).toBeTruthy();expect(health).toHaveBeenCalledTimes(2);expect(screen.queryByText(/Retained unique messages|Retained copied bodies|Import state: complete/)).toBeNull();
 });
 it('keeps permitted copied-body coverage separate from a disconnected mailbox and expired history recovery',async()=>{
- const measured=mailImportHealth();const ports:MailImportPorts={health:async()=>({...measured,state:'complete',connectionState:'disconnected',copyCoverage:{...measured.copyCoverage,coverage:'complete'},gapCoverage:{kind:'surviving_message_enumeration_and_fresh_history',epoch:1,state:'draining',originalCursor:'unavailable',fromAt:'2026-09-01T00:00:00Z',toAt:'2026-10-08T00:00:00Z',windowFrozen:true,totalDays:37,completedDays:12,historyComplete:false,reason:'history_coverage_expired'}}),request:vi.fn()};
+ const measured=mailImportHealth();const ports:MailImportPorts={health:async()=>({...measured,state:'complete',connectionState:'disconnected',copyCoverage:{...measured.copyCoverage,coverage:'complete'},gapCoverage:{olderCopyReconciliation:{kind:'bounded_current_copy_traversal',coverage:'partial',visitedCopies:'2',refreshedCopies:'1',unresolvedCopies:'1',traversalExhausted:false},kind:'surviving_message_enumeration_and_fresh_history',epoch:1,state:'draining',originalCursor:'unavailable',fromAt:'2026-09-01T00:00:00Z',toAt:'2026-10-08T00:00:00Z',windowFrozen:true,totalDays:37,completedDays:12,historyComplete:false,reason:'history_coverage_expired'}}),request:vi.fn()};
  render(<MailImportStatus ports={ports} enabled mailboxId={MAILBOX} privacyKey="one" generation={2} accountBinding={'a'.repeat(64)}/>);
  expect(await screen.findByText('Mailbox connection: disconnected')).toBeTruthy();expect(screen.getByText('Copied-body coverage: complete')).toBeTruthy();expect(screen.getByText('Retained copied bodies: 5')).toBeTruthy();expect(screen.getByText('Recovery-gap state: draining')).toBeTruthy();expect(screen.getByText('Original history cursor is unavailable.')).toBeTruthy();expect(screen.getByText('Fresh recovery history is incomplete.')).toBeTruthy();expect(screen.queryByText(/Original Gmail is currently available|All history complete|Copies deleted by disconnect/i)).toBeNull();
 });
@@ -38,4 +38,13 @@ it('discards late health and queued acknowledgement on privacy, mailbox and sour
  completeRequest({importId:IMPORT_ID,status:'queued'});
  await waitFor(()=>expect(screen.queryByText('Import request queued. Coverage is reported separately after work runs.')).toBeNull());
  expect(screen.queryByText('Retained unique messages: 7')).toBeNull();
+});
+
+it('separates exhausted initial traversal from the current recovery epoch without implying unique or complete history',async()=>{
+ const measured=mailImportHealth();const ports:MailImportPorts={health:async()=>({...measured,gapCoverage:{olderCopyReconciliation:{kind:'bounded_current_copy_traversal',coverage:'partial',visitedCopies:'2',refreshedCopies:'1',unresolvedCopies:'1',traversalExhausted:false},kind:'surviving_message_enumeration_and_fresh_history',epoch:2,state:'draining',originalCursor:'unavailable',fromAt:'2026-10-08T00:00:00Z',toAt:'2026-10-09T00:00:00Z',windowFrozen:true,totalDays:1,completedDays:1,historyComplete:false,reason:null}}),request:vi.fn()};
+ render(<MailImportStatus ports={ports} enabled mailboxId={MAILBOX} privacyKey="one" generation={2} accountBinding={'a'.repeat(64)}/>);
+ expect(await screen.findByText('Current retained-copy traversal reached its end. Coverage remains partial.')).toBeTruthy();
+ expect(screen.getByText('Recovery epoch 2 retained-copy traversal is ongoing. Coverage remains partial.')).toBeTruthy();
+ expect(screen.getByText('Recovery older copies visited: 2 · refreshed: 1 · unresolved: 1')).toBeTruthy();
+ expect(screen.queryByText(/unique older copies|all older copies complete/i)).toBeNull();
 });
