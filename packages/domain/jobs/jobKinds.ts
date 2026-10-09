@@ -19,6 +19,7 @@ export const IDEMPOTENCY_PROTECTIONS = ['business_uniqueness', 'fencing_token', 
 export type IdempotencyProtection = (typeof IDEMPOTENCY_PROTECTIONS)[number];
 
 export const JOB_KINDS = [
+  'crm.commitments_project',
   'crm.mail_progress',
   'crm.extract',
   'crm.capture_extraction',
@@ -68,6 +69,7 @@ export function isJobKind(value: string): value is JobKind {
 
 /** Appendix C, third column: the protection each kind's handler must carry. */
 export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection>> = Object.freeze({
+  'crm.commitments_project': 'outbound_fence',
   'crm.mail_progress': 'outbound_fence',
   'crm.extract': 'outbound_fence',
   'crm.capture_extraction': 'outbound_fence',
@@ -321,6 +323,7 @@ export type JobClass = (typeof JOB_CLASSES)[number];
  * compiler runs.
  */
 export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze({
+  'crm.commitments_project': 'bulk',
   'crm.mail_progress': 'bulk',
   'crm.extract': 'bulk',
   'crm.capture_extraction': 'bulk',
