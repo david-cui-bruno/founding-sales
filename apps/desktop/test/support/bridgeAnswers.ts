@@ -263,6 +263,13 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
 '/crm/relationships/context/save':{"status": "accepted", "replayed": false, "result": {"contextId": "11111111-1111-4111-8111-111111111111", "sourceId": "11111111-1111-4111-8111-111111111111", "relationshipId": "11111111-1111-4111-8111-111111111111", "relationshipRevision": 1}},
 
  '/crm/people/list':{people:[],nextAfterId:null},
+ '/crm/imports/preview':{previewHash:'a'.repeat(64),parserVersion:'selected-v1',participants:[],occurredAt:null,dateProvenance:'unknown',direction:'draft',directionVerified:false,attribution:'unknown',candidates:[],warnings:[]},
+ '/crm/imports/read':{imports:[],nextAfterId:null},
+ '/crm/imports/commit':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm,sourceRevision:1,metadataRevision:1}},
+ '/crm/imports/correct':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm,sourceRevision:1,metadataRevision:1}},
+ '/crm/imports/delete':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm,sourceRevision:1,metadataRevision:1}},
+ '/crm/imports/restore':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm,sourceRevision:1,metadataRevision:1}},
+ '/crm/imports/recapture':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm,sourceRevision:1,metadataRevision:1}},
  '/crm/people/read':{person:{personId:FIXTURE_IDS.firm,fullName:'Alex Example',firm:null,revision:1},sources:[],nextAfterSourceId:null},
  '/crm/people/create':{status:'accepted',replayed:false,result:{personId:FIXTURE_IDS.firm}},
  '/crm/people/source/add':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.firm}},

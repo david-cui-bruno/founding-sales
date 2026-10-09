@@ -1,3 +1,4 @@
+import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
 import type { ContextPorts } from "./SourceContexts.tsx";
 import {
   Endpoints,
@@ -50,6 +51,7 @@ export function People({
   contexts,
   endpoints,
   endpointEditing,
+  imports,
 }: {
   enabled: boolean;
   ports: PeoplePorts;
@@ -58,6 +60,7 @@ export function People({
   contexts?: ContextPorts;
   endpoints?: EndpointPorts;
   endpointEditing?: EndpointEditingPorts;
+  imports?: SelectedImportPorts;
 }): JSX.Element {
   const [people, setPeople] = useState<PersonPage["person"][]>([]);
   const [page, setPage] = useState<PersonPage | null>(null);
@@ -175,6 +178,7 @@ export function People({
       {page ? (
         <section>
           <h3>{page.person.fullName}</h3>
+          {imports ? <SelectedImports key={page.person.personId} enabled={enabled} personId={page.person.personId} ports={imports} sourceVersion={page.sources.map(source=>`${source.sourceId}:${source.revision}:${source.availability}`).join('|')} onChange={async()=>setPage(await ports.read(page.person.personId))}/> : null}
           {relationships ? (
             <Relationships
               key={page.person.personId}
