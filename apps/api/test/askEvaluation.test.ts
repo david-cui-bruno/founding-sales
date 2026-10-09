@@ -1,3 +1,4 @@
+import type { DevelopmentLabelTemplate } from "../../../tools/ask-evaluation/labels.ts";
 import type { DevelopmentCaseRuntime } from "../../../tools/ask-evaluation/runner.ts";
 import { writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
@@ -604,12 +605,11 @@ it("measures all eighty isolated development baselines without loading sealed ho
     };
     let cleanups = 0;
     let runnerReads = 0;
-    for (const [index, label] of DEVELOPMENT_LABELS.entries()) {
-      const firmId = await seedFirm(fixture, {
-        name: label.identityName,
-        regionCode: "RI",
-        assignedUserId: fixture.alpha.salesperson.userId,
-      });
+    const createCopy = async (
+      label: DevelopmentLabelTemplate,
+      index: number,
+      firmId: string,
+    ) => {
       let sourceId: string, contentHash: string, locator: string;
       const text = label.originalText;
       if (label.sourceKind === "selected_note") {
@@ -878,6 +878,19 @@ it("measures all eighty isolated development baselines without loading sealed ho
       });
       expect(sourceRead.status).toBe(200);
       const source = crmResolvedSourceSchema.parse(sourceRead.body).source;
+      return { sourceId, contentHash, source, text };
+    };
+    for (const [index, label] of DEVELOPMENT_LABELS.entries()) {
+      const firmId = await seedFirm(fixture, {
+        name: label.identityName,
+        regionCode: "RI",
+        assignedUserId: fixture.alpha.salesperson.userId,
+      });
+      const { sourceId, contentHash, source, text } = await createCopy(
+        label,
+        index,
+        firmId,
+      );
       const caseLookup = {
         workspaceId: source.workspaceId,
         sourceId: source.sourceId,

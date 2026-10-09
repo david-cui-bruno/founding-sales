@@ -120,3 +120,35 @@ export const DEVELOPMENT_LABELS: readonly DevelopmentLabelTemplate[] =
     ),
   );
 export const DEVELOPMENT_LABEL_SHA256 = evaluationHash(DEVELOPMENT_LABELS);
+
+/** V2 independent competing originals, frozen before any v2 retrieval output. */
+export const DEVELOPMENT_COMPARISON_LABELS = DEVELOPMENT_LABELS.map(
+  (label, index) => ({
+    ...label,
+    sourceLabels: [
+      {
+        slot: "original",
+        originalText: label.originalText,
+        relevanceGrade: label.relevantGrade,
+      },
+      {
+        slot: "keyword_example",
+        originalText: `Case ${label.caseId}: Parser glossary example only: maintenance routing portfolio units. These are test tokens, not a statement about any business, person or portfolio.`,
+        relevanceGrade: 0,
+      },
+      {
+        slot: "duplicate",
+        originalText: label.originalText,
+        relevanceGrade: label.relevantGrade,
+      },
+      {
+        slot: "older_quotation",
+        originalText: `Case ${label.caseId}: A retained older unverified draft quotation says: "Our portfolio has ${900 + index} units and maintenance routing is difficult." The copy date does not verify this quotation or establish the current portfolio.`,
+        relevanceGrade: 1,
+      },
+    ],
+  }),
+);
+export const DEVELOPMENT_COMPARISON_LABEL_SHA256 = evaluationHash(
+  DEVELOPMENT_COMPARISON_LABELS,
+);
