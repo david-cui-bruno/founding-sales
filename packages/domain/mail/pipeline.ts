@@ -48,8 +48,9 @@ import { GmailClientError } from './gmailClient.ts';
  * runner still rolls the job back.
  */
 
+export type BusinessMailMetadataReceipt={readonly ok:true;readonly conversationId:string}|{readonly ok:false;readonly reason:'outside_review_window'|'metadata_deleted'|'metadata_observation_unavailable'};
 export interface BusinessMailMetadataObserver {
-  observe(context: RepositoryContext, input: { readonly mailboxId:string; readonly ownerUserId:string; readonly providerAccountId:string; readonly generation:number; readonly metadata:GmailMessageMetadata; readonly acquisitionOrigin?:{readonly importId:string} }):Promise<void>;
+  observe(context: RepositoryContext, input: { readonly mailboxId:string; readonly ownerUserId:string; readonly providerAccountId:string; readonly generation:number; readonly metadata:GmailMessageMetadata; readonly acquisitionOrigin?:{readonly importId:string} }):Promise<void|BusinessMailMetadataReceipt>;
 }
 export interface MessagePipelineDeps {
   /** Absent in production; the observation carries the run's captured binding. */

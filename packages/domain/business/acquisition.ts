@@ -1,3 +1,4 @@
+import {redactBackfillMetadataForConversations} from '../mail/crmBackfillMetadata.ts';
 import { isSuppressed } from '../suppression/effective.ts';
 import { businessMetadataObservationSchema } from '@fss/contracts';
 import { normalizeIdentityEndpoint } from '../crm/endpoints.ts';
@@ -272,7 +273,8 @@ export async function redactBusinessMetadata(context: RepositoryContext, input: 
   if (actor.kind === 'user' && !await activeBusinessActor(context))
     return { ok: false as const, reason: 'metadata_deletion_denied' };
   const changed = await context.db.query<{id:string}>("UPDATE crm_business_conversations SET metadata_availability='deleted',subject='',participants='[]'::jsonb,latest_provider_at=NULL,category='uncertain',reason='metadata_deleted',classifier_version='redacted',metadata_hash=repeat('0',64),metadata_revision=metadata_revision+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND (NOT $3 OR NOT EXISTS(SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=crm_business_conversations.workspace_id AND s.conversation_id=crm_business_conversations.id AND s.availability='available')) RETURNING id", [context.scope.workspaceId, rows.map(row => row.id), Boolean(input.expiredOnly && ids.length===0 && addresses.length===0)]);
-  return { ok: true as const, value: { redacted: changed.rows.length, conversationIds: changed.rows.map(row => row.id) } };
+  const importMetadataRedacted=await redactBackfillMetadataForConversations(context,changed.rows.map(row=>row.id));
+  return { ok: true as const, value: { redacted: changed.rows.length, importMetadataRedacted, conversationIds: changed.rows.map(row => row.id) } };
 }
 
 /** Cross-account writer/deletion barrier for indivisible copies containing a known address. */

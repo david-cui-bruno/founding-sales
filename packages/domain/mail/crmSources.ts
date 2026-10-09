@@ -1,3 +1,4 @@
+import {redactBackfillMetadataForSources} from './crmBackfillMetadata.ts';
 import { businessMetadataObservationSchema } from '@fss/contracts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { isSuppressed } from '../suppression/effective.ts';
@@ -1134,6 +1135,7 @@ export async function changeMailSource(
   const revision = source.source_revision + 1;
   const availability = action === 'delete' ? 'deleted' : 'awaiting_recapture';
   if (action === 'delete') {
+    await redactBackfillMetadataForSources(context,[input.sourceId]);
     await context.db.query(
       'DELETE FROM mail_message_bodies WHERE workspace_id=$1 AND mail_message_id=$2',
       [context.scope.workspaceId, input.sourceId],
@@ -2322,7 +2324,7 @@ export function createApprovedBusinessMailObserver(
           [context.scope.workspaceId, input.mailboxId],
         )
       ).rows[0];
-      if (!policy) return;
+      if (!policy) return {ok:false,reason:'metadata_observation_unavailable'};
       const classification = options.categorizeMetadata?.(input.metadata) ?? {
         category: 'uncertain',
         reason: 'unclassified_metadata',
@@ -2343,8 +2345,8 @@ export function createApprovedBusinessMailObserver(
         participants.length > 50 ||
         participants.some((value) => value === null)
       )
-        return;
-      await observeApprovedBusinessMail(context, {
+        return {ok:false,reason:'metadata_observation_unavailable'};
+      const result=await observeApprovedBusinessMail(context, {
         ownerUserId: input.ownerUserId,
         ...input.acquisitionOrigin===undefined?{}:{acquisitionOrigin:input.acquisitionOrigin},
         observation: {
@@ -2365,6 +2367,9 @@ export function createApprovedBusinessMailObserver(
           ...classification,
         },
       });
+      if(!result.ok)return {ok:false,reason:result.reason==='outside_review_window'?'outside_review_window':result.reason==='metadata_deleted'?'metadata_deleted':'metadata_observation_unavailable'};
+      if(result.value.conversationId===null)return {ok:false,reason:'metadata_observation_unavailable'};
+      return {ok:true,conversationId:result.value.conversationId};
     },
   };
 }

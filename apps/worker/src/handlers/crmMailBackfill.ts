@@ -5,6 +5,7 @@ import {readBackfillAllocation,reserveBackfillRead,observeBackfillRead,type Back
 import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import type {GmailClient,GmailAccessGrant} from '@fss/domain/mail/gmailClient.ts';
 import type {MailCaptureProofVerifier} from '@fss/domain/mail/crmSources.ts';
+import {recordBackfillMetadata} from '@fss/domain/mail/crmBackfillMetadata.ts';
 import {METADATA_HEADERS} from '@fss/domain/mail/types.ts';
 import type {BusinessMailMetadataObserver} from '@fss/domain/mail/pipeline.ts';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
@@ -65,22 +66,22 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    for(const messageId of listed.messageIds){
     if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
     const metadata=await providerRead('metadata',authority,access=>adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS));
-    if(metadata===null)continue;
-    if(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds))throw new BackfillFailure('provider_evidence_invalid');
-    if(metadata.internalDateEpochMilliseconds<Date.parse(authority.fromAt)||metadata.internalDateEpochMilliseconds>=Date.parse(authority.toAt))continue;
+    if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
+    if(metadata!==null&&(BigInt(metadata.internalDateEpochMilliseconds)*1000n<BigInt(authority.fromEpochMicroseconds)||BigInt(metadata.internalDateEpochMilliseconds)*1000n>=BigInt(authority.toEpochMicroseconds)))continue;
     const expected=authority;
     await withTransaction(input.session,async()=>{
      if(!await fenced(input))throw new BackfillFailure('acquisition_binding_changed');
      const current=await readBackfillAuthority(context,importId,true);
-     if(current===null||JSON.stringify(current.proof)!==JSON.stringify(expected.proof)||current.fromAt!==expected.fromAt||current.toAt!==expected.toAt)throw new BackfillFailure('acquisition_binding_changed');
-     await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
+     if(current===null||JSON.stringify(current.proof)!==JSON.stringify(expected.proof)||current.fromEpochMicroseconds!==expected.fromEpochMicroseconds||current.toEpochMicroseconds!==expected.toEpochMicroseconds)throw new BackfillFailure('acquisition_binding_changed');
+     const observationReceipt=metadata===null?undefined:await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
+     await recordBackfillMetadata(context,{authority:current,messageId,metadata,scope:'historical',observationReceipt});
     });
    }
    const bound=authority;
    await withTransaction(input.session,async()=>{
     if(!await fenced(input))return;
     const current=await readBackfillAuthority(context,importId,true);
-    if(current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||current.fromAt!==bound.fromAt||current.toAt!==bound.toAt)return;
+    if(current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||current.fromEpochMicroseconds!==bound.fromEpochMicroseconds||current.toEpochMicroseconds!==bound.toEpochMicroseconds)return;
     const locked=(await input.session.query<{from_epoch_seconds:string;to_epoch_seconds:string;next_page_token:string|null}>("SELECT from_epoch_seconds,to_epoch_seconds,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND ordinal=$3 AND state='pending' FOR UPDATE",[input.scope.workspaceId,importId,slice.ordinal])).rows[0];
     const start=Math.floor(Date.parse(current.fromAt)/1000)+slice.ordinal*86400;
     if(locked===undefined||Number(locked.from_epoch_seconds)!==start||Number(locked.to_epoch_seconds)!==start+86400||locked.next_page_token!==slice.next_page_token)return;

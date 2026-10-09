@@ -68,4 +68,35 @@ CREATE INDEX crm_mail_import_read_project_window ON crm_mail_import_read_reserva
 CREATE INDEX crm_mail_import_read_user_window ON crm_mail_import_read_reservations(user_hash,reserved_at);
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_mail_import_allocations TO app_runtime,migration;
 -- Ledger is append/read + monotonic observed marker, retained after source deletion.
-GRANT SELECT,INSERT,UPDATE ON crm_mail_import_read_reservations TO app_runtime,migration;
+GRANT SELECT,INSERT ON crm_mail_import_read_reservations TO app_runtime,migration;
+GRANT UPDATE(state,observed_at) ON crm_mail_import_read_reservations TO app_runtime,migration;
+CREATE FUNCTION enforce_crm_mail_import_read_conservation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.state<>'unknown' OR NEW.state<>'observed' OR OLD.observed_at IS NOT NULL OR NEW.observed_at IS NULL
+ OR ROW(NEW.workspace_id,NEW.id,NEW.import_id,NEW.project_hash,NEW.user_hash,NEW.allocation_revision,NEW.method,NEW.units,NEW.reserved_at)
+ IS DISTINCT FROM ROW(OLD.workspace_id,OLD.id,OLD.import_id,OLD.project_hash,OLD.user_hash,OLD.allocation_revision,OLD.method,OLD.units,OLD.reserved_at)
+ THEN RAISE EXCEPTION 'Conserved read reservations permit only their first observation marker' USING ERRCODE='23514'; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER crm_mail_import_read_conserved BEFORE UPDATE ON crm_mail_import_read_reservations
+ FOR EACH ROW EXECUTE FUNCTION enforce_crm_mail_import_read_conservation();
+
+-- Sensitive causal metadata is versioned and terminally redacted; quota accounting is independent.
+CREATE TABLE crm_mail_import_messages (
+ workspace_id uuid NOT NULL,id uuid NOT NULL DEFAULT gen_random_uuid(),import_id uuid NOT NULL,
+ message_hash text NOT NULL CHECK(message_hash ~ '^[a-f0-9]{64}$'),
+ provider_message_id text CHECK(provider_message_id ~ '^[A-Za-z0-9_-]{1,128}$'),
+ provider_thread_id text CHECK(provider_thread_id ~ '^[A-Za-z0-9_-]{1,128}$'),provider_at timestamptz,
+ scope text NOT NULL CHECK(scope IN ('historical','overlap','reconciliation')),
+ state text NOT NULL CHECK(state IN ('available','refused','confirmed_missing','deleted')),
+ reason text CHECK(reason IN ('outside_review_window','metadata_observation_unavailable','provider_confirmed_missing','metadata_deleted')),
+ revision integer NOT NULL DEFAULT 1 CHECK(revision>0),observed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(workspace_id,id),UNIQUE(workspace_id,import_id,message_hash),
+ FOREIGN KEY(workspace_id,import_id) REFERENCES crm_mail_imports(workspace_id,id) ON DELETE CASCADE,
+ CHECK((state='available' AND provider_message_id IS NOT NULL AND provider_thread_id IS NOT NULL AND provider_at IS NOT NULL AND reason IS NULL)
+   OR (state='refused' AND provider_message_id IS NOT NULL AND provider_thread_id IS NULL AND provider_at IS NULL AND reason IN ('outside_review_window','metadata_observation_unavailable'))
+   OR (state='confirmed_missing' AND provider_message_id IS NOT NULL AND provider_thread_id IS NULL AND provider_at IS NULL AND reason='provider_confirmed_missing')
+   OR (state='deleted' AND provider_message_id IS NULL AND provider_thread_id IS NULL AND provider_at IS NULL AND reason='metadata_deleted'))
+);
+GRANT SELECT,INSERT,UPDATE,DELETE ON crm_mail_import_messages TO app_runtime,migration;
