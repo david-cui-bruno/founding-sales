@@ -1,3 +1,4 @@
+import {ASK_ACTION_PATHS,routeAskActions} from './askActions.ts';
 import {ASK_HISTORY_PATHS,routeAskHistory} from './askHistory.ts';
 import {CRM_COMMITMENT_PATHS,routeCrmCommitments} from './crmCommitments.ts';
 import {ASK_PATHS,routeAsk} from './ask.ts';
@@ -191,6 +192,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('selected-attachments', { paths: SELECTED_ATTACHMENT_PATHS }, routeSelectedAttachments, routing),
     moduleOf('people', { paths: PEOPLE_PATHS }, routePeople, routing),
     moduleOf('ask', {paths:ASK_PATHS}, routeAsk, routing),
+    moduleOf('ask-actions', {paths:ASK_ACTION_PATHS}, routeAskActions, routing),
     moduleOf('ask-history', {paths:ASK_HISTORY_PATHS}, routeAskHistory, routing),
     moduleOf('ask-answers', {paths:ASK_ANSWER_PATHS}, routeAskAnswers, routing),
     moduleOf('crm-progress', { paths: CRM_PROGRESS_PATHS }, routeCrmProgress, routing),
