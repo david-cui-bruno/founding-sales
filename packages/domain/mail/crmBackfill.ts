@@ -10,7 +10,7 @@ interface ImportRow extends Record<string, unknown> {
 const health = (row: ImportRow) => ({
   importId: row.id, state: row.state, reason: row.reason, generation: row.generation,
   fromAt: row.from_at.toISOString(), toAt: row.to_at.toISOString(),
-  historyAnchor: row.history_anchor, historyComplete: row.history_complete,
+  historyAnchor: row.history_anchor, windowFrozen:row.history_anchor!==null, historyComplete: row.history_complete,
   coverageKind: 'enumeration' as const, bodyCoverage: 'not_measured' as const, totalSlices: 90, completedSlices: Number(row.completed_slices),
 });
 /** The operational sync watermark is not CRM import completion. No original bytes are read. */

@@ -34,3 +34,38 @@ CREATE TABLE crm_mail_import_slices (
  CHECK(to_epoch_seconds-from_epoch_seconds=86400)
 );
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_mail_imports,crm_mail_import_slices TO app_runtime,migration;
+-- Provisional append to77, operator configuration only, no enabling public command.
+CREATE TABLE crm_mail_import_allocations (
+ workspace_id uuid NOT NULL, mailbox_id uuid NOT NULL, revision integer NOT NULL CHECK(revision>0),
+ owner_user_id uuid NOT NULL, account_binding text NOT NULL CHECK(account_binding ~ '^[a-f0-9]{64}$'), generation integer NOT NULL CHECK(generation>0),
+ project_hash text NOT NULL CHECK(project_hash ~ '^[a-f0-9]{64}$'), user_hash text NOT NULL CHECK(user_hash ~ '^[a-f0-9]{64}$'),
+ user_limit_units integer NOT NULL CHECK(user_limit_units BETWEEN 1 AND 2147483647),
+ project_limit_units integer NOT NULL CHECK(project_limit_units BETWEEN 1 AND 2147483647),
+ user_headroom_units integer NOT NULL CHECK(user_headroom_units>=0 AND user_headroom_units<user_limit_units),
+ project_headroom_units integer NOT NULL CHECK(project_headroom_units>=0 AND project_headroom_units<project_limit_units),
+ profile_units integer NOT NULL CHECK(profile_units BETWEEN 1 AND 1000000),
+ list_units integer NOT NULL CHECK(list_units BETWEEN 1 AND 1000000),
+ history_units integer NOT NULL CHECK(history_units BETWEEN 1 AND 1000000),
+ metadata_units integer NOT NULL CHECK(metadata_units BETWEEN 1 AND 1000000),
+ body_units integer NOT NULL CHECK(body_units BETWEEN 1 AND 1000000),
+ verification_sha256 text NOT NULL CHECK(verification_sha256 ~ '^[a-f0-9]{64}$'), verified_until timestamptz NOT NULL,
+ PRIMARY KEY(workspace_id,mailbox_id),
+ FOREIGN KEY(workspace_id,mailbox_id) REFERENCES mailboxes(workspace_id,id),
+ FOREIGN KEY(workspace_id,owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id)
+);
+CREATE TABLE crm_mail_import_read_reservations (
+ workspace_id uuid NOT NULL, id uuid NOT NULL DEFAULT gen_random_uuid(), import_id uuid NOT NULL,
+ project_hash text NOT NULL CHECK(project_hash ~ '^[a-f0-9]{64}$'), user_hash text NOT NULL CHECK(user_hash ~ '^[a-f0-9]{64}$'),
+ allocation_revision integer NOT NULL CHECK(allocation_revision>0),
+ method text NOT NULL CHECK(method IN ('profile','list','history','metadata','body')),
+ units integer NOT NULL CHECK(units BETWEEN 1 AND 1000000),
+ state text NOT NULL DEFAULT 'unknown' CHECK(state IN ('unknown','observed')),
+ reserved_at timestamptz NOT NULL DEFAULT clock_timestamp(), observed_at timestamptz,
+ PRIMARY KEY(workspace_id,id), FOREIGN KEY(workspace_id,import_id) REFERENCES crm_mail_imports(workspace_id,id),
+ CHECK((state='observed')=(observed_at IS NOT NULL))
+);
+CREATE INDEX crm_mail_import_read_project_window ON crm_mail_import_read_reservations(project_hash,reserved_at);
+CREATE INDEX crm_mail_import_read_user_window ON crm_mail_import_read_reservations(user_hash,reserved_at);
+GRANT SELECT,INSERT,UPDATE,DELETE ON crm_mail_import_allocations TO app_runtime,migration;
+-- Ledger is append/read + monotonic observed marker, retained after source deletion.
+GRANT SELECT,INSERT,UPDATE ON crm_mail_import_read_reservations TO app_runtime,migration;

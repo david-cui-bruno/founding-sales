@@ -53,6 +53,8 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
   crm_selected_imports: coverage(['retained','deletion_redacts'], 'Selected source labels, participants and attachment references redact atomically via the source-deletion trigger; only body-free import hashes and source identity remain to block replay. No duplicate body store; disconnect does not delete approved copied history.'),
+  crm_mail_import_allocations: coverage(['operational'], 'Operator-configured proven account/project allocation, exact verification receipt, unit costs and reserved operational headroom; mutable revisions require separate external verification before use.'),
+  crm_mail_import_read_reservations: coverage(['operational','retained'], 'Body-free read unit conservation across workers and allocation revisions; unknown and observed attempts both consume the rolling window, independent of source deletion.'),
   crm_mail_imports: coverage(['operational'], 'Body-free exact owner/account/generation import scope and enumeration coverage; completion does not establish copied-body coverage or sending authority.'),
   crm_mail_import_slices: coverage(['operational'], 'Bounded historical enumeration checkpoints, without message bodies, addresses or tokens; import-head deletion cascades checkpoints.'),
   crm_mail_capture_controls: coverage(['operational'], 'Disabled owner/account-bound capture configuration and exact evaluation/release proof hashes; no bodies, endpoints or sending authority.'),
