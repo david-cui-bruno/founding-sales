@@ -56,6 +56,12 @@ const coverage = (
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   Object.freeze({
+  crm_mail_import_allocations: coverage(['operational'], 'Operator-configured proven account/project allocation, exact verification receipt, unit costs and reserved operational headroom; mutable revisions require separate external verification before use.'),
+  crm_mail_import_read_reservations: coverage(['operational','retained'], 'Body-free read unit conservation across workers and allocation revisions; unknown and observed attempts both consume the rolling window, independent of source deletion.'),
+  crm_mail_imports: coverage(['operational'], 'Body-free exact owner/account/generation import scope and enumeration coverage; completion does not establish copied-body coverage or sending authority.'),
+  crm_mail_import_messages: coverage(['deletion_redacts','swept'], 'Versioned exact import causal metadata with opaque terminal hash barriers; available, refused and provider-confirmed missing results are distinct from copied bodies. Thread, provider date and raw ID clear on terminal deletion; conservation ledger remains.'),
+  crm_mail_history_recoveries: coverage(['swept','retained'], 'Bounded recovery gap checkpoints clear after ninety days without verified progress; opaque immutable epochs, account/config bindings and conserved quota survive. Scoped copy deletion does not erase unrelated mailbox recovery coverage.'),
+  crm_mail_import_slices: coverage(['operational'], 'Bounded historical enumeration checkpoints, without message bodies, addresses or tokens; import-head deletion cascades checkpoints.'),
   crm_selected_file_receipts: coverage(['retained','deletion_redacts'], 'Explicit original-file provenance follows its sole selected source copy. Source or scoped context deletion atomically clears names, hashes, format, parser, origin and byte count; only opaque identity/revisions and unavailable state remain. Restore requires fresh selection. Departed or unauthorized actors cannot read or analyze the copy; no duplicate original body or financial ledger.'),
   crm_mail_progress_scan_cursors:coverage(['retained'],'Opaque workspace-local UUID scan cursor; wrapping revisits changed dependencies and advancing never certifies processing or grants acquisition.'),
   crm_mail_progress_receipts:coverage(['retained','deletion_removes'],'Body-free exact mail progress proof; reads recheck current source and prerequisites. Terminal whole-context deletion removes proof metadata and dates.'),
