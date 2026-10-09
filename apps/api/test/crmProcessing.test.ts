@@ -1,3 +1,4 @@
+import type {SessionQueryable,QueryResultRowLike} from '@fss/domain/db/queryable.ts';
 import {workerDueWorkSources} from '../../worker/src/bootstrap/main.ts';
 import {runSchedulerPass} from '../../worker/src/scheduler/schedulerPass.ts';
 import { randomUUID, createHash } from 'node:crypto';
@@ -319,6 +320,30 @@ describe('canonical CRM evidence and extraction', () => {
     const oldToken=token;token=(await issueSessionFor(fixture,fixture.alpha,fixture.beta.salesperson)).accessToken;
     try{expect((await post('/crm/processing/record/read',{kind:'meeting',recordId:meetingId})).body).toMatchObject({sources:[]});expect((await post('/crm/processing/health/read',{sourceId:transcriptId,kind:'meeting_transcript'})).status).toBe(404);}
     finally{token=oldToken;await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=false WHERE workspace_id=$1',[fixture.alpha.workspaceId]);}
+  });
+
+  it.each(['body','assignment'] as const)('keeps displayed native speech and processing authority coherent across %s change',async mode=>{
+    const ws=fixture.alpha.workspaceId,firmId=await seedFirm(fixture,{name:'Native reference race',regionCode:'TX',assignedUserId:fixture.alpha.salesperson.userId});
+    const meetingId=randomUUID(),recordingId=randomUUID(),transcriptId=randomUUID(),booking=randomUUID();
+    await fixture.db.query("INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,$4,$4,'booked','2026-10-01T14:00:00Z','2026-10-01T14:20:00Z',now())",[ws,meetingId,firmId,booking]);
+    await fixture.db.query("INSERT INTO meeting_recordings(workspace_id,id,meeting_id,segment,participant_label,sha256,size_bytes,s3_key,processing_status) VALUES($1,$2,$3,1,'Selected transcript',$4,100,$5,'ready')",[ws,recordingId,meetingId,'b'.repeat(64),`meetings/${meetingId}/${'b'.repeat(64)}.m4a`]);
+    const original=[{startMs:0,endMs:5000,text:'Original private speech.',speaker:'Unknown',attribution:'source_label'}],corrected=[{...original[0],text:'Corrected private speech.'}];
+    await fixture.db.query("INSERT INTO meeting_transcripts(workspace_id,id,recording_id,original_recording_id,version,duration_ms,language,utterances) VALUES($1,$2,$3,$3,1,5000,'en-US',$4::jsonb)",[ws,transcriptId,recordingId,JSON.stringify(original)]);
+    let changed=false;
+    const wrapped:SessionQueryable={query:async <Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[])=>{
+      const result=await fixture.db.query<Row>(sql,values);
+      if(!changed&&((mode==='body'&&sql==='SELECT transcript_source_revision FROM meetings WHERE workspace_id=$1 AND id=$2')||(mode==='assignment'&&sql==='SELECT assigned_user_id,status FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE'))){
+        changed=true;
+        if(mode==='body')await fixture.db.query('UPDATE meeting_transcripts SET utterances=$3::jsonb WHERE workspace_id=$1 AND id=$2',[ws,transcriptId,JSON.stringify(corrected)]);
+        else await fixture.db.query('UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2',[ws,firmId,fixture.alpha.admin.userId]);
+      }
+      return result;
+    }};
+    const result=await dispatch({method:'GET',path:'/meetings/transcript',query:new URLSearchParams({meetingId,include:'processing'}),headers:{authorization:`Bearer ${token}`},body:null},{session:wrapped,auth:{...fixture.deps,db:wrapped},supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+    expect(changed).toBe(true);
+    if(mode==='assignment')expect(result.status).toBe(404);
+    else if(result.status===200)expect(result.body).toMatchObject({utterances:[{text:'Corrected private speech.'}],processingSources:[{contentHash:createHash('sha256').update(JSON.stringify(corrected)).digest('hex')}]});
+    else expect(result.status).toBe(404);
   });
 
   it('resolves native call speech with channel attribution and preserves an unknown original call date',async()=>{
