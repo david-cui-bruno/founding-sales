@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash,randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { crmProcessingResultSchema } from "@fss/contracts";
 import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
@@ -92,7 +92,7 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
       }[];
     };
     const copied = page.sources[0]!;
-    const source = {
+    let source = {
       workspaceId: copied.workspaceId,
       sourceId: copied.sourceId,
       revision: copied.revision,
@@ -105,6 +105,11 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
       "UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2",
       [source.workspaceId, personId, firmA],
     );
+    const initialEvidence={sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash};
+    const initialRelationship=await post('/crm/relationships/save',command({personId,firmId:firmA,status:'current',startDate:null,endDate:null,evidence:initialEvidence}));
+    expect(initialRelationship.status).toBe(200);
+    const initialRelation=(initialRelationship.body as {result:{relationshipId:string;revision:number}}).result;
+    expect((await post('/crm/relationships/context/save',command({personId,relationshipId:initialRelation.relationshipId,relationshipRevision:initialRelation.revision,evidence:initialEvidence}))).status).toBe(200);
     async function process(modelVersion: string, expectedRevision: number) {
       expect(
         (
@@ -229,6 +234,13 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
       "Prepare repair summary",
       "2026-10-12",
     );
+    // Controlled canonical correction fixture: old A context is revision-bound,
+    // while immutable original capture authority remains genuinely B.
+    const correctedExcerpt=excerpt+' ';
+    await fixture.db.query("UPDATE crm_selected_sources SET excerpt=$3,content_hash=$4,revision=revision+1 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,source.sourceId,correctedExcerpt,createHash('sha256').update(correctedExcerpt).digest('hex')]);
+    const correctedPage=(await post('/crm/people/read',{personId})).body as {sources:{sourceId:string;revision:number;contentHash:string}[]};
+    const corrected=correctedPage.sources.find(item=>item.sourceId===source.sourceId)!;
+    source={...source,revision:corrected.revision,contentHash:corrected.contentHash};
     const evidence = {
       sourceId: source.sourceId,
       sourceRevision: source.revision,
@@ -299,6 +311,11 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
       task: { version: 1 },
     });
     expect((await get("/today/actions/v2")).status).toBe(200);
+    const authority=(await fixture.db.query<{original_access_closure:{firmIds:string[]};context_snapshot:{firmIds:string[]};initial_context_snapshot:{firmIds:string[]}}> ("SELECT r.initial_context_snapshot,r.context_snapshot,s.original_access_closure FROM crm_commitment_reviews r JOIN crm_selected_sources s ON s.workspace_id=r.workspace_id AND s.id=(r.target->'source'->>'sourceId')::uuid WHERE r.workspace_id=$1 AND r.id=$2",[source.workspaceId,historicalId])).rows[0]!;
+    expect(authority.original_access_closure.firmIds).toEqual([firmB]);
+    expect(authority.context_snapshot.firmIds).toEqual([firmB]);
+    const originalReview=(await fixture.db.query<{initial_context_snapshot:{firmIds:string[]}}> ("SELECT initial_context_snapshot FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2",[source.workspaceId,historicalId])).rows[0]!;
+    expect(originalReview.initial_context_snapshot.firmIds).toContain(firmA);
     const preview = await post(
       "/retention/deletions/preview",
       command({ targetKind: "firm", firmId: firmA }),
@@ -343,7 +360,7 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
       .not.toContain("Prepare repair summary");
     expect((await post("/crm/people/read", { personId })).body).toMatchObject({
       sources: [
-        { sourceId: source.sourceId, availability: "available", excerpt },
+        { sourceId: source.sourceId, availability: "available", excerpt:correctedExcerpt },
       ],
     });
     const today = await get("/today/actions/v2");

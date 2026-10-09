@@ -104,7 +104,7 @@ CREATE TRIGGER crm_internal_task_guard BEFORE INSERT OR UPDATE ON crm_internal_t
 CREATE FUNCTION crm_commitment_anchor_change() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.availability='deleted' THEN
-  UPDATE crm_internal_tasks SET review_id=NULL,activation_receipt=NULL,review_required=true,version=version+1 WHERE workspace_id=NEW.workspace_id AND activation_receipt IS NOT NULL AND activation_receipt->>'sourceKind'=NEW.source_kind AND activation_receipt->>'sourceId'=NEW.source_id::text;
+  UPDATE crm_internal_tasks SET review_id=NULL,activation_receipt=NULL,review_required=true,version=version+1 WHERE workspace_id=NEW.workspace_id AND activation_receipt IS NOT NULL AND ((activation_receipt->>'anchorId')::uuid=NEW.id OR review_id IN(SELECT id FROM crm_commitment_reviews WHERE workspace_id=NEW.workspace_id AND anchor_id=NEW.id));
   UPDATE crm_commitment_reviews SET anchor_id=NULL,target=NULL,activation_key=NULL,initial_context_snapshot=NULL,context_snapshot=NULL,original_access_closure=NULL,basis=NULL,classification=NULL,actor=NULL,action_label=NULL,due=NULL,source_zone_receipt=NULL,today_eligibility=NULL,projection_receipt=NULL,projection_version=projection_version+1,state='redacted' WHERE workspace_id=NEW.workspace_id AND anchor_id=NEW.id;
  ELSIF NEW.current_decision_revision<>OLD.current_decision_revision THEN
   UPDATE crm_commitment_reviews SET state='review_required',projection_version=projection_version+1 WHERE workspace_id=NEW.workspace_id AND anchor_id=NEW.id AND state<>'redacted';
