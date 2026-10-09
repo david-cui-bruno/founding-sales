@@ -1,3 +1,4 @@
+import {RecordProgress} from './RecordProgress.tsx';
 import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
 import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
 import type { ContextPorts } from "./SourceContexts.tsx";
@@ -195,6 +196,7 @@ export function People({
         <section>
           <h3>{page.person.fullName}</h3>
           {imports ? <SelectedImports key={page.person.personId} enabled={enabled} personId={page.person.personId} ports={imports} sourceVersion={page.sources.map(source=>`${source.sourceId}:${source.revision}:${source.availability}`).join('|')} onChange={async()=>setPage(await ports.read(page.person.personId))}/> : null}
+          <RecordProgress personId={page.person.personId} enabled={enabled} privacyKey={privacyKey} sourceVersion={sourceVersion}/>
           {mail ? <EmailTimeline processing={processing} workspaceId={workspaceId} key={`email:${page.person.personId}`} enabled={enabled} ports={mail} personId={page.person.personId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} people={people.map(person => ({id:person.personId,name:person.fullName}))} firms={mailFirms} /> : null}
           {relationships ? (
             <Relationships

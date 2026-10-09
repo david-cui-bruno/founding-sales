@@ -24,7 +24,8 @@ export async function readRoutineSource(ctx:RepositoryContext,input:{planId:stri
  const fulfilled=(await ctx.db.query(`SELECT 1 FROM mail_message_effects e JOIN mail_messages m ON m.workspace_id=e.workspace_id AND m.id=e.mail_message_id
  WHERE e.workspace_id=$1 AND m.mailbox_id=$2 AND e.effect_kind='direct_send_conversation'
  AND e.detail->>'firmId'=$3 AND e.detail->'recipientContactIds' ? $4 AND m.internal_date>=$5::timestamptz LIMIT 1`,[ctx.scope.workspaceId,p.mailbox_id,p.firm_id,p.contact_id,message.internalDate])).rows[0];
- if(fulfilled)return {ok:false,reason:'answered_manually'};
+ const crmFulfilled=(await ctx.db.query('SELECT 1 FROM crm_mail_reply_resolutions WHERE workspace_id=$1 AND request_message_id=$2',[ctx.scope.workspaceId,message.id])).rows[0];
+ if(fulfilled||crmFulfilled)return {ok:false,reason:'answered_manually'};
  const matches=(await ctx.db.query<{outreach_plan_id:string|null;contact_id:string|null;ambiguous:boolean}>('SELECT outreach_plan_id,contact_id,ambiguous FROM mail_message_matches WHERE workspace_id=$1 AND mail_message_id=$2',[ctx.scope.workspaceId,message.id])).rows;
  if(matches.length!==1||matches[0]?.outreach_plan_id!==input.planId||matches[0]?.contact_id!==p.contact_id||matches[0]?.ambiguous)return {ok:false,reason:'ambiguous_sender'};
  const route=(await ctx.db.query("SELECT id FROM email_addresses WHERE workspace_id=$1 AND contact_id=$2 AND address=$3 AND eligibility='usable' AND retired_at IS NULL",[ctx.scope.workspaceId,p.contact_id,message.headerFrom])).rows[0];
