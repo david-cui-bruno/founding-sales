@@ -81,3 +81,13 @@ it('shows verified reply evidence without claiming unanswered mail from partial 
  expect(screen.getByText('This does not establish unanswered mail; captured history is partial.')).toBeTruthy();
  expect(read).toHaveBeenLastCalledWith({operation:'reply_status',scope:{firmId:one}});
 });
+
+it('reads dated operational activity for an explicitly selected firm',async()=>{
+ const read=vi.fn<AskPorts['read']>(async input=>input.operation==='records'?{operation:'records',selection:'single',records:[{recordId:one,kind:'firm',name:'Orion',firmId:one}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:{operation:'activity',scope:{firmId:one},dateBasis:'operational_event_at',events:[{key:`call:${two}`,at:'2026-10-08T15:00:00.000Z',kind:'call',code:'connected',detail:'Asked about maintenance',cursor:'2026-10-08T15:00:00.000000|call|example'}],nextBefore:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}});
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));fireEvent.click(screen.getByRole('button',{name:'Activity'}));
+ expect(await screen.findByText('2026-10-08T15:00:00.000Z · call · Asked about maintenance')).toBeTruthy();
+ expect(screen.getByText('Operational event dates. Conversation coverage is unverified.')).toBeTruthy();
+ expect(read).toHaveBeenLastCalledWith({operation:'activity',scope:{firmId:one}});
+});
