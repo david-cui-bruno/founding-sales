@@ -26,7 +26,7 @@ export async function routeCrmProcessing(request: ApiRequest, options: RoutingOp
       'crm.extraction_purpose_saved', (context, body) => saveCrmExtractionPurpose(context, body));
   if (request.path === '/crm/processing/purpose/read') {
     const result = await readCrmExtractionPurpose(scoped.context);
-    return result === null ? { status: 403, body: redactError('forbidden') } : { status: 200, body: result };
+    return result === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: result };
   }
   if (request.path === '/crm/processing/request')
     return runRouteCommand({ auth: options.auth, request, principal: verified.principal }, crmProcessingRequestSchema,
