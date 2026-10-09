@@ -1,3 +1,4 @@
+import {mailImportHealth} from './support/mailImportFixture.ts';
 import { describe, expect, it, vi } from 'vitest';
 import {
   answerOperation,
@@ -532,4 +533,15 @@ it('all evidence operations reject path injection, malformed output and changed 
   const injected=hosts();const read=vi.fn(),command=vi.fn();injected.api.read=read;injected.api.command=command;
   await expect(answerOperation(operationHandlers(injected),kind,name,{...input,path:'/unrelated',clientVersion:'forged'})).rejects.toThrow();expect(read).not.toHaveBeenCalled();expect(command).not.toHaveBeenCalled();
  }
+});
+it('queues one bounded mailbox import through the closed authenticated host and acknowledges no completion or grants',async()=>{
+ const deps=hosts();const input={mailboxId:ITEM_ID};
+ deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/crm/business/mail/import/request');expect(payload).toEqual(input);return {ok:true,value:parse({importId:FIRM_ID,status:'queued'})};};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.businessMailImportRequest',input)).toEqual({importId:FIRM_ID,status:'queued'});
+});
+
+it('reads measured import health separately from acknowledgement and preserves conserved decimal accounting',async()=>{
+ const deps=hosts();const input={mailboxId:ITEM_ID};const health=mailImportHealth();
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/business/mail/import/read');expect(payload).toEqual(input);return {ok:true,value:parse(health)};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.businessMailImportHealth',input)).toEqual(health);
 });

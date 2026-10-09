@@ -10,6 +10,7 @@ import { crmConflictListSchema, crmConflictListPageSchema } from "@fss/contracts
 import { crmDecisionHistoryReadSchema, crmDecisionHistoryPageSchema } from "@fss/contracts";
 import { crmDecisionHistoryListSchema, crmDecisionHistoryListPageSchema } from "@fss/contracts";
 import { crmEvidenceReadSchema, crmEvidencePageSchema, crmEvidenceDecidePayloadSchema, crmEvidenceDecidedSchema } from "@fss/contracts";
+import {crmMailImportReadSchema,crmMailImportAcknowledgmentSchema,crmMailImportHealthSchema} from "@fss/contracts";
 import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSchema,explicitOpportunityResultSchema} from '@fss/contracts';
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
 import {mailSourcesListSchema,mailSourceListSchema,mailSourceReadSchema,mailConversationSchema,mailSourceChangePayloadSchema,mailSourceChangedSchema,mailControlsReadSchema,mailCaptureControlsSchema,mailSourceStateReadSchema,mailSourceStateSchema,mailSourceRecaptureQueuedSchema,mailSourceAssociatePayloadSchema} from '@fss/contracts';
@@ -1150,6 +1151,8 @@ export const OPERATIONS = {
   'crm.selectedImportDelete': {kind:'command',calls:[{method:'POST',path:'/crm/imports/delete'}],input:selectedImportChangePayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
   'crm.selectedImportRestore': {kind:'command',calls:[{method:'POST',path:'/crm/imports/restore'}],input:selectedImportChangePayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
   'crm.selectedImportRecapture': {kind:'command',calls:[{method:'POST',path:'/crm/imports/recapture'}],input:selectedImportCorrectPayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
+  'crm.businessMailImportHealth':{kind:'read',calls:[{method:'POST',path:'/crm/business/mail/import/read'}],input:crmMailImportReadSchema,output:crmMailImportHealthSchema,transform:'separate measured metadata, copy, gap and allocation coverage'},
+  'crm.businessMailImportRequest':{kind:'command',calls:[{method:'POST',path:'/crm/business/mail/import/request'}],input:crmMailImportReadSchema,output:crmMailImportAcknowledgmentSchema,transform:'queued bounded import identity without completion or provider grants'},
   'crm.businessPolicyRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/policy/read'}],input:businessPolicyReadSchema,output:businessPolicySchema,transform:'actual actor mailbox configuration; capture remains disabled'},
   'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
   'crm.businessReviewRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/review/read'}],input:businessReviewReadSchema,output:businessReviewSchema,transform:'bounded proven account metadata; no bodies'},
