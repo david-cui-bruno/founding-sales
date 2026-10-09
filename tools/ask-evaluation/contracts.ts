@@ -305,6 +305,21 @@ export const frozenSuiteSchema = z.strictObject({version:z.literal('ask-evaluati
 export const developmentSuiteSchema = z.strictObject({version:z.literal('ask-evaluation-development-v1'),
   suiteId:fixtureId, fixtureVersion:version, caseBindings:z.array(caseBindingSchema.extend({split:z.literal('development')})).length(80),
   labelSha256:sha256, suiteSha256:sha256});
+/** Root-approved fake correctness configuration; per-run canonical bindings are separately frozen. */
+export const fakeCandidateDecisionSchema=z.strictObject({
+ version:z.literal('ask-evaluation-fake-decision-v1'),state:z.literal('frozen_fake_only_configuration'),
+ purpose:z.literal('crm_retrieval_evaluation'),realCallsAllowed:z.literal(false),activationAllowed:z.literal(false),
+ calibration:z.strictObject({reportSha256:sha256,freezeSha256:sha256,labelsSha256:sha256,baselineSourceCommit:gitCommit}),
+ logicalGoldSha256:sha256,sealedHoldoutLabelFileSha256:sha256,vectorNumericConfigurationSha256:sha256,candidateScriptSha256:sha256,
+ candidate:candidateSchema,envelope:envelopeSchema,
+ correctness:z.strictObject({criticalControlFailureCeiling:z.literal(0),exactStateMismatchCeiling:z.literal(0),invalidCanonicalCitationCeiling:z.literal(0),forbiddenTextPublicationCeiling:z.literal(0),duplicatePublicationCeiling:z.literal(0),unexpectedMutationCeiling:z.literal(0),productionOrPaidCallCeiling:z.literal(0),positiveControlPassFraction:z.literal(1),expectedRefusalExactMatchFraction:z.literal(1),knownGoldClaimSupportFraction:z.literal(1),unknownParaphraseTreatment:z.literal('unjudged_pending_not_supported'),literalVectorAndRrfAssertionsPassFraction:z.literal(1)}),
+ executionBindingRule:z.literal('fresh_full_suite_and_canonical_source_manifests_frozen_before_any_output'),
+ semanticSelection:z.literal('forbidden_from_scripted_fakes'),realQualityState:z.literal('pending_verified_purpose_budget_and_preregistration'),
+ configurationSha256:sha256,
+});
+export const fakeCandidateExecutionSchema=z.strictObject({version:z.literal('ask-evaluation-fake-execution-v1'),decisionConfigurationSha256:sha256,candidateScriptSha256:sha256,fullSuite:frozenSuiteSchema,sourceManifestSha256:sha256,caseBindingsSha256:sha256});
+export type FakeCandidateDecision=z.infer<typeof fakeCandidateDecisionSchema>;
+export type FakeCandidateExecution=z.infer<typeof fakeCandidateExecutionSchema>;
 export type FrozenSuite = z.infer<typeof frozenSuiteSchema>;
 export type DevelopmentSuite = z.infer<typeof developmentSuiteSchema>;
 

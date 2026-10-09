@@ -1,0 +1,51 @@
+{
+  "version": "ask-evaluation-fake-script-v1",
+  "purpose": "synthetic_orchestration_only",
+  "realCallsAllowed": false,
+  "maxSpendCents": 0,
+  "labelAccess": "none",
+  "generationInputs": [
+    "frozen_window_ordinal",
+    "frozen_window_id",
+    "literal_configuration"
+  ],
+  "embedding": {
+    "dimensions": 2,
+    "queryVector": [
+      1,
+      0
+    ],
+    "windowVectorsByOrdinalModulo4": [
+      [
+        1,
+        0
+      ],
+      [
+        -1,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        0,
+        1
+      ]
+    ],
+    "topK": 10,
+    "rrfConstant": 60,
+    "numericConfigurationSha256": "39b665313b10286ed0421cd6fa933529a2bef82608280e0d66149c36814eebd9"
+  },
+  "answer": {
+    "version": "controlled-abstention-v1",
+    "claims": [],
+    "abstained": true
+  },
+  "claims": {
+    "selectionPermitted": false,
+    "semanticQualityMeasured": false,
+    "realQualityState": "pending"
+  },
+  "executionState": "frozen_before_outputs"
+}
