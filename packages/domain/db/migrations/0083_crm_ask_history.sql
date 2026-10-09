@@ -81,3 +81,23 @@ BEGIN
  EXCEPTION WHEN OTHERS THEN RETURN false;
 END $$;
 ALTER TABLE crm_ask_actions ADD CONSTRAINT crm_ask_action_support CHECK(private_state<>'available' OR crm_ask_action_support_valid(workspace_id,input_scope,support_refs));
+
+CREATE FUNCTION crm_ask_action_due_valid(value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE date_text text;
+BEGIN
+ IF value IS NULL OR value='null'::jsonb THEN RETURN true; END IF;
+ IF jsonb_typeof(value)<>'object' OR (SELECT count(*) FROM jsonb_object_keys(value))<>4
+  OR jsonb_typeof(value->'kind')<>'string' OR value->>'kind' NOT IN ('date','instant')
+  OR jsonb_typeof(value->'zone')<>'string' OR length(value->>'zone') NOT BETWEEN 1 AND 100
+  OR jsonb_typeof(value->'expression')<>'string' OR length(btrim(value->>'expression')) NOT BETWEEN 1 AND 200 THEN RETURN false; END IF;
+ PERFORM timezone(value->>'zone',TIMESTAMPTZ '2026-01-01T00:00:00Z');
+ IF value->>'kind'='date' THEN
+  IF NOT(value ?& ARRAY['kind','date','zone','expression']) OR jsonb_typeof(value->'date')<>'string' OR (value->>'date')!~'^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN RETURN false; END IF;
+  date_text=(value->>'date')::date::text;RETURN date_text=value->>'date';
+ END IF;
+ IF NOT(value ?& ARRAY['kind','at','zone','expression']) OR jsonb_typeof(value->'at')<>'string' OR (value->>'at')!~'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3})?Z$' THEN RETURN false; END IF;
+ PERFORM (value->>'at')::timestamptz;
+ RETURN true;
+ EXCEPTION WHEN OTHERS THEN RETURN false;
+END $$;
+ALTER TABLE crm_ask_actions ADD CONSTRAINT crm_ask_action_due CHECK(crm_ask_action_due_valid(due));

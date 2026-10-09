@@ -344,6 +344,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       ["retained", "deletion_removes"],
       "Versioned bounded quote and interpretation projections are erased transactionally when their original selected/call/meeting source becomes deleted or its content becomes stale. Context-only superseded claims stay bound to their original context and remain unpublished; later source deletion still erases them. Restoring a source does not restore old quotes; every read revalidates current source and access.",
     ),
+    crm_ask_actions: coverage(['retained','deletion_redacts'],'Explicit human tasks, notes and preference proposals retain independent original input authority; source deletion erases all copied fields while source-free completion facts survive.'),
     crm_ask_requests: coverage(['retained','deletion_redacts'],'Owner-private questions and answers follow every initial source and context. Scoped deletion erases all private fields and keeps an irreversible opaque identity; capture is not sending permission.'),
     crm_ask_request_windows: coverage(['deletion_removes'],'Immutable body-free canonical window and duplicate group proofs are removed with the whole affected private request.'),
     crm_ask_financial_receipts: coverage(['retained'],'Opaque priced stage, attempt and reservation receipts conserve provider spending after private source and request deletion; no question or copied conversation body.'),
