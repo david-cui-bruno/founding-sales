@@ -63,4 +63,5 @@ cases.push({constraint:'crm_ask_request_private_shape',run:async f=>{
  const row=request(f);const scope=JSON.parse(String(row['scope'])) as {sources:Record<string,unknown>[]};
  return insert(f,'crm_ask_requests',{...row,scope:JSON.stringify({sources:[...scope.sources,...scope.sources]}),initial_contexts:JSON.stringify([context,context])});
 }});
+cases.push(bad('crm_ask_window_current_request','crm_ask_request_windows',{source_id:missing}));
 export const ASK_ANSWER_CONSTRAINT_CASES:readonly Case[]=cases;
