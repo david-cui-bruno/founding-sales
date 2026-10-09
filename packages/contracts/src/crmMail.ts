@@ -110,7 +110,7 @@ export const mailSourceListSchema = z.strictObject({
         sourceRevision: z.number().int().positive(),
         contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
         availability: z.enum(['available', 'deleted', 'awaiting_recapture']),
-        occurredAt: z.string().datetime(),
+        occurredAt: z.string().datetime().nullable(),
         completeness: z.enum(['complete', 'partial', 'unavailable']),
       }),
     )

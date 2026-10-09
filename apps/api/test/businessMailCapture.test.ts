@@ -432,6 +432,24 @@ it('captures an approved unknown business message with immutable lineage and con
       },
     );
     expect(copyState.body).toEqual({ revision: 2, availability: 'deleted' });
+    const deletedSummary = await dispatch(
+      {
+        method: 'POST',
+        path: '/crm/business/mail/list',
+        body: { limit: 50 },
+        query: new URLSearchParams(),
+        headers: { authorization: `Bearer ${token}` },
+      },
+      {
+        session: fixture.db,
+        auth: fixture.deps,
+        supportedClientVersions: fixture.deps.config.supportedClientVersions,
+        sendingEnabled: false,
+      },
+    );
+    expect(deletedSummary.body).toMatchObject({
+      sources: [{ sourceId, availability: 'deleted', occurredAt: null }],
+    });
 
     expect(
       await handler.handle({
@@ -1457,6 +1475,16 @@ it('omits owner-private mail summaries when any reviewed firm assignment is no l
     expect(
       (await post('/crm/business/mail/list', { limit: 50 })).body,
     ).toMatchObject({ sources: [{ sourceId, sourceRevision: 2 }] });
+    expect(
+      (
+        await post('/crm/business/mail/delete', {
+          commandId: randomUUID(),
+          clientVersion: '1.4.0',
+          sourceId,
+          expectedRevision: 2,
+        })
+      ).body,
+    ).toMatchObject({ status: 'accepted', result: { sourceRevision: 3 } });
     await fixture.db.query(
       'UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2',
       [workspaceId, firmId, fixture.alpha.admin.userId],
@@ -1473,6 +1501,16 @@ it('omits owner-private mail summaries when any reviewed firm assignment is no l
         })
       ).body,
     ).toMatchObject({ state: 'unavailable' });
+    expect(
+      (
+        await post('/crm/business/mail/restore', {
+          commandId: randomUUID(),
+          clientVersion: '1.4.0',
+          sourceId,
+          expectedRevision: 3,
+        })
+      ).body,
+    ).toMatchObject({ status: 'refused', reason: 'source_access_denied' });
   } finally {
     await fixture.stop();
   }
@@ -1816,6 +1854,311 @@ it('requires an explicit revision-bound recapture after restore and preserves ol
     });
     expect(reads).toBe(2);
   } finally {
+    await fixture.stop();
+  }
+});
+
+it.each([
+  { correctedName: null, expected: '[unknown]' },
+  { correctedName: 'Casey Sutton Jr.', expected: 'Casey Sutton Jr.' },
+])(
+  'governs sole source-derived observed labels on deletion (correction: $correctedName)',
+  async (example) => {
+    const fixture = await createAuthFixture();
+    try {
+      const { workspaceId, binding, job } =
+        await approveCaptureFixture(fixture);
+      const token = (
+        await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
+      ).accessToken;
+      const post = (path: string, body: unknown) =>
+        dispatch(
+          {
+            method: 'POST',
+            path,
+            body,
+            query: new URLSearchParams(),
+            headers: { authorization: `Bearer ${token}` },
+          },
+          {
+            session: fixture.db,
+            auth: fixture.deps,
+            supportedClientVersions:
+              fixture.deps.config.supportedClientVersions,
+            sendingEnabled: false,
+          },
+        );
+      const handler = captureHandler({
+        proofVerifier: {
+          async verify(proof) {
+            return proof.accountBinding === binding;
+          },
+        },
+        provider: {
+          async read() {
+            return {
+              providerAccountId: 'google-business',
+              messageId: 'approved-message',
+              threadId: 'approved-thread',
+              labels: ['INBOX'],
+              providerAt: '2026-10-08T15:00:00.000Z',
+              rawSenderDate: null,
+              from: 'casey@unknown.test',
+              fromDisplayName: 'Casey Sutton',
+              to: ['business@example.test'],
+              cc: [],
+              subject: 'Business',
+              body: 'Private source',
+              parserVersion: 'fixture-v1',
+              representation: 'plain_text',
+              completeness: 'complete',
+              ranges: [{ start: 0, end: 14, kind: 'authored' }],
+            };
+          },
+        },
+      });
+      const captured = await handler.handle({
+        session: fixture.db,
+        scope: workspaceScope(workspaceId, {
+          kind: 'system',
+          component: 'worker',
+        }),
+        job,
+      });
+      const sourceId = z.string().parse(captured?.progress['sourceId']);
+      const original = z
+        .object({
+          people: z.array(
+            z.object({ personId: z.string(), fullName: z.string() }),
+          ),
+        })
+        .parse((await post('/crm/people/list', { limit: 50 })).body);
+      expect(original.people).toEqual([
+        { personId: expect.any(String), fullName: 'Casey Sutton' },
+      ]);
+      if (example.correctedName)
+        await fixture.db.query(
+          'UPDATE crm_people SET full_name=$3,revision=revision+1 WHERE workspace_id=$1 AND id=$2',
+          [workspaceId, original.people[0]!.personId, example.correctedName],
+        );
+      expect(
+        (
+          await post('/crm/business/mail/delete', {
+            sourceId,
+            expectedRevision: 1,
+            commandId: randomUUID(),
+            clientVersion: '1.4.0',
+          })
+        ).body,
+      ).toMatchObject({ status: 'accepted' });
+      const after = z
+        .object({
+          people: z.array(
+            z.object({ personId: z.string(), fullName: z.string() }),
+          ),
+        })
+        .parse((await post('/crm/people/list', { limit: 50 })).body);
+      expect(after.people).toEqual([
+        { personId: original.people[0]!.personId, fullName: example.expected },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  },
+);
+
+it('serializes registered metadata observation and capture without reversing the account/address locks', async () => {
+  const fixture = await createAuthFixture();
+  const captureSession = await fixture.database.appRuntimeSession();
+  const syncSession = await fixture.database.appRuntimeSession();
+  const barrier = await fixture.database.appRuntimeSession();
+  const monitor = await fixture.database.appRuntimeSession();
+  let released = false;
+  try {
+    const { workspaceId, mailbox, binding, job } =
+      await approveCaptureFixture(fixture);
+    await fixture.db.query(
+      'UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',
+      [
+        workspaceId,
+        mailbox.id,
+        METADATA_REVIEW_DISCLOSURE.version,
+        METADATA_REVIEW_DISCLOSURE.sha256,
+      ],
+    );
+    await fixture.db.query(
+      "UPDATE mailboxes SET sync_state='ready',history_id='1',history_id_updated_at=now(),baseline_from_at=now()-interval '1 hour',baseline_completed_at=now() WHERE workspace_id=$1 AND id=$2",
+      [workspaceId, mailbox.id],
+    );
+    const cipher = localEnvelopeCipher();
+    await storeRefreshToken(
+      {
+        scope: workspaceScope(workspaceId, {
+          kind: 'system',
+          component: 'worker',
+        }),
+        db: fixture.db,
+      },
+      {
+        mailboxId: mailbox.id,
+        plaintext: randomBytes(24).toString('base64url'),
+        cipher,
+      },
+    );
+    const gmail = recordedGmailClient({
+      emailAddress: 'business@example.test',
+      historyId: '2',
+      messages: [
+        {
+          id: 'observed-other-message',
+          threadId: 'other-thread',
+          historyId: '2',
+          internalDateEpochMilliseconds: Date.now(),
+          labelIds: ['INBOX'],
+          headers: {
+            From: 'unknown@business.test',
+            To: 'business@example.test',
+            Subject: 'Other business',
+          },
+          body: 'Other business',
+        },
+      ],
+    });
+    const registry = registerHandlers(new HandlerRegistry(), {
+      classifier: undefined,
+      send: undefined,
+      research: undefined,
+      mail: {
+        gmail,
+        cipher,
+        oauth: {
+          clientId: 'fixture',
+          clientSecret: randomBytes(24).toString('base64url'),
+          redirectUri: 'https://example.test/callback',
+          authorizationEndpoint: 'https://example.test/authorize',
+          tokenEndpoint: 'https://example.test/token',
+          revocationEndpoint: 'https://example.test/revoke',
+          apiBaseUrl: 'https://example.test/mail',
+        },
+        journal: recordingSuppressionJournal(),
+        replyPromoter: { async promoteReply() {} },
+        pushTopicName: 'projects/example/topics/mail',
+        businessMailObserver: createApprovedBusinessMailObserver({
+          classify: () => ({
+            category: 'business',
+            reason: 'business_metadata',
+            classifierVersion: 'fixture-v1',
+          }),
+        }),
+      },
+      crmMailCapture: {
+        proofVerifier: {
+          async verify(proof) {
+            return proof.accountBinding === binding;
+          },
+        },
+        provider: {
+          async read() {
+            return {
+              providerAccountId: 'google-business',
+              messageId: 'approved-message',
+              threadId: 'approved-thread',
+              labels: ['INBOX'],
+              providerAt: '2026-10-08T15:00:00.000Z',
+              rawSenderDate: null,
+              from: 'unknown@business.test',
+              to: ['business@example.test'],
+              cc: [],
+              subject: 'Business',
+              body: 'Private source',
+              parserVersion: 'fixture-v1',
+              representation: 'plain_text',
+              completeness: 'complete',
+              ranges: [{ start: 0, end: 14, kind: 'authored' }],
+            };
+          },
+        },
+      },
+    });
+    await enqueueJob(fixture.db, {
+      workspaceId,
+      kind: 'mail.sync',
+      idempotencyKey: 'account-address-race-sync',
+      payload: { mailboxId: mailbox.id },
+    });
+    const syncJob = (
+      await claimJobs(fixture.db, {
+        owner: 'race-sync',
+        kinds: ['mail.sync'],
+        limit: 1,
+        leaseSeconds: 120,
+      })
+    )[0]!;
+    const capturePid = (
+      await captureSession.query<{ pid: number }>(
+        'SELECT pg_backend_pid() AS pid',
+      )
+    ).rows[0]!.pid;
+    const syncPid = (
+      await syncSession.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')
+    ).rows[0]!.pid;
+    await barrier.query('BEGIN');
+    await barrier.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+      [`${workspaceId}:business-metadata-address:unknown@business.test`],
+    );
+    const scope = workspaceScope(workspaceId, {
+      kind: 'system',
+      component: 'worker',
+    });
+    const captured = registry
+      .get('crm.mail_capture')!
+      .handle({ session: captureSession, scope, job })
+      .then(
+        (value) => ({ ok: true, value }),
+        (error) => ({ ok: false, error }),
+      );
+    async function blocked(pid: number) {
+      for (let n = 0; n < 200; n++) {
+        if (
+          (
+            await monitor.query<{ blocked: boolean }>(
+              'SELECT cardinality(pg_blocking_pids($1))>0 AS blocked',
+              [pid],
+            )
+          ).rows[0]!.blocked
+        )
+          return true;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return false;
+    }
+    expect(await blocked(capturePid)).toBe(true);
+    const observed = (async () => {
+      await syncSession.query('BEGIN');
+      try {
+        const value = await registry
+          .get('mail.sync')!
+          .handle({ session: syncSession, scope, job: syncJob });
+        await syncSession.query('COMMIT');
+        return { ok: true, value };
+      } catch (error) {
+        await syncSession.query('ROLLBACK');
+        return { ok: false, error };
+      }
+    })();
+    expect(await blocked(syncPid)).toBe(true);
+    await barrier.query('COMMIT');
+    released = true;
+    expect(await captured).toMatchObject({
+      ok: true,
+      value: { progress: { outcome: 'captured' } },
+    });
+    const observedResult = await observed;
+    if (!observedResult.ok) expect(observedResult.error).toBeUndefined();
+    expect(observedResult).toMatchObject({ ok: true });
+  } finally {
+    if (!released) await barrier.query('ROLLBACK');
     await fixture.stop();
   }
 });

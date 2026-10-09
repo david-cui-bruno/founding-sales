@@ -154,6 +154,7 @@ async function lockCaptureAuthority(
   input: JobHandlerInput,
   payload: CapturePayload,
   lockConversation = false,
+  beforeConversation?: () => Promise<boolean>,
 ): Promise<CaptureAuthority | null> {
   const { session: db, scope, job } = input;
   if (
@@ -214,6 +215,7 @@ async function lockCaptureAuthority(
     ],
   );
   if (!policy.rows.length) return null;
+  if (beforeConversation && !(await beforeConversation())) return null;
   const conversation = (
     await db.query<Conversation>(
       `SELECT * FROM crm_business_conversations WHERE workspace_id=$1 AND id=$2 AND mailbox_id=$3 ${lockConversation ? 'FOR UPDATE' : ''}`,
@@ -361,7 +363,12 @@ export function businessMailCaptureHandler(deps: {
         );
         if (
           identity.source_id !== null &&
-          identity.source_id !== original.messageId
+          identity.source_id !== original.messageId &&
+          !(
+            recaptureAllowed &&
+            original.messageId === null &&
+            identity.source_id === payload.recapture?.sourceId
+          )
         )
           return { outcome: 'source_deleted' } as const;
         if (
@@ -375,7 +382,7 @@ export function businessMailCaptureHandler(deps: {
           [
             input.scope.workspaceId,
             identity.id,
-            original.messageId,
+            recaptureAllowed ? payload.recapture!.sourceId : original.messageId,
             JSON.stringify(original.matches),
           ],
         );
@@ -450,18 +457,6 @@ export function businessMailCaptureHandler(deps: {
           JSON.stringify(original) !== JSON.stringify(staged.original)
         )
           return done('source_context_changed');
-        // Match deletion's firm -> address -> conversation/identity lock order.
-        const captureContext = repositoryContext(input.scope, input.session);
-        const addresses = participants.filter((value) => value !== null);
-        await lockBusinessMetadataAddresses(captureContext, addresses);
-        for (const address of addresses) {
-          const stop = await isSuppressed(captureContext, {
-            scope: 'handle',
-            canonicalKey: address,
-          });
-          if (stop?.source === 'deletion_tombstone')
-            return done('source_deleted');
-        }
         const knownIdentity =
           (
             await input.session.query(
@@ -488,13 +483,41 @@ export function businessMailCaptureHandler(deps: {
             'SELECT id FROM crm_people WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
             [input.scope.workspaceId, candidates[0]!.id],
           );
-        const current = await lockCaptureAuthority(input, payload, true);
+        let participantDeleted = false;
+        const current = await lockCaptureAuthority(
+          input,
+          payload,
+          true,
+          async () => {
+            // Account locks precede the address barrier, matching metadata observation.
+            // Firm/person closure was acquired before either set of locks.
+            const captureContext = repositoryContext(
+              input.scope,
+              input.session,
+            );
+            const addresses = participants.filter((value) => value !== null);
+            await lockBusinessMetadataAddresses(captureContext, addresses);
+            for (const address of addresses) {
+              const stop = await isSuppressed(captureContext, {
+                scope: 'handle',
+                canonicalKey: address,
+              });
+              if (stop?.source === 'deletion_tombstone') {
+                participantDeleted = true;
+                return false;
+              }
+            }
+            return true;
+          },
+        );
         if (
           !current ||
           JSON.stringify(current.proof) !==
             JSON.stringify(staged.authority.proof)
         )
-          return done('authority_changed');
+          return done(
+            participantDeleted ? 'source_deleted' : 'authority_changed',
+          );
         const identity = (
           await input.session.query<{
             state: string;
@@ -569,7 +592,7 @@ export function businessMailCaptureHandler(deps: {
           old?.id ??
           (
             await input.session.query<{ id: string }>(
-              'INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,header_from,header_to,header_cc,subject,label_ids,business_capture_authorized,metadata_only) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12) RETURNING id',
+              'INSERT INTO mail_messages(workspace_id,id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,header_from,header_to,header_cc,subject,label_ids,business_capture_authorized,metadata_only) VALUES($1,COALESCE($13::uuid,gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12) RETURNING id',
               [
                 input.scope.workspaceId,
                 payload.mailboxId,
@@ -583,6 +606,7 @@ export function businessMailCaptureHandler(deps: {
                 m.subject,
                 m.labels,
                 m.body === null,
+                payload.recapture?.sourceId ?? null,
               ],
             )
           ).rows[0]!.id;
@@ -636,7 +660,7 @@ export function businessMailCaptureHandler(deps: {
           m.ranges.some((r) => r.kind === 'authored') &&
           !m.ranges.every((r) => r.kind === 'forwarded' || r.kind === 'quoted');
         await input.session.query(
-          `INSERT INTO crm_mail_sources(workspace_id,source_id,capture_identity_id,source_revision,content_hash,owner_user_id,mailbox_id,provider_account_id,account_binding,acquired_generation,controls_revision,policy_revision,conversation_id,decision_revision,disclosure_version,disclosure_sha256,verification_receipts,parser_version,representation,completeness,passage_ranges,participants,raw_sender_date,provider_at,sent_proof) VALUES($1,$2,$3,$25,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20::jsonb,$21::jsonb,$22,$23,$24) ON CONFLICT(workspace_id,source_id) DO UPDATE SET source_revision=EXCLUDED.source_revision,content_hash=EXCLUDED.content_hash,acquired_generation=EXCLUDED.acquired_generation,controls_revision=EXCLUDED.controls_revision,policy_revision=EXCLUDED.policy_revision,decision_revision=EXCLUDED.decision_revision,disclosure_version=EXCLUDED.disclosure_version,disclosure_sha256=EXCLUDED.disclosure_sha256,verification_receipts=EXCLUDED.verification_receipts,parser_version=EXCLUDED.parser_version,representation=EXCLUDED.representation,completeness=EXCLUDED.completeness,passage_ranges=EXCLUDED.passage_ranges,participants=EXCLUDED.participants,raw_sender_date=EXCLUDED.raw_sender_date,provider_at=EXCLUDED.provider_at,sent_proof=EXCLUDED.sent_proof,availability='available'`,
+          `INSERT INTO crm_mail_sources(workspace_id,source_id,capture_identity_id,source_revision,content_hash,owner_user_id,mailbox_id,provider_account_id,account_binding,acquired_generation,controls_revision,policy_revision,conversation_id,decision_revision,disclosure_version,disclosure_sha256,verification_receipts,parser_version,representation,completeness,passage_ranges,participants,raw_sender_date,provider_at,sent_proof) VALUES($1,$2,$3,$25,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20::jsonb,$21::jsonb,$22,$23,$24) ON CONFLICT(workspace_id,source_id) DO UPDATE SET source_revision=EXCLUDED.source_revision,content_hash=EXCLUDED.content_hash,acquired_generation=EXCLUDED.acquired_generation,controls_revision=EXCLUDED.controls_revision,policy_revision=EXCLUDED.policy_revision,decision_revision=EXCLUDED.decision_revision,disclosure_version=EXCLUDED.disclosure_version,disclosure_sha256=EXCLUDED.disclosure_sha256,verification_receipts=EXCLUDED.verification_receipts,parser_version=EXCLUDED.parser_version,representation=EXCLUDED.representation,completeness=EXCLUDED.completeness,passage_ranges=EXCLUDED.passage_ranges,participants=EXCLUDED.participants,raw_sender_date=EXCLUDED.raw_sender_date,provider_at=EXCLUDED.provider_at,sent_proof=EXCLUDED.sent_proof,availability='available',observed_at=now()`,
           [
             input.scope.workspaceId,
             sourceId,
@@ -693,14 +717,21 @@ export function businessMailCaptureHandler(deps: {
               )
             ).rows[0]!.id;
           await input.session.query(
-            "INSERT INTO crm_mail_source_contexts(workspace_id,source_id,source_revision,person_id,context_kind,review,identity_status,correspondent_endpoint_hash) VALUES($1,$2,$5,$3,'acquired','review_required','observed_label',$4)",
+            "INSERT INTO crm_mail_source_contexts(workspace_id,source_id,source_revision,person_id,context_kind,review,identity_status,correspondent_endpoint_hash,observed_full_name_hash) VALUES($1,$2,$5,$3,'acquired','review_required','observed_label',$4,$6)",
             [
               input.scope.workspaceId,
               sourceId,
               personId,
               senderHash,
               captureRevision,
+              createHash('sha256').update(observedLabel!).digest('hex'),
             ],
+          );
+        }
+        if (payload.recapture) {
+          await input.session.query(
+            `INSERT INTO crm_mail_source_contexts(workspace_id,source_id,source_revision,person_id,firm_id,opportunity_id,context_kind,review,identity_status) SELECT workspace_id,source_id,$3,person_id,firm_id,opportunity_id,'reviewed','review_required','reviewed' FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id=$2 AND context_kind='reviewed' AND source_revision=(SELECT max(lastcx.source_revision) FROM crm_mail_source_contexts lastcx WHERE lastcx.workspace_id=$1 AND lastcx.source_id=$2 AND lastcx.context_kind='reviewed' AND lastcx.source_revision<$3)`,
+            [input.scope.workspaceId, sourceId, captureRevision],
           );
         }
         for (const match of staged.original.matches) {
@@ -1055,7 +1086,11 @@ export async function changeMailSource(
       [context.scope.workspaceId, input.sourceId],
     );
     await context.db.query(
-      "UPDATE crm_mail_sources SET participants='[]',raw_sender_date=NULL,passage_ranges='[]',sent_proof=false WHERE workspace_id=$1 AND source_id=$2",
+      "UPDATE crm_mail_sources SET participants='[]',raw_sender_date=NULL,passage_ranges='[]',sent_proof=false,provider_at=NULL,observed_at=NULL,availability=$3,source_revision=$4 WHERE workspace_id=$1 AND source_id=$2",
+      [context.scope.workspaceId, input.sourceId, availability, revision],
+    );
+    await context.db.query(
+      `DELETE FROM mail_messages m WHERE m.workspace_id=$1 AND m.id=$2 AND NOT m.matched AND NOT EXISTS(SELECT 1 FROM mail_message_matches mx WHERE mx.workspace_id=m.workspace_id AND mx.mail_message_id=m.id)`,
       [context.scope.workspaceId, input.sourceId],
     );
     await context.db.query(
@@ -1083,6 +1118,8 @@ export async function changeMailSource(
       availability,
     ],
   );
+  if (action === 'delete')
+    await redactUnsupportedObservedMailLabels(context, [input.sourceId]);
   await recordCrmAuditEvent(context, {
     action:
       action === 'delete' ? 'crm.mail_copy_deleted' : 'crm.mail_copy_restored',
@@ -1094,6 +1131,62 @@ export async function changeMailSource(
     ok: true as const,
     value: { sourceId: input.sourceId, sourceRevision: revision, availability },
   };
+}
+
+/** Retire only an unchanged label derived solely from removed mail copies.
+ * Caller holds the complete affected person/context closure. Body-free hashes
+ * prevent a later human name correction from being overwritten. */
+export async function eligibleObservedMailLabelRedactions(
+  context: RepositoryContext,
+  removedSourceIds: readonly string[],
+) {
+  const eligible: string[] = [];
+  const candidates = (
+    await context.db.query<{
+      person_id: string;
+      full_name: string;
+      observed_full_name_hash: string;
+    }>(
+      `SELECT DISTINCT p.id AS person_id,p.full_name,cx.observed_full_name_hash FROM crm_mail_source_contexts cx JOIN crm_people p ON p.workspace_id=cx.workspace_id AND p.id=cx.person_id WHERE cx.workspace_id=$1 AND cx.source_id=ANY($2::uuid[]) AND cx.context_kind='acquired' AND cx.identity_status='observed_label' ORDER BY p.id`,
+      [context.scope.workspaceId, removedSourceIds],
+    )
+  ).rows;
+  for (const candidate of candidates) {
+    if (
+      createHash('sha256').update(candidate.full_name).digest('hex') !==
+      candidate.observed_full_name_hash
+    )
+      continue;
+    const retained = (
+      await context.db.query(
+        `SELECT 1 FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE cx.workspace_id=$1 AND cx.person_id=$2 AND s.availability='available' AND ${mailContextPredicate()} AND NOT(s.source_id=ANY($3::uuid[])) AND (cx.context_kind='reviewed' OR cx.observed_full_name_hash=$4) UNION ALL SELECT 1 FROM crm_selected_sources WHERE workspace_id=$1 AND person_id=$2 AND availability='available' UNION ALL SELECT 1 FROM crm_legacy_contact_people WHERE workspace_id=$1 AND person_id=$2 LIMIT 1`,
+        [
+          context.scope.workspaceId,
+          candidate.person_id,
+          removedSourceIds,
+          candidate.observed_full_name_hash,
+        ],
+      )
+    ).rows.length;
+    if (retained) continue;
+    eligible.push(candidate.person_id);
+  }
+  return [...new Set(eligible)].sort();
+}
+
+export async function redactUnsupportedObservedMailLabels(
+  context: RepositoryContext,
+  removedSourceIds: readonly string[],
+) {
+  const ids = await eligibleObservedMailLabelRedactions(
+    context,
+    removedSourceIds,
+  );
+  const result = await context.db.query(
+    "UPDATE crm_people SET full_name='[unknown]',revision=revision+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[]) RETURNING id",
+    [context.scope.workspaceId, ids],
+  );
+  return result.rows.length;
 }
 
 /** An explicit restore request queues metadata-only work; only the worker's
@@ -1194,7 +1287,18 @@ export async function requestMailRecapture(
   await enqueueJob(context.db, {
     workspaceId: context.scope.workspaceId,
     kind: 'crm.mail_capture',
-    idempotencyKey: `mail-recapture:${input.sourceId}:${input.expectedRevision}`,
+    idempotencyKey: `mail-recapture:${createHash('sha256')
+      .update(
+        JSON.stringify({
+          sourceId: input.sourceId,
+          revision: input.expectedRevision,
+          generation: mailbox.generation,
+          controlsRevision: control.revision,
+          policyRevision: control.policy_revision,
+          decisionRevision: conversation.decision_revision,
+        }),
+      )
+      .digest('hex')}`,
     payload: {
       mailboxId: mailbox.id,
       providerMessageId: row.provider_message_id,
@@ -1292,10 +1396,12 @@ export async function listMailSources(
       source_revision: number;
       content_hash: string;
       availability: string;
-      provider_at: Date;
+      provider_at: Date | null;
       completeness: string;
+      mailbox_id: string;
+      conversation_id: string;
     }>(
-      `SELECT s.source_id,s.source_revision,s.content_hash,s.availability,s.provider_at,s.completeness FROM crm_mail_sources s WHERE s.workspace_id=$1 AND s.owner_user_id=$2 AND ($3::uuid IS NULL OR s.mailbox_id=$3) AND ($4::uuid IS NULL OR s.source_id>$4) AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM crm_mail_source_contexts cx WHERE cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id AND cx.source_revision=s.source_revision AND cx.person_id=$5)) AND ($6::uuid IS NULL OR EXISTS(SELECT 1 FROM crm_mail_source_contexts cx WHERE cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id AND cx.source_revision=s.source_revision AND cx.firm_id=$6)) AND ($8::boolean OR NOT EXISTS(SELECT 1 FROM crm_mail_source_contexts ac JOIN firms af ON af.workspace_id=ac.workspace_id AND af.id=ac.firm_id WHERE ac.workspace_id=s.workspace_id AND ac.source_id=s.source_id AND (ac.context_kind='acquired' OR ac.source_revision=s.source_revision) AND (af.status<>'active' OR af.assigned_user_id IS DISTINCT FROM $2))) ORDER BY s.source_id LIMIT $7`,
+      `SELECT s.source_id,s.source_revision,s.content_hash,s.availability,s.provider_at,s.completeness,s.mailbox_id,s.conversation_id FROM crm_mail_sources s WHERE s.workspace_id=$1 AND s.owner_user_id=$2 AND ($3::uuid IS NULL OR s.mailbox_id=$3) AND ($4::uuid IS NULL OR s.source_id>$4) AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM crm_mail_source_contexts cx WHERE cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id AND ${mailContextPredicate()} AND cx.person_id=$5)) AND ($6::uuid IS NULL OR EXISTS(SELECT 1 FROM crm_mail_source_contexts cx WHERE cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id AND ${mailContextPredicate()} AND cx.firm_id=$6)) AND ($8::boolean OR NOT EXISTS(SELECT 1 FROM crm_mail_source_contexts ac JOIN firms af ON af.workspace_id=ac.workspace_id AND af.id=ac.firm_id WHERE ac.workspace_id=s.workspace_id AND ac.source_id=s.source_id AND ${mailContextPredicate('s', 'ac')} AND (af.status<>'active' OR af.assigned_user_id IS DISTINCT FROM $2))) ORDER BY s.source_id LIMIT $7`,
       [
         context.scope.workspaceId,
         actor.userId,
@@ -1312,7 +1418,7 @@ export async function listMailSources(
   const readContexts = async () =>
     (
       await context.db.query<MailContext>(
-        `SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=ANY($2::uuid[]) AND (cx.context_kind='acquired' OR cx.source_revision=s.source_revision) ORDER BY cx.id LIMIT $3`,
+        `SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=ANY($2::uuid[]) AND ${mailContextPredicate()} ORDER BY cx.id LIMIT $3`,
         [context.scope.workspaceId, sourceIds, (input.limit + 1) * 100 + 1],
       )
     ).rows;
@@ -1334,6 +1440,11 @@ export async function listMailSources(
     }))
   )
     return { sources: [], nextAfterId: null };
+  await lockMailGrantRows(
+    context,
+    rows.map((row) => row.mailbox_id),
+    rows.map((row) => row.conversation_id),
+  );
   const locked = (
     await context.db.query<{
       source_id: string;
@@ -1368,12 +1479,17 @@ export async function listMailSources(
       sourceRevision: row.source_revision,
       contentHash: row.content_hash,
       availability: row.availability,
-      occurredAt: row.provider_at.toISOString(),
+      occurredAt: row.provider_at?.toISOString() ?? null,
       completeness: row.completeness,
     })),
     nextAfterId:
       rows.length > input.limit ? rows[input.limit - 1]!.source_id : null,
   };
+}
+
+/** Last explicit reviewed snapshot governs unavailable copies as well. */
+export function mailContextPredicate(sourceAlias = 's', contextAlias = 'cx') {
+  return `(${contextAlias}.context_kind='acquired' OR ${contextAlias}.source_revision=CASE WHEN ${sourceAlias}.availability='available' THEN ${sourceAlias}.source_revision ELSE (SELECT max(lastcx.source_revision) FROM crm_mail_source_contexts lastcx WHERE lastcx.workspace_id=${sourceAlias}.workspace_id AND lastcx.source_id=${sourceAlias}.source_id AND lastcx.context_kind='reviewed' AND lastcx.source_revision<=${sourceAlias}.source_revision) END)`;
 }
 
 interface MailContext extends Record<string, unknown> {
@@ -1389,6 +1505,7 @@ interface MailContext extends Record<string, unknown> {
   operational_match_hash: string | null;
   identity_status: string;
   correspondent_endpoint_hash: string | null;
+  observed_full_name_hash: string | null;
 }
 const contextDto = (cx: MailContext) => ({
   contextId: cx.id,
@@ -1401,6 +1518,33 @@ const contextDto = (cx: MailContext) => ({
   operationalMatchHash: cx.operational_match_hash,
   identityStatus: cx.identity_status,
 });
+/** All grant rows precede every copy lock. Locking is not processing consent:
+ * retained history remains readable when disconnected or controls are disabled. */
+async function lockMailGrantRows(
+  context: RepositoryContext,
+  mailboxIds: readonly string[],
+  conversationIds: readonly string[],
+) {
+  const mailboxes = [...new Set(mailboxIds)].sort();
+  const conversations = [...new Set(conversationIds)].sort();
+  await context.db.query(
+    'SELECT id FROM mailboxes WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',
+    [context.scope.workspaceId, mailboxes],
+  );
+  await context.db.query(
+    'SELECT mailbox_id FROM crm_mail_capture_controls WHERE workspace_id=$1 AND mailbox_id=ANY($2::uuid[]) ORDER BY mailbox_id FOR SHARE',
+    [context.scope.workspaceId, mailboxes],
+  );
+  await context.db.query(
+    'SELECT mailbox_id FROM crm_business_policies WHERE workspace_id=$1 AND mailbox_id=ANY($2::uuid[]) ORDER BY mailbox_id FOR SHARE',
+    [context.scope.workspaceId, mailboxes],
+  );
+  await context.db.query(
+    'SELECT id FROM crm_business_conversations WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',
+    [context.scope.workspaceId, conversations],
+  );
+}
+
 /** Acquire complete original/current reviewed context closure before the mail source lock. */
 async function lockMailCopyContext(
   context: RepositoryContext,
@@ -1419,8 +1563,10 @@ async function lockMailCopyContext(
       owner_user_id: string;
       source_revision: number;
       capture_identity_id: string;
+      mailbox_id: string;
+      conversation_id: string;
     }>(
-      'SELECT owner_user_id,source_revision,capture_identity_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2',
+      'SELECT owner_user_id,source_revision,capture_identity_id,mailbox_id,conversation_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2',
       [context.scope.workspaceId, sourceId],
     )
   ).rows[0];
@@ -1431,7 +1577,7 @@ async function lockMailCopyContext(
     return null;
   const contexts = (
     await context.db.query<MailContext>(
-      "SELECT * FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id=$2 AND (context_kind='acquired' OR source_revision=$3) ORDER BY id LIMIT 101",
+      `SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=$2 AND s.source_revision=$3 AND ${mailContextPredicate()} ORDER BY cx.id LIMIT 101`,
       [context.scope.workspaceId, sourceId, initial.source_revision],
     )
   ).rows;
@@ -1453,6 +1599,11 @@ async function lockMailCopyContext(
   )
     return null;
   if (!additional.deferCopyLocks) {
+    await lockMailGrantRows(
+      context,
+      [initial.mailbox_id],
+      [initial.conversation_id],
+    );
     await context.db.query(
       'SELECT id FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
       [context.scope.workspaceId, initial.capture_identity_id],
@@ -1476,7 +1627,7 @@ async function lockMailCopyContext(
     return null;
   const after = (
     await context.db.query<MailContext>(
-      "SELECT * FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id=$2 AND (context_kind='acquired' OR source_revision=$3) ORDER BY id LIMIT 101",
+      `SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=$2 AND s.source_revision=$3 AND ${mailContextPredicate()} ORDER BY cx.id LIMIT 101`,
       [context.scope.workspaceId, sourceId, current.source_revision],
     )
   ).rows;
@@ -1565,7 +1716,8 @@ export interface CapturedMailProcessingAuthority {
   acquiredGeneration: number;
   authorizationFingerprint: string;
 }
-async function readMailProcessingAuthority(
+/** DB-only unverified snapshot. This never grants provider or model authority. */
+export async function prepareMailProcessingAuthority(
   context: RepositoryContext,
   exact: ExactMailSource,
   purposeOwner: string,
@@ -1724,7 +1876,7 @@ export async function authorizeMailProcessing(
   | { ok: false; reason: string }
 > {
   if (!verifier) return { ok: false, reason: 'verification_unavailable' };
-  const before = await readMailProcessingAuthority(
+  const before = await prepareMailProcessingAuthority(
     context,
     exact,
     purposeOwner,
@@ -1732,7 +1884,11 @@ export async function authorizeMailProcessing(
   if (!before.ok) return before;
   if (!(await verifier.verify(before.authority.proof)))
     return { ok: false, reason: 'verification_unavailable' };
-  const after = await readMailProcessingAuthority(context, exact, purposeOwner);
+  const after = await prepareMailProcessingAuthority(
+    context,
+    exact,
+    purposeOwner,
+  );
   return after.ok &&
     JSON.stringify(after.authority) === JSON.stringify(before.authority)
     ? after
@@ -1754,6 +1910,22 @@ export async function revalidateMailProcessing(
     JSON.stringify(current.authority) === JSON.stringify(authority)
   );
 }
+/** DB-only current snapshot comparison; a separate verified token is required before paid work. */
+export async function revalidatePreparedMailProcessing(
+  context: RepositoryContext,
+  authority: CapturedMailProcessingAuthority,
+): Promise<boolean> {
+  const current = await prepareMailProcessingAuthority(
+    context,
+    authority.exact,
+    authority.purposeOwner,
+  );
+  return (
+    current.ok &&
+    JSON.stringify(current.authority) === JSON.stringify(authority)
+  );
+}
+
 /** Full bounded original bytes are transient provider input, never another retained body store. */
 export async function loadMailSourceInput(
   context: RepositoryContext,
@@ -1778,6 +1950,46 @@ export async function loadMailSourceInput(
       text: null,
     } as const;
   if (!(await revalidateMailProcessing(context, authority, verifier)))
+    return {
+      state: 'unavailable',
+      reason: 'processing_authority_unavailable',
+      text: null,
+    } as const;
+  return {
+    state: 'available',
+    text: original.source.passage,
+    sourceId: exact.sourceId,
+    sourceRevision: exact.sourceRevision,
+    contentHash: exact.contentHash,
+    parserVersion: original.source.parserVersion,
+    representation: original.source.representation,
+    completeness: original.source.completeness,
+    ranges: original.source.ranges,
+  } as const;
+}
+/** DB-only original input under exact retained-copy locks; not a provider/model grant. */
+export async function loadPreparedMailSourceInput(
+  context: RepositoryContext,
+  exact: ExactMailSource,
+  authority: CapturedMailProcessingAuthority,
+) {
+  if (
+    JSON.stringify(exact) !== JSON.stringify(authority.exact) ||
+    !(await revalidatePreparedMailProcessing(context, authority))
+  )
+    return {
+      state: 'unavailable',
+      reason: 'processing_authority_unavailable',
+      text: null,
+    } as const;
+  const original = await readMailConversation(context, exact);
+  if (original.state !== 'available' || original.source.passage === null)
+    return {
+      state: 'unavailable',
+      reason: 'body_unavailable',
+      text: null,
+    } as const;
+  if (!(await revalidatePreparedMailProcessing(context, authority)))
     return {
       state: 'unavailable',
       reason: 'processing_authority_unavailable',
@@ -1871,7 +2083,7 @@ async function lockOriginalMailContexts(
     if (owner.role !== 'admin' && owner.role !== 'salesperson') return null;
     const captured = (
       await input.session.query<MailContext>(
-        "SELECT * FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id=$2 AND (context_kind='acquired' OR source_revision=$3) ORDER BY id LIMIT 101",
+        `SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=$2 AND s.source_revision=$3 AND ${mailContextPredicate()} ORDER BY cx.id LIMIT 101`,
         [
           input.scope.workspaceId,
           payload.recapture.sourceId,
