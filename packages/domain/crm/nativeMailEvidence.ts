@@ -1,5 +1,5 @@
 import {snapshotMailProcessingSourceContexts,readMailConversation,resolveMailSource,readMailSourceState,prepareMailProcessingAuthority,revalidatePreparedMailProcessing,loadPreparedMailSourceInput,type CapturedMailProcessingAuthority,type MailCaptureProofVerifier} from '../mail/crmSources.ts';
-import {crmClaimContextSchema} from '@fss/contracts';
+import {crmClaimContextSchema,mailConversationSchema} from '@fss/contracts';
 import {unavailableMailEvidence,type CrmMailEvidencePort,type MailProcessingAuthority} from './mailEvidence.ts';
 interface NativeContextInput {contextId:string;sourceRevision:number;personId:string|null;firmId:string|null;opportunityId:string|null;operationalMatchId:string|null;operationalMatchHash:string|null;review:string;contextKind:string}
 /** One conversion keeps scheduler hints and locked worker context hashes identical. */
@@ -38,6 +38,17 @@ export function createNativeCrmMailEvidence(verifier?:MailCaptureProofVerifier):
   const read=await readMailConversation(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash});
   if(read.state!=='available')return null;
   return processingContext([...read.source.originalContexts.map(cx=>({...cx,contextKind:'acquired'})),...read.source.reviewedContexts.map(cx=>({...cx,contextKind:'reviewed'}))]);
+ },async resolveCommitmentProof(context,source){
+  if(source.kind!=='mail'||source.workspaceId!==context.scope.workspaceId||source.contentHash===null||source.locator===null)return null;
+  const exact={sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash};
+  const parsed=mailConversationSchema.safeParse(await readMailConversation(context,exact));if(!parsed.success)return null;
+  const read=parsed.data;
+  if(read.state!=='available'||read.source.direction!=='outgoing'||!read.source.sentProof||read.source.completeness!=='complete'||read.source.representation!=='plain_text'||read.source.passage===null)return null;
+  const range=/^text:(0|[1-9]\d*):(0|[1-9]\d*)$/u.exec(source.locator);if(range===null)return null;
+  const start=Number(range[1]),end=Number(range[2]);
+  if(!read.source.ranges.some(part=>part.kind==='authored'&&part.start<=start&&part.end>=end))return null;
+  const cited=await resolveMailSource(context,{...exact,locator:source.locator});if(cited.state!=='available'||cited.source.passage===null)return null;
+  return {ownerUserId:read.source.ownerUserId,sourceRevision:read.source.sourceRevision,sourceHash:read.source.contentHash,providerEventAt:read.source.occurredAt,observedAt:read.source.observedAt,authored:true,actualOutgoing:true,passage:cited.source.passage};
  },async resolve(context,source){
   if(source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
   const exact={sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash};

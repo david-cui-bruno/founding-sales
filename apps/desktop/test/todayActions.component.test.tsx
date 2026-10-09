@@ -11,7 +11,7 @@ import type { Today, TodayActions } from '../src/renderer/today/useToday.ts';
 import type { TodayState } from '../src/renderer/todayContract.ts';
 import { setNavigator } from '../src/renderer/routes.ts';
 import type { OperationApi } from '../src/shared/operations.ts';
-import type { TodayActionsResponse } from '@fss/contracts';
+import type { TodayActionsV2Response } from '@fss/contracts';
 import { buildTodayView } from '../src/renderer/todayView.ts';
 
 /** Today actions through the public workspace and a controlled Operations adapter. */
@@ -117,8 +117,8 @@ function Harness({ call }: { readonly call: CallControl }): JSX.Element {
 }
 
 const MESSAGE = '55555555-5555-4555-8555-555555555555';
-const read: TodayActionsResponse = { version: 1, workspaceId: A, businessTimeZone: 'America/Chicago', asOf: '2026-10-01T14:00:00.000Z', actions: [{ actionId: `reply-message:${MESSAGE}`, kind: 'reply', subject: 'Elm Fork Test Rentals', reason: 'substantive_reply', dueAt: '2026-09-30T14:00:00.000Z', state: 'overdue', target: { kind: 'reply', firmId: A, messageId: MESSAGE } }] };
-let currentRead: TodayActionsResponse | null;
+const read: TodayActionsV2Response = { promiseCoverage:{scope:"current_authorized_work",truncated:false,nextAfterId:null},version: 2, workspaceId: A, businessTimeZone: 'America/Chicago', asOf: '2026-10-01T14:00:00.000Z', actions: [{ actionId: `reply-message:${MESSAGE}`, kind: 'reply', subject: 'Elm Fork Test Rentals', reason: 'substantive_reply', dueAt: '2026-09-30T14:00:00.000Z', state: 'overdue', target: { kind: 'reply', firmId: A, messageId: MESSAGE } }] };
+let currentRead: TodayActionsV2Response | null;
 let currentTarget: typeof read.actions[number]['target'] | null;
 const navigated = vi.fn();
 beforeEach(() => {
@@ -127,8 +127,8 @@ beforeEach(() => {
   setNavigator(navigated, () => undefined);
   navigated.mockClear();
   globalThis.callieApi = {
-    read: async (operation: string) => operation === 'today.actions' ? currentRead
-      : operation === 'today.openAction' ? { version: 1, target: currentTarget }
+    read: async (operation: string) => operation === 'today.actionsV2' ? currentRead
+      : operation === 'today.openActionV2' ? { version: 2, target: currentTarget }
       : operation === 'recordings.recoveries' ? { items: [], truncated: false }
       : operation === 'calling.status' ? { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } }
       : { calls: [] },
@@ -147,7 +147,7 @@ it('opens the exact current overdue reply from Today without resolving it', asyn
 });
 
 it('describes uncertain mail as reply review rather than a substantive reply', async () => {
-  currentRead = { ...read, actions: read.actions.map(action => ({ ...action, state: 'open', reason: 'reply_review' })) };
+  currentRead = { ...read, actions: read.actions.map(action => action.kind==='reply'?({ ...action, state: 'open', reason: 'reply_review' }):action) };
   show();
   expect(await screen.findByText('Reply needs review')).toBeTruthy();
   expect(screen.queryByText('Substantive reply')).toBeNull();
