@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { crmProcessingResultSchema } from "@fss/contracts";
+import {
+  crmProcessingResultSchema,
+  crmResolvedSourceSchema,
+} from "@fss/contracts";
 import { createNativeCrmMailEvidence } from "@fss/domain/crm/nativeMailEvidence.ts";
 import { businessAccountBinding } from "@fss/domain/business/acquisition.ts";
 import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
@@ -277,6 +280,33 @@ it("reviews conflicts across two actual copied mailboxes after disconnect withou
       [fixture.alpha.workspaceId],
     );
     const baselineChecks = checks;
+    const copiedRead = await dispatch(
+      {
+        method: "POST",
+        path: "/crm/processing/source/read",
+        query: new URLSearchParams(),
+        headers: { authorization: `Bearer ${token}` },
+        body: { ...sources[0], locator: "text:0:8" },
+      },
+      {
+        session: fixture.db,
+        auth: fixture.deps,
+        supportedClientVersions: fixture.deps.config.supportedClientVersions,
+        sendingEnabled: false,
+        crmMailEvidence: createNativeCrmMailEvidence(),
+      },
+    );
+    expect(copiedRead.status).toBe(200);
+    expect(crmResolvedSourceSchema.safeParse(copiedRead.body).success).toBe(
+      true,
+    );
+    expect(copiedRead.body).toMatchObject({
+      state: "available",
+      source: { kind: "mail", completeness: "partial" },
+      passage: { text: "Could we", locator: "text:0:8" },
+    });
+    expect(checks).toBe(baselineChecks);
+
     const saved = await post(
       "/crm/evidence/conflict/save",
       command({ expectedConflictRevision: 0, members }),

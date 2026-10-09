@@ -1,3 +1,4 @@
+import {mailImportHealth} from './support/mailImportFixture.ts';
 import { describe, expect, it, vi } from 'vitest';
 import {
   answerOperation,
@@ -120,7 +121,7 @@ describe('the operation registry', () => {
   it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
     // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
-    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'social', 'notifications', 'replyComposer', 'outreach', 'sourcing', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls', 'recordings']);
+    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'social', 'notifications', 'replyComposer', 'outreach', 'sourcing', 'research', 'replies', 'diagnostics', 'crm', 'ask', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls', 'recordings']);
     // Slice S2: a firm's basics from Today and the firm page, and an incoming call.
     expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual([
       'firms.saveBasics',
@@ -397,6 +398,16 @@ it('reads durable extraction health through a closed authenticated operation and
  const pending=answerOperation(operationHandlers(deps),'read','crm.processingHealth',{sourceId:ITEM_ID,kind:'selected_note'});
  generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
 });
+
+it('reads Ask through strict authenticated transport',async()=>{
+ const deps=hosts();
+ const response={operation:'opportunities',scope:{firmId:FIRM_ID},dateBasis:'opportunity_opened_at',count:'0',records:[],truncated:false,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}};
+ deps.api.read=async(path,parse,payload)=>{
+  expect(path).toBe('/ask/read');expect(payload).toEqual({operation:'opportunities',scope:{firmId:FIRM_ID},status:'open',limit:20});
+  return {ok:true,value:parse(response)};
+ };
+ expect(await answerOperation(operationHandlers(deps),'read','ask.read',{operation:'opportunities',scope:{firmId:FIRM_ID},status:'open',limit:20})).toEqual(response);
+});
 it('previews an explicitly selected original file through the authenticated host and rejects late identity changes',async()=>{
  const deps=hosts();let generation=0;let finish!:()=>void;
  deps.recordings.identity.current=()=>generation;
@@ -449,6 +460,14 @@ it.each(['crm.selectedAttachmentCommit','crm.selectedAttachmentAnalyze','crm.sel
  const command=vi.fn();deps.api.command=command;
  await expect(answerOperation(operationHandlers(deps),'command',name,{...input,path:'/arbitrary',commandId:ITEM_ID})).rejects.toThrow();
  expect(command).not.toHaveBeenCalled();
+});
+
+it('does not release a late Ask result to a changed authenticated identity',async()=>{
+ const deps=hosts();let generation=0;let finish!:()=>void;
+ deps.recordings.identity.current=()=>generation;
+ deps.api.read=async(_path,parse)=>{await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse({operation:'records',selection:'single',records:[{recordId:ITEM_ID,kind:'person',name:'Private Person',firmId:null}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}})};};
+ const pending=answerOperation(operationHandlers(deps),'read','ask.read',{operation:'records',query:'Private',kind:'people',limit:20});
+ generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
 });
 it('reads bounded current and reviewed evidence through a closed authenticated source operation',async()=>{
  const deps=hosts();
@@ -534,4 +553,28 @@ it('all evidence operations reject path injection, malformed output and changed 
   const injected=hosts();const read=vi.fn(),command=vi.fn();injected.api.read=read;injected.api.command=command;
   await expect(answerOperation(operationHandlers(injected),kind,name,{...input,path:'/unrelated',clientVersion:'forged'})).rejects.toThrow();expect(read).not.toHaveBeenCalled();expect(command).not.toHaveBeenCalled();
  }
+});
+it('queues one bounded mailbox import through the closed authenticated host and acknowledges no completion or grants',async()=>{
+ const deps=hosts();const input={mailboxId:ITEM_ID};
+ deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/crm/business/mail/import/request');expect(payload).toEqual(input);return {ok:true,value:parse({importId:FIRM_ID,status:'queued'})};};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.businessMailImportRequest',input)).toEqual({importId:FIRM_ID,status:'queued'});
+});
+
+it('reads measured import health separately from acknowledgement and preserves conserved decimal accounting',async()=>{
+ const deps=hosts();const input={mailboxId:ITEM_ID};const health=mailImportHealth();
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/business/mail/import/read');expect(payload).toEqual(input);return {ok:true,value:parse(health)};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.businessMailImportHealth',input)).toEqual(health);
+});
+
+it('reads original observation V2 only through the exact authenticated copied-source seam',async()=>{
+ const deps=hosts();const input={sourceId:ITEM_ID,sourceRevision:1,contentHash:'a'.repeat(64)};
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/business/mail/read/v2');expect(payload).toEqual(input);return {ok:true,value:parse({state:'unavailable',reason:'source_changed',source:null})};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.businessMailReadV2',input)).toEqual({state:'unavailable',reason:'source_changed',source:null});
+});
+it('refuses extra import completion fields and a late mailbox health response after identity changes',async()=>{
+ const deps=hosts();deps.api.command=async(_path,_payload,parse)=>({ok:true,value:parse({importId:FIRM_ID,status:'queued',complete:true})});
+ await expect(answerOperation(operationHandlers(deps),'command','crm.businessMailImportRequest',{mailboxId:ITEM_ID})).rejects.toThrow();
+ let generation=0;let finish!:()=>void;deps.recordings.identity.current=()=>generation;
+ deps.api.read=async(_path,parse)=>{await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse(mailImportHealth())};};
+ const pending=answerOperation(operationHandlers(deps),'read','crm.businessMailImportHealth',{mailboxId:ITEM_ID});generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
 });

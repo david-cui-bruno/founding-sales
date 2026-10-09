@@ -2,6 +2,8 @@ import {crmCommitmentIntentJobHandler} from '../handlers/crmCommitmentIntent.ts'
 import {crmCommitmentJobHandler} from '../handlers/crmCommitments.ts';
 import {crmMailProgressSource} from '../scheduler/crmMailProgressSource.ts';
 import {crmMailProgressJobHandler} from '../handlers/crmMailProgress.ts';
+import {crmMailBackfillSource} from '../scheduler/crmMailBackfillSource.ts';
+import {crmMailBackfillJobHandler} from '../handlers/crmMailBackfill.ts';
 import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
 import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
 import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
@@ -121,6 +123,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
   /** Controlled composition only; no live proof verifier is configured by startup. */
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
@@ -207,6 +210,7 @@ export function registerHandlers(
   registry.register(crmMailProgressJobHandler());
   registry.register(crmCommitmentJobHandler());
   registry.register(crmCommitmentIntentJobHandler(composition.crmExtraction?.mailEvidence));
+  registry.register(crmMailBackfillJobHandler(composition.crmMailBackfill));
   registry.register(businessMailCaptureHandler(composition.crmMailCapture ?? { provider: { async read() { throw new Error('mail_capture_provider_unavailable'); } } }));
   registry.register(humanReplySendJobHandler(composition.send));
   registry.register(meetingFollowThroughJobHandler());
@@ -503,6 +507,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
 export function workerDueWorkSources(
   options: {
     readonly crmMailProcessing?:CrmMailEvidencePort;
+    readonly crmMailBackfill?:boolean;
     readonly socialDraft?: boolean;
     readonly qualification?: boolean;
     readonly discovery?: boolean;
@@ -522,6 +527,7 @@ export function workerDueWorkSources(
   return [
     crmMailProgressSource(),
     crmExtractionRecoverySource(),
+    crmMailBackfillSource(options.crmMailBackfill===true),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
     outreachReplySource(),

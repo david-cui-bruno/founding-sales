@@ -1,6 +1,8 @@
 import {CRM_COMMITMENT_PATHS,routeCrmCommitments} from './crmCommitments.ts';
+import {ASK_PATHS,routeAsk} from './ask.ts';
 import {CRM_PROGRESS_PATHS,routeCrmProgress} from './crmProgress.ts';
 import {CRM_EVIDENCE_PATHS,routeCrmEvidence} from './crmEvidence.ts';
+import { CRM_MAIL_IMPORT_PATHS, routeCrmMailImport } from './crmMailImport.ts';
 import { SELECTED_IMPORT_PATHS, routeSelectedImports } from './selectedImports.ts';
 import { SELECTED_ATTACHMENT_PATHS, routeSelectedAttachments } from './selectedAttachments.ts';
 import { BUSINESS_MAIL_PATHS, routeBusinessMail } from './businessMail.ts';
@@ -179,12 +181,14 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // The CRM surface. Exact paths, which is what every new endpoint should be: the
     // prefixes above are a record of the routers that already existed in that shape,
     // not an invitation.
+    moduleOf('crm-mail-import', {paths: CRM_MAIL_IMPORT_PATHS}, routeCrmMailImport, routing),
     moduleOf('business-mail', { paths: BUSINESS_MAIL_PATHS }, routeBusinessMail, routing),
     moduleOf('business-acquisition', { paths: BUSINESS_PATHS }, routeBusinessAcquisition, routing),
     moduleOf('people-relationships', { paths: IDENTITY_PATHS }, routePeopleRelationships, routing),
     moduleOf('selected-imports', { paths: SELECTED_IMPORT_PATHS }, routeSelectedImports, routing),
     moduleOf('selected-attachments', { paths: SELECTED_ATTACHMENT_PATHS }, routeSelectedAttachments, routing),
     moduleOf('people', { paths: PEOPLE_PATHS }, routePeople, routing),
+    moduleOf('ask', {paths:ASK_PATHS}, routeAsk, routing),
     moduleOf('crm-progress', { paths: CRM_PROGRESS_PATHS }, routeCrmProgress, routing),
     moduleOf('crm-commitments',{paths:CRM_COMMITMENT_PATHS},routeCrmCommitments,routing),
     moduleOf('crm-evidence', {paths:CRM_EVIDENCE_PATHS},routeCrmEvidence,routing),

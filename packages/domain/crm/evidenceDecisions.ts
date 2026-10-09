@@ -483,8 +483,15 @@ export async function lockConflictSources(
   sources: SourceLookup[],
   snapshots: unknown[] = [],
   accessSnapshots: unknown[] = [],
-  options: { allowUnavailable?: boolean } = {},
+  options: { allowUnavailable?: boolean; maxSources?: number } = {},
 ) {
+  if (
+    options.maxSources !== undefined &&
+    (!Number.isInteger(options.maxSources) ||
+      options.maxSources < 1 ||
+      options.maxSources > 100)
+  )
+    return false;
   if (
     sources.some((source) => source.workspaceId !== context.scope.workspaceId)
   )
@@ -576,6 +583,7 @@ export async function lockConflictSources(
   )
     return false;
   const mail = await snapshotMailCopyAuthorityBatch(context, mailRefs, {
+    maxSources: options.maxSources ?? 10,
     allowUnavailable: options.allowUnavailable === true,
   });
   if (mail === null) return false;

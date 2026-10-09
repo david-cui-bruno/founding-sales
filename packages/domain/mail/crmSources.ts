@@ -1,3 +1,4 @@
+import {redactBackfillMetadataForSources} from './crmBackfillMetadata.ts';
 import { businessMetadataObservationSchema } from '@fss/contracts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { isSuppressed } from '../suppression/effective.ts';
@@ -87,6 +88,14 @@ export interface MailCaptureProvider {
     generation: number;
   }): Promise<CapturedMailMessage>;
 }
+/** Separately composed historical provider; every actual metadata/body call is reserved. */
+export interface HistoricalMailCaptureProvider {
+  read(input: Parameters<MailCaptureProvider['read']>[0] & {
+    importId: string; conversationId: string; decisionRevision: number;
+    expectedProof: MailCaptureProof; context: RepositoryContext;
+    jobId: string; leaseOwner: string; fencingToken: string;
+  }): Promise<CapturedMailMessage>;
+}
 const payloadSchema = z
   .object({
     mailboxId: z.string().uuid(),
@@ -97,6 +106,7 @@ const payloadSchema = z
     controlsRevision: z.number().int().positive(),
     policyRevision: z.number().int().positive(),
     decisionRevision: z.number().int().nonnegative(),
+    acquisitionOrigin:z.strictObject({importId:z.string().uuid()}).optional(),
     recapture: z
       .object({
         sourceId: z.string().uuid(),
@@ -287,6 +297,7 @@ async function validExplicitMailRecapture(
 export function businessMailCaptureHandler(deps: {
   provider: MailCaptureProvider;
   proofVerifier?: MailCaptureProofVerifier;
+  historicalProvider?: HistoricalMailCaptureProvider;
 }): JobHandler {
   return {
     kind: 'crm.mail_capture',
@@ -299,6 +310,8 @@ export function businessMailCaptureHandler(deps: {
       if (!deps.proofVerifier) return done('acquisition_disabled');
       if (!parsed.success) return done('invalid_capture_payload');
       const payload = parsed.data;
+      // Historical reads require the separately reserved import adapter; never fall through to live reads.
+      if(payload.acquisitionOrigin&&!deps.historicalProvider)return done('historical_read_meter_required');
       const staged = await withTransaction(input.session, async () => {
         const original = await lockOriginalMailContexts(input, payload);
         if (!original) return null;
@@ -396,12 +409,16 @@ export function businessMailCaptureHandler(deps: {
         );
       if (!(await deps.proofVerifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
-      const message = providerMessageSchema.safeParse(
-        await deps.provider.read({
+      const providerInput={
           mailboxId: payload.mailboxId,
           providerMessageId: payload.providerMessageId,
           providerAccountId: payload.providerAccountId,
           generation: payload.generation,
+      };
+      const message = providerMessageSchema.safeParse(
+        payload.acquisitionOrigin===undefined?await deps.provider.read(providerInput):await deps.historicalProvider!.read({...providerInput,
+          importId:payload.acquisitionOrigin.importId,conversationId:payload.conversationId,decisionRevision:payload.decisionRevision,
+          expectedProof:staged.authority.proof,context:repositoryContext(input.scope,input.session),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken,
         }),
       );
       if (!message.success) return done('provider_evidence_invalid');
@@ -1131,6 +1148,7 @@ export async function changeMailSource(
   const revision = source.source_revision + 1;
   const availability = action === 'delete' ? 'deleted' : 'awaiting_recapture';
   if (action === 'delete') {
+    await redactBackfillMetadataForSources(context,[input.sourceId]);
     await context.db.query(
       'DELETE FROM mail_message_bodies WHERE workspace_id=$1 AND mail_message_id=$2',
       [context.scope.workspaceId, input.sourceId],
@@ -1140,7 +1158,7 @@ export async function changeMailSource(
       [context.scope.workspaceId, input.sourceId],
     );
     await context.db.query(
-      "UPDATE crm_mail_sources SET participants='[]',raw_sender_date=NULL,passage_ranges='[]',sent_proof=false,provider_at=NULL,observed_at=NULL,availability=$3,source_revision=$4 WHERE workspace_id=$1 AND source_id=$2",
+      "UPDATE crm_mail_sources SET original_availability='unknown',original_observation_revision=original_observation_revision+1,original_observed_at=NULL,original_observed_generation=NULL,original_observed_account_binding=NULL,original_observation_reason=NULL,participants='[]',raw_sender_date=NULL,passage_ranges='[]',sent_proof=false,provider_at=NULL,observed_at=NULL,availability=$3,source_revision=$4 WHERE workspace_id=$1 AND source_id=$2",
       [context.scope.workspaceId, input.sourceId, availability, revision],
     );
     await context.db.query(
@@ -2185,6 +2203,7 @@ export const approvedBusinessMailObservationSchema = z
   .object({
     ownerUserId: z.string().uuid(),
     observation: businessMetadataObservationSchema,
+    acquisitionOrigin:z.strictObject({importId:z.string().uuid()}).optional(),
   })
   .strict();
 /** Metadata review is not body permission. This only creates a separately verified worker intent. */
@@ -2291,6 +2310,7 @@ export async function observeApprovedBusinessMail(
       controlsRevision: control.revision,
       policyRevision: control.policy_revision,
       decisionRevision: conversation.decision_revision,
+      ...parsed.data.acquisitionOrigin===undefined?{}:{acquisitionOrigin:parsed.data.acquisitionOrigin},
     },
   });
   return {
@@ -2317,7 +2337,7 @@ export function createApprovedBusinessMailObserver(
           [context.scope.workspaceId, input.mailboxId],
         )
       ).rows[0];
-      if (!policy) return;
+      if (!policy) return {ok:false,reason:'metadata_observation_unavailable'};
       const classification = options.categorizeMetadata?.(input.metadata) ?? {
         category: 'uncertain',
         reason: 'unclassified_metadata',
@@ -2338,9 +2358,10 @@ export function createApprovedBusinessMailObserver(
         participants.length > 50 ||
         participants.some((value) => value === null)
       )
-        return;
-      await observeApprovedBusinessMail(context, {
+        return {ok:false,reason:'metadata_observation_unavailable'};
+      const result=await observeApprovedBusinessMail(context, {
         ownerUserId: input.ownerUserId,
+        ...input.acquisitionOrigin===undefined?{}:{acquisitionOrigin:input.acquisitionOrigin},
         observation: {
           mailboxId: input.mailboxId,
           providerAccountId: input.providerAccountId,
@@ -2359,6 +2380,9 @@ export function createApprovedBusinessMailObserver(
           ...classification,
         },
       });
+      if(!result.ok)return {ok:false,reason:result.reason==='outside_review_window'?'outside_review_window':result.reason==='metadata_deleted'?'metadata_deleted':'metadata_observation_unavailable'};
+      if(result.value.conversationId===null)return {ok:false,reason:'metadata_observation_unavailable'};
+      return {ok:true,conversationId:result.value.conversationId};
     },
   };
 }
@@ -2395,4 +2419,23 @@ export async function lockMailCopyAuthorityBatch(context:RepositoryContext,snaps
  await context.db.query(`SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) ORDER BY source_id FOR ${copyLock}`,[context.scope.workspaceId,snapshot.heads.map(value=>value.source_id).sort()]);
  const after=await snapshotMailCopyAuthorityBatch(context,snapshot.sources,{allowUnavailable:snapshot.allowUnavailable,maxSources:snapshot.maxSources});
  return JSON.stringify(after)===JSON.stringify(snapshot);
+}
+
+/** Current copied-availability flags only; no copied content leaves this read. */
+export async function readMailCopyAvailabilityBatch(context:RepositoryContext,sourceIds:readonly string[]){
+ const actor=context.scope.actor;if(actor.kind!=='user'||sourceIds.length>100)return null;
+ const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];
+ if(member?.role!==actor.role||member.status!=='active')return null;
+ const ids=[...new Set(sourceIds)].sort();
+ const heads=(await context.db.query<{source_id:string;source_revision:number;content_hash:string|null}>('SELECT source_id,source_revision,content_hash FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) ORDER BY source_id',[context.scope.workspaceId,ids])).rows;
+ if(heads.length!==ids.length)return null;
+ const exact=heads.map(head=>({sourceId:head.source_id,sourceRevision:head.source_revision,contentHash:head.content_hash}));
+ const snapshot=await snapshotMailCopyAuthorityBatch(context,exact,{allowUnavailable:true,maxSources:100});
+ if(snapshot===null||!await lockIdentityContext(context,{firmIds:snapshot.firmIds,personIds:snapshot.personIds})||!await lockMailCopyAuthorityBatch(context,snapshot,{firmIds:snapshot.firmIds,personIds:snapshot.personIds,lockMode:'read'}))return null;
+ const contexts=(await context.db.query<MailContext>(`SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=ANY($2::uuid[]) AND ${mailContextPredicate()} ORDER BY cx.source_id,cx.id LIMIT 10001`,[context.scope.workspaceId,ids])).rows;
+ if(createHash('sha256').update(JSON.stringify(contexts)).digest('hex')!==snapshot.contextIdentity)return null;
+ for(const head of snapshot.heads)await auditExceptionalMailRead(context,{sourceId:head.source_id,sourceRevision:head.source_revision,contentHash:head.content_hash},head.owner_user_id,contexts.filter(value=>value.source_id===head.source_id));
+ const flags=(await context.db.query<{source_id:string;availability:string;body_available:boolean}>(`SELECT s.source_id,s.availability,COALESCE(b.body_text IS NOT NULL AND encode(sha256(convert_to(b.body_text,'UTF8')),'hex')=s.content_hash,false) AS body_available FROM crm_mail_sources s LEFT JOIN mail_message_bodies b ON b.workspace_id=s.workspace_id AND b.mail_message_id=s.source_id WHERE s.workspace_id=$1 AND s.source_id=ANY($2::uuid[]) ORDER BY s.source_id`,[context.scope.workspaceId,ids])).rows;
+ if(!await activeBusinessActor(context))return null;
+ return flags.map(flag=>({sourceId:flag.source_id,availability:flag.availability,bodyAvailable:flag.body_available}));
 }

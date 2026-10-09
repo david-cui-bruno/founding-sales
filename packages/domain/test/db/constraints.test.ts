@@ -1,4 +1,5 @@
 import { CRM_COMMITMENT_CONSTRAINT_CASES } from "./support/crmCommitmentCases.ts";
+import { CRM_BACKFILL_CONSTRAINT_CASES } from './support/crmBackfillCases.ts';
 import { CRM_EVIDENCE_CONSTRAINT_CASES } from "./support/crmEvidenceCases.ts";
 import {SELECTED_FILE_CONSTRAINT_CASES} from './support/selectedFileCases.ts';
 import {CRM_PROGRESS_CONSTRAINT_CASES} from './support/crmProgressCases.ts';
@@ -2140,6 +2141,7 @@ const cases: readonly Case[] = [
   ...SELECTED_FILE_CONSTRAINT_CASES,
   ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,
   ...MAIL_CAPTURE_CONSTRAINT_CASES,
+  ...CRM_BACKFILL_CONSTRAINT_CASES,
   ...CRM_EXTRACTION_CONSTRAINT_CASES,
   ...CRM_PROGRESS_CONSTRAINT_CASES,
   ...peopleConstraintCases,

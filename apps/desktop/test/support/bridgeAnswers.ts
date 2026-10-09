@@ -1,3 +1,4 @@
+import {mailImportHealth} from './mailImportFixture.ts';
 /**
  * Bodies every bridge accepts, for the checks that need a bridge to be *holding*
  * something (1.0.13).
@@ -296,6 +297,9 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
  '/crm/business/review/read':{available:false,reasons:['disclosure_required'],mailboxId:FIXTURE_IDS.firm,accountBinding:'a'.repeat(64),generation:1,policyRevision:0,captureAllowed:false,conversations:[],nextAfter:null},
  '/crm/business/review/decide':{status:'accepted',replayed:false,result:{decisionRevision:1,captureAllowed:false}},
  '/crm/business/mail/list':{sources:[],nextAfterId:null},
+ '/crm/business/mail/read/v2':{state:'unavailable',reason:'provenance_unavailable',source:null},
+ '/crm/business/mail/import/read':mailImportHealth(),
+ '/crm/business/mail/import/request':{status:'accepted',replayed:false,result:{importId:'11111111-1111-4111-8111-111111111111',status:'queued'}},
  '/crm/business/mail/read':{state:'unavailable',reason:'provenance_unavailable',source:null},
  '/crm/business/mail/state/read':{revision:1,availability:'available'},
  '/crm/business/mail/controls/read':{mailboxId:FIXTURE_IDS.firm,enabled:false,ready:false,reason:'activation_not_available',revision:0},
@@ -355,6 +359,7 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   },
   '/replies/card': replyCardBody,
   '/sequences/versions': sequenceVersionsBody,
+  '/ask/read':{operation:'records',selection:'none',records:[],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}},
   '/gmail/status': {
     connected: true,
     mailbox: {

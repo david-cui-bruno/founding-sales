@@ -1,5 +1,5 @@
 import { readCrmProcessing, requestCrmProcessing, readCrmExtractionPurpose, saveCrmExtractionPurpose, readCrmProcessingHealth,readCrmProcessingRecord } from '@fss/domain/crm/processing.ts';
-import { crmSourceLookupSchema, crmProcessingReadSchema, crmProcessingRequestSchema, crmExtractionPurposeSaveSchema, crmProcessingHealthReadSchema,crmProcessingRecordReadSchema } from '@fss/contracts';
+import { crmResolvedSourceSchema, crmSourceLookupSchema, crmProcessingReadSchema, crmProcessingRequestSchema, crmExtractionPurposeSaveSchema, crmProcessingHealthReadSchema,crmProcessingRecordReadSchema } from '@fss/contracts';
 import { resolveCrmSource } from '@fss/domain/crm/sourceResolver.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
@@ -41,5 +41,5 @@ export async function routeCrmProcessing(request: ApiRequest, options: RoutingOp
   const input = crmSourceLookupSchema.safeParse(request.body);
   if (!input.success) return { status: 400, body: redactError('malformed_body') };
   const resolved = await withTransaction(options.auth.db, () => resolveCrmSource(scoped.context, input.data,options.crmMailEvidence));
-  return resolved === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: resolved };
+  return resolved === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: crmResolvedSourceSchema.parse({state:resolved.state,source:resolved.source,extent:resolved.extent,passage:resolved.passage}) };
 }

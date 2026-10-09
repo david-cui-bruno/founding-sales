@@ -315,7 +315,7 @@ describe('the lanes and the line of counts', () => {
     ]);
   });
 
-  it('lists the six selling views with the key the menu gives each, and Settings on its own', () => {
+  it('lists the seven selling views with the key the menu gives each, and Settings on its own', () => {
     expect(NAV_ROWS.map(row => `${row.label} ${row.keys}`)).toEqual([
       'Today ⌘1',
       'Replies ⌘2',
@@ -323,8 +323,9 @@ describe('the lanes and the line of counts', () => {
       'Firms ⌘4',
       'Sequences ⌘5',
       'Social ⌘6',
+      'Ask ⌘7',
     ]);
-    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'pipeline', 'firms', 'sequences', 'social']);
+    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'pipeline', 'firms', 'sequences', 'social', 'ask']);
     // Administration and the Dashboard were rows five and six until 1.0.12. Settings is
     // not in the list: it sits at the foot of the sidebar, away from the day's work.
     expect(SETTINGS_ROW).toEqual({ label: 'Settings', route: 'settings', keys: '⌘,' });

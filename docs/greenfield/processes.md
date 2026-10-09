@@ -52,6 +52,7 @@ that talked to anything outside PostgreSQL would be a bug.
 | Source | What it materializes |
 |---|---|
 | `crm-mail-progress` | A bounded, body-free scan of retained mail copies creates exact-version `crm.mail_progress` jobs. The workspace cursor wraps to revisit changed dependencies; verified evidence projects milestones and immutable request completions without acquisition, model dispatch, sending or new permissions. Partial/unknown Gmail origin remains ineligible as send proof. |
+| `crm-mail-backfill` | Default disabled. At most 100 import scopes per pass receive a fair scan; exact current account, generation, controls, policy, configured allocation and progress identify one bounded continuation. Active jobs suppress duplicates and unchanged exhausted attempts stay blocked. The source only reads PostgreSQL; provider verification and conserved historical-read reservations belong to the worker. |
 | `crm-processing-recovery` | At most 100 interrupted calling receipts per pass become body-free `crm.extract` financial recovery jobs. They settle conservative unknown money and never repeat model dispatch; default disabled processing stays disabled. |
 | `social-drafts` | Explicit requests and default-off weekly social draft opt-ins under shared credit reservations; two attempts and 30-minute expiry. Expiry runs even when generation is disabled. No approval or scheduling. |
 | `social-assets-cleanup` | Expire unfinished image uploads and retry private object deletion; release quota only after deletion succeeds. |

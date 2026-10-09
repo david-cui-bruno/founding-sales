@@ -1,5 +1,6 @@
 import {crmCommitmentReviewPayloadSchema,crmCommitmentCompletePayloadSchema,crmCommitmentQueuedSchema,crmCommitmentCompletedSchema,crmCommitmentReviewStatusSchema,crmCommitmentReviewStatusResultSchema,crmCommitmentReadSchema,crmCommitmentPageSchema,crmCommitmentHistoryPageSchema} from '@fss/contracts';
 import {todayActionsV2ResponseSchema,todayActionOpenV2RequestSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
+import {askReadSchema,askResponseSchema} from '@fss/contracts';
 import {selectedAttachmentFileSchema,selectedAttachmentPreviewSchema,selectedAttachmentReadSchema,selectedAttachmentPageSchema,selectedAttachmentCommitPayloadSchema,selectedAttachmentCommitResultSchema,selectedAttachmentAnalyzePayloadSchema,selectedAttachmentAnalyzeResultSchema,selectedAttachmentReselectPayloadSchema,selectedAttachmentReselectResultSchema} from '@fss/contracts';
 import {crmProgressReadSchema,crmProgressResponseSchema} from '@fss/contracts';
 import { crmEvidenceWorkBindPayloadSchema, crmEvidenceWorkBoundSchema } from "@fss/contracts";
@@ -12,9 +13,10 @@ import { crmConflictListSchema, crmConflictListPageSchema } from "@fss/contracts
 import { crmDecisionHistoryReadSchema, crmDecisionHistoryPageSchema } from "@fss/contracts";
 import { crmDecisionHistoryListSchema, crmDecisionHistoryListPageSchema } from "@fss/contracts";
 import { crmEvidenceReadSchema, crmEvidencePageSchema, crmEvidenceDecidePayloadSchema, crmEvidenceDecidedSchema } from "@fss/contracts";
+import {crmMailImportReadSchema,crmMailImportAcknowledgmentSchema,crmMailImportHealthSchema} from "@fss/contracts";
 import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSchema,explicitOpportunityResultSchema} from '@fss/contracts';
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
-import {mailSourcesListSchema,mailSourceListSchema,mailSourceReadSchema,mailConversationSchema,mailSourceChangePayloadSchema,mailSourceChangedSchema,mailControlsReadSchema,mailCaptureControlsSchema,mailSourceStateReadSchema,mailSourceStateSchema,mailSourceRecaptureQueuedSchema,mailSourceAssociatePayloadSchema} from '@fss/contracts';
+import {mailSourcesListSchema,mailSourceListSchema,mailSourceReadSchema,mailConversationSchema,mailConversationV2Schema,mailSourceChangePayloadSchema,mailSourceChangedSchema,mailControlsReadSchema,mailCaptureControlsSchema,mailSourceStateReadSchema,mailSourceStateSchema,mailSourceRecaptureQueuedSchema,mailSourceAssociatePayloadSchema} from '@fss/contracts';
 import {businessPolicySchema,businessPolicyReadSchema,businessPolicySavePayloadSchema,businessReviewSchema,businessReviewReadSchema,businessReviewDecidePayloadSchema} from '@fss/contracts';
 import {crmSourceLookupSchema,crmResolvedSourceSchema,crmProcessingReadSchema,crmProcessingRequestSchema,crmProcessingResultSchema,crmExtractionPurposeSaveSchema,crmExtractionPurposeSchema,crmProcessingHealthReadSchema,crmProcessingHealthSchema,crmProcessingRecordReadSchema,crmProcessingRecordHealthSchema} from '@fss/contracts';
 import {endpointClaimPayloadSchema,endpointCorrectPayloadSchema} from '@fss/contracts';
@@ -1154,6 +1156,8 @@ export const OPERATIONS = {
   'crm.selectedImportDelete': {kind:'command',calls:[{method:'POST',path:'/crm/imports/delete'}],input:selectedImportChangePayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
   'crm.selectedImportRestore': {kind:'command',calls:[{method:'POST',path:'/crm/imports/restore'}],input:selectedImportChangePayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
   'crm.selectedImportRecapture': {kind:'command',calls:[{method:'POST',path:'/crm/imports/recapture'}],input:selectedImportCorrectPayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
+  'crm.businessMailImportHealth':{kind:'read',calls:[{method:'POST',path:'/crm/business/mail/import/read'}],input:crmMailImportReadSchema,output:crmMailImportHealthSchema,transform:'separate measured metadata, copy, gap and allocation coverage'},
+  'crm.businessMailImportRequest':{kind:'command',calls:[{method:'POST',path:'/crm/business/mail/import/request'}],input:crmMailImportReadSchema,output:crmMailImportAcknowledgmentSchema,transform:'queued bounded import identity without completion or provider grants'},
   'crm.businessPolicyRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/policy/read'}],input:businessPolicyReadSchema,output:businessPolicySchema,transform:'actual actor mailbox configuration; capture remains disabled'},
   'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
   'crm.businessReviewRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/review/read'}],input:businessReviewReadSchema,output:businessReviewSchema,transform:'bounded proven account metadata; no bodies'},
@@ -1176,6 +1180,7 @@ export const OPERATIONS = {
   'crm.evidenceRead':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/read'}],input:crmEvidenceReadSchema,output:crmEvidencePageSchema,transform:'bounded current and human-reviewed source evidence'},
   'crm.processingSource':{kind:'read',calls:[{method:'POST',path:'/crm/processing/source/read'}],input:crmSourceLookupSchema,output:crmResolvedSourceSchema,transform:'exact current source authority and bounded quote'},
   'crm.progressRead':{kind:'read',calls:[{method:'POST',path:'/crm/progress/read'}],input:crmProgressReadSchema,output:crmProgressResponseSchema,transform:'current verified evidence; imports do not send or change sales stages'},
+  'ask.read':{kind:'read',calls:[{method:'POST',path:'/ask/read'}],input:askReadSchema,output:askResponseSchema,transform:'exact current state and authorized lexical retrieval; no execution authority'},
   'crm.processingRead':{kind:'read',calls:[{method:'POST',path:'/crm/processing/read'}],input:crmProcessingReadSchema,output:crmProcessingResultSchema,transform:'versioned evidence and financial coverage'},
   'crm.processingRequest':{kind:'command',calls:[{method:'POST',path:'/crm/processing/request'}],input:crmProcessingRequestSchema.omit({commandId:true,clientVersion:true}),output:crmProcessingResultSchema,transform:'explicit processing request; no activation authority'},
   'crm.processingPurpose':{kind:'read',calls:[{method:'POST',path:'/crm/processing/purpose/read'}],input:z.strictObject({}),output:crmExtractionPurposeSchema,transform:'purpose-specific disabled configuration'},
@@ -1184,6 +1189,7 @@ export const OPERATIONS = {
   'crm.processingRecordHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/record/read'}],input:crmProcessingRecordReadSchema,output:crmProcessingRecordHealthSchema,transform:'bounded owner-private body-free native record status survives transcript deletion'},
   'crm.businessMailList': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/list'}],input:mailSourcesListSchema,output:mailSourceListSchema,transform:'bounded copied-email identity page with current source access'},
   'crm.businessMailRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read'}],input:mailSourceReadSchema,output:mailConversationSchema,transform:'exact permitted copied source revision and provenance'},
+  'crm.businessMailReadV2': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read/v2'}],input:mailSourceReadSchema,output:mailConversationV2Schema,transform:'exact permitted copied source revision and provenance'},
   'crm.businessMailDelete': {kind:'command',calls:[{method:'POST',path:'/crm/business/mail/delete'}],input:mailSourceChangePayloadSchema,output:mailSourceChangedSchema,transform:'explicit versioned copied-source deletion; main owns command envelope'},
   'crm.businessMailControls': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/controls/read'}],input:mailControlsReadSchema,output:mailCaptureControlsSchema,transform:'capture configuration and unavailable activation; no enable command'},
   'crm.businessMailState': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/state/read'}],input:mailSourceStateReadSchema,output:mailSourceStateSchema,transform:'current copy revision and availability without body content'},

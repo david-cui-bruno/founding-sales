@@ -2,6 +2,7 @@ import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import type {
   MailConversation,
+  MailConversationV2,
   MailSourceList,
   MailSourceRead,
 } from "@fss/contracts";
@@ -14,6 +15,8 @@ import type { z } from "zod";
 import { Button } from "../ui/button.tsx";
 import { Select } from "../ui/select.tsx";
 
+type TimelineConversation = Exclude<MailConversation,{state:"available"}> | {state:"available";source:NonNullable<MailConversation["source"]> & {originalObservation?:NonNullable<MailConversationV2["source"]>["originalObservation"]}};
+
 export interface EmailTimelineFilter {
   mailboxId?: string;
   personId?: string;
@@ -24,6 +27,7 @@ export interface EmailTimelinePorts {
     input: EmailTimelineFilter & { afterId?: string; limit: number },
   ): Promise<MailSourceList>;
   read(input: MailSourceRead): Promise<MailConversation>;
+  readV2?(input: MailSourceRead): Promise<MailConversationV2>;
   remove?(input: {
     sourceId: string;
     expectedRevision: number;
@@ -125,7 +129,7 @@ export function EmailTimeline({
   ]);
   const [displayScope, setDisplayScope] = useState(scope);
   const [page, setPage] = useState<MailSourceList | null>(null);
-  const [detail, setDetail] = useState<MailConversation | null>(null);
+  const [detail, setDetail] = useState<TimelineConversation | null>(null);
   const [error, setError] = useState("");
   const [mutating, setMutating] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -211,7 +215,7 @@ export function EmailTimeline({
     setReviewedPerson("");
     setReviewedFirm("");
     try {
-      const value = await ports.read({
+      const value = await (ports.readV2 ?? ports.read)({
         sourceId: source.sourceId,
         sourceRevision: source.sourceRevision,
         contentHash: source.contentHash,
@@ -561,6 +565,12 @@ export function EmailTimeline({
               : `Sender date (as supplied): ${source.rawSenderDate}`}
           </p>
           <p>Observed in Callie: {source.observedAt}</p>
+          {source.originalObservation && <section aria-label="Provider original observation">
+            <p>Last verified original status: {source.originalObservation.state.replaceAll("_", " ")}</p>
+            <p>Original last checked: {source.originalObservation.observedAt ?? "Unknown"}</p>
+            <p>Original connection: {source.originalObservation.connectionState}</p>
+            <p>This dated observation does not establish live original availability or delete the retained copy.</p>
+          </section>}
           <p>
             Observed participants: {source.participants.join(", ") || "Unknown"}
           </p>
