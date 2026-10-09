@@ -117,7 +117,18 @@ it('discovers actual copied sources for a selected firm without guessing associa
  render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
  fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));
  fireEvent.click(screen.getByRole('button',{name:'Copied sources'}));
- expect(await screen.findByText('Selected note · Version 3 · Date unknown')).toBeTruthy();
+ expect(await screen.findByText('Selected note · Version 3 · Date unknown · available')).toBeTruthy();
  expect(screen.getByText('Available copied sources for this record. Acquisition coverage is unverified.')).toBeTruthy();
  expect(read).toHaveBeenLastCalledWith({operation:'sources',scope:{firmId:one},limit:20});
+});
+
+it('searches only explicitly selected current copies with their exact versions',async()=>{
+ const source={workspaceId:two,sourceId:one,kind:'selected_note' as const,revision:3,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-09T11:00:00.000Z',completeness:'selected_excerpt' as const,availability:'available' as const};
+ const read=vi.fn<AskPorts['read']>(async input=>input.operation==='records'?{operation:'records',selection:'single',records:[{recordId:one,kind:'firm',name:'Orion',firmId:one}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:input.operation==='sources'?{operation:'sources',scope:{firmId:one},sources:[source],nextAfter:null,coverage:{scope:'record_copied_sources',acquisition:'unverified',semantic:'not_requested',scanComplete:true,candidateCeiling:50}}:{operation:'passages',scope:{sources:[{workspaceId:two,sourceId:one,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]},passages:[],nextAfterSourceId:null,truncated:false,coverage:{scope:'explicit_copied_sources',acquisition:'unverified',semantic:'not_requested',scanComplete:true,requestedSources:1,inspectedSources:1,unavailableSources:0,refusedSources:0,truncatedSources:0,inspectedWindows:1,textBytes:20,sourceByteCeiling:80000,textByteCeiling:800000,windowCeiling:1000,omittedSignatures:0,chunkerVersion:'lexical-original-v1'}});
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));fireEvent.click(screen.getByRole('button',{name:'Copied sources'}));
+ fireEvent.click(await screen.findByRole('checkbox',{name:'Include Selected note version 3'}));
+ fireEvent.change(screen.getByLabelText('Search selected copies'),{target:{value:'maintenance'}});fireEvent.click(screen.getByRole('button',{name:'Search selected copies'}));
+ await waitFor(()=>expect(read).toHaveBeenLastCalledWith({operation:'passages',scope:{sources:[{workspaceId:two,sourceId:one,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]},query:'maintenance',limit:20}));
+ expect(screen.getByText('Explicit selected copies only. Acquisition coverage is unverified.')).toBeTruthy();
 });
