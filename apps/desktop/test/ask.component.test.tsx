@@ -110,3 +110,14 @@ it('lets the user search the next bounded copied-source page',async()=>{
  fireEvent.click(await screen.findByRole('button',{name:'Next copied-source page'}));
  await waitFor(()=>expect(read).toHaveBeenLastCalledWith({operation:'passages',scope:{personId:one,afterSourceId:two},query:'maintenance',limit:20}));
 });
+
+it('discovers actual copied sources for a selected firm without guessing associations',async()=>{
+ const source={workspaceId:two,sourceId:one,kind:'selected_note' as const,revision:3,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-09T11:00:00.000Z',completeness:'selected_excerpt' as const,availability:'available' as const};
+ const read=vi.fn<AskPorts['read']>(async input=>input.operation==='records'?{operation:'records',selection:'single',records:[{recordId:one,kind:'firm',name:'Orion',firmId:one}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:{operation:'sources',scope:{firmId:one},sources:[source],nextAfter:null,coverage:{scope:'record_copied_sources',acquisition:'unverified',semantic:'not_requested',scanComplete:true,candidateCeiling:50}});
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));
+ fireEvent.click(screen.getByRole('button',{name:'Copied sources'}));
+ expect(await screen.findByText('Selected note · Version 3 · Date unknown')).toBeTruthy();
+ expect(screen.getByText('Available copied sources for this record. Acquisition coverage is unverified.')).toBeTruthy();
+ expect(read).toHaveBeenLastCalledWith({operation:'sources',scope:{firmId:one},limit:20});
+});
