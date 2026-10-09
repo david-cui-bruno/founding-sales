@@ -61,3 +61,58 @@ CREATE TABLE crm_ask_purposes (
 );
 GRANT SELECT,INSERT,UPDATE ON crm_ask_requests TO app_runtime,migration;
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_ask_purposes TO app_runtime,migration;
+CREATE TABLE crm_ask_request_windows (
+ workspace_id uuid NOT NULL,
+ request_id uuid NOT NULL,
+ id uuid NOT NULL DEFAULT gen_random_uuid(),
+ request_version integer NOT NULL CHECK(request_version>0),
+ request_epoch integer NOT NULL CHECK(request_epoch>0),
+ ordinal integer NOT NULL CHECK(ordinal BETWEEN 1 AND 1000),
+ source_kind text NOT NULL CHECK(source_kind IN ('selected_note','mail','call_transcript','meeting_transcript')),
+ source_id uuid NOT NULL,
+ source_revision integer NOT NULL CHECK(source_revision>0),
+ source_hash text NOT NULL CHECK(source_hash ~ '^[a-f0-9]{64}$'),
+ locator text NOT NULL CHECK(length(locator) BETWEEN 1 AND 200),
+ parser_version text NOT NULL DEFAULT 'canonical-original-v1' CHECK(length(parser_version) BETWEEN 1 AND 100),
+ chunker_version text NOT NULL DEFAULT 'lexical-original-v1' CHECK(length(chunker_version) BETWEEN 1 AND 100),
+ context_hash text NOT NULL CHECK(context_hash ~ '^[a-f0-9]{64}$'),
+ text_hash text NOT NULL CHECK(text_hash ~ '^[a-f0-9]{64}$'),
+ group_hash text NOT NULL CHECK(group_hash ~ '^[a-f0-9]{64}$'),
+ context_snapshot jsonb NOT NULL CHECK(crm_extraction_context_valid(context_snapshot)),
+ original_access_closure jsonb NOT NULL CHECK(crm_access_closure_valid(original_access_closure)),
+ PRIMARY KEY(workspace_id,id),
+ FOREIGN KEY(workspace_id,request_id) REFERENCES crm_ask_requests(workspace_id,id),
+ UNIQUE(workspace_id,request_id,request_version,request_epoch,ordinal)
+);
+GRANT SELECT,INSERT,DELETE ON crm_ask_request_windows TO app_runtime,migration;
+CREATE TABLE crm_ask_financial_receipts (
+ workspace_id uuid NOT NULL,
+ id uuid NOT NULL DEFAULT gen_random_uuid(),
+ request_id uuid NOT NULL,
+ request_version integer NOT NULL CHECK(request_version>0),
+ request_epoch integer NOT NULL CHECK(request_epoch>0),
+ stage text NOT NULL CHECK(stage IN ('answer','embedding_query','embedding_document','support')),
+ attempt integer NOT NULL CHECK(attempt BETWEEN 1 AND 3),
+ reservation_id uuid NOT NULL,
+ job_id uuid NOT NULL,
+ fencing_token bigint NOT NULL CHECK(fencing_token>0),
+ purpose_revision integer NOT NULL CHECK(purpose_revision>0),
+ purpose_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb CHECK(jsonb_typeof(purpose_snapshot)='object'),
+ config_fingerprint text NOT NULL CHECK(config_fingerprint ~ '^[a-f0-9]{64}$'),
+ evaluation_fingerprint text NOT NULL CHECK(evaluation_fingerprint ~ '^[a-f0-9]{64}$'),
+ authorization_fingerprint text NOT NULL CHECK(authorization_fingerprint ~ '^[a-f0-9]{64}$'),
+ input_hash text NOT NULL CHECK(input_hash ~ '^[a-f0-9]{64}$'),
+ input_price_micros integer NOT NULL CHECK(input_price_micros BETWEEN 1 AND 1000000),
+ output_price_micros integer NOT NULL CHECK(output_price_micros BETWEEN 1 AND 1000000),
+ max_input_tokens integer NOT NULL CHECK(max_input_tokens BETWEEN 1 AND 1000000),
+ max_output_tokens integer NOT NULL CHECK(max_output_tokens BETWEEN 1 AND 100000),
+ dispatch_state text NOT NULL CHECK(dispatch_state IN ('reserved','calling','unknown_acceptance','settled','released')),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(workspace_id,id),
+ FOREIGN KEY(workspace_id,request_id) REFERENCES crm_ask_requests(workspace_id,id),
+ FOREIGN KEY(workspace_id,reservation_id) REFERENCES provider_reservations(workspace_id,id),
+ FOREIGN KEY(workspace_id,job_id) REFERENCES jobs(workspace_id,id),
+ CONSTRAINT crm_ask_financial_attempt UNIQUE(workspace_id,request_id,request_version,request_epoch,stage,attempt),
+ CONSTRAINT crm_ask_financial_reservation UNIQUE(workspace_id,reservation_id)
+);
+GRANT SELECT,INSERT,UPDATE ON crm_ask_financial_receipts TO app_runtime,migration;
