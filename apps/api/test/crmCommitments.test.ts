@@ -9,6 +9,7 @@ import {
   createAuthFixture,
   CURRENT_CLIENT_VERSION,
 } from "./support/authFixture.ts";
+import { seedFirm, seedContact } from "./support/crmSeed.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 
 it("projects exactly one internal task from an explicit dated human promise review through the registered worker", async () => {
@@ -64,7 +65,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
         }[];
       }
     ).sources[0]!;
-    const source = {
+    let source = {
       workspaceId: selected.workspaceId,
       sourceId: selected.sourceId,
       kind: "selected_note" as const,
@@ -147,10 +148,18 @@ it("projects exactly one internal task from an explicit dated human promise revi
     expect(receipt.result).toMatchObject({revision:1,status:"queued"});
     const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
     await runOnce(fixture.db,{registry,owner:"commitment-projector",limit:20});
+    const projection=(await fixture.db.query<{receipt:unknown}>("SELECT to_jsonb(r)->'projection_receipt' AS receipt FROM crm_commitment_reviews r WHERE workspace_id=$1 AND id=$2",[source.workspaceId,receipt.result.commitmentId])).rows[0]!.receipt;
+    expect(projection).toMatchObject({reviewRevision:1,sourceKind:source.kind,sourceId:source.sourceId,sourceRevision:source.revision,sourceHash:source.contentHash,decisionRevision:0,contextHash:first.generation.contextHash,outcome:"applied",observedAt:expect.any(String),jobId:expect.any(String),fencingToken:expect.any(String)});
     const read=()=>post("/crm/commitments/read",{scope:{kind:"person",personId},limit:50});
     const visible=await read();expect(visible.status).toBe(200);
     expect(visible.body).toMatchObject({items:[{commitmentId:receipt.result.commitmentId,task:{status:"open"},actionLabel:"Prepare the repair summary",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago",expression:"by October 12"},quote:"I will prepare the repair summary by October 12.",source:{occurredAt:"2026-10-01T14:00:00.000Z"}}]});
     const originalTask=(visible.body as {items:{task:{taskId:string}}[]}).items[0]!.task.taskId;
+    const runtime=await fixture.database.appRuntimeSession();
+    await expect(runtime.query("UPDATE crm_commitment_reviews SET original_access_closure='{\"firmIds\":[],\"personIds\":[]}'::jsonb,revision=revision+1 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,receipt.result.commitmentId])).rejects.toMatchObject({code:"23514",constraint:"crm_commitment_review_guard"});
+    await expect(runtime.query("UPDATE crm_commitment_reviews SET state='suggestion' WHERE workspace_id=$1 AND id=$2",[source.workspaceId,receipt.result.commitmentId])).rejects.toMatchObject({code:"23514",constraint:"crm_commitment_review_guard"});
+    await expect(runtime.query("UPDATE crm_internal_tasks SET status='cancelled' WHERE workspace_id=$1 AND id=$2",[source.workspaceId,originalTask])).rejects.toMatchObject({code:"23514",constraint:"crm_internal_task_guard"});
+    await expect(runtime.query("DELETE FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2",[source.workspaceId,originalTask])).rejects.toMatchObject({code:"42501"});
+
     expect((await post("/crm/commitments/review",review)).status).toBe(200);
     await runOnce(fixture.db,{registry,owner:"commitment-projector-again",limit:20});
     expect((await read()).body).toMatchObject({items:[{task:{taskId:originalTask,status:"open"}}]});
@@ -162,6 +171,12 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const completedAt=(done.body as {result:{completedAt:string}}).result.completedAt;
     expect((await read()).body).toMatchObject({items:[{task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
     expect((await post("/crm/commitments/complete",complete)).body).toMatchObject({result:(done.body as {result:unknown}).result});
+    await expect(runtime.query("UPDATE crm_internal_tasks SET completed_at=clock_timestamp(),version=version+1 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,originalTask])).rejects.toMatchObject({code:"23514",constraint:"crm_internal_task_guard"});
+    const revised={...review,commandId:randomUUID(),expectedCommitmentRevision:1,actionLabel:"Prepare the same agreed summary"};
+    expect((await post("/crm/commitments/review",revised)).status).toBe(200);
+    await runOnce(fixture.db,{registry,owner:"commitment-projector-revised",limit:20});
+    expect((await read()).body).toMatchObject({items:[{revision:2,task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
+
     expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toEqual({items:[],nextAfterId:null});
     // Cycle3: changed interpretation cannot erase an already performed action.
     const correction=await post("/crm/evidence/decide",command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,action:"correct",correctedInterpretation:"This was tentative, not an agreed commitment"}));expect(correction.status).toBe(200);
@@ -172,6 +187,39 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const redacted=await post("/crm/commitments/read",{scope:{kind:"history"},limit:50});expect(redacted.status).toBe(200);
     expect(redacted.body).toMatchObject({items:[{taskId:originalTask,status:"done",version:2,completedAt}],nextAfterId:null});
     expect(JSON.stringify(redacted.body)).not.toContain("repair summary");
+    const scrubbed=(await runtime.query<Record<string,unknown>>("SELECT anchor_id,target,context_snapshot,original_access_closure,classification,actor,action_label,due,source_zone_receipt,projection_receipt FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2",[source.workspaceId,receipt.result.commitmentId])).rows[0]!;
+    expect(Object.values(scrubbed)).toEqual(Array(10).fill(null));
+    // Cycle7: terminal original-firm deletion previews and redacts current private proof.
+    const firmId=await seedFirm(fixture,{name:"Original promise authority",assignedUserId:fixture.alpha.admin.userId});
+    const bridgedId=await seedContact(fixture,{firmId,fullName:"Captured firm promise owner"});
+    expect((await post("/crm/people/bridge",command({contactIds:[bridgedId]}))).status).toBe(200);
+    expect((await post("/crm/people/source/add",command({personId:bridgedId,sourceKey:"firm-promise",excerpt:"I will prepare the repair summary by October 12.",occurredAt:"2026-10-01T14:00:00Z"}))).status).toBe(200);
+    const firmPage=await post("/crm/people/read",{personId:bridgedId});
+    const firmSource=(firmPage.body as {sources:typeof source[]}).sources[0]!;
+    source={workspaceId:firmSource.workspaceId,sourceId:firmSource.sourceId,kind:"selected_note",revision:firmSource.revision,contentHash:firmSource.contentHash,locator:null};
+    const second=await process("fixture-v2",1);
+    const secondReview=command({source,claimId:second.claim.claimId,claimRevision:1,claimHash:second.claim.claimHash,contextHash:second.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Prepare the firm summary",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago",expression:"by October 12"}});
+    const secondQueued=await post("/crm/commitments/review",secondReview);expect(secondQueued.status).toBe(200);
+    const secondId=(secondQueued.body as {result:{commitmentId:string}}).result.commitmentId;
+    await runOnce(fixture.db,{registry,owner:"firm-commitment-projector",limit:20});
+    const firmCommitments=await post("/crm/commitments/read",{scope:{kind:"person",personId:bridgedId},limit:50});expect(firmCommitments.status).toBe(200);
+    const secondTask=(firmCommitments.body as {items:{task:{taskId:string}}[]}).items[0]!.task.taskId;
+    expect((await post("/crm/commitments/complete",command({taskId:secondTask,expectedVersion:1}))).status).toBe(200);
+    // Controlled current-context drift: original A capture is retained while current source moves to B.
+    const movedFirmId=await seedFirm(fixture,{name:"Current promise context B",assignedUserId:fixture.alpha.admin.userId});
+    await fixture.db.query("UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,bridgedId,movedFirmId]);
+    expect((await runtime.query<{closure:{firmIds:string[]}}>("SELECT original_access_closure AS closure FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2",[source.workspaceId,secondId])).rows[0]!.closure.firmIds).toEqual([firmId]);
+    const deletionPreview=await post("/retention/deletions/preview",command({targetKind:"firm",firmId}));expect(deletionPreview.status).toBe(200);
+    const previewReceipt=(deletionPreview.body as {result:{requestId:string;previewHash:string;redacts:Record<string,number>}}).result;
+    expect(previewReceipt.redacts["crm_commitment_reviews"]).toBe(1);
+    const deleted=await post("/retention/deletions/commit",command({requestId:previewReceipt.requestId,previewHash:previewReceipt.previewHash}));expect(deleted.status).toBe(200);
+    expect(deleted.body).toMatchObject({result:{redacted:{crm_commitment_reviews:1}}});
+    const finalProof=(await runtime.query<Record<string,unknown>>("SELECT anchor_id,target,context_snapshot,original_access_closure,classification,actor,action_label,due,source_zone_receipt,projection_receipt FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2",[source.workspaceId,secondId])).rows[0]!;
+    expect(Object.values(finalProof)).toEqual(Array(10).fill(null));
+    const history=await post("/crm/commitments/read",{scope:{kind:"history"},limit:50});expect(history.status).toBe(200);
+    expect((history.body as {items:{taskId:string;status:string}[]}).items).toEqual(expect.arrayContaining([expect.objectContaining({taskId:originalTask,status:"done"}),expect.objectContaining({taskId:secondTask,status:"done"})]));
+
+
 
 
   }finally{await fixture.stop();}

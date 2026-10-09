@@ -8,7 +8,7 @@ import {activeIdentityActor} from './identityAccess.ts';
 import {lockConflictSources,readCrmEvidence,targetAnchor} from './evidenceDecisions.ts';
 import {createNativeCrmMailEvidence} from './nativeMailEvidence.ts';
 import type {CrmMailEvidencePort} from './mailEvidence.ts';
-interface Review extends Record<string,unknown>{id:string;owner_user_id:string;task_key:string;anchor_id:string|null;target:unknown;context_snapshot:unknown;original_access_closure:unknown;classification:CrmCommitmentReview['classification']|null;actor:CrmCommitmentReview['actor']|null;action_label:string|null;due:unknown;revision:number;projected_revision:number;state:'pending'|'applied'|'suggestion'|'review_required'|'redacted'}
+interface Review extends Record<string,unknown>{id:string;owner_user_id:string;task_key:string;anchor_id:string|null;target:unknown;context_snapshot:unknown;original_access_closure:unknown;classification:CrmCommitmentReview['classification']|null;actor:CrmCommitmentReview['actor']|null;action_label:string|null;due:unknown;revision:number;projected_revision:number;projection_version:number;state:'pending'|'applied'|'suggestion'|'review_required'|'redacted'}
 async function supported(context:RepositoryContext,target:ReturnType<typeof crmEvidenceClaimTargetSchema.parse>,mail:CrmMailEvidencePort){
  const page=await readCrmEvidence(context,{source:target.source,limit:50},mail);
  const claim=page===null?undefined:[...page.claims,...page.reviewedHistory].find(value=>value.claimId===target.claimId);
@@ -32,7 +32,7 @@ export async function reviewCrmCommitment(context:RepositoryContext,input:CrmCom
  await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'crm.commitments_project',idempotencyKey:`commitment:${row.id}:${row.revision}`,payload:{commitmentId:row.id,revision:row.revision},maxAttempts:3});
  return {ok:true as const,value:{commitmentId:row.id,revision:row.revision,status:'queued' as const}};
 }
-export async function projectCrmCommitment(context:RepositoryContext,input:{commitmentId:string;revision:number},fence:()=>Promise<boolean>,mail:CrmMailEvidencePort=createNativeCrmMailEvidence()){
+export async function projectCrmCommitment(context:RepositoryContext,input:{commitmentId:string;revision:number},fence:()=>Promise<boolean>,jobReceipt:{jobId:string;fencingToken:string},mail:CrmMailEvidencePort=createNativeCrmMailEvidence()){
  if(!await fence())return;
  const before=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.commitmentId])).rows[0];
  if(before===undefined||before.state==='redacted'||before.revision!==input.revision||before.projected_revision>=input.revision)return;
@@ -40,11 +40,14 @@ export async function projectCrmCommitment(context:RepositoryContext,input:{comm
  const support=await supported(context,target.data,mail);if(support===null)return;
  const anchor=await targetAnchor(context,target.data,mail);if(anchor===null||anchor.id!==before.anchor_id||!await conflictFree(context,anchor.id))return;
  const current=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.commitmentId])).rows[0];
- if(current===undefined||current.revision!==before.revision||JSON.stringify(current.target)!==JSON.stringify(before.target)||!await fence())return;
+ if(current===undefined||current.revision!==before.revision||current.projection_version!==before.projection_version||JSON.stringify(current.target)!==JSON.stringify(before.target)||!await fence())return;
  const dated=crmCommitmentDueSchema.parse(current.due);
  const actionable=current.classification==='internal_promise'&&current.actor!=='unknown'&&dated!==null;
  if(actionable)await context.db.query(`INSERT INTO crm_internal_tasks(workspace_id,owner_user_id,task_key,review_id) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id,task_key) DO NOTHING`,[context.scope.workspaceId,current.owner_user_id,current.task_key,current.id]);
- await context.db.query("UPDATE crm_commitment_reviews SET state=$4,projected_revision=$3 WHERE workspace_id=$1 AND id=$2 AND revision=$3 AND state<>'redacted'",[context.scope.workspaceId,current.id,current.revision,actionable?'applied':'suggestion']);
+ const outcome=actionable?'applied':'suggestion';
+ const observed=(await context.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.toISOString();
+ const receipt={reviewRevision:current.revision,sourceKind:target.data.source.kind,sourceId:target.data.source.sourceId,sourceRevision:target.data.source.revision,sourceHash:target.data.source.contentHash,anchorId:anchor.id,decisionRevision:target.data.expectedDecisionRevision,contextHash:target.data.contextHash,outcome,observedAt:observed,...jobReceipt};
+ await context.db.query("UPDATE crm_commitment_reviews SET state=$4,projected_revision=$3,projection_version=projection_version+1,projection_receipt=$6::jsonb WHERE workspace_id=$1 AND id=$2 AND revision=$3 AND projection_version=$5 AND state<>'redacted'",[context.scope.workspaceId,current.id,current.revision,outcome,current.projection_version,JSON.stringify(receipt)]);
 }
 export async function readCrmCommitments(context:RepositoryContext,input:CrmCommitmentRead,mail:CrmMailEvidencePort=createNativeCrmMailEvidence()){
  const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return null;

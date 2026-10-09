@@ -329,7 +329,7 @@ async function identityDeletionClosure(
       ARRAY(SELECT id::text FROM progress_selected ORDER BY id) AS "progressReceipts",
       ARRAY(SELECT id::text FROM human_anchors ORDER BY id) AS "humanAnchors",
       ARRAY(SELECT concat(id::text,':',source_revision,':',source_hash,':',context_hash,':',original_access_closure::text,':',current_decision_revision,':',availability) FROM human_anchors ORDER BY id) ||
-       ARRAY(SELECT concat(id::text,':',current_revision) FROM crm_claim_conflicts WHERE workspace_id=$1 AND id IN(SELECT conflict_id FROM human_groups) ORDER BY id) AS "humanVersions"`,
+       ARRAY(SELECT concat(id::text,':',current_revision) FROM crm_claim_conflicts WHERE workspace_id=$1 AND id IN(SELECT conflict_id FROM human_groups) ORDER BY id) || ARRAY(SELECT concat(id::text,':',revision,':',projection_version,':',state) FROM crm_commitment_reviews WHERE workspace_id=$1 AND anchor_id IN(SELECT id FROM human_anchors) ORDER BY id) AS "humanVersions"`,
       [context.scope.workspaceId, scope.contactId, scope.firmId],
     )
   ).rows[0];
@@ -635,6 +635,7 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    crm_commitment_reviews: await countOf(context,`SELECT count(*) AS count FROM crm_commitment_reviews WHERE workspace_id=$1 AND anchor_id IN (${CRM_HUMAN_ANCHOR_IDS}) AND state<>'redacted'`,byContact),
     crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE} AND (request_provider_at IS NOT NULL OR sent_receipt_id IS NOT NULL)`,byContact),
     crm_selected_file_receipts: await countOf(context,`SELECT count(*) AS count FROM crm_selected_file_receipts f WHERE f.workspace_id=$1 AND f.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (f.file_name IS NOT NULL OR f.file_hash IS NOT NULL OR f.source_content_hash IS NOT NULL OR f.byte_length IS NOT NULL OR f.format IS NOT NULL OR f.origin IS NOT NULL OR f.parser_version IS NOT NULL)`,byContact),
     crm_claim_review_anchors: await countOf(
@@ -792,6 +793,8 @@ async function measure(
   };
 
   const retains: Record<string, number> = {
+    crm_commitment_reviews: await countOf(context,`SELECT count(*) AS count FROM crm_commitment_reviews WHERE workspace_id=$1 AND anchor_id IN (${CRM_HUMAN_ANCHOR_IDS})`,byContact),
+    crm_internal_tasks: await countOf(context,`SELECT count(*) AS count FROM crm_internal_tasks t JOIN crm_commitment_reviews r ON r.workspace_id=t.workspace_id AND r.id=t.review_id WHERE r.workspace_id=$1 AND r.anchor_id IN (${CRM_HUMAN_ANCHOR_IDS})`,byContact),
     crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE}`,byContact),
     crm_claim_review_anchors: await countOf(
       context,
@@ -1251,6 +1254,7 @@ export async function commitDeletion(
       byContact,
     )
   ).rows.map((value) => value.id);
+  redacted["crm_commitment_reviews"] = await countOf(context,"SELECT count(*) AS count FROM crm_commitment_reviews WHERE workspace_id=$1 AND anchor_id=ANY($2::uuid[]) AND state<>'redacted'",[workspace,affectedAnchorIds]);
   redacted["crm_claim_review_anchors"] =
     (
       await context.db.query(
