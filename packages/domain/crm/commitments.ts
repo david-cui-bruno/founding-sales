@@ -4,7 +4,8 @@ import {crmEvidenceClaimTargetSchema,crmCommitmentDueSchema} from '@fss/contract
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
 import {recordCrmAuditEvent} from './audit.ts';
-import {activeIdentityActor} from './identityAccess.ts';
+import {activeIdentityActor,sourceContextPredicate} from './identityAccess.ts';
+import {mailContextPredicate} from '../mail/crmSources.ts';
 import {lockConflictSources,readCrmEvidence,targetAnchor} from './evidenceDecisions.ts';
 import {createNativeCrmMailEvidence} from './nativeMailEvidence.ts';
 import {readProcessingContext,processingContextHash} from './processingContext.ts';
@@ -146,6 +147,12 @@ const todayKnownFirmAccess=`NOT EXISTS(SELECT 1 FROM (
  UNION SELECT jsonb_array_elements_text(COALESCE(t.activation_receipt->'originalAccessClosure'->'firmIds','[]'::jsonb)) FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key
  UNION SELECT cx->>'firmId' FROM crm_internal_tasks t CROSS JOIN LATERAL jsonb_array_elements(COALESCE(t.activation_receipt->'initialContextSnapshot'->'mailContexts','[]'::jsonb)) cx WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND cx->>'firmId' IS NOT NULL
  UNION SELECT cx->>'firmId' FROM crm_internal_tasks t CROSS JOIN LATERAL jsonb_array_elements(COALESCE(t.activation_receipt->'contextSnapshot'->'mailContexts','[]'::jsonb)) cx WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND cx->>'firmId' IS NOT NULL
+ UNION SELECT s.firm_id::text FROM crm_selected_sources s WHERE r.target->'source'->>'kind'='selected_note' AND s.workspace_id=r.workspace_id AND s.id=(r.target->'source'->>'sourceId')::uuid AND s.firm_id IS NOT NULL
+ UNION SELECT cx.firm_id::text FROM crm_selected_sources s JOIN crm_source_relationship_contexts cx ON ${sourceContextPredicate()} WHERE r.target->'source'->>'kind'='selected_note' AND s.workspace_id=r.workspace_id AND s.id=(r.target->'source'->>'sourceId')::uuid
+ UNION SELECT c.firm_id::text FROM crm_selected_sources s JOIN crm_legacy_contact_people b ON b.workspace_id=s.workspace_id AND b.person_id=s.person_id JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id WHERE r.target->'source'->>'kind'='selected_note' AND s.workspace_id=r.workspace_id AND s.id=(r.target->'source'->>'sourceId')::uuid AND s.firm_id IS NULL AND NOT EXISTS(SELECT 1 FROM crm_source_relationship_contexts cx WHERE ${sourceContextPredicate()})
+ UNION SELECT s.firm_id::text FROM call_sessions s WHERE r.target->'source'->>'kind'='call_transcript' AND s.workspace_id=r.workspace_id AND s.id=(r.target->'source'->>'sourceId')::uuid
+ UNION SELECT m.firm_id::text FROM meeting_transcripts t JOIN meeting_recordings mr ON mr.workspace_id=t.workspace_id AND mr.id=t.recording_id JOIN meetings m ON m.workspace_id=mr.workspace_id AND m.id=mr.meeting_id WHERE r.target->'source'->>'kind'='meeting_transcript' AND t.workspace_id=r.workspace_id AND t.id=(r.target->'source'->>'sourceId')::uuid
+ UNION SELECT cx.firm_id::text FROM crm_mail_sources s JOIN crm_mail_source_contexts cx ON cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id AND ${mailContextPredicate()} WHERE r.target->'source'->>'kind'='mail' AND s.workspace_id=r.workspace_id AND s.source_id=(r.target->'source'->>'sourceId')::uuid AND cx.firm_id IS NOT NULL
 ) required JOIN firms f ON f.workspace_id=r.workspace_id AND f.id=required.id::uuid WHERE f.assigned_user_id IS DISTINCT FROM $2::uuid)`;
 export async function readCrmCommitments(context:RepositoryContext,input:CrmCommitmentRead,mail:CrmMailEvidencePort=createNativeCrmMailEvidence()){
  const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return null;
