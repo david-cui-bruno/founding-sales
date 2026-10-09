@@ -16,7 +16,7 @@ export async function readBackfillAllocation(context:RepositoryContext,mailboxId
 }
 function fingerprint(row:BackfillAllocation){return createHash('sha256').update(JSON.stringify(row)).digest('hex');}
 /** Call only outside a caller-owned transaction: arbitrary receipt verification precedes short reservation locks. */
-export async function reserveBackfillRead(context:RepositoryContext,input:{importId:string;mailboxId:string;ownerUserId:string;accountBinding:string;generation:number;method:BackfillReadMethod;expectedProof:MailCaptureProof;jobId:string;leaseOwner:string;fencingToken:string},verifier:BackfillAllocationVerifier){
+export async function reserveBackfillRead(context:RepositoryContext,input:{importId:string;mailboxId:string;ownerUserId:string;accountBinding:string;generation:number;method:BackfillReadMethod;expectedProof:MailCaptureProof;expectedCausal?:{messageId:string;conversationId:string;decisionRevision:number};jobId:string;leaseOwner:string;fencingToken:string},verifier:BackfillAllocationVerifier){
  const before=await readBackfillAllocation(context,input.mailboxId);
  if(before===null||before.owner_user_id!==input.ownerUserId||before.account_binding!==input.accountBinding||before.generation!==input.generation||!await verifier.verify(before))return null;
  return withTransaction(context.db,async()=>{
@@ -29,6 +29,13 @@ export async function reserveBackfillRead(context:RepositoryContext,input:{impor
   if(current===undefined||fingerprint(current)!==fingerprint(before))return null;
   const imported=await context.db.query('SELECT id FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2 AND mailbox_id=$3 AND owner_user_id=$4 AND account_binding=$5 AND generation=$6',[context.scope.workspaceId,input.importId,input.mailboxId,input.ownerUserId,input.accountBinding,input.generation]);
   if(!imported.rows.length)return null;
+  if(input.expectedCausal){
+   const causal=input.expectedCausal;
+   const messageHash=createHash('sha256').update(JSON.stringify({accountBinding:input.accountBinding,providerMessageId:causal.messageId})).digest('hex');
+   const permitted=await context.db.query(`SELECT x.id FROM crm_mail_import_messages x JOIN crm_business_conversations c ON c.workspace_id=x.workspace_id AND c.mailbox_id=$3 AND c.owner_user_id=$4 AND c.account_binding=$5 AND c.provider_thread_id=x.provider_thread_id
+    WHERE x.workspace_id=$1 AND x.import_id=$2 AND x.message_hash=$6 AND x.provider_message_id=$7 AND x.state='available' AND c.id=$8 AND c.metadata_availability='available' AND c.decision_revision=$9 AND (c.human_decision='include' OR (c.human_decision IS NULL AND c.category='business')) FOR SHARE OF x,c`,[context.scope.workspaceId,input.importId,input.mailboxId,input.ownerUserId,input.accountBinding,messageHash,causal.messageId,causal.conversationId,causal.decisionRevision]);
+   if(permitted.rows.length!==1)return null;
+  }
   for(const key of [`crm-mail-project:${current.project_hash}`,`crm-mail-user:${current.user_hash}`].sort())await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[key]);
   const sums=(await context.db.query<{project:string;user:string}>(`SELECT COALESCE(sum(units) FILTER(WHERE project_hash=$1),0)::text AS project,COALESCE(sum(units) FILTER(WHERE user_hash=$2),0)::text AS "user" FROM crm_mail_import_read_reservations WHERE reserved_at>clock_timestamp()-interval '60 seconds' AND (project_hash=$1 OR user_hash=$2)`,[current.project_hash,current.user_hash])).rows[0]!;
   if(leased.rows[0]?.['kind']==='crm.mail_backfill'){

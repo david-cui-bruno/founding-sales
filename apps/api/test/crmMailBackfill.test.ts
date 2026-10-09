@@ -1,8 +1,9 @@
+import {createHistoricalGmailMailCaptureProvider} from '@fss/domain/mail/crmBackfillCapture.ts';
 import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
 import { createApprovedBusinessMailObserver } from '@fss/domain/mail/crmSources.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import {seedFirm,seedContact} from './support/crmSeed.ts';
-import { randomUUID } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { claimJobs } from '@fss/domain/jobs/jobStore.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
@@ -253,5 +254,59 @@ it('uses bounded real runner retries and never rematerializes exhausted unchange
   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
   expect(listAttempts).toBe(4);
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({quotaAccounting:{reservedUnits:'5',observedUnits:'1',unknownUnits:'4'}});
+ }finally{await fixture.stop();}
+});
+
+it.each(['copy','body_quota','changed_generation','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
+ const fixture=await createAuthFixture();
+ try{
+  const {workspaceId,admin}=fixture.alpha;
+  const token=(await issueSessionFor(fixture,fixture.alpha,admin)).accessToken;
+  const mailbox=(await fixture.db.query<{id:string;owner_user_id:string;email_address:string;provider_account_id:string;generation:number;status:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'business@example.test','google-business','connected') RETURNING *",[workspaceId,admin.userId])).rows[0]!;
+  const binding=businessAccountBinding(workspaceId,mailbox)!;
+  await fixture.db.query("INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled) VALUES($1,$2,$3,'google-business',$4,1,1,true)",[workspaceId,mailbox.id,admin.userId,binding]);
+  await fixture.db.query("INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'google-business',$4,1,1,true,1,'fixture',repeat('b',64),'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')",[workspaceId,mailbox.id,admin.userId,binding]);
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,suppressionJournal:recordingSuppressionJournal()});
+  await fixture.db.query('UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id,METADATA_REVIEW_DISCLOSURE.version,METADATA_REVIEW_DISCLOSURE.sha256]);
+  expect((await post('/crm/business/mail/import/request',{commandId:randomUUID(),clientVersion:'1.4.0',mailboxId:mailbox.id})).status).toBe(200);
+  await fixture.db.query("INSERT INTO crm_mail_import_allocations(workspace_id,mailbox_id,revision,owner_user_id,account_binding,generation,project_hash,user_hash,user_limit_units,project_limit_units,user_headroom_units,project_headroom_units,profile_units,list_units,history_units,metadata_units,body_units,verification_sha256,verified_until) VALUES($1,$2,1,$3,$4,1,repeat('c',64),repeat('d',64),1000,1000,100,100,1,1,1,1,1,repeat('e',64),clock_timestamp()+interval '1 hour')",[workspaceId,mailbox.id,admin.userId,binding]);
+  if(scenario==='body_quota')await fixture.db.query('UPDATE crm_mail_import_allocations SET user_limit_units=4,user_headroom_units=0 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
+  const gmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'100',messages:[{id:'historical-business',threadId:'historical-business-thread',historyId:'50',internalDateEpochMilliseconds:Date.now()-89.5*86400000,headers:{From:'person@example.test',To:'business@example.test',Subject:'Historical business'},body:'Permitted historical business text'}]});
+  const access={resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true}};
+  const captureGmail={...gmail,getMetadata:async(...args:Parameters<typeof gmail.getMetadata>)=>{
+   const metadata=await gmail.getMetadata(...args);
+   if(scenario==='changed_generation')await fixture.db.query('UPDATE mailboxes SET generation=2 WHERE workspace_id=$1 AND id=$2',[workspaceId,mailbox.id]);
+   if(scenario==='excluded_after_metadata'){
+    const review=(await post('/crm/business/review/read',{mailboxId:mailbox.id})).body as {conversations:{conversationId:string;metadataRevision:number;decisionRevision:number}[]};
+    const conversation=review.conversations[0]!;
+    expect((await post('/crm/business/review/decide',{commandId:randomUUID(),clientVersion:'1.4.0',mailboxId:mailbox.id,conversationId:conversation.conversationId,expectedGeneration:1,expectedAccountBinding:binding,expectedPolicyRevision:1,expectedMetadataRevision:conversation.metadataRevision,expectedDecisionRevision:conversation.decisionRevision,decision:'exclude'})).body).toMatchObject({status:'accepted'});
+   }
+   return metadata;
+  }};
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,
+   crmMailBackfill:{...access,gmail,observer:createApprovedBusinessMailObserver({categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'fixture-metadata-v1'})})},
+   crmMailCapture:{proofVerifier:access.proofVerifier,provider:{read:async()=>{throw new Error('unmetered live provider must not be called');}},historicalProvider:createHistoricalGmailMailCaptureProvider({...access,gmail:captureGmail})},
+  });
+  const runtime=await fixture.database.appRuntimeSession();
+  const backfill=(await claimJobs(runtime,{owner:'historical-copy-import',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:backfill})).toBe('completed');
+  expect(gmail.bodyReads).toEqual([]);
+  const capture=(await claimJobs(runtime,{owner:'historical-copy-capture',kinds:['crm.mail_capture'],limit:1,leaseSeconds:120}))[0]!;
+  expect(capture.payload).toMatchObject({acquisitionOrigin:{importId:expect.any(String)}});
+  if(scenario!=='copy'){
+   expect(await runClaimedJob(runtime,{registry,job:capture,backoff:{baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0}})).toBe('retryable');
+   expect(gmail.bodyReads).toEqual([]);
+   expect(gmail.metadataReads).toEqual(['historical-business','historical-business']);
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({quotaAccounting:{reservedUnits:'4',observedUnits:'4',unknownUnits:'0'}});
+   return;
+  }
+  const copied=await registry.get('crm.mail_capture')!.handle({session:runtime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:capture});
+  expect(copied).toMatchObject({progress:{outcome:'captured',sourceRevision:1}});
+  expect((await post('/crm/business/mail/read',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{passage:'Permitted historical business text',completeness:'partial',ownerUserId:admin.userId,mailboxId:mailbox.id,accountBinding:binding}});
+  expect(await runClaimedJob(runtime,{registry,job:capture})).toBe('completed');
+  expect(gmail.bodyReads).toEqual(['historical-business']);
+  expect(gmail.metadataReads).toEqual(['historical-business','historical-business']);
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({quotaAccounting:{reservedUnits:'5',observedUnits:'5',unknownUnits:'0'}});
+  expect(gmail.sends).toEqual([]);
  }finally{await fixture.stop();}
 });

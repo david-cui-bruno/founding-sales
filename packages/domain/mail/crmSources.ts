@@ -88,6 +88,14 @@ export interface MailCaptureProvider {
     generation: number;
   }): Promise<CapturedMailMessage>;
 }
+/** Separately composed historical provider; every actual metadata/body call is reserved. */
+export interface HistoricalMailCaptureProvider {
+  read(input: Parameters<MailCaptureProvider['read']>[0] & {
+    importId: string; conversationId: string; decisionRevision: number;
+    expectedProof: MailCaptureProof; context: RepositoryContext;
+    jobId: string; leaseOwner: string; fencingToken: string;
+  }): Promise<CapturedMailMessage>;
+}
 const payloadSchema = z
   .object({
     mailboxId: z.string().uuid(),
@@ -289,6 +297,7 @@ async function validExplicitMailRecapture(
 export function businessMailCaptureHandler(deps: {
   provider: MailCaptureProvider;
   proofVerifier?: MailCaptureProofVerifier;
+  historicalProvider?: HistoricalMailCaptureProvider;
 }): JobHandler {
   return {
     kind: 'crm.mail_capture',
@@ -302,7 +311,7 @@ export function businessMailCaptureHandler(deps: {
       if (!parsed.success) return done('invalid_capture_payload');
       const payload = parsed.data;
       // Historical reads require the separately reserved import adapter; never fall through to live reads.
-      if(payload.acquisitionOrigin)return done('historical_read_meter_required');
+      if(payload.acquisitionOrigin&&!deps.historicalProvider)return done('historical_read_meter_required');
       const staged = await withTransaction(input.session, async () => {
         const original = await lockOriginalMailContexts(input, payload);
         if (!original) return null;
@@ -400,12 +409,16 @@ export function businessMailCaptureHandler(deps: {
         );
       if (!(await deps.proofVerifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
-      const message = providerMessageSchema.safeParse(
-        await deps.provider.read({
+      const providerInput={
           mailboxId: payload.mailboxId,
           providerMessageId: payload.providerMessageId,
           providerAccountId: payload.providerAccountId,
           generation: payload.generation,
+      };
+      const message = providerMessageSchema.safeParse(
+        payload.acquisitionOrigin===undefined?await deps.provider.read(providerInput):await deps.historicalProvider!.read({...providerInput,
+          importId:payload.acquisitionOrigin.importId,conversationId:payload.conversationId,decisionRevision:payload.decisionRevision,
+          expectedProof:staged.authority.proof,context:repositoryContext(input.scope,input.session),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken,
         }),
       );
       if (!message.success) return done('provider_evidence_invalid');
