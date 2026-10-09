@@ -1787,6 +1787,16 @@ export async function snapshotMailProcessingAuthority(
 ) {
   return prepareMailProcessingSnapshot(context, exact, purposeOwner, false);
 }
+/** Nonlocking, body-free exact context hint. Never processing authorization. */
+export async function snapshotMailProcessingSourceContexts(context:RepositoryContext,exact:ExactMailSource,purposeOwner:string){
+ const before=await snapshotMailProcessingAuthority(context,exact,purposeOwner);
+ if(!before.ok)return before;
+ const rows=(await context.db.query<MailContext>(`SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=$2 AND s.source_revision=$3 AND s.content_hash=$4 AND ${mailContextPredicate()} ORDER BY cx.id LIMIT 101`,[context.scope.workspaceId,exact.sourceId,exact.sourceRevision,exact.contentHash])).rows;
+ if(rows.length>100)return {ok:false as const,reason:'context_limit'};
+ const after=await snapshotMailProcessingAuthority(context,exact,purposeOwner);
+ if(!after.ok||after.authority.authorizationFingerprint!==before.authority.authorizationFingerprint)return {ok:false as const,reason:'source_changed'};
+ return {ok:true as const,authority:after.authority,contexts:rows.map(cx=>({...contextDto(cx),contextKind:cx.context_kind}))};
+}
 async function prepareMailProcessingSnapshot(
   context: RepositoryContext,
   exact: ExactMailSource,

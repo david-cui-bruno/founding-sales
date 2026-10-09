@@ -1,3 +1,8 @@
+import {activeIdentityActor} from '@fss/domain/crm/identityAccess.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {nativeProcessingReference} from '@fss/domain/crm/sourceResolver.ts';
+import {createHash} from 'node:crypto';
+import {callTranscriptUtteranceSchema} from '@fss/contracts';
 import {
   CALL_HISTORY_INCLUDE_NOTES,
   CALL_HISTORY_INCLUDE_OUTCOME,
@@ -190,9 +195,15 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
   if (request.path === '/calls/transcript') {
     const callSessionId = idOf('callSessionId');
     if (callSessionId === null) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
-    const transcript = await readCallTranscript(scoped.context, callSessionId);
-    if (transcript === null) return notFound;
-    return { status: 200, body: callTranscriptResponseSchema.parse(transcript) };
+    const read=async()=>{
+      // Include-processing keeps the normal authority/source closure across display.
+      const reference=request.query.getAll('include').includes('processing')?await nativeProcessingReference(scoped.context,'call_transcript',callSessionId):null;
+      if(request.query.getAll('include').includes('processing')&&reference===null)return notFound;
+      const transcript=await readCallTranscript(scoped.context,callSessionId);if(transcript===null)return notFound;
+      if(reference!==null){const parsed=callTranscriptUtteranceSchema.array().safeParse(transcript.utterances);if(!parsed.success||reference.contentHash!==createHash('sha256').update(JSON.stringify(parsed.data)).digest('hex'))return notFound;transcript.processingSource=reference;if(!await activeIdentityActor(scoped.context))return notFound;}
+      return {status:200,body:callTranscriptResponseSchema.parse(transcript)};
+    };
+    return request.query.getAll('include').includes('processing')?await withTransaction(deps.auth.db,read):await read();
   }
 
   if (request.path === '/calls/cadence/resume') {

@@ -1,3 +1,5 @@
+import {activeIdentityActor} from '@fss/domain/crm/identityAccess.ts';
+import {nativeProcessingReference} from '@fss/domain/crm/sourceResolver.ts';
 import { randomUUID } from 'node:crypto';
 import { authorizeRecordingRecovery, completeRecordingRecovery, listRecordingRecoveries } from '@fss/domain/meetings/recordingRecovery.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
@@ -28,8 +30,27 @@ export async function routeMeetingTranscription(request: ApiRequest, options: Ro
     if (!meetingId.success || (cursor?.length ?? 0) > 500)
         return { status: 400, body: { error: 'invalid_input' } };
     try {
-        const value = await readMeetingTranscript(scoped.context, { meetingId: meetingId.data, ...(cursor === undefined ? {} : { cursor }) });
-        return value === null ? { status: 404, body: { error: 'not_found' } } : { status: 200, body: value };
+        const read=()=>readMeetingTranscript(scoped.context,{meetingId:meetingId.data,...(cursor===undefined?{}:{cursor})});
+        if(!request.query?.getAll('include').includes('processing')){const value=await read();return value===null?{status:404,body:{error:'not_found'}}:{status:200,body:value};}
+        return await withTransaction(options.auth.db,async()=>{
+            const preflight=await read();if(preflight===null)return {status:404,body:{error:'not_found'}};
+            const ids=(value:typeof preflight)=>[...new Set([...value.recordings.flatMap(row=>row.transcriptId===null?[]:[row.transcriptId]),...value.utterances.map(row=>row.transcriptId)])].sort();
+            const sourceIds=ids(preflight),processingSources=[];
+            // Resolver authority/source locks are retained until the final displayed read.
+            for(const sourceId of sourceIds.slice(0,200)){
+                const reference=await nativeProcessingReference(scoped.context,'meeting_transcript',sourceId);
+                if(reference===null)return {status:404,body:{error:'not_found'}};
+                processingSources.push(reference);
+            }
+            const value=await read();if(value===null||JSON.stringify(ids(value))!==JSON.stringify(sourceIds))return {status:404,body:{error:'not_found'}};
+            for(const reference of processingSources){
+                const expected=value.recordings.find(row=>row.transcriptId===reference.sourceId)?.transcriptVersion??value.utterances.find(row=>row.transcriptId===reference.sourceId)?.transcriptVersion;
+                if(reference.revision!==expected)return {status:404,body:{error:'not_found'}};
+            }
+            if(!await activeIdentityActor(scoped.context))return {status:404,body:{error:'not_found'}};
+            value.processingSources=processingSources;value.processingSourcesTruncated=sourceIds.length>200||value.recordingsTruncated;
+            return {status:200,body:value};
+        });
     }
     catch (error) {
         if (error instanceof MeetingTranscriptChangedError)

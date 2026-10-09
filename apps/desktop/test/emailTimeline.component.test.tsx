@@ -718,6 +718,8 @@ it("wires the authenticated email timeline onto the actual firm page", async () 
       expect(input).toEqual({ firmId: FIRM_ID, limit: 50 });
       return list();
     }
+    if (name === "crm.processingHealth") return {sourceId:SOURCE,sourceRevision:1,availability:'available',unknownAcceptance:false,truncated:false,generations:[]};
+    if (name === "crm.processingRequest") {expect(input).toEqual({source:{workspaceId:PERSON,sourceId:SOURCE,kind:'mail',revision:1,contentHash:HASH,locator:null}});return {};}
     if (name === "crm.businessMailRead") return conversation();
     if (name === "crm.businessMailControls")
       return {
@@ -754,6 +756,7 @@ it("wires the authenticated email timeline onto the actual firm page", async () 
     <QueryClientProvider client={client}>
       <DraftsProvider>
         <FirmsRoute
+          workspaceId={PERSON}
           route={{ name: "firm", firmId: FIRM_ID }}
           identity="owner"
           generation={0}
@@ -764,6 +767,7 @@ it("wires the authenticated email timeline onto the actual firm page", async () 
   );
   await user.click(await screen.findByRole("button", { name: "Open email 1" }));
   expect(await screen.findByText("Retained email text.")).toBeTruthy();
+  await user.click(await screen.findByRole("button",{name:"Request extraction"}));
 });
 for (const change of [
   "authentication",
@@ -904,4 +908,17 @@ it("binds supplied quoted and forwarded attribution to their exact text while ke
   expect(within(blocks[2]!).getByText(forwarded.trim())).toBeTruthy();
   expect(within(blocks[3]!).getByText("Text attribution unknown")).toBeTruthy();
   expect(within(blocks[3]!).getByText(unknown)).toBeTruthy();
+});
+
+it('binds copied email processing to the explicit workspace and clears health on an account switch',async()=>{
+ const user=userEvent.setup();const requests:unknown[]=[];
+ const health={sourceId:SOURCE,sourceRevision:1,availability:'available' as const,unknownAcceptance:false,truncated:false,generations:[]};
+ const ports:EmailTimelinePorts={list:async()=>list(),read:async()=>conversation()};
+ const processing={health:async()=>health,request:async(input:unknown)=>{requests.push(input);}};
+ const {rerender}=render(<EmailTimeline enabled ports={ports} processing={processing} workspaceId={FIRM} privacyKey="first-account"/>);
+ await user.click(await screen.findByRole('button',{name:'Request extraction'}));
+ expect(requests).toEqual([{workspaceId:FIRM,sourceId:SOURCE,kind:'mail',revision:1,contentHash:HASH,locator:null}]);
+ rerender(<EmailTimeline enabled ports={ports} processing={processing} privacyKey="signed-out"/>);
+ expect(screen.queryByRole('button',{name:'Request extraction'})).toBeNull();
+ expect(screen.queryByRole('region',{name:'Evidence processing'})).toBeNull();
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {canonicalSourceReferenceSchema} from './people.ts';
 import { instant, uuid } from './foundationRows.ts';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
@@ -46,6 +47,8 @@ export const meetingTranscriptPageSchema = z.strictObject({
     meetingId: uuid, coverage: meetingCoverageSchema, recordings: z.array(recordingProcessingViewSchema).max(200),
     recordingsTruncated: z.boolean(), utterances: z.array(meetingUtteranceSchema).max(200),
     nextCursor: z.string().max(500).nullable(), timing: z.literal('file_relative'),
+    processingSources:z.array(canonicalSourceReferenceSchema).max(200).optional(),
+    processingSourcesTruncated:z.boolean().optional(),
 });
 export type MeetingTranscriptPage = z.infer<typeof meetingTranscriptPageSchema>;
 export const recordingRecoveryCommandSchema = z.strictObject({ commandId: commandIdSchema, clientVersion: semanticVersionSchema, recordingId: uuid });

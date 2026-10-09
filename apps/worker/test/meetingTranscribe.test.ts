@@ -1,3 +1,4 @@
+import {crmCaptureExtractionJobHandler} from '../src/handlers/crmCaptureExtraction.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { meetingProcessingFixture, accountId, jobPrefix } from '@fss/domain/test/meetings/support/meetingProcessingFixture.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
@@ -58,4 +59,53 @@ describe('meeting worker through the actual chunked runner', () => {
     expect((await runOnce(f.db.session, { registry, owner: 'meeting-no-credit', limit: 5 })).failed).toBe(0);
     expect(s.preparations()).toBe(0); expect(s.starts()).toBe(0);
   });
+  it('captures one exact owner-bound extraction successor in the original transcript transaction only when enabled',async()=>{
+    await f.db.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2)",[f.workspace,f.seeded.alpha.admin.userId]);
+    const s=await setup();const registry=new HandlerRegistry().register(crmCaptureExtractionJobHandler()).register(meetingTranscribeJobHandler(s.options));
+    await runOnce(f.db.session,{registry,owner:'native-capture-first',limit:5});
+    await f.db.session.query("UPDATE meeting_transcription_attempts SET next_check_at=now()-interval '1 minute'");
+    const at=(await f.db.session.query<{at:string}>('SELECT clock_timestamp()::text AS at')).rows[0]!.at;
+    await withTransaction(f.db.session,async()=>{for(const job of await scheduleMeetingTranscriptions(f.db.session,at))await enqueueJob(f.db.session,job);});
+    expect((await runOnce(f.db.session,{registry,owner:'native-capture-finish',limit:5})).failed).toBe(0);
+    expect((await runOnce(f.db.session,{registry,owner:'native-capture-materialize',limit:5})).failed).toBe(0);
+    const rows=(await f.db.session.query<{source_id:string;requested_by:string;source_hash:string;purpose_revision:number}>('SELECT source_id,requested_by,source_hash,purpose_revision FROM crm_extraction_generations WHERE workspace_id=$1',[f.workspace])).rows;
+    expect(rows).toHaveLength(1);expect(rows[0]).toMatchObject({requested_by:f.seeded.alpha.salesperson.userId,purpose_revision:1,source_hash:'4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'});
+    const jobs=(await f.db.session.query<{payload:unknown}>("SELECT payload FROM jobs WHERE workspace_id=$1 AND kind='crm.extract'",[f.workspace])).rows;
+    expect(jobs).toHaveLength(1);expect(Object.keys(jobs[0]!.payload as object)).toEqual(['generationId']);
+    await f.db.session.query('UPDATE firms SET assigned_user_id=$2 WHERE workspace_id=$1 AND id=$3',[f.workspace,f.seeded.alpha.admin.userId,f.firmId]);
+    expect((await f.db.session.query('SELECT requested_by FROM crm_extraction_generations WHERE workspace_id=$1',[f.workspace])).rows).toEqual([{requested_by:f.seeded.alpha.salesperson.userId}]);
+  });
+
+  it.each(['purpose','context'] as const)('refuses a queued native capture when its original %s changes',async change=>{
+    await f.db.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2)",[f.workspace,f.seeded.alpha.admin.userId]);
+    const s=await setup();const capture=new HandlerRegistry().register(meetingTranscribeJobHandler(s.options));
+    await runOnce(f.db.session,{registry:capture,owner:'capture-bound-start',limit:5});
+    await f.db.session.query("UPDATE meeting_transcription_attempts SET next_check_at=now()-interval '1 minute'");
+    const at=(await f.db.session.query<{at:string}>('SELECT clock_timestamp()::text AS at')).rows[0]!.at;
+    await withTransaction(f.db.session,async()=>{for(const job of await scheduleMeetingTranscriptions(f.db.session,at))await enqueueJob(f.db.session,job);});
+    expect((await runOnce(f.db.session,{registry:capture,owner:'capture-bound-finish',limit:5})).failed).toBe(0);
+    const pending=(await f.db.session.query<{payload:Record<string,unknown>}>("SELECT payload FROM jobs WHERE workspace_id=$1 AND kind='crm.capture_extraction'",[f.workspace])).rows;
+    expect(pending).toHaveLength(1);expect(pending[0]!.payload).toMatchObject({ownerUserId:f.seeded.alpha.salesperson.userId,originalFirmId:f.firmId,purposeRevision:1});
+    expect(Object.keys(pending[0]!.payload).sort()).toEqual(['contextHash','originalFirmId','ownerUserId','purposeRevision','source']);
+    if(change==='purpose')await f.db.session.query('UPDATE crm_extraction_purposes SET revision=revision+1 WHERE workspace_id=$1',[f.workspace]);
+    else {
+      const next=(await f.db.session.query<{id:string}>("INSERT INTO firms(workspace_id,name,assigned_user_id,website,locality,region_code,postal_code,time_zone,time_zone_confidence,time_zone_source,time_zone_rule_version) SELECT workspace_id,'Different context',assigned_user_id,website,locality,region_code,postal_code,time_zone,time_zone_confidence,time_zone_source,time_zone_rule_version FROM firms WHERE workspace_id=$1 AND id=$2 RETURNING id",[f.workspace,f.firmId])).rows[0]!.id;
+      await f.db.session.query('UPDATE meetings SET firm_id=$2 WHERE workspace_id=$1',[f.workspace,next]);
+    }
+    const registry=new HandlerRegistry().register(crmCaptureExtractionJobHandler());
+    expect((await runOnce(f.db.session,{registry,owner:'capture-bound-materialize',limit:5})).failed).toBe(0);
+    expect((await f.db.session.query('SELECT id FROM crm_extraction_generations WHERE workspace_id=$1',[f.workspace])).rows).toEqual([]);expect(s.starts()).toBe(1);
+  });
+
+  it('rolls native source capture back if its extraction successor intent cannot be recorded',async()=>{
+    await f.db.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2)",[f.workspace,f.seeded.alpha.admin.userId]);
+    const s=await setup();const registry=new HandlerRegistry().register(meetingTranscribeJobHandler(s.options));await runOnce(f.db.session,{registry,owner:'native-rollback-first',limit:5});
+    await f.db.session.query("UPDATE meeting_transcription_attempts SET next_check_at=now()-interval '1 minute'");
+    const at=(await f.db.session.query<{at:string}>('SELECT clock_timestamp()::text AS at')).rows[0]!.at;await withTransaction(f.db.session,async()=>{for(const job of await scheduleMeetingTranscriptions(f.db.session,at))await enqueueJob(f.db.session,job);});
+    await f.db.session.query("CREATE FUNCTION reject_fixture_extraction_intent() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='crm.capture_extraction' THEN RAISE EXCEPTION 'controlled_intent_failure'; END IF; RETURN NEW; END $$");
+    await f.db.session.query('CREATE TRIGGER reject_fixture_extraction_intent BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION reject_fixture_extraction_intent()');
+    expect((await runOnce(f.db.session,{registry,owner:'native-rollback-finish',limit:5})).failed).toBe(1);
+    expect((await f.db.session.query('SELECT id FROM meeting_transcripts')).rows).toEqual([]);expect((await f.db.session.query('SELECT id FROM crm_extraction_generations')).rows).toEqual([]);expect(s.starts()).toBe(1);
+  });
+
 });

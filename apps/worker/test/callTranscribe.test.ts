@@ -1,3 +1,4 @@
+import {crmCaptureExtractionJobHandler} from '../src/handlers/crmCaptureExtraction.ts';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -334,7 +335,7 @@ describe('the call.transcribe job', () => {
     fetcher: TwilioRecordingFetcher = recordings,
     collector: TranscriptionProvider | undefined = provider.jobs === undefined ? undefined : provider,
   ): Promise<void> {
-    const registry = new HandlerRegistry().register(
+    const registry = new HandlerRegistry().register(crmCaptureExtractionJobHandler()).register(
       callTranscribeJobHandler({
         provider,
         ...(collector === undefined ? {} : { collector }),
@@ -400,6 +401,16 @@ describe('the call.transcribe job', () => {
     );
     expect(rows.reduce((total, row) => total + Number(row.cost_cents), 0)).toBeGreaterThanOrEqual(2);
     expect(logs.find(line => line.event === 'call_transcription')?.fields).toMatchObject({ settled_cents: 2, utterances: 2 });
+  });
+
+  it('queues exact call evidence with the original call actor only under enabled extraction configuration',async()=>{
+    await database.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2)",[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
+    try{
+      const sessionId=await call(60);await enqueue(sessionId);const provider=scripted([ok(60)]);await drain(provider);expect(provider.calls).toBe(1);
+      const generations=(await database.session.query("SELECT id,source_id,source_revision,requested_by,purpose_revision FROM crm_extraction_generations WHERE workspace_id=$1 AND source_kind='call_transcript'",[seeded.alpha.workspaceId])).rows;
+      expect(generations).toHaveLength(1);expect(generations[0]).toMatchObject({source_id:sessionId,source_revision:1,requested_by:seeded.alpha.salesperson.userId,purpose_revision:1});
+      expect((await database.session.query("SELECT payload FROM jobs WHERE workspace_id=$1 AND kind='crm.extract'",[seeded.alpha.workspaceId])).rows).toEqual([{payload:{generationId:generations[0]!['id']}}]);
+    }finally{await database.session.query('UPDATE crm_extraction_purposes SET enabled=false WHERE workspace_id=$1',[seeded.alpha.workspaceId]);}
   });
 
   it('refuses with transcription_budget_exhausted when the day’s ceiling would be passed, and calls nobody', async () => {
@@ -1431,6 +1442,39 @@ describe('the call.transcribe job', () => {
     );
     await runOnce(database.session, { registry, owner: 'sweep-test', limit: 5 });
     expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 1, settled_cents: 1 }]);
+  });
+
+  it('rolls back call transcript and settlement when its body-free capture intent fails',async()=>{
+    await database.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2) ON CONFLICT(workspace_id) DO UPDATE SET enabled=true",[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
+    const sessionId=await call(60);await enqueue(sessionId);
+    await database.session.query("CREATE FUNCTION reject_call_capture_intent() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='crm.capture_extraction' THEN RAISE EXCEPTION 'capture_intent_failure'; END IF; RETURN NEW; END $$");
+    await database.session.query('CREATE TRIGGER reject_call_capture_intent BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION reject_call_capture_intent()');
+    try{
+      const provider=scripted([ok(60)]),registry=new HandlerRegistry().register(callTranscribeJobHandler({provider,recordings}));
+      expect((await runOnce(database.session,{registry,owner:'call-capture-rollback',limit:10})).failed).toBe(1);
+      expect(await readCallTranscript(salesperson(),sessionId)).toBeNull();expect(await attempts(sessionId)).toMatchObject([{state:'calling'}]);
+      expect((await database.session.query("SELECT id FROM jobs WHERE workspace_id=$1 AND kind='crm.capture_extraction' AND payload->'source'->>'sourceId'=$2",[seeded.alpha.workspaceId,sessionId])).rows).toEqual([]);expect(provider.calls).toBe(1);
+    }finally{await database.session.query('DROP TRIGGER reject_call_capture_intent ON jobs');await database.session.query('DROP FUNCTION reject_call_capture_intent()');await database.session.query('UPDATE crm_extraction_purposes SET enabled=false WHERE workspace_id=$1',[seeded.alpha.workspaceId]);}
+  });
+
+  it('completes native capture and deletion without a transcription-to-firm lock cycle',async()=>{
+    await database.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2) ON CONFLICT(workspace_id) DO UPDATE SET enabled=true",[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
+    const sessionId=await call(60);await enqueue(sessionId);
+    const preview=await previewDeletion(admin(),{targetKind:'firm',firmId:crm.alpha.firmId});
+    const other=await database.appRuntimeSession();
+    const deleting=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),other);
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;}),waiting=new Promise<void>(resolve=>{release=resolve;});
+    const provider={...scripted([]),transcribe:async()=>{entered();await waiting;return ok(60);}};
+    const work=drain(provider);
+    try{
+      await started;await other.query('BEGIN');
+      await other.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[seeded.alpha.workspaceId,crm.alpha.firmId]);
+      const deletion=commitDeletion(deleting,{requestId:preview.value?.requestId??'',previewHash:preview.value?.previewHash??'',commandId:'capture-delete-lock-race',journal:recordingSuppressionJournal()}).then(value=>({value,error:null})).catch((error:unknown)=>({value:null,error}));
+      release();const result=await deletion;await other.query('ROLLBACK');await work;
+      expect(result.error).toBeNull();expect(result.value!==null&&(result.value.ok||result.value.reason==='preview_stale')).toBe(true);
+      expect(await readCallTranscript(salesperson(),sessionId)).not.toBeNull();
+    }finally{release();await other.query('ROLLBACK');await work;await database.session.query('UPDATE crm_extraction_purposes SET enabled=false WHERE workspace_id=$1',[seeded.alpha.workspaceId]);}
   });
 
   // Last, because it deletes the firm every call above was placed at.

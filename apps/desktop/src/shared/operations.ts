@@ -2,6 +2,7 @@ import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSch
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
 import {mailSourcesListSchema,mailSourceListSchema,mailSourceReadSchema,mailConversationSchema,mailSourceChangePayloadSchema,mailSourceChangedSchema,mailControlsReadSchema,mailCaptureControlsSchema,mailSourceStateReadSchema,mailSourceStateSchema,mailSourceRecaptureQueuedSchema,mailSourceAssociatePayloadSchema} from '@fss/contracts';
 import {businessPolicySchema,businessPolicyReadSchema,businessPolicySavePayloadSchema,businessReviewSchema,businessReviewReadSchema,businessReviewDecidePayloadSchema} from '@fss/contracts';
+import {crmSourceLookupSchema,crmResolvedSourceSchema,crmProcessingReadSchema,crmProcessingRequestSchema,crmProcessingResultSchema,crmExtractionPurposeSaveSchema,crmExtractionPurposeSchema,crmProcessingHealthReadSchema,crmProcessingHealthSchema,crmProcessingRecordReadSchema,crmProcessingRecordHealthSchema} from '@fss/contracts';
 import {endpointClaimPayloadSchema,endpointCorrectPayloadSchema} from '@fss/contracts';
 import {sourceContextSaveSchema,sourceContextListSchema} from '@fss/contracts';
 import {endpointListInputSchema,endpointListSchema,endpointMatchInputSchema,endpointMatchSchema,firmSourceAddSchema,firmSourceChangeSchema,firmSourcePageSchema,firmSourceReadSchema,firmSourceRecaptureSchema} from '@fss/contracts';
@@ -846,8 +847,8 @@ export const OPERATIONS = {
   },
   'calling.transcript': {
     kind: 'read',
-    calls: [{ method: 'GET', path: '/calls/transcript?callSessionId={uuid}' }],
-    input: z.strictObject({ callSessionId: uuid }),
+    calls: [{ method: 'GET', path: '/calls/transcript?callSessionId={uuid}' },{method:'GET',path:'/calls/transcript?callSessionId={uuid}&include=processing'}],
+    input: z.strictObject({ callSessionId: uuid,includeProcessing:z.literal(true).optional() }),
     output: callTranscriptViewSchema,
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
@@ -1136,6 +1137,13 @@ export const OPERATIONS = {
   'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
   'crm.businessReviewRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/review/read'}],input:businessReviewReadSchema,output:businessReviewSchema,transform:'bounded proven account metadata; no bodies'},
   'crm.businessReviewDecide': {kind:'command',calls:[{method:'POST',path:'/crm/business/review/decide'}],input:businessReviewDecidePayloadSchema,output:z.strictObject({decisionRevision:z.number().int().positive(),captureAllowed:z.literal(false)}),transform:'versioned human inclusion/exclusion; no capture authority'},
+  'crm.processingSource':{kind:'read',calls:[{method:'POST',path:'/crm/processing/source/read'}],input:crmSourceLookupSchema,output:crmResolvedSourceSchema,transform:'exact current source authority and bounded quote'},
+  'crm.processingRead':{kind:'read',calls:[{method:'POST',path:'/crm/processing/read'}],input:crmProcessingReadSchema,output:crmProcessingResultSchema,transform:'versioned evidence and financial coverage'},
+  'crm.processingRequest':{kind:'command',calls:[{method:'POST',path:'/crm/processing/request'}],input:crmProcessingRequestSchema.omit({commandId:true,clientVersion:true}),output:crmProcessingResultSchema,transform:'explicit processing request; no activation authority'},
+  'crm.processingPurpose':{kind:'read',calls:[{method:'POST',path:'/crm/processing/purpose/read'}],input:z.strictObject({}),output:crmExtractionPurposeSchema,transform:'purpose-specific disabled configuration'},
+  'crm.processingPurposeSave':{kind:'command',calls:[{method:'POST',path:'/crm/processing/purpose/save'}],input:crmExtractionPurposeSaveSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({revision:z.number().int().positive(),enabled:z.literal(false)}),transform:'disabled-only purpose configuration; main owns envelope'},
+  'crm.processingHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/health/read'}],input:crmProcessingHealthReadSchema,output:crmProcessingHealthSchema,transform:'body-free status survives deletion; no blind paid retry'},
+  'crm.processingRecordHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/record/read'}],input:crmProcessingRecordReadSchema,output:crmProcessingRecordHealthSchema,transform:'bounded owner-private body-free native record status survives transcript deletion'},
   'crm.businessMailList': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/list'}],input:mailSourcesListSchema,output:mailSourceListSchema,transform:'bounded copied-email identity page with current source access'},
   'crm.businessMailRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read'}],input:mailSourceReadSchema,output:mailConversationSchema,transform:'exact permitted copied source revision and provenance'},
   'crm.businessMailDelete': {kind:'command',calls:[{method:'POST',path:'/crm/business/mail/delete'}],input:mailSourceChangePayloadSchema,output:mailSourceChangedSchema,transform:'explicit versioned copied-source deletion; main owns command envelope'},
@@ -1907,8 +1915,8 @@ export const OPERATIONS = {
   // M4 reset, R4: the firm's registered recordings, from the server's rows (which follow a
   // fold, and show another Mac's uploads), straight through the authenticated client.
   'meetings.transcript': {
-    kind: 'read', calls: [{ method: 'GET', path: '/meetings/transcript?meetingId={uuid}' }, { method: 'GET', path: '/meetings/transcript?meetingId={uuid}&cursor={string}' }],
-    input: z.strictObject({ meetingId: uuid, cursor: z.string().max(500).optional() }),
+    kind: 'read', calls: [{ method: 'GET', path: '/meetings/transcript?meetingId={uuid}' }, { method: 'GET', path: '/meetings/transcript?meetingId={uuid}&cursor={string}' },{method:'GET',path:'/meetings/transcript?meetingId={uuid}&include=processing'},{method:'GET',path:'/meetings/transcript?meetingId={uuid}&cursor={string}&include=processing'}],
+    input: z.strictObject({ meetingId: uuid, cursor: z.string().max(500).optional(),includeProcessing:z.literal(true).optional() }),
     output: z.strictObject({ page: meetingTranscriptPageSchema.nullable(), reason: z.string().nullable() }),
     transform: 'bounded source-grouped transcript page, or an explicit reason',
   },

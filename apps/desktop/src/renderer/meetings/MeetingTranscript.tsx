@@ -1,3 +1,6 @@
+import {ProcessingRecordHealth,type ProcessingRecordPorts} from '../firms/ProcessingRecordHealth.tsx';
+import {ProcessingHealth,type ProcessingPorts} from '../firms/ProcessingHealth.tsx';
+import {processingPorts} from '../firms/peoplePorts.ts';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import type { MeetingTranscriptPage, RecordingProcessingView } from '@fss/contracts';
 import { useSessionEpoch } from '../app/drafts.tsx';
@@ -7,7 +10,7 @@ export interface TranscriptPorts extends RecoveryPorts {
   read(input: { meetingId: string; cursor?: string }): Promise<{ page: MeetingTranscriptPage | null; reason: string | null }>;
 }
 export const transcriptPorts: TranscriptPorts = {
-  read: async input => await globalThis.callieApi?.read('meetings.transcript', input) ?? { page: null, reason: 'unavailable' },
+  read: async input => await globalThis.callieApi?.read('meetings.transcript', {...input,includeProcessing:true}) ?? { page: null, reason: 'unavailable' },
   reupload: async recordingId => await globalThis.callieApi?.command('recordings.reupload', { recordingId }) ?? { status: 'unavailable' },
   chooseFile: async recordingId => await globalThis.callieImport?.chooseRecordingRecoveryFile(recordingId) ?? { status: 'unavailable' },
 };
@@ -23,7 +26,7 @@ function sourceStatus(source: RecordingProcessingView): string {
 }
 const timestamp = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
 interface View { epoch: object | null; meetingId: string; page: MeetingTranscriptPage | null; reason: string | null }
-export function MeetingTranscript({ meetingId, ports = transcriptPorts, actionsEnabled = true }: { meetingId: string; ports?: TranscriptPorts; actionsEnabled?: boolean }): JSX.Element {
+export function MeetingTranscript({ meetingId, ports = transcriptPorts, actionsEnabled = true,processing=processingPorts,recordHealth }: { meetingId: string; ports?: TranscriptPorts; actionsEnabled?: boolean;processing?:ProcessingPorts;recordHealth?:ProcessingRecordPorts }): JSX.Element {
   const epoch = useSessionEpoch();
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [view, setView] = useState<View | null>(null);
   const request = useRef(0), alive = useRef(true);
@@ -53,6 +56,7 @@ export function MeetingTranscript({ meetingId, ports = transcriptPorts, actionsE
   const toggle = () => { if (open) { setOpen(false); request.current++; setBusy(false); } else { setOpen(true); void load(); } };
   const sourceIds = page === null ? [] : [...new Set([...page.recordings.map(row => row.recordingId), ...page.utterances.map(row => row.recordingId)])];
   return <div className="min-w-0" data-testid="meeting-transcript">
+    <ProcessingRecordHealth key={`processing:${meetingId}`} kind="meeting" recordId={meetingId} {...(recordHealth===undefined?{}:{ports:recordHealth})}/>
     <div className="flex items-center gap-2">
       <Button size="sm" variant="quiet" aria-expanded={open} onClick={toggle}>Transcript</Button>
       {open && page !== null ? <span className="text-xs text-muted-foreground">{page.coverage.ready} of {page.coverage.total} recordings ready</span> : null}
@@ -75,6 +79,8 @@ export function MeetingTranscript({ meetingId, ports = transcriptPorts, actionsE
             </li>)}</ol>
           </section>;
         })}
+        {page.processingSources?.map(source=><ProcessingHealth key={`${source.sourceId}:${source.revision}:${source.contentHash}`} source={source} ports={processing}/>)}
+        {page.processingSourcesTruncated?<p className="text-xs text-muted-foreground">Some processing sources are outside this page.</p>:null}
         {page.recordingsTruncated ? <p className="text-xs text-muted-foreground">Some source labels are omitted from this large meeting.</p> : null}
         {page.nextCursor === null ? null : <Button size="sm" variant="quiet" className="self-start" disabled={busy} onClick={() => { void load(page.nextCursor ?? undefined); }}>Load more</Button>}
       </>}

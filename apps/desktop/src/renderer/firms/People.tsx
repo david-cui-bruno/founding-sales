@@ -1,4 +1,5 @@
 import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
+import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
 import type { ContextPorts } from "./SourceContexts.tsx";
 import { EmailTimeline, type EmailTimelinePorts } from './EmailTimeline.tsx';
 import {
@@ -53,6 +54,8 @@ export function People({
   endpoints,
   endpointEditing,
   imports,
+  processing,
+  workspaceId,
   mail,
   privacyKey = 'people',
   mailFirms = [],
@@ -60,6 +63,8 @@ export function People({
   onSourceChange,
 }: {
   enabled: boolean;
+  workspaceId?:string | undefined;
+  processing?:ProcessingPorts;
   ports: PeoplePorts;
   relationships?: RelationshipPorts;
   relationshipEditing?: RelationshipEditingPorts;
@@ -190,7 +195,7 @@ export function People({
         <section>
           <h3>{page.person.fullName}</h3>
           {imports ? <SelectedImports key={page.person.personId} enabled={enabled} personId={page.person.personId} ports={imports} sourceVersion={page.sources.map(source=>`${source.sourceId}:${source.revision}:${source.availability}`).join('|')} onChange={async()=>setPage(await ports.read(page.person.personId))}/> : null}
-          {mail ? <EmailTimeline key={`email:${page.person.personId}`} enabled={enabled} ports={mail} personId={page.person.personId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} people={people.map(person => ({id:person.personId,name:person.fullName}))} firms={mailFirms} /> : null}
+          {mail ? <EmailTimeline processing={processing} workspaceId={workspaceId} key={`email:${page.person.personId}`} enabled={enabled} ports={mail} personId={page.person.personId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} people={people.map(person => ({id:person.personId,name:person.fullName}))} firms={mailFirms} /> : null}
           {relationships ? (
             <Relationships
               key={page.person.personId}
@@ -288,6 +293,7 @@ export function People({
           <ul>
             {page.sources.map((source) => (
               <li key={source.sourceId}>
+                {processing&&<ProcessingHealth source={source} ports={processing}/>}
                 {source.excerpt ? (
                   <>
                     <p>{source.excerpt}</p>

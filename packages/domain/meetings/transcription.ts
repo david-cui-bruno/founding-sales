@@ -1,3 +1,4 @@
+import {enqueueNativeCrmExtraction} from '../crm/processingCapture.ts';
 import { enqueueMeetingAnalysis } from './analysisJobs.ts';
 import { randomUUID } from 'node:crypto';
 import { MEETING_TRANSCRIPTION_LIMITS, meetingSpeechSchema, type MeetingProcessingStatus, type RecordingSourceKind } from '@fss/contracts';
@@ -183,8 +184,9 @@ export async function completeMeetingTranscription(context: RepositoryContext, i
   }
   if (result.kind === 'complete') {
     const utterances = result.utterances;
-    await context.db.query(`INSERT INTO meeting_transcripts (workspace_id,recording_id,original_recording_id,version,duration_ms,language,utterances,created_at)
-      SELECT $1,$2,$3,COALESCE(max(version),0)+1,$4,$5,$6::jsonb,$7 FROM meeting_transcripts WHERE workspace_id=$1 AND original_recording_id=$3`, [context.scope.workspaceId, source.id, attempt.original_recording_id, attempt.duration_ms, result.language, JSON.stringify(utterances), input.at]);
+    const captured=await context.db.query<{id:string}>(`INSERT INTO meeting_transcripts (workspace_id,recording_id,original_recording_id,version,duration_ms,language,utterances,created_at)
+      SELECT $1,$2,$3,COALESCE(max(version),0)+1,$4,$5,$6::jsonb,$7 FROM meeting_transcripts WHERE workspace_id=$1 AND original_recording_id=$3 RETURNING id`, [context.scope.workspaceId, source.id, attempt.original_recording_id, attempt.duration_ms, result.language, JSON.stringify(utterances), input.at]);
+    const capturedId=captured.rows[0]?.id;if(capturedId!==undefined)await enqueueNativeCrmExtraction(context,{kind:'meeting_transcript',sourceId:capturedId});
     await context.db.query("UPDATE meeting_recordings SET state='transcribed',processing_status='ready',processing_reason=NULL,duration_ms=$3 WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, source.id, attempt.duration_ms]);
     await context.db.query('UPDATE meetings SET transcript_source_revision=transcript_source_revision+1 WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, source.meeting_id]);
     await enqueueMeetingAnalysis(context, source.meeting_id);

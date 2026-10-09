@@ -347,3 +347,5 @@ acknowledgement is audited, because "who silenced it" is the first question afte
 3. Add a probe to the stolen-lease harness and prove one business effect.
 4. If the scheduler materializes it, add a `DueWorkSource`.
 5. `npm run gate:greenfield`.
+
+The enabled-only native CRM capture hook atomically records a body-free `crm.capture_extraction` successor with exact source version/hash, immutable owner, original firm/context fingerprint and purpose revision. This provider-free business-uniqueness handler takes normal source authority locks before materializing `crm.extract`; changed context, purpose, owner authority or deleted source refuses the old capture rather than rebinding it. Failed capture enqueue rolls back the transcript and its settlement.

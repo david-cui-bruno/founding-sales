@@ -388,3 +388,10 @@ it('vetoes people results when the authenticated identity changes while the requ
  generation++;finish();
  await expect(pending).rejects.toThrow('identity_changed');
 });
+it('reads durable extraction health through a closed authenticated operation and rejects a changed workspace',async()=>{
+ const deps=hosts();let generation=0;let finish!:()=>void;
+ deps.recordings.identity.current=()=>generation;
+ deps.api.read=async(path,parse)=>{expect(path).toBe('/crm/processing/health/read');await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse({sourceId:ITEM_ID,sourceRevision:2,availability:'deleted',generations:[],truncated:false,unknownAcceptance:false})};};
+ const pending=answerOperation(operationHandlers(deps),'read','crm.processingHealth',{sourceId:ITEM_ID,kind:'selected_note'});
+ generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
+});
