@@ -91,3 +91,13 @@ it('reads dated operational activity for an explicitly selected firm',async()=>{
  expect(screen.getByText('Operational event dates. Conversation coverage is unverified.')).toBeTruthy();
  expect(read).toHaveBeenLastCalledWith({operation:'activity',scope:{firmId:one}});
 });
+
+it('loads another bounded identity page without treating a later match as globally unique',async()=>{
+ const read=vi.fn<AskPorts['read']>(async input=>({operation:'records',selection:'unresolved',records:input.operation==='records'&&input.afterId===one?[{recordId:two,kind:'person',name:'Alex Later',firmId:null}]:[],nextAfterId:input.operation==='records'&&input.afterId===one?null:one,scanComplete:input.operation==='records'&&input.afterId===one,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}));
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Alex'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Next record page'}));
+ expect(await screen.findByRole('button',{name:'Select Alex Later'})).toBeTruthy();
+ expect(screen.queryByRole('heading',{name:'Alex Later'})).toBeNull();
+ expect(read).toHaveBeenLastCalledWith({operation:'records',query:'Alex',kind:'people',limit:20,afterId:one});
+});
