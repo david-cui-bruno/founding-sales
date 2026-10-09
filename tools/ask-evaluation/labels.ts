@@ -14,6 +14,11 @@ export interface DevelopmentLabelTemplate {
   acceptableClaimText: readonly string[];
   forbiddenClaimText: readonly string[];
   lifecycleScenario: LabeledCase["lifecycleScenario"];
+  sourceLabels?: readonly {
+    slot: string;
+    originalText: string;
+    relevanceGrade: 0 | 1 | 2;
+  }[];
 }
 
 // Independent originals/labels: defined before running retrieval or any fake candidate.
@@ -121,9 +126,13 @@ export const DEVELOPMENT_LABELS: readonly DevelopmentLabelTemplate[] =
   );
 export const DEVELOPMENT_LABEL_SHA256 = evaluationHash(DEVELOPMENT_LABELS);
 
+export interface DevelopmentComparisonLabel extends DevelopmentLabelTemplate {
+  sourceLabels: NonNullable<DevelopmentLabelTemplate["sourceLabels"]>;
+}
+
 /** V2 independent competing originals, frozen before any v2 retrieval output. */
 export const DEVELOPMENT_COMPARISON_LABELS = DEVELOPMENT_LABELS.map(
-  (label, index) => ({
+  (label, index): DevelopmentComparisonLabel => ({
     ...label,
     sourceLabels: [
       {

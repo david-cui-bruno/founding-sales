@@ -380,6 +380,70 @@ export async function runDevelopmentSuite(input: {
         originals.has(label.originalText)
       )
         throw new RangeError("manifest_mismatch");
+      const sourceGold = label.sourceLabels ?? [
+        {
+          slot: "original",
+          originalText: label.originalText,
+          relevanceGrade: label.relevantGrade,
+        },
+      ];
+      const expectedRelevance = corpus.sources.flatMap((source, index) =>
+        source.windows.map((window) => ({
+          windowId: window.id,
+          grade: sourceGold[index]?.relevanceGrade,
+        })),
+      );
+      const expectedClaims =
+        label.acceptableClaimText.length === 0
+          ? []
+          : [
+              {
+                acceptableTextVariants: label.acceptableClaimText,
+                forbiddenTextVariants: label.forbiddenClaimText,
+              },
+            ];
+      const actualClaims = item.acceptableClaims.map((claim) => ({
+        acceptableTextVariants: claim.acceptableTextVariants,
+        forbiddenTextVariants: claim.forbiddenTextVariants,
+      }));
+      const originalWindowIds = new Set(
+        corpus.sources[0]!.windows.map((window) => window.id),
+      );
+      if (
+        corpus.sources.length !== sourceGold.length ||
+        JSON.stringify(item.relevance) !== JSON.stringify(expectedRelevance) ||
+        JSON.stringify(actualClaims) !== JSON.stringify(expectedClaims) ||
+        item.acceptableClaims.some((claim) =>
+          claim.supportedBy.some((id) => !originalWindowIds.has(id)),
+        ) ||
+        item.mustAbstain !== (label.lifecycleScenario !== "none") ||
+        corpus.sources.some((source, index) =>
+          source.windows.some((window) => {
+            const gold = sourceGold[index]!;
+            const range = /^(?:utterance:0:)?text:(\d+):(\d+)$/u.exec(
+              window.source.locator,
+            );
+            return (
+              range === null ||
+              window.textSha256 !==
+                originalTextHash(
+                  gold.originalText.slice(Number(range[1]), Number(range[2])),
+                )
+            );
+          }),
+        ) ||
+        (label.expectedOpenOpportunities === null
+          ? item.request.operation !== "passages" ||
+            item.request.query !== label.query
+          : item.request.operation !== "opportunities" ||
+            item.request.status !== "open" ||
+            item.exactExpected?.operation !== "opportunities" ||
+            item.exactExpected.count !==
+              String(label.expectedOpenOpportunities) ||
+            JSON.stringify(item.request.scope) !==
+              JSON.stringify(item.exactExpected.scope))
+      )
+        throw new RangeError("manifest_mismatch");
       identities.add(label.identityName);
       originals.add(label.originalText);
       kinds.add(label.sourceKind);

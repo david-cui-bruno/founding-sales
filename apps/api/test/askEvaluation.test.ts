@@ -1169,6 +1169,56 @@ it("measures all eighty isolated development baselines without loading sealed ho
     ).rejects.toThrow("manifest_mismatch");
     expect(runnerReads).toBe(0);
     expect(cleanups).toBe(80);
+    const changedCases = cases.map((runtime, index) => {
+      if (index !== 79) return runtime;
+      const { corpusSha256: _corpusSha256, ...original } = runtime.input.development;
+      const changed = {
+        ...original,
+        cases: original.cases.map((item) => ({
+          ...item,
+          request:
+            item.request.operation === "passages"
+              ? { ...item.request, query: "independent gold was replaced" }
+              : item.request,
+        })),
+      };
+      const canonical = frozenCorpusSchema
+        .omit({ corpusSha256: true })
+        .parse(changed);
+      const development = frozenCorpusSchema.parse({
+        ...canonical,
+        corpusSha256: hash(canonical),
+      });
+      return {
+        ...runtime,
+        input: {
+          ...runtime.input,
+          development,
+          manifest: {
+            ...runtime.input.manifest,
+            corpusSha256: development.corpusSha256,
+          },
+        },
+      };
+    });
+    const changedDefinition = {
+      ...definition,
+      caseBindings: definition.caseBindings.map((binding, index) => ({
+        ...binding,
+        corpusSha256: changedCases[index]!.input.development.corpusSha256,
+      })),
+    };
+    await expect(
+      runDevelopmentSuite({
+        suite: developmentSuiteSchema.parse({
+          ...changedDefinition,
+          suiteSha256: hash(changedDefinition),
+        }),
+        cases: changedCases,
+      }),
+    ).rejects.toThrow("manifest_mismatch");
+    expect(runnerReads).toBe(0);
+    expect(cleanups).toBe(160);
     cleanups = 0;
     const report = await runDevelopmentSuite({ suite, cases });
     if (process.env["ASK_EVALUATION_EXPORT_BASELINE"] === "1")
