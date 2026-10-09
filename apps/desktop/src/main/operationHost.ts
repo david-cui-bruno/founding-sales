@@ -1,3 +1,4 @@
+import {todayActionsV2ResponseSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
 import {businessPolicySchema,businessReviewSchema} from '@fss/contracts';
 import {firmListResponseSchema} from '@fss/contracts';
 import {relationshipListSchema} from '@fss/contracts';
@@ -144,6 +145,16 @@ async function readAnalysis(api: AuthedClient, callSessionId: string): Promise<{
 
 export function operationHandlers(deps: OperationHostDeps): Readonly<Record<OperationName, Handler>> {
   const handlers = {
+    'today.actionsV2':async()=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read('/today/actions/v2',value=>todayActionsV2ResponseSchema.parse(value));
+      return generation===deps.recordings.identity.current()&&answer.ok?answer.value:null;
+    },
+    'today.openActionV2':async(input:OperationInput<'today.openActionV2'>)=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read('/today/actions/open/v2',value=>todayActionOpenV2ResponseSchema.parse(value),input);
+      return generation===deps.recordings.identity.current()&&answer.ok?answer.value:null;
+    },
     'today.actions': async () => {
       const generation = deps.recordings.identity.current();
       const answer = await deps.api.read('/today/actions', value => todayActionsResponseSchema.parse(value));

@@ -1,3 +1,4 @@
+import {todayActionsV2ResponseSchema,todayActionOpenV2RequestSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
 import {selectedAttachmentFileSchema,selectedAttachmentPreviewSchema,selectedAttachmentReadSchema,selectedAttachmentPageSchema,selectedAttachmentCommitPayloadSchema,selectedAttachmentCommitResultSchema,selectedAttachmentAnalyzePayloadSchema,selectedAttachmentAnalyzeResultSchema,selectedAttachmentReselectPayloadSchema,selectedAttachmentReselectResultSchema} from '@fss/contracts';
 import {crmProgressReadSchema,crmProgressResponseSchema} from '@fss/contracts';
 import { crmEvidenceWorkBindPayloadSchema, crmEvidenceWorkBoundSchema } from "@fss/contracts";
@@ -562,6 +563,8 @@ export interface Operation {
 }
 
 export const OPERATIONS = {
+  'today.actionsV2':{kind:'read',calls:[{method:'GET',path:'/today/actions/v2'}],input:nothing,output:todayActionsV2ResponseSchema.nullable(),transform:'explicit current V2 actions; unavailable or identity drift is null; never cached or V1-fallback'},
+  'today.openActionV2':{kind:'read',calls:[{method:'POST',path:'/today/actions/open/v2'}],input:todayActionOpenV2RequestSchema,output:todayActionOpenV2ResponseSchema.nullable(),transform:'revalidate exact current V2 task and source-support target; no completion'},
   'today.actions': {
     kind: 'read', calls: [{ method: 'GET', path: '/today/actions' }], input: nothing,
     output: todayActionsResponseSchema.nullable(), transform: 'live action metadata only; unavailable is null; never cached',
