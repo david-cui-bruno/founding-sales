@@ -1,3 +1,4 @@
+import { ASK_ANSWER_CONSTRAINT_CASES } from './support/askAnswerCases.ts';
 import { CRM_COMMITMENT_CONSTRAINT_CASES } from "./support/crmCommitmentCases.ts";
 import { CRM_BACKFILL_CONSTRAINT_CASES } from './support/crmBackfillCases.ts';
 import { CRM_EVIDENCE_CONSTRAINT_CASES } from "./support/crmEvidenceCases.ts";
@@ -793,6 +794,7 @@ const relationshipConstraintCases: readonly Case[] = [
 ];
 
 const cases: readonly Case[] = [
+  ...ASK_ANSWER_CONSTRAINT_CASES,
   ...CRM_EVIDENCE_CONSTRAINT_CASES,
   ...CRM_COMMITMENT_CONSTRAINT_CASES,
   // ---------------------------------------------------------------- workspaces

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { AskAnswer, type AskAnswerPorts } from "./AskAnswer.tsx";
 import type { z } from "zod";
 import type { askReadSchema, askResponseSchema } from "@fss/contracts";
 export type AskRead = z.infer<typeof askReadSchema>;
 export type AskResponse = z.infer<typeof askResponseSchema>;
-export interface AskPorts {
+export interface AskPorts extends Partial<AskAnswerPorts> {
   read(input: AskRead): Promise<AskResponse>;
 }
 const sourceKindLabels = {
@@ -600,10 +601,11 @@ export function Ask({
         <div>
           <p>{selectedSources.length} selected copies (maximum 10)</p>
           <label className="block text-sm font-medium">
-            Search selected copies
+            Question or keywords for selected copies
             <input
               className="mt-1 block h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm"
               aria-label="Search selected copies"
+              maxLength={300}
               value={copyQuery}
               onChange={(event) => {
                 epoch.current++;
@@ -620,6 +622,7 @@ export function Ask({
           >
             Search selected copies
           </button>
+          <AskAnswer key={`${key}:${selected?.recordId}:${copyQuery}:${JSON.stringify(selectedSources)}`} ports={ports} enabled={enabled} question={copyQuery} scope={{sources:selectedSources.map(({workspaceId,sourceId,kind,revision,contentHash})=>({workspaceId,sourceId,kind,revision,contentHash,locator:null}))}} />
         </div>
       )}
       {result?.operation === "passages" && (

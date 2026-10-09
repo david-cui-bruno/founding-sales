@@ -189,7 +189,7 @@ export const askCorpusCoverageSchema = z.strictObject({
   omittedSignatures: z.number().int().min(0).max(10),
   chunkerVersion: z.literal("lexical-original-v1"),
 });
-const askPassagesResponseSchema = z
+export const askPassagesResponseSchema = z
   .strictObject({
     operation: z.literal("passages"),
     scope: askPassagesReadSchema.shape.scope,

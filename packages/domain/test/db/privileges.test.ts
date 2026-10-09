@@ -1,3 +1,4 @@
+import {seedAskFinancialReceipt} from './support/askAnswerCases.ts';
 import {randomUUID} from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
@@ -47,6 +48,36 @@ describe('append-only privileges', () => {
     await runtime.query('DELETE FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=$2',[workspaceId,receipts[0]]);
     await expect(runtime.query('UPDATE crm_mail_reply_resolutions SET sent_receipt_id=$3 WHERE workspace_id=$1 AND request_message_id=$2',[workspaceId,requestId,receipts[1]])).rejects.toMatchObject({code:'23514'});
     await expect(runtime.query("UPDATE crm_mail_reply_resolutions SET request_provider_at='2026-09-24T14:00:00Z' WHERE workspace_id=$1 AND request_message_id=$2",[workspaceId,requestId])).rejects.toMatchObject({code:'23514'});
+  });
+
+  it('preserves Ask request and conserved financial history and protects canonical window proof', async () => {
+    for (const table of ['crm_ask_requests','crm_ask_financial_receipts']) {
+      await expect(runtime.query(`DELETE FROM ${table} WHERE false`)).rejects.toMatchObject({code:'42501'});
+      await expect(runtime.query(`TRUNCATE ${table}`)).rejects.toMatchObject({code:'42501'});
+    }
+    await expect(runtime.query("UPDATE crm_ask_request_windows SET source_hash=repeat('b',64) WHERE false")).rejects.toMatchObject({code:'42501'});
+    await expect(runtime.query('TRUNCATE crm_ask_request_windows')).rejects.toMatchObject({code:'42501'});
+    for (const table of ['crm_ask_requests','crm_ask_purposes','crm_ask_request_windows','crm_ask_financial_receipts']) {
+      await expect(runtime.query(`SELECT 1 FROM ${table} LIMIT 0`)).resolves.toMatchObject({rows:[]});
+    }
+  });
+
+  it('conserves Ask attempt proof across legitimate dispatch and refuses terminal or backward changes', async () => {
+    const f={session:database.session,seeded};
+    const unknown=await seedAskFinancialReceipt(f);
+    await runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='calling' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,unknown]);
+    await runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='unknown_acceptance' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,unknown]);
+    await expect(runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='calling' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,unknown])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_financial_immutable'});
+    const settled=await seedAskFinancialReceipt(f);
+    await runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='calling' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,settled]);
+    await expect(runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='reserved' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,settled])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_financial_immutable'});
+    await runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='settled' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,settled]);
+    await expect(runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='released' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,settled])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_financial_immutable'});
+    await expect(runtime.query('UPDATE crm_ask_financial_receipts SET input_price_micros=2 WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,settled])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_financial_immutable'});
+    const released=await seedAskFinancialReceipt(f);
+    await runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='released' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,released]);
+    await expect(runtime.query("UPDATE crm_ask_financial_receipts SET dispatch_state='calling' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,released])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_financial_immutable'});
+    expect((await runtime.query<{dispatch_state:string}>('SELECT dispatch_state FROM crm_ask_financial_receipts WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY dispatch_state',[seeded.alpha.workspaceId,[unknown,settled,released]])).rows).toEqual([{dispatch_state:'released'},{dispatch_state:'settled'},{dispatch_state:'unknown_acceptance'}]);
   });
 
   it('runs as app_runtime, not as the owner', async () => {
