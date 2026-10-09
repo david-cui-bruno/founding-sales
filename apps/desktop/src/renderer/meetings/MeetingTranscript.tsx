@@ -84,7 +84,7 @@ export function MeetingTranscript({ meetingId, ports = transcriptPorts, actionsE
             </li>)}</ol>
           </section>;
         })}
-        {page.processingSources?.map(source=><ProcessingHealth key={`${source.sourceId}:${source.revision}:${source.contentHash}`} source={source} ports={processing} enabled={actionsEnabled} recordId={meetingId} privacyKey={epoch} sourceVersion={String(page.coverage.sourceRevision)} workContexts={view?.epoch===epoch&&view.meetingId===meetingId?view.workContexts:[]}/>)}
+        {page.processingSources?.map(source=><ProcessingHealth key={`${source.sourceId}:${source.revision}:${source.contentHash}`} source={source} comparisonSources={page.processingSources??[]} ports={processing} enabled={actionsEnabled} recordId={meetingId} privacyKey={epoch} sourceVersion={String(page.coverage.sourceRevision)} workContexts={view?.epoch===epoch&&view.meetingId===meetingId?view.workContexts:[]}/>)}
         {page.processingSourcesTruncated?<p className="text-xs text-muted-foreground">Some processing sources are outside this page.</p>:null}
         {page.recordingsTruncated ? <p className="text-xs text-muted-foreground">Some source labels are omitted from this large meeting.</p> : null}
         {page.nextCursor === null ? null : <Button size="sm" variant="quiet" className="self-start" disabled={busy} onClick={() => { void load(page.nextCursor ?? undefined); }}>Load more</Button>}

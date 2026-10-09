@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
 import {MeetingTranscript} from '../src/renderer/meetings/MeetingTranscript.tsx';
@@ -43,4 +43,9 @@ it('reads actual meeting outcome task IDs before offering source support and fet
  render(<DraftsProvider><MeetingTranscript meetingId={MID} processing={processing} ports={{read:async()=>({page,reason:null}),tasks,reupload:async()=>({status:'resumed'}),chooseFile:async()=>({status:'cancelled'})}}/></DraftsProvider>);
  fireEvent.click(screen.getByRole('button',{name:'Transcript'}));fireEvent.click(await screen.findByRole('button',{name:'Review evidence 1'}));fireEvent.click(await screen.findByRole('button',{name:'Support existing task 1 with interpretation 1'}));
  await waitFor(()=>expect(bind).toHaveBeenCalledWith(expect.objectContaining({work:{kind:'meeting_task',id:taskId,expectedVersion:'3'}})));
+});
+it('offers the actual meeting record processing-source choices for explicit comparison without inventing source identities',async()=>{
+ const second={...source,sourceId:'33333333-3333-4333-8333-333333333333',revision:2,contentHash:'f'.repeat(64)};const page={...transcriptPage(),processingSources:[source,second],processingSourcesTruncated:false};
+ const read=vi.fn(async(input:{source:{sourceId:string}})=>({source:input.source.sourceId===source.sourceId?source:second,claims:[],reviewedHistory:[],nextAfterClaimId:null,nextAfterReviewedAnchorId:null,projection:{scope:'bounded_source_page' as const,counts:{current:0,reviewedHistory:0,confirmed:0,dismissed:0,corrected:0,unreviewed:0,reviewRequired:0},truncated:false,revisionFingerprint:'e'.repeat(64)}}));
+ render(<DraftsProvider><MeetingTranscript meetingId={MID} processing={{health,request:async()=>{},evidence:{read}}} ports={{read:async()=>({page,reason:null}),reupload:async()=>({status:'resumed'}),chooseFile:async()=>({status:'cancelled'})}}/></DraftsProvider>);fireEvent.click(screen.getByRole('button',{name:'Transcript'}));const panes=await screen.findAllByRole('region',{name:'Evidence review'});fireEvent.click(within(panes[0]!).getByRole('button',{name:'Review evidence 2'}));await waitFor(()=>expect(read).toHaveBeenCalledWith({source:{workspaceId:second.workspaceId,sourceId:second.sourceId,kind:second.kind,revision:2,contentHash:'f'.repeat(64),locator:null},limit:50}));
 });

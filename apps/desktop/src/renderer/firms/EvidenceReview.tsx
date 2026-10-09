@@ -19,7 +19,8 @@ export interface EvidenceReviewPorts {
 }
 function claimTarget(claim:CrmEvidencePage['claims'][number]){return {source:{workspaceId:claim.source.workspaceId,sourceId:claim.source.sourceId,kind:claim.source.kind,revision:claim.source.revision,contentHash:claim.source.contentHash,locator:null},claimId:claim.claimId,claimRevision:claim.claimRevision,claimHash:claim.claimHash,contextHash:claim.contextHash,expectedDecisionRevision:claim.decisionRevision};}
 export function EvidenceReview({sources,ports,enabled,recordId,privacyKey,sourceVersion,workContexts=[]}:{sources:readonly EvidenceSource[];ports:EvidenceReviewPorts;enabled:boolean;recordId:string;privacyKey:string|object|null;sourceVersion?:string|undefined;workContexts?:readonly z.infer<typeof crmEvidenceWorkIdentitySchema>[]}):JSX.Element {
- const [selectedClaims,setSelectedClaims]=useState<string[]>([]);
+ const [comparisonMembers,setComparisonMembers]=useState<CrmEvidencePage['claims']>([]);
+ const selectedClaims=comparisonMembers.map(claim=>claim.claimId);
  const [notice,setNotice]=useState('');
  const [page,setPage]=useState<CrmEvidencePage|null>(null);
  const [busy,setBusy]=useState(false);
@@ -39,21 +40,23 @@ export function EvidenceReview({sources,ports,enabled,recordId,privacyKey,source
  const sourceIdentity=JSON.stringify(sources.map(source=>[source.workspaceId,source.sourceId,source.kind,source.revision,source.contentHash,source.availability]));
  const epoch=useRef(0);
  const invalidate=useCallback(()=>++epoch.current,[]);
- const clearSource=useCallback(()=>{setDiscoverySource(null);setPage(null);setSelectedClaims([]);setNotice('');setEditing(null);setCorrection('');setRationale('');setHistoryRefs(null);setHistorySource(null);setHistory(null);setConflictRefs(null);setConflict(null);setWorkRefs(null);setWork(null);},[]);
+ const clearSource=useCallback((preserveComparison=false)=>{setDiscoverySource(null);setPage(null);if(!preserveComparison)setComparisonMembers([]);setNotice('');setEditing(null);setCorrection('');setRationale('');setHistoryRefs(null);setHistorySource(null);setHistory(null);setConflictRefs(null);setConflict(null);setWorkRefs(null);setWork(null);},[]);
  useLayoutEffect(()=>{invalidate();clearSource();setError('');setBusy(false);return()=>{invalidate();};},[ports,enabled,recordId,privacyKey,sourceVersion,sourceIdentity,workIdentity,invalidate,clearSource]);
  const read=async(source:EvidenceSource,cursors?:{afterClaimId?:string;afterReviewedAnchorId?:string})=>{
-  const ticket=invalidate();clearSource();setBusy(true);setError('');
+  const ticket=invalidate();clearSource(true);setBusy(true);setError('');
   try{
    const value=await ports.read({source:{workspaceId:source.workspaceId,sourceId:source.sourceId,kind:source.kind,revision:source.revision,contentHash:source.contentHash,locator:null},...cursors,limit:50});
    if(ticket!==epoch.current)return;
    if(value.source.workspaceId!==source.workspaceId||value.source.sourceId!==source.sourceId||value.source.kind!==source.kind||value.source.revision!==source.revision||value.source.contentHash!==source.contentHash)throw new Error('source_changed');
+   const contextHashes=new Set([...value.claims,...value.reviewedHistory].map(claim=>claim.contextHash));
+   setComparisonMembers(members=>members.filter(claim=>claim.source.kind!==source.kind||claim.source.sourceId!==source.sourceId||contextHashes.has(claim.contextHash)));
    setPage(value);
-  }catch{if(ticket===epoch.current){setPage(null);setSelectedClaims([]);setNotice('');setError('Evidence is unavailable. Refresh the source and check current access.');}}
+  }catch{if(ticket===epoch.current){setPage(null);setComparisonMembers([]);setNotice('');setError('Evidence is unavailable. Refresh the source and check current access.');}}
   finally{if(ticket===epoch.current)setBusy(false);}
  };
  const listHistory=async(source:EvidenceSource,afterId?:string)=>{
   if(!ports.historyList)return;
-  const ticket=invalidate();setDiscoverySource(null);setPage(null);setSelectedClaims([]);setNotice('');setEditing(null);setCorrection('');setRationale('');setHistoryRefs(null);setHistory(null);setConflictRefs(null);setConflict(null);setWorkRefs(null);setWork(null);setBusy(true);setError('');
+  const ticket=invalidate();setDiscoverySource(null);setPage(null);setComparisonMembers([]);setNotice('');setEditing(null);setCorrection('');setRationale('');setHistoryRefs(null);setHistory(null);setConflictRefs(null);setConflict(null);setWorkRefs(null);setWork(null);setBusy(true);setError('');
   const selected={kind:source.kind,sourceId:source.sourceId};setHistorySource(selected);
   try{const value=await ports.historyList({...selected,...(afterId===undefined?{}:{afterId}),limit:50});if(ticket===epoch.current)setHistoryRefs(value);}
   catch{if(ticket===epoch.current){setHistorySource(null);setError('Decision history is unavailable. Check current source access.');}}
@@ -61,7 +64,7 @@ export function EvidenceReview({sources,ports,enabled,recordId,privacyKey,source
  };
  const openHistory=async(anchorId:string,beforeRevision?:number)=>{
   if(!ports.historyRead||historySource===null)return;
-  const selected=historySource,ticket=invalidate();setPage(null);setSelectedClaims([]);setNotice('');setHistory(null);setConflictRefs(null);setConflict(null);setWorkRefs(null);setWork(null);setBusy(true);setError('');
+  const selected=historySource,ticket=invalidate();setPage(null);setComparisonMembers([]);setNotice('');setHistory(null);setConflictRefs(null);setConflict(null);setWorkRefs(null);setWork(null);setBusy(true);setError('');
   try{const value=await ports.historyRead({...selected,anchorId,...(beforeRevision===undefined?{}:{beforeRevision}),limit:50});if(ticket!==epoch.current)return;if(value.kind!==selected.kind||value.sourceId!==selected.sourceId||value.anchorId!==anchorId)throw new Error('source_changed');setHistory(value);}
   catch{if(ticket===epoch.current){setHistoryRefs(null);setHistorySource(null);setError('Decision history is unavailable. Check current source access.');}}
   finally{if(ticket===epoch.current)setBusy(false);}
@@ -89,10 +92,10 @@ export function EvidenceReview({sources,ports,enabled,recordId,privacyKey,source
   finally{if(ticket===epoch.current)setBusy(false);}
  };
  const saveConflict=async()=>{
-  if(!ports.conflictSave||page===null)return;
-  const members=page.claims.filter(claim=>selectedClaims.includes(claim.claimId)&&supported(claim));
+  if(!ports.conflictSave)return;
+  const members=comparisonMembers.filter(claim=>sources.some(source=>source.availability==='available'&&source.workspaceId===claim.source.workspaceId&&source.kind===claim.source.kind&&source.sourceId===claim.source.sourceId&&source.revision===claim.source.revision&&source.contentHash===claim.source.contentHash));
   if(members.length<2||members.length>10)return;
-  const ticket=invalidate();setDiscoverySource(null);setPage(null);setSelectedClaims([]);setBusy(true);setError('');setNotice('');
+  const ticket=invalidate();setDiscoverySource(null);setPage(null);setComparisonMembers([]);setBusy(true);setError('');setNotice('');
   try{await ports.conflictSave({expectedConflictRevision:0,members:members.map(claimTarget)});if(ticket===epoch.current)setNotice('Conflict saved. Reload conflicts to review the current group.');}
   catch{if(ticket===epoch.current)setError('Conflict could not be saved. Reload current evidence before trying again.');}
   finally{if(ticket===epoch.current)setBusy(false);}
@@ -114,24 +117,24 @@ export function EvidenceReview({sources,ports,enabled,recordId,privacyKey,source
  };
  const bindWork=async(claim:CrmEvidencePage['claims'][number],identity:z.infer<typeof crmEvidenceWorkIdentitySchema>)=>{
   if(!ports.workRead||!ports.workBind||!workContexts.some(item=>item.kind===identity.kind&&item.id===identity.id)||!supported(claim))return;
-  const ticket=invalidate();setDiscoverySource(null);setPage(null);setSelectedClaims([]);setEditing(null);setCorrection('');setRationale('');setNotice('');setBusy(true);setError('');
+  const ticket=invalidate();setDiscoverySource(null);setPage(null);setComparisonMembers([]);setEditing(null);setCorrection('');setRationale('');setNotice('');setBusy(true);setError('');
   try{const current=await ports.workRead({work:identity,limit:50});if(ticket!==epoch.current)return;if(current.work.kind!==identity.kind||current.work.id!==identity.id)throw new Error('work_changed');await ports.workBind({...claimTarget(claim),work:{...identity,expectedVersion:current.work.version}});if(ticket===epoch.current)setNotice('Evidence dependency saved. Task status is unchanged.');}
   catch{if(ticket===epoch.current)setError('Task support could not be saved. Reload current evidence and task context.');}
   finally{if(ticket===epoch.current)setBusy(false);}
  };
  const decide=async(claim:CrmEvidencePage['claims'][number],action:'confirm'|'dismiss'|'correct')=>{
   if(!ports.decide||page===null)return;
-  const selected=page.source,ticket=invalidate();setPage(null);setSelectedClaims([]);setNotice('');setBusy(true);setError('');
+  const selected=page.source,ticket=invalidate();setPage(null);setComparisonMembers([]);setNotice('');setBusy(true);setError('');
   try{
    await ports.decide({...claimTarget(claim),...(action==='correct'?{action,correctedInterpretation:correction.trim(),...(rationale.trim()?{rationale:rationale.trim()}:{})}:{action})});
    if(ticket===epoch.current){setEditing(null);setCorrection('');setRationale('');}
    if(ticket===epoch.current)await read(selected);
-  }catch{if(ticket===epoch.current){setPage(null);setSelectedClaims([]);setNotice('');setEditing(null);setCorrection('');setRationale('');setError('Review could not be saved. Refresh the source and current decision before trying again.');}}
+  }catch{if(ticket===epoch.current){setPage(null);setComparisonMembers([]);setNotice('');setEditing(null);setCorrection('');setRationale('');setError('Review could not be saved. Refresh the source and current decision before trying again.');}}
   finally{if(ticket===epoch.current)setBusy(false);}
  };
  const supported=(claim:CrmEvidencePage['claims'][number])=>page!==null&&claim.source.availability==='available'&&claim.source.workspaceId===page.source.workspaceId&&claim.source.sourceId===page.source.sourceId&&claim.source.kind===page.source.kind&&claim.source.revision===page.source.revision&&claim.source.contentHash===page.source.contentHash;
  const interpretation=(claim:CrmEvidencePage['claims'][number],historical:boolean,index:number)=><article key={`${historical?'history':'current'}:${claim.claimId}`}>
-  {historical?<p>Previously reviewed interpretation</p>:null}{!historical&&ports.conflictSave?<label><input type="checkbox" aria-label={`Conflict member interpretation ${index+1}`} disabled={busy||(!selectedClaims.includes(claim.claimId)&&selectedClaims.length>=10)} checked={selectedClaims.includes(claim.claimId)} onChange={event=>setSelectedClaims(ids=>event.target.checked?[...ids,claim.claimId]:ids.filter(id=>id!==claim.claimId))}/>Include in evidence conflict</label>:null}
+  {historical?<p>Previously reviewed interpretation</p>:null}{!historical&&ports.conflictSave?<label><input type="checkbox" aria-label={`Conflict member interpretation ${index+1}`} disabled={busy||(!selectedClaims.includes(claim.claimId)&&selectedClaims.length>=10)} checked={selectedClaims.includes(claim.claimId)} onChange={event=>setComparisonMembers(members=>event.target.checked?[...members,claim]:members.filter(member=>member.claimId!==claim.claimId))}/>Include in evidence conflict</label>:null}
   <p>AI interpretation · {claim.status} · {claim.effectiveState}</p>
   <p>{claim.interpretation}</p>
   <blockquote>{claim.quote}</blockquote>
@@ -150,6 +153,7 @@ export function EvidenceReview({sources,ports,enabled,recordId,privacyKey,source
   {enabled?<>
    {error?<p role="alert">{error}</p>:null}{notice?<p role="status">{notice}</p>:null}
    {sources.map((source,index)=><div key={source.sourceId}><Button disabled={busy||source.availability!=='available'||source.contentHash===null} onClick={()=>void read(source)}>Review evidence {index+1}</Button>{ports.historyList&&ports.historyRead?<Button disabled={busy} onClick={()=>void listHistory(source)}>Review decision history {index+1}</Button>:null}{ports.conflictList&&ports.conflictRead?<Button disabled={busy} onClick={()=>void listConflicts(source)}>Review conflicts for evidence {index+1}</Button>:null}{ports.workList&&ports.workRead?<Button disabled={busy} onClick={()=>void listWork(source)}>Review dependent work for evidence {index+1}</Button>:null}</div>)}
+   {comparisonMembers.length>0?<section aria-label="Selected evidence comparison"><p>Compare selected interpretations from current record sources. Saving preserves both original passages.</p>{comparisonMembers.map((member,index)=><article key={`${member.source.kind}:${member.source.sourceId}:${member.claimId}`}><p>Comparison member {index+1}: {member.interpretation}</p><blockquote>{member.quote}</blockquote><p>Source {member.source.kind} · revision {member.source.revision} · Original event {member.source.occurredAt??'unknown'} · observed {member.source.observedAt}</p><p>{member.source.locator??'Passage location unavailable'} · {member.source.speaker??'Speaker unknown'}</p><Button disabled={busy} onClick={()=>setComparisonMembers(members=>members.filter(claim=>claim.claimId!==member.claimId))}>Remove comparison member {index+1}</Button></article>)}</section>:null}
    {workRefs?.nextAfter&&discoverySource?<Button disabled={busy} onClick={()=>void listWork(discoverySource,workRefs.nextAfter??undefined)}>More dependent work references</Button>:null}
    {conflictRefs?.nextAfterId&&discoverySource?<Button disabled={busy} onClick={()=>void listConflicts(discoverySource,conflictRefs.nextAfterId??undefined)}>More conflict references</Button>:null}
    {historyRefs?.nextAfterId&&historySource?<Button disabled={busy} onClick={()=>{const selected=sources.find(source=>source.kind===historySource.kind&&source.sourceId===historySource.sourceId);if(selected)void listHistory(selected,historyRefs.nextAfterId??undefined);}}>More decision history references</Button>:null}

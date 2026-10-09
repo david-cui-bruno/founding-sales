@@ -1,4 +1,4 @@
-import {EvidenceReview,type EvidenceReviewPorts,type EvidenceWorkIdentity} from "./EvidenceReview.tsx";
+import {EvidenceReview,type EvidenceReviewPorts,type EvidenceWorkIdentity,type EvidenceSource} from "./EvidenceReview.tsx";
 import { useCallback, useLayoutEffect, useRef, useState, type JSX } from 'react';
 import type { CanonicalSourceReference, CrmProcessingHealth } from '@fss/contracts';
 import { Button } from '../ui/button.tsx';
@@ -8,7 +8,7 @@ export interface ProcessingPorts {
  request(source:Pick<CanonicalSourceReference,'workspaceId'|'sourceId'|'kind'|'revision'|'contentHash'|'locator'>):Promise<void>;
 }
 /** Health survives source deletion; it contains no copied excerpts or model input. */
-export function ProcessingHealth({source,ports,enabled=true,recordId=source.sourceId,privacyKey=source.workspaceId,sourceVersion,workContexts}:{workContexts?:readonly EvidenceWorkIdentity[];enabled?:boolean;recordId?:string;privacyKey?:string|object|null;sourceVersion?:string|undefined;source:Pick<CanonicalSourceReference,'workspaceId'|'sourceId'|'kind'|'revision'|'contentHash'|'locator'|'availability'>;ports:ProcessingPorts}):JSX.Element{
+export function ProcessingHealth({source,ports,enabled=true,recordId=source.sourceId,privacyKey=source.workspaceId,sourceVersion,workContexts,comparisonSources}:{comparisonSources?:readonly EvidenceSource[];workContexts?:readonly EvidenceWorkIdentity[];enabled?:boolean;recordId?:string;privacyKey?:string|object|null;sourceVersion?:string|undefined;source:Pick<CanonicalSourceReference,'workspaceId'|'sourceId'|'kind'|'revision'|'contentHash'|'locator'|'availability'>;ports:ProcessingPorts}):JSX.Element{
  const [health,setHealth]=useState<CrmProcessingHealth|null>(null);
  const [error,setError]=useState('');
  const [busy,setBusy]=useState(false);
@@ -37,6 +37,6 @@ export function ProcessingHealth({source,ports,enabled=true,recordId=source.sour
    const mine=epoch.current;setBusy(true);setError('');
    void ports.request({workspaceId:source.workspaceId,sourceId:source.sourceId,kind:source.kind,revision:source.revision,contentHash:source.contentHash,locator:null}).then(()=>{if(epoch.current===mine)setRefresh(value=>value+1);}).catch(()=>{if(epoch.current===mine)setError('Extraction could not be requested.');}).finally(()=>{if(epoch.current===mine)setBusy(false);});
   }}>Request extraction</Button>}
- {ports.evidence?<EvidenceReview sources={[source]} ports={ports.evidence} enabled={enabled} recordId={recordId} privacyKey={privacyKey} sourceVersion={sourceVersion} {...(workContexts===undefined?{}:{workContexts})}/>:null}
+ {ports.evidence?<EvidenceReview sources={[...new Map([source,...(comparisonSources??[])].map(choice=>[`${choice.workspaceId}:${choice.kind}:${choice.sourceId}`,choice])).values()]} ports={ports.evidence} enabled={enabled} recordId={recordId} privacyKey={privacyKey} sourceVersion={sourceVersion} {...(workContexts===undefined?{}:{workContexts})}/>:null}
  </section>;
 }
