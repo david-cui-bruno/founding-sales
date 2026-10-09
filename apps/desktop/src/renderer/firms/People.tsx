@@ -295,7 +295,7 @@ export function People({
           <ul>
             {page.sources.map((source) => (
               <li key={source.sourceId}>
-                {processing&&<ProcessingHealth source={source} ports={processing}/>}
+                {processing&&<ProcessingHealth source={source} comparisonSources={page.sources} ports={processing} enabled={enabled} recordId={page.person.personId} privacyKey={privacyKey} sourceVersion={String(sourceVersion ?? 0)}/>}
                 {source.excerpt ? (
                   <>
                     <p>{source.excerpt}</p>

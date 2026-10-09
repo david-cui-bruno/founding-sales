@@ -1,6 +1,16 @@
 import {askReadSchema,askResponseSchema} from '@fss/contracts';
 import {selectedAttachmentFileSchema,selectedAttachmentPreviewSchema,selectedAttachmentReadSchema,selectedAttachmentPageSchema,selectedAttachmentCommitPayloadSchema,selectedAttachmentCommitResultSchema,selectedAttachmentAnalyzePayloadSchema,selectedAttachmentAnalyzeResultSchema,selectedAttachmentReselectPayloadSchema,selectedAttachmentReselectResultSchema} from '@fss/contracts';
 import {crmProgressReadSchema,crmProgressResponseSchema} from '@fss/contracts';
+import { crmEvidenceWorkBindPayloadSchema, crmEvidenceWorkBoundSchema } from "@fss/contracts";
+import { crmEvidenceWorkReadSchema, crmEvidenceWorkPageSchema } from "@fss/contracts";
+import { crmEvidenceWorkListSchema, crmEvidenceWorkListPageSchema } from "@fss/contracts";
+import { crmConflictSavePayloadSchema } from "@fss/contracts";
+import { crmConflictResolvePayloadSchema, crmConflictSavedSchema } from "@fss/contracts";
+import { crmConflictReadSchema, crmConflictPageSchema } from "@fss/contracts";
+import { crmConflictListSchema, crmConflictListPageSchema } from "@fss/contracts";
+import { crmDecisionHistoryReadSchema, crmDecisionHistoryPageSchema } from "@fss/contracts";
+import { crmDecisionHistoryListSchema, crmDecisionHistoryListPageSchema } from "@fss/contracts";
+import { crmEvidenceReadSchema, crmEvidencePageSchema, crmEvidenceDecidePayloadSchema, crmEvidenceDecidedSchema } from "@fss/contracts";
 import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSchema,explicitOpportunityResultSchema} from '@fss/contracts';
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
 import {mailSourcesListSchema,mailSourceListSchema,mailSourceReadSchema,mailConversationSchema,mailSourceChangePayloadSchema,mailSourceChangedSchema,mailControlsReadSchema,mailCaptureControlsSchema,mailSourceStateReadSchema,mailSourceStateSchema,mailSourceRecaptureQueuedSchema,mailSourceAssociatePayloadSchema} from '@fss/contracts';
@@ -1145,6 +1155,17 @@ export const OPERATIONS = {
   'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
   'crm.businessReviewRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/review/read'}],input:businessReviewReadSchema,output:businessReviewSchema,transform:'bounded proven account metadata; no bodies'},
   'crm.businessReviewDecide': {kind:'command',calls:[{method:'POST',path:'/crm/business/review/decide'}],input:businessReviewDecidePayloadSchema,output:z.strictObject({decisionRevision:z.number().int().positive(),captureAllowed:z.literal(false)}),transform:'versioned human inclusion/exclusion; no capture authority'},
+  'crm.evidenceWorkBind':{kind:'command',calls:[{method:'POST',path:'/crm/evidence/work/bind'}],input:crmEvidenceWorkBindPayloadSchema,output:crmEvidenceWorkBoundSchema,transform:'exact current claim and actual task version dependency'},
+  'crm.evidenceWorkRead':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/work/read'}],input:crmEvidenceWorkReadSchema,output:crmEvidenceWorkPageSchema,transform:'immutable work state with evidence review flags'},
+  'crm.evidenceWorkList':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/work/list'}],input:crmEvidenceWorkListSchema,output:crmEvidenceWorkListPageSchema,transform:'bounded existing source dependent work'},
+  'crm.evidenceConflictSave':{kind:'command',calls:[{method:'POST',path:'/crm/evidence/conflict/save'}],input:crmConflictSavePayloadSchema,output:crmConflictSavedSchema,transform:'exact distinct source evidence conflict members'},
+  'crm.evidenceConflictResolve':{kind:'command',calls:[{method:'POST',path:'/crm/evidence/conflict/resolve'}],input:crmConflictResolvePayloadSchema,output:crmConflictSavedSchema,transform:'dated human resolution of an exact conflict revision'},
+  'crm.evidenceConflictRead':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/conflict/read'}],input:crmConflictReadSchema,output:crmConflictPageSchema,transform:'exact conflict members and dated membership history'},
+  'crm.evidenceConflictList':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/conflict/list'}],input:crmConflictListSchema,output:crmConflictListPageSchema,transform:'protected source conflict group discovery'},
+  'crm.evidenceHistoryRead':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/decision/history/read'}],input:crmDecisionHistoryReadSchema,output:crmDecisionHistoryPageSchema,transform:'dated human decisions with redaction and current source access'},
+  'crm.evidenceHistoryList':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/decision/history/list'}],input:crmDecisionHistoryListSchema,output:crmDecisionHistoryListPageSchema,transform:'protected body-free decision anchor discovery'},
+  'crm.evidenceDecide':{kind:'command',calls:[{method:'POST',path:'/crm/evidence/decide'}],input:crmEvidenceDecidePayloadSchema,output:crmEvidenceDecidedSchema,transform:'human decision bound to exact claim and source revisions'},
+  'crm.evidenceRead':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/read'}],input:crmEvidenceReadSchema,output:crmEvidencePageSchema,transform:'bounded current and human-reviewed source evidence'},
   'crm.processingSource':{kind:'read',calls:[{method:'POST',path:'/crm/processing/source/read'}],input:crmSourceLookupSchema,output:crmResolvedSourceSchema,transform:'exact current source authority and bounded quote'},
   'crm.progressRead':{kind:'read',calls:[{method:'POST',path:'/crm/progress/read'}],input:crmProgressReadSchema,output:crmProgressResponseSchema,transform:'current verified evidence; imports do not send or change sales stages'},
   'ask.read':{kind:'read',calls:[{method:'POST',path:'/ask/read'}],input:askReadSchema,output:askResponseSchema,transform:'exact current state and authorized lexical retrieval; no execution authority'},
