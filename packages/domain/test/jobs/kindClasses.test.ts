@@ -55,6 +55,7 @@ describe('job kind classes', () => {
       'sequence.action',
       'sequence.terminal_stop',
       'crm.mail_capture',
+      'crm.mail_backfill',
       'retention.batch',
       'route.validate',
       // Lane R: a page fetch and a sweep. Nobody is watching the clock on either, and
