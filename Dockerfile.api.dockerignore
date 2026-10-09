@@ -45,6 +45,7 @@
 !packages/domain/retention
 !packages/domain/release
 !packages/domain/funnel
+!packages/domain/business
 !packages/domain/calls
 !packages/domain/meetings
 !packages/contracts/package.json

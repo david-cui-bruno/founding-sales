@@ -1,0 +1,35 @@
+// @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, expect, it } from 'vitest';
+import { FirmsRoute } from '../src/renderer/firms/FirmsRoute.tsx';
+import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
+import { createGeneration } from '../src/renderer/app/generation.ts';
+import { resetCrmMemory } from '../src/renderer/firms/crmMemory.ts';
+import type { OperationApi } from '../src/shared/operations.ts';
+import { crmState, pipelineView } from './e2e/support/crmFixtures.ts';
+afterEach(()=>{cleanup();resetCrmMemory();globalThis.callieApi=undefined;});
+it('opens selected conversation import from a person through Firms navigation',async()=>{
+ resetCrmMemory();const user=userEvent.setup();const generation=createGeneration();generation.note(0);
+ const person={personId:'11111111-1111-4111-8111-111111111111',fullName:'Import Example',firm:null,revision:1};
+ const state=crmState({screen:'pipeline',firm:null,pipeline:pipelineView()});
+ const reads:string[]=[];
+ globalThis.callieApi={read:async(name:string)=>{reads.push(name);
+  if(name==='crm.state'||name==='crm.openPipeline')return state;
+  if(name==='crm.personList')return {people:[person],nextAfterId:null};
+  if(name==='crm.personRead')return {person,sources:[],nextAfterSourceId:null};
+  if(name==='crm.relationshipFirms')return {firms:[]};
+  if(name==='crm.relationshipRead')return {relationships:[],nextAfterId:null};
+  if(name==='crm.sourceContextRead')return {contexts:[],nextAfterId:null};
+  if(name==='crm.endpointList')return {claims:[],nextAfterId:null};
+  if(name==='crm.selectedImportRead')return {imports:[],nextAfterId:null};
+  throw new Error(`Unexpected read ${name}`);
+ },command:async()=>{throw new Error('No mutation expected');}} as unknown as OperationApi;
+ const client=new QueryClient({defaultOptions:{queries:{retry:false,staleTime:Infinity}}});
+ render(<QueryClientProvider client={client}><DraftsProvider><FirmsRoute route={{name:'firms'}} identity="import-navigation" generation={0} guard={generation.guard}/></DraftsProvider></QueryClientProvider>);
+ await user.click(await screen.findByRole('button',{name:'People'}));
+ await user.click(await screen.findByRole('button',{name:'Import Example'}));
+ expect(await screen.findByLabelText('Selected conversation text')).toBeTruthy();
+ expect(reads).toContain('crm.selectedImportRead');
+});

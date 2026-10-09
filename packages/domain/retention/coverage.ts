@@ -52,6 +52,10 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  crm_selected_imports: coverage(['retained','deletion_redacts'], 'Selected source labels, participants and attachment references redact atomically via the source-deletion trigger; only body-free import hashes and source identity remain to block replay. No duplicate body store; disconnect does not delete approved copied history.'),
+  crm_business_conversations: coverage(['deletion_redacts','swept'], 'Owner-private proven account metadata, redacted whole with mapped source or exact target address; 90-day review horizon. No bodies or sending authority.'),
+  crm_business_decision_revisions: coverage(['retained'], 'Content-free durable business inclusion/exclusion decisions; opaque IDs and revisions survive metadata redaction.'),
+  crm_business_policies: coverage(['operational'], 'Disabled mailbox-bound metadata review configuration; no message bodies or sending authority.'),
   human_reply_send_intents: coverage(['deletion_removes'], 'Exact human approval and envelope/thread metadata, with no duplicate body store. Firm/contact deletion removes this metadata under the send gate; the original outbound draft fence/source identity retains no-repeat history. Short expiry and current authority checks forbid replay. Outbound removal cascades this metadata.'),
   actionable_notification_attempts: coverage(['operational','retained'], 'Body-free user/device/source delivery and acknowledgement markers are retained for event deduplication through prospect deletion, departure and whole-database restore. Current ownership and source reads gate every new alert and context; a retained attempt never authorizes a replay.'),
   mailbox_provider_incidents: coverage(['operational','retained'], 'Coded mailbox safety history and hold identities; retained after prospect deletion/departure and with the whole database restore. Deadlines do not authorize fresh external action.'),

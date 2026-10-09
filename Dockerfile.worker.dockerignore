@@ -36,6 +36,7 @@
 !packages/domain/retention
 !packages/domain/restore
 !packages/domain/release
+!packages/domain/business
 !packages/domain/calls
 !packages/domain/meetings
 !packages/domain/funnel
