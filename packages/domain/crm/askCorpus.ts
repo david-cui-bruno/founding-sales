@@ -44,12 +44,10 @@ const nativeOwner = (
 const copiedMail = createNativeCrmMailEvidence();
 
 /** Bounded transient copied-source retrieval; no processing authority, provider, or content store. */
-export async function readAskCorpus(
+export async function readAskCanonicalCorpus(
   context: RepositoryContext,
   input: {
     scope: z.infer<typeof askExplicitCorpusScopeSchema>;
-    query: string;
-    limit: number;
   },
 ) {
   const requested = input.scope.sources;
@@ -238,6 +236,38 @@ export async function readAskCorpus(
     }
     if (sourceTruncated) truncatedSources++;
   }
+  if (!(await activeIdentityActor(context))) return null;
+  return {
+    windows,
+    coverage: {
+      scope: "explicit_copied_sources" as const,
+      acquisition: "unverified" as const,
+      semantic: "not_requested" as const,
+      scanComplete: refusedSources === 0 && truncatedSources === 0,
+      requestedSources: requested.length,
+      inspectedSources,
+      unavailableSources: 0,
+      refusedSources,
+      truncatedSources,
+      inspectedWindows: windows.length,
+      textBytes,
+      sourceByteCeiling: 80000 as const,
+      textByteCeiling: 800000 as const,
+      windowCeiling: 1000 as const,
+      omittedSignatures,
+      chunkerVersion: "lexical-original-v1" as const,
+    },
+  };
+}
+
+/** Existing keyword response remains a projection of the same bounded canonical census. */
+export async function readAskCorpus(
+ context:RepositoryContext,
+ input:{scope:z.infer<typeof askExplicitCorpusScopeSchema>;query:string;limit:number},
+){
+ const census=await readAskCanonicalCorpus(context,{scope:input.scope});
+ if(census===null)return null;
+ const {windows}=census;
   const matches = (
     await context.db.query<{ ordinal: number }>(
       "SELECT ordinal::int FROM unnest($1::text[]) WITH ORDINALITY AS chunk(text,ordinal) WHERE to_tsvector('simple',text) @@ websearch_to_tsquery('simple',$2) ORDER BY ordinal",
@@ -272,25 +302,8 @@ export async function readAskCorpus(
     scope: input.scope,
     passages: [...grouped.values()].slice(0, input.limit),
     nextAfterSourceId: null,
-    truncated: grouped.size > input.limit || truncatedSources > 0,
-    coverage: {
-      scope: "explicit_copied_sources" as const,
-      acquisition: "unverified" as const,
-      semantic: "not_requested" as const,
-      scanComplete: refusedSources === 0 && truncatedSources === 0,
-      requestedSources: requested.length,
-      inspectedSources,
-      unavailableSources: 0,
-      refusedSources,
-      truncatedSources,
-      inspectedWindows: windows.length,
-      textBytes,
-      sourceByteCeiling: 80000 as const,
-      textByteCeiling: 800000 as const,
-      windowCeiling: 1000 as const,
-      omittedSignatures,
-      chunkerVersion: "lexical-original-v1" as const,
-    },
+    truncated: grouped.size > input.limit || census.coverage.truncatedSources > 0,
+    coverage:census.coverage,
   };
 }
 

@@ -10,6 +10,7 @@ import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
 import {crmCaptureExtractionJobHandler} from '../handlers/crmCaptureExtraction.ts';
 import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts';
 import { crmExtractJobHandler } from '../handlers/crmExtract.ts';
+import {askAnswerJobHandler} from '../handlers/askAnswer.ts';
 import {automaticEmailHandler,automaticEmailSource} from '../handlers/emailAdmission.ts';
 import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
@@ -125,6 +126,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
 export interface HandlerComposition {
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
+  readonly crmAskAnswers?: Parameters<typeof askAnswerJobHandler>[0];
   /** Controlled composition only; no live proof verifier is configured by startup. */
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
@@ -237,6 +239,7 @@ export function registerHandlers(
   );
   registry.register(retentionBatchJobHandler());
   registry.register(crmExtractJobHandler(composition.crmExtraction??{}));
+  registry.register(askAnswerJobHandler(composition.crmAskAnswers??{}));
   registry.register(crmCaptureExtractionJobHandler(composition.crmExtraction?.mailEvidence));
   registry.register(socialAssetsHandler(composition.socialAssets??null));
   // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,
