@@ -1,3 +1,4 @@
+import {GmailClientError} from '@fss/domain/mail/gmailClient.ts';
 import {createHistoricalGmailMailCaptureProvider} from '@fss/domain/mail/crmBackfillCapture.ts';
 import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
 import { createApprovedBusinessMailObserver } from '@fss/domain/mail/crmSources.ts';
@@ -276,10 +277,11 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
   if(scenario==='body_quota')await fixture.db.query('UPDATE crm_mail_import_allocations SET user_limit_units=4,user_headroom_units=0 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
   const gmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'100',messages:[{id:'historical-business',threadId:'historical-business-thread',historyId:'50',internalDateEpochMilliseconds:Date.now()-89.5*86400000,headers:{From:'person@example.test',To:'business@example.test',Subject:'Historical business'},body:'Permitted historical business text'}]});
   const access={resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true}};
-  let originalMode:'unchanged'|'trashed'='unchanged';
+  let originalMode:'unchanged'|'trashed'|'missing'|'denied'='unchanged';
   const backfillGmail={...gmail,listMessageIds:async(...args:Parameters<typeof gmail.listMessageIds>)=>originalMode==='unchanged'?await gmail.listMessageIds(...args):{ok:true as const,messageIds:['historical-business'],nextPageToken:null},getMetadata:async(...args:Parameters<typeof gmail.getMetadata>)=>{
    const metadata=await gmail.getMetadata(...args);
-   return originalMode==='trashed'&&metadata!==null?{...metadata,labelIds:['TRASH']}:metadata;
+   if(originalMode==='denied')throw new GmailClientError('unexpected_status','Controlled metadata denial',403);
+   return originalMode==='missing'?null:originalMode==='trashed'&&metadata!==null?{...metadata,labelIds:['TRASH']}:metadata;
   }};
   const captureGmail={...gmail,getMetadata:async(...args:Parameters<typeof gmail.getMetadata>)=>{
    const metadata=await gmail.getMetadata(...args);
@@ -326,6 +328,18 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
   const refresh=(await claimJobs(runtime,{owner:'original-state-refresh',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(runtime,{registry,job:refresh})).toBe('completed');
   expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{sourceRevision:1,passage:'Permitted historical business text',originalObservation:{state:'trashed',revision:'1',observedAt:expect.any(String),observedGeneration:1,observedAccountBinding:binding,reason:'verified_trash_label',connectionState:'current'}}});
+  originalMode='missing';
+  expect(await runSchedulerPass(runtime,{sources:[workerDueWorkSources({crmMailBackfill:true}).find(source=>source.name==='crm-mail-backfill')!],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
+  const missingRefresh=(await claimJobs(runtime,{owner:'original-missing-refresh',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:missingRefresh})).toBe('completed');
+  expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{sourceRevision:1,passage:'Permitted historical business text',originalObservation:{state:'confirmed_missing',revision:'2',observedGeneration:1,observedAccountBinding:binding,reason:'verified_message_not_found'}}});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({metadataCoverage:{retainedUniqueMessages:'1',confirmedMissingMessages:'1'},copyCoverage:{retainedCopiedBodies:'1',coverage:'complete'}});
+  originalMode='denied';
+  expect(await runSchedulerPass(runtime,{sources:[workerDueWorkSources({crmMailBackfill:true}).find(source=>source.name==='crm-mail-backfill')!],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
+  const deniedRefresh=(await claimJobs(runtime,{owner:'original-denied-refresh',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:deniedRefresh})).toBe('retryable');
+  expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{passage:'Permitted historical business text',originalObservation:{state:'transient_unavailable',revision:'3',reason:'grant_unavailable'}}});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({quotaAccounting:{reservedUnits:'11',observedUnits:'10',unknownUnits:'1'},copyCoverage:{retainedCopiedBodies:'1'}});
   const outsideFirm=await seedFirm(fixture,{name:'Other assigned context',regionCode:'RI',postalCode:'02903',assignedUserId:fixture.alpha.salesperson.userId});
   expect((await post('/crm/business/mail/associate',{commandId:randomUUID(),clientVersion:'1.4.0',sourceId:copied?.progress['sourceId'],expectedRevision:1,firmId:outsideFirm})).body).toMatchObject({status:'accepted'});
   await fixture.db.query("CREATE FUNCTION test_refuse_backfill_coverage_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='crm.mail_source_admin_read' THEN RAISE EXCEPTION 'coverage audit unavailable'; END IF; RETURN NEW; END $$");
@@ -335,8 +349,10 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{coverage:'complete',retainedCopiedBodies:'1',unresolvedMetadata:'0'}});
   await fixture.db.query("UPDATE mailboxes SET status='disconnected',disconnected_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:'disconnected',copyCoverage:{coverage:'complete',retainedCopiedBodies:'1'}});
+  expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:2,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{originalObservation:{state:'transient_unavailable',revision:'3',connectionState:'disconnected'}}});
   await fixture.db.query("UPDATE mailboxes SET status='connected',disconnected_at=NULL,provider_account_id='replacement-provider-account',generation=2 WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:'changed',copyCoverage:{coverage:'complete',retainedCopiedBodies:'1'}});
+  expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:2,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{originalObservation:{state:'transient_unavailable',revision:'3',connectionState:'changed'}}});
   await fixture.db.query("UPDATE mailboxes SET provider_account_id='google-business',generation=1 WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
   // Separate runtime sessions exercise the read/delete lock boundary through real commands.
   const coverageSession=await fixture.database.appRuntimeSession();
@@ -364,6 +380,7 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
   }finally{await fixture.db.query('SELECT pg_advisory_unlock(4842201)');}
   expect((await coverageRun).body).toMatchObject({copyCoverage:{retainedCopiedBodies:'1',coverage:'complete'}});
   expect((await deletionRun!).body).toMatchObject({status:'accepted',result:{availability:'deleted'}});
+  expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:3,contentHash:null})).body).toEqual({state:'unavailable',reason:'deleted',source:null});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{retainedCopiedBodies:'0',unresolvedMetadata:'1',coverage:'partial'}});
   expect(gmail.bodyReads).toEqual(['historical-business']);
   expect(gmail.sends).toEqual([]);

@@ -4,7 +4,7 @@ import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {readBackfillAuthority,type BackfillAuthority} from '@fss/domain/mail/crmBackfillAuthority.ts';
 import {readBackfillAllocation,reserveBackfillRead,observeBackfillRead,type BackfillAllocationVerifier,type BackfillReadMethod} from '@fss/domain/mail/crmBackfillBudget.ts';
 import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
-import type {GmailClient,GmailAccessGrant} from '@fss/domain/mail/gmailClient.ts';
+import {GmailClientError,type GmailClient,type GmailAccessGrant} from '@fss/domain/mail/gmailClient.ts';
 import type {MailCaptureProofVerifier} from '@fss/domain/mail/crmSources.ts';
 import {recordBackfillMetadata} from '@fss/domain/mail/crmBackfillMetadata.ts';
 import {METADATA_HEADERS} from '@fss/domain/mail/types.ts';
@@ -46,6 +46,27 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(latest===null||latest.mailboxId!==proofInput.mailboxId||latest.providerAccountId!==proofInput.providerAccountId||latest.generation!==proofInput.generation||current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof))throw new BackfillFailure('acquisition_binding_changed');
    return result;
   }
+  async function providerMetadata(bound:BackfillAuthority,messageId:string){
+   let transientReason:'grant_unavailable'|'rate_limited'|'provider_unavailable'|undefined;
+   try{
+    const metadata=await providerRead('metadata',bound,async access=>{
+     try{return await adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS);}catch(error){
+      transientReason=error instanceof GmailClientError&&(error.status===401||error.status===403)?'grant_unavailable':error instanceof GmailClientError&&error.status===429?'rate_limited':'provider_unavailable';
+      throw error;
+     }
+    });
+    if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
+    await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    return metadata;
+   }catch(error){
+    if(transientReason!==undefined){
+     const latest=await adapters.resolveAccess({mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation});
+     if(latest!==null&&latest.mailboxId===bound.proof.mailboxId&&latest.providerAccountId===bound.proof.providerAccountId&&latest.generation===bound.proof.generation)
+      await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata:null,transientReason,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    }
+    throw error;
+   }
+  }
   try{
    if(authority.historyAnchor===null){
     const profile=await providerRead('profile',authority,access=>adapters.gmail.getProfile(access));
@@ -74,9 +95,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      const unique=new Set(record.changes.map(change=>change.messageId));
      for(const messageId of unique){
       if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
-      const metadata=await providerRead('metadata',bound,access=>adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS));
-      if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
-      await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+      const metadata=await providerMetadata(bound,messageId);
       await withTransaction(input.session,async()=>{
        if(!await fenced(input))throw new BackfillFailure('acquisition_binding_changed');
        const current=await readBackfillAuthority(context,importId,true);
@@ -100,9 +119,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(!listed.ok)throw new BackfillFailure('provider_read_unavailable');
    for(const messageId of listed.messageIds){
     if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
-    const metadata=await providerRead('metadata',authority,access=>adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS));
-    if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
-    await recordRetainedOriginalMetadata(context,{authority,messageId,metadata,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    const metadata=await providerMetadata(authority,messageId);
     if(metadata!==null&&(BigInt(metadata.internalDateEpochMilliseconds)*1000n<BigInt(authority.fromEpochMicroseconds)||BigInt(metadata.internalDateEpochMilliseconds)*1000n>=BigInt(authority.toEpochMicroseconds)))continue;
     const expected=authority;
     await withTransaction(input.session,async()=>{
