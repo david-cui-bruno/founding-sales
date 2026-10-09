@@ -6,15 +6,17 @@ import {enqueueJob,claimJobs} from '@fss/domain/jobs/jobStore.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
+import {runSchedulerPass} from '../../worker/src/scheduler/schedulerPass.ts';
+import {workerDueWorkSources} from '../../worker/src/bootstrap/main.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION} from './support/authFixture.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {seedFirm,seedContact} from './support/crmSeed.ts';
 import {dispatch} from '../src/server.ts';
 
-it.each(['unique','shared','partial','draft','forward_only','old_sent','newer_request','other_thread','wrong_recipient','mixed_local_case'])('resolves only supported exact-conversation work (%s)',async(scenario)=>{
+it.each(['unique','scheduled','replied','out_of_order','source_shared','shared','partial','draft','forward_only','old_sent','newer_request','other_thread','wrong_recipient','mixed_local_case'])('resolves only supported exact-conversation work (%s)',async(scenario)=>{
  const shared=scenario==='shared';
- const resolves=scenario==='unique';
+ const resolves=scenario==='unique'||scenario==='scheduled';
  const fixture=await createAuthFixture();
  try{
   const {workspaceId,admin}=fixture.alpha;
@@ -28,7 +30,7 @@ it.each(['unique','shared','partial','draft','forward_only','old_sent','newer_re
   await fixture.db.query("INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled) VALUES($1,$2,$3,'google-progress',$4,1,1,false)",[workspaceId,mailbox.id,admin.userId,binding]);
   await fixture.db.query("INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'google-progress',$4,1,1,true,1,'controlled-full-capture',repeat('b',64),'fixture-grant','fixture-policy','fixture-evaluation','fixture-release')",[workspaceId,mailbox.id,admin.userId,binding]);
   const records=[{providerId:'request-a',threadId:'thread-a',at:'2026-09-24T14:00:00Z',sent:false},{providerId:'request-b',threadId:'thread-b',at:'2026-09-24T15:00:00Z',sent:false},{providerId:'sent-a',threadId:'thread-a',at:'2026-09-25T14:00:00Z',sent:true}];
-  if(scenario==='old_sent')records[2]!.at='2026-09-23T14:00:00Z';
+  if(scenario==='old_sent'||scenario==='replied'||scenario==='out_of_order')records[2]!.at='2026-09-23T14:00:00Z';
   if(scenario==='newer_request')records[0]!.at='2026-09-26T14:00:00Z';
   if(scenario==='other_thread')records[2]!.threadId='thread-c';
   const ids=new Map<string,string>();
@@ -40,6 +42,7 @@ it.each(['unique','shared','partial','draft','forward_only','old_sent','newer_re
    ids.set(record.providerId,id);
    await fixture.db.query("INSERT INTO mail_message_matches(workspace_id,mail_message_id,firm_id,opportunity_id,contact_id,match_rule) VALUES($1,$2,$3,$4,$5,'thread')",[workspaceId,id,firmId,opportunityId,contactId]);
    if(!record.sent)await fixture.db.query("INSERT INTO mail_message_classifications(workspace_id,mail_message_id,layer,class,requires_confirmation,rules_version) VALUES($1,$2,'deterministic','human',false,'fixture')",[workspaceId,id]);
+   if(scenario==='out_of_order'&&record.sent)continue;
    await enqueueJob(fixture.db,{workspaceId,kind:'crm.mail_capture',idempotencyKey:`capture:${record.providerId}`,payload:{mailboxId:mailbox.id,providerMessageId:record.providerId,providerAccountId:'google-progress',generation:1,conversationId,controlsRevision:1,policyRevision:1,decisionRevision:0}});
   }
   const passage='Yes, let us discuss your request.';
@@ -47,19 +50,34 @@ it.each(['unique','shared','partial','draft','forward_only','old_sent','newer_re
   await runOnce(fixture.db,{registry,owner:'progress-capture-fixture',limit:20});
   const token=(await issueSessionFor(fixture,fixture.alpha,admin)).accessToken;
   const request=(path:string,body?:unknown)=>dispatch({method:body===undefined?'GET':'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  if(scenario==='out_of_order'){
+   await runSchedulerPass(fixture.db,{sources:workerDueWorkSources(),now:'2026-10-09T15:00:00Z'});await runOnce(fixture.db,{registry,owner:'progress-before-prerequisite',limit:20});
+   expect((await request('/crm/progress/read',{firmId})).body).toMatchObject({events:[]});
+   await enqueueJob(fixture.db,{workspaceId,kind:'crm.mail_capture',idempotencyKey:'capture:sent-a',payload:{mailboxId:mailbox.id,providerMessageId:'sent-a',providerAccountId:'google-progress',generation:1,conversationId:threadIds.get('thread-a'),controlsRevision:1,policyRevision:1,decisionRevision:0}});
+   await runOnce(fixture.db,{registry,owner:'progress-late-prerequisite',limit:20});
+  }
+  if(scenario==='source_shared'){
+   const command=(fields:Record<string,unknown>)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...fields});
+   const added=await request('/crm/firm-sources/add',command({firmId,sourceKey:randomUUID(),excerpt:'This is a shared office email endpoint',occurredAt:'2026-09-15T14:00:00.000Z'}));expect(added.status).toBe(200);
+   const sourceId=(added.body as {result:{sourceId:string}}).result.sourceId;
+   const sources=(await request('/crm/firm-sources/read',{firmId})).body as {sources:{sourceId:string;revision:number;contentHash:string}[]};const source=sources.sources.find(item=>item.sourceId===sourceId)!;
+   const claimed=await request('/crm/endpoints/claim',command({personId:null,firmId,shared:true,kind:'email',value:'morgan@example.test',status:'current',startDate:null,endDate:null,evidence:{sourceId,sourceRevision:source.revision,contentHash:source.contentHash}}));expect(claimed.status).toBe(200);
+  }
   const before=todayActionsResponseSchema.parse((await request('/today/actions')).body);
   expect(before.actions.map(a=>a.actionId).sort()).toEqual([`reply-message:${ids.get('request-a')}`,`reply-message:${ids.get('request-b')}`].sort());
   const notifications=actionableNotificationsResponseSchema.parse((await request('/notifications/actions')).body);
   const first=notifications.items.find(item=>item.actionId===`reply-message:${ids.get('request-a')}`);if(!first)throw new Error('request reminder missing');
   const claimed=await request('/notifications/claim',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,eventKey:first.eventKey});expect(claimed.status).toBe(200);
   const progress=registry.get('crm.mail_progress');
-  if(progress){
+  if(scenario==='scheduled'||scenario==='replied'||scenario==='out_of_order'){await runSchedulerPass(fixture.db,{sources:workerDueWorkSources(),now:'2026-10-09T15:00:00Z'});const ran=await runOnce(fixture.db,{registry,owner:'progress-scheduled-fixture',limit:20});expect(ran.failed).toBe(0);}
+  else if(progress){
    await enqueueJob(fixture.db,{workspaceId,kind:progress.kind,idempotencyKey:'project:sent-a',payload:{sourceId:ids.get('sent-a'),sourceRevision:1,contentHash:createHash('sha256').update(passage).digest('hex')}});
    const job=(await claimJobs(fixture.db,{owner:'progress-projection-fixture',kinds:[progress.kind],limit:1,leaseSeconds:120}))[0]!;
    await progress.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
   }
   expect(todayActionsResponseSchema.parse((await request('/today/actions')).body).actions.map(a=>a.actionId).sort()).toEqual(resolves?[`reply-message:${ids.get('request-b')}`]:[`reply-message:${ids.get('request-a')}`,`reply-message:${ids.get('request-b')}`].sort());
   if(resolves){const progressRead=await request('/crm/progress/read',{firmId});expect(progressRead.status).toBe(200);expect(progressRead.body).toMatchObject({version:1,events:[{kind:'contacted',occurredAt:'2026-09-25T14:00:00.000Z',source:{sourceId:ids.get('sent-a'),kind:'mail',revision:1}}]});}
+  if(scenario==='replied'||scenario==='out_of_order'){const read=await request('/crm/progress/read',{firmId});expect(read.status).toBe(200);expect(read.body).toMatchObject({events:[{kind:'contacted',occurredAt:'2026-09-23T14:00:00.000Z'},{kind:'replied',occurredAt:'2026-09-24T14:00:00.000Z',source:{sourceId:ids.get('request-a')}}]});}
   const after=actionableNotificationsResponseSchema.parse((await request('/notifications/actions')).body);
   expect(after.items.some(item=>item.actionId===first.actionId)).toBe(!resolves);
   expect(after.recoveries.find(item=>item.actionId===first.actionId)).toMatchObject({current:!resolves});

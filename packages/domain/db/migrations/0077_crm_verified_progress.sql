@@ -7,6 +7,10 @@ CREATE TABLE crm_mail_progress_receipts (
  account_binding text CHECK(account_binding ~ '^[a-f0-9]{64}$'),
  event_kind text NOT NULL CHECK(event_kind IN ('contacted','replied')),
  provider_at timestamptz,
+ prerequisite_source_id uuid, prerequisite_source_revision integer CHECK(prerequisite_source_revision>0),
+ prerequisite_source_hash text CHECK(prerequisite_source_hash ~ '^[a-f0-9]{64}$'),
+ CHECK((prerequisite_source_id IS NULL)=(prerequisite_source_revision IS NULL) AND (prerequisite_source_id IS NULL)=(prerequisite_source_hash IS NULL)),
+ CHECK(state<>'active' OR event_kind<>'replied' OR prerequisite_source_id IS NOT NULL),
  context_hash text NOT NULL CHECK(context_hash ~ '^[a-f0-9]{64}$'),
  original_firm_ids uuid[] NOT NULL CHECK(cardinality(original_firm_ids)<=100),
  original_person_ids uuid[] NOT NULL CHECK(cardinality(original_person_ids)<=100),
@@ -19,8 +23,8 @@ CREATE TABLE crm_mail_progress_receipts (
 );
 CREATE TABLE crm_mail_reply_resolutions (
  workspace_id uuid NOT NULL, request_message_id uuid NOT NULL,
- sent_receipt_id uuid NOT NULL, request_provider_at timestamptz,
+ sent_receipt_id uuid, request_provider_at timestamptz,
  PRIMARY KEY(workspace_id,request_message_id),
- FOREIGN KEY(workspace_id,sent_receipt_id) REFERENCES crm_mail_progress_receipts(workspace_id,id)
+ FOREIGN KEY(workspace_id,sent_receipt_id) REFERENCES crm_mail_progress_receipts(workspace_id,id) ON DELETE SET NULL (sent_receipt_id)
 );
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_mail_progress_receipts,crm_mail_reply_resolutions TO app_runtime,migration;

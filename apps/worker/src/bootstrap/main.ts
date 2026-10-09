@@ -1,3 +1,4 @@
+import {crmMailProgressSource} from '../scheduler/crmMailProgressSource.ts';
 import {crmMailProgressJobHandler} from '../handlers/crmMailProgress.ts';
 import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
 import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
@@ -515,6 +516,7 @@ export function workerDueWorkSources(
   } = {},
 ): readonly DueWorkSource[] {
   return [
+    crmMailProgressSource(),
     crmExtractionRecoverySource(),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
