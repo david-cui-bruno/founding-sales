@@ -1732,8 +1732,8 @@ export async function prepareMailProcessingAuthority(
     !(await activeBusinessActor(context))
   )
     return { ok: false, reason: 'processing_authority_unavailable' };
-  const read = await readMailConversation(context, exact);
-  if (read.state !== 'available') return { ok: false, reason: read.reason };
+  const copyContext = await lockMailCopyContext(context, exact.sourceId);
+  if (!copyContext) return { ok: false, reason: 'source_unknown' };
   const source = (
     await context.db.query<
       Control & {
@@ -1743,6 +1743,7 @@ export async function prepareMailProcessingAuthority(
         decision_revision: number;
         source_revision: number;
         content_hash: string;
+        availability: string;
       }
     >('SELECT * FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2', [
       context.scope.workspaceId,
@@ -1754,6 +1755,25 @@ export async function prepareMailProcessingAuthority(
     (source.owner_user_id !== purposeOwner && actor.role !== 'admin')
   )
     return { ok: false, reason: 'processing_authority_unavailable' };
+  if (source.availability !== 'available')
+    return { ok: false, reason: source.availability };
+  if (
+    source.source_revision !== exact.sourceRevision ||
+    source.content_hash !== exact.contentHash
+  )
+    return { ok: false, reason: 'source_changed' };
+  const veto = await context.db.query(
+    'SELECT 1 FROM crm_mail_acquisition_tombstones WHERE workspace_id=$1 AND source_id=$2 AND source_revision >= $3 LIMIT 1',
+    [context.scope.workspaceId, exact.sourceId, exact.sourceRevision],
+  );
+  if (veto.rows.length) return { ok: false, reason: 'source_deleted' };
+  if (actor.role === 'admin' && source.owner_user_id !== actor.userId)
+    await recordCrmAuditEvent(context, {
+      action: 'crm.mail_source_admin_read',
+      subjectKind: 'mail_source',
+      subjectId: exact.sourceId,
+      detail: { sourceRevision: source.source_revision },
+    });
   const mailbox = (
     await context.db.query<Mailbox>(
       'SELECT * FROM mailboxes WHERE workspace_id=$1 AND id=$2',
