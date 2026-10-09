@@ -94,3 +94,18 @@ it('returns one firm identity despite multiple opportunities and preserves equal
   expect(records.every(row=>row.kind==='firm'&&row.name==='Orion Management')).toBe(true);
  }finally{await fixture.stop();}
 });
+
+it('counts exact open work and states due-date scope without inferred tasks',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const firmId=await seedFirm(fixture,{name:'Task count firm',assignedUserId:fixture.alpha.salesperson.userId});
+  await fixture.db.query("INSERT INTO callbacks(workspace_id,firm_id,assigned_user_id,requested_local_date,source_time_zone,due_at,confirmed_at,confirmed_by_user_id) VALUES($1,$2,$3,'2026-10-20','America/New_York','2026-10-20T14:00:00Z',now(),$3),($1,$2,$3,'2026-11-20','America/New_York','2026-11-20T14:00:00Z',now(),$3)",[fixture.alpha.workspaceId,firmId,fixture.alpha.salesperson.userId]);
+  const scope={firmId,from:'2026-10-01T00:00:00.000Z',to:'2026-11-01T00:00:00.000Z'};
+  const read=await post('/ask/read',{operation:'tasks',scope,limit:20});
+  expect(read.status).toBe(200);expect(read.body).toMatchObject({operation:'tasks',count:'1',dateBasis:'task_due_at',scope,truncated:false,coverage:{acquisition:'unverified'}});
+  expect((read.body as {records:unknown[]}).records).toHaveLength(1);
+  expect((read.body as {records:unknown[]}).records[0]).toMatchObject({kind:'callback',status:'open',dueAt:'2026-10-20T14:00:00.000Z'});
+ }finally{await fixture.stop();}
+});
