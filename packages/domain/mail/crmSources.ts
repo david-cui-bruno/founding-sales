@@ -788,6 +788,41 @@ export interface ExactMailSource {
   contentHash: string | null;
   locator?: string | undefined;
 }
+/** Exceptional status is protected by the same append-only audit as copied content. */
+async function auditExceptionalMailRead(
+  context: RepositoryContext,
+  exact: ExactMailSource,
+  ownerUserId: string,
+  capturedContexts?: readonly MailContext[],
+) {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user' || actor.role !== 'admin') return;
+  let exceptional = ownerUserId !== actor.userId;
+  if (!exceptional) {
+    const contexts =
+      capturedContexts ?? (await lockMailCopyContext(context, exact.sourceId));
+    const firms = [
+      ...new Set(
+        (contexts ?? []).flatMap((cx) => (cx.firm_id ? [cx.firm_id] : [])),
+      ),
+    ];
+    if (firms.length)
+      exceptional =
+        (
+          await context.db.query(
+            'SELECT 1 FROM firms WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND assigned_user_id IS DISTINCT FROM $3::uuid LIMIT 1',
+            [context.scope.workspaceId, firms, actor.userId],
+          )
+        ).rows.length > 0;
+  }
+  if (exceptional)
+    await recordCrmAuditEvent(context, {
+      action: 'crm.mail_source_admin_read',
+      subjectKind: 'mail_source',
+      subjectId: exact.sourceId,
+      detail: { sourceRevision: exact.sourceRevision },
+    });
+}
 export async function readMailConversation(
   context: RepositoryContext,
   exact: ExactMailSource,
@@ -805,19 +840,24 @@ export async function readMailConversation(
       [context.scope.workspaceId, exact.sourceId, exact.sourceRevision],
     )
   ).rows[0];
-  if (known && (actor.role === 'admin' || known.owner_user_id === actor.userId))
+  if (
+    known &&
+    (actor.role === 'admin' || known.owner_user_id === actor.userId)
+  ) {
+    await auditExceptionalMailRead(context, exact, known.owner_user_id);
     return {
       state: 'unavailable',
       reason: known.availability,
       source: null,
     } as const;
+  }
   const lineage = await context.db.query(
     'SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2',
     [context.scope.workspaceId, exact.sourceId],
   );
   if (!lineage.rows.length) {
-    const legacy = await context.db.query(
-      'SELECT 1 FROM mail_messages m JOIN mailboxes mb ON mb.workspace_id=m.workspace_id AND mb.id=m.mailbox_id WHERE m.workspace_id=$1 AND m.id=$2 AND ($3::boolean OR mb.owner_user_id=$4)',
+    const legacy = await context.db.query<{ owner_user_id: string }>(
+      'SELECT mb.owner_user_id FROM mail_messages m JOIN mailboxes mb ON mb.workspace_id=m.workspace_id AND mb.id=m.mailbox_id WHERE m.workspace_id=$1 AND m.id=$2 AND ($3::boolean OR mb.owner_user_id=$4)',
       [
         context.scope.workspaceId,
         exact.sourceId,
@@ -825,6 +865,13 @@ export async function readMailConversation(
         actor.userId,
       ],
     );
+    if (legacy.rows[0])
+      await auditExceptionalMailRead(
+        context,
+        exact,
+        legacy.rows[0].owner_user_id,
+        [],
+      );
     return {
       state: 'unavailable',
       reason: legacy.rows.length ? 'provenance_unavailable' : 'source_unknown',
@@ -871,6 +918,19 @@ export async function readMailConversation(
       reason: 'source_unknown',
       source: null,
     } as const;
+  if (!(await activeBusinessActor(context)))
+    return {
+      state: 'unavailable',
+      reason: 'source_unknown',
+      source: null,
+    } as const;
+  await auditExceptionalMailRead(
+    context,
+    exact,
+    row.owner_user_id,
+    copyContext,
+  );
+
   if (row.availability !== 'available')
     return {
       state: 'unavailable',
@@ -895,13 +955,7 @@ export async function readMailConversation(
       reason: 'source_unknown',
       source: null,
     } as const;
-  if (actor.role === 'admin' && row.owner_user_id !== actor.userId)
-    await recordCrmAuditEvent(context, {
-      action: 'crm.mail_source_admin_read',
-      subjectKind: 'mail_source',
-      subjectId: row.source_id,
-      detail: { sourceRevision: row.source_revision },
-    });
+
   return {
     state: 'available',
     source: {
