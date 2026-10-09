@@ -1,3 +1,4 @@
+import type { GmailMessageMetadata } from './gmailClient.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { fenceForOutgoingMessage } from '../outbound/fence.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
@@ -47,7 +48,12 @@ import { GmailClientError } from './gmailClient.ts';
  * runner still rolls the job back.
  */
 
+export interface BusinessMailMetadataObserver {
+  observe(context: RepositoryContext, input: { readonly mailboxId:string; readonly ownerUserId:string; readonly providerAccountId:string; readonly generation:number; readonly metadata:GmailMessageMetadata }):Promise<void>;
+}
 export interface MessagePipelineDeps {
+  /** Absent in production; the observation carries the run's captured binding. */
+  readonly businessMailObserver?:BusinessMailMetadataObserver|undefined;
   readonly gmail: GmailClient;
   readonly oauth: GmailOAuthConfig;
   readonly cipher: EnvelopeCipher;
@@ -190,6 +196,7 @@ export async function processMessageIds(
 
   let processedMessages = 0;
   let readFailure: PipelineReadFailure | null = null;
+  const completedMetadata: GmailMessageMetadata[]=[];
 
   for (const [index, providerMessageId] of input.messageIds.entries()) {
     // Step 1: metadata only, and only the allowlist (12.3).
@@ -415,6 +422,13 @@ export async function processMessageIds(
     }
     if (nested) await context.db.query(`RELEASE SAVEPOINT ${MESSAGE_SAVEPOINT}`);
     processedMessages = index + 1;
+    if(metadata.id===providerMessageId) completedMetadata.push(metadata);
+  }
+
+  // Publish metadata observations only after the operational prefix has acquired its locks.
+  // Failed messages never enter this list; bodies and effects keep their original savepoints.
+  for(const metadata of completedMetadata) {
+    if(deps.businessMailObserver && input.mailbox.providerAccountId!==null) await deps.businessMailObserver.observe(context,{mailboxId:input.mailbox.id,ownerUserId:input.mailbox.ownerUserId,providerAccountId:input.mailbox.providerAccountId,generation:input.mailbox.generation,metadata});
   }
 
   return {

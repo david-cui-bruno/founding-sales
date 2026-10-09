@@ -22,6 +22,7 @@ export const JOB_KINDS = [
   'sequence.action',
   'sequence.terminal_stop',
   'mail.sync',
+  'crm.mail_capture',
   'mail.reconcile',
   'mail.recover',
   'mail.watch_renew',
@@ -75,6 +76,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'sequence.terminal_stop': 'business_uniqueness',
   // Message uniqueness and a compare-and-set cursor.
   'mail.sync': 'business_uniqueness',
+  'crm.mail_capture': 'outbound_fence',
   // The fence state machine decides; a second reconcile observes, it does not send.
   'mail.reconcile': 'outbound_fence',
   // Message uniqueness and the coverage watermark.
@@ -315,6 +317,7 @@ export type JobClass = (typeof JOB_CLASSES)[number];
 export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze({
   // A person or the clock is waiting.
   'mail.sync': 'urgent',
+  'crm.mail_capture': 'bulk',
   'mail.reconcile': 'urgent',
   'mail.recover': 'urgent',
   'mail.watch_renew': 'urgent',

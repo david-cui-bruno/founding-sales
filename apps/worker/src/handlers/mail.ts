@@ -1,3 +1,4 @@
+import type { BusinessMailMetadataObserver } from '@fss/domain/mail/pipeline.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import type { EnvelopeCipher } from '@fss/domain/mail/envelope.ts';
 import type { GmailClient, GmailOAuthConfig } from '@fss/domain/mail/gmailClient.ts';
@@ -49,6 +50,7 @@ import { promoteReply } from '@fss/domain/today/promotions.ts';
  */
 
 export interface MailWorkerOptions {
+  readonly businessMailObserver?: BusinessMailMetadataObserver | undefined;
   readonly gmail: GmailClient;
   /** Resolved from `MailPublicConfig` plus the injected secret provider, at startup. */
   readonly oauth: GmailOAuthConfig;
@@ -80,6 +82,7 @@ export function mailHandlers(options: MailWorkerOptions | undefined): readonly J
     cipher: options.cipher,
     journal: options.journal,
     replyPromoter: options.replyPromoter,
+    ...(options.businessMailObserver===undefined?{}:{businessMailObserver:options.businessMailObserver}),
   };
   const handlerOptions = {
     ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
