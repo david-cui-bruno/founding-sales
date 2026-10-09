@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BusinessPolicy, BusinessReviewPage } from '@fss/contracts';
+import { EmailTimeline, type EmailTimelinePorts } from './EmailTimeline.tsx';
 export interface BusinessReviewPorts {
   policy(): Promise<BusinessPolicy>;
   review?(mailboxId: string, after?: string): Promise<BusinessReviewPage>;
@@ -30,9 +31,14 @@ export interface BusinessReviewPorts {
     revision: number;
   }>;
 }
-export function BusinessReview({ enabled, ports }: {
+export function BusinessReview({ enabled, ports, mail, privacyKey = 'business-review', sourceVersion, onSourceChange, mailFirms = [] }: {
   enabled: boolean;
   ports: BusinessReviewPorts;
+  mail?: EmailTimelinePorts;
+  privacyKey?: string;
+  sourceVersion?: number | undefined;
+  onSourceChange?: (() => void) | undefined;
+  mailFirms?: readonly {id:string;name:string}[];
 }) {
   const [policy, setPolicy] = useState<BusinessPolicy | null>(null);
   const [review, setReview] = useState<BusinessReviewPage | null>(null);
@@ -135,5 +141,6 @@ export function BusinessReview({ enabled, ports }: {
   }
   if (!enabled)
     return null;
-  return <section aria-label="Conversation review"><h2>Conversation review</h2><p>Business conversation capture is off.</p><p>Metadata review does not fetch message bodies, use hosted AI or authorize sending. Capture remains subject to provider verification and release approval.</p>{error && <p role="alert">{error}</p>}{policy && <><p>{policy.emailAddress ?? 'Connect your own mailbox to prepare review.'}</p><p>{policy.metadataReviewDisclosureText}</p><label><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)}/>I approve metadata-only conversation review</label><button type="button" disabled={!approved || busy || policy.mailboxId === null || policy.accountBinding === null} onClick={() => void prepare()}>Prepare metadata review</button></>}{review && <><p>{review.available ? 'Metadata only; including a conversation does not enable capture.' : 'Metadata review is unavailable. Prepare consent for the current mailbox connection.'}</p>{review.conversations.map(row => <article key={row.conversationId}><h3>{row.subject || '(No subject)'}</h3><p>{row.participants.join(', ')}</p><p>{new Date(row.latestProviderAt).toLocaleString()}</p><p>{row.humanDecision === 'exclude' ? 'Excluded by you' : row.humanDecision === 'include' ? 'Included by you' : row.effectiveDecision === 'needs_review' ? 'Needs review' : row.effectiveDecision === 'excluded' ? 'Excluded by classification' : 'Included by classification'}</p><button type="button" disabled={busy || !review.available} onClick={() => void decide(row, 'include')}>Include conversation</button><button type="button" disabled={busy || !review.available} onClick={() => void decide(row, 'exclude')}>Exclude conversation</button></article>)}{review.nextAfter !== null && <button type="button" disabled={busy} onClick={() => void loadMore()}>Show more conversations</button>}</>}</section>;
+  const copiedEmailTimeline = mail && policy?.mailboxId ? <EmailTimeline key={`email:${policy.mailboxId}`} enabled={enabled} ports={mail} mailboxId={policy.mailboxId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} firms={mailFirms} /> : null;
+  return <section aria-label="Conversation review"><h2>Conversation review</h2>{copiedEmailTimeline}<p>Business conversation capture is off.</p><p>Metadata review does not fetch message bodies, use hosted AI or authorize sending. Capture remains subject to provider verification and release approval.</p>{error && <p role="alert">{error}</p>}{policy && <><p>{policy.emailAddress ?? 'Connect your own mailbox to prepare review.'}</p><p>{policy.metadataReviewDisclosureText}</p><label><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)}/>I approve metadata-only conversation review</label><button type="button" disabled={!approved || busy || policy.mailboxId === null || policy.accountBinding === null} onClick={() => void prepare()}>Prepare metadata review</button></>}{review && <><p>{review.available ? 'Metadata only; including a conversation does not enable capture.' : 'Metadata review is unavailable. Prepare consent for the current mailbox connection.'}</p>{review.conversations.map(row => <article key={row.conversationId}><h3>{row.subject || '(No subject)'}</h3><p>{row.participants.join(', ')}</p><p>{new Date(row.latestProviderAt).toLocaleString()}</p><p>{row.humanDecision === 'exclude' ? 'Excluded by you' : row.humanDecision === 'include' ? 'Included by you' : row.effectiveDecision === 'needs_review' ? 'Needs review' : row.effectiveDecision === 'excluded' ? 'Excluded by classification' : 'Included by classification'}</p><button type="button" disabled={busy || !review.available} onClick={() => void decide(row, 'include')}>Include conversation</button><button type="button" disabled={busy || !review.available} onClick={() => void decide(row, 'exclude')}>Exclude conversation</button></article>)}{review.nextAfter !== null && <button type="button" disabled={busy} onClick={() => void loadMore()}>Show more conversations</button>}</>}</section>;
 }

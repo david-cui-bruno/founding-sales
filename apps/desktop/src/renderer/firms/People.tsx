@@ -1,6 +1,7 @@
 import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
 import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
 import type { ContextPorts } from "./SourceContexts.tsx";
+import { EmailTimeline, type EmailTimelinePorts } from './EmailTimeline.tsx';
 import {
   Endpoints,
   type EndpointPorts,
@@ -54,6 +55,11 @@ export function People({
   endpointEditing,
   imports,
   processing,
+  mail,
+  privacyKey = 'people',
+  mailFirms = [],
+  sourceVersion,
+  onSourceChange,
 }: {
   enabled: boolean;
   processing?:ProcessingPorts;
@@ -64,6 +70,11 @@ export function People({
   endpoints?: EndpointPorts;
   endpointEditing?: EndpointEditingPorts;
   imports?: SelectedImportPorts;
+  mail?: EmailTimelinePorts;
+  privacyKey?: string;
+  mailFirms?: readonly {id:string;name:string}[];
+  sourceVersion?: number | undefined;
+  onSourceChange?: (() => void) | undefined;
 }): JSX.Element {
   const [people, setPeople] = useState<PersonPage["person"][]>([]);
   const [page, setPage] = useState<PersonPage | null>(null);
@@ -182,6 +193,7 @@ export function People({
         <section>
           <h3>{page.person.fullName}</h3>
           {imports ? <SelectedImports key={page.person.personId} enabled={enabled} personId={page.person.personId} ports={imports} sourceVersion={page.sources.map(source=>`${source.sourceId}:${source.revision}:${source.availability}`).join('|')} onChange={async()=>setPage(await ports.read(page.person.personId))}/> : null}
+          {mail ? <EmailTimeline key={`email:${page.person.personId}`} enabled={enabled} ports={mail} personId={page.person.personId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} people={people.map(person => ({id:person.personId,name:person.fullName}))} firms={mailFirms} /> : null}
           {relationships ? (
             <Relationships
               key={page.person.personId}
