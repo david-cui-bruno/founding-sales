@@ -981,7 +981,7 @@ async function measure(
     UNION ALL SELECT 'business_metadata',b.id::text,b.metadata_revision,b.metadata_hash,b.metadata_availability
       FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}
     UNION ALL SELECT 'mail_import_metadata',x.id::text,x.revision,encode(sha256(convert_to(concat_ws(':',x.message_hash,x.provider_message_id,x.provider_thread_id,x.provider_at::text,x.scope,x.reason),'UTF8')),'hex'),x.state FROM crm_mail_import_messages x WHERE x.workspace_id=$1 AND ${IMPORT_METADATA_IN_SCOPE}
-    UNION ALL SELECT 'ask_request',a.id::text,a.version,encode(sha256(convert_to(concat_ws(':',a.epoch::text,a.scope::text,a.initial_contexts::text,a.initial_access_closure::text,a.question,a.result::text),'UTF8')),'hex'),a.state FROM crm_ask_requests a WHERE a.workspace_id=$1 AND ${CRM_ASK_REQUEST_IN_SCOPE}
+    UNION ALL SELECT 'ask_request',a.id::text,a.version,encode(sha256(convert_to(concat_ws(':',a.epoch::text,a.scope::text,a.initial_contexts::text,a.initial_access_closure::text,a.question,a.result::text,jsonb_build_array(a.history_revision,a.history_title,a.history_pinned,a.history_updated_at)::text),'UTF8')),'hex'),a.state FROM crm_ask_requests a WHERE a.workspace_id=$1 AND ${CRM_ASK_REQUEST_IN_SCOPE}
     ORDER BY kind,id`,
       byContact,
     )
