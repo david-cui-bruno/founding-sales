@@ -523,7 +523,6 @@ export function workerDueWorkSources(
   return [
     crmMailProgressSource(),
     crmExtractionRecoverySource(),
-    crmExtractionRecoverySource(),
     crmMailBackfillSource(options.crmMailBackfill===true),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
