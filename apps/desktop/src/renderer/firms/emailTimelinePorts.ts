@@ -10,6 +10,7 @@ function api() {
 export const emailTimelinePorts: EmailTimelinePorts = {
   list: async (input) => api().read("crm.businessMailList", input),
   read: async (input) => api().read("crm.businessMailRead", input),
+  readV2: async (input) => api().read("crm.businessMailReadV2", input),
   controls: async (input) => api().read("crm.businessMailControls", input),
   state: async (input) => api().read("crm.businessMailState", input),
   remove: async (input) => api().command("crm.businessMailDelete", input),

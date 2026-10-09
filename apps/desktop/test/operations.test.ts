@@ -545,3 +545,16 @@ it('reads measured import health separately from acknowledgement and preserves c
  deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/business/mail/import/read');expect(payload).toEqual(input);return {ok:true,value:parse(health)};};
  expect(await answerOperation(operationHandlers(deps),'read','crm.businessMailImportHealth',input)).toEqual(health);
 });
+
+it('reads original observation V2 only through the exact authenticated copied-source seam',async()=>{
+ const deps=hosts();const input={sourceId:ITEM_ID,sourceRevision:1,contentHash:'a'.repeat(64)};
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/business/mail/read/v2');expect(payload).toEqual(input);return {ok:true,value:parse({state:'unavailable',reason:'source_changed',source:null})};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.businessMailReadV2',input)).toEqual({state:'unavailable',reason:'source_changed',source:null});
+});
+it('refuses extra import completion fields and a late mailbox health response after identity changes',async()=>{
+ const deps=hosts();deps.api.command=async(_path,_payload,parse)=>({ok:true,value:parse({importId:FIRM_ID,status:'queued',complete:true})});
+ await expect(answerOperation(operationHandlers(deps),'command','crm.businessMailImportRequest',{mailboxId:ITEM_ID})).rejects.toThrow();
+ let generation=0;let finish!:()=>void;deps.recordings.identity.current=()=>generation;
+ deps.api.read=async(_path,parse)=>{await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse(mailImportHealth())};};
+ const pending=answerOperation(operationHandlers(deps),'read','crm.businessMailImportHealth',{mailboxId:ITEM_ID});generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
+});

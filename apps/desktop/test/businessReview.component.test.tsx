@@ -61,3 +61,7 @@ it('invalidates a pending page when a newer exclusion refresh replaces the revie
  await act(async()=>{pending.resolve(reviewPage('Stale pre-exclusion page'));});
  expect(screen.queryByText('Stale pre-exclusion page')).toBeNull();expect(screen.getByText('Excluded by you')).toBeTruthy();
 });
+it('offers bounded import status and an explicit queued request in the existing conversation review without enabling capture',async()=>{
+ const user=userEvent.setup();let requested=false,saved=false;const ports:BusinessReviewPorts={policy:async()=>REVIEW_POLICY,savePolicy:async()=>{saved=true;return {revision:2};},imports:{health:async()=>null,request:async input=>{expect(input).toEqual({mailboxId:ID});requested=true;return {importId:ID,status:'queued'};}}};
+ render(<BusinessReview enabled ports={ports} privacyKey="one"/>);await screen.findByRole('region',{name:'Mailbox import status'});await user.click(screen.getByRole('button',{name:'Request 90-day import'}));expect(await screen.findByText('Import request queued. Coverage is reported separately after work runs.')).toBeTruthy();expect(requested).toBe(true);expect(saved).toBe(false);expect(screen.getByText('Business conversation capture is off.')).toBeTruthy();expect(screen.queryByRole('button',{name:/enable capture|send email/i})).toBeNull();
+});
