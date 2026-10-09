@@ -30,6 +30,7 @@ GRANT SELECT,INSERT,UPDATE ON crm_commitment_reviews,crm_internal_tasks TO app_r
 CREATE FUNCTION crm_commitment_review_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF ROW(NEW.workspace_id,NEW.id,NEW.owner_user_id,NEW.task_key) IS DISTINCT FROM ROW(OLD.workspace_id,OLD.id,OLD.owner_user_id,OLD.task_key)
+ OR (NEW.state<>'redacted' AND NEW.original_access_closure IS DISTINCT FROM OLD.original_access_closure)
  OR OLD.state='redacted' AND NEW.state<>'redacted'
  OR NEW.revision<OLD.revision OR NEW.revision>OLD.revision+1
  OR (NEW.state<>'redacted' AND NEW.revision=OLD.revision AND ROW(NEW.anchor_id,NEW.target,NEW.context_snapshot,NEW.original_access_closure,NEW.classification,NEW.actor,NEW.action_label,NEW.due,NEW.source_zone_receipt,NEW.reviewed_at) IS DISTINCT FROM ROW(OLD.anchor_id,OLD.target,OLD.context_snapshot,OLD.original_access_closure,OLD.classification,OLD.actor,OLD.action_label,OLD.due,OLD.source_zone_receipt,OLD.reviewed_at))
@@ -41,6 +42,7 @@ CREATE TRIGGER crm_commitment_review_guard BEFORE UPDATE ON crm_commitment_revie
 CREATE FUNCTION crm_internal_task_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF ROW(NEW.workspace_id,NEW.id,NEW.owner_user_id,NEW.task_key) IS DISTINCT FROM ROW(OLD.workspace_id,OLD.id,OLD.owner_user_id,OLD.task_key)
+ OR (ROW(NEW.status,NEW.completed_at,NEW.review_id,NEW.review_required) IS DISTINCT FROM ROW(OLD.status,OLD.completed_at,OLD.review_id,OLD.review_required) AND NEW.version<>OLD.version+1)
  OR OLD.status='done' AND ROW(NEW.status,NEW.completed_at) IS DISTINCT FROM ROW(OLD.status,OLD.completed_at)
  OR OLD.status='cancelled' AND NEW.status<>'cancelled'
  OR NEW.version<OLD.version OR NEW.version>OLD.version+1
@@ -56,7 +58,7 @@ BEGIN
  ELSIF NEW.current_decision_revision<>OLD.current_decision_revision THEN
   UPDATE crm_commitment_reviews SET state='review_required' WHERE workspace_id=NEW.workspace_id AND anchor_id=NEW.id AND state<>'redacted';
  END IF;
- UPDATE crm_internal_tasks t SET review_required=true WHERE t.workspace_id=NEW.workspace_id AND t.status='open' AND EXISTS(SELECT 1 FROM crm_commitment_reviews r WHERE r.workspace_id=t.workspace_id AND r.id=t.review_id AND r.state IN ('review_required','redacted'));
+ UPDATE crm_internal_tasks t SET review_required=true,version=version+1 WHERE t.workspace_id=NEW.workspace_id AND t.status='open' AND EXISTS(SELECT 1 FROM crm_commitment_reviews r WHERE r.workspace_id=t.workspace_id AND r.id=t.review_id AND r.state IN ('review_required','redacted'));
  RETURN NEW;
 END $$;
 CREATE TRIGGER crm_commitment_anchor_change AFTER UPDATE ON crm_claim_review_anchors FOR EACH ROW EXECUTE FUNCTION crm_commitment_anchor_change();

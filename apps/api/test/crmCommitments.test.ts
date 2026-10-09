@@ -155,5 +155,24 @@ it("projects exactly one internal task from an explicit dated human promise revi
     await runOnce(fixture.db,{registry,owner:"commitment-projector-again",limit:20});
     expect((await read()).body).toMatchObject({items:[{task:{taskId:originalTask,status:"open"}}]});
     expect((await read()).body as object).toHaveProperty("items.length",1);
+    // Cycle2: an explicit actual completion is separate from evidence review.
+    const complete=command({taskId:originalTask,expectedVersion:1});
+    const done=await post("/crm/commitments/complete",complete);expect(done.status).toBe(200);
+    expect(done.body).toMatchObject({result:{taskId:originalTask,version:2}});
+    const completedAt=(done.body as {result:{completedAt:string}}).result.completedAt;
+    expect((await read()).body).toMatchObject({items:[{task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
+    expect((await post("/crm/commitments/complete",complete)).body).toMatchObject({result:(done.body as {result:unknown}).result});
+    expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toEqual({items:[],nextAfterId:null});
+    // Cycle3: changed interpretation cannot erase an already performed action.
+    const correction=await post("/crm/evidence/decide",command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,action:"correct",correctedInterpretation:"This was tentative, not an agreed commitment"}));expect(correction.status).toBe(200);
+    const corrected=await read();expect(corrected.status).toBe(200);
+    expect(corrected.body).toMatchObject({items:[{state:"review_required",actionLabel:null,due:null,quote:null,source:null,task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
+    // Cycle4: whole-copy deletion scrubs private promise proof, not completion.
+    expect((await post("/crm/people/source/delete",command({personId,sourceId:source.sourceId,expectedRevision:source.revision}))).status).toBe(200);
+    const redacted=await post("/crm/commitments/read",{scope:{kind:"history"},limit:50});expect(redacted.status).toBe(200);
+    expect(redacted.body).toMatchObject({items:[{taskId:originalTask,status:"done",version:2,completedAt}],nextAfterId:null});
+    expect(JSON.stringify(redacted.body)).not.toContain("repair summary");
+
+
   }finally{await fixture.stop();}
 });

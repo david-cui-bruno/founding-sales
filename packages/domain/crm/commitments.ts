@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto';
-import type {CrmCommitmentRead,CrmCommitmentReview} from '@fss/contracts';
+import type {CrmCommitmentRead,CrmCommitmentReview,CrmCommitmentComplete} from '@fss/contracts';
 import {crmEvidenceClaimTargetSchema,crmCommitmentDueSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
+import {recordCrmAuditEvent} from './audit.ts';
 import {activeIdentityActor} from './identityAccess.ts';
 import {lockConflictSources,readCrmEvidence,targetAnchor} from './evidenceDecisions.ts';
 import {createNativeCrmMailEvidence} from './nativeMailEvidence.ts';
@@ -48,8 +49,13 @@ export async function projectCrmCommitment(context:RepositoryContext,input:{comm
 export async function readCrmCommitments(context:RepositoryContext,input:CrmCommitmentRead,mail:CrmMailEvidencePort=createNativeCrmMailEvidence()){
  const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return null;
  const scope=input.scope;
+ if(scope.kind==='history'){
+  const tasks=(await context.db.query<{id:string;status:'done'|'cancelled';version:number;completed_at:Date|null}>("SELECT id,status,version,completed_at FROM crm_internal_tasks WHERE workspace_id=$1 AND owner_user_id=$2 AND status IN ('done','cancelled') AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4 FOR SHARE",[context.scope.workspaceId,actor.userId,input.afterId??null,input.limit+1])).rows;
+  if(!await activeIdentityActor(context))return null;
+  return {items:tasks.slice(0,input.limit).map(task=>({taskId:task.id,status:task.status,version:task.version,completedAt:task.completed_at?.toISOString()??null})),nextAfterId:tasks.length>input.limit?tasks[input.limit-1]!.id:null};
+ }
  const rows=(await context.db.query<Review>(`SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND owner_user_id=$2 AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT 51`,[context.scope.workspaceId,actor.userId,input.afterId??null])).rows;
- const candidates=rows.filter(row=>{if(row.state==='redacted')return scope.kind==='today';const parsed=crmEvidenceClaimTargetSchema.safeParse(row.target);if(!parsed.success)return false;const contextView=row.context_snapshot as {personId?:string;firmIds?:string[]};return scope.kind==='source'?parsed.data.source.sourceId===scope.sourceId&&parsed.data.source.kind===scope.sourceKind:scope.kind==='person'?contextView.personId===scope.personId:scope.kind==='firm'?contextView.firmIds?.includes(scope.firmId)===true:true;});
+ const candidates=rows.filter(row=>{if(row.state==='redacted')return false;const parsed=crmEvidenceClaimTargetSchema.safeParse(row.target);if(!parsed.success)return false;const contextView=row.context_snapshot as {personId?:string;firmIds?:string[]};return scope.kind==='source'?parsed.data.source.sourceId===scope.sourceId&&parsed.data.source.kind===scope.sourceKind:scope.kind==='person'?contextView.personId===scope.personId:scope.kind==='firm'?contextView.firmIds?.includes(scope.firmId)===true:true;});
  if(candidates.length>50)return null;
  const live=candidates.filter(row=>row.state!=='redacted');const targets=live.map(row=>crmEvidenceClaimTargetSchema.parse(row.target));
  if(!await lockConflictSources(context,targets.map(target=>target.source),live.map(row=>row.context_snapshot),live.map(row=>row.original_access_closure)))return null;
@@ -59,10 +65,31 @@ export async function readCrmCommitments(context:RepositoryContext,input:CrmComm
   if(locked===undefined||JSON.stringify(locked)!==JSON.stringify(row))return null;
   const target=crmEvidenceClaimTargetSchema.safeParse(row.target);
   if(row.state==='redacted'||!target.success)continue;
-  const support=await supported(context,target.data,mail);if(support===null)return null;
+  const support=await supported(context,target.data,mail);
+  if(support===null&&await readCrmEvidence(context,{source:target.data.source,limit:50},mail)===null)return null;
   const tasks=(await context.db.query<{id:string;status:'open'|'done'|'cancelled';version:number;completed_at:Date|null}>('SELECT id,status,version,completed_at FROM crm_internal_tasks WHERE workspace_id=$1 AND task_key=$2 FOR SHARE',[context.scope.workspaceId,row.task_key])).rows;
-  items.push({commitmentId:row.id,revision:row.revision,state:row.state,actor:row.actor,actionLabel:row.action_label,due:crmCommitmentDueSchema.parse(row.due),quote:support.claim.quote,source:support.source,task:tasks[0]===undefined?null:{taskId:tasks[0].id,status:tasks[0].status,version:tasks[0].version,completedAt:tasks[0].completed_at?.toISOString()??null}});
+  if(scope.kind==='today'&&(support===null||row.state!=='applied'||tasks[0]?.status!=='open'||row.due===null))continue;
+  items.push({commitmentId:row.id,revision:row.revision,state:support===null?'review_required' as const:row.state,actor:support===null?null:row.actor,actionLabel:support===null?null:row.action_label,due:support===null?null:crmCommitmentDueSchema.parse(row.due),quote:support?.claim.quote??null,source:support?.source??null,task:tasks[0]===undefined?null:{taskId:tasks[0].id,status:tasks[0].status,version:tasks[0].version,completedAt:tasks[0].completed_at?.toISOString()??null}});
  }
  if(!await activeIdentityActor(context))return null;
  return {items,nextAfterId:candidates.length>input.limit?candidates[input.limit-1]!.id:null};
+}
+
+export async function completeCrmCommitment(context:RepositoryContext,input:CrmCommitmentComplete,mail:CrmMailEvidencePort=createNativeCrmMailEvidence()){
+ const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return {ok:false as const,reason:'source_unavailable'};
+ const task=(await context.db.query<{review_id:string|null;version:number;status:string;completed_at:Date|null}>('SELECT review_id,version,status,completed_at FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3',[context.scope.workspaceId,input.taskId,actor.userId])).rows[0];
+ if(task===undefined||task.review_id===null)return {ok:false as const,reason:'work_unavailable'};
+ const review=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,task.review_id])).rows[0];
+ const target=crmEvidenceClaimTargetSchema.safeParse(review?.target);
+ if(review===undefined||review.state!=='applied'||!target.success||!await lockConflictSources(context,[target.data.source],[review.context_snapshot],[review.original_access_closure]))return {ok:false as const,reason:'work_requires_review'};
+ const supportedView=await supported(context,target.data,mail);const anchor=await targetAnchor(context,target.data,mail);
+ if(supportedView===null||anchor===null||!await conflictFree(context,anchor.id))return {ok:false as const,reason:'work_requires_review'};
+ const currentReview=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.scope.workspaceId,review.id])).rows[0];
+ if(JSON.stringify(currentReview)!==JSON.stringify(review))return {ok:false as const,reason:'commitment_changed'};
+ const current=(await context.db.query<{version:number;status:string;completed_at:Date|null}>('SELECT version,status,completed_at FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR UPDATE',[context.scope.workspaceId,input.taskId,actor.userId])).rows[0];
+ if(current?.status==='done'&&current.completed_at!==null)return {ok:true as const,value:{taskId:input.taskId,version:current.version,completedAt:current.completed_at.toISOString()}};
+ if(current?.status!=='open'||current.version!==input.expectedVersion||!await activeIdentityActor(context))return {ok:false as const,reason:'work_changed'};
+ const changed=(await context.db.query<{version:number;completed_at:Date}>("UPDATE crm_internal_tasks SET status='done',version=version+1,completed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND version=$3 RETURNING version,completed_at",[context.scope.workspaceId,input.taskId,input.expectedVersion])).rows[0]!;
+ await recordCrmAuditEvent(context,{action:'crm.internal_task_completed',subjectKind:'crm_internal_task',subjectId:input.taskId,detail:{version:changed.version}});
+ return {ok:true as const,value:{taskId:input.taskId,version:changed.version,completedAt:changed.completed_at.toISOString()}};
 }
