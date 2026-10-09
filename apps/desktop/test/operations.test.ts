@@ -608,3 +608,8 @@ it('reads owner-private Ask history through a strict bounded authenticated opera
  const deps=hosts();deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/ask/history/list');expect(payload).toEqual({limit:20});return {ok:true,value:parse({items:[],nextCursor:null})};};
  expect(await answerOperation(operationHandlers(deps),'read','ask.historyList',{})).toEqual({items:[],nextCursor:null});
 });
+
+it('changes Ask history through a metadata-only current-revision command',async()=>{
+ const deps=hosts();deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/ask/history/change');expect(payload).toEqual({requestId:ITEM_ID,expectedRevision:2,action:{kind:'pin',pinned:true}});return {ok:true,value:parse({requestId:ITEM_ID,historyRevision:3,requestVersion:1,state:'complete'})};};
+ expect(await answerOperation(operationHandlers(deps),'command','ask.historyChange',{requestId:ITEM_ID,expectedRevision:2,action:{kind:'pin',pinned:true}})).toMatchObject({historyRevision:3});
+});

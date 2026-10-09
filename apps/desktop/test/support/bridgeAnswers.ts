@@ -359,6 +359,7 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   },
   '/replies/card': replyCardBody,
   '/sequences/versions': sequenceVersionsBody,
+  '/ask/history/change':{status:'accepted',replayed:false,result:{requestId:'11111111-1111-4111-8111-111111111111',historyRevision:2,requestVersion:1,state:'complete'}},
   '/ask/history/list':{items:[],nextCursor:null},
   '/ask/answers/request':{status:'accepted',replayed:false,result:{requestId:'11111111-1111-4111-8111-111111111111',version:1,state:'unavailable'}},
   '/ask/answers/read':{requestId:'11111111-1111-4111-8111-111111111111',version:1,createdAt:'2026-10-09T11:00:00Z',state:'unavailable',reason:'evaluation_unavailable',question:'Why?',fallback:null,answer:null},

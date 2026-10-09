@@ -68,3 +68,51 @@ it('evicts old private history metadata when reopening discovers changed source 
  expect(screen.queryByText('Scheduling investigation')).toBeNull();
  expect(screen.queryByText('What matters to Alex?')).toBeNull();
 });
+
+it('renames a private investigation with its current metadata revision and reads the saved title',async()=>{
+ const page=await historyList();
+ const list=vi.fn(async()=>page).mockResolvedValueOnce(page).mockResolvedValueOnce({...page,items:page.items.map(item=>({...item,title:'Scheduling follow-up',historyRevision:3}))});
+ const historyChange=vi.fn(async()=>({requestId,historyRevision:3,requestVersion:1,state:'complete' as const}));
+ render(<Ask ports={{read,historyList:list,...{historyChange}}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
+ fireEvent.change(await screen.findByLabelText('Investigation title'),{target:{value:'Scheduling follow-up'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save title'}));
+ expect(await screen.findByText('Scheduling follow-up')).toBeTruthy();
+ expect(historyChange).toHaveBeenCalledWith({requestId,expectedRevision:2,action:{kind:'rename',title:'Scheduling follow-up'}});
+});
+
+it('changes pin state with the current history revision',async()=>{
+ const page=await historyList();
+ const list=vi.fn(async()=>({...page,items:page.items.map(item=>({...item,pinned:false,historyRevision:3}))})).mockResolvedValueOnce(page);
+ const historyChange=vi.fn(async()=>({requestId,historyRevision:3,requestVersion:1,state:'complete' as const}));
+ render(<Ask ports={{read,historyList:list,historyChange}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Unpin investigation'}));
+ expect(await screen.findByText('Complete')).toBeTruthy();
+ expect(historyChange).toHaveBeenCalledWith({requestId,expectedRevision:2,action:{kind:'pin',pinned:false}});
+});
+
+it('deletes only the explicitly confirmed private investigation with metadata CAS',async()=>{
+ const page=await historyList();const list=vi.fn<NonNullable<AskPorts['historyList']>>(async()=>({items:[],nextCursor:null})).mockResolvedValueOnce(page);
+ const historyChange=vi.fn(async()=>({requestId,historyRevision:3,requestVersion:2,state:'deleted' as const}));
+ render(<Ask ports={{read,historyList:list,historyChange}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
+ expect((await screen.findByRole('button',{name:'Delete investigation'})).hasAttribute('disabled')).toBe(true);
+ fireEvent.click(screen.getByLabelText('Confirm deleting this investigation'));
+ fireEvent.click(screen.getByRole('button',{name:'Delete investigation'}));
+ expect(await screen.findByText('No saved investigations on this page.')).toBeTruthy();
+ expect(historyChange).toHaveBeenCalledWith({requestId,expectedRevision:2,action:{kind:'delete'}});
+ expect(screen.queryByText('Scheduling investigation')).toBeNull();
+});
+
+it('evicts private history and drafts when a stale metadata change is refused',async()=>{
+ const historyChange=vi.fn(async()=>{throw new Error('changed_history');});
+ render(<Ask ports={{read,historyList,historyChange}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
+ fireEvent.change(await screen.findByLabelText('Investigation title'),{target:{value:'Private edited title'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save title'}));
+ expect(await screen.findByText('History change could not be confirmed. Read current history before trying again.')).toBeTruthy();
+ expect(screen.queryByText('Scheduling investigation')).toBeNull();
+ expect(screen.queryByLabelText('Investigation title')).toBeNull();
+ expect(historyChange).toHaveBeenCalledTimes(1);
+});
