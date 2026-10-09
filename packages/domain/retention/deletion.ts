@@ -168,6 +168,19 @@ const CRM_PERSON_IN_SCOPE = `p.id IN (${CRM_TARGET_PEOPLE}) AND NOT EXISTS (
     AND NOT ${CRM_SOURCE_IN_SCOPE})`;
 const CRM_SELECTED_SOURCE_IDS = `SELECT s.id FROM crm_selected_sources s
   WHERE s.workspace_id=$1 AND s.availability<>'deleted' AND ${CRM_SOURCE_IN_SCOPE}`;
+// Original acquired context and current reviewed context select an indivisible copy.
+const CRM_MAIL_MESSAGE_IDS = `SELECT x.mail_message_id AS id FROM mail_message_matches x
+  WHERE x.workspace_id=$1 AND x.firm_id=$3 AND ${contactPredicate('x.contact_id', '$2')}
+  UNION SELECT s.source_id FROM crm_mail_sources s WHERE s.workspace_id=$1 AND EXISTS(
+    SELECT 1 FROM crm_mail_source_contexts cx WHERE cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id
+      AND (cx.context_kind='acquired' OR cx.source_revision=s.source_revision) AND cx.firm_id=$3
+      AND ($2::uuid IS NULL OR cx.person_id IN (${CRM_TARGET_PEOPLE}) OR EXISTS(
+        SELECT 1 FROM mail_message_matches mx WHERE mx.workspace_id=cx.workspace_id
+        AND mx.id=cx.operational_match_id AND mx.contact_id=$2)))`;
+const CRM_MAIL_CAPTURE_IDS = `SELECT i.id FROM crm_mail_capture_identities i WHERE i.workspace_id=$1
+  AND (i.source_id IN (${CRM_MAIL_MESSAGE_IDS}) OR EXISTS(
+    SELECT 1 FROM jsonb_array_elements(i.context_snapshot) captured
+      WHERE captured->>'firmId'=$3::text AND ($2::uuid IS NULL OR captured->>'contactId'=$2::text)))`;
 // Only explicit supported endpoint evidence contributes; metadata never invents firm membership.
 const BUSINESS_TARGET_ADDRESSES = `SELECT address FROM email_addresses
   WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id', '$2')}
@@ -178,9 +191,13 @@ const BUSINESS_TARGET_ADDRESSES = `SELECT address FROM email_addresses
     AND s.availability='available' AND s.revision=c.source_revision AND s.content_hash=c.source_hash
     AND ((${FIRM_SCOPED_ONLY} AND c.firm_id=$3) OR
       (c.person_id IN (${CRM_TARGET_PEOPLE}) AND c.source_id IN (${CRM_SELECTED_SOURCE_IDS})))`;
-const BUSINESS_METADATA_IN_SCOPE = `b.metadata_availability='available' AND EXISTS(
-  SELECT 1 FROM jsonb_array_elements_text(b.participants) AS participant(address)
-  WHERE participant.address IN (${BUSINESS_TARGET_ADDRESSES}))`;
+const BUSINESS_METADATA_IN_SCOPE = `b.metadata_availability='available' AND (
+  EXISTS(SELECT 1 FROM jsonb_array_elements_text(b.participants) AS participant(address)
+    WHERE participant.address IN (${BUSINESS_TARGET_ADDRESSES}))
+  OR b.id IN(SELECT conversation_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS}))
+  OR EXISTS(SELECT 1 FROM crm_mail_capture_identities i JOIN jobs j ON j.workspace_id=i.workspace_id AND j.id=i.job_id
+    WHERE i.workspace_id=$1 AND i.id IN (${CRM_MAIL_CAPTURE_IDS}) AND b.mailbox_id=i.mailbox_id
+      AND b.account_binding=i.account_binding AND b.id::text=j.payload->>'conversationId'))`;
 
 
 /** Collect the identity dependency closure before any firm/person/source locks. */
@@ -195,10 +212,12 @@ async function lockBusinessMetadataForDeletion(context: RepositoryContext, scope
 }
 
 async function identityDeletionClosure(context: RepositoryContext, scope: Scope) {
-  return (await context.db.query<{ firms: string[]; people: string[]; sources: string[]; selected: string[] }>(`
+  return (await context.db.query<{ firms: string[]; people: string[]; sources: string[]; selected: string[]; mailSources: string[]; mailIdentities: string[] }>(`
     WITH selected AS (${CRM_SELECTED_SOURCE_IDS}),
+    mail_selected AS (${CRM_MAIL_MESSAGE_IDS}), mail_identities AS (${CRM_MAIL_CAPTURE_IDS}),
     affected_people AS (
       ${CRM_TARGET_PEOPLE}
+      UNION SELECT person_id FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id IN(SELECT id FROM mail_selected) AND person_id IS NOT NULL
       UNION SELECT person_id FROM crm_selected_sources WHERE workspace_id=$1 AND id IN (SELECT id FROM selected) AND person_id IS NOT NULL
       UNION SELECT person_id FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)
       UNION SELECT person_id FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected) AND person_id IS NOT NULL
@@ -215,6 +234,8 @@ async function identityDeletionClosure(context: RepositoryContext, scope: Scope)
     ),
     firms_to_lock AS (
       SELECT $3::uuid AS id
+      UNION SELECT cx.firm_id FROM crm_mail_source_contexts cx WHERE cx.workspace_id=$1 AND cx.source_id IN(SELECT id FROM mail_selected) AND cx.firm_id IS NOT NULL
+      UNION SELECT (captured->>'firmId')::uuid FROM crm_mail_capture_identities i CROSS JOIN LATERAL jsonb_array_elements(i.context_snapshot) captured WHERE i.workspace_id=$1 AND i.id IN(SELECT id FROM mail_identities) AND captured->>'firmId' IS NOT NULL
       UNION SELECT m.firm_id FROM meetings m WHERE m.workspace_id=$1 AND ${MEETING_IN_SCOPE} AND m.firm_id IS NOT NULL
       UNION SELECT c.firm_id FROM crm_legacy_contact_people b JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id
         WHERE b.workspace_id=$1 AND b.person_id IN (SELECT person_id FROM affected_people)
@@ -226,7 +247,9 @@ async function identityDeletionClosure(context: RepositoryContext, scope: Scope)
     SELECT ARRAY(SELECT id::text FROM firms_to_lock ORDER BY id) AS firms,
       ARRAY(SELECT person_id::text FROM affected_people ORDER BY person_id) AS people,
       ARRAY(SELECT id::text FROM sources ORDER BY id) AS sources,
-      ARRAY(SELECT id::text FROM selected ORDER BY id) AS selected`,
+      ARRAY(SELECT id::text FROM selected ORDER BY id) AS selected,
+      ARRAY(SELECT id::text FROM mail_selected ORDER BY id) AS "mailSources",
+      ARRAY(SELECT id::text FROM mail_identities ORDER BY id) AS "mailIdentities"`,
     [context.scope.workspaceId, scope.contactId, scope.firmId])).rows[0];
 }
 
@@ -320,11 +343,15 @@ async function measure(
     ),
     mail_messages: await countOf(
       context,
-      `SELECT count(DISTINCT m.id) AS count FROM mail_messages m
-         JOIN mail_message_matches x ON x.workspace_id = m.workspace_id AND x.mail_message_id = m.id
-        WHERE m.workspace_id = $1 AND x.firm_id = $3 AND ${contactPredicate('x.contact_id', '$2')}`,
+      `SELECT count(*) AS count FROM mail_messages WHERE workspace_id=$1 AND id IN (${CRM_MAIL_MESSAGE_IDS})`,
       byContact,
     ),
+    mail_message_bodies: await countOf(context,
+      `SELECT count(*) AS count FROM mail_message_bodies WHERE workspace_id=$1 AND mail_message_id IN (${CRM_MAIL_MESSAGE_IDS})`, byContact),
+    crm_mail_sources: await countOf(context,
+      `SELECT count(*) AS count FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})`, byContact),
+    crm_mail_source_contexts: await countOf(context,
+      `SELECT count(*) AS count FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})`, byContact),
     evidence_items: await countOf(
       context,
       `SELECT count(*) AS count FROM evidence_items
@@ -559,6 +586,10 @@ async function measure(
    * than inventing a reason of its own.
    */
   const stops: Record<string, number> = {
+    crm_mail_capture_identities: await countOf(context,
+      `SELECT count(*) AS count FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id IN (${CRM_MAIL_CAPTURE_IDS}) AND state<>'blocked'`, byContact),
+    crm_mail_source_intents: await countOf(context,
+      `SELECT count(*) AS count FROM crm_mail_source_intents WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS}) AND state<>'invalidated'`, byContact),
     crm_relationships: await countOf(context,
       `SELECT count(*) AS count FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS})`, byContact),
     crm_source_relationship_contexts: await countOf(context,
@@ -667,6 +698,10 @@ async function measure(
         OR relationship_id IN (SELECT id FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)))
     UNION ALL SELECT 'claim',id::text,revision,source_hash,source_invalidated::text
       FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)
+    UNION ALL SELECT 'mail_source',source_id::text,source_revision,content_hash,availability
+      FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})
+    UNION ALL SELECT 'mail_capture',id::text,1,encode(sha256(convert_to(concat(source_id::text,context_snapshot::text,job_id::text,lease_fencing_token::text,account_binding),'UTF8')),'hex'),state
+      FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id IN (${CRM_MAIL_CAPTURE_IDS})
     UNION ALL SELECT 'business_metadata',b.id::text,b.metadata_revision,b.metadata_hash,b.metadata_availability
       FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}
     ORDER BY kind,id`, byContact)).rows;
@@ -903,6 +938,13 @@ export async function commitDeletion(
   // Then the month: every settlement and every message deletion below comes after it.
   await lockMonthlySpend(context);
   await lockBusinessMetadataForDeletion(context, scope);
+  for (const identityId of closure.mailIdentities) await context.db.query(
+    'SELECT id FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,identityId]);
+  for (const sourceId of closure.mailSources) {
+    await context.db.query('SELECT id FROM mail_messages WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,sourceId]);
+    await context.db.query('SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 FOR UPDATE',[context.scope.workspaceId,sourceId]);
+  }
+  if (JSON.stringify(await identityDeletionClosure(context,scope))!==JSON.stringify(closure)) return refuse('preview_stale');
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
   // Both comparisons. The presented hash catches a client approving somebody else's
@@ -1038,15 +1080,22 @@ export async function commitDeletion(
   );
   // Correspondence next: the messages take their bodies, matches, classifications,
   // classifier calls and effects with them through the cascades of 0009 and 0011.
-  await remove(
-    'mail_messages',
-    `DELETE FROM mail_messages
-      WHERE workspace_id = $1 AND id IN (
-        SELECT x.mail_message_id FROM mail_message_matches x
-         WHERE x.workspace_id = $1 AND x.firm_id = $3 AND ${contactPredicate('x.contact_id', '$2')}
-      )`,
-    byContact,
-  );
+  // Opaque identity survives canonical-row cascades. No provider replay may create
+  // a replacement UUID after deleting an approved copy or a pending matched capture.
+  const mailIds=closure.mailSources;
+  await context.db.query(`INSERT INTO crm_mail_acquisition_tombstones
+    (workspace_id,capture_identity_id,source_id,owner_user_id,source_revision,content_hash,availability)
+    SELECT workspace_id,capture_identity_id,source_id,owner_user_id,source_revision+1,content_hash,'deleted'
+    FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[])
+    ON CONFLICT(workspace_id,source_id) DO UPDATE SET source_revision=EXCLUDED.source_revision,availability='deleted'`,[workspace,mailIds]);
+  stopped['crm_mail_capture_identities']=(await context.db.query(
+    "UPDATE crm_mail_capture_identities SET state='blocked' WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state<>'blocked'",[workspace,closure.mailIdentities])).rowCount??0;
+  stopped['crm_mail_source_intents']=(await context.db.query(
+    "UPDATE crm_mail_source_intents SET state='invalidated' WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) AND state<>'invalidated'",[workspace,mailIds])).rowCount??0;
+  removed['mail_message_bodies']=measured.removes['mail_message_bodies']??0;
+  removed['crm_mail_sources']=measured.removes['crm_mail_sources']??0;
+  removed['crm_mail_source_contexts']=measured.removes['crm_mail_source_contexts']??0;
+  await remove('mail_messages','DELETE FROM mail_messages WHERE workspace_id=$1 AND id=ANY($2::uuid[])',[workspace,mailIds]);
   await remove('outreach_email_sources',`DELETE FROM outreach_email_sources WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id', '$2')}`,byContact);
   // Learning contains references only, but deleted interactions must stop contributing.
   await remove('sourcing_interactions', `DELETE FROM sourcing_interactions i WHERE i.workspace_id=$1 AND (
