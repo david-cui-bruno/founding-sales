@@ -58,7 +58,7 @@ it('answers through the registered controlled-purpose worker and navigates a cur
   expect((await runOnce(fixture.db,{registry,owner:'controlled-ask-worker',limit:20})).claimed).toBeGreaterThan(0);
   const read=await post('/ask/answers/read',{requestId});
   expect(read.status).toBe(200);
-  expect(read.body).toMatchObject({state:'complete',answer:{claims:[{text,kind:'extractive',verification:'supported'}],abstained:false,coverage:{semantic:'unverified'}}});
+  expect(read.body).toMatchObject({state:'complete',answer:{claims:[{text,kind:'extractive',verification:'supported'}],abstained:false,coverage:{semantic:'unverified',input:'partial'},missingEvidence:['input_partial']}});
   const value=read.body as {version:number;answer:{claims:{citationWindowIds:string[]}[]}};
   const navigation=await post('/ask/answers/source/read',{requestId,expectedVersion:value.version,windowId:value.answer.claims[0]!.citationWindowIds[0]});
   expect(navigation.status).toBe(200);

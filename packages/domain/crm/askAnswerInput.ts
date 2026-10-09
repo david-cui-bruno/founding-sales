@@ -24,6 +24,8 @@ export async function readCurrentAskInput(context:RepositoryContext,requestId:st
  if(purpose===null||purpose.revision!==row['purpose_revision']||purpose.evaluationFingerprint!==row['evaluation_fingerprint'])return null;
  const census=await readAskCanonicalCorpus(context,{scope});
  if(census===null||!census.coverage.scanComplete||census.windows.length===0)return null;
+ let originalsComplete=true;
+ for(const source of scope.sources){const original=await resolveCrmSource(context,source,copiedMail);if(original===null)return null;if(original.source.completeness!=='complete')originalsComplete=false;}
  const windows:AskInputWindow[]=[];
  for(const [offset,window] of census.windows.entries()){
   const resolved=await resolveCrmSource(context,{...window.source,locator:window.locator},copiedMail);
@@ -49,5 +51,5 @@ export async function readCurrentAskInput(context:RepositoryContext,requestId:st
  const authorizationFingerprint=askFingerprint({workspaceId:context.scope.workspaceId,ownerUserId:row['owner_user_id'],inputScopeFingerprint,contextFingerprint,initialAccessFingerprint});
  const proofInput:AskPurposeProofInput={stage:'answer',route:structuredClone(route),purpose,configFingerprint,authorizationFingerprint,workspaceId:context.scope.workspaceId,ownerUserId:String(row['owner_user_id']),inputScopeFingerprint,contextFingerprint,initialAccessFingerprint};
  const inputHash=askFingerprint({question:read.question,windows:windows.map(window=>({id:window.id,source:window.source,textHash:window.textHash})),selectedWindowIds:[...selectedIds],configFingerprint,authorizationFingerprint});
- return {question:read.question,windows:selectedWindows,groups,proofInput,inputHash,coverage:census.coverage,retrievalPartial:grouped.size>groups.length};
+ return {question:read.question,windows:selectedWindows,groups,proofInput,inputHash,coverage:census.coverage,retrievalPartial:!originalsComplete||grouped.size>groups.length};
 }
