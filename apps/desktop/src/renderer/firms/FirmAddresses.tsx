@@ -215,7 +215,7 @@ export function FirmAddresses({
           <ul>
             {page.sources.map((source) => (
               <li key={source.sourceId}>
-                {processing&&<ProcessingHealth source={source} ports={processing}/>}
+                {processing&&<ProcessingHealth source={source} ports={processing} enabled={enabled} recordId={firmId} privacyKey={privacyKey} sourceVersion={String(sourceVersion ?? 0)}/>}
                 {source.excerpt ? (
                   <>
                     <p>{source.excerpt}</p>

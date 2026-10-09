@@ -476,7 +476,7 @@ export function EmailTimeline({
       <ul>
         {page?.sources.map((row, index) => (
           <li key={row.sourceId}>
-            {processing&&workspaceId?<ProcessingHealth key={`${scope}:${row.sourceId}:${row.sourceRevision}:${row.contentHash}:${row.availability}`} ports={processing} source={{workspaceId,sourceId:row.sourceId,kind:'mail',revision:row.sourceRevision,contentHash:row.contentHash,locator:null,availability:row.availability}}/>:null}
+            {processing&&workspaceId?<ProcessingHealth key={`${scope}:${row.sourceId}:${row.sourceRevision}:${row.contentHash}:${row.availability}`} ports={processing} enabled={enabled} recordId={personId??firmId??mailboxId??row.sourceId} privacyKey={privacyKey} sourceVersion={String(sourceVersion)} source={{workspaceId,sourceId:row.sourceId,kind:'mail',revision:row.sourceRevision,contentHash:row.contentHash,locator:null,availability:row.availability}}/>:null}
             {row.availability === "available" ? (
               <>
                 <Button
