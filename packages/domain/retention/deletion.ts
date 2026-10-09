@@ -1087,7 +1087,7 @@ export async function commitDeletion(
     (workspace_id,capture_identity_id,source_id,owner_user_id,source_revision,content_hash,availability)
     SELECT workspace_id,capture_identity_id,source_id,owner_user_id,source_revision+1,content_hash,'deleted'
     FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[])
-    ON CONFLICT(workspace_id,source_id) DO UPDATE SET source_revision=EXCLUDED.source_revision,availability='deleted'`,[workspace,mailIds]);
+    ON CONFLICT(workspace_id,source_id,source_revision) DO UPDATE SET availability='deleted'`,[workspace,mailIds]);
   stopped['crm_mail_capture_identities']=(await context.db.query(
     "UPDATE crm_mail_capture_identities SET state='blocked' WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state<>'blocked'",[workspace,closure.mailIdentities])).rowCount??0;
   stopped['crm_mail_source_intents']=(await context.db.query(
