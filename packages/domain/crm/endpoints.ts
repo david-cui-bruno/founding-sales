@@ -76,12 +76,11 @@ async function claimDto(context: RepositoryContext, row: Claim): Promise<z.infer
   if (row.person_id !== null && person === null)
     return null;
   const available = !row.source_invalidated && await evidenceAvailable(context, evidence);
-  if (available && context.scope.actor.kind === 'user' && context.scope.actor.role === 'admin') {
+  if (context.scope.actor.kind === 'user' && context.scope.actor.role === 'admin') {
     // Callers hold the source/context locks. Audit exceptional access before publishing derived identity.
     const source = (await context.db.query<{ owner_user_id: string }>(
-      `SELECT owner_user_id FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2
-       AND availability='available' AND revision=$3 AND content_hash=$4`,
-      [context.scope.workspaceId, row.source_id, row.source_revision, row.source_hash],
+      'SELECT owner_user_id FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2',
+      [context.scope.workspaceId, row.source_id],
     )).rows[0];
     if (source !== undefined && source.owner_user_id !== context.scope.actor.userId)
       await recordCrmAuditEvent(context, {

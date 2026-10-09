@@ -483,6 +483,9 @@ describe("selected conversation imports", () => {
       direction: "unknown", occurredAt: null, attachments: [],
       participants: [{ label: "Participant", endpoint, provenance: "user_supplied" }],
     };
+    const availableAdminPreview = await post("/crm/imports/preview", input, adminToken);
+    expect(availableAdminPreview.status).toBe(200);
+    expect(availableAdminPreview.body).toMatchObject({ candidates: [{ outcome: "person_match", personId }] });
     // Failure injection controls the audit sink; all outcomes use authenticated reads.
     await fixture.database.session.query(`CREATE FUNCTION refuse_private_endpoint_audit() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN IF NEW.action = 'crm.endpoint_private_evidence_read' THEN
@@ -497,13 +500,27 @@ describe("selected conversation imports", () => {
       expect((await post("/crm/people/read", { personId })).body).toMatchObject({
         sources: [{ sourceId: source.sourceId, availability: "available" }],
       });
+      // Model an older retained claim whose evidence version is no longer current.
+      await fixture.database.session.query(
+        "UPDATE crm_selected_sources SET revision=revision+1 WHERE workspace_id=$1 AND id=$2",
+        [fixture.alpha.workspaceId, source.sourceId],
+      );
+      await expect(post("/crm/endpoints/list", { personId }, adminToken)).rejects.toThrow("fixture_private_audit_unavailable");
+      const ownerEndpoints = await post("/crm/endpoints/list", { personId });
+      expect(ownerEndpoints.status).toBe(200);
+      expect(ownerEndpoints.body).toMatchObject({
+        claims: [{ personId, value: endpoint, sourceState: "unavailable" }],
+      });
     } finally {
       await fixture.database.session.query("DROP TRIGGER refuse_private_endpoint_audit ON audit_events");
       await fixture.database.session.query("DROP FUNCTION refuse_private_endpoint_audit()");
     }
     const adminPreview = await post("/crm/imports/preview", input, adminToken);
     expect(adminPreview.status).toBe(200);
-    expect(adminPreview.body).toMatchObject({ candidates: [{ outcome: "person_match", personId }] });
+    expect(adminPreview.body).toMatchObject({ candidates: [{ outcome: "needs_review", personId: null }] });
+    expect((await post("/crm/endpoints/list", { personId }, adminToken)).body).toMatchObject({
+      claims: [{ personId, value: endpoint, sourceState: "unavailable" }],
+    });
   });
   it("preserves supported public-preview candidates when another participant has private evidence", async () => {
     const adminToken = (
