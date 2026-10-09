@@ -220,6 +220,39 @@ async function createCopy(
       "INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,$4,$5,1,1,true,1,'fixture',$6,'fixture','fixture','fixture','fixture') ON CONFLICT DO NOTHING",
       [ws, mailbox.id, user, account, binding, hash("synthetic")],
     );
+    // Controlled operational metadata binds this synthetic copy's original firm before acquisition.
+    const lineage = await post("/opportunities/v2/open", {
+      commandId: randomUUID(),
+      clientVersion: CURRENT_CLIENT_VERSION,
+      firmId,
+      name: `Synthetic closed acquisition ${label.caseId}`,
+      stageKey: "new",
+    });
+    if (lineage.status !== 200)
+      throw new Error("synthetic_fixture_setup_failed");
+    const opportunityId = (
+      lineage.body as { result: { opportunityId: string } }
+    ).result.opportunityId;
+    const closed = await post("/opportunities/stage", {
+      commandId: randomUUID(),
+      clientVersion: CURRENT_CLIENT_VERSION,
+      opportunityId,
+      expectedStageKey: "new",
+      toStageKey: "lost",
+      reason: "Synthetic acquisition context only",
+    });
+    if (closed.status !== 200)
+      throw new Error("synthetic_fixture_setup_failed");
+    const messageId = (
+      await fixture.db.query<{ id: string }>(
+        "INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,matched) VALUES($1,$2,$3,$3,'incoming','2026-10-01T14:00:00Z',true) RETURNING id",
+        [ws, mailbox.id, label.caseId],
+      )
+    ).rows[0]!.id;
+    await fixture.db.query(
+      "INSERT INTO mail_message_matches(workspace_id,mail_message_id,firm_id,opportunity_id,match_rule) VALUES($1,$2,$3,$4,'thread')",
+      [ws, messageId, firmId, opportunityId],
+    );
     await enqueueJob(fixture.db, {
       workspaceId: ws,
       kind: "crm.mail_capture",

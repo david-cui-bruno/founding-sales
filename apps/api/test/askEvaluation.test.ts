@@ -552,6 +552,90 @@ it("measures a frozen development selected-note lexical baseline through authent
     expect(JSON.stringify(unknownCitation)).not.toContain(
       "Untrusted synthetic claim",
     );
+    // Independent literal control labels; scripted outputs below never read these variants.
+    const claimDefinition = {
+      ...fixtureDefinition,
+      cases: fixtureDefinition.cases.map((item) => ({
+        ...item,
+        acceptableClaims: [
+          {
+            id: "dev_manual_claim",
+            acceptableTextVariants: [
+              "The note requests clearer maintenance routing.",
+            ],
+            supportedBy: ["dev_window"],
+            forbiddenTextVariants: ["The organization manages 300 residences."],
+          },
+        ],
+      })),
+    };
+    const claimCanonical = frozenCorpusSchema
+      .omit({ corpusSha256: true })
+      .parse(claimDefinition);
+    const claimCorpus = frozenCorpusSchema.parse({
+      ...claimCanonical,
+      corpusSha256: hash(claimCanonical),
+    });
+    const claimControls = await runEvaluation({
+      phase: "guard_only",
+      manifest: { ...manifest, corpusSha256: claimCorpus.corpusSha256 },
+      development: claimCorpus,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: fakeGuard(async () => ({
+        claims: [
+          {
+            text: "The note requests clearer maintenance routing.",
+            windowIds: ["dev_window"],
+          },
+          {
+            text: "The organization manages 300 residences.",
+            windowIds: ["dev_window"],
+          },
+          {
+            text: "Their maintenance workflow could stand to improve.",
+            windowIds: ["dev_window"],
+          },
+        ],
+        abstained: false,
+        usage: {
+          outcome: "observed",
+          calls: 1,
+          inputTokens: 1,
+          outputTokens: 1,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+      })),
+    });
+    expect(claimControls.caseResults[0]).toMatchObject({
+      supportedClaims: 1,
+      unsupportedClaims: 1,
+      unjudgedClaims: 1,
+      claimEvaluationState: "pending_human_adjudication",
+      claimJudgments: [
+        {
+          claimIndex: 0,
+          verdict: "supported",
+          matchedGoldClaimId: "dev_manual_claim",
+        },
+        { claimIndex: 1, verdict: "unsupported", matchedGoldClaimId: null },
+        {
+          claimIndex: 2,
+          verdict: "unjudged_unknown_paraphrase",
+          matchedGoldClaimId: null,
+        },
+      ],
+      recallAt10: null,
+      precisionAt10: null,
+      ndcgAt10: null,
+      publishedClaimCount: 0,
+      publishedCitationCount: 0,
+    });
+    expect(claimControls.modelEvaluationState).toBe("guard_only");
+    expect(claimControls.syntheticControlsPassed).toBe(false);
+    expect(JSON.stringify(claimControls)).not.toContain(
+      "The note requests clearer maintenance routing.",
+    );
     const overshoot = await runEvaluation({
       phase: "guard_only",
       manifest,
@@ -1683,6 +1767,32 @@ it("runs one preregistered fake candidate on a fresh full-suite binding with no 
       sourceManifestSha256: receipt.sourceManifestSha256,
       caseBindingsSha256: hash(receipt.suite.caseBindings),
     });
+    let invalidBindingReads = 0;
+    let invalidBindingRanks = 0;
+    await expect(
+      runFakeCandidateSuite({
+        phase: "fake_candidate",
+        execution: { ...execution, sourceManifestSha256: "0".repeat(64) },
+        caseCorpora: receipt.caseCorpora,
+        caseIds: ["dev_topic_01"],
+        publicReads: {
+          read: async (actor, path, body) => {
+            invalidBindingReads++;
+            return post(path, body);
+          },
+        },
+        vector: {
+          rank: async (input) => {
+            invalidBindingRanks++;
+            return createEvaluationVectorPort(fixture.database.session).rank(
+              input,
+            );
+          },
+        },
+      }),
+    ).rejects.toThrow("manifest_mismatch");
+    expect(invalidBindingReads).toBe(0);
+    expect(invalidBindingRanks).toBe(0);
     const result = await runFakeCandidateSuite({
       phase: "fake_candidate",
       execution,
@@ -1726,6 +1836,312 @@ it("runs one preregistered fake candidate on a fresh full-suite binding with no 
     ).toEqual([1, -1, 1, 0]);
     expect(result.activationAllowed).toBe(false);
     expect(result.semanticSelection).toBe(false);
+    const incompleteRanking = await runFakeCandidateSuite({
+      phase: "fake_candidate",
+      execution,
+      caseCorpora: receipt.caseCorpora,
+      caseIds: ["dev_topic_01"],
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      vector: {
+        rank: async (input) => {
+          const output = await createEvaluationVectorPort(
+            fixture.database.session,
+          ).rank(input);
+          return {
+            ...output,
+            rawWindowScores: output.rawWindowScores.slice(0, -1),
+          };
+        },
+      },
+    });
+    expect(
+      incompleteRanking.development.caseResults.every(
+        (row) => row.qualityScoringState === "failed",
+      ),
+    ).toBe(true);
+    expect(
+      incompleteRanking.development.caseResults[0]?.failures,
+    ).toContainEqual({
+      code: "invalid_adapter_output",
+      stage: "vector_sql",
+    });
+    expect(incompleteRanking.rankObservations).toEqual([]);
+    const swappedRanking = await runFakeCandidateSuite({
+      phase: "fake_candidate",
+      execution,
+      caseCorpora: receipt.caseCorpora,
+      caseIds: ["dev_topic_01"],
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      vector: {
+        rank: async (input) => {
+          const result = await createEvaluationVectorPort(
+            fixture.database.session,
+          ).rank(input);
+          return {
+            ...result,
+            vector: {
+              ...result.vector,
+              ranked: [...result.vector.ranked]
+                .reverse()
+                .map((row, i) => ({ ...row, rank: i + 1 })),
+            },
+          };
+        },
+      },
+    });
+    expect(swappedRanking.development.caseResults[0]?.failures).toContainEqual({
+      code: "invalid_adapter_output",
+      stage: "vector_sql",
+    });
+    expect(swappedRanking.rankObservations).toEqual([]);
+    const forgedHybrid = await runFakeCandidateSuite({
+      phase: "fake_candidate",
+      execution,
+      caseCorpora: receipt.caseCorpora,
+      caseIds: ["dev_topic_01"],
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      vector: {
+        rank: async (input) => {
+          const result = await createEvaluationVectorPort(
+            fixture.database.session,
+          ).rank(input);
+          return {
+            ...result,
+            hybrid: {
+              ...result.hybrid,
+              ranked: [...result.hybrid.ranked]
+                .reverse()
+                .map((row, i) => ({ ...row, rank: i + 1, score: 0.5 })),
+            },
+          };
+        },
+      },
+    });
+    expect(forgedHybrid.development.caseResults[0]?.failures).toContainEqual({
+      code: "invalid_adapter_output",
+      stage: "fusion",
+    });
+    expect(forgedHybrid.rankObservations).toEqual([]);
+    const mutableCases = structuredClone(receipt.caseCorpora);
+    let mutated = false;
+    const immutableRun = await runFakeCandidateSuite({
+      phase: "fake_candidate",
+      execution,
+      caseCorpora: mutableCases,
+      caseIds: ["dev_topic_01"],
+      vector: createEvaluationVectorPort(fixture.database.session),
+      publicReads: {
+        read: async (actor, path, body) => {
+          const response = await post(path, body);
+          if (!mutated) {
+            mutated = true;
+            const row = mutableCases.find(
+              (row) => row.label.caseId === "dev_topic_01",
+            )!;
+            row.corpus.cases[0]!.relevance.forEach((label) => {
+              label.grade = 0;
+            });
+          }
+          return response;
+        },
+      },
+    });
+    expect(
+      immutableRun.development.caseResults.find(
+        (row) => row.path === "fake_exact_vector",
+      )?.recallAt10,
+    ).toBe(1);
+  } finally {
+    await fixture.stop();
+  }
+}, 120000);
+
+it("reports frozen development and untouched held-out fake evaluation separately with lifecycle refusals", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const { receipt, post } = await prepareEvaluationSuite(fixture);
+    const decision = fakeCandidateDecisionSchema.parse(
+      JSON.parse(
+        await readFile(
+          new URL(
+            "../../../tools/ask-evaluation/fakeCandidateDecision.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      ),
+    );
+    const execution = fakeCandidateExecutionSchema.parse({
+      version: "ask-evaluation-fake-execution-v1",
+      decisionConfigurationSha256: decision.configurationSha256,
+      candidateScriptSha256: decision.candidateScriptSha256,
+      fullSuite: receipt.suite,
+      sourceManifestSha256: receipt.sourceManifestSha256,
+      caseBindingsSha256: hash(receipt.suite.caseBindings),
+    });
+    if (process.env["ASK_EVALUATION_EXPORT_CANDIDATE"] === "1")
+      await writeFile(
+        new URL(
+          "../../../.context/492-candidate-live-freeze.json",
+          import.meta.url,
+        ),
+        JSON.stringify(
+          { execution, caseCorpora: receipt.caseCorpora },
+          null,
+          2,
+        ),
+      );
+    const changed = new Set<string>();
+    const result = await runFakeCandidateSuite({
+      phase: "fake_candidate",
+      execution,
+      caseCorpora: receipt.caseCorpora,
+      vector: createEvaluationVectorPort(fixture.database.session),
+      publicReads: {
+        read: async (actor, path, body) => {
+          const row = receipt.caseCorpora.find(
+            (row) => `${row.label.caseId}_actor` === actor,
+          );
+          if (row === undefined) throw new Error("unknown_fixture_actor");
+          const response = await post(path, body);
+          if (
+            path === "/ask/read" &&
+            row.label.lifecycleScenario !== "none" &&
+            !changed.has(actor)
+          ) {
+            changed.add(actor);
+            const source = row.corpus.sources[0]!.windows[0]!.source;
+            if (row.label.lifecycleScenario === "reassign_during") {
+              const reassigned = await fixture.db.query(
+                "UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND name=$2 RETURNING id",
+                [
+                  fixture.alpha.workspaceId,
+                  row.label.identityName,
+                  fixture.alpha.admin.userId,
+                ],
+              );
+              expect(reassigned.rows).toHaveLength(1);
+            } else if (source.kind === "selected_note") {
+              const person = (
+                await fixture.db.query<{ person_id: string }>(
+                  "SELECT person_id FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2",
+                  [source.workspaceId, source.sourceId],
+                )
+              ).rows[0]!;
+              expect(
+                (
+                  await post("/crm/people/source/delete", {
+                    commandId: randomUUID(),
+                    clientVersion: CURRENT_CLIENT_VERSION,
+                    personId: person.person_id,
+                    sourceId: source.sourceId,
+                    expectedRevision: 1,
+                  })
+                ).status,
+              ).toBe(200);
+            } else if (source.kind === "mail") {
+              expect(
+                (
+                  await post("/crm/business/mail/delete", {
+                    commandId: randomUUID(),
+                    clientVersion: CURRENT_CLIENT_VERSION,
+                    sourceId: source.sourceId,
+                    expectedRevision: 1,
+                  })
+                ).status,
+              ).toBe(200);
+            } else if (source.kind === "call_transcript")
+              await fixture.db.query(
+                "DELETE FROM call_transcripts WHERE workspace_id=$1 AND call_session_id=$2",
+                [source.workspaceId, source.sourceId],
+              );
+            else
+              await fixture.db.query(
+                "UPDATE meeting_transcripts SET version=version+1 WHERE workspace_id=$1 AND id=$2",
+                [source.workspaceId, source.sourceId],
+              );
+          }
+          return response;
+        },
+      },
+    });
+    expect(result.development.caseResults).toHaveLength(290);
+    expect(result.holdout.caseResults).toHaveLength(145);
+    expect(result.development.expectedRefusalCount).toBe(40);
+    expect(result.holdout.expectedRefusalCount).toBe(20);
+    expect(result.development.criticalControlFailureCount).toBe(0);
+    expect(result.holdout.criticalControlFailureCount).toBe(0);
+    expect(result.development.syntheticControlsPassed).toBe(true);
+    expect(result.holdout.syntheticControlsPassed).toBe(true);
+    expect(result.development.syntheticOrchestrationPassed).toBe(false);
+    expect(result.holdout.syntheticOrchestrationPassed).toBe(false);
+    expect(result.rankObservations).toHaveLength(90);
+    expect(
+      result.development.caseResults.filter((row) => row.path === "exact_sql"),
+    ).toHaveLength(10);
+    expect(
+      result.holdout.caseResults.filter((row) => row.path === "exact_sql"),
+    ).toHaveLength(5);
+    for (const report of [result.development, result.holdout]) {
+      expect(
+        report.caseResults.every(
+          (row) =>
+            row.publishedClaimCount === 0 && row.publishedCitationCount === 0,
+        ),
+      ).toBe(true);
+      expect(
+        report.caseResults
+          .filter((row) => row.expectedRefusal !== null)
+          .every((row) => row.failures.length > 0 && row.recallAt10 === null),
+      ).toBe(true);
+      expect(report.realModelMeasured).toBe(false);
+      expect(report.realVectorMeasured).toBe(false);
+      expect(report.realQualityState).toBe(
+        "pending_verified_purpose_budget_and_preregistration",
+      );
+    }
+    if (process.env["ASK_EVALUATION_EXPORT_CANDIDATE"] === "1") {
+      await writeFile(
+        new URL(
+          "../../../.context/492-candidate-development.json",
+          import.meta.url,
+        ),
+        JSON.stringify(
+          {
+            executionSha256: result.executionSha256,
+            decisionConfigurationSha256: result.decisionConfigurationSha256,
+            report: result.development,
+            rankObservations: result.rankObservations.filter((row) =>
+              row.caseId.startsWith("dev_"),
+            ),
+            semanticSelection: false,
+            activationAllowed: false,
+          },
+          null,
+          2,
+        ),
+      );
+      await writeFile(
+        new URL(
+          "../../../.context/492-candidate-holdout.json",
+          import.meta.url,
+        ),
+        JSON.stringify(
+          {
+            executionSha256: result.executionSha256,
+            decisionConfigurationSha256: result.decisionConfigurationSha256,
+            report: result.holdout,
+            rankObservations: result.rankObservations.filter((row) =>
+              row.caseId.startsWith("holdout_"),
+            ),
+            semanticSelection: false,
+            activationAllowed: false,
+          },
+          null,
+          2,
+        ),
+      );
+    }
   } finally {
     await fixture.stop();
   }

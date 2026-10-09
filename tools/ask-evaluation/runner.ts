@@ -1,5 +1,6 @@
 import type { DevelopmentLabelTemplate } from "./labels.ts";
 import { readFile } from "node:fs/promises";
+import { evaluationFusion } from "./fusion.ts";
 import {
   createFakeEvaluationEmbedding,
   createFakeEvaluationAnswer,
@@ -21,6 +22,7 @@ import type {
 import {
   developmentSuiteSchema,
   fakeCandidateDecisionSchema,
+  fakeCandidateScriptSchema,
   fakeCandidateExecutionSchema,
   frozenManifestSchema,
   embeddingOutputSchema,
@@ -43,6 +45,14 @@ import { baselineReport, type CaseMeasurement } from "./report.ts";
 class EvaluationTimeout extends Error {
   constructor(
     readonly code: "case_timeout" | "run_timeout",
+    readonly stage: CaseMeasurement["failures"][number]["stage"],
+  ) {
+    super(code);
+  }
+}
+class EvaluationRefusal extends Error {
+  constructor(
+    readonly code: CaseMeasurement["failures"][number]["code"],
     readonly stage: CaseMeasurement["failures"][number]["stage"],
   ) {
     super(code);
@@ -320,6 +330,8 @@ async function runBoundedEvaluation(
             source: window.source,
             text: observed.get(window.id)!.text,
           }));
+          let guardOutput: ReturnType<typeof answerOutputSchema.parse> | null =
+            null;
           try {
             const raw = await awaitStage("answer", (signal) =>
               guard.answer.answer(
@@ -340,6 +352,7 @@ async function runBoundedEvaluation(
             else if (output.data.usage.calls !== 1)
               fail("invalid_adapter_output", "answer");
             else {
+              guardOutput = output.data;
               const settled = {
                 outcome: "observed" as const,
                 calls: charged.calls,
@@ -386,9 +399,57 @@ async function runBoundedEvaluation(
               fail(error.code, error.stage);
             else fail("unknown_acceptance", "answer");
           }
-          // All adapter outputs are discarded in guard-only mode; no ranking or gold judgment.
+          // Guard-only never publishes adapter text or retrieval scores; judgments are body-free controls.
           for (const window of windows) {
             if ((await readWindow(window, true)) === null) break;
+          }
+          if (result.failures.length === 0 && guardOutput !== null) {
+            result.abstained = guardOutput.abstained;
+            for (const [claimIndex, claim] of guardOutput.claims.entries()) {
+              const forbidden = item.acceptableClaims.some((gold) =>
+                gold.forbiddenTextVariants.includes(claim.text),
+              );
+              const known = item.acceptableClaims.find((gold) =>
+                gold.acceptableTextVariants.includes(claim.text),
+              );
+              const supported =
+                known !== undefined &&
+                !forbidden &&
+                known.supportedBy.every((id) => claim.windowIds.includes(id)) &&
+                claim.windowIds.every(
+                  (id) => known.supportedBy.includes(id) && observed.has(id),
+                );
+              result.validCitations += new Set(claim.windowIds).size;
+              if (supported) {
+                result.supportedClaims++;
+                result.claimJudgments.push({
+                  claimIndex,
+                  verdict: "supported",
+                  matchedGoldClaimId: known.id,
+                });
+              } else if (forbidden || known !== undefined) {
+                result.unsupportedClaims++;
+                result.claimJudgments.push({
+                  claimIndex,
+                  verdict: "unsupported",
+                  matchedGoldClaimId: null,
+                });
+                fail("unsupported_claim", "scoring");
+              } else {
+                result.unjudgedClaims++;
+                result.claimJudgments.push({
+                  claimIndex,
+                  verdict: "unjudged_unknown_paraphrase",
+                  matchedGoldClaimId: null,
+                });
+              }
+            }
+            result.claimEvaluationState =
+              result.unjudgedClaims > 0
+                ? "pending_human_adjudication"
+                : guardOutput.claims.length > 0
+                  ? "closed_gold_variants_checked"
+                  : "no_claims";
           }
         }
       } else if (result.failures.length === 0) {
@@ -696,6 +757,11 @@ export interface FakeCandidateSuiteInput {
 
 /** The sole candidate entry accepts the full live binding before selecting either split. */
 export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
+  // Capture caller-owned manifests before any await; source lifecycle may change, gold may not.
+  const caseCorpora = structuredClone(input.caseCorpora);
+  const rawExecution = structuredClone(input.execution);
+  const requestedCaseIds =
+    input.caseIds === undefined ? undefined : [...input.caseIds];
   const decision = fakeCandidateDecisionSchema.parse(
     JSON.parse(
       await readFile(
@@ -708,8 +774,8 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
     new URL("./fakeCandidateScript.json", import.meta.url),
     "utf8",
   );
-  const script = JSON.parse(scriptBytes);
-  const execution = fakeCandidateExecutionSchema.parse(input.execution);
+  const script = fakeCandidateScriptSchema.parse(JSON.parse(scriptBytes));
+  const execution = fakeCandidateExecutionSchema.parse(rawExecution);
   const { configurationSha256, ...decisionDefinition } = decision;
   const { suiteSha256, ...suiteDefinition } = execution.fullSuite;
   const { splitSha256, ...splitDefinition } = execution.fullSuite.split;
@@ -723,13 +789,13 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
     evaluationHash(splitDefinition) !== splitSha256 ||
     evaluationHash(execution.fullSuite.caseBindings) !==
       execution.caseBindingsSha256 ||
-    input.caseCorpora.length !== 120 ||
-    input.caseCorpora.some(
+    caseCorpora.length !== 120 ||
+    caseCorpora.some(
       (row) => row.split !== "development" && row.split !== "holdout",
     ) ||
-    evaluationHash(input.caseCorpora.map((row) => row.corpus.sources)) !==
+    evaluationHash(caseCorpora.map((row) => row.corpus.sources)) !==
       execution.sourceManifestSha256 ||
-    evaluationHash(input.caseCorpora.map((row) => row.label)) !==
+    evaluationHash(caseCorpora.map((row) => row.label)) !==
       decision.logicalGoldSha256 ||
     execution.fullSuite.split.labelSha256 !== decision.logicalGoldSha256
   )
@@ -737,7 +803,7 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
   const manifests = new Map<string, FrozenManifest>();
   const identities = new Set<string>();
   const originalIds = new Set<string>();
-  for (const [index, row] of input.caseCorpora.entries()) {
+  for (const [index, row] of caseCorpora.entries()) {
     const binding = execution.fullSuite.caseBindings[index];
     const item = row.corpus.cases[0];
     const label = row.label;
@@ -779,6 +845,8 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
       binding === undefined ||
       binding.caseId !== label.caseId ||
       item.id !== label.caseId ||
+      item.actorFixtureId !== `${label.caseId}_actor` ||
+      row.corpus.id !== `${label.caseId}_corpus` ||
       !ids.includes(item.id) ||
       binding.split !== row.split ||
       binding.corpusSha256 !== row.corpus.corpusSha256 ||
@@ -789,6 +857,16 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
       row.corpus.sources.length !== gold.length ||
       item.category !== label.category ||
       item.lifecycleScenario !== label.lifecycleScenario ||
+      JSON.stringify(item.expectedRefusal ?? null) !==
+        JSON.stringify(
+          label.lifecycleScenario === "none"
+            ? null
+            : {
+                stage: "final_read",
+                code: "source_unavailable",
+                scenario: label.lifecycleScenario,
+              },
+        ) ||
       item.mustAbstain !== (label.lifecycleScenario !== "none") ||
       JSON.stringify(item.relevance) !==
         JSON.stringify(
@@ -861,7 +939,7 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
     manifests.set(item.id, manifest);
   }
   const selected =
-    input.caseIds ?? input.caseCorpora.map((row) => row.label.caseId);
+    requestedCaseIds ?? caseCorpora.map((row) => row.label.caseId);
   if (
     new Set(selected).size !== selected.length ||
     selected.some((id) => !manifests.has(id))
@@ -882,7 +960,7 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
     caseId: string;
     ranking: EvaluationRankingOutput;
   }[] = [];
-  for (const row of input.caseCorpora.filter((row) =>
+  for (const row of caseCorpora.filter((row) =>
     selected.includes(row.label.caseId),
   )) {
     const started = performance.now(),
@@ -1017,7 +1095,7 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
           vectors[window.id] = [
             ...script.embedding.windowVectorsByOrdinalModulo4[
               window.ordinal % 4
-            ],
+            ]!,
           ];
         const embedding = createFakeEvaluationEmbedding({
           version: decision.candidate.embeddingVersion,
@@ -1087,6 +1165,130 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
               }),
           ),
         );
+        const expectedGroups = groupEvaluationWindows(
+          permitted.map((window, i) => ({
+            id: window.id,
+            ordinal: windows[i]!.ordinal,
+            text: window.text,
+          })),
+        );
+        const expectedVectorRanks = expectedGroups
+          .map((group) => ({
+            groupId: group.groupId,
+            windowIds: group.windowIds,
+            firstOrdinal: group.firstOrdinal,
+            score: Math.max(
+              ...group.windowIds.map((id) => {
+                const window = windows.find((window) => window.id === id)!;
+                return [1, -1, 1, 0][window.ordinal % 4]!;
+              }),
+            ),
+          }))
+          .sort(
+            (a, b) =>
+              b.score - a.score ||
+              a.firstOrdinal - b.firstOrdinal ||
+              (a.groupId < b.groupId ? -1 : a.groupId > b.groupId ? 1 : 0),
+          )
+          .slice(0, 10)
+          .map((group, i) => ({ ...group, rank: i + 1 }));
+        const sameRanks = (
+          actual: typeof ranking.vector.ranked,
+          expected: typeof ranking.vector.ranked,
+        ) =>
+          actual.length === expected.length &&
+          actual.every((group, i) => {
+            const target = expected[i]!;
+            return (
+              group.groupId === target.groupId &&
+              group.rank === target.rank &&
+              group.firstOrdinal === target.firstOrdinal &&
+              group.score === target.score &&
+              JSON.stringify(group.windowIds) ===
+                JSON.stringify(target.windowIds)
+            );
+          });
+        if (
+          !sameRanks(ranking.vector.ranked, expectedVectorRanks) ||
+          ranking.vector.path !== "fake_exact_vector" ||
+          ranking.groups.length !== expectedGroups.length ||
+          ranking.groups.some((group, i) => {
+            const expected = expectedGroups[i];
+            return (
+              expected === undefined ||
+              group.groupId !== expected.groupId ||
+              group.textSha256 !== expected.textSha256 ||
+              group.firstOrdinal !== expected.firstOrdinal ||
+              JSON.stringify(group.windowIds) !==
+                JSON.stringify(expected.windowIds)
+            );
+          }) ||
+          ranking.rawWindowScores.length !== windows.length ||
+          new Set(ranking.rawWindowScores.map((row) => row.windowId)).size !==
+            windows.length ||
+          ranking.rawWindowScores.some((score) => {
+            const window = windows.find(
+              (window) => window.id === score.windowId,
+            );
+            return (
+              window === undefined ||
+              score.score !== [1, -1, 1, 0][window.ordinal % 4]
+            );
+          }) ||
+          [ranking.vector, ranking.hybrid].some(
+            (result) =>
+              result.failures.length !== 0 ||
+              result.qualityScoringState !== "scored" ||
+              new Set(result.ranked.map((group) => group.groupId)).size !==
+                result.ranked.length ||
+              result.ranked.some((group, i) => {
+                const expected = expectedGroups.find(
+                  (row) => row.groupId === group.groupId,
+                );
+                return (
+                  expected === undefined ||
+                  group.rank !== i + 1 ||
+                  group.firstOrdinal !== expected.firstOrdinal ||
+                  JSON.stringify(group.windowIds) !==
+                    JSON.stringify(expected.windowIds)
+                );
+              }),
+          ) ||
+          ranking.sqlBounds.inputWindows !== windows.length ||
+          ranking.sqlObservation.evaluatedWindowScores !== windows.length
+        )
+          throw new EvaluationRefusal("invalid_adapter_output", "vector_sql");
+        const expectedHybrid = evaluationFusion.fuse({
+          lexical: {
+            path: "lexical",
+            dedupUnit: "trim_whitespace_lowercase_en_us_text_group",
+            qualityScoringState: "scored",
+            durationMs: 0,
+            failures: [],
+            ranked: lexical.passages.map((passage, i) => {
+              const group = expectedGroups.find(
+                (group) =>
+                  group.groupId === evaluationTextGroupId(passage.text),
+              )!;
+              return {
+                groupId: group.groupId,
+                windowIds: group.windowIds,
+                firstOrdinal: group.firstOrdinal,
+                rank: i + 1,
+                score: null,
+              };
+            }),
+          },
+          vector: { ...ranking.vector, ranked: expectedVectorRanks },
+          groups: expectedGroups,
+          rrfConstant: 60,
+          k: 10,
+        });
+        if (
+          ranking.hybrid.path !== "fake_hybrid" ||
+          !sameRanks(ranking.hybrid.ranked, expectedHybrid.ranked)
+        )
+          throw new EvaluationRefusal("invalid_adapter_output", "fusion");
         rankObservations.push({ caseId: row.label.caseId, ranking });
         const answer = createFakeEvaluationAnswer({
           version: decision.candidate.answerVersion,
@@ -1183,7 +1385,11 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
           }
         }
       } catch (error) {
-        if (error instanceof EvaluationTimeout) fail(error.code, error.stage);
+        if (
+          error instanceof EvaluationTimeout ||
+          error instanceof EvaluationRefusal
+        )
+          fail(error.code, error.stage);
         else {
           const allowed = [
             "source_unavailable",
