@@ -33,7 +33,15 @@ function columns(table:string,make:(f:CallToBookingFixture,patch:Row)=>Row|Promi
 function duplicate(table:string,make:(f:CallToBookingFixture)=>Row|Promise<Row>,constraint:string,identity:'id'|'task_key'|'family_key'):Case{
  return {constraint,run:async f=>{const first=await make(f);await insert(f,table,first);const next=await make(f);next[identity]=first[identity]!;return insert(f,table,next);}};
 }
+function fixtureActivation(row:Row):Record<string,unknown>{
+ return {reviewId:row['id'],reviewRevision:1,activationKey:hash,sourceKind:'selected_note',sourceId:randomUUID(),sourceRevision:1,sourceHash:hash,anchorId:row['anchor_id'],decisionRevision:0,contextHash:hash,initialContextSnapshot:JSON.parse(String(row['initial_context_snapshot'])),contextSnapshot:JSON.parse(String(row['context_snapshot'])),originalAccessClosure:JSON.parse(String(row['original_access_closure'])),actionHash:hash,dueHash:hash,activatedAt:'2026-10-01T00:00:00.000Z'};
+}
 export const CRM_COMMITMENT_CONSTRAINT_CASES:readonly Case[]=[
+ ...['sourceKind'].map(field=>({constraint:'crm_internal_activation_shape',run:async(f:CallToBookingFixture)=>{
+  const row=await review(f);await insert(f,'crm_commitment_reviews',row);
+  const receipt=fixtureActivation(row);receipt[field]=null;
+  return insert(f,'crm_internal_tasks',task(f,{task_key:hash,review_id:row['id']!,activation_receipt:JSON.stringify(receipt)}));
+ }})),
  ...columns('crm_commitment_reviews',review,[
   ['crm_commitment_projection_shape',{projection_receipt:'{}'}],
   ['crm_commitment_review_private_shape',{context_snapshot:'{}'}],
@@ -64,7 +72,7 @@ export const CRM_COMMITMENT_CONSTRAINT_CASES:readonly Case[]=[
  ]),
  {constraint:'crm_internal_tasks_workspace_id_review_id_fkey',run:async f=>{
    const r=await review(f);await insert(f,'crm_commitment_reviews',r);
-   const receipt={reviewId:r.id,reviewRevision:1,activationKey:hash,sourceKind:'selected_note',sourceId:randomUUID(),sourceRevision:1,sourceHash:hash,anchorId:r.anchor_id,decisionRevision:0,contextHash:hash,initialContextSnapshot:JSON.parse(String(r.initial_context_snapshot)),contextSnapshot:JSON.parse(String(r.context_snapshot)),originalAccessClosure:JSON.parse(String(r.original_access_closure)),actionHash:hash,dueHash:hash,activatedAt:'2026-10-01T00:00:00.000Z'};
+   const receipt=fixtureActivation(r);
    return insert(f,'crm_internal_tasks',task(f,{task_key:hash,review_id:absent,activation_receipt:JSON.stringify(receipt)}));
  }},
  duplicate('crm_internal_tasks',task,'crm_internal_tasks_pkey','id'),

@@ -55,7 +55,7 @@ BEGIN
  FOREACH key IN ARRAY ARRAY['reviewRevision','sourceRevision','decisionRevision'] LOOP
   IF jsonb_typeof(value->key)<>'number' OR (value->>key)!~'^[0-9]+$' THEN RETURN false; END IF;
  END LOOP;
- IF (value->>'reviewRevision')::numeric<1 OR (value->>'sourceRevision')::numeric<1 OR value->>'sourceKind' NOT IN ('selected_note','mail','call_transcript','meeting_transcript') OR NOT crm_extraction_context_valid(value->'initialContextSnapshot') OR NOT crm_extraction_context_valid(value->'contextSnapshot') OR NOT crm_access_closure_valid(value->'originalAccessClosure') OR jsonb_typeof(value->'activatedAt')<>'string' OR (value->>'activatedAt')!~'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$' THEN RETURN false; END IF;
+ IF (value->>'reviewRevision')::numeric<1 OR (value->>'sourceRevision')::numeric<1 OR jsonb_typeof(value->'sourceKind') IS DISTINCT FROM 'string' OR value->>'sourceKind' NOT IN ('selected_note','mail','call_transcript','meeting_transcript') OR NOT crm_extraction_context_valid(value->'initialContextSnapshot') OR NOT crm_extraction_context_valid(value->'contextSnapshot') OR NOT crm_access_closure_valid(value->'originalAccessClosure') OR jsonb_typeof(value->'activatedAt')<>'string' OR (value->>'activatedAt')!~'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$' THEN RETURN false; END IF;
  PERFORM (value->>'activatedAt')::timestamptz;
  RETURN true;
  EXCEPTION WHEN OTHERS THEN RETURN false;
