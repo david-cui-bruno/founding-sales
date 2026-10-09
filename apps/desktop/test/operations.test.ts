@@ -448,3 +448,10 @@ it.each(['crm.selectedAttachmentCommit','crm.selectedAttachmentAnalyze','crm.sel
  await expect(answerOperation(operationHandlers(deps),'command',name,{...input,path:'/arbitrary',commandId:ITEM_ID})).rejects.toThrow();
  expect(command).not.toHaveBeenCalled();
 });
+it('reads bounded current and reviewed evidence through a closed authenticated source operation',async()=>{
+ const deps=hosts();
+ const source={workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note' as const,revision:1,contentHash:'a'.repeat(64),locator:null};
+ const result={source:{...source,speaker:null,occurredAt:null,observedAt:'2026-10-09T00:00:00Z',completeness:'selected_excerpt',availability:'available'},claims:[],reviewedHistory:[],nextAfterReviewedAnchorId:null,nextAfterClaimId:null,projection:{scope:'bounded_source_page',counts:{current:0,reviewedHistory:0,confirmed:0,dismissed:0,corrected:0,unreviewed:0,reviewRequired:0},truncated:false,revisionFingerprint:'b'.repeat(64)}};
+ deps.api.read=async(path,parse,input)=>{expect(path).toBe('/crm/evidence/read');expect(input).toEqual({source,limit:50});return {ok:true,value:parse(result)};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.evidenceRead',{source,limit:50})).toEqual(result);
+});
