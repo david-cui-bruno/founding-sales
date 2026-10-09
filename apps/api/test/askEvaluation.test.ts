@@ -439,6 +439,112 @@ it("measures a frozen development selected-note lexical baseline through authent
       failures: [{ code: "invalid_adapter_output", stage: "answer" }],
       publishedClaimCount: 0,
     });
+    for (const code of [
+      "real_purpose_unverified",
+      "invalid_adapter_output",
+    ] as const) {
+      let publicReadCount = 0;
+      let adapterCallCount = 0;
+      const deniedGuard = fakeGuard(async () => {
+        adapterCallCount++;
+        throw new Error("must_not_call");
+      });
+      if (code === "real_purpose_unverified")
+        deniedGuard.purpose = {
+          state: "real_unavailable",
+          purpose: "crm_retrieval_evaluation",
+          realCallsAllowed: false,
+          maxSpendCents: 0,
+          reason: "purpose_configuration_unverified",
+        };
+      else
+        deniedGuard.answer = {
+          ...deniedGuard.answer,
+          version: "unfrozen-version",
+        };
+      const denied = await runEvaluation({
+        phase: "guard_only",
+        manifest,
+        development,
+        guard: deniedGuard,
+        publicReads: {
+          read: async (actor, path, body) => {
+            publicReadCount++;
+            return post(path, body);
+          },
+        },
+      });
+      expect(publicReadCount).toBe(0);
+      expect(adapterCallCount).toBe(0);
+      expect(denied.caseResults[0]).toMatchObject({
+        usage: {
+          outcome: "observed",
+          calls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        failures: [{ code, stage: "answer" }],
+        publishedClaimCount: 0,
+        publishedCitationCount: 0,
+      });
+    }
+    const thrownReceipt = await runEvaluation({
+      phase: "guard_only",
+      manifest,
+      development,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: fakeGuard(async () => {
+        throw new Error("private_adapter_error");
+      }),
+    });
+    expect(thrownReceipt.caseResults[0]).toMatchObject({
+      usage: {
+        outcome: "unknown",
+        calls: 1,
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+      failures: [{ code: "unknown_acceptance", stage: "answer" }],
+      publishedClaimCount: 0,
+      publishedCitationCount: 0,
+    });
+    expect(JSON.stringify(thrownReceipt)).not.toContain(
+      "private_adapter_error",
+    );
+    const unknownCitation = await runEvaluation({
+      phase: "guard_only",
+      manifest,
+      development,
+      publicReads: { read: async (actor, path, body) => post(path, body) },
+      guard: fakeGuard(async () => ({
+        claims: [
+          { text: "Untrusted synthetic claim", windowIds: ["unknown_window"] },
+        ],
+        abstained: false,
+        usage: {
+          outcome: "observed",
+          calls: 1,
+          inputTokens: 1,
+          outputTokens: 1,
+          reservedCents: "0",
+          observedCents: "0",
+        },
+      })),
+    });
+    expect(unknownCitation.caseResults[0]).toMatchObject({
+      usage: {
+        outcome: "observed",
+        calls: 1,
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+      failures: [{ code: "unknown_citation", stage: "answer" }],
+      publishedClaimCount: 0,
+      publishedCitationCount: 0,
+    });
+    expect(JSON.stringify(unknownCitation)).not.toContain(
+      "Untrusted synthetic claim",
+    );
     const overshoot = await runEvaluation({
       phase: "guard_only",
       manifest,
