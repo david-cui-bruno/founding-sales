@@ -60,3 +60,14 @@ it('shows exact task counts without claiming the acquired conversations are comp
  expect(await screen.findByText('1 open tasks')).toBeTruthy();expect(screen.getByText(/callback · 2026-10-20/u)).toBeTruthy();
  expect(read).toHaveBeenLastCalledWith({operation:'tasks',scope:{firmId:one},limit:20});
 });
+
+it('requires a fresh record selection after changing identity search',async()=>{
+ const read=vi.fn<AskPorts['read']>(async()=>({operation:'records',selection:'single',records:[{recordId:one,kind:'firm',name:'Orion',firmId:one}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}));
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));
+ expect(screen.getByRole('button',{name:'Open opportunities'})).toBeTruthy();
+ fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Different firm'}});
+ expect(screen.queryByRole('button',{name:'Open opportunities'})).toBeNull();
+ expect(screen.queryByRole('heading',{name:'Orion'})).toBeNull();
+});
