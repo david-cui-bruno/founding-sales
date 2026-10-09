@@ -231,3 +231,17 @@ BEGIN
 END;
 $$;
 CREATE CONSTRAINT TRIGGER crm_ask_financial_immutable AFTER UPDATE ON crm_ask_financial_receipts DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_crm_ask_financial_immutable();
+
+CREATE FUNCTION invalidate_crm_ask_meeting_copy() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE erased boolean;
+BEGIN
+ IF TG_OP='DELETE' OR OLD.version IS DISTINCT FROM NEW.version OR OLD.utterances IS DISTINCT FROM NEW.utterances THEN
+  erased:=TG_OP='DELETE';
+  DELETE FROM crm_ask_request_windows w USING crm_ask_requests a WHERE w.workspace_id=a.workspace_id AND w.request_id=a.id AND a.workspace_id=OLD.workspace_id AND a.state<>'deleted' AND EXISTS(SELECT 1 FROM jsonb_array_elements(a.scope->'sources') src WHERE src->>'kind'='meeting_transcript' AND src->>'sourceId'=OLD.id::text);
+  UPDATE crm_ask_requests a SET question=NULL,result=NULL,result_at=NULL,scope=CASE WHEN erased THEN NULL ELSE scope END,initial_contexts=CASE WHEN erased THEN NULL ELSE initial_contexts END,initial_access_closure=CASE WHEN erased THEN NULL ELSE initial_access_closure END,state=CASE WHEN erased THEN 'deleted' ELSE 'stale' END,reason=CASE WHEN erased THEN 'deleted' ELSE 'source_changed' END,version=version+1,epoch=epoch+1,updated_at=now() WHERE a.workspace_id=OLD.workspace_id AND a.state<>'deleted' AND EXISTS(SELECT 1 FROM jsonb_array_elements(a.scope->'sources') src WHERE src->>'kind'='meeting_transcript' AND src->>'sourceId'=OLD.id::text);
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER crm_ask_meeting_invalidation AFTER UPDATE OR DELETE ON meeting_transcripts FOR EACH ROW EXECUTE FUNCTION invalidate_crm_ask_meeting_copy();
