@@ -33,6 +33,18 @@ CREATE TABLE crm_mail_reply_resolutions (
  CONSTRAINT crm_reply_resolutions_pkey PRIMARY KEY(workspace_id,request_message_id),
  CONSTRAINT crm_reply_resolutions_receipt_fk FOREIGN KEY(workspace_id,sent_receipt_id) REFERENCES crm_mail_progress_receipts(workspace_id,id) ON DELETE SET NULL (sent_receipt_id)
 );
+-- A completion's identity is permanent; sensitive attribution can only be scrubbed.
+CREATE FUNCTION crm_completion_redaction_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.workspace_id IS DISTINCT FROM OLD.workspace_id OR NEW.request_message_id IS DISTINCT FROM OLD.request_message_id
+ OR (NEW.sent_receipt_id IS DISTINCT FROM OLD.sent_receipt_id AND NEW.sent_receipt_id IS NOT NULL)
+ OR (NEW.request_provider_at IS DISTINCT FROM OLD.request_provider_at AND NEW.request_provider_at IS NOT NULL) THEN
+  RAISE EXCEPTION 'CRM completion permits only attribution redaction' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER crm_completion_redaction_only BEFORE UPDATE ON crm_mail_reply_resolutions
+ FOR EACH ROW EXECUTE FUNCTION crm_completion_redaction_only();
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_mail_progress_receipts TO app_runtime,migration;
 GRANT SELECT,INSERT ON crm_mail_reply_resolutions TO app_runtime,migration;
 GRANT UPDATE(sent_receipt_id,request_provider_at) ON crm_mail_reply_resolutions TO app_runtime,migration;

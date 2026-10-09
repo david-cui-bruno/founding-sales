@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
@@ -35,6 +36,18 @@ describe('append-only privileges', () => {
   it('preserves immutable body-free business decisions as app_runtime',async()=>{await expect(runtime.query("UPDATE crm_business_decision_revisions SET decision='include'")).rejects.toMatchObject({code:'42501'});await expect(runtime.query('DELETE FROM crm_business_decision_revisions')).rejects.toMatchObject({code:'42501'});await expect(runtime.query('TRUNCATE crm_business_decision_revisions')).rejects.toMatchObject({code:'42501'});});
 
   it('cannot reopen completed CRM requests by deleting or changing their opaque identity',async()=>{await expect(runtime.query('DELETE FROM crm_mail_reply_resolutions')).rejects.toMatchObject({code:'42501'});await expect(runtime.query('UPDATE crm_mail_reply_resolutions SET request_message_id=gen_random_uuid()')).rejects.toMatchObject({code:'42501'});await expect(runtime.query('TRUNCATE crm_mail_reply_resolutions')).rejects.toMatchObject({code:'42501'});});
+
+  it('allows only null-redaction of exact completion proof and never replaces or restores it',async()=>{
+    const workspaceId=seeded.alpha.workspaceId,requestId=randomUUID();
+    const receipts=[];for(let index=0;index<2;index++)receipts.push((await runtime.query<{id:string}>("INSERT INTO crm_mail_progress_receipts(workspace_id,source_id,source_revision,source_hash,event_kind,context_hash,original_firm_ids,original_person_ids,state) VALUES($1,gen_random_uuid(),1,repeat('a',64),'contacted',repeat('b',64),'{}','{}','deleted') RETURNING id",[workspaceId])).rows[0]!.id);
+    await runtime.query("INSERT INTO crm_mail_reply_resolutions(workspace_id,request_message_id,sent_receipt_id,request_provider_at) VALUES($1,$2,$3,'2026-09-24T14:00:00Z')",[workspaceId,requestId,receipts[0]]);
+    await expect(runtime.query('UPDATE crm_mail_reply_resolutions SET sent_receipt_id=$3 WHERE workspace_id=$1 AND request_message_id=$2',[workspaceId,requestId,receipts[1]])).rejects.toMatchObject({code:'23514'});
+    await expect(runtime.query("UPDATE crm_mail_reply_resolutions SET request_provider_at='2026-09-25T14:00:00Z' WHERE workspace_id=$1 AND request_message_id=$2",[workspaceId,requestId])).rejects.toMatchObject({code:'23514'});
+    await runtime.query('UPDATE crm_mail_reply_resolutions SET request_provider_at=NULL WHERE workspace_id=$1 AND request_message_id=$2',[workspaceId,requestId]);
+    await runtime.query('DELETE FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=$2',[workspaceId,receipts[0]]);
+    await expect(runtime.query('UPDATE crm_mail_reply_resolutions SET sent_receipt_id=$3 WHERE workspace_id=$1 AND request_message_id=$2',[workspaceId,requestId,receipts[1]])).rejects.toMatchObject({code:'23514'});
+    await expect(runtime.query("UPDATE crm_mail_reply_resolutions SET request_provider_at='2026-09-24T14:00:00Z' WHERE workspace_id=$1 AND request_message_id=$2",[workspaceId,requestId])).rejects.toMatchObject({code:'23514'});
+  });
 
   it('runs as app_runtime, not as the owner', async () => {
     const { rows } = await runtime.query<{ current_user: string }>('SELECT current_user');

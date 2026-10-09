@@ -21,9 +21,9 @@ export async function mailProgressDependency(db:Queryable,workspaceId:string,sou
  return {hash,sources,endpointKeys,endpoints,selectedSourceIds,firmIds:[...new Set([...contexts.flatMap(cx=>cx.firm_id?[cx.firm_id]:[]),...selectedContexts.map(cx=>cx.firm_id),...claims.flatMap(cx=>cx.firm_id?[cx.firm_id]:[])])].sort(),personIds:[...new Set([...contexts.flatMap(cx=>cx.person_id?[cx.person_id]:[]),...selectedContexts.map(cx=>cx.person_id),...claims.flatMap(cx=>cx.person_id?[cx.person_id]:[])])].sort()};
 }
 /** Completed CRM work grants no outreach permission and changes no stop. */
-export async function projectMailProgress(context:RepositoryContext,exact:ExactMailSource & {dependencyHash?:string|undefined},fence:()=>Promise<boolean>){
+export async function projectMailProgress(context:RepositoryContext,exact:ExactMailSource & {dependencyHash:string},fence:()=>Promise<boolean>){
  if(!await lockProgressActor(context))return;
- const snapshot=await mailProgressDependency(context.db,context.scope.workspaceId,exact.sourceId);if(!snapshot||exact.dependencyHash!==undefined&&exact.dependencyHash!==snapshot.hash)return;
+ const snapshot=await mailProgressDependency(context.db,context.scope.workspaceId,exact.sourceId);if(!snapshot||exact.dependencyHash!==snapshot.hash)return;
  if(!await lockIdentityContext(context,{firmIds:snapshot.firmIds,personIds:snapshot.personIds,sourceIds:snapshot.selectedSourceIds}))return;
  for(const hash of snapshot.endpointKeys)await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`identity-endpoint:${context.scope.workspaceId}:email:${hash}`]);
  for(const endpoint of snapshot.endpoints)await context.db.query('SELECT id FROM crm_identity_endpoints WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,endpoint.id]);
