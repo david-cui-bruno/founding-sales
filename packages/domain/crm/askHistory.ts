@@ -32,7 +32,13 @@ export async function listAskHistory(context:RepositoryContext&{db:SessionQuerya
 export async function changeAskHistory(context:RepositoryContext,input:AskHistoryChange){
  const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return {ok:false as const,reason:'source_unavailable'};
  await lockAskLifecycle(context);
- if(input.action.kind==='delete')return {ok:false as const,reason:'invalid_input'};
+ if(input.action.kind==='delete'){
+  const row=(await context.db.query<HistoryRow>('SELECT id,version,history_revision FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR UPDATE',[context.scope.workspaceId,input.requestId,actor.userId])).rows[0];
+  if(row===undefined)return {ok:false as const,reason:'source_unavailable'};
+  if(row.history_revision!==input.expectedRevision)return {ok:false as const,reason:'history_changed'};
+  const changed=(await context.db.query<{id:string;version:number;history_revision:number;state:string}>("UPDATE crm_ask_requests SET state='deleted',reason='deleted',version=version+1,epoch=epoch+1,question=NULL,scope=NULL,initial_contexts=NULL,initial_access_closure=NULL,result=NULL,result_at=NULL,history_title=NULL,history_pinned=false,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 RETURNING id,version,history_revision,state",[context.scope.workspaceId,input.requestId,actor.userId])).rows[0]!;
+  return {ok:true as const,value:askHistoryChangedSchema.parse({requestId:changed.id,historyRevision:changed.history_revision,requestVersion:changed.version,state:changed.state})};
+ }
  const current=await readAskAnswer(context,input.requestId);
  if(current===null||current.question===null)return {ok:false as const,reason:'source_unavailable'};
  const row=(await context.db.query<HistoryRow>('SELECT id,version,history_revision FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR UPDATE',[context.scope.workspaceId,input.requestId,actor.userId])).rows[0];

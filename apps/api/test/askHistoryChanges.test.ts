@@ -32,6 +32,17 @@ it('explicitly renames a current private investigation with revision-bound metad
   expect((await post('/ask/history/change',pinCommand)).body).toMatchObject({replayed:true,result:{requestId,historyRevision:3,requestVersion:1,state:'unavailable'}});
   expect((await post('/ask/history/list',{})).body).toMatchObject({items:[{requestId,title:'Maintenance investigation',pinned:true,historyRevision:3}]});
   expect((await post('/ask/history/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedRevision:2,action:{kind:'rename',title:'Stale overwrite'}})).status).toBe(409);
+  const deleteCommand={commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedRevision:3,action:{kind:'delete'}};
+  const deleted=await post('/ask/history/change',deleteCommand);
+  expect(deleted.status).toBe(200);
+  expect(deleted.body).toMatchObject({result:{requestId,historyRevision:4,requestVersion:2,state:'deleted'}});
+  expect((await post('/ask/history/list',{})).body).toMatchObject({items:[],nextCursor:null});
+  expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'deleted',reason:'deleted',question:null,fallback:null,answer:null});
+  expect((await post('/ask/history/change',pinCommand)).body).toMatchObject({replayed:true,result:{historyRevision:3}});
+  const sourcePage=await post('/crm/people/read',{personId});
+  expect(sourcePage.body).toMatchObject({sources:[{sourceId}]});
+  expect((await post('/ask/history/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedRevision:4,action:{kind:'rename',title:'Restore copied title'}})).status).toBe(409);
+
 
  }finally{await fixture.stop();}
 });
