@@ -21,7 +21,7 @@ async function review(f:CallToBookingFixture,patch:Row={}){
  return {workspace_id:f.seeded.alpha.workspaceId,id:randomUUID(),owner_user_id:f.seeded.alpha.salesperson.userId,
   family_key:randomUUID().replaceAll('-','').repeat(2),activation_key:hash,anchor_id:id,target:'{}',
   initial_context_snapshot:'{"personId":null,"firmIds":[],"relationships":[],"review":"current"}',context_snapshot:'{"personId":null,"firmIds":[],"relationships":[],"review":"current"}',original_access_closure:'{"firmIds":[],"personIds":[]}',
-  classification:'internal_promise',actor:'self',action_label:'Internal work',today_eligibility:'unknown',...patch};
+  basis:'human',classification:'internal_promise',actor:'self',action_label:'Internal work',today_eligibility:'unknown',...patch};
 }
 function task(f:CallToBookingFixture,patch:Row={}){
  return {workspace_id:f.seeded.alpha.workspaceId,id:randomUUID(),owner_user_id:f.seeded.alpha.salesperson.userId,
@@ -48,6 +48,8 @@ export const CRM_COMMITMENT_CONSTRAINT_CASES:readonly Case[]=[
   ['crm_commitment_reviews_activation_key_check',{activation_key:'invalid'}],
   ['crm_commitment_reviews_workspace_id_anchor_id_fkey',{anchor_id:absent}],
   ['crm_commitment_reviews_workspace_id_owner_user_id_fkey',{owner_user_id:absent}],
+  ['crm_commitment_basis',{basis:'invented'}],
+  ['crm_commitment_review_private_shape',{basis:null}],
   ['crm_commitment_today_eligibility',{today_eligibility:'invented'}],
  ]),
  duplicate('crm_commitment_reviews',review,'crm_commitment_reviews_pkey','id'),

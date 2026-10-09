@@ -1,3 +1,4 @@
+import {enqueueJob} from '@fss/domain/jobs/jobStore.ts';
 import {flagPublishedCrmEvidence} from '@fss/domain/crm/evidenceDecisions.ts';
 import {unavailableMailEvidence,type CrmMailEvidencePort,type MailProcessingAuthority} from '@fss/domain/crm/mailEvidence.ts';
 import {createHash} from 'node:crypto';
@@ -153,9 +154,11 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    const claims=claimsSchema.safeParse(answer.claims);
    if(!claims.success||answer.acceptance!=='accepted'){await setState(context,row.id,'failed','invalid_extraction');return;}
    for(const claim of claims.data){const citation=await resolveCrmSource(context,{...source,locator:claim.locator},mailEvidence);if(citation?.passage?.text!==claim.quote){await setState(context,row.id,'failed','invalid_quote');return;}}
-   for(const claim of claims.data)await context.db.query('INSERT INTO crm_extraction_claims(workspace_id,generation_id,kind,interpretation,status,locator,quote,claim_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[context.scope.workspaceId,row.id,claim.kind,claim.interpretation,claim.status,claim.locator,claim.quote,createHash('sha256').update(JSON.stringify({source,context:capturedContext,...claim})).digest('hex')]);
+   const published=[];
+   for(const claim of claims.data){const inserted=await context.db.query<{id:string}>('INSERT INTO crm_extraction_claims(workspace_id,generation_id,kind,interpretation,status,locator,quote,claim_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',[context.scope.workspaceId,row.id,claim.kind,claim.interpretation,claim.status,claim.locator,claim.quote,createHash('sha256').update(JSON.stringify({source,context:capturedContext,...claim})).digest('hex')]);if(claim.kind==='commitment')published.push(inserted.rows[0]!.id);}
    await flagPublishedCrmEvidence(context,source,row.context_hash,claims.data);
    await setState(context,row.id,'complete',null);
+   if(source.kind==='mail')for(const claimId of published)await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'crm.commitments_intent',idempotencyKey:`crm-promise-intent:${createHash('sha256').update(JSON.stringify([row.id,claimId,source,row.context_hash])).digest('hex')}`,payload:{generationId:row.id,claimId,source,contextHash:row.context_hash},maxAttempts:3});
   });
  }};
 }

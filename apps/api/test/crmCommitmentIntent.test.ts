@@ -1,0 +1,128 @@
+import {createHash,randomUUID} from 'node:crypto';
+import {expect,it} from 'vitest';
+import {crmProcessingResultSchema} from '@fss/contracts';
+import {createNativeCrmMailEvidence} from '@fss/domain/crm/nativeMailEvidence.ts';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {enqueueJob,claimJobs} from '@fss/domain/jobs/jobStore.ts';
+import {businessAccountBinding} from '@fss/domain/business/acquisition.ts';
+import {workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
+import {runOnce} from '../../worker/src/runner/jobRunner.ts';
+import {createAuthFixture,CURRENT_CLIENT_VERSION} from './support/authFixture.ts';
+import {issueSessionFor} from './support/sessionFixture.ts';
+import {seedFirm,seedContact} from './support/crmSeed.ts';
+import {dispatch} from '../src/server.ts';
+async function approveCaptureFixture(
+  fixture: Awaited<ReturnType<typeof createAuthFixture>>,
+  ownerUserId = fixture.alpha.admin.userId,
+) {
+  const workspaceId = fixture.alpha.workspaceId;
+  const mailbox = (
+    await fixture.db.query<{
+      id: string;
+      owner_user_id: string;
+      email_address: string;
+      provider_account_id: string;
+      generation: number;
+      status: string;
+    }>(
+      "INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'business@example.test','google-business','connected') RETURNING *",
+      [workspaceId, ownerUserId],
+    )
+  ).rows[0]!;
+  const binding = businessAccountBinding(workspaceId, mailbox)!;
+  await fixture.db.query(
+    "INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled) VALUES($1,$2,$3,'google-business',$4,1,1,false)",
+    [workspaceId, mailbox.id, ownerUserId, binding],
+  );
+  const conversationId = (
+    await fixture.db.query<{ id: string }>(
+      "INSERT INTO crm_business_conversations(workspace_id,mailbox_id,owner_user_id,account_binding,provider_thread_id,subject,participants,latest_provider_at,category,reason,classifier_version,metadata_hash) VALUES($1,$2,$3,$4,'approved-thread','Business','[]',now(),'business','fixture','fixture',$5) RETURNING id",
+      [workspaceId, mailbox.id, ownerUserId, binding, 'a'.repeat(64)],
+    )
+  ).rows[0]!.id;
+  await fixture.db.query(
+    "INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'google-business',$4,1,1,true,1,'full-body-fixture',$5,'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')",
+    [workspaceId, mailbox.id, ownerUserId, binding, 'b'.repeat(64)],
+  );
+  await enqueueJob(fixture.db, {
+    workspaceId,
+    kind: 'crm.mail_capture',
+    idempotencyKey: 'approved-fixture',
+    payload: {
+      mailboxId: mailbox.id,
+      providerMessageId: 'approved-message',
+      providerAccountId: 'google-business',
+      generation: 1,
+      conversationId,
+      controlsRevision: 1,
+      policyRevision: 1,
+      decisionRevision: 0,
+    },
+  });
+  const job = (
+    await claimJobs(fixture.db, {
+      owner: 'capture-fixture',
+      kinds: ['crm.mail_capture'],
+      limit: 1,
+      leaseSeconds: 120,
+    })
+  )[0]!;
+  return { workspaceId, ownerUserId, mailbox, binding, conversationId, job };
+}
+
+
+it.each([
+ {name:'human review veto',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'dated human dismissal veto',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'old dated promise',quote:'I will prepare the repair summary by 2020-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:true},
+ {name:'other sender',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'forwarded passage',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'forwarded' as const,eligible:false},
+ {name:'complete authored Sent',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:true},
+ {name:'quoted passage',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'quoted' as const,eligible:false},
+ {name:'actual parser partial body',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'partial' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'unknown origin',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'unknown' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'draft label',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'unknown' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'conditional',quote:'I will prepare the repair summary by 2026-10-12 UTC if approved.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'relative date without source zone',quote:'I will prepare the repair summary by tomorrow.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'commercial promise',quote:'I will prepare the contract by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'unknown actor',quote:'They will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+])('uses actual registered native capture/extraction/intent: $name',async({name,quote,origin,completeness,rangeKind,eligible})=>{
+ const fixture=await createAuthFixture();try{
+  const {workspaceId,mailbox,binding,job}=await approveCaptureFixture(fixture);
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+  const port=createNativeCrmMailEvidence({verify:async proof=>proof.accountBinding===binding});
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,crmMailEvidence:port});
+  const command=<T extends object>(fields:T)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...fields});
+  const firmId=await seedFirm(fixture,{name:'Verified promise firm',assignedUserId:fixture.alpha.admin.userId});
+  const contactId=await seedContact(fixture,{firmId,fullName:'Known promise correspondent'});
+  expect((await post('/crm/people/bridge',command({contactIds:[contactId]}))).status).toBe(200);
+  const message=(await fixture.db.query<{id:string}>("INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,matched) VALUES($1,$2,'approved-message','approved-thread','outgoing','2026-10-08T15:00:00Z',true) RETURNING id",[workspaceId,mailbox.id])).rows[0]!;
+  const opportunityId=(await fixture.db.query<{id:string}>('INSERT INTO opportunities(workspace_id,firm_id,stage_id,control_mode_changed_at) VALUES($1,$2,(SELECT id FROM pipeline_stages WHERE workspace_id=$1 ORDER BY position LIMIT 1),now()) RETURNING id',[workspaceId,firmId])).rows[0]!.id;
+  await fixture.db.query("INSERT INTO mail_message_matches(workspace_id,mail_message_id,firm_id,contact_id,opportunity_id,match_rule) VALUES($1,$2,$3,$4,$5,'thread')",[workspaceId,message.id,firmId,contactId,opportunityId]);
+  const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:{verify:async proof=>proof.accountBinding===binding},provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:name==='draft label'?['DRAFT']:['SENT'],origin,providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:name==='other sender'?'someoneelse@example.test':'business@example.test',to:['known@example.test'],cc:[],subject:'Repair summary',body:quote,parserVersion:'controlled-authored-mime-v1',representation:'plain_text',completeness,ranges:[{start:0,end:quote.length,kind:rangeKind}]})}}});
+  const handler=capture.get('crm.mail_capture');if(!handler)throw new Error('capture registration missing');
+  const captured=await handler.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  expect(captured?.progress['sourceId']).toBe(message.id);
+  const source={workspaceId,sourceId:message.id,kind:'mail' as const,revision:1,contentHash:createHash('sha256').update(quote).digest('hex'),locator:null};
+  expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:'promise-evaluation',modelVersion:'fixture-promises-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
+  await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[workspaceId]);
+  expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{mailEvidence:port,adapter:{endpointId:'promise-evaluation',modelVersion:'fixture-promises-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',providerKey:'fixture.promise_intent',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:[{kind:'commitment',status:'stated',interpretation:'Untrusted date/actor interpretation deliberately ignored',locator:`text:0:${quote.length}`,quote}]})}}});
+  await runOnce(fixture.db,{registry,owner:'promise-extraction',limit:20});
+  const processed=await post('/crm/processing/read',{source});expect(processed.body).toMatchObject({state:'complete'});
+  if(name==='human review veto'||name==='dated human dismissal veto'){
+   const result=crmProcessingResultSchema.parse(processed.body);if(result?.state!=='complete')throw new Error('complete processing missing');
+   const claim=result.claims[0]!;
+   const target={source,claimId:claim.claimId,claimRevision:1,claimHash:claim.claimHash,contextHash:result.contextHash,expectedDecisionRevision:0};
+   const response=name==='human review veto'?await post('/crm/commitments/review',command({...target,expectedCommitmentRevision:0,classification:'ambiguous',actor:'unknown',actionLabel:'Human chose a suggestion',due:null})):await post('/crm/evidence/decide',command({...target,action:'dismiss'}));
+   expect(response.status).toBe(200);
+  }
+  await runOnce(fixture.db,{registry,owner:'promise-intent',limit:20});
+  await runOnce(fixture.db,{registry,owner:'promise-projector',limit:20});
+  const page=await post('/crm/commitments/read',{scope:{kind:'firm',firmId},limit:50});expect(page.status).toBe(200);
+  if(!eligible){expect(page.body).toMatchObject({items:name==='human review veto'?[{basis:'human',state:'suggestion',task:null}]:[]});return;}
+  expect(page.body).toMatchObject({items:[{basis:'verified_original',actor:'self',actionLabel:'Prepare the repair summary',due:{kind:'date',date:name==='old dated promise'?'2020-10-12':'2026-10-12',zone:'UTC'},quote,task:{status:'open'}}]});
+  if(name==='old dated promise'){expect(page.body).toMatchObject({items:[{todayEligibility:'historical'}]});expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toMatchObject({items:[]});}
+ }finally{await fixture.stop();}
+});
