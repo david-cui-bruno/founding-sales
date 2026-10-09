@@ -7,6 +7,7 @@ import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
 import type {AskInputWindow,AskPurposeProofInput} from '@fss/domain/crm/askAnswerPorts.ts';
+import {seedFirm} from './support/crmSeed.ts';
 
 it('acknowledges a selected-source answer request without exposing its question or source text when answering is disabled', async()=>{
  const fixture=await createAuthFixture();
@@ -62,5 +63,25 @@ it('answers through the registered controlled-purpose worker and navigates a cur
   const navigation=await post('/ask/answers/source/read',{requestId,expectedVersion:value.version,windowId:value.answer.claims[0]!.citationWindowIds[0]});
   expect(navigation.status).toBe(200);
   expect(navigation.body).toMatchObject({source:{passage:{text,locator:'text:0:23'},source:{sourceId:source.sourceId}}});
+  const interrupted=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
+  expect(interrupted.status).toBe(200);
+  const interruptedId=(interrupted.body as {result:{requestId:string}}).result.requestId;
+  let release!:()=>void,started!:()=>void,calls=0;
+  const wait=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{started=resolve;});
+  const interruptedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>({configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const}),answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async()=>{calls++;started();await wait;return {acceptance:'unknown' as const,usage:null,answer:null};}}}});
+  const first=await fixture.database.appRuntimeSession(),second=await fixture.database.appRuntimeSession();
+  const running=runOnce(first,{registry:interruptedRegistry,owner:'ask-interrupted-first',limit:20});
+  await entered;
+  try{
+   const firmId=await seedFirm(fixture,{name:'Conserved Ask spend read',assignedUserId:fixture.alpha.salesperson.userId});
+   expect((await post('/research/firm',{firmId})).body).toMatchObject({spend:{monthToDateCents:2}});
+   await fixture.db.query("UPDATE jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND payload->>'requestId'=$2 AND state='running'",[fixture.alpha.workspaceId,interruptedId]);
+   await runOnce(second,{registry:interruptedRegistry,owner:'ask-interrupted-reclaim',limit:20});
+   await fixture.db.query("UPDATE jobs SET not_before=clock_timestamp()-interval '1 second',run_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND payload->>'requestId'=$2 AND state='queued'",[fixture.alpha.workspaceId,interruptedId]);
+   await runOnce(second,{registry:interruptedRegistry,owner:'ask-interrupted-second',limit:20});
+   expect((await post('/ask/answers/read',{requestId:interruptedId})).body).toMatchObject({state:'unknown_acceptance',reason:'provider_acceptance_unknown',answer:null});
+   expect((await post('/research/firm',{firmId})).body).toMatchObject({spend:{monthToDateCents:2}});
+   expect(calls).toBe(1);
+  }finally{release();await running;}
  }finally{await fixture.stop();}
 });

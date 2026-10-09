@@ -29,9 +29,29 @@ async function withinBudget(context:RepositoryContext,purpose:AskPurposeSnapshot
  const totals=(await context.db.query<{daily:string;monthly:string}>(`SELECT coalesce(sum(CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END) FILTER(WHERE business_date=$2::date),0)::text daily,coalesce(sum(CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END) FILTER(WHERE date_trunc('month',business_date)=date_trunc('month',$2::date)),0)::text monthly FROM provider_reservations WHERE workspace_id=$1 AND subject_kind='crm_ask_answer'`,[context.scope.workspaceId,date])).rows[0]!;
  return Number(totals.daily)+extra<=purpose.dailyCeilingCents&&Number(totals.monthly)+extra<=purpose.monthlyCeilingCents&&(providerFunding(providerKey)==='credits'||(extra===0?await monthWithinCeiling(context,{at,zone}):await clearMonthlyCash(context,{at,zone,cents:extra})));
 }
+/** Reclaimed calling is an unknown financial result, even after private authority disappears. */
+async function recoverCalling(input:JobHandlerInput){
+ const payload=z.strictObject({requestId:z.uuid(),version:z.number().int().positive(),epoch:z.number().int().positive()}).safeParse(input.job.payload);if(!payload.success)return false;
+ const {requestId,version,epoch}=payload.data;
+ const context=repositoryContext(input.scope,input.session);
+ return withTransaction(input.session,async()=>{
+  await context.db.query('SELECT id FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[input.scope.workspaceId,requestId]);
+  if(!await fenced(input))return true;
+  const previous=(await context.db.query<{id:string;reservation_id:string;dispatch_state:string;job_id:string;fencing_token:string}>('SELECT id,reservation_id,dispatch_state,job_id,fencing_token FROM crm_ask_financial_receipts WHERE workspace_id=$1 AND request_id=$2 AND request_version=$3 AND request_epoch=$4 AND stage=\'answer\'',[input.scope.workspaceId,requestId,version,epoch])).rows[0];
+  if(previous===undefined||previous.dispatch_state!=='calling'&&previous.dispatch_state!=='unknown_acceptance')return false;
+  if(previous.dispatch_state==='calling'&&previous.job_id===input.job.id&&previous.fencing_token===input.job.fencingToken)return false;
+  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${context.scope.workspaceId}:crm-ask-budget:answer`]);
+  await lockMonthlySpend(context);
+  await settleAttempt(context,{reservationId:previous.reservation_id,at:await now(context),outcome:{kind:'estimated'}});
+  await context.db.query("UPDATE crm_ask_financial_receipts SET dispatch_state='unknown_acceptance' WHERE workspace_id=$1 AND id=$2 AND dispatch_state='calling'",[context.scope.workspaceId,previous.id]);
+  await setState(context,requestId,version,epoch,'unknown_acceptance','provider_acceptance_unknown');
+  return true;
+ });
+}
 /** Durable calling precedes the wait; original copies are reread after every external stage. */
 export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHandler{
  return {kind:'crm.ask_answer',protection:'outbound_fence',maxAttempts:3,leaseSeconds:120,async handle(input){
+  if(await recoverCalling(input))return;
   const located=await locate(input);if(located===null)return;
   const {context,requestId,version,epoch}=located;
   async function snapshot(){return withTransaction(input.session,async()=>{const current=await readCurrentAskInput(context,requestId,version,epoch);return current!==null&&await fenced(input)?current:null;});}
