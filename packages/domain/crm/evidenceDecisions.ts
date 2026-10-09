@@ -125,7 +125,7 @@ async function currentClaims(
   };
 }
 /** Canonical capture authority, never inferred from a claim's semantic context. */
-async function originalSourceAccessClosure(
+export async function originalSourceAccessClosure(
   context: RepositoryContext,
   source: SourceLookup,
 ): Promise<CrmOriginalAccessClosure | null> {
