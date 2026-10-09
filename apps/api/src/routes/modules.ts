@@ -1,3 +1,4 @@
+import {CRM_EVIDENCE_PATHS,routeCrmEvidence} from './crmEvidence.ts';
 import { SELECTED_IMPORT_PATHS, routeSelectedImports } from './selectedImports.ts';
 import { BUSINESS_MAIL_PATHS, routeBusinessMail } from './businessMail.ts';
 import { BUSINESS_PATHS, routeBusinessAcquisition } from './businessAcquisition.ts';
@@ -180,6 +181,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('people-relationships', { paths: IDENTITY_PATHS }, routePeopleRelationships, routing),
     moduleOf('selected-imports', { paths: SELECTED_IMPORT_PATHS }, routeSelectedImports, routing),
     moduleOf('people', { paths: PEOPLE_PATHS }, routePeople, routing),
+    moduleOf('crm-evidence', {paths:CRM_EVIDENCE_PATHS},routeCrmEvidence,routing),
     moduleOf('crm-processing', { paths: CRM_PROCESSING_PATHS }, routeCrmProcessing, routing),
     moduleOf('firm-page', { paths: FIRM_PAGE_PATHS }, routeFirmPage, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),
