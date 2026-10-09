@@ -830,6 +830,30 @@ it("a versioned context correction invalidates deletion approval even when copie
   }
 });
 
+it('erases saved Ask questions after direct mail-copy deletion without restoring their private history', async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const copied = await copyWithOriginalAndReviewedFirms(fixture);
+    const question = 'private copied conversation';
+    const requested = await copied.post('/ask/answers/request', copied.command({ question, scope: { sources: [{ workspaceId: fixture.alpha.workspaceId, sourceId: copied.sourceId, kind: 'mail', revision: 2, contentHash: copied.contentHash, locator: null }] } }));
+    expect(requested.status).toBe(200);
+    const requestId = (requested.body as { result: { requestId: string } }).result.requestId;
+    const current = await copied.post('/ask/answers/read', { requestId });
+    expect(current.status).toBe(200);
+    expect(current.body).toMatchObject({ question, fallback: { passages: [{ text: copied.passage }] } });
+    const deleted = await copied.post('/crm/business/mail/delete', copied.command({ sourceId: copied.sourceId, expectedRevision: 2 }));
+    expect(deleted.status).toBe(200);
+    const erased = await copied.post('/ask/answers/read', { requestId });
+    expect(erased.status).toBe(200);
+    expect(erased.body).toMatchObject({ state: 'deleted', reason: 'deleted', question: null, fallback: null, answer: null });
+    expect((await copied.post('/crm/business/mail/restore', copied.command({ sourceId: copied.sourceId, expectedRevision: 3 }))).status).toBe(200);
+    expect((await copied.post('/ask/answers/read', { requestId })).body).toMatchObject({ state: 'deleted', reason: 'deleted', question: null, fallback: null, answer: null });
+    expect(copied.bodyReads()).toBe(1);
+  } finally {
+    await fixture.stop();
+  }
+});
+
 it('keeps the last reviewed firm in deletion scope after copy deletion and restoration', async () => {
   const fixture = await createAuthFixture();
   try {
