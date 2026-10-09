@@ -163,6 +163,18 @@ export function SourcePromises({
                     ? "Human attestation"
                     : "Verified original authored promise"}
               </p>
+              {item.supersededOpenTasks.map((task) => (
+                <p key={task.taskId} className="mt-2 text-sm">
+                  Earlier open work needs review because the human-attested
+                  action or deadline changed. Review the original evidence
+                  explicitly to reconcile it.
+                </p>
+              ))}
+              {item.supersededOpenTasksTruncated ? (
+                <p className="text-sm">
+                  More earlier open work exists beyond this bounded review.
+                </p>
+              ) : null}
               <p className="font-medium">
                 {item.actionLabel ?? "Removed promise evidence"}
               </p>

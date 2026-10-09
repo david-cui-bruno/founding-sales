@@ -117,7 +117,7 @@ function Harness({ call }: { readonly call: CallControl }): JSX.Element {
 }
 
 const MESSAGE = '55555555-5555-4555-8555-555555555555';
-const read: TodayActionsV2Response = { version: 2, workspaceId: A, businessTimeZone: 'America/Chicago', asOf: '2026-10-01T14:00:00.000Z', actions: [{ actionId: `reply-message:${MESSAGE}`, kind: 'reply', subject: 'Elm Fork Test Rentals', reason: 'substantive_reply', dueAt: '2026-09-30T14:00:00.000Z', state: 'overdue', target: { kind: 'reply', firmId: A, messageId: MESSAGE } }] };
+const read: TodayActionsV2Response = { promiseCoverage:{scope:"current_authorized_work",truncated:false,nextAfterId:null},version: 2, workspaceId: A, businessTimeZone: 'America/Chicago', asOf: '2026-10-01T14:00:00.000Z', actions: [{ actionId: `reply-message:${MESSAGE}`, kind: 'reply', subject: 'Elm Fork Test Rentals', reason: 'substantive_reply', dueAt: '2026-09-30T14:00:00.000Z', state: 'overdue', target: { kind: 'reply', firmId: A, messageId: MESSAGE } }] };
 let currentRead: TodayActionsV2Response | null;
 let currentTarget: typeof read.actions[number]['target'] | null;
 const navigated = vi.fn();

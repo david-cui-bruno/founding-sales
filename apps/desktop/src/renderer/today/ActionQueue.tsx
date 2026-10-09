@@ -232,7 +232,11 @@ export function ActionQueue({
           </Button>
         </p>
       ) : read.actions.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No actions need you.</p>
+        <p className="text-sm text-muted-foreground">
+          {read.promiseCoverage.truncated
+            ? "No actions on this page."
+            : "No actions need you."}
+        </p>
       ) : (
         <ul className="flex max-h-[40vh] flex-col gap-2 overflow-y-auto">
           {read.actions.map((action) => (
@@ -275,6 +279,12 @@ export function ActionQueue({
           ))}
         </ul>
       )}
+      {read?.promiseCoverage.truncated ? (
+        <p className="mt-2 text-sm text-muted-foreground">
+          More promise work exists beyond this bounded Today page. Open the
+          relevant record for its current source promises.
+        </p>
+      ) : null}
       {promise === null ? null : (
         <section
           aria-label="Current promise"

@@ -44,6 +44,11 @@ test("opens promise proof in the shipped shell without completing it", async ({
         workspaceId: id,
         businessTimeZone: "Etc/UTC",
         asOf: "2026-10-09T15:00:00.000Z",
+        promiseCoverage: {
+          scope: "current_authorized_work",
+          truncated: false,
+          nextAfterId: null,
+        },
         actions: [
           {
             actionId: `crm-promise:${id}:4`,
@@ -62,6 +67,8 @@ test("opens promise proof in the shipped shell without completing it", async ({
           {
             commitmentId: id,
             revision: 2,
+            supersededOpenTasks: [],
+            supersededOpenTasksTruncated: false,
             basis: "human",
             state: "applied",
             todayEligibility: "current",

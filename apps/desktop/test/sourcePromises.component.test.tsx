@@ -21,6 +21,8 @@ const page = {
     {
       commitmentId: id,
       revision: 1,
+      supersededOpenTasks: [],
+      supersededOpenTasksTruncated: false,
       basis: "human" as const,
       state: "suggestion" as const,
       todayEligibility: "unknown" as const,
@@ -129,6 +131,8 @@ it("completes supported internal work only through an explicit version-bound com
     items: [
       {
         ...page.items[0]!,
+        supersededOpenTasks: [],
+        supersededOpenTasksTruncated: false,
         basis: "human" as const,
         state: "applied" as const,
         actor: "self" as const,
@@ -176,4 +180,36 @@ it("completes supported internal work only through an explicit version-bound com
     expectedVersion: 4,
   });
   expect(screen.queryByText("Maybe next week")).toBeNull();
+});
+
+it("shows earlier open work only as bounded reconciliation without reconstructing its action or deadline", async () => {
+  const value = {
+    ...page,
+    items: page.items.map((item) => ({
+      ...item,
+      supersededOpenTasks: [
+        {
+          taskId: id,
+          status: "open" as const,
+          version: 3,
+          reviewRequired: true as const,
+          reason: "human_action_changed" as const,
+        },
+      ],
+    })),
+  };
+  render(
+    <SourcePromises
+      source={source}
+      enabled={true}
+      privacyKey="first"
+      ports={{ read: async () => value, complete: vi.fn() }}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "View source promises" }));
+  await screen.findByText("Maybe next week");
+  expect(screen.getByText(/Earlier open work needs review/u)).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Complete this promise" }),
+  ).toBeNull();
 });

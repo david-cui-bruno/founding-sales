@@ -10,6 +10,11 @@ const response: TodayActionsV2Response = {
   workspaceId: id,
   businessTimeZone: "Etc/UTC",
   asOf: "2026-10-09T14:00:00.000Z",
+  promiseCoverage: {
+    scope: "current_authorized_work",
+    truncated: false,
+    nextAfterId: null,
+  },
   actions: [
     {
       actionId: `crm-promise:${id}:1`,
@@ -45,6 +50,8 @@ const promisePage = {
     {
       commitmentId: id,
       revision: 1,
+      supersededOpenTasks: [],
+      supersededOpenTasksTruncated: false,
       basis: "human" as const,
       state: "applied" as const,
       todayEligibility: "current" as const,
@@ -229,4 +236,27 @@ it("drops private action labels immediately when the current open is denied whil
   fireEvent.click(await screen.findByRole("button", { name: "Open promise" }));
   await screen.findByRole("status");
   expect(screen.queryByText("Send the maintenance outline")).toBeNull();
+});
+
+it("discloses a bounded incomplete promise page without inventing total work", async () => {
+  globalThis.callieApi = {
+    read: async () => ({
+      ...response,
+      promiseCoverage: {
+        scope: "current_authorized_work",
+        truncated: true,
+        nextAfterId: id,
+      },
+    }),
+    command: async () => {
+      throw new Error("no command");
+    },
+  } as unknown as OperationApi;
+  render(<ActionQueue refreshKey="partial" enabled={true} />);
+  await screen.findByText("Send the maintenance outline");
+  expect(
+    screen.getByText(
+      /More promise work exists beyond this bounded Today page/u,
+    ),
+  ).toBeTruthy();
 });
