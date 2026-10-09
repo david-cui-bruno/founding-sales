@@ -989,7 +989,15 @@ it("measures all eighty isolated development baselines without loading sealed ho
                       forbiddenTextVariants: label.forbiddenClaimText,
                     },
                   ],
-            mustAbstain: false,
+            mustAbstain: label.lifecycleScenario !== "none",
+            expectedRefusal:
+              label.lifecycleScenario === "none"
+                ? null
+                : {
+                    stage: "final_read",
+                    code: "source_unavailable",
+                    scenario: label.lifecycleScenario,
+                  },
             exactExpected,
             labelVersion: "independent-v1",
             labelAuthoringState: "independent_before_candidate_outputs",
@@ -997,9 +1005,12 @@ it("measures all eighty isolated development baselines without loading sealed ho
           },
         ],
       };
+      const canonicalDefinition = frozenCorpusSchema
+        .omit({ corpusSha256: true })
+        .parse(corpusDefinition);
       const development = frozenCorpusSchema.parse({
-        ...corpusDefinition,
-        corpusSha256: hash(corpusDefinition),
+        ...canonicalDefinition,
+        corpusSha256: hash(canonicalDefinition),
       });
       const manifest = frozenManifestSchema.parse({
         version: "ask-evaluation-v1",
@@ -1125,6 +1136,12 @@ it("measures all eighty isolated development baselines without loading sealed ho
         JSON.stringify(report, null, 2),
       );
     expect(report.caseResults).toHaveLength(80);
+    expect(report).toMatchObject({
+      syntheticOrchestrationPassed: false,
+      syntheticControlsPassed: true,
+      expectedRefusalCount: 10,
+      criticalControlFailureCount: 0,
+    });
     expect(cleanups).toBe(80);
     expect(
       report.categorySummaries.map((row) => [row.category, row.caseCount]),

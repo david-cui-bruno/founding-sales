@@ -75,6 +75,11 @@ export async function runEvaluation(
         observedCents: "0",
       },
       failures: [],
+      controlOutcome: "unverified",
+      expectedRefusal: item.expectedRefusal ?? null,
+      publishedClaimCount: 0,
+      publishedCitationCount: 0,
+      prohibitedPublication: false,
     };
     const fail = (
       code: CaseMeasurement["failures"][number]["code"],
@@ -253,6 +258,23 @@ export async function runEvaluation(
       if (error instanceof EvaluationTimeout) fail(error.code, error.stage);
       else fail("adapter_unavailable", "baseline");
     }
+    const expected = item.expectedRefusal ?? null;
+    if (expected !== null) {
+      const exactRefusal =
+        item.mustAbstain &&
+        item.lifecycleScenario === expected.scenario &&
+        result.failures.length > 0 &&
+        result.failures.every(
+          (failure) =>
+            failure.code === expected.code && failure.stage === expected.stage,
+        ) &&
+        result.publishedClaimCount === 0 &&
+        result.publishedCitationCount === 0 &&
+        !result.prohibitedPublication;
+      result.controlOutcome = exactRefusal ? "passed" : "failed";
+    } else
+      result.controlOutcome =
+        result.failures.length === 0 && !item.mustAbstain ? "passed" : "failed";
     result.durationMs = performance.now() - started;
     results.push(result);
   }

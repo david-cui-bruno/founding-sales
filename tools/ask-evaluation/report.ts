@@ -27,6 +27,22 @@ export function baselineReport(
         (row) =>
           row.failures.length === 0 && row.qualityScoringState === "scored",
       ),
+    syntheticControlsPassed:
+      results.length > 0 &&
+      results.every(
+        (row) =>
+          row.controlOutcome === "passed" ||
+          row.controlOutcome === "not_applicable",
+      ),
+    criticalControlFailureCount: results.filter(
+      (row) =>
+        row.controlOutcome === "failed" ||
+        row.controlOutcome === "unverified" ||
+        row.controlOutcome === undefined,
+    ).length,
+    expectedRefusalCount: results.filter(
+      (row) => row.expectedRefusal != null && row.controlOutcome === "passed",
+    ).length,
     modelEvaluationState: "not_run",
     caseResults: results,
     categorySummaries: categories.map((category) => {
