@@ -1,3 +1,4 @@
+import {ManualWork} from '../ask/ManualWork.tsx';
 import {NotificationStatus,type NotificationStatusPort} from './NotificationStatus.tsx';
 import {operations} from '../app/bridges.ts';
 import { ActionQueue } from './ActionQueue.tsx';
@@ -582,6 +583,7 @@ export function TodayWorkspace({
           </button>
         </div>
       ) : null}
+      <ManualWork scope={{kind:'today'}} enabled={hasTodayBridge} privacyKey={state?.asOf??null}/>
       <ActionQueue refreshKey={state?.asOf ?? null} enabled={hasTodayBridge} />
       <NotificationStatus port={notificationStatusPort}/>
       {unavailable ? (

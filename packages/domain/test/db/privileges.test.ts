@@ -1,4 +1,5 @@
-import {seedAskFinancialReceipt} from './support/askAnswerCases.ts';
+import {seedAskAction} from './support/askActionCases.ts';
+import {seedAskFinancialReceipt,seedAskRequest} from './support/askAnswerCases.ts';
 import {randomUUID} from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
@@ -48,6 +49,26 @@ describe('append-only privileges', () => {
     await runtime.query('DELETE FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=$2',[workspaceId,receipts[0]]);
     await expect(runtime.query('UPDATE crm_mail_reply_resolutions SET sent_receipt_id=$3 WHERE workspace_id=$1 AND request_message_id=$2',[workspaceId,requestId,receipts[1]])).rejects.toMatchObject({code:'23514'});
     await expect(runtime.query("UPDATE crm_mail_reply_resolutions SET request_provider_at='2026-09-24T14:00:00Z' WHERE workspace_id=$1 AND request_message_id=$2",[workspaceId,requestId])).rejects.toMatchObject({code:'23514'});
+  });
+
+  it('allows explicit manual Ask action state changes while preserving its private human instruction and identity', async () => {
+    const id=await seedAskAction({session:runtime,seeded});
+    expect((await runtime.query<{human_text:string;status:string}>('SELECT human_text,status FROM crm_ask_actions WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,id])).rows).toEqual([{human_text:'Prefer explicit maintenance evidence',status:'proposed'}]);
+    await expect(runtime.query("UPDATE crm_ask_actions SET human_text='Unapproved changed instruction' WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_action_immutable'});
+    await runtime.query("UPDATE crm_ask_actions SET status='dismissed',version=version+1 WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id]);
+    expect((await runtime.query<{status:string;version:number}>('SELECT status,version FROM crm_ask_actions WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,id])).rows).toEqual([{status:'dismissed',version:2}]);
+    await expect(runtime.query("UPDATE crm_ask_actions SET status='proposed',version=version+1 WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_action_immutable'});
+    await expect(runtime.query('DELETE FROM crm_ask_actions WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,id])).rejects.toMatchObject({code:'42501'});
+    await expect(runtime.query('TRUNCATE crm_ask_actions')).rejects.toMatchObject({code:'42501'});
+  });
+
+  it('allows bounded Ask history metadata changes while preserving the request and its owner', async () => {
+    const id=await seedAskRequest({session:runtime,seeded});
+    await runtime.query("UPDATE crm_ask_requests SET history_title='Maintenance evidence',history_pinned=true,history_revision=history_revision+1,history_updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id]);
+    expect((await runtime.query<{history_title:string;history_pinned:boolean;history_revision:number;owner_user_id:string}>("SELECT history_title,history_pinned,history_revision,owner_user_id FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,id])).rows).toEqual([{history_title:'Maintenance evidence',history_pinned:true,history_revision:2,owner_user_id:seeded.alpha.salesperson.userId}]);
+    await expect(runtime.query('UPDATE crm_ask_requests SET owner_user_id=$3 WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,id,seeded.alpha.admin.userId])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_initial_identity_immutable'});
+    await expect(runtime.query('DELETE FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,id])).rejects.toMatchObject({code:'42501'});
+    await expect(runtime.query('TRUNCATE crm_ask_requests')).rejects.toMatchObject({code:'42501'});
   });
 
   it('preserves Ask request and conserved financial history and protects canonical window proof', async () => {

@@ -1,3 +1,4 @@
+import {ManualWork} from '../ask/ManualWork.tsx';
 import {crmEvidenceWorkIdentitySchema} from '@fss/contracts';
 import { deadlineLabel } from '../meetings/MeetingTaskControls.tsx';
 import { holdEnrollmentLine, reasonSentence, type ContactDto, type FirmDetailDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
@@ -988,6 +989,7 @@ export function FirmPage({
   }
   const calls = (
     <>
+      <ManualWork scope={{kind:"firm",firmId:page.read.firm.id}} enabled={actionsEnabled} privacyKey={page}/>
       {/* Slice C1: calls placed from Callie, with their recordings. Renders nothing until there is one. */}
       <CallHistory firmId={page.read.firm.id} timeZone={page.read.firm.timeZone} workContexts={(page.tasks??[]).filter(task=>task.kind==='call_task').flatMap(task=>{const parsed=crmEvidenceWorkIdentitySchema.safeParse({kind:'call_task',id:task.key.startsWith('call_task:')?task.key.slice('call_task:'.length):null});return parsed.success?[parsed.data]:[];})}/>
       {/* Slice M1: the firm's Cal.com meetings, their state and time. Renders nothing until there is one. */}

@@ -1,3 +1,4 @@
+import {ManualWork,type ManualWorkPorts} from '../ask/ManualWork.tsx';
 import {RecordProgress} from './RecordProgress.tsx';
 import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
 import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
@@ -58,6 +59,7 @@ export function People({
   processing,
   workspaceId,
   mail,
+  manual,
   privacyKey = 'people',
   mailFirms = [],
   sourceVersion,
@@ -74,6 +76,7 @@ export function People({
   endpointEditing?: EndpointEditingPorts;
   imports?: SelectedImportPorts;
   mail?: EmailTimelinePorts;
+  manual?:Partial<ManualWorkPorts>;
   privacyKey?: string;
   mailFirms?: readonly {id:string;name:string}[];
   sourceVersion?: number | undefined;
@@ -195,6 +198,7 @@ export function People({
       {page ? (
         <section>
           <h3>{page.person.fullName}</h3>
+          <ManualWork scope={{kind:"person",personId:page.person.personId}} enabled={enabled} privacyKey={`${privacyKey}:${String(sourceVersion??0)}:${page.sources.map(source=>`${source.kind}:${source.sourceId}:${source.revision}:${source.contentHash}:${source.availability}`).join("|")}`} {...(manual===undefined?{}:{ports:manual})}/>
           {imports ? <SelectedImports key={page.person.personId} privacyKey={privacyKey} enabled={enabled} personId={page.person.personId} ports={imports} sourceVersion={page.sources.map(source=>`${source.sourceId}:${source.revision}:${source.availability}`).join('|')} onChange={async(isCurrent)=>{ const next=await ports.read(page.person.personId); if(isCurrent?.() ?? true)setPage(next); }}/> : null}
           <RecordProgress personId={page.person.personId} enabled={enabled} privacyKey={privacyKey} sourceVersion={sourceVersion}/>
           {mail ? <EmailTimeline processing={processing} workspaceId={workspaceId} key={`email:${page.person.personId}`} enabled={enabled} ports={mail} personId={page.person.personId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} people={people.map(person => ({id:person.personId,name:person.fullName}))} firms={mailFirms} /> : null}

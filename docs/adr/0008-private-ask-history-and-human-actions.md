@@ -1,0 +1,9 @@
+# Private Ask history and explicit human actions
+
+Approved #479/#494 saves source-scoped investigations under their existing request IDs. Opening history reads the current evidence and access closure without rerunning inference. Titles are private copied content. Global exact and record reads retain their existing behavior.
+
+An explicitly confirmed task, record annotation or preference proposal is an independent human leaf action. It owns its text once and freezes the complete original input scope, identity contexts, original access closure and bounded canonical support tuples. Admission binds those snapshots and the owner/version to the current request. Reads and task completion revalidate all original inputs and current authority, including uncited inputs; arbitrary historical firms cannot become action targets. Preferences remain proposals and annotations do not automatically become canonical evidence or trigger extraction/indexing.
+
+Deleting an investigation erases its question, title, result and copied windows while preserving separately committed human actions. Changing or deleting an original source erases the private fields of its actions; restoring that source cannot restore old copied text. Open tasks require review after erasure. Completed status and time remain source-free historical facts. Scoped deletion inventories, locks and fingerprints actions before original source mutation, so preview and committed redaction counts agree.
+
+Manual work has a separate surface on records, private Ask history and Today. Today includes explicitly dated open tasks due on or before the current calendar day in their supplied zone; it excludes undated and future tasks. This adds no briefing, inferred urgency, notification, commercial stage transition, sending authority or effective preference policy. Source completion does not activate providers or lift the release hold.

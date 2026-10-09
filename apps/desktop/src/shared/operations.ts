@@ -1,3 +1,5 @@
+import {askActionCreatePayloadSchema,askActionAcknowledgmentSchema,askActionReadSchema,askActionPageSchema,askActionChangePayloadSchema,askActionChangedSchema} from '@fss/contracts';
+import {askHistoryListSchema,askHistoryPageSchema,askHistoryChangePayloadSchema,askHistoryChangedSchema} from '@fss/contracts';
 import {askAnswerRequestPayloadSchema,askAnswerAcknowledgmentSchema,askAnswerReadSchema,askAnswerReadResultSchema,askAnswerSourceReadSchema,askAnswerSourceResultSchema} from '@fss/contracts';
 import {crmCommitmentReviewPayloadSchema,crmCommitmentCompletePayloadSchema,crmCommitmentQueuedSchema,crmCommitmentCompletedSchema,crmCommitmentReviewStatusSchema,crmCommitmentReviewStatusResultSchema,crmCommitmentReadSchema,crmCommitmentPageSchema,crmCommitmentHistoryPageSchema} from '@fss/contracts';
 import {todayActionsV2ResponseSchema,todayActionOpenV2RequestSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
@@ -1182,6 +1184,11 @@ export const OPERATIONS = {
   'crm.processingSource':{kind:'read',calls:[{method:'POST',path:'/crm/processing/source/read'}],input:crmSourceLookupSchema,output:crmResolvedSourceSchema,transform:'exact current source authority and bounded quote'},
   'crm.progressRead':{kind:'read',calls:[{method:'POST',path:'/crm/progress/read'}],input:crmProgressReadSchema,output:crmProgressResponseSchema,transform:'current verified evidence; imports do not send or change sales stages'},
   'ask.read':{kind:'read',calls:[{method:'POST',path:'/ask/read'}],input:askReadSchema,output:askResponseSchema,transform:'exact current state and authorized lexical retrieval; no execution authority'},
+  'ask.actionRead':{kind:'read',calls:[{method:'POST',path:'/ask/actions/read'}],input:askActionReadSchema,output:askActionPageSchema,transform:'owner-private current human work; unavailable support is source-free'},
+  'ask.actionChange':{kind:'command',calls:[{method:'POST',path:'/ask/actions/change'}],input:askActionChangePayloadSchema,output:askActionChangedSchema,transform:'explicit current manual task or proposal revision; no operational task effects'},
+  'ask.actionCreate':{kind:'command',calls:[{method:'POST',path:'/ask/actions/create'}],input:askActionCreatePayloadSchema,output:askActionAcknowledgmentSchema,transform:'explicit human leaf action bound to current supported finding; no policy or send effects'},
+  'ask.historyChange':{kind:'command',calls:[{method:'POST',path:'/ask/history/change'}],input:askHistoryChangePayloadSchema,output:askHistoryChangedSchema,transform:'explicit owner-private metadata CAS; body-free receipt'},
+  'ask.historyList':{kind:'read',calls:[{method:'POST',path:'/ask/history/list'}],input:askHistoryListSchema,output:askHistoryPageSchema,transform:'owner-private dated history with current source authority; no inference'},
   'ask.answerRequest':{kind:'command',calls:[{method:'POST',path:'/ask/answers/request'}],input:askAnswerRequestPayloadSchema,output:askAnswerAcknowledgmentSchema,transform:'explicit bounded question and selected versions; metadata acknowledgment only'},
   'ask.answerRead':{kind:'read',calls:[{method:'POST',path:'/ask/answers/read'}],input:askAnswerReadSchema,output:askAnswerReadResultSchema,transform:'fresh permission-checked answer and same-input keyword fallback'},
   'ask.answerSourceRead':{kind:'read',calls:[{method:'POST',path:'/ask/answers/source/read'}],input:askAnswerSourceReadSchema,output:askAnswerSourceResultSchema,transform:'current server-resolved request version and citation window; no navigation authority'},

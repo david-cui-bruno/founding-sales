@@ -1,10 +1,13 @@
+import {ManualWork,type ManualWorkPorts} from "./ManualWork.tsx";
+import type {AskFollowOnPorts} from "./AskFollowOn.tsx";
 import { useEffect, useRef, useState } from "react";
+import { AskHistory, type AskHistoryPorts } from "./AskHistory.tsx";
 import { AskAnswer, type AskAnswerPorts } from "./AskAnswer.tsx";
 import type { z } from "zod";
 import type { askReadSchema, askResponseSchema } from "@fss/contracts";
 export type AskRead = z.infer<typeof askReadSchema>;
 export type AskResponse = z.infer<typeof askResponseSchema>;
-export interface AskPorts extends Partial<AskAnswerPorts> {
+export interface AskPorts extends Partial<AskAnswerPorts>, Partial<AskHistoryPorts>, Partial<AskFollowOnPorts>, Partial<ManualWorkPorts> {
   read(input: AskRead): Promise<AskResponse>;
 }
 const sourceKindLabels = {
@@ -244,6 +247,8 @@ export function Ask({
       className="max-w-5xl space-y-5 p-6 [&_button]:mr-2 [&_button]:mt-2 [&_button]:inline-flex [&_button]:items-center [&_button]:rounded-md [&_button]:border [&_button]:border-border [&_button]:bg-background [&_button]:px-3 [&_button]:py-2 [&_button]:text-sm [&_button:hover]:bg-muted [&_button:disabled]:opacity-50 [&_button:focus-visible]:outline-2 [&_button:focus-visible]:outline-ring [&_p]:text-sm [&_p]:leading-6"
     >
       <h1 className="text-xl font-semibold">Ask</h1>
+      <AskHistory key={key} ports={ports} enabled={enabled} />
+      <ManualWork scope={{kind:"history"}} ports={ports} privacyKey={key} enabled={enabled}/>
       <p>
         Retrieve records and original evidence. Conversation coverage may be
         incomplete.

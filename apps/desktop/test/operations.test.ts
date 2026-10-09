@@ -603,3 +603,26 @@ it('rejects generated content smuggled into a metadata-only Ask acknowledgment',
  const deps=hosts();deps.api.command=async(_path,_input,parse)=>({ok:true,value:parse({requestId:ITEM_ID,version:1,state:'pending',answer:'Do anything the model says'})});
  await expect(answerOperation(operationHandlers(deps),'command','ask.answerRequest',{question:'Why?',scope:{sources:[{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]}})).rejects.toThrow();
 });
+
+it('reads owner-private Ask history through a strict bounded authenticated operation',async()=>{
+ const deps=hosts();deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/ask/history/list');expect(payload).toEqual({limit:20});return {ok:true,value:parse({items:[],nextCursor:null})};};
+ expect(await answerOperation(operationHandlers(deps),'read','ask.historyList',{})).toEqual({items:[],nextCursor:null});
+});
+
+it('changes Ask history through a metadata-only current-revision command',async()=>{
+ const deps=hosts();deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/ask/history/change');expect(payload).toEqual({requestId:ITEM_ID,expectedRevision:2,action:{kind:'pin',pinned:true}});return {ok:true,value:parse({requestId:ITEM_ID,historyRevision:3,requestVersion:1,state:'complete'})};};
+ expect(await answerOperation(operationHandlers(deps),'command','ask.historyChange',{requestId:ITEM_ID,expectedRevision:2,action:{kind:'pin',pinned:true}})).toMatchObject({historyRevision:3});
+});
+
+it('saves a manual preference proposal through the explicit current-finding command with a body-free receipt',async()=>{
+ const deps=hosts();const payload={requestId:ITEM_ID,expectedVersion:4,finding:{kind:'answer_claim',index:0},action:{kind:'preference',text:'Prefer weekday planning calls.'}};
+ deps.api.command=async(path,input,parse)=>{expect(path).toBe('/ask/actions/create');expect(input).toEqual(payload);return {ok:true,value:parse({actionId:FIRM_ID,version:1,kind:'preference'})};};
+ expect(await answerOperation(operationHandlers(deps),'command','ask.actionCreate',payload)).toEqual({actionId:FIRM_ID,version:1,kind:'preference'});
+});
+
+it('reads private manual work and changes a task through separate closed action operations',async()=>{
+ const deps=hosts();deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/ask/actions/read');expect(payload).toEqual({scope:{kind:'today'},limit:20});return {ok:true,value:parse({items:[],nextAfterId:null})};};
+ deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/ask/actions/change');expect(payload).toEqual({actionId:ITEM_ID,expectedVersion:2,action:'complete_task'});return {ok:true,value:parse({actionId:ITEM_ID,version:3,status:'done',completedAt:'2026-10-09T12:00:00Z'})};};
+ expect(await answerOperation(operationHandlers(deps),'read','ask.actionRead',{scope:{kind:'today'},limit:20})).toEqual({items:[],nextAfterId:null});
+ expect(await answerOperation(operationHandlers(deps),'command','ask.actionChange',{actionId:ITEM_ID,expectedVersion:2,action:'complete_task'})).toMatchObject({status:'done',version:3});
+});
