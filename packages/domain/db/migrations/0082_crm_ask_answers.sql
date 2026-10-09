@@ -1,4 +1,25 @@
 -- changes: provider_reservations
+CREATE FUNCTION crm_ask_input_valid(ws uuid,selected_scope jsonb,contexts jsonb,closure jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE src jsonb; cx jsonb; identities text[]:='{}'; identity text;
+BEGIN
+ IF selected_scope IS NULL OR contexts IS NULL OR closure IS NULL OR jsonb_typeof(selected_scope) IS DISTINCT FROM 'object' OR selected_scope-ARRAY['sources']<>'{}'::jsonb OR jsonb_typeof(selected_scope->'sources') IS DISTINCT FROM 'array' OR jsonb_typeof(contexts) IS DISTINCT FROM 'array' OR NOT COALESCE(crm_access_closure_valid(closure),false) THEN RETURN false; END IF;
+ IF jsonb_array_length(selected_scope->'sources') NOT BETWEEN 1 AND 10 OR jsonb_array_length(contexts)<>jsonb_array_length(selected_scope->'sources') THEN RETURN false; END IF;
+ FOR src IN SELECT jsonb_array_elements(selected_scope->'sources') LOOP
+  IF jsonb_typeof(src) IS DISTINCT FROM 'object' OR NOT src ?& ARRAY['workspaceId','sourceId','kind','revision','contentHash','locator'] OR src-ARRAY['workspaceId','sourceId','kind','revision','contentHash','locator']<>'{}'::jsonb
+  OR src->>'workspaceId' IS DISTINCT FROM ws::text OR src->>'sourceId' !~ '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
+  OR jsonb_typeof(src->'sourceId') IS DISTINCT FROM 'string' OR src->>'kind' NOT IN ('selected_note','mail','call_transcript','meeting_transcript') OR jsonb_typeof(src->'kind') IS DISTINCT FROM 'string'
+  OR jsonb_typeof(src->'revision') IS DISTINCT FROM 'number' OR src->>'revision' !~ '^[1-9][0-9]*$' OR (src->>'revision')::numeric>2147483647
+  OR jsonb_typeof(src->'contentHash') IS DISTINCT FROM 'string' OR src->>'contentHash' !~ '^[a-f0-9]{64}$' OR src->'locator' IS DISTINCT FROM 'null'::jsonb THEN RETURN false; END IF;
+  identity:=concat(src->>'kind',':',src->>'sourceId');
+  IF identity=ANY(identities) THEN RETURN false; END IF;
+  identities:=array_append(identities,identity);
+ END LOOP;
+ FOR cx IN SELECT jsonb_array_elements(contexts) LOOP
+  IF jsonb_typeof(cx) IS DISTINCT FROM 'object' OR NOT COALESCE(crm_extraction_context_valid(cx),false) THEN RETURN false; END IF;
+ END LOOP;
+ RETURN true;
+END;
+$$;
 -- Owner-private requests are also the future private history identity.
 CREATE TABLE crm_ask_requests (
  workspace_id uuid NOT NULL REFERENCES workspaces(id),
@@ -22,7 +43,7 @@ CREATE TABLE crm_ask_requests (
  FOREIGN KEY(workspace_id,owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
  CONSTRAINT crm_ask_request_private_shape CHECK (
   (state='deleted' AND question IS NULL AND scope IS NULL AND initial_contexts IS NULL AND initial_access_closure IS NULL AND result IS NULL AND result_at IS NULL)
-  OR (state<>'deleted' AND scope IS NOT NULL AND jsonb_typeof(scope)='object' AND jsonb_typeof(scope->'sources')='array' AND jsonb_array_length(scope->'sources') BETWEEN 1 AND 10 AND initial_contexts IS NOT NULL AND jsonb_typeof(initial_contexts)='array' AND crm_access_closure_valid(initial_access_closure) AND (question IS NOT NULL AND length(question) BETWEEN 1 AND 300 OR state='stale' AND question IS NULL))),
+  OR (state<>'deleted' AND crm_ask_input_valid(workspace_id,scope,initial_contexts,initial_access_closure) AND (question IS NOT NULL AND length(question) BETWEEN 1 AND 300 OR state='stale' AND question IS NULL))),
  CONSTRAINT crm_ask_request_result_shape CHECK ((state='complete' AND result IS NOT NULL AND jsonb_typeof(result)='object' AND octet_length(result::text)<=100000 AND result_at IS NOT NULL) OR (state<>'complete' AND result IS NULL AND result_at IS NULL))
 );
 CREATE FUNCTION crm_ask_initial_identity_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
