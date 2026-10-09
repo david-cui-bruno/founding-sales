@@ -216,3 +216,130 @@ it('publishes only current server conflict receipts for fully selected originals
   expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'stale',reason:'source_changed',question:null,fallback:null,answer:null});
  }finally{await fixture.stop();}
 });
+
+it('refuses unverified purposes and conserves timeout or excessive observed usage without publishing answers',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const person=(await post('/crm/people/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,fullName:'Controlled output guard owner'})).body as {result:{personId:string}};
+  const text='We need faster repairs.';
+  expect((await post('/crm/people/source/add',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,personId:person.result.personId,sourceKey:'guard-source',excerpt:text,occurredAt:'2026-10-01T14:00:00Z'})).status).toBe(200);
+  const original=((await post('/crm/people/read',{personId:person.result.personId})).body as {sources:{workspaceId:string;sourceId:string;revision:number;contentHash:string}[]}).sources[0]!;
+  const source={workspaceId:original.workspaceId,sourceId:original.sourceId,revision:original.revision,contentHash:original.contentHash,kind:'selected_note',locator:null};
+  await fixture.db.query(`INSERT INTO crm_ask_purposes(workspace_id,purpose,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,evaluation_fingerprint,processor_version,retrieval_version,answer_version,support_version,chunker_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,'answer',1,true,'controlled-answer','literal-v1','ask-only-fixture-grant','fixture-no-retention',$2,'ask-answer-v1','lexical-original-v1','literal-v1','exact-original-v1','lexical-original-v1',100,1000,1,1,$3)`,[fixture.alpha.workspaceId,'a'.repeat(64),fixture.alpha.admin.userId]);
+  const proof=async(input:AskPurposeProofInput)=>({configFingerprint:input.configFingerprint,authorizationFingerprint:input.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const});
+  let calls=0;
+  const request=async()=>{const response=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});expect(response.status).toBe(200);return (response.body as {result:{requestId:string}}).result.requestId;};
+  const disabledId=await request();
+  const unapproved=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{verifyPurpose:proof,answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async()=>{calls++;return {acceptance:'unknown',usage:null,answer:null};}}}});
+  await runOnce(fixture.db,{registry:unapproved,owner:'ask-control-flag-off',limit:20});
+  expect(calls).toBe(0);
+  expect((await post('/ask/answers/read',{requestId:disabledId})).body).toMatchObject({state:'unavailable',reason:'processing_authority_unavailable',answer:null});
+
+  for(const mismatch of ['config','authorization','expired'] as const){
+   const requestId=await request();let rejectedCalls=0;
+   const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(input:AskPurposeProofInput)=>({configFingerprint:mismatch==='config'?'b'.repeat(64):input.configFingerprint,authorizationFingerprint:mismatch==='authorization'?'b'.repeat(64):input.authorizationFingerprint,validUntil:mismatch==='expired'?'2000-01-01T00:00:00Z':'2099-01-01T00:00:00Z',evaluationKind:'actual'}),answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async()=>{rejectedCalls++;return {acceptance:'unknown',usage:null,answer:null};}}}});
+   await runOnce(fixture.db,{registry,owner:`ask-misbound-${mismatch}`,limit:20});
+   expect(rejectedCalls).toBe(0);
+   expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'unavailable',reason:'processing_authority_unavailable',answer:null});
+  }
+  const timeoutId=await request();let timeoutCalls=0;
+  const timeoutRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,providerTimeoutMs:1,verifyPurpose:proof,answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async()=>{timeoutCalls++;return new Promise<never>(()=>{});}}}});
+  await runOnce(fixture.db,{registry:timeoutRegistry,owner:'ask-timeout',limit:20});
+  expect((await post('/ask/answers/read',{requestId:timeoutId})).body).toMatchObject({state:'unknown_acceptance',reason:'provider_acceptance_unknown',answer:null});
+  await runOnce(fixture.db,{registry:timeoutRegistry,owner:'ask-timeout-again',limit:20});expect(timeoutCalls).toBe(1);
+  const overshootId=await request();
+  const overshootRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:proof,answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>({acceptance:'accepted',usage:{inputTokens:100000,outputTokens:10},answer:{claims:[{text,kind:'extractive',citationWindowIds:[input.windows[0]!.id]}],abstained:false}})}}});
+  await runOnce(fixture.db,{registry:overshootRegistry,owner:'ask-usage-overshoot',limit:20});
+  expect((await post('/ask/answers/read',{requestId:overshootId})).body).toMatchObject({state:'unavailable',reason:'processing_failed',answer:null});
+  const firmId=await seedFirm(fixture,{name:'Controlled truthful usage',assignedUserId:fixture.alpha.salesperson.userId});
+  // One conserved timeout (1), truthful observed overshoot (11).
+  expect((await post('/research/firm',{firmId})).body).toMatchObject({spend:{monthToDateCents:12}});
+ }finally{await fixture.stop();}
+});
+
+it('admits an uncached retained call original with honest partial source coverage',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+    const ws = fixture.alpha.workspaceId,
+      user = fixture.alpha.salesperson.userId;
+    const firmId = await seedFirm(fixture, {
+      name: "Native call source",
+      regionCode: "RI",
+      assignedUserId: user,
+    });
+    const callId = randomUUID();
+    const route = (
+      await fixture.db.query<{ id: string }>(
+        "INSERT INTO phone_routes(workspace_id,firm_id,e164,source,retrieved_at,association_confidence,technical_validation,eligibility,eligibility_policy_version) VALUES($1,$2,'+14015550123','research_provider',now(),0.9,'passed','usable','route.1') RETURNING id",
+        [ws, firmId],
+      )
+    ).rows[0]!.id;
+    const identity = (
+      await fixture.db.query<{ id: string }>(
+        "INSERT INTO calling_identities(workspace_id,owner_user_id,e164,verification_status,enabled,verified_at,verified_by_user_id,verification_method) VALUES($1,$2,'+14015550124','verified',false,now(),$2,'owner_attestation') RETURNING id",
+        [ws, user],
+      )
+    ).rows[0]!.id;
+    const posture = (
+      await fixture.db.query<{ id: string }>(
+        "INSERT INTO state_postures(workspace_id,state,revision,effective_from,review_at,rules_revision,confirmed_statements,confirmed_by_user_id) VALUES($1,'RI',1,'2026-01-01','2027-01-01',2,ARRAY['businessToBusiness'],$2) RETURNING id",
+        [ws, fixture.alpha.admin.userId],
+      )
+    ).rows[0]!.id;
+    const device = (
+      await fixture.db.query<{ id: string }>(
+        "SELECT id FROM devices WHERE workspace_id=$1 AND user_id=$2 LIMIT 1",
+        [ws, user],
+      )
+    ).rows[0]!.id;
+    const ticket = (
+      await fixture.db.query<{ id: string }>(
+        "INSERT INTO dial_tickets(workspace_id,command_id,firm_id,phone_route_id,route_version,posture_id,posture_revision,calling_identity_id,actor_user_id,device_id,assigned_user_id,e164,firm_time_zone,expires_at) VALUES($1,'crm-call-fixture',$2,$3,1,$4,1,$5,$6,$7,$6,'+14015550123','America/New_York',now()+interval '30 seconds') RETURNING id",
+        [ws, firmId, route, posture, identity, user, device],
+      )
+    ).rows[0]!.id;
+    const reservation = (
+      await fixture.db.query<{ id: string }>(
+        "INSERT INTO provider_reservations(workspace_id,provider_key,subject_kind,subject_id,attempt,business_date,business_time_zone,cents,model_name,max_input_tokens,max_output_tokens,priced_unit,max_units,unit_price_micros,state,settled_at) VALUES($1,'twilio.voice','call_session',$2,1,current_date,'America/New_York',0,NULL,NULL,NULL,'minute',1,0,'released',now()) RETURNING id",
+        [ws, callId],
+      )
+    ).rows[0]!.id;
+    await fixture.db.query(
+      "INSERT INTO call_sessions(workspace_id,id,ticket_id,firm_id,actor_user_id,reservation_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+interval '30 seconds')",
+      [ws, callId, ticket, firmId, user, reservation],
+    );
+    const utterances = [
+      {
+        speaker: 1,
+        start: 0,
+        end: 5,
+        text: "Drainage coordination is needed.",
+      },
+    ];
+    await fixture.db.query(
+      "INSERT INTO call_transcripts(workspace_id,call_session_id,provider,model,language,duration_seconds,utterances) VALUES($1,$2,'aws_transcribe','standard','en-US',5,$3::jsonb)",
+      [ws, callId, JSON.stringify(utterances)],
+    );
+    const source = {
+      workspaceId: ws,
+      sourceId: callId,
+      kind: "call_transcript",
+      revision: 1,
+      contentHash: createHash("sha256")
+        .update(JSON.stringify(utterances))
+        .digest("hex"),
+      locator: null,
+    };
+
+
+  const requested=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'drainage',scope:{sources:[source]}});
+  expect(requested.status).toBe(200);
+  expect(requested.body).toMatchObject({result:{state:'unavailable'}});
+  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
+  expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'unavailable',reason:'purpose_unavailable',fallback:{passages:[{text:'Drainage coordination is needed.',sources:[{kind:'call_transcript',sourceId:callId,completeness:'partial',speaker:'channel:1'}]}]}});
+ }finally{await fixture.stop();}
+});
