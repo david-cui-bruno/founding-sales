@@ -6,6 +6,12 @@ export type AskResponse = z.infer<typeof askResponseSchema>;
 export interface AskPorts {
   read(input: AskRead): Promise<AskResponse>;
 }
+const sourceKindLabels = {
+  selected_note: "Selected note",
+  call_transcript: "Call transcript",
+  meeting_transcript: "Meeting transcript",
+  mail: "Email",
+};
 export function Ask({
   ports,
   privacyKey,
@@ -419,7 +425,7 @@ export function Ask({
             <label key={`${source.kind}:${source.sourceId}`}>
               <input
                 type="checkbox"
-                aria-label={`Include ${source.kind === "selected_note" ? "Selected note" : source.kind === "call_transcript" ? "Call transcript" : source.kind === "meeting_transcript" ? "Meeting transcript" : "Email"} version ${source.revision}`}
+                aria-label={`Include ${sourceKindLabels[source.kind]} version ${source.revision}`}
                 disabled={
                   !enabled ||
                   source.availability !== "available" ||
@@ -448,14 +454,7 @@ export function Ask({
                   );
                 }}
               />
-              {source.kind === "selected_note"
-                ? "Selected note"
-                : source.kind === "call_transcript"
-                  ? "Call transcript"
-                  : source.kind === "meeting_transcript"
-                    ? "Meeting transcript"
-                    : "Email"}{" "}
-              · Version {source.revision} ·{" "}
+              {sourceKindLabels[source.kind]} · Version {source.revision} ·{" "}
               {source.occurredAt ?? "Date unknown"} · {source.availability}
             </label>
           ))}
@@ -651,15 +650,8 @@ export function Ask({
                   <details>
                     <summary>Source details</summary>
                     <p>
-                      {source.kind === "selected_note"
-                        ? "Selected note"
-                        : source.kind === "call_transcript"
-                          ? "Call transcript"
-                          : source.kind === "meeting_transcript"
-                            ? "Meeting transcript"
-                            : "Email"}{" "}
-                      · Source {source.sourceId} ·{" "}
-                      {source.locator ?? "Location unknown"} ·{" "}
+                      {sourceKindLabels[source.kind]} · Source {source.sourceId}{" "}
+                      · {source.locator ?? "Location unknown"} ·{" "}
                       {source.completeness}
                     </p>
                   </details>
