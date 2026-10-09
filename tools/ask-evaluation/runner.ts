@@ -16,6 +16,7 @@ import {
   evaluationHash,
   originalTextHash,
   validateDevelopment,
+  coversOriginalExtent,
 } from "./corpus.ts";
 import { baselineReport, type CaseMeasurement } from "./report.ts";
 
@@ -93,6 +94,7 @@ async function runBoundedEvaluation(
       result.failures.push({ code, stage });
     };
     const permitted: { id: string; ordinal: number; text: string }[] = [];
+    const observed = new Map<string, { extent: number; text: string }>();
     const readPublic = async (
       stage: CaseMeasurement["failures"][number]["stage"],
       path: "/ask/read" | "/crm/processing/source/read",
@@ -101,20 +103,23 @@ async function runBoundedEvaluation(
       const caseDeadline = started + manifest.envelope.maxCaseWallTimeMs;
       const runDeadline = runStarted + manifest.envelope.maxRunWallTimeMs;
       const deadline = Math.min(caseDeadline, runDeadline);
-      const code = runDeadline < caseDeadline ? "run_timeout" : "case_timeout";
+      const timeout = () =>
+        new EvaluationTimeout(
+          performance.now() >= runDeadline ? "run_timeout" : "case_timeout",
+          stage,
+        );
       const remaining = deadline - performance.now();
-      if (remaining <= 0) throw new EvaluationTimeout(code, stage);
+      if (remaining <= 0) throw timeout();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        return await Promise.race([
+        const response = await Promise.race([
           input.publicReads.read(item.actorFixtureId, path, body),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new EvaluationTimeout(code, stage)),
-              remaining,
-            );
+            timer = setTimeout(() => reject(timeout()), remaining);
           }),
         ]);
+        if (performance.now() >= deadline) throw timeout();
+        return response;
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }
@@ -154,6 +159,11 @@ async function runBoundedEvaluation(
         fail("source_unavailable", final ? "final_read" : "canonical_read");
         return null;
       }
+      if (!final)
+        observed.set(window.id, {
+          extent: parsed.data.extent.length,
+          text: parsed.data.passage!.text,
+        });
       return parsed.data.passage!.text;
     };
     try {
@@ -161,6 +171,31 @@ async function runBoundedEvaluation(
         const text = await readWindow(window, false);
         if (text !== null)
           permitted.push({ id: window.id, ordinal: window.ordinal, text });
+      }
+      if (
+        result.failures.length === 0 &&
+        corpus.sources.some(
+          (source) => !coversOriginalExtent(source.windows, observed),
+        )
+      ) {
+        result.qualityScoringState = "censored_source_or_result_cap";
+        fail("corpus_bound", "canonical_read");
+      }
+      if (result.failures.length === 0) {
+        const bytes = corpus.sources.map((source) =>
+          source.windows.reduce(
+            (sum, window) =>
+              sum + Buffer.byteLength(observed.get(window.id)!.text, "utf8"),
+            0,
+          ),
+        );
+        if (
+          bytes.some((value) => value > 80000) ||
+          bytes.reduce((sum, value) => sum + value, 0) > 800000
+        ) {
+          result.qualityScoringState = "censored_source_or_result_cap";
+          fail("corpus_bound", "canonical_read");
+        }
       }
       if (result.failures.length === 0) {
         const response = await readPublic(
@@ -206,12 +241,24 @@ async function runBoundedEvaluation(
                 );
                 if (
                   window === undefined ||
-                  originalTextHash(passage.text) !== window.textSha256
+                  evaluationTextGroupId(observed.get(window.id)!.text) !==
+                    groupId
                 ) {
                   result.invalidCitations++;
                   fail("canonical_quote_mismatch", "baseline");
                 } else result.validCitations++;
               }
+              if (
+                !passage.sources.some((source) =>
+                  windows.some(
+                    (window) =>
+                      JSON.stringify(window.source) ===
+                        JSON.stringify(source) &&
+                      window.textSha256 === originalTextHash(passage.text),
+                  ),
+                )
+              )
+                fail("canonical_quote_mismatch", "baseline");
               if (!groups.some((group) => group.groupId === groupId))
                 fail("canonical_quote_mismatch", "baseline");
               else if (!ranked.includes(groupId)) ranked.push(groupId);

@@ -1252,7 +1252,7 @@ it("measures all eighty isolated development baselines without loading sealed ho
               path,
               body,
             );
-            elapsed = 600000;
+            elapsed = 600001;
             return response;
           },
         },
@@ -1262,6 +1262,12 @@ it("measures all eighty isolated development baselines without loading sealed ho
       const exhausted = await runDevelopmentSuite({
         suite,
         cases: expiredCases,
+      });
+      expect(exhausted.caseResults[0]).toMatchObject({
+        durationMs: 600001,
+        failures: [{ code: "run_timeout", stage: "canonical_read" }],
+        qualityScoringState: "failed",
+        recallAt10: null,
       });
       expect(
         exhausted.caseResults
