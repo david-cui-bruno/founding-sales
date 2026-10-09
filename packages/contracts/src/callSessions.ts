@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {canonicalSourceReferenceSchema} from './people.ts';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
@@ -294,6 +295,7 @@ export const CALL_TRANSCRIPT_MAX_UTTERANCES = 5_000;
  */
 export const callTranscriptResponseSchema = z.strictObject({
   callSessionId: uuid,
+  processingSource:canonicalSourceReferenceSchema.nullable().optional(),
   provider: z.string().min(1).max(32),
   model: z.string().min(1).max(64),
   language: z.string().min(2).max(16),

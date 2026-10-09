@@ -1,3 +1,4 @@
+import {enqueueNativeCrmExtraction} from '../crm/processingCapture.ts';
 import {
   CALL_TRANSCRIPT_MAX_UTTERANCES,
   TRANSCRIPTION_MINIMUM_SECONDS,
@@ -862,6 +863,7 @@ async function storeAndSettle(
       JSON.stringify(utterances),
     ],
   );
+  await enqueueNativeCrmExtraction(context,{kind:'call_transcript',sourceId:input.sessionId});
   // Settled at the provider's duration, never past the minutes that were cleared: the audio
   // was cut to them, so a longer report is the provider's rounding, not more audio. By the
   // started minute, or by the second for a provider that bills so (slice C3a).

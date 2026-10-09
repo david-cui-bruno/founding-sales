@@ -1,4 +1,5 @@
 import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
+import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
 import { useEffect, useState, type JSX } from 'react';
 import { type z } from 'zod';
 import type { firmSourcePageSchema } from '@fss/contracts';
@@ -44,12 +45,16 @@ export function FirmAddresses({
   endpoints,
   editing,
   imports,
+  processing,
+  workspaceId,
   mail,
   privacyKey = 'firm-addresses',
   sourceVersion,
   onSourceChange,
 }: {
   enabled: boolean;
+  workspaceId?:string | undefined;
+  processing?:ProcessingPorts;
   ports: FirmAddressPorts;
   endpoints: EndpointPorts;
   editing?: EndpointEditingPorts | undefined;
@@ -145,7 +150,7 @@ export function FirmAddresses({
       </label>
       {firmId && page ? (
         <>
-          {mail ? <EmailTimeline key={`email:${firmId}`} enabled={enabled} ports={mail} firmId={firmId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} firms={firms.map(firm => ({id:firm.firmId,name:firm.name}))} /> : null}
+          {mail ? <EmailTimeline processing={processing} workspaceId={workspaceId} key={`email:${firmId}`} enabled={enabled} ports={mail} firmId={firmId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} firms={firms.map(firm => ({id:firm.firmId,name:firm.name}))} /> : null}
           <label>
             Firm note reference
             <input
@@ -210,6 +215,7 @@ export function FirmAddresses({
           <ul>
             {page.sources.map((source) => (
               <li key={source.sourceId}>
+                {processing&&<ProcessingHealth source={source} ports={processing}/>}
                 {source.excerpt ? (
                   <>
                     <p>{source.excerpt}</p>

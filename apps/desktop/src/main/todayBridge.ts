@@ -191,7 +191,7 @@ export interface TodayBridgeHost {
     readonly reason: string | null;
   }>;
   /** Slice C2: one call's transcript; both null when it has none. */
-  callTranscript(input: { readonly callSessionId: string }): Promise<{
+  callTranscript(input: { readonly callSessionId: string;readonly includeProcessing?:true }): Promise<{
     readonly transcript: z.infer<typeof callTranscriptResponseSchema> | null;
     readonly reason: string | null;
   }>;
@@ -1278,7 +1278,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
 
     async callTranscript(input) {
       const answer = await deps.api.read(
-        `/calls/transcript?callSessionId=${encodeURIComponent(input.callSessionId)}`,
+        `/calls/transcript?callSessionId=${encodeURIComponent(input.callSessionId)}${input.includeProcessing===true?'&include=processing':''}`,
         value => callTranscriptResponseSchema.parse(value),
       );
       if (answer.ok) return { transcript: answer.value, reason: null };

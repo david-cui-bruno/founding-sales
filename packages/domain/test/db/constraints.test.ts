@@ -1,5 +1,6 @@
 import { MAIL_CAPTURE_CONSTRAINT_CASES } from './support/mailCaptureCases.ts';
 import {BUSINESS_ACQUISITION_CONSTRAINT_CASES} from './support/businessAcquisitionCases.ts';
+import {CRM_EXTRACTION_CONSTRAINT_CASES} from './support/crmExtractionCases.ts';
 import { SOCIAL_CONSTRAINT_CASES } from './support/socialCases.ts';
 import { OUTREACH_CONSTRAINT_CASES } from './support/outreachCases.ts';
 import { SOURCING_CONSTRAINT_CASES } from './support/sourcingCases.ts';
@@ -1620,6 +1621,7 @@ const cases: readonly Case[] = [
   ...selectedImportConstraintCases,
   ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,
   ...MAIL_CAPTURE_CONSTRAINT_CASES,
+  ...CRM_EXTRACTION_CONSTRAINT_CASES,
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
   ...SOURCING_CONSTRAINT_CASES,

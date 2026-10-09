@@ -1,3 +1,6 @@
+import {ProcessingRecordHealth} from '../firms/ProcessingRecordHealth.tsx';
+import {ProcessingHealth,type ProcessingPorts} from '../firms/ProcessingHealth.tsx';
+import {processingPorts} from '../firms/peoplePorts.ts';
 import { useEffect, useRef, useState, type JSX } from 'react';
 import {
   hasReasonSentence,
@@ -83,7 +86,7 @@ export function registryHistoryPorts(): CallHistoryPorts | null {
   return {
     history: async firmId => await api.read('calling.history', { firmId }),
     recording: async sessionId => await api.read('calling.recording', { sessionId }),
-    transcript: async callSessionId => await api.read('calling.transcript', { callSessionId }),
+    transcript: async callSessionId => await api.read('calling.transcript', { callSessionId,includeProcessing:true }),
     logs: async firmId => await api.read('calling.logs', { firmId }),
   };
 }
@@ -140,9 +143,11 @@ type TranscriptState =
 export function TranscriptDisclosure({
   callSessionId,
   read,
+  processing=processingPorts,
 }: {
   readonly callSessionId: string;
   readonly read: NonNullable<CallHistoryPorts['transcript']>;
+  readonly processing?:ProcessingPorts;
 }): JSX.Element | null {
   const [state, setState] = useState<TranscriptState | null>(null);
   const mounted = useRef(true);
@@ -184,7 +189,7 @@ export function TranscriptDisclosure({
           {reasonSentence(hasReasonSentence(state.reason) ? state.reason : 'transcript_unavailable')}
         </p>
       ) : state.kind === 'shown' ? (
-        <TranscriptLines transcript={state.transcript} />
+        <><TranscriptLines transcript={state.transcript} />{state.transcript.processingSource===null||state.transcript.processingSource===undefined?null:<ProcessingHealth key={`${state.transcript.processingSource.sourceId}:${state.transcript.processingSource.revision}:${state.transcript.processingSource.contentHash}`} source={state.transcript.processingSource} ports={processing}/>}</>
       ) : null}
     </details>
   );
@@ -410,6 +415,7 @@ export function CallHistory({
               return note === null ? null : <CallNote sessionId={call.sessionId} note={note} />;
             })()}
             {call.summary === undefined ? null : <CallSummaryBlock summary={call.summary} />}
+            <ProcessingRecordHealth key={`processing:${call.sessionId}`} kind="call_session" recordId={call.sessionId}/>
             {call.hasTranscript === true && ports?.transcript !== undefined ? (
               <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} />
             ) : null}

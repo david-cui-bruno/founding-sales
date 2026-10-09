@@ -132,6 +132,7 @@ describe('what the API mounts', () => {
       '/crm/processing/purpose/read',
       '/crm/processing/purpose/save',
       '/crm/processing/read',
+      '/crm/processing/record/read',
       '/crm/processing/request',
       '/crm/processing/source/read',
       '/crm/relationships/context/read',

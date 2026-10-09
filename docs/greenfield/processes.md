@@ -51,6 +51,7 @@ that talked to anything outside PostgreSQL would be a bug.
 
 | Source | What it materializes |
 |---|---|
+| `crm-processing-recovery` | At most 100 interrupted calling receipts per pass become body-free `crm.extract` financial recovery jobs. They settle conservative unknown money and never repeat model dispatch; default disabled processing stays disabled. |
 | `social-drafts` | Explicit requests and default-off weekly social draft opt-ins under shared credit reservations; two attempts and 30-minute expiry. Expiry runs even when generation is disabled. No approval or scheduling. |
 | `social-assets-cleanup` | Expire unfinished image uploads and retry private object deletion; release quota only after deletion succeeds. |
 | `outreach-replies` | Bounded Bedrock interpretation of current matched human replies; prepares one message-scoped answer through normal delivery gates; expires abandoned claims even while disabled. |
