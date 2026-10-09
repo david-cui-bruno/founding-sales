@@ -792,6 +792,7 @@ async function measure(
   };
 
   const retains: Record<string, number> = {
+    crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE}`,byContact),
     crm_claim_review_anchors: await countOf(
       context,
       `SELECT count(*) AS count FROM crm_claim_review_anchors a WHERE a.workspace_id=$1 AND ${CRM_HUMAN_ANCHOR_IN_SCOPE}`,
