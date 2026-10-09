@@ -44,9 +44,17 @@ it('explicitly commits a human note from current keyword evidence without enabli
   const history=await post('/ask/actions/read',{scope:{kind:'history'}});
   expect(history.status).toBe(200);
   expect(history.body).toMatchObject({items:expect.arrayContaining([{actionId:proposalId,version:1,kind:'preference',status:'proposed',provenance:'human',text:'Consider prioritizing repair routing examples.',label:null,due:null,target:null,supportState:'current',reviewRequired:false,createdAt:expect.any(String),updatedAt:expect.any(String),completedAt:null,sources:expect.any(Array)}])});
-  const completion=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:taskId,expectedVersion:1,action:'complete_task'});
+  const completionCommand={commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:taskId,expectedVersion:1,action:'complete_task'};
+  const completion=await post('/ask/actions/change',completionCommand);
   expect(completion.status).toBe(200);
   expect(completion.body).toMatchObject({result:{actionId:taskId,version:2,status:'done',completedAt:expect.any(String)}});
+  const completionReplay=await post('/ask/actions/change',completionCommand);
+  expect(completionReplay.status).toBe(200);
+  expect(completionReplay.body).toMatchObject({replayed:true,result:(completion.body as {result:unknown}).result});
+  const staleCancellation=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:taskId,expectedVersion:1,action:'cancel_task'});
+  expect(staleCancellation.status).toBe(409);
+  const unrelatedTarget=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'note',text:'Unrelated target must not receive evidence.',target:{kind:'person',personId:randomUUID()}}});
+  expect(unrelatedTarget.status).toBe(409);
   const dismissal=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:proposalId,expectedVersion:1,action:'dismiss_preference'});
   expect(dismissal.status).toBe(200);
   expect(dismissal.body).toMatchObject({result:{actionId:proposalId,version:2,status:'dismissed',completedAt:null}});
