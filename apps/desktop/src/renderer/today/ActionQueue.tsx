@@ -185,21 +185,23 @@ export function ActionQueue({
       busy !== null
     )
       return;
-    const current = promise,
-      ticket = invalidate();
-    setBusy(current.target.taskId);
+    const current = promise;
+    const target = current.target;
+    if(target.kind !== "internal_task") return;
+    const ticket = invalidate();
+    setBusy(target.taskId);
     setNotice(null);
     try {
       const result = crmCommitmentCompletedSchema.parse(
         await promisePorts.complete({
-          taskId: current.target.taskId,
-          expectedVersion: current.target.expectedVersion,
+          taskId: target.taskId,
+          expectedVersion: target.expectedVersion,
         }),
       );
       if (!alive.current || ticket !== issued.current) return;
       if (
-        result.taskId !== current.target.taskId ||
-        result.version <= current.target.expectedVersion
+        result.taskId !== target.taskId ||
+        result.version <= target.expectedVersion
       )
         throw new Error("promise_changed");
       setPromise(null);

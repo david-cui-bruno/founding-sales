@@ -147,7 +147,7 @@ it('opens the exact current overdue reply from Today without resolving it', asyn
 });
 
 it('describes uncertain mail as reply review rather than a substantive reply', async () => {
-  currentRead = { ...read, actions: read.actions.map(action => action.kind==='promise'?action:({ ...action, state: 'open', reason: 'reply_review' })) };
+  currentRead = { ...read, actions: read.actions.map(action => action.kind==='reply'?({ ...action, state: 'open', reason: 'reply_review' }):action) };
   show();
   expect(await screen.findByText('Reply needs review')).toBeTruthy();
   expect(screen.queryByText('Substantive reply')).toBeNull();
