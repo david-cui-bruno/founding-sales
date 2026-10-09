@@ -1,3 +1,4 @@
+import {SOURCE_69_SEEDS} from './source69Seeds.ts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 
 /**
@@ -25,6 +26,7 @@ export interface HeadSeed {
 }
 
 export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
+  ...SOURCE_69_SEEDS,
   {
     name:'discovery approval versions preserve schedule, quotas and historical uncertainty (0051)',
     fromVersions:[50],
