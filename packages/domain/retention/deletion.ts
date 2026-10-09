@@ -1269,7 +1269,8 @@ export async function commitDeletion(
   )
     return refuse("preview_stale");
   for(const requestId of closure.askRequests)await context.db.query('SELECT id FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,requestId]);
-  for(const windowId of closure.askWindows)await context.db.query('SELECT id FROM crm_ask_request_windows WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,windowId]);
+  // Windows cannot be updated. Their insert guard locks the already-held parent;
+  // parent serialization and the closure recheck fence their private erasure.
   for(const receiptId of closure.progressReceipts)await context.db.query('SELECT id FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,receiptId]);
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
