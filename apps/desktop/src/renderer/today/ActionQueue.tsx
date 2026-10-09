@@ -281,6 +281,11 @@ export function ActionQueue({
           className="mt-3 rounded-md border border-border p-3"
         >
           <p className="text-sm font-medium">{promise.item.actionLabel}</p>
+          <p className="text-sm">
+            {promise.item.basis === "human"
+              ? "Human attestation"
+              : "Verified original authored promise"}
+          </p>
           <blockquote className="mt-2 whitespace-pre-wrap text-sm">
             {promise.item.quote}
           </blockquote>

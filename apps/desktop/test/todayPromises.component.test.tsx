@@ -45,6 +45,7 @@ const promisePage = {
     {
       commitmentId: id,
       revision: 1,
+      basis: "human" as const,
       state: "applied" as const,
       todayEligibility: "current" as const,
       actor: "self" as const,

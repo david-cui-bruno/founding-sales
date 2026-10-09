@@ -42,6 +42,9 @@ export function CommitmentReview({
     [busy, setBusy] = useState(false),
     [revision, setRevision] = useState<number | null>(null),
     [notice, setNotice] = useState("");
+  const [basis, setBasis] = useState<"human" | "verified_original" | null>(
+    null,
+  );
   const [classification, setClassification] = useState<
     "internal_promise" | "commercial" | "ambiguous"
   >("ambiguous");
@@ -62,6 +65,7 @@ export function CommitmentReview({
     setOpened(false);
     setBusy(false);
     setRevision(null);
+    setBasis(null);
     setNotice("");
     setClassification("ambiguous");
     setActor("unknown");
@@ -98,6 +102,7 @@ export function CommitmentReview({
       );
       if (ticket !== epoch.current) return;
       setRevision(result.current?.revision ?? 0);
+      setBasis(result.current?.basis ?? null);
       setOpened(true);
     } catch {
       if (ticket === epoch.current) {
@@ -160,6 +165,14 @@ export function CommitmentReview({
       </Button>
       {opened ? (
         <div className="mt-2 rounded-md border border-border p-3">
+          {basis === null ? null : (
+            <p className="text-sm">
+              Current review basis:{" "}
+              {basis === "human"
+                ? "human attestation"
+                : "verified original authored promise"}
+            </p>
+          )}
           <p className="text-sm">
             Review the actor, action and deadline explicitly. Ambiguous or
             commercial interpretations remain suggestions.

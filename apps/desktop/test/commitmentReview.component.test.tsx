@@ -94,7 +94,12 @@ it("attests a structured promise with the current server review revision and exp
     status: "queued" as const,
   }));
   const status = vi.fn(async () => ({
-    current: { commitmentId: id, revision: 7, state: "suggestion" as const },
+    current: {
+      commitmentId: id,
+      revision: 7,
+      basis: "human" as const,
+      state: "suggestion" as const,
+    },
   }));
   const ports: EvidenceReviewPorts = {
     read: async () => evidencePage,
@@ -115,6 +120,9 @@ it("attests a structured promise with the current server review revision and exp
     await screen.findByRole("button", { name: "Review promise 1" }),
   );
   await screen.findByLabelText("Promised action");
+  expect(
+    screen.getByText("Current review basis: human attestation"),
+  ).toBeTruthy();
   expect(status).toHaveBeenCalledExactlyOnceWith(target);
   expect(review).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText("Promise classification"), {

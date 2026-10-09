@@ -21,6 +21,7 @@ const page = {
     {
       commitmentId: id,
       revision: 1,
+      basis: "human" as const,
       state: "suggestion" as const,
       todayEligibility: "unknown" as const,
       actor: "unknown" as const,
@@ -128,6 +129,7 @@ it("completes supported internal work only through an explicit version-bound com
     items: [
       {
         ...page.items[0]!,
+        basis: "human" as const,
         state: "applied" as const,
         actor: "self" as const,
         todayEligibility: "current" as const,

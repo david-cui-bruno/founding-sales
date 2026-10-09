@@ -1,4 +1,10 @@
-import { useLayoutEffect, useRef, useState, type JSX } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
 import {
   crmCommitmentPageSchema,
   crmCommitmentCompletedSchema,
@@ -27,15 +33,16 @@ export function SourcePromises({
     [notice, setNotice] = useState("");
   const epoch = useRef(0),
     identity = JSON.stringify(source);
+  const invalidate = useCallback(() => ++epoch.current, []);
   useLayoutEffect(() => {
-    ++epoch.current;
+    invalidate();
     setPage(null);
     setBusy(false);
     setNotice("");
     return () => {
-      ++epoch.current;
+      invalidate();
     };
-  }, [identity, privacyKey, enabled, ports.read, ports.complete]);
+  }, [identity, privacyKey, enabled, ports.read, ports.complete, invalidate]);
   const read = async (afterId?: string) => {
     if (!enabled || busy) return;
     const ticket = ++epoch.current;
@@ -149,6 +156,13 @@ export function SourcePromises({
               key={item.commitmentId}
               className="mt-3 border-t border-border pt-3"
             >
+              <p className="text-sm">
+                {item.basis === null
+                  ? "Basis removed"
+                  : item.basis === "human"
+                    ? "Human attestation"
+                    : "Verified original authored promise"}
+              </p>
               <p className="font-medium">
                 {item.actionLabel ?? "Removed promise evidence"}
               </p>
