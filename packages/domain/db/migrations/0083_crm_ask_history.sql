@@ -49,6 +49,24 @@ CREATE TABLE crm_ask_actions (
 CREATE INDEX crm_ask_manual_owner ON crm_ask_actions(workspace_id,owner_user_id,id);
 GRANT SELECT,INSERT,UPDATE ON crm_ask_actions TO app_runtime,migration;
 
+CREATE FUNCTION crm_ask_action_request_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE parent crm_ask_requests%ROWTYPE;
+BEGIN
+ SELECT * INTO parent FROM crm_ask_requests WHERE workspace_id=NEW.workspace_id AND id=NEW.source_request_id FOR SHARE;
+ IF NOT FOUND THEN RETURN NEW; END IF;
+ IF NEW.private_state<>'available' OR parent.question IS NULL OR parent.state IN ('stale','deleted')
+  OR NEW.owner_user_id<>parent.owner_user_id OR NEW.source_request_version<>parent.version
+  OR NEW.input_scope IS DISTINCT FROM parent.scope
+  OR NEW.initial_contexts IS DISTINCT FROM parent.initial_contexts
+  OR NEW.original_access_closure IS DISTINCT FROM parent.initial_access_closure
+  OR (NEW.target_person_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(parent.initial_contexts) ctx WHERE ctx->>'personId'=NEW.target_person_id::text))
+  OR (NEW.target_firm_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(parent.initial_contexts) ctx,jsonb_array_elements_text(ctx->'firmIds') firm WHERE firm=NEW.target_firm_id::text)) THEN
+  RAISE EXCEPTION 'Manual action must bind its current investigation owner and proof' USING ERRCODE='23514',CONSTRAINT=TG_NAME;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE CONSTRAINT TRIGGER crm_ask_action_current_request AFTER INSERT ON crm_ask_actions DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION crm_ask_action_request_guard();
+
 CREATE FUNCTION crm_ask_action_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF ROW(NEW.workspace_id,NEW.id,NEW.owner_user_id,NEW.source_request_id,NEW.source_request_version,NEW.kind,NEW.created_at)
