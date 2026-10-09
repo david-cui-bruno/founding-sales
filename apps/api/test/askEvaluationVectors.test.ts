@@ -511,3 +511,20 @@ it("honors cancellation at the fake adapter boundary without providing a result"
     name: "AbortError",
   });
 });
+it("refuses underflowing cosine intermediates rather than publishing a rounded perfect match", async () => {
+  const database = await createTestDatabase();
+  try {
+    const input = example();
+    input.windows = [{id: "tiny", ordinal: 0, text: "Tiny diagonal"}];
+    input.embeddings = [{id: "tiny", vector: [2e-162, 2e-162]}];
+    input.queryVector = [2e-162, 0];
+    const port = createEvaluationVectorPort(database.session);
+    const result = await port.rank(input);
+    expect(result.vector.failures).toEqual([{code: "invalid_vector", stage: "vector_sql"}]);
+    expect(result.rawWindowScores).toEqual([]);
+    expect(result.sqlObservation.state).toBe("refused_before_sql");
+    expect((await port.rank(example())).vector.ranked).toHaveLength(3);
+  } finally {
+    await database.drop();
+  }
+});

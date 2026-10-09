@@ -87,7 +87,11 @@ export function createEvaluationVectorPort(
       ]) {
         let norm = 0;
         for (const value of vector) {
-          norm += value * value;
+          const square = value * value;
+          // Subnormal intermediates cannot support the declared roundoff bound.
+          if (value !== 0 && (square === 0 || square < 2 ** -1022))
+            return refused(input, "invalid_vector");
+          norm += square;
           if (!Number.isFinite(norm)) return refused(input, "vector_overflow");
         }
         if (norm === 0) return refused(input, "vector_zero_norm");
@@ -95,7 +99,12 @@ export function createEvaluationVectorPort(
       for (const row of input.embeddings) {
         let dot = 0;
         for (let index = 0; index < input.dimensions; index++) {
-          dot += row.vector[index]! * input.queryVector[index]!;
+          const left = row.vector[index]!;
+          const right = input.queryVector[index]!;
+          const product = left * right;
+          if (left !== 0 && right !== 0 && (product === 0 || Math.abs(product) < 2 ** -1022))
+            return refused(input, "invalid_vector");
+          dot += product;
           if (!Number.isFinite(dot)) return refused(input, "vector_overflow");
         }
       }
