@@ -33,3 +33,8 @@ it('waits on the parent and refuses private proof when erasure commits first',as
   expect((await writer.query<{count:string}>('SELECT count(*) AS count FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id=$2',[seeded.alpha.workspaceId,f.requestId])).rows[0]!.count).toBe('0');
  }finally{await database.session.query('ROLLBACK');await insertion;}
 });
+it('removes all existing private window proofs when a request tombstone is saved',async()=>{
+ const f=await fixture();await insertWindow(f);
+ await database.session.query("UPDATE crm_ask_requests SET state='deleted',question=NULL,scope=NULL,initial_contexts=NULL,initial_access_closure=NULL,version=version+1,epoch=epoch+1 WHERE workspace_id=$1 AND id=$2",[seeded.alpha.workspaceId,f.requestId]);
+ expect((await database.session.query<{count:string}>('SELECT count(*) AS count FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id=$2',[seeded.alpha.workspaceId,f.requestId])).rows[0]!.count).toBe('0');
+});

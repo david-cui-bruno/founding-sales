@@ -1833,9 +1833,9 @@ export async function commitDeletion(
     [...byContact, REDACTED_NAME],
   );
   redacted["crm_people"] = (people.rowCount ?? 0) + observedMailNamesRedacted;
+  await remove('crm_ask_request_windows',`DELETE FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id=ANY($2::uuid[])`,[workspace,closure.askRequests]);
   const erasedAsk = await context.db.query(`UPDATE crm_ask_requests a SET question=NULL,scope=NULL,initial_contexts=NULL,initial_access_closure=NULL,result=NULL,result_at=NULL,state='deleted',reason='deleted',version=version+1,epoch=epoch+1,updated_at=now() WHERE a.workspace_id=$1 AND a.id=ANY($2::uuid[]) AND a.state<>'deleted'`,[workspace,closure.askRequests]);
   redacted['crm_ask_requests']=erasedAsk.rowCount??0;
-  await remove('crm_ask_request_windows',`DELETE FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id=ANY($2::uuid[])`,[workspace,closure.askRequests]);
   const selectedSources = await context.db.query<{ id: string }>(
     `UPDATE crm_selected_sources s SET availability='deleted',excerpt=NULL,content_hash=NULL,occurred_at=NULL,revision=revision+1
       WHERE s.workspace_id=$1 AND s.availability <> 'deleted' AND ${CRM_SOURCE_IN_SCOPE} RETURNING s.id`,

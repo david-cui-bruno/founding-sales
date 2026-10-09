@@ -259,3 +259,13 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER crm_ask_call_invalidation AFTER UPDATE OR DELETE ON call_transcripts FOR EACH ROW EXECUTE FUNCTION invalidate_crm_ask_call_copy();
+
+CREATE FUNCTION erase_crm_ask_request_windows() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.state IN ('stale','deleted') THEN
+  DELETE FROM crm_ask_request_windows WHERE workspace_id=NEW.workspace_id AND request_id=NEW.id;
+ END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER crm_ask_request_window_erasure AFTER UPDATE ON crm_ask_requests FOR EACH ROW EXECUTE FUNCTION erase_crm_ask_request_windows();
