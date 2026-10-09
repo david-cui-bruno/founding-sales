@@ -4,7 +4,7 @@ import {crmEvidenceClaimTargetSchema,crmCommitmentDueSchema} from '@fss/contract
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
 import {recordCrmAuditEvent} from './audit.ts';
-import {activeIdentityActor,sourceContextPredicate} from './identityAccess.ts';
+import {activeIdentityActor,sourceContextPredicate,sourceAccessPredicate} from './identityAccess.ts';
 import {mailContextPredicate} from '../mail/crmSources.ts';
 import {lockConflictSources,readCrmEvidence,targetAnchor} from './evidenceDecisions.ts';
 import {createNativeCrmMailEvidence} from './nativeMailEvidence.ts';
@@ -136,17 +136,23 @@ export async function projectCrmCommitment(context:RepositoryContext,input:{comm
 // A known reassignment can omit only this owner's inaccessible Today work.
 // Missing/inconsistent proof and exceptional audit failures still reach the strict
 // authority path and refuse the operation; no private IDs/counts are published.
-const todayKnownFirmAccess=`NOT EXISTS(SELECT 1 FROM (
- SELECT jsonb_array_elements_text(COALESCE(r.initial_context_snapshot->'firmIds','[]'::jsonb)) AS id
- UNION SELECT jsonb_array_elements_text(COALESCE(r.context_snapshot->'firmIds','[]'::jsonb))
- UNION SELECT jsonb_array_elements_text(COALESCE(r.original_access_closure->'firmIds','[]'::jsonb))
- UNION SELECT cx->>'firmId' FROM jsonb_array_elements(COALESCE(r.initial_context_snapshot->'mailContexts','[]'::jsonb)) cx WHERE cx->>'firmId' IS NOT NULL
- UNION SELECT cx->>'firmId' FROM jsonb_array_elements(COALESCE(r.context_snapshot->'mailContexts','[]'::jsonb)) cx WHERE cx->>'firmId' IS NOT NULL
- UNION SELECT jsonb_array_elements_text(COALESCE(t.activation_receipt->'initialContextSnapshot'->'firmIds','[]'::jsonb)) FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key
- UNION SELECT jsonb_array_elements_text(COALESCE(t.activation_receipt->'contextSnapshot'->'firmIds','[]'::jsonb)) FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key
- UNION SELECT jsonb_array_elements_text(COALESCE(t.activation_receipt->'originalAccessClosure'->'firmIds','[]'::jsonb)) FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key
- UNION SELECT cx->>'firmId' FROM crm_internal_tasks t CROSS JOIN LATERAL jsonb_array_elements(COALESCE(t.activation_receipt->'initialContextSnapshot'->'mailContexts','[]'::jsonb)) cx WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND cx->>'firmId' IS NOT NULL
- UNION SELECT cx->>'firmId' FROM crm_internal_tasks t CROSS JOIN LATERAL jsonb_array_elements(COALESCE(t.activation_receipt->'contextSnapshot'->'mailContexts','[]'::jsonb)) cx WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND cx->>'firmId' IS NOT NULL
+const todayKnownFirmAccess=`NOT EXISTS(WITH task_proofs AS (
+ SELECT * FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key
+ UNION SELECT * FROM (SELECT t.* FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.review_id=r.id AND t.task_key IS DISTINCT FROM r.activation_key AND t.status='open' AND t.activation_receipt IS NOT NULL ORDER BY t.id LIMIT 11) prior
+), snapshots AS (
+ SELECT r.initial_context_snapshot AS proof UNION ALL SELECT r.context_snapshot UNION ALL SELECT r.original_access_closure
+ UNION ALL SELECT t.activation_receipt->'initialContextSnapshot' FROM task_proofs t
+ UNION ALL SELECT t.activation_receipt->'contextSnapshot' FROM task_proofs t
+ UNION ALL SELECT t.activation_receipt->'originalAccessClosure' FROM task_proofs t
+), required_people AS (
+ SELECT proof->>'personId' AS person_id FROM snapshots
+ UNION SELECT jsonb_array_elements_text(COALESCE(proof->'personIds','[]'::jsonb)) FROM snapshots
+ UNION SELECT cx->>'personId' FROM snapshots CROSS JOIN LATERAL jsonb_array_elements(COALESCE(proof->'mailContexts','[]'::jsonb)) cx
+ UNION SELECT cx.person_id::text FROM crm_mail_sources s JOIN crm_mail_source_contexts cx ON cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id AND ${mailContextPredicate()} WHERE r.target->'source'->>'kind'='mail' AND s.workspace_id=r.workspace_id AND s.source_id=(r.target->'source'->>'sourceId')::uuid
+) SELECT 1 FROM (
+ SELECT jsonb_array_elements_text(COALESCE(proof->'firmIds','[]'::jsonb)) AS id FROM snapshots
+ UNION SELECT cx->>'firmId' FROM snapshots CROSS JOIN LATERAL jsonb_array_elements(COALESCE(proof->'mailContexts','[]'::jsonb)) cx WHERE cx->>'firmId' IS NOT NULL
+ UNION SELECT c.firm_id::text FROM required_people required_person JOIN crm_people person ON person.workspace_id=r.workspace_id AND person.id=required_person.person_id::uuid JOIN crm_legacy_contact_people bridge ON bridge.workspace_id=person.workspace_id AND bridge.person_id=person.id JOIN contacts c ON c.workspace_id=bridge.workspace_id AND c.id=bridge.contact_id JOIN firms current_firm ON current_firm.workspace_id=c.workspace_id AND current_firm.id=c.firm_id WHERE c.status='active' AND current_firm.status='active' AND NOT EXISTS(SELECT 1 FROM crm_selected_sources proof_source JOIN crm_source_relationship_contexts proof_cx ON ${sourceContextPredicate('proof_source','proof_cx')} WHERE proof_source.workspace_id=r.workspace_id AND proof_source.person_id=person.id AND ${sourceAccessPredicate('$8','$2','proof_source')})
  UNION SELECT s.firm_id::text FROM crm_selected_sources s WHERE r.target->'source'->>'kind'='selected_note' AND s.workspace_id=r.workspace_id AND s.id=(r.target->'source'->>'sourceId')::uuid AND s.firm_id IS NOT NULL
  UNION SELECT cx.firm_id::text FROM crm_selected_sources s JOIN crm_source_relationship_contexts cx ON ${sourceContextPredicate()} WHERE r.target->'source'->>'kind'='selected_note' AND s.workspace_id=r.workspace_id AND s.id=(r.target->'source'->>'sourceId')::uuid
  UNION SELECT c.firm_id::text FROM crm_selected_sources s JOIN crm_legacy_contact_people b ON b.workspace_id=s.workspace_id AND b.person_id=s.person_id JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id WHERE r.target->'source'->>'kind'='selected_note' AND s.workspace_id=r.workspace_id AND s.id=(r.target->'source'->>'sourceId')::uuid AND s.firm_id IS NULL AND NOT EXISTS(SELECT 1 FROM crm_source_relationship_contexts cx WHERE ${sourceContextPredicate()})
