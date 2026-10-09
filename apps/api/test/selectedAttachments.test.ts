@@ -117,6 +117,9 @@ describe('explicit selected attachment analysis',()=>{
   const denied=await post('/crm/attachments/analyze',command({source:{workspaceId:reference.workspaceId,sourceId:reference.sourceId,kind:reference.kind,revision:reference.revision,contentHash:reference.contentHash,locator:null},fileHash:'25ee8c81049e3d9309107bf3b7b9b807b1a7ed83121acb6c43b978889d86d3b1'}));
   expect(denied.status).toBe(409);
   expect(denied.body).toMatchObject({reason:'file_selection_changed'});
+  const generic=await post('/crm/processing/request',command({source:{workspaceId:reference.workspaceId,sourceId:reference.sourceId,kind:reference.kind,revision:reference.revision,contentHash:reference.contentHash,locator:null}}));
+  expect(generic.status).toBe(409);
+  expect(generic.body).toMatchObject({reason:'selected_file_analysis_required'});
  });
  it('reselects restored bytes explicitly at a newer source revision without reviving the old selection',async()=>{
   const person=await post('/crm/people/create',command({fullName:'Reselected file correspondent'}));

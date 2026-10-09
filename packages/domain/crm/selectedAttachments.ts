@@ -59,7 +59,7 @@ export async function readSelectedAttachment(context:RepositoryContext,sourceId:
 export async function requestSelectedAttachmentAnalysis(context:RepositoryContext,input:z.infer<typeof selectedAttachmentAnalyzeSchema>){
  const selected=await readSelectedAttachment(context,input.source.sourceId);
  if(selected===null||selected.file.state!=='selected'||selected.file.fileHash!==input.fileHash||selected.source.workspaceId!==input.source.workspaceId||selected.source.revision!==input.source.revision||selected.source.contentHash!==input.source.contentHash)return {ok:false as const,reason:'file_selection_changed'};
- const requested=await requestCrmProcessing(context,input.source);if(!requested.ok)return requested;
+ const requested=await requestCrmProcessing(context,input.source,undefined,{selectedFileHash:input.fileHash});if(!requested.ok)return requested;
  if(requested.value===null||!('generationId' in requested.value))return {ok:false as const,reason:'file_processing_unavailable'};
  return {ok:true as const,value:{sourceId:input.source.sourceId,sourceRevision:input.source.revision,generationId:requested.value.generationId,state:requested.value.state,reason:requested.value.reason}};
 }
