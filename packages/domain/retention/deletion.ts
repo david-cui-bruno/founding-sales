@@ -1,3 +1,4 @@
+import { redactBusinessMetadata, lockBusinessMetadataAddresses } from '../business/acquisition.ts';
 import { deleteMeetingOutcomeContent } from '../meetings/outcomeCorrections.ts';
 import { lockTodayForFirmChange } from '../today/build.ts';
 import { createHash } from 'node:crypto';
@@ -167,8 +168,32 @@ const CRM_PERSON_IN_SCOPE = `p.id IN (${CRM_TARGET_PEOPLE}) AND NOT EXISTS (
     AND NOT ${CRM_SOURCE_IN_SCOPE})`;
 const CRM_SELECTED_SOURCE_IDS = `SELECT s.id FROM crm_selected_sources s
   WHERE s.workspace_id=$1 AND s.availability<>'deleted' AND ${CRM_SOURCE_IN_SCOPE}`;
+// Only explicit supported endpoint evidence contributes; metadata never invents firm membership.
+const BUSINESS_TARGET_ADDRESSES = `SELECT address FROM email_addresses
+  WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id', '$2')}
+  UNION SELECT e.value AS address FROM crm_identity_endpoints e
+  JOIN crm_endpoint_claims c ON c.workspace_id=e.workspace_id AND c.endpoint_id=e.id
+  JOIN crm_selected_sources s ON s.workspace_id=c.workspace_id AND s.id=c.source_id
+  WHERE e.workspace_id=$1 AND e.kind='email' AND e.value IS NOT NULL AND NOT c.source_invalidated
+    AND s.availability='available' AND s.revision=c.source_revision AND s.content_hash=c.source_hash
+    AND ((${FIRM_SCOPED_ONLY} AND c.firm_id=$3) OR
+      (c.person_id IN (${CRM_TARGET_PEOPLE}) AND c.source_id IN (${CRM_SELECTED_SOURCE_IDS})))`;
+const BUSINESS_METADATA_IN_SCOPE = `b.metadata_availability='available' AND EXISTS(
+  SELECT 1 FROM jsonb_array_elements_text(b.participants) AS participant(address)
+  WHERE participant.address IN (${BUSINESS_TARGET_ADDRESSES}))`;
+
 
 /** Collect the identity dependency closure before any firm/person/source locks. */
+async function lockBusinessMetadataForDeletion(context: RepositoryContext, scope: Scope): Promise<void> {
+  const metadataAddresses=(await context.db.query<{address:string}>(
+    `${BUSINESS_TARGET_ADDRESSES}`,
+    [context.scope.workspaceId,scope.contactId,scope.firmId])).rows.map(value=>value.address);
+  await lockBusinessMetadataAddresses(context,metadataAddresses);
+  await context.db.query(`SELECT b.id FROM crm_business_conversations b WHERE b.workspace_id=$1
+    AND ${BUSINESS_METADATA_IN_SCOPE} ORDER BY b.id FOR UPDATE`,
+    [context.scope.workspaceId,scope.contactId,scope.firmId]);
+}
+
 async function identityDeletionClosure(context: RepositoryContext, scope: Scope) {
   return (await context.db.query<{ firms: string[]; people: string[]; sources: string[]; selected: string[] }>(`
     WITH selected AS (${CRM_SELECTED_SOURCE_IDS}),
@@ -472,6 +497,8 @@ async function measure(
          WHERE c.workspace_id=e.workspace_id AND c.endpoint_id=e.id AND NOT c.source_invalidated
            AND s.availability='available' AND s.revision=c.source_revision AND s.content_hash=c.source_hash
            AND s.id NOT IN (${CRM_SELECTED_SOURCE_IDS}))`, byContact),
+    crm_business_conversations: await countOf(context,
+      `SELECT count(*) AS count FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}`, byContact),
     crm_people: await countOf(
       context,
       `SELECT count(*) AS count FROM crm_people p
@@ -592,6 +619,7 @@ async function measure(
      UNION
      SELECT e164 AS handle FROM phone_routes
       WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+     UNION SELECT address AS handle FROM (${BUSINESS_TARGET_ADDRESSES}) business_addresses
      ORDER BY handle`,
     byContact,
   );
@@ -634,6 +662,8 @@ async function measure(
         OR relationship_id IN (SELECT id FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)))
     UNION ALL SELECT 'claim',id::text,revision,source_hash,source_invalidated::text
       FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)
+    UNION ALL SELECT 'business_metadata',b.id::text,b.metadata_revision,b.metadata_hash,b.metadata_availability
+      FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}
     ORDER BY kind,id`, byContact)).rows;
 
   return {
@@ -700,6 +730,7 @@ export async function previewDeletion(
   if (!scoped.ok) return refuse(scoped.reason);
   const scope = scoped.value;
 
+  await lockBusinessMetadataForDeletion(context, scope);
   const measured = await measure(context, scope);
   const previewHash = hashOf(scope, measured);
 
@@ -866,6 +897,7 @@ export async function commitDeletion(
   }
   // Then the month: every settlement and every message deletion below comes after it.
   await lockMonthlySpend(context);
+  await lockBusinessMetadataForDeletion(context, scope);
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
   // Both comparisons. The presented hash catches a client approving somebody else's
@@ -1283,6 +1315,14 @@ export async function commitDeletion(
     byContact,
   );
   const redacted: Record<string, number> = {};
+  const metadataIds = measured.identityVersions.filter(value => value.kind==='business_metadata').map(value => value.id);
+  redacted['crm_business_conversations'] = 0;
+  for (let offset=0; offset<metadataIds.length; offset+=100) {
+    const result = await redactBusinessMetadata(context,{ conversationIds: metadataIds.slice(offset,offset+100) });
+    if (!result.ok) throw new Error('Scoped business metadata deletion refused');
+    redacted['crm_business_conversations'] += result.value.redacted;
+  }
+
   const people = await context.db.query(
     `UPDATE crm_people p SET full_name=$4,revision=revision+1
       WHERE p.workspace_id=$1 AND p.full_name <> $4 AND ${CRM_PERSON_IN_SCOPE}`,

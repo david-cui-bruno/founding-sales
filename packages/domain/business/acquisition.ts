@@ -1,3 +1,4 @@
+import { isSuppressed } from '../suppression/effective.ts';
 import { businessMetadataObservationSchema } from '@fss/contracts';
 import { normalizeIdentityEndpoint } from '../crm/endpoints.ts';
 import { createHash } from 'node:crypto';
@@ -158,6 +159,12 @@ export async function observeBusinessMetadata(context: RepositoryContext, observ
   const participants = input.participants.map(value => normalizeIdentityEndpoint('email', value));
   if (participants.some(value => value === null))
     return { ok: false as const, reason: 'invalid_metadata' };
+  await lockBusinessMetadataAddresses(context, participants.filter(value => value!==null));
+  for (const participant of participants) {
+    if (participant === null) return { ok: false as const, reason: 'invalid_metadata' };
+    const stop = await isSuppressed(context,{ scope: 'handle',canonicalKey: participant });
+    if (stop?.source==='deletion_tombstone') return { ok: false as const, reason: 'metadata_deleted' };
+  }
   const existing = (await context.db.query<{
     id: string;
     metadata_revision: number;
@@ -266,4 +273,11 @@ export async function redactBusinessMetadata(context: RepositoryContext, input: 
     return { ok: false as const, reason: 'metadata_deletion_denied' };
   await context.db.query("UPDATE crm_business_conversations SET metadata_availability='deleted',subject='',participants='[]'::jsonb,latest_provider_at=NULL,category='uncertain',reason='metadata_deleted',classifier_version='redacted',metadata_hash=repeat('0',64),metadata_revision=metadata_revision+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[])", [context.scope.workspaceId, rows.map(row => row.id)]);
   return { ok: true as const, value: { redacted: rows.length, conversationIds: rows.map(row => row.id) } };
+}
+
+/** Cross-account writer/deletion barrier for indivisible copies containing a known address. */
+export async function lockBusinessMetadataAddresses(context: RepositoryContext, addresses: readonly string[]) {
+  const keys=[...new Set(addresses.map(value=>normalizeIdentityEndpoint('email',value)?.toLowerCase()).filter(value=>value!==undefined))].sort();
+  for (const key of keys) await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+    [`${context.scope.workspaceId}:business-metadata-address:${key}`]);
 }
