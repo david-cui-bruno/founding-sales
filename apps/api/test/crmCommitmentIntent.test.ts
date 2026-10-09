@@ -78,6 +78,8 @@ it.each([
  {name:'old dated promise',quote:'I will prepare the repair summary by 2020-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:true},
  {name:'other sender',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
  {name:'forwarded passage',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'forwarded' as const,eligible:false},
+ {name:'same verified action after completed rerun',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:true},
+ {name:'lost exact intent lease',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
  {name:'complete authored Sent',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:true},
  {name:'quoted passage',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'quoted' as const,eligible:false},
  {name:'actual parser partial body',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'partial' as const,rangeKind:'authored' as const,eligible:false},
@@ -108,7 +110,8 @@ it.each([
   expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:'promise-evaluation',modelVersion:'fixture-promises-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
   await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[workspaceId]);
   expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
-  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{mailEvidence:port,adapter:{endpointId:'promise-evaluation',modelVersion:'fixture-promises-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',providerKey:'fixture.promise_intent',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:[{kind:'commitment',status:'stated',interpretation:'Untrusted date/actor interpretation deliberately ignored',locator:`text:0:${quote.length}`,quote}]})}}});
+  const extractionRegistry=(modelVersion:string)=>registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{mailEvidence:port,adapter:{endpointId:'promise-evaluation',modelVersion,accessGrantVersion:'fixture',dataHandlingVersion:'fixture',providerKey:'fixture.promise_intent',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:[{kind:'commitment',status:'stated',interpretation:'Untrusted date/actor interpretation deliberately ignored',locator:`text:0:${quote.length}`,quote}]})}}});
+  const registry=extractionRegistry('fixture-promises-v1');
   await runOnce(fixture.db,{registry,owner:'promise-extraction',limit:20});
   const processed=await post('/crm/processing/read',{source});expect(processed.body).toMatchObject({state:'complete'});
   if(name==='human review veto'||name==='dated human dismissal veto'){
@@ -118,11 +121,30 @@ it.each([
    const response=name==='human review veto'?await post('/crm/commitments/review',command({...target,expectedCommitmentRevision:0,classification:'ambiguous',actor:'unknown',actionLabel:'Human chose a suggestion',due:null})):await post('/crm/evidence/decide',command({...target,action:'dismiss'}));
    expect(response.status).toBe(200);
   }
+  if(name==='lost exact intent lease'){
+   const intent=(await claimJobs(fixture.db,{owner:'stolen-intent',kinds:['crm.commitments_intent'],limit:1,leaseSeconds:120}))[0]!;
+   await fixture.db.query('UPDATE jobs SET fencing_token=fencing_token+1 WHERE workspace_id=$1 AND id=$2',[workspaceId,intent.id]);
+   const intentHandler=registry.get('crm.commitments_intent');if(!intentHandler)throw new Error('intent registration missing');
+   await intentHandler.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:intent});
+  }
   await runOnce(fixture.db,{registry,owner:'promise-intent',limit:20});
   await runOnce(fixture.db,{registry,owner:'promise-projector',limit:20});
   const page=await post('/crm/commitments/read',{scope:{kind:'firm',firmId},limit:50});expect(page.status).toBe(200);
   if(!eligible){expect(page.body).toMatchObject({items:name==='human review veto'?[{basis:'human',state:'suggestion',task:null}]:[]});return;}
   expect(page.body).toMatchObject({items:[{basis:'verified_original',actor:'self',actionLabel:'Prepare the repair summary',due:{kind:'date',date:name==='old dated promise'?'2020-10-12':'2026-10-12',zone:'UTC'},quote,task:{status:'open'}}]});
+  if(name==='same verified action after completed rerun'){
+   const first=(page.body as {items:{task:{taskId:string;version:number}}[]}).items[0]!.task;
+   const originalReceipt=(await fixture.db.query<{activation_receipt:unknown}>('SELECT activation_receipt FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2',[workspaceId,first.taskId])).rows[0]!.activation_receipt;
+   expect((await post('/crm/commitments/complete',command({taskId:first.taskId,expectedVersion:first.version}))).status).toBe(200);
+   expect((await post('/crm/processing/purpose/save',command({expectedRevision:1,enabled:false,endpointId:'promise-evaluation',modelVersion:'fixture-promises-v2',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
+   await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[workspaceId]);
+   expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
+   const nextRegistry=extractionRegistry('fixture-promises-v2');
+   for(let pass=0;pass<3;pass++)await runOnce(fixture.db,{registry:nextRegistry,owner:'promise-rerun',limit:20});
+   expect((await post('/crm/commitments/read',{scope:{kind:'firm',firmId},limit:50})).body).toMatchObject({items:[{basis:'verified_original',task:{taskId:first.taskId,status:'done',version:2}}]});
+   expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toEqual({items:[],nextAfterId:null});
+   expect((await fixture.db.query<{activation_receipt:unknown}>('SELECT activation_receipt FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2',[workspaceId,first.taskId])).rows[0]!.activation_receipt).toEqual(originalReceipt);
+  }
   if(name==='old dated promise'){expect(page.body).toMatchObject({items:[{todayEligibility:'historical'}]});expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toMatchObject({items:[]});}
  }finally{await fixture.stop();}
 });

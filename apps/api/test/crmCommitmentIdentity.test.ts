@@ -11,7 +11,7 @@ import {
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 
-it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict", "equivalent_open", "identical_open", "open_action", "open_due"] as const)("preserves completed action identity across %s", async scenario => {
+it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict", "equivalent_open", "identical_open", "open_action", "open_due", "open_overflow"] as const)("preserves completed action identity across %s", async scenario => {
   const fixture = await createAuthFixture();
   try {
     let token = (
@@ -169,6 +169,19 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toEqual({items:[],nextAfterId:null});return;
     }
     const task=((await read()).body as {items:{task:{taskId:string}}[]}).items[0]!.task;
+    if(scenario==='open_overflow'){
+      for(let index=0;index<12;index++){
+       expect((await post('/crm/commitments/review',{...review,commandId:randomUUID(),expectedCommitmentRevision:index+1,actionLabel:`Review repair item ${index}`})).status).toBe(200);
+       await runOnce(fixture.db,{registry,owner:'bounded-open-review',limit:20});
+      }
+      const bounded=(await read()).body as {items:{supersededOpenTasks:unknown[];supersededOpenTasksTruncated:boolean}[]};
+      expect(bounded.items[0]!.supersededOpenTasks).toHaveLength(10);
+      expect(bounded.items[0]!.supersededOpenTasksTruncated).toBe(true);
+      expect(JSON.stringify(bounded.items[0]!.supersededOpenTasks)).not.toMatch(/actionLabel|quote|due|sourceId/);
+      const statuses=(await fixture.db.query<{status:string}>("SELECT status FROM crm_internal_tasks WHERE workspace_id=$1 ORDER BY id",[source.workspaceId])).rows;
+      expect(statuses).toHaveLength(13);expect(statuses.every(row=>row.status==='open')).toBe(true);
+      return;
+    }
     if(scenario==='open_action'||scenario==='open_due'){
       const changed=command({...review,commandId:randomUUID(),expectedCommitmentRevision:1,...(scenario==='open_action'?{actionLabel:'Review the repair summary'}:{due:{kind:'date' as const,date:'2026-10-13',zone:'America/Chicago',expression:'by October 13'}})});
       expect((await post('/crm/commitments/review',changed)).status).toBe(200);
@@ -202,6 +215,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
     }
     const activationReceipt=(await fixture.db.query<{activation_receipt:unknown}>("SELECT activation_receipt FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2",[source.workspaceId,task.taskId])).rows[0]!.activation_receipt;
     const runtime=await fixture.database.appRuntimeSession();
+    if(scenario==='cas')await expect(runtime.query("UPDATE crm_commitment_reviews SET basis='verified_original',revision=revision+1 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,(queued.body as {result:{commitmentId:string}}).result.commitmentId])).rejects.toMatchObject({code:'23514',constraint:'crm_commitment_review_guard'});
     await expect(runtime.query("UPDATE crm_internal_tasks SET activation_receipt=activation_receipt || '{\"activatedAt\":\"2026-10-01T00:00:00.000Z\"}'::jsonb,version=version+1 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,task.taskId])).rejects.toMatchObject({code:"23514",constraint:"crm_internal_task_guard"});
     const done=await post("/crm/commitments/complete",command({taskId:task.taskId,expectedVersion:1}));expect(done.status).toBe(200);
     const completedAt=(done.body as {result:{completedAt:string}}).result.completedAt;
