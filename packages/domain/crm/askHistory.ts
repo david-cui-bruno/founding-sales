@@ -1,8 +1,9 @@
-import {askHistoryPageSchema,type AskHistoryList} from '@fss/contracts';
+import {askHistoryPageSchema,askHistoryChangedSchema,type AskHistoryList,type AskHistoryChange} from '@fss/contracts';
 import type {SessionQueryable} from '../db/queryable.ts';
 import {withTransaction} from '../db/queryable.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from './identityAccess.ts';
+import {lockAskLifecycle} from './askAnswerLifecycle.ts';
 import {readAskAnswer} from './askAnswers.ts';
 interface HistoryRow extends Record<string,unknown>{id:string;version:number;history_revision:number;created_at:Date;cursor_at:string;history_updated_at:Date;history_title:string|null;history_pinned:boolean}
 /** Caller supplies one authenticated session. Current observations are serial per item, not an atomic page. */
@@ -25,4 +26,17 @@ export async function listAskHistory(context:RepositoryContext&{db:SessionQuerya
  if(!await activeIdentityActor(context))return null;
  const last=rows[input.limit-1];
  return askHistoryPageSchema.parse({items,nextCursor:rows.length>input.limit&&last!==undefined?{pinned:last.history_pinned,createdAt:last.created_at.toISOString(),requestId:last.id}:null});
+}
+
+/** Owner intent does not authorize accessing stale source text. Caller owns the command transaction. */
+export async function changeAskHistory(context:RepositoryContext,input:AskHistoryChange){
+ const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return {ok:false as const,reason:'source_unavailable'};
+ await lockAskLifecycle(context);
+ if(input.action.kind!=='rename')return {ok:false as const,reason:'invalid_input'};
+ const current=await readAskAnswer(context,input.requestId);
+ if(current===null||current.question===null)return {ok:false as const,reason:'source_unavailable'};
+ const row=(await context.db.query<HistoryRow>('SELECT id,version,history_revision FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR UPDATE',[context.scope.workspaceId,input.requestId,actor.userId])).rows[0];
+ if(row===undefined||row.version!==current.version||row.history_revision!==input.expectedRevision)return {ok:false as const,reason:'history_changed'};
+ const changed=(await context.db.query<{id:string;version:number;history_revision:number;state:string}>('UPDATE crm_ask_requests SET history_title=$4 WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 RETURNING id,version,history_revision,state',[context.scope.workspaceId,input.requestId,actor.userId,input.action.title])).rows[0]!;
+ return {ok:true as const,value:askHistoryChangedSchema.parse({requestId:changed.id,historyRevision:changed.history_revision,requestVersion:changed.version,state:changed.state})};
 }
