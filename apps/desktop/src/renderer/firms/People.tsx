@@ -1,10 +1,21 @@
-import { useEffect, useState, type JSX } from 'react';
-import type { PersonPage } from '@fss/contracts';
-import { Button } from '../ui/button.tsx';
+import type { ContextPorts } from "./SourceContexts.tsx";
+import {
+  Endpoints,
+  type EndpointPorts,
+  type EndpointEditingPorts,
+} from "./Endpoints.tsx";
+import {
+  Relationships,
+  type RelationshipPorts,
+  type RelationshipEditingPorts,
+} from "./Relationships.tsx";
+import { useEffect, useState, type JSX } from "react";
+import type { PersonPage } from "@fss/contracts";
+import { Button } from "../ui/button.tsx";
 export interface PeoplePorts {
   list(
     afterId?: string,
-  ): Promise<{ people: PersonPage['person'][]; nextAfterId: string | null }>;
+  ): Promise<{ people: PersonPage["person"][]; nextAfterId: string | null }>;
   create(fullName: string): Promise<{ personId: string }>;
   read(personId: string, afterSourceId?: string): Promise<PersonPage>;
   add(input: {
@@ -34,22 +45,32 @@ export interface PeoplePorts {
 export function People({
   enabled,
   ports,
+  relationships,
+  relationshipEditing,
+  contexts,
+  endpoints,
+  endpointEditing,
 }: {
   enabled: boolean;
   ports: PeoplePorts;
+  relationships?: RelationshipPorts;
+  relationshipEditing?: RelationshipEditingPorts;
+  contexts?: ContextPorts;
+  endpoints?: EndpointPorts;
+  endpointEditing?: EndpointEditingPorts;
 }): JSX.Element {
-  const [people, setPeople] = useState<PersonPage['person'][]>([]);
+  const [people, setPeople] = useState<PersonPage["person"][]>([]);
   const [page, setPage] = useState<PersonPage | null>(null);
   const [recapturing, setRecapturing] = useState<{
     sourceId: string;
     revision: number;
   } | null>(null);
-  const [key, setKey] = useState('');
-  const [excerpt, setExcerpt] = useState('');
-  const [date, setDate] = useState('');
+  const [key, setKey] = useState("");
+  const [excerpt, setExcerpt] = useState("");
+  const [date, setDate] = useState("");
   const [nextPerson, setNextPerson] = useState<string | null>(null);
-  const [name, setName] = useState('');
-  const [error, setError] = useState('');
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
@@ -62,7 +83,7 @@ export function People({
         }
       })
       .catch(() => {
-        if (live) setError('People could not be loaded.');
+        if (live) setError("People could not be loaded.");
       });
     return () => {
       live = false;
@@ -70,16 +91,16 @@ export function People({
   }, [ports]);
   const run = async (work: () => Promise<void>): Promise<void> => {
     setBusy(true);
-    setError('');
+    setError("");
     try {
       await work();
     } catch {
       setPage(null);
       setRecapturing(null);
-      setExcerpt('');
-      setKey('');
-      setDate('');
-      setError('That change could not be completed. Refresh and try again.');
+      setExcerpt("");
+      setKey("");
+      setDate("");
+      setError("That change could not be completed. Refresh and try again.");
     } finally {
       setBusy(false);
     }
@@ -102,14 +123,14 @@ export function People({
         onClick={() =>
           void run(async () => {
             setRecapturing(null);
-            setKey('');
-            setExcerpt('');
-            setDate('');
+            setKey("");
+            setExcerpt("");
+            setDate("");
             setPage(null);
             const created = await ports.create(name.trim());
             setPage(await ports.read(created.personId));
             setPeople((await ports.list()).people);
-            setName('');
+            setName("");
           })
         }
       >
@@ -124,9 +145,9 @@ export function People({
               onClick={() =>
                 void run(async () => {
                   setRecapturing(null);
-                  setKey('');
-                  setExcerpt('');
-                  setDate('');
+                  setKey("");
+                  setExcerpt("");
+                  setDate("");
                   setPage(null);
                   setPage(await ports.read(person.personId));
                 })
@@ -154,7 +175,34 @@ export function People({
       {page ? (
         <section>
           <h3>{page.person.fullName}</h3>
-          <p>{page.person.firm?.name ?? 'Firm unknown'}</p>
+          {relationships ? (
+            <Relationships
+              key={page.person.personId}
+              personId={page.person.personId}
+              ports={relationships}
+              editing={relationshipEditing}
+              contexts={contexts}
+              sources={page.sources}
+              enabled={enabled}
+            />
+          ) : null}
+          {endpoints ? (
+            <Endpoints
+              key={page.person.personId}
+              personId={page.person.personId}
+              ports={endpoints}
+              editing={endpointEditing}
+              sources={page.sources}
+              enabled={enabled}
+            />
+          ) : null}
+          <p>
+            {page.person.firm === null
+              ? relationships
+                ? "Operational contact association not recorded"
+                : "Firm unknown"
+              : `Operational contact association: ${page.person.firm.name}`}
+          </p>
           {recapturing === null ? (
             <label>
               Note reference
@@ -213,13 +261,13 @@ export function People({
                     occurredAt: new Date(date).toISOString(),
                   });
                 setPage(await ports.read(page.person.personId));
-                setExcerpt('');
+                setExcerpt("");
               })
             }
           >
             {recapturing === null
-              ? 'Save selected note'
-              : 'Save recaptured note'}
+              ? "Save selected note"
+              : "Save recaptured note"}
           </Button>
           <ul>
             {page.sources.map((source) => (
@@ -237,6 +285,7 @@ export function People({
                             sourceId: source.sourceId,
                             expectedRevision: source.revision,
                           });
+                          setPage(null);
                           setPage(await ports.read(page.person.personId));
                         })
                       }
@@ -244,7 +293,7 @@ export function People({
                       Delete copied note
                     </Button>
                   </>
-                ) : source.availability === 'deleted' ? (
+                ) : source.availability === "deleted" ? (
                   <>
                     <p>Copied note deleted.</p>
                     <Button
@@ -256,6 +305,7 @@ export function People({
                             sourceId: source.sourceId,
                             expectedRevision: source.revision,
                           });
+                          setPage(null);
                           setPage(await ports.read(page.person.personId));
                         })
                       }
@@ -273,8 +323,8 @@ export function People({
                           sourceId: source.sourceId,
                           revision: source.revision,
                         });
-                        setExcerpt('');
-                        setDate('');
+                        setExcerpt("");
+                        setDate("");
                       }}
                     >
                       Recapture this note
