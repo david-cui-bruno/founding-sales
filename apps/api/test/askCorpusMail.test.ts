@@ -1,7 +1,10 @@
 import { randomUUID, createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { dispatch } from "../src/server.ts";
-import { createAuthFixture } from "./support/authFixture.ts";
+import {
+  createAuthFixture,
+  CURRENT_CLIENT_VERSION,
+} from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
 import { registerHandlers } from "../../worker/src/bootstrap/main.ts";
@@ -188,7 +191,210 @@ it("retrieves retained mail passages after disconnect without a processing grant
         semantic: "not_requested",
       },
     });
+    const post = (path: string, body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path,
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    const created = await post("/crm/people/create", {
+      commandId: randomUUID(),
+      clientVersion: CURRENT_CLIENT_VERSION,
+      fullName: "Explicit mail context",
+    });
+    const personId = (created.body as { result: { personId: string } }).result
+      .personId;
+    expect(
+      (
+        await post("/crm/business/mail/associate", {
+          commandId: randomUUID(),
+          clientVersion: CURRENT_CLIENT_VERSION,
+          sourceId,
+          expectedRevision: 1,
+          personId,
+        })
+      ).status,
+    ).toBe(200);
+    const discovered = await post("/ask/read", {
+      operation: "sources",
+      scope: { personId },
+    });
+    expect(discovered.status).toBe(200);
+    expect(discovered.body).toMatchObject({
+      sources: [
+        {
+          sourceId,
+          kind: "mail",
+          revision: 2,
+          locator: null,
+          availability: "available",
+          completeness: "partial",
+        },
+      ],
+      coverage: { scanComplete: true },
+    });
+    expect(JSON.stringify(discovered.body)).not.toContain(
+      "Drainage coordination",
+    );
     expect(reads).toBe(1);
+  } finally {
+    await fixture.stop();
+  }
+});
+
+it("discovers more than ten explicitly associated permitted mail copies within the bounded record page", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const approved = await approveCaptureFixture(fixture),
+      token = (
+        await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
+      ).accessToken;
+    const post = (path: string, body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path,
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    const person = (
+      await post("/crm/people/create", {
+        commandId: randomUUID(),
+        clientVersion: CURRENT_CLIENT_VERSION,
+        fullName: "Explicit batch mail context",
+      })
+    ).body as { result: { personId: string } };
+    const text = "Retained original business copy.";
+    const registry = registerHandlers(new HandlerRegistry(), {
+      classifier: undefined,
+      mail: undefined,
+      send: undefined,
+      research: undefined,
+      crmMailCapture: {
+        proofVerifier: {
+          async verify() {
+            return true;
+          },
+        },
+        provider: {
+          async read(input) {
+            return {
+              providerAccountId: "google-business",
+              messageId: input.providerMessageId,
+              threadId: "approved-thread",
+              labels: ["INBOX"],
+              providerAt: "2026-10-08T15:00:00.000Z",
+              rawSenderDate: null,
+              from: "Unknown@business.test",
+              to: ["business@example.test"],
+              cc: [],
+              subject: "Business",
+              body: text,
+              parserVersion: "fixture-mime-v1",
+              representation: "plain_text" as const,
+              completeness: "partial" as const,
+              ranges: [
+                { start: 0, end: text.length, kind: "unknown" as const },
+              ],
+            };
+          },
+        },
+      },
+    });
+    const handler = registry.get("crm.mail_capture")!,
+      sourceIds = [];
+    for (let index = 0; index < 12; index++) {
+      let job = approved.job;
+      if (index > 0) {
+        await enqueueJob(fixture.db, {
+          workspaceId: approved.workspaceId,
+          kind: "crm.mail_capture",
+          idempotencyKey: `ask-batch:${index}`,
+          payload: {
+            mailboxId: approved.mailbox.id,
+            providerMessageId: `approved-message-${index}`,
+            providerAccountId: "google-business",
+            generation: 1,
+            conversationId: approved.conversationId,
+            controlsRevision: 1,
+            policyRevision: 1,
+            decisionRevision: 0,
+          },
+        });
+        job = (
+          await claimJobs(fixture.db, {
+            owner: "ask-batch",
+            kinds: ["crm.mail_capture"],
+            limit: 1,
+            leaseSeconds: 120,
+          })
+        )[0]!;
+      }
+      const captured = await handler.handle({
+        session: fixture.db,
+        scope: workspaceScope(approved.workspaceId, {
+          kind: "system",
+          component: "worker",
+        }),
+        job,
+      });
+      expect(captured).toMatchObject({
+        done: true,
+        progress: { outcome: "captured", sourceRevision: 1 },
+      });
+      const sourceId = captured!.progress["sourceId"];
+      sourceIds.push(sourceId);
+      expect(
+        (
+          await post("/crm/business/mail/associate", {
+            commandId: randomUUID(),
+            clientVersion: CURRENT_CLIENT_VERSION,
+            sourceId,
+            expectedRevision: 1,
+            personId: person.result.personId,
+          })
+        ).status,
+      ).toBe(200);
+    }
+    const read = await post("/ask/read", {
+      operation: "sources",
+      scope: { personId: person.result.personId },
+    });
+    expect(read.status).toBe(200);
+    const page = read.body as {
+      sources: { sourceId: string; kind: string; revision: number }[];
+    };
+    expect(page.sources.map((source) => source.sourceId).sort()).toEqual(
+      sourceIds.sort(),
+    );
+    expect(
+      page.sources.every(
+        (source) => source.kind === "mail" && source.revision === 2,
+      ),
+    ).toBe(true);
+    expect(read.body).toMatchObject({
+      nextAfter: null,
+      coverage: { scanComplete: true, candidateCeiling: 50 },
+    });
+    expect(JSON.stringify(read.body)).not.toContain(text);
   } finally {
     await fixture.stop();
   }
