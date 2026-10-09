@@ -2,11 +2,17 @@ import { z } from "zod";
 import { canonicalSourceReferenceSchema } from "./people.ts";
 import { crmSourceLookupSchema } from "./crmProcessing.ts";
 import { firmTaskDtoSchema, firmTimelineEventSchema } from "./crmSurface.ts";
+// Ask scopes use the same millisecond precision as displayed activity/provider dates.
+// Reject finer input instead of silently truncating it during interval validation.
+const askScopeDateSchema = z.iso.datetime().refine(
+  (value) => !/\.\d{4,}Z$/u.test(value),
+  "Ask date scopes support at most millisecond precision",
+);
 export const askScopeSchema = z
   .strictObject({
     firmId: z.uuid(),
-    from: z.iso.datetime().optional(),
-    to: z.iso.datetime().optional(),
+    from: askScopeDateSchema.optional(),
+    to: askScopeDateSchema.optional(),
   })
   .refine(
     (value) =>

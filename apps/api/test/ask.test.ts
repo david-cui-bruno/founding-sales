@@ -151,6 +151,74 @@ it("states the event basis and bounds exact opportunity counts by opening dates"
   }
 });
 
+it("rejects unsupported fractional date precision before answering an Ask scope", async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const token = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)
+    ).accessToken;
+    const firmId = await seedFirm(fixture, {
+      name: "Ask millisecond scope firm",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const post = (operation: string, from: string, to: string) =>
+      dispatch(
+        {
+          method: "POST",
+          path: "/ask/read",
+          body: { operation, scope: { firmId, from, to } },
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: fixture.db,
+          auth: fixture.deps,
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
+    for (const operation of [
+      "opportunities",
+      "tasks",
+      "activity",
+      "reply_status",
+    ]) {
+      for (const fraction of ["0001", "000100", "0000"]) {
+        expect(
+          (
+            await post(
+              operation,
+              `2026-10-09T12:00:00.${fraction}Z`,
+              "2026-10-09T12:00:00.001Z",
+            )
+          ).status,
+        ).toBe(400);
+        expect(
+          (
+            await post(
+              operation,
+              "2026-10-09T12:00:00.000Z",
+              `2026-10-09T12:00:00.${fraction}Z`,
+            )
+          ).status,
+        ).toBe(400);
+      }
+      for (const from of [
+        "2026-10-09T12:00:00Z",
+        "2026-10-09T12:00:00.0Z",
+        "2026-10-09T12:00:00.00Z",
+        "2026-10-09T12:00:00.000Z",
+      ]) {
+        expect(
+          (await post(operation, from, "2026-10-09T12:00:00.001Z")).status,
+        ).toBe(200);
+      }
+    }
+  } finally {
+    await fixture.stop();
+  }
+});
+
 it("keeps equal names as separate Ask records and requires explicit identity selection", async () => {
   const fixture = await createAuthFixture();
   try {
