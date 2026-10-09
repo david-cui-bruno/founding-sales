@@ -12,8 +12,9 @@ import {createNativeCrmMailEvidence} from './nativeMailEvidence.ts';
 const copiedMail=createNativeCrmMailEvidence();
 const supportSchema=crmSourceLookupSchema.extend({contentHash:z.string().regex(/^[a-f0-9]{64}$/u),locator:z.string().min(1).max(500)}).strict().array().min(1).max(10);
 interface ActionProof extends Record<string,unknown>{id:string;version:number;kind:'task'|'note'|'preference';status:'active'|'open'|'done'|'cancelled'|'proposed'|'dismissed';private_state:'available'|'stale'|'deleted';target_firm_id:string|null;target_person_id:string|null;input_scope:unknown;initial_contexts:unknown;original_access_closure:unknown;support_refs:unknown;review_required:boolean;created_at:Date;updated_at:Date;completed_at:Date|null}
+type ActionAuthority=Pick<ActionProof,'private_state'|'input_scope'|'initial_contexts'|'original_access_closure'|'support_refs'>;
 /** Independent immutable source proof; saved history is not needed to authorize an action. */
-async function currentActionSupport(context:RepositoryContext,row:ActionProof){
+async function currentActionSupport(context:RepositoryContext,row:ActionAuthority){
  if(row.private_state!=='available')return {state:row.private_state,sources:[] as CanonicalSourceReference[]};
  const scope=askExplicitCorpusScopeSchema.safeParse(row.input_scope),contexts=crmClaimContextSchema.array().max(10).safeParse(row.initial_contexts),original=crmOriginalAccessClosureSchema.safeParse(row.original_access_closure),support=supportSchema.safeParse(row.support_refs);
  if(!scope.success||!contexts.success||!original.success||!support.success||contexts.data.length!==scope.data.sources.length)return {state:'unavailable' as const,sources:[] as CanonicalSourceReference[]};
@@ -52,7 +53,7 @@ export async function createAskAction(context:RepositoryContext,input:AskActionC
  }
  const support=supportSchema.safeParse(references.map(({workspaceId,sourceId,kind,revision,contentHash,locator})=>({workspaceId,sourceId,kind,revision,contentHash,locator})));
  if(!support.success)return {ok:false as const,reason:'input_bound_reached'};
- const checked=await currentActionSupport(context,{id:input.requestId,version:1,kind:'note',status:'active',private_state:'available',target_firm_id:target?.kind==='firm'?target.firmId:null,target_person_id:target?.kind==='person'?target.personId:null,input_scope:scope,initial_contexts:contexts,original_access_closure:original,support_refs:support.data,review_required:false,created_at:new Date(),updated_at:new Date(),completed_at:null});
+ const checked=await currentActionSupport(context,{private_state:'available',input_scope:scope,initial_contexts:contexts,original_access_closure:original,support_refs:support.data});
  if(checked.state!=='current')return {ok:false as const,reason:'source_unavailable'};
  const created=(await context.db.query<{id:string;version:number;kind:string}>(`INSERT INTO crm_ask_actions(workspace_id,owner_user_id,source_request_id,source_request_version,kind,status,target_firm_id,target_person_id,human_text,input_scope,initial_contexts,original_access_closure,support_refs,due) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb) RETURNING id,version,kind`,[context.scope.workspaceId,actor.userId,input.requestId,input.expectedVersion,input.action.kind,input.action.kind==='task'?'open':input.action.kind==='note'?'active':'proposed',target?.kind==='firm'?target.firmId:null,target?.kind==='person'?target.personId:null,input.action.kind==='task'?input.action.label:input.action.text,JSON.stringify(scope),JSON.stringify(contexts),JSON.stringify(original),JSON.stringify(support.data),input.action.kind==='task'?JSON.stringify(input.action.due):null])).rows[0]!;
  return {ok:true as const,value:askActionAcknowledgmentSchema.parse({actionId:created.id,version:created.version,kind:created.kind})};
