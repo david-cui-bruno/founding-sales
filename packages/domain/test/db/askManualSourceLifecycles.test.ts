@@ -35,7 +35,7 @@ async function assertInvalidated(database:Database,workspaceId:string,actions:Aw
   return erased;
 }
 
-it('physically deleting an uncited call input erases independent human action details while preserving completed facts and the cited original',async()=>{
+it.each(['change','delete'] as const)('%s of an uncited call input erases independent human action details while preserving completed facts and the cited original',async(operation)=>{
  const database=await createTestDatabase();
  try{
   const seeded=await seedTwoWorkspaces(database.session),crm=await seedCrm(database.session,seeded),mail=await seedMail(database.session,seeded,crm);
@@ -46,14 +46,16 @@ it('physically deleting an uncited call input erases independent human action de
   await database.session.query(`INSERT INTO call_transcripts(workspace_id,call_session_id,provider,model,language,duration_seconds,utterances) VALUES($1,$2,'fixture','fixture-v1','en',2,$3::jsonb)`,[workspaceId,callId,JSON.stringify(speech)]);
   const uncited:UncitedSource={workspaceId,sourceId:callId,kind:'call_transcript',revision:1,contentHash:createHash('sha256').update(JSON.stringify(speech)).digest('hex'),locator:null};
   const actions=await createDependentActions(database,{workspaceId,owner,firmId:crm.alpha.firmId,uncitedFirmId:callFirm,source:uncited});
-  await database.session.query('DELETE FROM call_transcripts WHERE workspace_id=$1 AND call_session_id=$2',[workspaceId,callId]);
-  const erased=await assertInvalidated(database,workspaceId,actions,'deleted');
-  await database.session.query(`INSERT INTO call_transcripts(workspace_id,call_session_id,provider,model,language,duration_seconds,utterances,crm_revision) VALUES($1,$2,'fixture','fixture-v1','en',2,$3::jsonb,2)`,[workspaceId,callId,JSON.stringify(speech)]);
+  if(operation==='change')await database.session.query('UPDATE call_transcripts SET utterances=$3::jsonb WHERE workspace_id=$1 AND call_session_id=$2',[workspaceId,callId,JSON.stringify([{speaker:0,start:0,end:2,text:'Revised uncited routing context.'}])]);
+  else await database.session.query('DELETE FROM call_transcripts WHERE workspace_id=$1 AND call_session_id=$2',[workspaceId,callId]);
+  const erased=await assertInvalidated(database,workspaceId,actions,operation==='delete'?'deleted':'stale');
+  if(operation==='change')await database.session.query('UPDATE call_transcripts SET utterances=$3::jsonb WHERE workspace_id=$1 AND call_session_id=$2',[workspaceId,callId,JSON.stringify(speech)]);
+  else await database.session.query(`INSERT INTO call_transcripts(workspace_id,call_session_id,provider,model,language,duration_seconds,utterances,crm_revision) VALUES($1,$2,'fixture','fixture-v1','en',2,$3::jsonb,2)`,[workspaceId,callId,JSON.stringify(speech)]);
   expect(await actions.read()).toEqual(erased);
  }finally{await database.drop();}
 });
 
-it('physically deleting an uncited meeting input erases independent human action details while preserving completed facts and the cited original',async()=>{
+it.each(['change','delete'] as const)('%s of an uncited meeting input erases independent human action details while preserving completed facts and the cited original',async(operation)=>{
  const database=await createTestDatabase();
  try{
   const seeded=await seedTwoWorkspaces(database.session),crm=await seedCrm(database.session,seeded),mail=await seedMail(database.session,seeded,crm);
@@ -65,9 +67,11 @@ it('physically deleting an uncited meeting input erases independent human action
   await database.session.query(`INSERT INTO meeting_transcripts(workspace_id,id,recording_id,original_recording_id,version,duration_ms,language,utterances) VALUES($1,$2,$3,$3,1,2000,'en',$4::jsonb)`,[workspaceId,transcriptId,recordingId,JSON.stringify(speech)]);
   const uncited:UncitedSource={workspaceId,sourceId:transcriptId,kind:'meeting_transcript',revision:1,contentHash:createHash('sha256').update(JSON.stringify(speech)).digest('hex'),locator:null};
   const actions=await createDependentActions(database,{workspaceId,owner,firmId:crm.alpha.firmId,uncitedFirmId:meetingFirm,source:uncited});
-  await database.session.query('DELETE FROM meeting_transcripts WHERE workspace_id=$1 AND id=$2',[workspaceId,transcriptId]);
-  const erased=await assertInvalidated(database,workspaceId,actions,'deleted');
-  await database.session.query(`INSERT INTO meeting_transcripts(workspace_id,id,recording_id,original_recording_id,version,duration_ms,language,utterances) VALUES($1,$2,$3,$3,2,2000,'en',$4::jsonb)`,[workspaceId,transcriptId,recordingId,JSON.stringify(speech)]);
+  if(operation==='change')await database.session.query('UPDATE meeting_transcripts SET version=2 WHERE workspace_id=$1 AND id=$2',[workspaceId,transcriptId]);
+  else await database.session.query('DELETE FROM meeting_transcripts WHERE workspace_id=$1 AND id=$2',[workspaceId,transcriptId]);
+  const erased=await assertInvalidated(database,workspaceId,actions,operation==='delete'?'deleted':'stale');
+  if(operation==='change')await database.session.query('UPDATE meeting_transcripts SET version=3 WHERE workspace_id=$1 AND id=$2',[workspaceId,transcriptId]);
+  else await database.session.query(`INSERT INTO meeting_transcripts(workspace_id,id,recording_id,original_recording_id,version,duration_ms,language,utterances) VALUES($1,$2,$3,$3,2,2000,'en',$4::jsonb)`,[workspaceId,transcriptId,recordingId,JSON.stringify(speech)]);
   expect(await actions.read()).toEqual(erased);
  }finally{await database.drop();}
 });
