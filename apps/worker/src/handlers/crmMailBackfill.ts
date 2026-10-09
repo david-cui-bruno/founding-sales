@@ -1,3 +1,4 @@
+import {prepareRetainedCopyTraversal,completeRetainedCopyTraversal} from '@fss/domain/mail/crmRetainedReconciliation.ts';
 import {readHistoryRecovery,replaceHistoryRecoveryConfiguration,beginExpiredHistoryRecovery,freezeHistoryRecovery,advanceHistoryRecovery,type HistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
 import {backfillConfigurationHash} from '@fss/domain/mail/crmBackfillWork.ts';
 import {recordRetainedOriginalMetadata} from '@fss/domain/mail/crmMailOriginals.ts';
@@ -71,6 +72,19 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    }
   }
   try{
+   if(authority.historyAnchor!==null&&(await input.session.query("SELECT 1 FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' LIMIT 1",[input.scope.workspaceId,importId])).rows.length===0){
+    const traversal=await prepareRetainedCopyTraversal(context,{authority,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    if(traversal!==undefined){
+     let refreshed=false;
+     if(traversal.snapshot!==null){
+      const metadata=await providerRead('metadata',authority,access=>adapters.gmail.getMetadata(access,traversal.messageId,METADATA_HEADERS));
+      if(metadata!==null&&(metadata.id!==traversal.messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
+      refreshed=await recordRetainedOriginalMetadata(context,{authority,messageId:traversal.messageId,metadata,expectedSource:traversal.exact,expectedContextIdentity:traversal.snapshot.contextIdentity,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken})===true;
+     }
+     await completeRetainedCopyTraversal(context,{authority,traversal,refreshed,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+     return;
+    }
+   }
    const recovery=await readHistoryRecovery(context,importId);
    recoveryScope=recovery;
    if(recovery!==undefined){

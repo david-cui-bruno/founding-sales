@@ -158,3 +158,11 @@ BEGIN
  RETURN NEW;
 END $$;
 CREATE TRIGGER crm_mail_recovery_progress BEFORE UPDATE ON crm_mail_history_recoveries FOR EACH ROW EXECUTE FUNCTION enforce_crm_mail_recovery_progress();
+
+-- Current-copy traversal is deliberately not a frozen membership/completeness claim.
+ALTER TABLE crm_mail_imports ADD COLUMN reconciliation_after_source_id uuid,
+ ADD COLUMN reconciliation_visited numeric(40,0) NOT NULL DEFAULT 0,
+ ADD COLUMN reconciliation_refreshed numeric(40,0) NOT NULL DEFAULT 0,
+ ADD COLUMN reconciliation_unresolved numeric(40,0) NOT NULL DEFAULT 0,
+ ADD COLUMN reconciliation_exhausted boolean NOT NULL DEFAULT false,
+ ADD CONSTRAINT crm_mail_reconciliation_counts CHECK(reconciliation_visited>=0 AND reconciliation_refreshed>=0 AND reconciliation_unresolved>=0 AND reconciliation_refreshed+reconciliation_unresolved<=reconciliation_visited);

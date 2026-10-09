@@ -5,11 +5,13 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { activeBusinessActor, businessAccountBinding } from '../business/acquisition.ts';
 
 interface ImportRow extends Record<string, unknown> {
+  reconciliation_visited:string;reconciliation_refreshed:string;reconciliation_unresolved:string;reconciliation_exhausted:boolean;
   connection_state:'current'|'disconnected'|'changed';id: string; state: string; reason: string | null; generation: number;
   from_at: Date; to_at: Date; history_anchor: string | null; history_complete: boolean;
   completed_slices: string; reserved_units:string; observed_units:string; unknown_units:string; metadata_counts:{retainedUniqueMessages:string;availableMetadataMessages:string;refusedMetadataMessages:string;confirmedMissingMessages:string;deletedMetadataMessages:string};
 }
 const health = (row: ImportRow) => ({
+  olderCopyReconciliation:{kind:'bounded_current_copy_traversal' as const,coverage:'partial' as const,visitedCopies:row.reconciliation_visited,refreshedCopies:row.reconciliation_refreshed,unresolvedCopies:row.reconciliation_unresolved,traversalExhausted:row.reconciliation_exhausted},
   connectionState:row.connection_state,importId: row.id, state: row.state, reason: row.reason, generation: row.generation,
   fromAt: row.from_at.toISOString(), toAt: row.to_at.toISOString(),
   historyAnchor: row.history_anchor, windowFrozen:row.history_anchor!==null, historyComplete: row.history_complete,
@@ -22,7 +24,7 @@ export async function readCrmMailImport(context: RepositoryContext, input: { mai
   const actor = context.scope.actor;
   if (actor.kind !== 'user' || !await activeBusinessActor(context)) return null;
   const row = (await context.db.query<ImportRow>(`
-    SELECT i.*,CASE WHEN m.status<>'connected' THEN 'disconnected'
+    SELECT i.*,i.reconciliation_visited::text AS reconciliation_visited,i.reconciliation_refreshed::text AS reconciliation_refreshed,i.reconciliation_unresolved::text AS reconciliation_unresolved,CASE WHEN m.status<>'connected' THEN 'disconnected'
      WHEN m.generation<>i.generation OR m.provider_account_id IS DISTINCT FROM i.provider_account_id
      OR NOT EXISTS(SELECT 1 FROM crm_mail_capture_controls c JOIN crm_business_policies p ON p.workspace_id=c.workspace_id AND p.mailbox_id=c.mailbox_id WHERE c.workspace_id=i.workspace_id AND c.mailbox_id=i.mailbox_id AND c.owner_user_id=i.owner_user_id AND p.owner_user_id=i.owner_user_id AND c.provider_account_id=i.provider_account_id AND p.provider_account_id=i.provider_account_id AND c.account_binding=i.account_binding AND p.account_binding=i.account_binding AND c.generation=i.generation AND p.generation=i.generation AND c.revision=i.controls_revision AND c.policy_revision=i.policy_revision AND p.revision=i.policy_revision AND c.enabled AND p.enabled) THEN 'changed' ELSE 'current' END AS connection_state,
      (SELECT count(*) FROM crm_mail_import_slices x
