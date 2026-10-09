@@ -51,6 +51,30 @@ export function validateDevelopment(input: {
   ) {
     throw new RangeError("manifest_mismatch");
   }
+  for (const item of corpus.cases) {
+    if (item.request.operation !== "passages") continue;
+    if (!("sources" in item.request.scope))
+      throw new RangeError("manifest_mismatch");
+    const requestSources = item.request.scope.sources;
+    if (
+      requestSources === undefined ||
+      requestSources.some(
+        (request) =>
+          !windows.some((window) => {
+            const source = window.source;
+            return (
+              request.workspaceId === source.workspaceId &&
+              request.sourceId === source.sourceId &&
+              request.kind === source.kind &&
+              request.revision === source.revision &&
+              request.contentHash === source.contentHash &&
+              (request.locator === null || request.locator === source.locator)
+            );
+          }),
+      )
+    )
+      throw new RangeError("manifest_mismatch");
+  }
   const ids = new Set(windows.map((row) => row.id));
   if (
     corpus.cases.some(

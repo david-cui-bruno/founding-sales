@@ -186,6 +186,48 @@ it("measures a frozen development selected-note lexical baseline through authent
       envelope,
       configurationSha256: hash({ candidate, envelope }),
     });
+    const widenedDefinition = {
+      ...fixtureDefinition,
+      cases: fixtureDefinition.cases.map((item) => ({
+        ...item,
+        request: {
+          operation: "passages",
+          scope: {
+            sources: [
+              {
+                workspaceId: source.workspaceId,
+                sourceId: randomUUID(),
+                kind: source.kind,
+                revision: source.revision,
+                contentHash: source.contentHash,
+                locator: null,
+              },
+            ],
+          },
+          query: "maintenance routing",
+          limit: 50,
+        },
+      })),
+    };
+    const widened = frozenCorpusSchema.parse({
+      ...widenedDefinition,
+      corpusSha256: hash(widenedDefinition),
+    });
+    let unauthorizedReads = 0;
+    await expect(
+      runEvaluation({
+        phase: "development_baseline",
+        manifest: { ...manifest, corpusSha256: widened.corpusSha256 },
+        development: widened,
+        publicReads: {
+          read: async (actor, path, body) => {
+            unauthorizedReads++;
+            return post(path, body);
+          },
+        },
+      }),
+    ).rejects.toThrow("manifest_mismatch");
+    expect(unauthorizedReads).toBe(0);
     const report = await runEvaluation({
       phase: "development_baseline",
       manifest,
