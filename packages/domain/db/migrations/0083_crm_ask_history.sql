@@ -48,3 +48,36 @@ CREATE TABLE crm_ask_actions (
 );
 CREATE INDEX crm_ask_manual_owner ON crm_ask_actions(workspace_id,owner_user_id,id);
 GRANT SELECT,INSERT,UPDATE ON crm_ask_actions TO app_runtime,migration;
+
+CREATE FUNCTION crm_ask_action_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF ROW(NEW.workspace_id,NEW.id,NEW.owner_user_id,NEW.source_request_id,NEW.source_request_version,NEW.kind,NEW.created_at)
+  IS DISTINCT FROM ROW(OLD.workspace_id,OLD.id,OLD.owner_user_id,OLD.source_request_id,OLD.source_request_version,OLD.kind,OLD.created_at)
+ OR (NEW.private_state='available' AND ROW(NEW.target_firm_id,NEW.target_person_id,NEW.human_text,NEW.due,NEW.input_scope,NEW.initial_contexts,NEW.original_access_closure,NEW.support_refs)
+  IS DISTINCT FROM ROW(OLD.target_firm_id,OLD.target_person_id,OLD.human_text,OLD.due,OLD.input_scope,OLD.initial_contexts,OLD.original_access_closure,OLD.support_refs))
+ OR (OLD.private_state<>'available' AND NEW.private_state='available')
+ OR (OLD.status IN ('done','cancelled','dismissed') AND NEW.status<>OLD.status)
+ OR (OLD.completed_at IS NOT NULL AND NEW.completed_at IS DISTINCT FROM OLD.completed_at)
+ OR NEW.version<OLD.version OR NEW.version>OLD.version+1 THEN
+  RAISE EXCEPTION 'Human action identity and copied support are immutable' USING ERRCODE='23514',CONSTRAINT=TG_NAME;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE CONSTRAINT TRIGGER crm_ask_action_immutable AFTER UPDATE ON crm_ask_actions DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION crm_ask_action_guard();
+
+CREATE FUNCTION crm_ask_action_support_valid(ws uuid,scope jsonb,refs jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE ref jsonb;
+BEGIN
+ IF refs IS NULL OR jsonb_typeof(refs)<>'array' OR jsonb_array_length(refs) NOT BETWEEN 1 AND 10 THEN RETURN false; END IF;
+ IF (SELECT count(DISTINCT value) FROM jsonb_array_elements(refs))<>jsonb_array_length(refs) THEN RETURN false; END IF;
+ FOR ref IN SELECT value FROM jsonb_array_elements(refs) LOOP
+  IF jsonb_typeof(ref)<>'object' OR (SELECT count(*) FROM jsonb_object_keys(ref))<>6
+   OR NOT(ref ?& ARRAY['workspaceId','sourceId','kind','revision','contentHash','locator'])
+   OR ref->>'workspaceId'<>ws::text OR jsonb_typeof(ref->'locator')<>'string'
+   OR length(ref->>'locator') NOT BETWEEN 1 AND 500
+   OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(scope->'sources') source WHERE source=jsonb_set(ref,'{locator}','null'::jsonb)) THEN RETURN false; END IF;
+ END LOOP;
+ RETURN true;
+ EXCEPTION WHEN OTHERS THEN RETURN false;
+END $$;
+ALTER TABLE crm_ask_actions ADD CONSTRAINT crm_ask_action_support CHECK(private_state<>'available' OR crm_ask_action_support_valid(workspace_id,input_scope,support_refs));
