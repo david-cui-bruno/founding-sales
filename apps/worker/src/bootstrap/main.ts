@@ -1,3 +1,4 @@
+import {crmMailBackfillJobHandler} from '../handlers/crmMailBackfill.ts';
 import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
 import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
 import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
@@ -200,6 +201,7 @@ export function registerHandlers(
 ): HandlerRegistry {
   const { classifier } = composition;
   registry.register(canaryHandler());
+  registry.register(crmMailBackfillJobHandler());
   registry.register(businessMailCaptureHandler(composition.crmMailCapture ?? { provider: { async read() { throw new Error('mail_capture_provider_unavailable'); } } }));
   registry.register(humanReplySendJobHandler(composition.send));
   registry.register(meetingFollowThroughJobHandler());

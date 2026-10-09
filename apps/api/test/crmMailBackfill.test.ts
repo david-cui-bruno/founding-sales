@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
+import { claimJobs } from '@fss/domain/jobs/jobStore.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { registerHandlers } from '../../worker/src/bootstrap/main.ts';
 import { businessAccountBinding } from '@fss/domain/business/acquisition.ts';
 import { createAuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -22,5 +26,11 @@ it('starts a separate exact ninety-day CRM import without claiming an operationa
     expect(health.body).toMatchObject({state:'pending',generation:1,historyAnchor:null,historyComplete:false,completedSlices:0,totalSlices:90});
     const interval = health.body as {fromAt:string;toAt:string};
     expect(Date.parse(interval.toAt)-Date.parse(interval.fromAt)).toBe(90*24*60*60*1000);
+    const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
+    const handler=registry.get('crm.mail_backfill');
+    expect(handler,'A registered worker must explain missing configuration without treating the import as complete').toBeDefined();
+    const job=(await claimJobs(fixture.db,{owner:'backfill-fixture',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+    await handler!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+    expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'backfill_configuration_required',historyAnchor:null,historyComplete:false,completedSlices:0});
   } finally {await fixture.stop();}
 });
