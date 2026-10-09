@@ -23,6 +23,9 @@ it('renders source-unavailable saved rows neutrally without private titles or qu
  fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
  expect(await screen.findByText('Unavailable investigation')).toBeTruthy();
  expect(screen.getByText('Stale')).toBeTruthy();
+ expect(screen.queryByLabelText('Investigation title')).toBeNull();
+ expect(screen.queryByRole('button',{name:'Save title'})).toBeNull();
+ expect(screen.queryByRole('button',{name:'Pin investigation'})).toBeNull();
  expect(screen.queryByText('Scheduling investigation')).toBeNull();
  expect(screen.queryByText('What matters to Alex?')).toBeNull();
 });
@@ -115,4 +118,21 @@ it('evicts private history and drafts when a stale metadata change is refused',a
  expect(screen.queryByText('Scheduling investigation')).toBeNull();
  expect(screen.queryByLabelText('Investigation title')).toBeNull();
  expect(historyChange).toHaveBeenCalledTimes(1);
+});
+
+it('lets a readable untitled saved investigation receive its first title and be pinned',async()=>{
+ const original=await historyList();
+ const untitled={...original,items:original.items.map(item=>({...item,title:null,pinned:false}))};
+ const list=vi.fn<NonNullable<AskPorts['historyList']>>(async()=>({...original,items:original.items.map(item=>({...item,title:'First investigation title',pinned:false,historyRevision:3}))})).mockResolvedValueOnce(untitled);
+ const historyChange=vi.fn(async()=>({requestId,historyRevision:3,requestVersion:1,state:'complete' as const}));
+ render(<Ask ports={{read,historyList:list,historyChange}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
+ expect(await screen.findByText('What matters to Alex?')).toBeTruthy();
+ expect(screen.getByRole('heading',{name:'Saved investigation'})).toBeTruthy();
+ expect(screen.queryByRole('heading',{name:'Unavailable investigation'})).toBeNull();
+ expect(screen.getByRole('button',{name:'Pin investigation'}).hasAttribute('disabled')).toBe(false);
+ fireEvent.change(screen.getByLabelText('Investigation title'),{target:{value:'First investigation title'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save title'}));
+ expect(await screen.findByText('First investigation title')).toBeTruthy();
+ expect(historyChange).toHaveBeenCalledWith({requestId,expectedRevision:2,action:{kind:'rename',title:'First investigation title'}});
 });

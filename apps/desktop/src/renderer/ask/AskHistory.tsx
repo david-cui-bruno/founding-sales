@@ -56,11 +56,11 @@ export function AskHistory({ports,enabled}:{ports:Partial<AskHistoryPorts>&Parti
   {notice!==null&&<p role='status'>{notice}</p>}
   {page?.items.length===0&&<p>No saved investigations on this page.</p>}
   {page?.items.map(item=><article key={item.requestId}>
-   <h3>{item.title??'Unavailable investigation'}</h3>
+   <h3>{item.title??(item.question!==null?'Saved investigation':'Unavailable investigation')}</h3>
    <time dateTime={item.createdAt}>{item.createdAt}</time>
    <p>{status[item.state]}{item.pinned?' · Pinned':''}</p>
    {item.question!==null&&<p>{item.question}</p>}
-   {item.title!==null&&item.state!=='stale'&&item.state!=='deleted'&&<HistoryEditing key={`${item.requestId}:${item.historyRevision}`} item={item} enabled={enabled&&!busy&&ports.historyChange!==undefined} change={action=>{void change(item,action);}}/>}
+   {item.question!==null&&item.state!=='stale'&&item.state!=='deleted'&&<HistoryEditing key={`${item.requestId}:${item.historyRevision}`} item={item} enabled={enabled&&!busy&&ports.historyChange!==undefined} change={action=>{void change(item,action);}}/>}
    {item.state!=='deleted'&&<HistoryDelete key={`delete:${item.requestId}:${item.historyRevision}`} enabled={enabled&&!busy&&ports.historyChange!==undefined} remove={()=>{void change(item,{kind:'delete'});}}/>}
    <button disabled={!enabled||busy||!ports.answerRead} onClick={()=>setOpened({requestId:item.requestId,epoch:++epoch.current})}>Open investigation</button>
   </article>)}
