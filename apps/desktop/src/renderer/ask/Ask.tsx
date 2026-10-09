@@ -19,6 +19,22 @@ export function Ask({
     Extract<AskResponse, { operation: "sources" }>["sources"]
   >([]);
   const [copyQuery, setCopyQuery] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const fromTime = fromDate === "" ? undefined : Date.parse(`${fromDate}Z`);
+  const toTime = toDate === "" ? undefined : Date.parse(`${toDate}Z`);
+  const validDates =
+    (fromTime === undefined || Number.isFinite(fromTime)) &&
+    (toTime === undefined || Number.isFinite(toTime)) &&
+    (fromTime === undefined || toTime === undefined || fromTime < toTime);
+  const dateScope = {
+    ...(fromTime === undefined || !Number.isFinite(fromTime)
+      ? {}
+      : { from: new Date(fromTime).toISOString() }),
+    ...(toTime === undefined || !Number.isFinite(toTime)
+      ? {}
+      : { to: new Date(toTime).toISOString() }),
+  };
   const [selected, setSelected] = useState<
     Extract<AskResponse, { operation: "records" }>["records"][number] | null
   >(null);
@@ -40,6 +56,8 @@ export function Ask({
     setSelectedSources([]);
     setCopyQuery("");
     setQuery("");
+    setFromDate("");
+    setToDate("");
     setPassageQuery("");
     setError(null);
   }, [key]);
@@ -107,14 +125,14 @@ export function Ask({
     }
   }
   async function activity(before?: string) {
-    if (selected?.kind !== "firm") return;
+    if (selected?.kind !== "firm" || !validDates) return;
     const captured = ++epoch.current;
     setResult(null);
     setError(null);
     try {
       const next = await ports.read({
         operation: "activity",
-        scope: { firmId: selected.recordId },
+        scope: { firmId: selected.recordId, ...dateScope },
         ...(before === undefined ? {} : { before }),
       });
       if (captured === epoch.current) setResult(next);
@@ -124,14 +142,14 @@ export function Ask({
     }
   }
   async function replies() {
-    if (selected?.kind !== "firm") return;
+    if (selected?.kind !== "firm" || !validDates) return;
     const captured = ++epoch.current;
     setResult(null);
     setError(null);
     try {
       const next = await ports.read({
         operation: "reply_status",
-        scope: { firmId: selected.recordId },
+        scope: { firmId: selected.recordId, ...dateScope },
       });
       if (captured === epoch.current) setResult(next);
     } catch {
@@ -140,14 +158,14 @@ export function Ask({
     }
   }
   async function tasks() {
-    if (selected?.kind !== "firm") return;
+    if (selected?.kind !== "firm" || !validDates) return;
     const captured = ++epoch.current;
     setResult(null);
     setError(null);
     try {
       const next = await ports.read({
         operation: "tasks",
-        scope: { firmId: selected.recordId },
+        scope: { firmId: selected.recordId, ...dateScope },
         limit: 20,
       });
       if (captured === epoch.current) setResult(next);
@@ -157,14 +175,14 @@ export function Ask({
     }
   }
   async function opportunities() {
-    if (selected?.kind !== "firm") return;
+    if (selected?.kind !== "firm" || !validDates) return;
     const captured = ++epoch.current;
     setResult(null);
     setError(null);
     try {
       const next = await ports.read({
         operation: "opportunities",
-        scope: { firmId: selected.recordId },
+        scope: { firmId: selected.recordId, ...dateScope },
         status: "open",
         limit: 20,
       });
@@ -308,6 +326,8 @@ export function Ask({
           onClick={() => {
             epoch.current++;
             setSelected(null);
+            setFromDate("");
+            setToDate("");
             setSelectedSources([]);
             setCopyQuery("");
             setPassageQuery("");
@@ -318,6 +338,48 @@ export function Ask({
         >
           Change record
         </button>
+      )}
+      {selected?.kind === "firm" && (
+        <fieldset>
+          <legend>Date scope (UTC)</legend>
+          <p>
+            Optional range: opportunity opening, work due, activity event or
+            reply event dates.
+          </p>
+          <label>
+            From (UTC, inclusive)
+            <input
+              type="datetime-local"
+              aria-label="From (UTC, inclusive)"
+              value={fromDate}
+              onChange={(event) => {
+                epoch.current++;
+                setResult(null);
+                setError(null);
+                setFromDate(event.target.value);
+              }}
+            />
+          </label>
+          <label>
+            Until (UTC, exclusive)
+            <input
+              type="datetime-local"
+              aria-label="Until (UTC, exclusive)"
+              value={toDate}
+              onChange={(event) => {
+                epoch.current++;
+                setResult(null);
+                setError(null);
+                setToDate(event.target.value);
+              }}
+            />
+          </label>
+          {!validDates && (
+            <p role="alert">
+              Choose a valid range with From earlier than Until.
+            </p>
+          )}
+        </fieldset>
       )}
       {selected !== null && (
         <button
@@ -403,7 +465,7 @@ export function Ask({
         <div>
           <h2>{selected.name}</h2>
           <button
-            disabled={!enabled}
+            disabled={!enabled || !validDates}
             onClick={() => {
               void opportunities();
             }}
@@ -411,7 +473,7 @@ export function Ask({
             Open opportunities
           </button>
           <button
-            disabled={!enabled}
+            disabled={!enabled || !validDates}
             onClick={() => {
               void tasks();
             }}
@@ -419,7 +481,7 @@ export function Ask({
             Open work
           </button>
           <button
-            disabled={!enabled}
+            disabled={!enabled || !validDates}
             onClick={() => {
               void replies();
             }}
@@ -427,7 +489,7 @@ export function Ask({
             Reply evidence
           </button>
           <button
-            disabled={!enabled}
+            disabled={!enabled || !validDates}
             onClick={() => {
               void activity();
             }}
@@ -575,14 +637,33 @@ export function Ask({
                 {passage.text}
               </pre>
               {passage.sources.map((source, sourceIndex) => (
-                <p key={sourceIndex}>
-                  {source.occurredAt === null
-                    ? "Date unknown"
-                    : source.occurredAt}{" "}
-                  ·{" "}
-                  {source.speaker === null ? "Speaker unknown" : source.speaker}{" "}
-                  · Version {source.revision}
-                </p>
+                <div key={sourceIndex}>
+                  <p>
+                    {source.occurredAt === null
+                      ? "Date unknown"
+                      : source.occurredAt}{" "}
+                    ·{" "}
+                    {source.speaker === null
+                      ? "Speaker unknown"
+                      : source.speaker}{" "}
+                    · Version {source.revision}
+                  </p>
+                  <details>
+                    <summary>Source details</summary>
+                    <p>
+                      {source.kind === "selected_note"
+                        ? "Selected note"
+                        : source.kind === "call_transcript"
+                          ? "Call transcript"
+                          : source.kind === "meeting_transcript"
+                            ? "Meeting transcript"
+                            : "Email"}{" "}
+                      · Source {source.sourceId} ·{" "}
+                      {source.locator ?? "Location unknown"} ·{" "}
+                      {source.completeness}
+                    </p>
+                  </details>
+                </div>
               ))}
             </article>
           ))}

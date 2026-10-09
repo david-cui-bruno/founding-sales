@@ -87,6 +87,19 @@ it("retrieves selected original passages and renders hostile excerpts as text", 
                   completeness: "selected_excerpt",
                   availability: "available",
                 },
+                {
+                  workspaceId: two,
+                  sourceId: two,
+                  kind: "call_transcript",
+                  revision: 1,
+                  contentHash: "b".repeat(64),
+                  locator: "utterance:0:text:0:37",
+                  speaker: null,
+                  occurredAt: null,
+                  observedAt: "2026-10-09T11:00:00.000Z",
+                  completeness: "selected_excerpt",
+                  availability: "available",
+                },
               ],
             },
           ],
@@ -118,7 +131,19 @@ it("retrieves selected original passages and renders hostile excerpts as text", 
   expect(await screen.findByText(text)).toBeTruthy();
   expect(view.container.querySelector("script")).toBeNull();
   expect(
-    screen.getByText(/Date unknown · Speaker unknown · Version 1/u),
+    screen.getByText(
+      "Selected note · Source " + one + " · text:0:37 · selected_excerpt",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(
+      "Call transcript · Source " +
+        two +
+        " · utterance:0:text:0:37 · selected_excerpt",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getAllByText(/Date unknown · Speaker unknown · Version 1/u)[0],
   ).toBeTruthy();
   expect(read).toHaveBeenLastCalledWith({
     operation: "passages",
@@ -897,4 +922,79 @@ it("uses one retrieval input within the explicitly selected record scope", async
   expect(screen.getAllByRole("textbox")).toHaveLength(1);
   expect(screen.getByLabelText("Find a person or firm")).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Alex" })).toBeNull();
+});
+
+it("applies an explicit UTC date range to the selected firm work and refuses reversed bounds", async () => {
+  const read = vi.fn<AskPorts["read"]>(async (input) =>
+    input.operation === "records"
+      ? {
+          operation: "records",
+          selection: "single",
+          records: [
+            { recordId: one, kind: "firm", name: "Orion", firmId: one },
+          ],
+          nextAfterId: null,
+          scanComplete: true,
+          coverage: {
+            scope: "current_permitted_crm_state",
+            acquisition: "unverified",
+            semantic: "not_requested",
+          },
+        }
+      : {
+          operation: "tasks",
+          scope: { firmId: one },
+          dateBasis: "task_due_at",
+          count: "1",
+          records: [
+            {
+              key: `callback:${two}`,
+              kind: "callback",
+              label: "callback",
+              dueAt: "2026-10-20T14:00:00.000Z",
+              status: "open",
+            },
+          ],
+          truncated: false,
+          coverage: {
+            scope: "current_permitted_crm_state",
+            acquisition: "unverified",
+            semantic: "not_requested",
+          },
+        },
+  );
+  render(<Ask ports={{ read }} privacyKey="owner:1" enabled />);
+  fireEvent.change(screen.getByLabelText("Record kind"), {
+    target: { value: "firms" },
+  });
+  fireEvent.change(screen.getByLabelText("Find a person or firm"), {
+    target: { value: "Orion" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Find records" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Select Orion" }));
+  fireEvent.change(screen.getByLabelText("From (UTC, inclusive)"), {
+    target: { value: "2026-10-20T00:00" },
+  });
+  fireEvent.change(screen.getByLabelText("Until (UTC, exclusive)"), {
+    target: { value: "2026-10-21T00:00" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Open work" }));
+  expect(await screen.findByText("1 open tasks")).toBeTruthy();
+  expect(screen.getByText(/callback · 2026-10-20/u)).toBeTruthy();
+  expect(read).toHaveBeenLastCalledWith({
+    operation: "tasks",
+    scope: {
+      firmId: one,
+      from: "2026-10-20T00:00:00.000Z",
+      to: "2026-10-21T00:00:00.000Z",
+    },
+    limit: 20,
+  });
+  fireEvent.change(screen.getByLabelText("Until (UTC, exclusive)"), {
+    target: { value: "2026-10-19T00:00" },
+  });
+  expect(screen.queryByText("1 open tasks")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Open work" }).hasAttribute("disabled"),
+  ).toBe(true);
 });
