@@ -16,6 +16,7 @@ it('a Today meeting route retains its target while the firm and meeting reads ar
   const briefReads: string[] = [];
   globalThis.callieApi = {
     read: async (name: string, input: {meetingId?:string}) => {
+      if (name === 'crm.businessMailList') return {sources:[],nextAfterId:null};
       if (name.startsWith('crm.')) return crmState();
       if (name === 'research.open') return { firm: null, settings: null, worstCaseRunCents: null, spend: null, notice: null, mayMutate: true, role: 'salesperson' };
       if (name === 'calling.history') return { calls: null };

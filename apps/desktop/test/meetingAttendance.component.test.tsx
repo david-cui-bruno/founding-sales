@@ -443,6 +443,8 @@ describe('review M1R', () => {
     const answer = (name: string, input: unknown): unknown => {
       calls.push({ name, input });
       switch (name) {
+        case 'crm.businessMailList':
+          return {sources:[],nextAfterId:null};
         case 'meetings.forFirm':
           return { meetings: [booked()], stageSuggestion: { stageKey: 'demo_booked', opportunityId: null, fromStageKey: null } };
         case 'meetings.unmatched':

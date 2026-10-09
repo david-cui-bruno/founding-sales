@@ -2301,7 +2301,7 @@ export async function observeApprovedBusinessMail(
 /** Account provenance is passed by the sync run, never reconstructed from today's mailbox. */
 export function createApprovedBusinessMailObserver(
   options: {
-    classify?: (
+    categorizeMetadata?: (
       metadata: GmailMessageMetadata,
     ) => Pick<
       z.infer<typeof businessMetadataObservationSchema>,
@@ -2318,7 +2318,7 @@ export function createApprovedBusinessMailObserver(
         )
       ).rows[0];
       if (!policy) return;
-      const classification = options.classify?.(input.metadata) ?? {
+      const classification = options.categorizeMetadata?.(input.metadata) ?? {
         category: 'uncertain',
         reason: 'unclassified_metadata',
         classifierVersion: 'business-metadata-unclassified-v1',
