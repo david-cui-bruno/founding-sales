@@ -19,7 +19,9 @@ export interface AskPurposeSnapshot {
  readonly dailyCeilingCents:number;
  readonly monthlyCeilingCents:number;
 }
+export interface AskAdapterRoute {readonly endpointId:string;readonly modelVersion:string;readonly providerKey:string}
 export interface AskPurposeProofInput {
+ readonly route:AskAdapterRoute;
  readonly stage:AskPaidStage;
  readonly purpose:AskPurposeSnapshot;
  readonly configFingerprint:string;

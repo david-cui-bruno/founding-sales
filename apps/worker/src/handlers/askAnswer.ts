@@ -51,17 +51,23 @@ async function recoverCalling(input:JobHandlerInput){
 /** Durable calling precedes the wait; original copies are reread after every external stage. */
 export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHandler{
  return {kind:'crm.ask_answer',protection:'outbound_fence',maxAttempts:3,leaseSeconds:120,async handle(input){
+  const originalAdapter=composition.answer;
+  const originalRun=originalAdapter?.run;
+  const adapter=originalAdapter===undefined?undefined:{endpointId:originalAdapter.endpointId,modelVersion:originalAdapter.modelVersion,providerKey:originalAdapter.providerKey,run:originalRun!.bind(Object.freeze({...originalAdapter}))};
+  const route=adapter===undefined?undefined:{endpointId:adapter.endpointId,modelVersion:adapter.modelVersion,providerKey:adapter.providerKey};
+  const runtime={...composition};
+  const unchanged=()=>originalAdapter!==undefined&&composition.answer===originalAdapter&&originalAdapter.endpointId===adapter!.endpointId&&originalAdapter.modelVersion===adapter!.modelVersion&&originalAdapter.providerKey===adapter!.providerKey&&originalAdapter.run===originalRun;
   if(await recoverCalling(input))return;
   const located=await locate(input);if(located===null)return;
   const {context,requestId,version,epoch}=located;
-  async function snapshot(){return withTransaction(input.session,async()=>{const current=await readCurrentAskInput(context,requestId,version,epoch);return current!==null&&await fenced(input)?current:null;});}
+  async function snapshot(){return withTransaction(input.session,async()=>{const current=await readCurrentAskInput(context,requestId,version,epoch,route!);return current!==null&&await fenced(input)?current:null;});}
+  if(adapter===undefined){await withTransaction(input.session,async()=>{if(await fenced(input))await setState(context,requestId,version,epoch,'unavailable','processing_authority_unavailable');});return;}
   const initial=await snapshot();if(initial===null)return;
-  const adapter=composition.answer;
-  const proof=await verifyAskPurpose(composition,initial.proofInput);
+  const proof=await verifyAskPurpose(runtime,initial.proofInput);
   if(adapter===undefined||proof===null||composition.retrieval!==undefined||composition.support!==undefined||adapter.endpointId!==initial.proofInput.purpose.endpointId||adapter.modelVersion!==initial.proofInput.purpose.modelVersion){await withTransaction(input.session,async()=>{if(await fenced(input))await setState(context,requestId,version,epoch,'unavailable','processing_authority_unavailable');});return;}
   if(initial.windows.length===0){await withTransaction(input.session,async()=>{if(await fenced(input))await setState(context,requestId,version,epoch,'unavailable','unsupported_answer');});return;}
   const reserved=await withTransaction(input.session,async()=>{
-   const current=await readCurrentAskInput(context,requestId,version,epoch);if(current===null||!await fenced(input)||current.inputHash!==initial.inputHash||Date.parse(proof.validUntil)<=Date.parse(await now(context)))return null;
+   const current=await readCurrentAskInput(context,requestId,version,epoch,route!);if(current===null||!await fenced(input)||current.inputHash!==initial.inputHash||Date.parse(proof.validUntil)<=Date.parse(await now(context)))return null;
    const previous=(await context.db.query<{dispatch_state:string}>('SELECT dispatch_state FROM crm_ask_financial_receipts WHERE workspace_id=$1 AND request_id=$2 AND stage=\'answer\'',[context.scope.workspaceId,requestId])).rows[0];if(previous!==undefined)return null;
    const purpose=current.proofInput.purpose;
    const inputTokens=Buffer.byteLength(JSON.stringify({question:current.question,windows:current.windows,groups:current.groups}))+1024,maxOutputTokens=4096;
@@ -73,10 +79,10 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
    return {receiptId:receipt.id,reservationId:reservation.id,inputTokens,maxOutputTokens,purpose,inputHash:current.inputHash};
   });
   if(reserved===null)return;
-  const dispatchProof=await verifyAskPurpose(composition,initial.proofInput);
+  const dispatchProof=await verifyAskPurpose(runtime,initial.proofInput);
   const dispatch=await withTransaction(input.session,async()=>{
-   const current=await readCurrentAskInput(context,requestId,version,epoch);
-   if(current===null||dispatchProof===null||current.inputHash!==reserved.inputHash||!await fenced(input)||Date.parse(dispatchProof.validUntil)<=Date.parse(await now(context))||!await withinBudget(context,reserved.purpose,adapter.providerKey,0)){await settleAttempt(context,{reservationId:reserved.reservationId,at:await now(context),outcome:{kind:'released'}});await context.db.query("UPDATE crm_ask_financial_receipts SET dispatch_state='released' WHERE workspace_id=$1 AND id=$2 AND dispatch_state='reserved'",[context.scope.workspaceId,reserved.receiptId]);return null;}
+   const current=await readCurrentAskInput(context,requestId,version,epoch,route!);
+   if(!unchanged()||current===null||dispatchProof===null||current.inputHash!==reserved.inputHash||!await fenced(input)||Date.parse(dispatchProof.validUntil)<=Date.parse(await now(context))||!await withinBudget(context,reserved.purpose,adapter.providerKey,0)){await settleAttempt(context,{reservationId:reserved.reservationId,at:await now(context),outcome:{kind:'released'}});await context.db.query("UPDATE crm_ask_financial_receipts SET dispatch_state='released' WHERE workspace_id=$1 AND id=$2 AND dispatch_state='reserved'",[context.scope.workspaceId,reserved.receiptId]);if(await fenced(input))await setState(context,requestId,version,epoch,'unavailable','processing_authority_unavailable');return null;}
    if(!await markCalling(context,reserved.reservationId))return null;
    await context.db.query("UPDATE crm_ask_financial_receipts SET dispatch_state='calling' WHERE workspace_id=$1 AND id=$2 AND dispatch_state='reserved'",[context.scope.workspaceId,reserved.receiptId]);
    return structuredClone(current);
@@ -85,10 +91,10 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
   let outcome:Awaited<ReturnType<AskAnswerAdapter['run']>>;
   const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
   const timed=new Promise<Awaited<ReturnType<AskAnswerAdapter['run']>>>(resolve=>{timer=setTimeout(()=>{controller.abort();resolve({acceptance:'unknown',usage:null,answer:null});},Math.max(1,Math.min(60000,composition.providerTimeoutMs??60000)));});
-  try{outcome=await Promise.race([adapter.run({question:dispatch.question,windows:structuredClone(dispatch.windows),groups:structuredClone(dispatch.groups),maxOutputTokens:reserved.maxOutputTokens,signal:controller.signal}),timed]);}catch{outcome={acceptance:'unknown',usage:null,answer:null};}finally{if(timer!==undefined)clearTimeout(timer);}
-  const finalProof=await verifyAskPurpose(composition,initial.proofInput);
+  try{outcome=!unchanged()?{acceptance:'not_accepted',usage:{inputTokens:0,outputTokens:0},answer:null}:structuredClone(await Promise.race([adapter.run({question:dispatch.question,windows:structuredClone(dispatch.windows),groups:structuredClone(dispatch.groups),maxOutputTokens:reserved.maxOutputTokens,signal:controller.signal}),timed]));}catch{outcome={acceptance:'unknown',usage:null,answer:null};}finally{if(timer!==undefined)clearTimeout(timer);}
+  const finalProof=await verifyAskPurpose(runtime,initial.proofInput);
   await withTransaction(input.session,async()=>{
-   const current=await readCurrentAskInput(context,requestId,version,epoch);
+   const current=await readCurrentAskInput(context,requestId,version,epoch,route!);
    // Money remains recoverable even when private history is deleted or the actor is revoked.
    await lockMonthlySpend(context);
    const usage=z.strictObject({inputTokens:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),outputTokens:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)}).safeParse(outcome.usage);
@@ -98,7 +104,7 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
    await context.db.query('UPDATE crm_ask_financial_receipts SET dispatch_state=$3 WHERE workspace_id=$1 AND id=$2 AND dispatch_state=\'calling\'',[context.scope.workspaceId,reserved.receiptId,unknown?'unknown_acceptance':'settled']);
    if(!await fenced(input))return;
    if(unknown){await setState(context,requestId,version,epoch,'unknown_acceptance','provider_acceptance_unknown');return;}
-   if(current===null||finalProof===null||current.inputHash!==reserved.inputHash||Date.parse(finalProof.validUntil)<=Date.parse(await now(context))){const livePurpose=await readAskPurpose(context,'answer');await setState(context,requestId,version,epoch,'stale',livePurpose===null||askFingerprint(livePurpose)!==initial.proofInput.configFingerprint?'purpose_changed':'source_changed');return;}
+   if(current===null||finalProof===null||current.inputHash!==reserved.inputHash||Date.parse(finalProof.validUntil)<=Date.parse(await now(context))){const livePurpose=await readAskPurpose(context,'answer');await setState(context,requestId,version,epoch,'stale',livePurpose===null||askFingerprint({purpose:livePurpose,route:initial.proofInput.route})!==initial.proofInput.configFingerprint?'purpose_changed':'source_changed');return;}
    const candidate=candidateSchema.safeParse(outcome.answer);
    if(outcome.acceptance!=='accepted'||!candidate.success||!usage.success||usage.data.inputTokens>reserved.inputTokens||usage.data.outputTokens>reserved.maxOutputTokens){await setState(context,requestId,version,epoch,'unavailable','processing_failed');return;}
    const permitted=new Map(current.windows.map(window=>[window.id,window]));

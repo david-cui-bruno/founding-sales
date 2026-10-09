@@ -105,5 +105,21 @@ it('answers through the registered controlled-purpose worker and navigates a cur
   const boundedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>({configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const}),answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>({acceptance:'accepted' as const,usage:{inputTokens:50,outputTokens:10},answer:{claims:[{text:'repairs',kind:'extractive',citationWindowIds:[input.windows[0]!.id]}],abstained:false}})}}});
   await runOnce(fixture.db,{registry:boundedRegistry,owner:'ask-bounded-groups',limit:20});
   expect((await post('/ask/answers/read',{requestId:boundedId})).body).toMatchObject({state:'complete',answer:{coverage:{input:'partial',semantic:'unverified'},missingEvidence:['input_partial']}});
+  const rerouted=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
+  const reroutedId=(rerouted.body as {result:{requestId:string}}).result.requestId;
+  let verifications=0,reroutedCalls=0;
+  const mutableAdapter={endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>{reroutedCalls++;return {acceptance:'accepted' as const,usage:{inputTokens:50,outputTokens:10},answer:{claims:[{text,kind:'extractive',citationWindowIds:[input.windows[0]!.id]}],abstained:false}};}};
+  const reroutedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>{if(++verifications===2){mutableAdapter.endpointId='different-private-route';mutableAdapter.modelVersion='different-model';mutableAdapter.providerKey='fixture.other-provider';}return {configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const};},answer:mutableAdapter}});
+  await runOnce(fixture.db,{registry:reroutedRegistry,owner:'ask-mutable-route',limit:20});
+  expect(reroutedCalls).toBe(0);
+  expect((await post('/ask/answers/read',{requestId:reroutedId})).body).toMatchObject({state:'unavailable',reason:'processing_authority_unavailable',answer:null});
+  const mutatedOutcomeRequest=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
+  const mutatedOutcomeId=(mutatedOutcomeRequest.body as {result:{requestId:string}}).result.requestId;
+  let outcomeVerifications=0;
+  const mutableOutcome={acceptance:'accepted' as const,usage:{inputTokens:50,outputTokens:10},answer:{claims:[{text,kind:'extractive',citationWindowIds:[] as string[]}],abstained:false}};
+  const outcomeRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>{if(++outcomeVerifications===3){mutableOutcome.answer.claims[0]!.text='repairs';mutableOutcome.usage.inputTokens=99999;}return {configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture' as const};},answer:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async(input:{windows:readonly AskInputWindow[]})=>{mutableOutcome.answer.claims[0]!.citationWindowIds=[input.windows[0]!.id];return mutableOutcome;}}}});
+  await runOnce(fixture.db,{registry:outcomeRegistry,owner:'ask-mutable-outcome',limit:20});
+  expect((await post('/ask/answers/read',{requestId:mutatedOutcomeId})).body).toMatchObject({state:'complete',answer:{claims:[{text}],coverage:{semantic:'unverified'}}});
+
  }finally{await fixture.stop();}
 });

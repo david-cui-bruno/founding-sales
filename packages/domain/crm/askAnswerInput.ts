@@ -7,12 +7,12 @@ import {resolveCrmSource} from './sourceResolver.ts';
 import {createNativeCrmMailEvidence} from './nativeMailEvidence.ts';
 import {processingContextHash} from './processingContext.ts';
 import {askFingerprint,readAskPurpose} from './askAnswerAuthority.ts';
-import type {AskInputWindow,AskInputGroup,AskPurposeProofInput} from './askAnswerPorts.ts';
+import type {AskInputWindow,AskInputGroup,AskPurposeProofInput,AskAdapterRoute} from './askAnswerPorts.ts';
 const copiedMail=createNativeCrmMailEvidence();
 const textHash=(text:string)=>createHash('sha256').update(text).digest('hex');
 export const askGroupHash=(text:string)=>textHash(text.trim().replace(/\s+/gu,' ').toLocaleLowerCase('en-US'));
 /** Complete current inputs, assembled from originals, never recovered from saved answer prose. */
-export async function readCurrentAskInput(context:RepositoryContext,requestId:string,version:number,epoch:number){
+export async function readCurrentAskInput(context:RepositoryContext,requestId:string,version:number,epoch:number,route:AskAdapterRoute){
  const read=await readAskAnswer(context,requestId);
  if(read===null||read.state!=='pending'||read.question===null||read.reason==='source_unavailable'||read.version!==version)return null;
  const row=(await context.db.query<Record<string,unknown>>('SELECT * FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND version=$3 AND epoch=$4 FOR UPDATE',[context.scope.workspaceId,requestId,version,epoch])).rows[0];
@@ -45,9 +45,9 @@ export async function readCurrentAskInput(context:RepositoryContext,requestId:st
  const selectedIds=new Set(groups.flatMap(group=>group.windowIds));
  const selectedWindows=windows.filter(window=>selectedIds.has(window.id));
  const inputScopeFingerprint=askFingerprint(scope),contextFingerprint=askFingerprint(contexts),initialAccessFingerprint=askFingerprint(access);
- const configFingerprint=askFingerprint(purpose);
+ const configFingerprint=askFingerprint({purpose,route});
  const authorizationFingerprint=askFingerprint({workspaceId:context.scope.workspaceId,ownerUserId:row['owner_user_id'],inputScopeFingerprint,contextFingerprint,initialAccessFingerprint});
- const proofInput:AskPurposeProofInput={stage:'answer',purpose,configFingerprint,authorizationFingerprint,workspaceId:context.scope.workspaceId,ownerUserId:String(row['owner_user_id']),inputScopeFingerprint,contextFingerprint,initialAccessFingerprint};
+ const proofInput:AskPurposeProofInput={stage:'answer',route:structuredClone(route),purpose,configFingerprint,authorizationFingerprint,workspaceId:context.scope.workspaceId,ownerUserId:String(row['owner_user_id']),inputScopeFingerprint,contextFingerprint,initialAccessFingerprint};
  const inputHash=askFingerprint({question:read.question,windows:windows.map(window=>({id:window.id,source:window.source,textHash:window.textHash})),selectedWindowIds:[...selectedIds],configFingerprint,authorizationFingerprint});
  return {question:read.question,windows:selectedWindows,groups,proofInput,inputHash,coverage:census.coverage,retrievalPartial:grouped.size>groups.length};
 }
