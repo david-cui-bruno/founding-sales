@@ -3,7 +3,7 @@ import type { z } from 'zod';
 import type { endpointClaimSchema, endpointListSchema } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { QueryResultRowLike } from '../db/queryable.ts';
-import { activeIdentityActor, evidenceAvailable, sourceAccessPredicate, lockIdentityContext, readIdentityPerson } from './identityAccess.ts';
+import { activeIdentityActor, evidenceAvailable, sourceAccessPredicate, lockIdentityContext, readIdentityPerson, sourceVisible } from './identityAccess.ts';
 export type EndpointInput = z.infer<typeof endpointClaimSchema>;
 interface Claim extends QueryResultRowLike {
   id: string;
@@ -76,39 +76,194 @@ async function claimDto(context: RepositoryContext, row: Claim): Promise<z.infer
     return null;
   return { claimId: row.id, endpointId: row.endpoint_id, kind: row.kind, value: row.value, personId: row.person_id, personName: person?.fullName ?? null, firmId: row.firm_id, firmName: row.firm_name, shared: row.shared, status: row.status, startDate: row.start_date, endDate: row.end_date, revision: row.revision, evidence, sourceState: !row.source_invalidated && await evidenceAvailable(context, evidence) ? 'available' : 'unavailable' };
 }
-export async function matchEndpoint(context: RepositoryContext, input: {
+interface EndpointMatchInput {
   kind: 'email' | 'phone';
   value: string;
-}) {
-  const empty = { personId: null, firmId: null, candidates: [] };
-  const value = normalizeIdentityEndpoint(input.kind, input.value);
-  if (value === null)
-    return { outcome: 'no_supported_match', reason: 'no_supported_evidence', ...empty };
-  const query = () => context.db.query<Claim>(`SELECT ${columns} FROM crm_endpoint_claims c JOIN crm_identity_endpoints e ON e.workspace_id=c.workspace_id AND e.id=c.endpoint_id LEFT JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=c.firm_id WHERE c.workspace_id=$1 AND e.kind=$2 AND e.value_hash=$3 AND NOT c.source_invalidated ORDER BY c.id LIMIT 101`, [context.scope.workspaceId, input.kind, createHash('sha256').update(value).digest('hex')]);
-  const rows = (await query()).rows;
-  if (rows.length === 0)
-    return { outcome: 'no_supported_match', reason: 'no_supported_evidence', ...empty };
-  if (rows.length > 100 || !await lockIdentityContext(context, { personIds: rows.flatMap(row => row.person_id === null ? [] : [row.person_id]), firmIds: rows.flatMap(row => row.firm_id === null ? [] : [row.firm_id]), sourceIds: rows.map(row => row.source_id), requireActiveFirms: false }))
-    return { outcome: 'needs_review', reason: 'uncertain_identity', ...empty };
-  await context.db.query('SELECT id FROM crm_identity_endpoints WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [context.scope.workspaceId, rows[0]?.endpoint_id]);
-  const current = (await query()).rows;
-  if (current.length !== rows.length || current.some(row => !rows.some(previous => previous.id === row.id && previous.revision === row.revision && previous.source_id === row.source_id && previous.person_id === row.person_id && previous.firm_id === row.firm_id)))
-    return { outcome: 'needs_review', reason: 'uncertain_identity', ...empty };
+}
+const emptyMatch = () => ({ personId: null, firmId: null, candidates: [] });
+const unsupportedMatch = () => ({
+  outcome: 'no_supported_match',
+  reason: 'no_supported_evidence',
+  ...emptyMatch(),
+});
+const uncertainMatch = () => ({
+  outcome: 'needs_review',
+  reason: 'uncertain_identity',
+  ...emptyMatch(),
+});
+function matchingClaims(
+  context: RepositoryContext,
+  input: EndpointMatchInput,
+  value: string,
+) {
+  return context.db.query<Claim>(
+    `SELECT ${columns} FROM crm_endpoint_claims c JOIN crm_identity_endpoints e ON e.workspace_id=c.workspace_id AND e.id=c.endpoint_id LEFT JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=c.firm_id WHERE c.workspace_id=$1 AND e.kind=$2 AND e.value_hash=$3 AND NOT c.source_invalidated ORDER BY c.id LIMIT 101`,
+    [
+      context.scope.workspaceId,
+      input.kind,
+      createHash('sha256').update(value).digest('hex'),
+    ],
+  );
+}
+/** Preflight only omits inaccessible groups; the combined locked check remains authoritative. */
+async function readableMatchClaims(
+  context: RepositoryContext,
+  rows: readonly Claim[],
+) {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return false;
+  for (const row of rows) {
+    if (!(await sourceVisible(context, row.source_id))) return false;
+    if (
+      row.person_id !== null &&
+      (await readIdentityPerson(context, row.person_id)) === null
+    )
+      return false;
+    if (row.firm_id !== null) {
+      const firm = (
+        await context.db.query<{ assigned_user_id: string | null }>(
+          'SELECT assigned_user_id FROM firms WHERE workspace_id=$1 AND id=$2',
+          [context.scope.workspaceId, row.firm_id],
+        )
+      ).rows[0];
+      if (
+        firm === undefined ||
+        (actor.role !== 'admin' && firm.assigned_user_id !== actor.userId)
+      )
+        return false;
+    }
+  }
+  return true;
+}
+/** A bounded preview collects every participant context before taking any identity lock. */
+export async function matchEndpoints(
+  context: RepositoryContext,
+  inputs: readonly EndpointMatchInput[],
+) {
+  if (inputs.length > 20 || !(await activeIdentityActor(context))) return null;
+  const snapshots = [];
+  for (const input of inputs) {
+    const value = normalizeIdentityEndpoint(input.kind, input.value);
+    const rows =
+      value === null ? [] : (await matchingClaims(context, input, value)).rows;
+    const opaque =
+      rows.length > 100 || !(await readableMatchClaims(context, rows));
+    snapshots.push({ input, value, rows, opaque });
+  }
+  const rows = snapshots.flatMap((snapshot) =>
+    snapshot.opaque ? [] : snapshot.rows,
+  );
+  const locked = await lockIdentityContext(context, {
+    personIds: rows.flatMap((row) =>
+      row.person_id === null ? [] : [row.person_id],
+    ),
+    firmIds: rows.flatMap((row) => (row.firm_id === null ? [] : [row.firm_id])),
+    sourceIds: rows.map((row) => row.source_id),
+    requireActiveFirms: false,
+  });
+  if (!locked)
+    return snapshots.map((snapshot) =>
+      snapshot.rows.length === 0 ? unsupportedMatch() : uncertainMatch(),
+    );
+  for (const endpointId of [
+    ...new Set(rows.map((row) => row.endpoint_id)),
+  ].sort()) {
+    await context.db.query(
+      'SELECT id FROM crm_identity_endpoints WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
+      [context.scope.workspaceId, endpointId],
+    );
+  }
+  const today = (
+    await context.db.query<{ today: string }>(
+      'SELECT (clock_timestamp() AT TIME ZONE business_time_zone)::date::text AS today FROM workspaces WHERE id=$1',
+      [context.scope.workspaceId],
+    )
+  ).rows[0]?.today;
+  const results = [];
+  for (const snapshot of snapshots) {
+    if (snapshot.value === null || snapshot.rows.length === 0) {
+      results.push(unsupportedMatch());
+      continue;
+    }
+    if (snapshot.opaque) {
+      results.push(uncertainMatch());
+      continue;
+    }
+    const current = (
+      await matchingClaims(context, snapshot.input, snapshot.value)
+    ).rows;
+    if (
+      current.length !== snapshot.rows.length ||
+      current.some(
+        (row) =>
+          !snapshot.rows.some(
+            (previous) =>
+              previous.id === row.id &&
+              previous.revision === row.revision &&
+              previous.endpoint_id === row.endpoint_id &&
+              previous.source_id === row.source_id &&
+              previous.source_revision === row.source_revision &&
+              previous.source_hash === row.source_hash &&
+              previous.person_id === row.person_id &&
+              previous.firm_id === row.firm_id,
+          ),
+      )
+    ) {
+      results.push(uncertainMatch());
+      continue;
+    }
+    results.push(await matchCurrentClaims(context, current, today));
+  }
+  return (await activeIdentityActor(context)) ? results : null;
+}
+export async function matchEndpoint(
+  context: RepositoryContext,
+  input: EndpointMatchInput,
+) {
+  return (await matchEndpoints(context, [input]))?.[0] ?? null;
+}
+async function matchCurrentClaims(
+  context: RepositoryContext,
+  current: readonly Claim[],
+  today: string | undefined,
+) {
+  const empty = emptyMatch();
   const candidates = [];
   for (const row of current) {
     const candidate = await claimDto(context, row);
-    if (candidate !== null)
-      candidates.push(candidate);
+    if (candidate !== null) candidates.push(candidate);
   }
-  if (!await activeIdentityActor(context))
-    return null;
-  const today = (await context.db.query<{
-    today: string;
-  }>("SELECT (clock_timestamp() AT TIME ZONE business_time_zone)::date::text AS today FROM workspaces WHERE id=$1", [context.scope.workspaceId])).rows[0]?.today;
-  if (today === undefined || candidates.length !== 1 || candidates[0]?.sourceState !== 'available' || candidates[0]?.status !== 'current' || candidates[0]?.startDate === null || candidates[0].startDate > today || (candidates[0].endDate !== null && candidates[0].endDate < today))
-    return { outcome: 'needs_review', reason: 'uncertain_identity', ...empty, candidates };
+  if (
+    today === undefined ||
+    candidates.length !== 1 ||
+    candidates[0]?.sourceState !== 'available' ||
+    candidates[0]?.status !== 'current' ||
+    candidates[0]?.startDate === null ||
+    candidates[0].startDate > today ||
+    (candidates[0].endDate !== null && candidates[0].endDate < today)
+  )
+    return {
+      outcome: 'needs_review',
+      reason: 'uncertain_identity',
+      ...empty,
+      candidates,
+    };
   const selected = candidates[0];
-  return selected.shared ? { outcome: 'firm_endpoint_match', reason: 'shared_endpoint', ...empty, firmId: selected.firmId, candidates } : { outcome: 'person_match', reason: 'supported_unique', ...empty, personId: selected.personId, candidates };
+  return selected.shared
+    ? {
+        outcome: 'firm_endpoint_match',
+        reason: 'shared_endpoint',
+        ...empty,
+        firmId: selected.firmId,
+        candidates,
+      }
+    : {
+        outcome: 'person_match',
+        reason: 'supported_unique',
+        ...empty,
+        personId: selected.personId,
+        candidates,
+      };
 }
 export async function listEndpoints(context: RepositoryContext, input: {
   personId?: string | undefined;

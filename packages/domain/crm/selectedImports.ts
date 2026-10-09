@@ -19,7 +19,7 @@ import {
   sourceAccessPredicate,
   readIdentityPerson,
 } from "./identityAccess.ts";
-import { matchEndpoint } from "./endpoints.ts";
+import { matchEndpoints } from "./endpoints.ts";
 type Input = z.infer<typeof selectedImportInputSchema>;
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -67,24 +67,33 @@ async function buildSelectedImportPreview(
       : null;
   const occurredAt = input.occurredAt ?? parsedDate;
   const candidates = [];
-  for (const participant of includeCandidates ? participants : [])
-    if (
-      participant.endpoint !== null &&
-      (participant.endpoint.includes("@") ||
-        /^\+[1-9]\d{7,14}$/u.test(participant.endpoint))
-    ) {
-      const matched = await matchEndpoint(context, {
-        kind: participant.endpoint.includes("@") ? "email" : "phone",
-        value: participant.endpoint,
-      });
-      if (matched === null) return null;
+  const endpoints = (includeCandidates ? participants : []).flatMap(
+    (participant) => {
+      const value = participant.endpoint;
+      if (
+        value === null ||
+        (!value.includes("@") && !/^\+[1-9]\d{7,14}$/u.test(value))
+      )
+        return [];
+      return [
+        {
+          kind: value.includes("@") ? ("email" as const) : ("phone" as const),
+          value,
+        },
+      ];
+    },
+  );
+  if (endpoints.length > 0) {
+    const matches = await matchEndpoints(context, endpoints);
+    if (matches === null) return null;
+    for (const [index, matched] of matches.entries())
       candidates.push({
-        endpoint: participant.endpoint,
+        endpoint: endpoints[index]!.value,
         outcome: matched.outcome,
         personId: matched.personId,
         firmId: matched.firmId,
       });
-    }
+  }
   if (!(await activeIdentityActor(context))) return null;
   return selectedImportPreviewSchema.parse({
     previewHash: hash(JSON.stringify(input)),
@@ -394,7 +403,7 @@ export async function changeSelectedImport(
       occurredAt: selection.occurredAt,
       attachments: selection.attachments,
     };
-    const preview = await previewSelectedImport(context, plain);
+    const preview = await buildSelectedImportPreview(context, plain, false);
     if (preview === null || preview.previewHash !== selection.previewHash)
       return { ok: false as const, reason: "import_preview_changed" };
     const contexts = await prepareRecaptureContexts(context, input.sourceId);

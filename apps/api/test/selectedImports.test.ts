@@ -140,6 +140,415 @@ describe("selected conversation imports", () => {
       });
     }
   });
+  it("corrects crossing participant excerpts concurrently without deadlocking", async () => {
+    const prepared = [];
+    for (const label of ["First", "Second"]) {
+      const firmId = await seedFirm(fixture, {
+        name: `${label} correction firm`,
+        assignedUserId: fixture.alpha.salesperson.userId,
+      });
+      const personId = await seedContact(fixture, {
+        firmId,
+        fullName: `${label} correction person`,
+      });
+      await post("/crm/people/bridge", command({ contactIds: [personId] }));
+      const selection = {
+        text: `${label} original excerpt`,
+        subtype: "pasted_text",
+        label: `${label} import`,
+        direction: "unknown",
+        participants: [],
+        occurredAt: null,
+        attachments: [],
+      };
+      const preview = await post("/crm/imports/preview", selection);
+      const committed = await post(
+        "/crm/imports/commit",
+        command({
+          ...selection,
+          personId,
+          importKey: randomUUID(),
+          previewHash: (preview.body as { previewHash: string }).previewHash,
+          parserVersion: "selected-v1",
+        }),
+      );
+      expect(committed.status).toBe(200);
+      const source = (await post("/crm/imports/read", { personId })).body as {
+        imports: { source: { sourceId: string; contentHash: string } }[];
+      };
+      const evidence = {
+        sourceId: source.imports[0]!.source.sourceId,
+        sourceRevision: 1,
+        contentHash: source.imports[0]!.source.contentHash,
+      };
+      const endpoint = `${label.toLowerCase()}@correction.example.test`;
+      expect(
+        (
+          await post(
+            "/crm/endpoints/claim",
+            command({
+              personId,
+              firmId: null,
+              shared: false,
+              kind: "email",
+              value: endpoint,
+              status: "current",
+              startDate: "2026-01-01",
+              endDate: null,
+              evidence,
+            }),
+          )
+        ).status,
+      ).toBe(200);
+      prepared.push({ personId, selection, evidence, endpoint });
+    }
+    const corrections = [];
+    for (const [index, item] of prepared.entries()) {
+      const selection = {
+        ...item.selection,
+        text: `${item.selection.text} corrected`,
+        participants: [
+          {
+            label: "Other participant",
+            endpoint: prepared[1 - index]!.endpoint,
+            provenance: "user_supplied",
+          },
+        ],
+      };
+      const preview = await post("/crm/imports/preview", selection);
+      expect(preview.status).toBe(200);
+      corrections.push(
+        command({
+          ...selection,
+          sourceId: item.evidence.sourceId,
+          expectedSourceRevision: 1,
+          expectedMetadataRevision: 1,
+          previewHash: (preview.body as { previewHash: string }).previewHash,
+          parserVersion: "selected-v1",
+        }),
+      );
+    }
+    const holder = await fixture.database.appRuntimeSession();
+    const observer = await fixture.database.appRuntimeSession();
+    const pid = (
+      await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0]?.pid;
+    await holder.query("BEGIN");
+    await holder.query(
+      "SELECT source_id FROM crm_selected_imports WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) ORDER BY source_id FOR UPDATE",
+      [
+        fixture.alpha.workspaceId,
+        prepared.map((item) => item.evidence.sourceId),
+      ],
+    );
+    const sessions = await Promise.all([
+      fixture.database.appRuntimeSession(),
+      fixture.database.appRuntimeSession(),
+    ]);
+    const pending = Promise.allSettled(
+      corrections.map((body, index) =>
+        dispatch(
+          {
+            method: "POST",
+            path: "/crm/imports/correct",
+            query: new URLSearchParams(),
+            headers: { authorization: `Bearer ${token}` },
+            body,
+          },
+          {
+            session: sessions[index]!,
+            auth: { ...fixture.deps, db: sessions[index]! },
+            supportedClientVersions:
+              fixture.deps.config.supportedClientVersions,
+            sendingEnabled: false,
+          },
+        ),
+      ),
+    );
+    try {
+      let reached = false;
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const rows = (
+          await observer.query<{ waiting: number }>(
+            "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
+            [pid],
+          )
+        ).rows;
+        if ((rows[0]?.waiting ?? 0) >= 2) {
+          reached = true;
+          break;
+        }
+        await delay(5);
+      }
+      if (!reached)
+        throw new Error("Both corrections did not reach the database barrier");
+    } finally {
+      await holder.query("COMMIT");
+    }
+    for (const result of await pending) {
+      expect(
+        result.status,
+        result.status === "rejected"
+          ? String(result.reason)
+          : "Clean correction result",
+      ).toBe("fulfilled");
+      if (result.status !== "fulfilled") throw result.reason;
+      expect(result.value.status).toBe(200);
+    }
+    for (const item of prepared) {
+      expect(
+        (await post("/crm/imports/read", { personId: item.personId })).body,
+      ).toMatchObject({
+        imports: [
+          {
+            source: {
+              sourceId: item.evidence.sourceId,
+              revision: 2,
+              excerpt: `${item.selection.text} corrected`,
+            },
+          },
+        ],
+      });
+    }
+  });
+  it("previews reversed participant orders concurrently without deadlocking or losing supported identities", async () => {
+    const prepared = [];
+    for (const label of ["First", "Second"]) {
+      const firmId = await seedFirm(fixture, {
+        name: `${label} preview firm`,
+        assignedUserId: fixture.alpha.salesperson.userId,
+      });
+      const personId = await seedContact(fixture, {
+        firmId,
+        fullName: `${label} preview person`,
+      });
+      await post("/crm/people/bridge", command({ contactIds: [personId] }));
+      await post(
+        "/crm/people/source/add",
+        command({
+          personId,
+          sourceKey: randomUUID(),
+          excerpt: `${label} identity evidence`,
+          occurredAt: "2026-09-15T14:00:00.000Z",
+        }),
+      );
+      const page = (await post("/crm/people/read", { personId })).body as {
+        sources: { sourceId: string; revision: number; contentHash: string }[];
+      };
+      const source = page.sources[0]!;
+      const endpoint = `${label.toLowerCase()}@preview.example.test`;
+      expect(
+        (
+          await post(
+            "/crm/endpoints/claim",
+            command({
+              personId,
+              firmId: null,
+              shared: false,
+              kind: "email",
+              value: endpoint,
+              status: "current",
+              startDate: "2026-01-01",
+              endDate: null,
+              evidence: {
+                sourceId: source.sourceId,
+                sourceRevision: source.revision,
+                contentHash: source.contentHash,
+              },
+            }),
+          )
+        ).status,
+      ).toBe(200);
+      prepared.push({ personId, sourceId: source.sourceId, endpoint });
+    }
+    const holder = await fixture.database.appRuntimeSession();
+    const observer = await fixture.database.appRuntimeSession();
+    await holder.query("BEGIN");
+    await holder.query(
+      "SELECT id FROM crm_selected_sources WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR UPDATE",
+      [fixture.alpha.workspaceId, prepared.map((item) => item.sourceId)],
+    );
+    const sessions = await Promise.all([
+      fixture.database.appRuntimeSession(),
+      fixture.database.appRuntimeSession(),
+    ]);
+    const pids = await Promise.all(
+      sessions.map(
+        async (session) =>
+          (
+            await session.query<{ pid: number }>(
+              "SELECT pg_backend_pid() AS pid",
+            )
+          ).rows[0]!.pid,
+      ),
+    );
+    const orders = [prepared, [...prepared].reverse()];
+    const pending = Promise.allSettled(
+      orders.map((order, index) =>
+        dispatch(
+          {
+            method: "POST",
+            path: "/crm/imports/preview",
+            query: new URLSearchParams(),
+            headers: { authorization: `Bearer ${token}` },
+            body: {
+              text: "Selected conversation between two supported people",
+              subtype: "pasted_text",
+              label: "Two participant preview",
+              direction: "unknown",
+              occurredAt: null,
+              attachments: [],
+              participants: order.map((item) => ({
+                label: "Participant",
+                endpoint: item.endpoint,
+                provenance: "user_supplied",
+              })),
+            },
+          },
+          {
+            session: sessions[index]!,
+            auth: { ...fixture.deps, db: sessions[index]! },
+            supportedClientVersions:
+              fixture.deps.config.supportedClientVersions,
+            sendingEnabled: false,
+          },
+        ),
+      ),
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    try {
+      let reached = false;
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const rows = (
+          await observer.query<{ waiting: number }>(
+            "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE pid=ANY($1::int[]) AND cardinality(pg_blocking_pids(pid))>0",
+            [pids],
+          )
+        ).rows;
+        if ((rows[0]?.waiting ?? 0) >= 2 || settled) {
+          reached = true;
+          break;
+        }
+        await delay(5);
+      }
+      if (!reached)
+        throw new Error(
+          "Previews neither settled nor reached a real database barrier",
+        );
+    } finally {
+      await holder.query("COMMIT");
+    }
+    for (const [index, result] of (await pending).entries()) {
+      expect(
+        result.status,
+        result.status === "rejected"
+          ? String(result.reason)
+          : "Clean preview result",
+      ).toBe("fulfilled");
+      if (result.status !== "fulfilled") throw result.reason;
+      expect(result.value.status).toBe(200);
+      expect(result.value.body).toMatchObject({
+        candidates: orders[index]!.map((item) => ({
+          endpoint: item.endpoint,
+          outcome: "person_match",
+          personId: item.personId,
+          firmId: null,
+        })),
+      });
+    }
+  });
+  it("preserves supported public-preview candidates when another participant has private evidence", async () => {
+    const adminToken = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
+    ).accessToken;
+    const people = [];
+    for (const [label, bearer] of [
+      ["Allowed", token],
+      ["Private", adminToken],
+    ]) {
+      const created = await post(
+        "/crm/people/create",
+        command({ fullName: `${label} preview identity` }),
+        bearer,
+      );
+      const personId = (created.body as { result: { personId: string } }).result
+        .personId;
+      await post(
+        "/crm/people/source/add",
+        command({
+          personId,
+          sourceKey: randomUUID(),
+          excerpt: `${label} identity proof`,
+          occurredAt: "2026-09-15T14:00:00.000Z",
+        }),
+        bearer,
+      );
+      const page = (await post("/crm/people/read", { personId }, bearer))
+        .body as {
+        sources: { sourceId: string; revision: number; contentHash: string }[];
+      };
+      const source = page.sources[0]!;
+      const endpoint = `${label!.toLowerCase()}@mixed-preview.example.test`;
+      expect(
+        (
+          await post(
+            "/crm/endpoints/claim",
+            command({
+              personId,
+              firmId: null,
+              shared: false,
+              kind: "email",
+              value: endpoint,
+              status: "current",
+              startDate: "2026-01-01",
+              endDate: null,
+              evidence: {
+                sourceId: source.sourceId,
+                sourceRevision: source.revision,
+                contentHash: source.contentHash,
+              },
+            }),
+            bearer,
+          )
+        ).status,
+      ).toBe(200);
+      people.push({ personId, endpoint });
+    }
+    const preview = await post("/crm/imports/preview", {
+      text: "Selected two-person excerpt",
+      subtype: "pasted_text",
+      label: "Mixed access",
+      direction: "unknown",
+      occurredAt: null,
+      attachments: [],
+      participants: people.map((item) => ({
+        label: "Participant",
+        endpoint: item.endpoint,
+        provenance: "user_supplied",
+      })),
+    });
+    expect(preview.status).toBe(200);
+    expect(preview.body).toMatchObject({
+      candidates: [
+        {
+          endpoint: people[0]!.endpoint,
+          outcome: "person_match",
+          personId: people[0]!.personId,
+          firmId: null,
+        },
+        {
+          endpoint: people[1]!.endpoint,
+          outcome: "needs_review",
+          personId: null,
+          firmId: null,
+        },
+      ],
+    });
+    expect(JSON.stringify(preview.body)).not.toContain(people[1]!.personId);
+  });
   it("previews unknown attribution and date, imports a selected passage and replays without duplicate effects", async () => {
     const created = await post(
       "/crm/people/create",
