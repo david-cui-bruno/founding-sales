@@ -19,6 +19,14 @@ import {
 } from "./corpus.ts";
 import { baselineReport, type CaseMeasurement } from "./report.ts";
 
+class EvaluationTimeout extends Error {
+  constructor(
+    readonly code: "case_timeout" | "run_timeout",
+    readonly stage: CaseMeasurement["failures"][number]["stage"],
+  ) {
+    super(code);
+  }
+}
 export interface EvaluationPublicReads {
   read(
     actorFixtureId: string,
@@ -37,6 +45,7 @@ export async function runEvaluation(
 ): Promise<EvaluationReport> {
   const { manifest, corpus, windows } = validateDevelopment(input);
   const results: CaseMeasurement[] = [];
+  const runStarted = performance.now();
   for (const item of corpus.cases) {
     const started = performance.now();
     const result: CaseMeasurement = {
@@ -74,12 +83,39 @@ export async function runEvaluation(
       result.failures.push({ code, stage });
     };
     const permitted: { id: string; ordinal: number; text: string }[] = [];
+    const readPublic = async (
+      stage: CaseMeasurement["failures"][number]["stage"],
+      path: "/ask/read" | "/crm/processing/source/read",
+      body: unknown,
+    ) => {
+      const caseDeadline = started + manifest.envelope.maxCaseWallTimeMs;
+      const runDeadline = runStarted + manifest.envelope.maxRunWallTimeMs;
+      const deadline = Math.min(caseDeadline, runDeadline);
+      const code = runDeadline < caseDeadline ? "run_timeout" : "case_timeout";
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new EvaluationTimeout(code, stage);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          input.publicReads.read(item.actorFixtureId, path, body),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new EvaluationTimeout(code, stage)),
+              remaining,
+            );
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    };
+
     const readWindow = async (
       window: (typeof windows)[number],
       final: boolean,
     ) => {
-      const raw = await input.publicReads.read(
-        item.actorFixtureId,
+      const raw = await readPublic(
+        final ? "final_read" : "canonical_read",
         "/crm/processing/source/read",
         {
           workspaceId: window.source.workspaceId,
@@ -117,8 +153,8 @@ export async function runEvaluation(
           permitted.push({ id: window.id, ordinal: window.ordinal, text });
       }
       if (result.failures.length === 0) {
-        const response = await input.publicReads.read(
-          item.actorFixtureId,
+        const response = await readPublic(
+          "baseline",
           "/ask/read",
           item.request,
         );
@@ -213,8 +249,9 @@ export async function runEvaluation(
           }
         }
       }
-    } catch {
-      fail("adapter_unavailable", "baseline");
+    } catch (error) {
+      if (error instanceof EvaluationTimeout) fail(error.code, error.stage);
+      else fail("adapter_unavailable", "baseline");
     }
     result.durationMs = performance.now() - started;
     results.push(result);

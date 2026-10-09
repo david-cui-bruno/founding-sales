@@ -263,10 +263,46 @@ it("measures a frozen development selected-note lexical baseline through authent
     expect(report.realVectorMeasured).toBe(false);
     expect(report.realModelMeasured).toBe(false);
     expect(report.activationAllowed).toBe(false);
+    let releaseRead: (() => void) | undefined;
+    const waiting = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const pending = runEvaluation({
+      phase: "development_baseline",
+      manifest,
+      development,
+      publicReads: {
+        read: async (actor, path, body) => {
+          const response = await post(path, body);
+          await waiting;
+          return response;
+        },
+      },
+    });
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        pending,
+        new Promise<"blocked">((resolve) => {
+          watchdog = setTimeout(() => resolve("blocked"), 12000);
+        }),
+      ]);
+      expect(outcome).not.toBe("blocked");
+      if (outcome !== "blocked")
+        expect(outcome.caseResults[0]).toMatchObject({
+          qualityScoringState: "failed",
+          recallAt10: null,
+          failures: [{ code: "case_timeout", stage: "canonical_read" }],
+        });
+    } finally {
+      if (watchdog !== undefined) clearTimeout(watchdog);
+      releaseRead?.();
+      await pending;
+    }
   } finally {
     await fixture.stop();
   }
-});
+}, 20000);
 
 it("checks an independently seeded exact opportunity baseline without semantic inference", async () => {
   const fixture = await createAuthFixture();
