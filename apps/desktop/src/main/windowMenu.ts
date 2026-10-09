@@ -31,6 +31,7 @@ export const MENU_ROUTES: readonly { readonly target: NavigationTarget; readonly
     { target: 'firms', label: 'Firms', accelerator: 'CmdOrCtrl+4' },
     { target: 'sequences', label: 'Sequences', accelerator: 'CmdOrCtrl+5' },
     { target: 'social', label: 'Social', accelerator: 'CmdOrCtrl+6' },
+    { target: 'ask', label: 'Ask', accelerator: 'CmdOrCtrl+7' },
   ]);
 
 /** Settings and its three tabs, below a separator. ⌘, is where a Mac keeps this. */
