@@ -27,6 +27,13 @@ export async function previewSelectedImport(
   context: RepositoryContext,
   input: Input,
 ): Promise<z.infer<typeof selectedImportPreviewSchema> | null> {
+  return buildSelectedImportPreview(context, input, true);
+}
+async function buildSelectedImportPreview(
+  context: RepositoryContext,
+  input: Input,
+  includeCandidates: boolean,
+): Promise<z.infer<typeof selectedImportPreviewSchema> | null> {
   if (!(await activeIdentityActor(context))) return null;
   // Narrow parsing only: unsupported formats retain explicit unknowns.
   const participants =
@@ -60,7 +67,7 @@ export async function previewSelectedImport(
       : null;
   const occurredAt = input.occurredAt ?? parsedDate;
   const candidates = [];
-  for (const participant of participants)
+  for (const participant of includeCandidates ? participants : [])
     if (
       participant.endpoint !== null &&
       (participant.endpoint.includes("@") ||
@@ -119,21 +126,17 @@ export async function commitSelectedImport(
     occurredAt: input.occurredAt,
     attachments: input.attachments,
   };
-  const preview = await previewSelectedImport(context, selection);
-  if (preview === null || preview.previewHash !== input.previewHash)
-    return { ok: false as const, reason: "import_preview_changed" };
-  if (
-    !(await lockIdentityContext(context, {
-      personIds: input.personId === null ? [] : [input.personId],
-      firmIds: input.firmId === null ? [] : [input.firmId],
-    }))
-  )
-    return { ok: false as const, reason: "import_access_denied" };
+  // Serialize the stable import key before acquiring any identity/source locks.
+  // Commit validates the preview fingerprint and parser result without repeating
+  // endpoint candidate reads that would acquire a separate identity closure.
   const keyHash = hash(input.importKey);
   await context.db.query(
     "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
     [`${context.scope.workspaceId}:${actor.userId}:import:${keyHash}`],
   );
+  const preview = await buildSelectedImportPreview(context, selection, false);
+  if (preview === null || preview.previewHash !== input.previewHash)
+    return { ok: false as const, reason: "import_preview_changed" };
   let old = (
     await context.db.query<{
       source_id: string;
@@ -148,9 +151,18 @@ export async function commitSelectedImport(
       [context.scope.workspaceId, actor.userId, keyHash],
     )
   ).rows[0];
+  // One complete sorted firm→person→source closure covers the submitted binding
+  // and an existing copy. A conflicting replay must not lock a new person first
+  // and then acquire an earlier original-context firm.
+  if (
+    !(await lockIdentityContext(context, {
+      personIds: input.personId === null ? [] : [input.personId],
+      firmIds: input.firmId === null ? [] : [input.firmId],
+      sourceIds: old === undefined ? [] : [old.source_id],
+    }))
+  )
+    return { ok: false as const, reason: "import_access_denied" };
   if (old !== undefined) {
-    if (!(await lockIdentityContext(context, { sourceIds: [old.source_id] })))
-      return { ok: false as const, reason: "import_access_denied" };
     old = (
       await context.db.query<typeof old>(
         "SELECT m.source_id,m.input_hash,m.revision,s.revision AS source_revision,s.person_id,s.firm_id,s.availability FROM crm_selected_imports m JOIN crm_selected_sources s ON s.workspace_id=m.workspace_id AND s.id=m.source_id WHERE m.workspace_id=$1 AND m.source_id=$2",

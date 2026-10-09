@@ -6,7 +6,8 @@ import {
 import { withTransaction } from "@fss/domain/db/queryable.ts";
 import { seedContact } from "./support/crmSeed.ts";
 import { seedFirm } from "./support/crmSeed.ts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dispatch } from "../src/server.ts";
 import {
@@ -46,6 +47,99 @@ describe("selected conversation imports", () => {
     ).accessToken;
   });
   afterAll(async () => fixture.stop());
+  it("refuses concurrent cross-person replay without deadlocking or changing either imported copy", async () => {
+    const firstFirm = await seedFirm(fixture, {
+      name: "First replay firm",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const secondFirm = await seedFirm(fixture, {
+      name: "Second replay firm",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const firstPerson = await seedContact(fixture, {
+      firmId: firstFirm, fullName: "First replay person",
+    });
+    const secondPerson = await seedContact(fixture, {
+      firmId: secondFirm, fullName: "Second replay person",
+    });
+    const bridged = await post("/crm/people/bridge", command({
+      contactIds: [firstPerson, secondPerson],
+    }));
+    expect(bridged.status).toBe(200);
+    const selection = {
+      text: "Original selected passage remains with its person.",
+      subtype: "pasted_text", label: "Replay source", direction: "unknown",
+      participants: [], occurredAt: null, attachments: [],
+    };
+    const preview = await post("/crm/imports/preview", selection);
+    const firstKey = randomUUID(), secondKey = randomUUID();
+    const input = (personId: string, importKey: string) => command({
+      ...selection, personId, firmId: null, importKey,
+      previewHash: (preview.body as { previewHash: string }).previewHash,
+      parserVersion: "selected-v1",
+    });
+    const first = await post("/crm/imports/commit", input(firstPerson, firstKey));
+    const second = await post("/crm/imports/commit", input(secondPerson, secondKey));
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const holder = await fixture.database.appRuntimeSession();
+    const observer = await fixture.database.appRuntimeSession();
+    const pid = (await holder.query<{ pid: number }>(
+      "SELECT pg_backend_pid() AS pid",
+    )).rows[0]?.pid;
+    await holder.query("BEGIN");
+    // A real database barrier releases both replay requests together. Outcomes are
+    // verified only through authenticated commands and reads, never table assertions.
+    for (const key of [firstKey, secondKey]) {
+      const keyHash = createHash("sha256").update(key).digest("hex");
+      await holder.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [`${fixture.alpha.workspaceId}:${fixture.alpha.salesperson.userId}:import:${keyHash}`],
+      );
+    }
+    const firstSession = await fixture.database.appRuntimeSession();
+    const secondSession = await fixture.database.appRuntimeSession();
+    const replayOn = (session: typeof firstSession, body: object) => dispatch({
+      method: "POST", path: "/crm/imports/commit", query: new URLSearchParams(),
+      headers: { authorization: `Bearer ${token}` }, body,
+    }, {
+      session, auth: { ...fixture.deps, db: session },
+      supportedClientVersions: fixture.deps.config.supportedClientVersions,
+      sendingEnabled: false,
+    });
+    const pending = Promise.allSettled([
+      replayOn(firstSession, input(secondPerson, firstKey)),
+      replayOn(secondSession, input(firstPerson, secondKey)),
+    ]);
+    try {
+      let reached = false;
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const rows = (await observer.query<{ waiting: number }>(
+          "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
+          [pid],
+        )).rows;
+        if ((rows[0]?.waiting ?? 0) >= 2) { reached = true; break; }
+        await delay(5);
+      }
+      if (!reached) throw new Error("Both replay commands did not reach the database barrier");
+    } finally {
+      await holder.query("COMMIT");
+    }
+    for (const result of await pending) {
+      expect(result.status, result.status === "rejected"
+        ? String(result.reason) : "Both commands return a clean refusal").toBe("fulfilled");
+      if (result.status !== "fulfilled") throw result.reason;
+      expect(result.value.status).toBe(409);
+      expect(result.value.body).toMatchObject({ reason: "import_identity_conflict" });
+    }
+    for (const [personId, committed] of [[firstPerson, first], [secondPerson, second]] as const) {
+      const sourceId = (committed.body as { result: { sourceId: string } }).result.sourceId;
+      const read = await post("/crm/imports/read", { personId });
+      expect(read.body).toMatchObject({
+        imports: [{ source: { sourceId, excerpt: selection.text, revision: 1 } }],
+      });
+    }
+  });
   it("previews unknown attribution and date, imports a selected passage and replays without duplicate effects", async () => {
     const created = await post(
       "/crm/people/create",
