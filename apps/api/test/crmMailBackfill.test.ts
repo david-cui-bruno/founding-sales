@@ -387,7 +387,7 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
  }finally{await fixture.db.query('SELECT pg_advisory_unlock_all()');await fixture.stop();}
 });
 
-it('persists bounded recovery after actual cursor expiry and freezes a fresh anchor without moving the original window',async()=>{
+it.each([false,true])('persists bounded recovery after actual cursor expiry without moving the original window (changed configuration=%s)',async changedConfiguration=>{
  const fixture=await createAuthFixture();
  try{
   const {workspaceId,admin}=fixture.alpha;
@@ -418,21 +418,30 @@ it('persists bounded recovery after actual cursor expiry and freezes a fresh anc
   expect(await runClaimedJob(runtime,{registry,job:expired})).toBe('completed');
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyAnchor:'100',historyComplete:false,gapCoverage:{state:'pending_profile',originalCursor:'unavailable',windowFrozen:false,toAt:null}});
   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
+  if(changedConfiguration){
+   await fixture.db.query("UPDATE crm_mail_import_allocations SET revision=2,verification_sha256=repeat('f',64) WHERE workspace_id=$1 AND mailbox_id=$2",[workspaceId,mailbox.id]);
+   const changed=(await claimJobs(runtime,{owner:'changed-recovery-allocation',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+   expect(await runClaimedJob(runtime,{registry,job:changed})).toBe('completed');
+   expect(profiles).toBe(1);
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({gapCoverage:{epoch:2,state:'pending_profile',windowFrozen:false,toAt:null},quotaAccounting:{reservedUnits:'3',observedUnits:'3',unknownUnits:'0'}});
+   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
+  }
+  const epoch=changedConfiguration?2:1;
   const recovery=(await claimJobs(runtime,{owner:'fresh-recovery-anchor',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(runtime,{registry,job:recovery})).toBe('completed');
   expect(profiles).toBe(2);
   const recovered=(await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body as {fromAt:string;toAt:string;gapCoverage:{fromAt:string;toAt:string}};
-  expect(recovered).toMatchObject({fromAt:original.fromAt,toAt:original.toAt,historyAnchor:'100',historyComplete:false,gapCoverage:{state:'enumerating',epoch:1,originalCursor:'unavailable',windowFrozen:true,historyComplete:false,completedDays:0}});
+  expect(recovered).toMatchObject({fromAt:original.fromAt,toAt:original.toAt,historyAnchor:'100',historyComplete:false,gapCoverage:{state:'enumerating',epoch,originalCursor:'unavailable',windowFrozen:true,historyComplete:false,completedDays:0}});
   expect(recovered.gapCoverage.fromAt).toBe(original.toAt);
   expect(Date.parse(recovered.gapCoverage.toAt)).toBeGreaterThanOrEqual(Date.parse(recovered.gapCoverage.fromAt));
   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});
   const gapEnumeration=(await claimJobs(runtime,{owner:'recovery-gap-enumeration',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(runtime,{registry,job:gapEnumeration})).toBe('completed');
-  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyComplete:false,gapCoverage:{state:'draining',epoch:1,totalDays:1,completedDays:1,historyComplete:false},metadataCoverage:{retainedUniqueMessages:'1',availableMetadataMessages:'1'}});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyComplete:false,gapCoverage:{state:'draining',epoch,totalDays:1,completedDays:1,historyComplete:false},metadataCoverage:{retainedUniqueMessages:'1',availableMetadataMessages:'1'}});
   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});
   const freshHistory=(await claimJobs(runtime,{owner:'recovery-fresh-history',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(await runClaimedJob(runtime,{registry,job:freshHistory})).toBe('completed');
-  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({fromAt:original.fromAt,toAt:original.toAt,historyAnchor:'100',historyComplete:false,gapCoverage:{state:'complete',epoch:1,totalDays:1,completedDays:1,historyComplete:true},metadataCoverage:{retainedUniqueMessages:'1',availableMetadataMessages:'1'},copyCoverage:{retainedCopiedBodies:'0',uncapturedMetadata:'1'},quotaAccounting:{reservedUnits:'8',observedUnits:'8',unknownUnits:'0'}});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({fromAt:original.fromAt,toAt:original.toAt,historyAnchor:'100',historyComplete:false,gapCoverage:{state:'complete',epoch,totalDays:1,completedDays:1,historyComplete:true},metadataCoverage:{retainedUniqueMessages:'1',availableMetadataMessages:'1'},copyCoverage:{retainedCopiedBodies:'0',uncapturedMetadata:'1'},quotaAccounting:{reservedUnits:'8',observedUnits:'8',unknownUnits:'0'}});
   expect(gapMetadataReads).toBe(2);
   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
   expect(gmail.bodyReads).toEqual([]);

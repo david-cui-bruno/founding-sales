@@ -1,4 +1,4 @@
-import {readHistoryRecovery,beginExpiredHistoryRecovery,freezeHistoryRecovery,advanceHistoryRecovery,type HistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
+import {readHistoryRecovery,replaceHistoryRecoveryConfiguration,beginExpiredHistoryRecovery,freezeHistoryRecovery,advanceHistoryRecovery,type HistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
 import {backfillConfigurationHash} from '@fss/domain/mail/crmBackfillWork.ts';
 import {recordRetainedOriginalMetadata} from '@fss/domain/mail/crmMailOriginals.ts';
 import {z} from 'zod';
@@ -74,9 +74,15 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    const recovery=await readHistoryRecovery(context,importId);
    recoveryScope=recovery;
    if(recovery!==undefined){
-    if(recovery.state==='pending_profile'){
+    if(['pending_profile','enumerating','draining'].includes(recovery.state)){
      const allocation=await readBackfillAllocation(context,authority.proof.mailboxId);
-     if(allocation===null||backfillConfigurationHash(authority,allocation)!==recovery.configuration_hash){await block('recovery_configuration_changed');return;}
+     if(allocation===null)return;
+     if(backfillConfigurationHash(authority,allocation)!==recovery.configuration_hash){
+      await replaceHistoryRecoveryConfiguration(context,{authority,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
+      await block('recovery_configuration_changed');return;
+     }
+    }
+    if(recovery.state==='pending_profile'){
      const profile=await providerRead('profile',authority,access=>adapters.gmail.getProfile(access));
      await freezeHistoryRecovery(context,{authority,recovery,historyAnchor:profile.historyId,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     }else if(recovery.state==='enumerating'||recovery.state==='draining'){

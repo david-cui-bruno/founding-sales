@@ -36,6 +36,25 @@ export async function beginExpiredHistoryRecovery(context:RepositoryContext,inpu
    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE((SELECT to_at FROM crm_mail_history_recoveries WHERE workspace_id=$1 AND import_id=$2 AND state='complete' ORDER BY epoch DESC LIMIT 1),(SELECT to_at FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2))`,[context.scope.workspaceId,current.importId,epoch,current.proof.accountBinding,current.proof.generation,current.proof.controlsRevision,current.proof.policyRevision,live.revision,hash]);
  });
 }
+/** Verified replacement configuration creates a new bounded epoch; old scopes and charges are immutable. */
+export async function replaceHistoryRecoveryConfiguration(context:RepositoryContext,input:RecoveryFence&{recovery:HistoryRecovery},verifier:BackfillAllocationVerifier){
+ const allocation=await readBackfillAllocation(context,input.authority.proof.mailboxId);
+ if(allocation===null||!await verifier.verify(allocation))return;
+ const hash=backfillConfigurationHash(input.authority,allocation);
+ if(hash===input.recovery.configuration_hash)return;
+ await withTransaction(context.db,async()=>{
+  const current=await lockedAuthority(context,input);if(current===null)return;
+  await context.db.query('SELECT mailbox_id FROM crm_mail_import_allocations WHERE workspace_id=$1 AND mailbox_id=$2 FOR SHARE',[context.scope.workspaceId,current.proof.mailboxId]);
+  const live=await readBackfillAllocation(context,current.proof.mailboxId);if(live===null||backfillConfigurationHash(current,live)!==hash)return;
+  await context.db.query('SELECT id FROM crm_mail_history_recoveries WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.recovery.id]);
+  const last=await readHistoryRecovery(context,current.importId);
+  if(last===undefined||last.id!==input.recovery.id||last.revision!==input.recovery.revision||!['pending_profile','enumerating','draining'].includes(last.state))return;
+  await context.db.query("UPDATE crm_mail_history_recoveries SET state='blocked',reason='configuration_changed',revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",[context.scope.workspaceId,last.id]);
+  if(last.epoch>=4)return;
+  await context.db.query(`INSERT INTO crm_mail_history_recoveries(workspace_id,import_id,epoch,account_binding,generation,controls_revision,policy_revision,allocation_revision,configuration_hash,from_at)
+   SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE((SELECT to_at FROM crm_mail_history_recoveries WHERE workspace_id=$1 AND import_id=$2 AND state='complete' ORDER BY epoch DESC LIMIT 1),(SELECT to_at FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2))`,[context.scope.workspaceId,current.importId,last.epoch+1,current.proof.accountBinding,current.proof.generation,current.proof.controlsRevision,current.proof.policyRevision,live.revision,hash]);
+ });
+}
 /** A paid profile has succeeded, but only this exact locked DB-time freeze defines the gap. */
 export async function freezeHistoryRecovery(context:RepositoryContext,input:RecoveryFence&{recovery:HistoryRecovery;historyAnchor:string}){
  if(!/^[0-9]{1,20}$/u.test(input.historyAnchor))return;
