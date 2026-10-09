@@ -10,6 +10,7 @@ CREATE TABLE crm_mail_imports (
  from_at timestamptz NOT NULL, to_at timestamptz NOT NULL,
  history_anchor text CHECK(history_anchor ~ '^[0-9]{1,20}$'),
  history_cursor text CHECK(history_cursor ~ '^[0-9]{1,20}$'),
+ history_page_token text CHECK(length(history_page_token) BETWEEN 1 AND 2000),
  history_complete boolean NOT NULL DEFAULT false,
  state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','partial','complete','blocked')),
  reason text CHECK(reason ~ '^[a-z][a-z0-9_]{0,99}$'),
@@ -20,7 +21,8 @@ CREATE TABLE crm_mail_imports (
  FOREIGN KEY(workspace_id,owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
  CHECK(from_at<to_at AND to_at-from_at=interval '90 days'),
  CHECK((history_anchor IS NULL)=(history_cursor IS NULL)),
- CHECK(NOT history_complete OR history_anchor IS NOT NULL),
+ CHECK(NOT history_complete OR (history_anchor IS NOT NULL AND history_page_token IS NULL)),
+ CHECK(history_page_token IS NULL OR history_cursor IS NOT NULL),
  CHECK((state='complete')=(completed_at IS NOT NULL)),
  CHECK(state<>'complete' OR history_complete)
 );

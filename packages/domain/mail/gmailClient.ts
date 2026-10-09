@@ -186,6 +186,8 @@ export type GmailWatchOutcome =
   | ({ readonly ok: false; readonly reason: 'grant_revoked' | 'provider_refusal' } & GmailIncidentMetadata);
 
 export interface GmailHistoryRequest {
+  /** Optional bounded history-page size; omitted for existing operational sync. */
+  readonly maxResults?: number | undefined;
   readonly startHistoryId: string;
   readonly pageToken?: string | undefined;
 }

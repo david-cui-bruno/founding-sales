@@ -60,7 +60,40 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     authority=await readBackfillAuthority(context,importId);if(authority===null||authority.historyAnchor===null)return;
    }
    const slice=(await input.session.query<{ordinal:number;from_epoch_seconds:string;to_epoch_seconds:string;next_page_token:string|null}>("SELECT ordinal,from_epoch_seconds,to_epoch_seconds,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' ORDER BY ordinal LIMIT 1",[input.scope.workspaceId,importId])).rows[0];
-   if(slice===undefined)return;
+   if(slice===undefined){
+    const bound=authority;
+    if(bound.historyCursor===null)return;
+    const history=await providerRead('history',bound,access=>adapters.gmail.listHistory(access,{startHistoryId:bound.historyCursor!,maxResults:25,...bound.historyPageToken===null?{}:{pageToken:bound.historyPageToken}}));
+    if(!history.ok)throw new BackfillFailure(history.reason==='history_expired'?'history_coverage_expired':'provider_read_unavailable');
+    if(!/^[0-9]{1,20}$/u.test(history.historyId)||BigInt(history.historyId)<BigInt(bound.historyCursor)||history.nextPageToken!==null&&history.nextPageToken.length>2000)throw new BackfillFailure('provider_evidence_invalid');
+    let previous=BigInt(bound.historyCursor);
+    for(const record of history.records){
+     if(!/^[0-9]{1,20}$/u.test(record.id)||BigInt(record.id)<=previous||BigInt(record.id)>BigInt(history.historyId))throw new BackfillFailure('provider_evidence_invalid');
+     previous=BigInt(record.id);
+     const unique=new Set(record.changes.map(change=>change.messageId));
+     for(const messageId of unique){
+      if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
+      const metadata=await providerRead('metadata',bound,access=>adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS));
+      if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
+      await withTransaction(input.session,async()=>{
+       if(!await fenced(input))throw new BackfillFailure('acquisition_binding_changed');
+       const current=await readBackfillAuthority(context,importId,true);
+       if(current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||current.historyCursor!==bound.historyCursor||current.historyPageToken!==bound.historyPageToken||current.fromEpochMicroseconds!==bound.fromEpochMicroseconds||current.toEpochMicroseconds!==bound.toEpochMicroseconds)throw new BackfillFailure('acquisition_binding_changed');
+       const observationReceipt=metadata===null?undefined:await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
+       await recordBackfillMetadata(context,{authority:current,messageId,metadata,scope:'overlap',observationReceipt});
+      });
+     }
+    }
+    await withTransaction(input.session,async()=>{
+     if(!await fenced(input))return;
+     const current=await readBackfillAuthority(context,importId,true);
+     if(current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||current.historyCursor!==bound.historyCursor||current.historyPageToken!==bound.historyPageToken||current.fromEpochMicroseconds!==bound.fromEpochMicroseconds||current.toEpochMicroseconds!==bound.toEpochMicroseconds)return;
+     const count=(await input.session.query<{count:string}>("SELECT count(*)::text AS count FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='complete'",[input.scope.workspaceId,importId])).rows[0]!.count;
+     if(count!=='90')return;
+     await input.session.query("UPDATE crm_mail_imports SET history_cursor=$3,history_page_token=$4,history_complete=$5,state=$6,completed_at=CASE WHEN $5 THEN clock_timestamp() ELSE NULL END,reason=NULL WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,importId,history.nextPageToken===null?history.historyId:bound.historyCursor,history.nextPageToken,history.nextPageToken===null,history.nextPageToken===null?'complete':'partial']);
+    });
+    return;
+   }
    const listed=await providerRead('list',authority,access=>adapters.gmail.listMessageIds(access,{afterEpochSeconds:Number(slice.from_epoch_seconds)-1,beforeEpochSeconds:Number(slice.to_epoch_seconds)+1,maxResults:25,...slice.next_page_token===null?{}:{pageToken:slice.next_page_token}}));
    if(!listed.ok)throw new BackfillFailure('provider_read_unavailable');
    for(const messageId of listed.messageIds){

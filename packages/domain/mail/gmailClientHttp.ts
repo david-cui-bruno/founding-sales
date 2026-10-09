@@ -575,6 +575,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
         {
           startHistoryId: request.startHistoryId,
           historyTypes: ['messageAdded', 'labelAdded'],
+          ...(request.maxResults === undefined ? {} : { maxResults: String(request.maxResults) }),
           ...(request.pageToken === undefined ? {} : { pageToken: request.pageToken }),
         },
       );

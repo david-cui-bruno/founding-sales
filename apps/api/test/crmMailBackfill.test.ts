@@ -172,13 +172,12 @@ it('uses exact frozen microseconds for provider millisecond timestamps at the ad
    {id:'after-exact-to',threadId:'after-end-thread',historyId:'101',internalDateEpochMilliseconds:endMs+1,headers:{From:'end-outside@example.test',To:'business@example.test',Subject:'Outside end'}},
   ]});
   const endBounded=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{...deps,gmail:endEdges}});
-  await endBounded.get('crm.mail_backfill')!.handle({session:fixture.db,scope,job});
+  expect(await runClaimedJob(fixture.db,{registry:endBounded,job})).toBe('completed');
   expect((await post('/crm/business/review/read',{mailboxId:mailbox.id})).body).toMatchObject({conversations:[{subject:'Just inside end'}]});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',completedSlices:90,historyComplete:false,metadataCoverage:{retainedUniqueMessages:'2',availableMetadataMessages:'1',refusedMetadataMessages:'1'}});
   expect(endEdges.metadataReads).toEqual(['inside-exact-to','after-exact-to']);
   expect(endEdges.bodyReads).toEqual([]);
   // Actual runner completion and scheduler continuation must not confuse finished enumeration with history coverage.
-  expect(await runClaimedJob(fixture.db,{registry:endBounded,job})).toBe('completed');
   const source=workerDueWorkSources({crmMailBackfill:true}).find(value=>value.name==='crm-mail-backfill');
   expect(source).toBeDefined();
   const scheduler=await fixture.database.appRuntimeSession();
@@ -189,6 +188,34 @@ it('uses exact frozen microseconds for provider millisecond timestamps at the ad
   expect(endEdges.calls).toHaveLength(callsBeforeSchedule);
   const continuation=(await claimJobs(scheduler,{owner:'history-continuation',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
   expect(continuation.payload).toMatchObject({importId:expect.any(String),accountBinding:binding,generation:1,controlsRevision:1,policyRevision:1});
+  const overlap=recordedGmailClient({emailAddress:'business@example.test',historyId:'300',messages:[
+   {id:'handoff-overlap',threadId:'handoff-thread',historyId:'201',internalDateEpochMilliseconds:endMs+1,headers:{From:'handoff@example.test',To:'business@example.test',Subject:'Arrived during enumeration'}},
+   {id:'inside-exact-to',threadId:'inside-end-thread',historyId:'101',internalDateEpochMilliseconds:endMs,headers:{From:'end-inside@example.test',To:'business@example.test',Subject:'Just inside end'}},
+  ]});
+  const historyRequests:{startHistoryId:string;pageToken?:string|undefined}[]=[];
+  let interruptHistoryMetadata=true;
+  const historyRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{...deps,gmail:{...overlap,getMetadata:async(access,messageId,headers)=>{
+   if(messageId==='inside-exact-to'&&interruptHistoryMetadata){interruptHistoryMetadata=false;throw new Error('private_history_interruption');}
+   return overlap.getMetadata(access,messageId,headers);
+  },listHistory:async(_access,request)=>{
+   historyRequests.push(request);
+   return request.pageToken===undefined?{ok:true,historyId:'300',nextPageToken:'history-page-two',records:[{id:'201',changes:[{messageId:'handoff-overlap',threadId:'handoff-thread',kind:'message_added',labelIds:[]},{messageId:'inside-exact-to',threadId:'inside-end-thread',kind:'label_added',labelIds:['INBOX']}]}]}:{ok:true,historyId:'300',nextPageToken:null,records:[{id:'202',changes:[{messageId:'inside-exact-to',threadId:'inside-end-thread',kind:'label_added',labelIds:['INBOX']}]}]};
+  }}}});
+  const historyBackoff={baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0};
+  expect(await runClaimedJob(scheduler,{registry:historyRegistry,job:continuation,backoff:historyBackoff})).toBe('retryable');
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'provider_read_unavailable',historyComplete:false,metadataCoverage:{retainedUniqueMessages:'3'}});
+  const samePage=(await claimJobs(scheduler,{owner:'history-page-replay',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(scheduler,{registry:historyRegistry,job:samePage})).toBe('completed');
+  expect(historyRequests).toEqual([{startHistoryId:'100',maxResults:25},{startHistoryId:'100',maxResults:25}]);
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',completedSlices:90,historyComplete:false,metadataCoverage:{retainedUniqueMessages:'3',availableMetadataMessages:'2'}});
+  expect(await runSchedulerPass(scheduler,{sources:[source!],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
+  const historyTail=(await claimJobs(scheduler,{owner:'history-tail',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(scheduler,{registry:historyRegistry,job:historyTail})).toBe('completed');
+  expect(historyRequests).toEqual([{startHistoryId:'100',maxResults:25},{startHistoryId:'100',maxResults:25},{startHistoryId:'100',maxResults:25,pageToken:'history-page-two'}]);
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'complete',completedSlices:90,historyComplete:true,metadataCoverage:{retainedUniqueMessages:'3',availableMetadataMessages:'2'}});
+  expect(await runSchedulerPass(scheduler,{sources:[source!],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
+  expect(overlap.bodyReads).toEqual([]);
+  expect(overlap.sends).toEqual([]);
  }finally{await fixture.stop();}
 });
 
