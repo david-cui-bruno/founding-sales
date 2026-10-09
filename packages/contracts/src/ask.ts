@@ -6,5 +6,5 @@ const askOpportunitiesResponseSchema=z.strictObject({operation:z.literal('opport
 
 const askRecordsReadSchema=z.strictObject({operation:z.literal('records'),query:z.string().trim().min(1).max(160),kind:z.literal('people'),afterId:z.uuid().optional(),limit:z.number().int().min(1).max(50).default(20)});
 export const askReadSchema=z.discriminatedUnion('operation',[askOpportunitiesReadSchema,askRecordsReadSchema]);
-const askRecordsResponseSchema=z.strictObject({operation:z.literal('records'),selection:z.enum(['none','single','ambiguous']),records:z.array(z.strictObject({recordId:z.uuid(),kind:z.literal('person'),name:z.string(),firmId:z.uuid().nullable()})).max(50),nextAfterId:z.uuid().nullable(),scanComplete:z.boolean(),coverage:askCoverageSchema});
+const askRecordsResponseSchema=z.strictObject({operation:z.literal('records'),selection:z.enum(['none','single','ambiguous','unresolved']),records:z.array(z.strictObject({recordId:z.uuid(),kind:z.literal('person'),name:z.string(),firmId:z.uuid().nullable()})).max(50),nextAfterId:z.uuid().nullable(),scanComplete:z.boolean(),coverage:askCoverageSchema});
 export const askResponseSchema=z.discriminatedUnion('operation',[askOpportunitiesResponseSchema,askRecordsResponseSchema]);

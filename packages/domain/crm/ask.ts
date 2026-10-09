@@ -10,7 +10,7 @@ export async function readAsk(context:RepositoryContext,input:z.infer<typeof ask
   const page=await listPeople(context,{afterId:input.afterId,limit:input.limit});
   const query=input.query.normalize('NFKC').toLocaleLowerCase('en-US');
   const records=page.people.filter(person=>person.fullName.normalize('NFKC').toLocaleLowerCase('en-US').includes(query)).map(person=>({recordId:person.personId,kind:'person' as const,name:person.fullName,firmId:person.firm?.firmId??null}));
-  return {operation:'records' as const,selection:records.length>1?'ambiguous' as const:records.length===1?'single' as const:'none' as const,records,nextAfterId:page.nextAfterId,scanComplete:page.nextAfterId===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
+  return {operation:'records' as const,selection:page.nextAfterId!==null?'unresolved' as const:records.length>1?'ambiguous' as const:records.length===1?'single' as const:'none' as const,records,nextAfterId:page.nextAfterId,scanComplete:page.nextAfterId===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
  }
  if(!await lockIdentityContext(context,{firmIds:[input.scope.firmId]}))return null;
  const count=(await context.db.query<{count:string}>("SELECT count(*)::text AS count FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND ($3='all' OR status=$3) AND ($4::timestamptz IS NULL OR opened_at>=$4) AND ($5::timestamptz IS NULL OR opened_at<$5)",[context.scope.workspaceId,input.scope.firmId,input.status,input.scope.from??null,input.scope.to??null])).rows[0]!.count;

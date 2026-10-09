@@ -60,3 +60,21 @@ it('keeps equal names as separate Ask records and requires explicit identity sel
   expect(records.every(row=>row.name==='Alex Lee'&&row.kind==='person'&&row.firmId===null)).toBe(true);
  }finally{await fixture.stop();}
 });
+
+it('keeps bounded identity scans unresolved until their remaining pages are checked',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  for(let index=0;index<2;index++) expect((await post('/crm/people/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,fullName:'Alex Lee'})).status).toBe(200);
+  const first=await post('/ask/read',{operation:'records',query:'Alex Lee',kind:'people',limit:1});
+  expect(first.status).toBe(200);
+  expect(first.body).toMatchObject({selection:'unresolved',scanComplete:false});
+  const page=first.body as {records:{recordId:string}[];nextAfterId:string};
+  expect(page.records).toHaveLength(1);expect(page.nextAfterId).toEqual(expect.any(String));
+  const second=await post('/ask/read',{operation:'records',query:'Alex Lee',kind:'people',limit:1,afterId:page.nextAfterId});
+  expect(second.status).toBe(200);
+  expect(second.body).toMatchObject({scanComplete:true,nextAfterId:null});
+  expect((second.body as {records:{recordId:string}[]}).records[0]?.recordId).not.toBe(page.records[0]?.recordId);
+ }finally{await fixture.stop();}
+});
