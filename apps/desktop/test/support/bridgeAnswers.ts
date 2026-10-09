@@ -335,6 +335,7 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   },
   '/replies/card': replyCardBody,
   '/sequences/versions': sequenceVersionsBody,
+  '/ask/read':{operation:'records',selection:'none',records:[],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}},
   '/gmail/status': {
     connected: true,
     mailbox: {

@@ -120,7 +120,7 @@ describe('the operation registry', () => {
   it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
     // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
-    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'social', 'notifications', 'replyComposer', 'outreach', 'sourcing', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls', 'recordings']);
+    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'social', 'notifications', 'replyComposer', 'outreach', 'sourcing', 'research', 'replies', 'diagnostics', 'crm', 'ask', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls', 'recordings']);
     // Slice S2: a firm's basics from Today and the firm page, and an incoming call.
     expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual([
       'firms.saveBasics',

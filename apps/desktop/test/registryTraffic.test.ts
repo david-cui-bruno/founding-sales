@@ -100,6 +100,7 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'ask.read':{operation:'records',query:'Example',kind:'people',limit:20},
   'crm.businessMailList': {limit:50},
   'crm.businessMailRead': {sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},
   'crm.businessMailState': {sourceId:UUID},
@@ -377,6 +378,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       }),
     });
   return {
+    ask:{read:async(input:unknown)=>await operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps)['ask.read'](input as never)},
     today: { ...today, ...(() => {
       const handlers = operationHandlers({ api, recordings: { identity: { current: () => 0 } } } as unknown as OperationHostDeps);
       return { actions: async () => await handlers['today.actions'](undefined as never), openAction: async (input: unknown) => await handlers['today.openAction'](input as never) };

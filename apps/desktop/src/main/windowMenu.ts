@@ -38,8 +38,8 @@ export const MENU_ROUTES: readonly { readonly target: NavigationTarget; readonly
 export const MENU_SETTINGS: readonly { readonly target: NavigationTarget; readonly label: string; readonly accelerator: string }[] =
   Object.freeze([
     { target: 'settings/administration', label: 'Settings', accelerator: 'CmdOrCtrl+,' },
-    { target: 'settings/dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+7' },
-    { target: 'settings/diagnostics', label: 'Diagnostics', accelerator: 'CmdOrCtrl+8' },
+    { target: 'settings/dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+8' },
+    { target: 'settings/diagnostics', label: 'Diagnostics', accelerator: 'CmdOrCtrl+9' },
   ]);
 
 export type MenuItem =
