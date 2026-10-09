@@ -261,7 +261,7 @@ it('uses bounded real runner retries and never rematerializes exhausted unchange
  }finally{await fixture.stop();}
 });
 
-it.each(['copy','older_reconciliation','older_recovery','older_recovery_denied','older_denied','older_missing','older_head_changed','older_verifier_changed','older_audit','body_quota','changed_generation','changed_account','disconnected','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
+it.each(['copy','older_reconciliation','older_window_recovery','older_recovery','older_recovery_denied','older_denied','older_missing','older_head_changed','older_verifier_changed','older_audit','body_quota','changed_generation','changed_account','disconnected','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
  const fixture=await createAuthFixture();
  try{
   const {workspaceId,admin}=fixture.alpha;
@@ -329,6 +329,19 @@ it.each(['copy','older_reconciliation','older_recovery','older_recovery_denied',
   expect(gmail.metadataReads).toEqual(['historical-business','historical-business']);
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:'current',quotaAccounting:{reservedUnits:'5',observedUnits:'5',unknownUnits:'0'}});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{scope:'permitted_import_corpus',coverage:'complete',retainedCopiedBodies:'1',unavailableCopies:'0',pendingCaptures:'0',reviewRequiredMetadata:'0',uncapturedMetadata:'0',unresolvedMetadata:'0'}});
+  if(scenario==='older_window_recovery'){
+   // Keep this actual copy inside the original historical window, before the later gap.
+   await fixture.db.query("UPDATE crm_mail_import_slices SET state='complete' WHERE workspace_id=$1",[workspaceId]);
+   expireNextHistory=true;recoveringOlder=true;originalMode='missing';
+   const source=workerDueWorkSources({crmMailBackfill:true}).find(value=>value.name==='crm-mail-backfill')!;
+   const run=async()=>{expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});const job=(await claimJobs(runtime,{owner:'original-window-recovery',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;expect(await runClaimedJob(runtime,{registry,job})).toBe('completed');};
+   await run();await run();await run();
+   expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{passage:'Permitted historical business text',originalObservation:{state:'confirmed_missing',revision:'1',reason:'verified_message_not_found'}}});
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({olderCopyReconciliation:{visitedCopies:'0',refreshedCopies:'0',traversalExhausted:true},gapCoverage:{epoch:1,olderCopyReconciliation:{visitedCopies:'1',refreshedCopies:'1',unresolvedCopies:'0',traversalExhausted:true}},quotaAccounting:{reservedUnits:'8',observedUnits:'8',unknownUnits:'0'}});
+   await run();await run();
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyComplete:false,gapCoverage:{state:'complete',olderCopyReconciliation:{coverage:'partial',visitedCopies:'1'}},quotaAccounting:{reservedUnits:'10',observedUnits:'10',unknownUnits:'0'},copyCoverage:{retainedCopiedBodies:'1'}});
+   expect(gmail.metadataReads).toEqual(['historical-business','historical-business','historical-business']);expect(gmail.bodyReads).toEqual(['historical-business']);expect(gmail.sends).toEqual([]);return;
+  }
   if(scenario.startsWith('older_')){
    // A retained older copy is fixture state; the registered backfill worker measures metadata-only reconciliation.
    olderOriginal=true;
