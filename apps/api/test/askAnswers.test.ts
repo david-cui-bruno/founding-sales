@@ -152,3 +152,29 @@ it('answers through the registered controlled-purpose worker and navigates a cur
 
  }finally{await fixture.stop();}
 });
+
+it('admits an uncached retained meeting original without inventing historical extraction authority',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const firmId=await seedFirm(fixture,{name:'Uncached retained meeting',assignedUserId:fixture.alpha.salesperson.userId});
+  const meetingId=randomUUID(),recordingId=randomUUID(),sourceId=randomUUID();
+  await fixture.db.query("INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,'ask-uncached','ask-uncached','booked','2026-10-01T14:00:00Z','2026-10-01T14:20:00Z',now())",[fixture.alpha.workspaceId,meetingId,firmId]);
+  await fixture.db.query("INSERT INTO meeting_recordings(workspace_id,id,meeting_id,segment,participant_label,sha256,size_bytes,s3_key,processing_status) VALUES($1,$2,$3,1,'Selected transcript',$4,100,$5,'ready')",[fixture.alpha.workspaceId,recordingId,meetingId,'a'.repeat(64),`meetings/${meetingId}/${'a'.repeat(64)}.m4a`]);
+  const utterances=[{startMs:0,endMs:5000,text:'We need help coordinating repairs.',speaker:'Correspondent',attribution:'source_label'}];
+  await fixture.db.query("INSERT INTO meeting_transcripts(workspace_id,id,recording_id,original_recording_id,version,duration_ms,language,utterances) VALUES($1,$2,$3,$3,1,5000,'en-US',$4::jsonb)",[fixture.alpha.workspaceId,sourceId,recordingId,JSON.stringify(utterances)]);
+  const source={workspaceId:fixture.alpha.workspaceId,sourceId,kind:'meeting_transcript',revision:1,contentHash:createHash('sha256').update(JSON.stringify(utterances)).digest('hex'),locator:null};
+  expect((await post('/ask/read',{operation:'passages',scope:{sources:[source]},query:'repairs',limit:10})).status).toBe(200);
+  const requested=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
+  expect(requested.status).toBe(200);
+  expect(requested.body).toMatchObject({result:{state:'unavailable',version:1}});
+  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
+  expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'unavailable',reason:'purpose_unavailable',fallback:{passages:[{text:utterances[0]!.text}]}});
+  // Controlled legacy unavailable receipt: it cannot become a new native authority grant.
+  await fixture.db.query("INSERT INTO crm_extraction_generations(workspace_id,source_id,source_kind,source_revision,source_hash,requested_by,processor_version,state,original_firm_id) VALUES($1,$2,'meeting_transcript',1,$3,$4,'legacy-unavailable','unavailable',NULL)",[fixture.alpha.workspaceId,sourceId,source.contentHash,fixture.alpha.salesperson.userId]);
+  const historical=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'repairs',scope:{sources:[source]}});
+  expect(historical.status).toBe(409);
+
+ }finally{await fixture.stop();}
+});

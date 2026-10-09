@@ -21,7 +21,11 @@ export async function requestAskAnswer(context:RepositoryContext,input:AskAnswer
  for(const source of input.scope.sources){
   if(await resolveCrmSource(context,source,copiedMail)===null)return {ok:false as const,reason:'source_unavailable'};
   const current=await readProcessingContext(context,source,copiedMail);
-  const original=await originalSourceAccessClosure(context,source);
+  let original=await originalSourceAccessClosure(context,source);
+  if(original===null&&current!==null&&(source.kind==='call_transcript'||source.kind==='meeting_transcript')){
+   const history=await context.db.query('SELECT id FROM crm_extraction_generations WHERE workspace_id=$1 AND source_kind=$2 AND source_id=$3 LIMIT 1',[context.scope.workspaceId,source.kind,source.sourceId]);
+   if(history.rows.length===0&&current.firmIds.length>0)original={firmIds:[...current.firmIds],personIds:current.personId===null?[]:[current.personId]};
+  }
   if(current===null||original===null)return {ok:false as const,reason:'source_unavailable'};
   contexts.push(current);
   closures.push(original);
