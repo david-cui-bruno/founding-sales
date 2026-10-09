@@ -1,0 +1,76 @@
+import {createHash,randomUUID} from 'node:crypto';
+import {expect,it} from 'vitest';
+import {recordingSuppressionJournal} from '@fss/domain/suppression/journal.ts';
+import {dispatch} from '../src/server.ts';
+import {createAuthFixture,CURRENT_CLIENT_VERSION} from './support/authFixture.ts';
+import {issueSessionFor} from './support/sessionFixture.ts';
+import {seedFirm} from './support/crmSeed.ts';
+
+it('keeps two human opportunities distinct through native and selected evidence, explicit task completion and scoped deletion',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const owner=fixture.alpha.admin.userId,workspaceId=fixture.alpha.workspaceId;
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+  const journal=recordingSuppressionJournal();
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,suppressionJournal:journal});
+  const command=(fields:object)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...fields});
+  const firmId=await seedFirm(fixture,{name:'Two independent maintenance initiatives',assignedUserId:owner});
+  const unrelatedFirmId=await seedFirm(fixture,{name:'Unrelated business survives',assignedUserId:owner});
+  const open=async(firm:string,name:string)=>{
+   const response=await post('/opportunities/v2/open',command({firmId:firm,name}));
+   expect(response.status,JSON.stringify(response.body)).toBe(200);
+   return (response.body as {result:{opportunityId:string}}).result.opportunityId;
+  };
+  const first=await open(firmId,'Maintenance pilot'),second=await open(firmId,'Leasing initiative');
+  expect(first).not.toBe(second);
+  await open(unrelatedFirmId,'Unrelated pilot');
+  const originalPage=await post('/crm/firm-page-v3',{firmId,pageVersion:2});
+  expect(originalPage.status).toBe(200);
+  expect(originalPage.body).toMatchObject({opportunities:expect.arrayContaining([expect.objectContaining({opportunity:expect.objectContaining({id:first})}),expect.objectContaining({opportunity:expect.objectContaining({id:second})})])});
+  const unrelatedBefore=await post('/crm/firm-page-v3',{firmId:unrelatedFirmId,pageVersion:2});
+  expect(unrelatedBefore.status).toBe(200);
+  const text='Maintenance coordinator review.';
+  const selection={text,subtype:'pasted_text',label:'Explicit human evidence',direction:'unknown',participants:[],occurredAt:null,attachments:[]};
+  const importPreview=await post('/crm/imports/preview',selection);
+  expect(importPreview.status).toBe(200);
+  const imported=await post('/crm/imports/commit',command({...selection,personId:null,firmId,importKey:randomUUID(),previewHash:(importPreview.body as {previewHash:string}).previewHash,parserVersion:'selected-v1'}));
+  expect(imported.status).toBe(200);
+  const selectedId=(imported.body as {result:{sourceId:string}}).result.sourceId;
+  // Native retained transcript fixture: no recorder, inference or provider is invoked.
+  const meetingId=randomUUID(),recordingId=randomUUID(),nativeId=randomUUID();
+  await fixture.db.query("INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,$2::uuid::text,$2::uuid::text,'booked','2026-10-01T14:00:00Z','2026-10-01T14:20:00Z',now())",[workspaceId,meetingId,firmId]);
+  await fixture.db.query("INSERT INTO meeting_recordings(workspace_id,id,meeting_id,segment,participant_label,sha256,size_bytes,s3_key,processing_status,crm_capture_owner_user_id) VALUES($1,$2,$3,1,'Synthetic retained recording',$4,100,$5,'ready',$6)",[workspaceId,recordingId,meetingId,'a'.repeat(64),`meetings/${meetingId}/${'a'.repeat(64)}.m4a`,owner]);
+  const utterances=[{startMs:0,endMs:5000,text:'Leasing workflow uses a separate team.',speaker:'Correspondent',attribution:'source_label'}];
+  await fixture.db.query("INSERT INTO meeting_transcripts(workspace_id,id,recording_id,original_recording_id,version,duration_ms,language,utterances) VALUES($1,$2,$3,$3,1,5000,'en-US',$4::jsonb)",[workspaceId,nativeId,recordingId,JSON.stringify(utterances)]);
+  const sources=[{workspaceId,sourceId:selectedId,kind:'selected_note',revision:1,contentHash:createHash('sha256').update(text).digest('hex'),locator:null},{workspaceId,sourceId:nativeId,kind:'meeting_transcript',revision:1,contentHash:createHash('sha256').update(JSON.stringify(utterances)).digest('hex'),locator:null}];
+  const requested=await post('/ask/answers/request',command({question:'maintenance',scope:{sources}}));
+  expect(requested.status,JSON.stringify(requested.body)).toBe(200);
+  expect(requested.body).toMatchObject({result:{state:'unavailable'}});
+  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
+  const current=await post('/ask/answers/read',{requestId});
+  expect(current.status).toBe(200);
+  expect(current.body).toMatchObject({reason:'purpose_unavailable',answer:null,fallback:{passages:[{text}]}});
+  const created=await post('/ask/actions/create',command({requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Discuss the coordinator workflow',due:null,target:{kind:'firm',firmId}}}));
+  expect(created.status,JSON.stringify(created.body)).toBe(200);
+  const actionId=(created.body as {result:{actionId:string}}).result.actionId;
+  const complete=await post('/ask/actions/change',command({actionId,expectedVersion:1,action:'complete_task'}));
+  expect(complete.status).toBe(200);
+  const completedAt=(complete.body as {result:{completedAt:string}}).result.completedAt;
+  const pageAfterCompletion=await post('/crm/firm-page-v3',{firmId,pageVersion:2});
+  expect(pageAfterCompletion.status).toBe(200);
+  expect((pageAfterCompletion.body as {opportunities:unknown[]}).opportunities).toEqual((originalPage.body as {opportunities:unknown[]}).opportunities);
+  const preview=await post('/retention/deletions/preview',command({targetKind:'firm',firmId}));
+  expect(preview.status).toBe(200);
+  expect(preview.body).toMatchObject({result:{redacts:{crm_ask_actions:1,crm_ask_requests:1}}});
+  const shown=(preview.body as {result:{requestId:string;previewHash:string}}).result;
+  const committed=await post('/retention/deletions/commit',command({requestId:shown.requestId,previewHash:shown.previewHash}));
+  expect(committed.status,JSON.stringify(committed.body)).toBe(200);
+  expect(committed.body).toMatchObject({result:{redacted:{crm_ask_actions:1,crm_ask_requests:1}}});
+  expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'deleted',question:null,fallback:null,answer:null});
+  expect((await post('/ask/history/list',{})).body).toEqual({items:[],nextCursor:null});
+  const actions=await post('/ask/actions/read',{scope:{kind:'history'}});
+  expect(actions.status).toBe(200);
+  expect(actions.body).toMatchObject({items:[{actionId,status:'done',completedAt,supportState:'deleted',label:null,text:null,target:null,due:null,sources:[],reviewRequired:false}],nextAfterId:null});
+  expect((await post('/crm/firm-page-v3',{firmId:unrelatedFirmId,pageVersion:2})).body).toEqual(unrelatedBefore.body);
+ }finally{await fixture.stop();}
+});
