@@ -22,6 +22,7 @@ import {
   readMailConversation,
   mailContextPredicate,
   readMailSourceState,
+  snapshotMailCopyAuthorityBatch,
 } from "../mail/crmSources.ts";
 import { createNativeCrmMailEvidence } from "./nativeMailEvidence.ts";
 import {
@@ -30,6 +31,14 @@ import {
   sourceAccessPredicate,
   sourceContextPredicate,
 } from "./identityAccess.ts";
+
+const nativeOwner = (
+  kind: string,
+  id: string,
+  firm: string,
+  fallback: string,
+) =>
+  `($4::boolean OR CASE WHEN EXISTS(SELECT 1 FROM crm_extraction_generations g WHERE g.workspace_id=$1 AND g.source_kind='${kind}' AND g.source_id=${id}) THEN (SELECT coalesce(g.source_owner_user_id,g.requested_by)=$5 AND g.original_firm_id=${firm} FROM crm_extraction_generations g WHERE g.workspace_id=$1 AND g.source_kind='${kind}' AND g.source_id=${id} ORDER BY g.observed_at,g.id LIMIT 1) ELSE ${fallback} END)`;
 
 // The copy-only resolver has no processing verifier or provider composition.
 const copiedMail = createNativeCrmMailEvidence();
@@ -59,6 +68,59 @@ export async function readAskCorpus(
     ) {
       refusedSources++;
       continue;
+    }
+    if (source.kind === "mail") {
+      const hint =
+        source.contentHash === null
+          ? null
+          : await snapshotMailCopyAuthorityBatch(context, [
+              {
+                sourceId: source.sourceId,
+                sourceRevision: source.revision,
+                contentHash: source.contentHash,
+              },
+            ]);
+      const actor = context.scope.actor;
+      const permittedFirms =
+        hint !== null &&
+        actor.kind === "user" &&
+        (actor.role === "admin" ||
+          (
+            await context.db.query<{ denied: boolean }>(
+              "SELECT EXISTS(SELECT 1 FROM unnest($2::uuid[]) required(id) LEFT JOIN firms f ON f.workspace_id=$1 AND f.id=required.id WHERE f.id IS NULL OR f.status<>'active' OR f.assigned_user_id IS DISTINCT FROM $3::uuid) AS denied",
+              [context.scope.workspaceId, hint.firmIds, actor.userId],
+            )
+          ).rows[0]?.denied === false);
+      if (!permittedFirms) {
+        refusedSources++;
+        continue;
+      }
+    }
+    if (
+      source.kind === "call_transcript" ||
+      source.kind === "meeting_transcript"
+    ) {
+      const actor = context.scope.actor;
+      if (actor.kind !== "user") return null;
+      const visible =
+        (
+          await context.db.query<{ source_id: string }>(
+            source.kind === "call_transcript"
+              ? `SELECT c.id AS source_id FROM call_sessions c JOIN call_transcripts t ON t.workspace_id=c.workspace_id AND t.call_session_id=c.id JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=c.firm_id WHERE c.workspace_id=$1 AND c.id=$2 AND t.crm_revision=$3 AND f.status='active' AND ($4::boolean OR f.assigned_user_id=$5) AND ${nativeOwner("call_transcript", "c.id", "c.firm_id", "c.actor_user_id=$5")}`
+              : `SELECT t.id AS source_id FROM meeting_transcripts t JOIN meeting_recordings r ON r.workspace_id=t.workspace_id AND r.id=t.recording_id JOIN meetings m ON m.workspace_id=r.workspace_id AND m.id=r.meeting_id JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id WHERE t.workspace_id=$1 AND t.id=$2 AND t.version=$3 AND f.status='active' AND ($4::boolean OR f.assigned_user_id=$5) AND ${nativeOwner("meeting_transcript", "t.id", "m.firm_id", "(r.crm_capture_owner_user_id IS NULL OR r.crm_capture_owner_user_id=$5)")}`,
+            [
+              context.scope.workspaceId,
+              source.sourceId,
+              source.revision,
+              actor.role === "admin",
+              actor.userId,
+            ],
+          )
+        ).rows.length === 1;
+      if (!visible) {
+        refusedSources++;
+        continue;
+      }
     }
     sources.push(source);
   }
@@ -206,13 +268,6 @@ export async function discoverAskSources(
   const actor = context.scope.actor;
   if (actor.kind !== "user" || !(await activeIdentityActor(context)))
     return null;
-  const nativeOwner = (
-    kind: string,
-    id: string,
-    firm: string,
-    fallback: string,
-  ) =>
-    `($4::boolean OR CASE WHEN EXISTS(SELECT 1 FROM crm_extraction_generations g WHERE g.workspace_id=$1 AND g.source_kind='${kind}' AND g.source_id=${id}) THEN (SELECT coalesce(g.source_owner_user_id,g.requested_by)=$5 AND g.original_firm_id=${firm} FROM crm_extraction_generations g WHERE g.workspace_id=$1 AND g.source_kind='${kind}' AND g.source_id=${id} ORDER BY g.observed_at,g.id LIMIT 1) ELSE ${fallback} END)`;
   const candidates = (
     await context.db.query<{
       kind: CanonicalSourceReference["kind"];
