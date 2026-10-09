@@ -1,3 +1,4 @@
+import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
 import { useEffect, useState, type JSX } from 'react';
 import { type z } from 'zod';
 import type { firmSourcePageSchema } from '@fss/contracts';
@@ -41,11 +42,13 @@ export function FirmAddresses({
   ports,
   endpoints,
   editing,
+  imports,
 }: {
   enabled: boolean;
   ports: FirmAddressPorts;
   endpoints: EndpointPorts;
   editing?: EndpointEditingPorts | undefined;
+  imports?: SelectedImportPorts;
 }): JSX.Element {
   const [firms, setFirms] = useState<{ firmId: string; name: string }[]>([]);
   const [firmId, setFirmId] = useState('');
@@ -268,7 +271,8 @@ export function FirmAddresses({
               More firm notes
             </Button>
           ) : null}
-          <Endpoints
+          {imports ? <SelectedImports key={firmId} enabled={enabled} firmId={firmId} ports={imports} sourceVersion={page.sources.map(source=>`${source.sourceId}:${source.revision}:${source.availability}`).join('|')} onChange={async()=>setPage(await ports.read(firmId))}/> : null}
+            <Endpoints
             key={firmId}
             firmId={firmId}
             ports={endpoints}

@@ -1,3 +1,4 @@
+import { SELECTED_IMPORT_PATHS, routeSelectedImports } from './selectedImports.ts';
 import { BUSINESS_PATHS, routeBusinessAcquisition } from './businessAcquisition.ts';
 import { IDENTITY_PATHS,routePeopleRelationships } from './peopleRelationships.ts';
 import { PEOPLE_PATHS, routePeople } from './people.ts';
@@ -174,6 +175,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // not an invitation.
     moduleOf('business-acquisition', { paths: BUSINESS_PATHS }, routeBusinessAcquisition, routing),
     moduleOf('people-relationships', { paths: IDENTITY_PATHS }, routePeopleRelationships, routing),
+    moduleOf('selected-imports', { paths: SELECTED_IMPORT_PATHS }, routeSelectedImports, routing),
     moduleOf('people', { paths: PEOPLE_PATHS }, routePeople, routing),
     moduleOf('firm-page', { paths: FIRM_PAGE_PATHS }, routeFirmPage, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),

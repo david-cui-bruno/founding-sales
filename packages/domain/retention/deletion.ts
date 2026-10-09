@@ -490,6 +490,8 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    crm_selected_imports: await countOf(context,`SELECT count(*) AS count FROM crm_selected_imports m WHERE m.workspace_id=$1 AND m.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (m.label IS NOT NULL OR m.participants IS NOT NULL OR m.attachments IS NOT NULL OR m.direction IS NOT NULL OR m.attribution IS NOT NULL OR m.date_provenance IS NOT NULL)`,byContact),
+
     crm_identity_endpoints: await countOf(context,
       `SELECT count(*) AS count FROM crm_identity_endpoints e WHERE e.workspace_id=$1 AND e.value IS NOT NULL
        AND e.id IN (SELECT endpoint_id FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS}))
@@ -1315,6 +1317,7 @@ export async function commitDeletion(
     byContact,
   );
   const redacted: Record<string, number> = {};
+  redacted['crm_selected_imports'] = await countOf(context,`SELECT count(*) AS count FROM crm_selected_imports m WHERE m.workspace_id=$1 AND m.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (m.label IS NOT NULL OR m.participants IS NOT NULL OR m.attachments IS NOT NULL OR m.direction IS NOT NULL OR m.attribution IS NOT NULL OR m.date_provenance IS NOT NULL)`,byContact);
   const metadataIds = measured.identityVersions.filter(value => value.kind==='business_metadata').map(value => value.id);
   redacted['crm_business_conversations'] = 0;
   for (let offset=0; offset<metadataIds.length; offset+=100) {

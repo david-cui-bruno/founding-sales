@@ -52,6 +52,7 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  crm_selected_imports: coverage(['retained','deletion_redacts'], 'Selected source labels, participants and attachment references redact atomically via the source-deletion trigger; only body-free import hashes and source identity remain to block replay. No duplicate body store; disconnect does not delete approved copied history.'),
   crm_business_conversations: coverage(['deletion_redacts','swept'], 'Owner-private proven account metadata, redacted whole with mapped source or exact target address; 90-day review horizon. No bodies or sending authority.'),
   crm_business_decision_revisions: coverage(['retained'], 'Content-free durable business inclusion/exclusion decisions; opaque IDs and revisions survive metadata redaction.'),
   crm_business_policies: coverage(['operational'], 'Disabled mailbox-bound metadata review configuration; no message bodies or sending authority.'),

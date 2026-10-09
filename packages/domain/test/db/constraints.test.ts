@@ -97,6 +97,31 @@ async function seedSelectedSource(f: Fixture, personId: string): Promise<string>
   );
   return rows[0]?.id ?? '';
 }
+async function seedSelectedImport(f:Fixture):Promise<string>{
+ const sourceId=await seedSelectedSource(f,await seedIndependentPerson(f));
+ await f.session.query("INSERT INTO crm_selected_imports(workspace_id,source_id,owner_user_id,import_key_hash,input_hash,parser_version,subtype,label,participants,attachments,direction,attribution,date_provenance) VALUES($1,$2,$3,$4,$5,'selected-v1','pasted_text','Selected import','[]','[]','unknown','unknown','unknown')",[workspace(f),sourceId,admin(f),payloadHash('import-key'),payloadHash('input')]);
+ return sourceId;
+}
+const selectedImportConstraintCases:readonly Case[]=[
+ ...[
+  ['crm_selected_imports_import_key_hash_check',"import_key_hash='invalid'"],
+  ['crm_selected_imports_input_hash_check',"input_hash='invalid'"],
+  ['crm_selected_imports_parser_version_check',"parser_version='unknown'"],
+  ['crm_selected_imports_revision_check','revision=0'],
+  ['crm_selected_imports_subtype_check',"subtype='mail'"],
+  ['crm_selected_imports_label_check',"label='   '"],
+  ['crm_selected_imports_participants_check',"participants='{}'::jsonb"],
+  ['crm_selected_imports_attachments_check',"attachments='{}'::jsonb"],
+  ['crm_selected_imports_direction_check',"direction='verified_sent'"],
+  ['crm_selected_imports_attribution_check',"attribution='verified'"],
+  ['crm_selected_imports_date_provenance_check',"date_provenance='guessed'"],
+  ['crm_selected_imports_workspace_id_owner_user_id_fkey',"owner_user_id='00000000-0000-4000-8000-000000000000'"],
+  ['crm_selected_imports_workspace_id_source_id_fkey',"source_id='00000000-0000-4000-8000-000000000000'"],
+ ].map(([constraint,assignment])=>({constraint:constraint??'',run:async(f:Fixture)=>{const id=await seedSelectedImport(f);return f.session.query(`UPDATE crm_selected_imports SET ${assignment} WHERE workspace_id=$1 AND source_id=$2`,[workspace(f),id]);}})),
+ {constraint:'crm_selected_imports_workspace_id_fkey',run:async f=>f.session.query("INSERT INTO crm_selected_imports(workspace_id,source_id,owner_user_id,import_key_hash,input_hash,parser_version,subtype) VALUES('00000000-0000-4000-8000-000000000000',$1,$2,$3,$4,'selected-v1','pasted_text')",[f.crm.alpha.contactId,admin(f),payloadHash('key'),payloadHash('input')])},
+ {constraint:'crm_selected_imports_pkey',run:async f=>{const id=await seedSelectedImport(f);return f.session.query('INSERT INTO crm_selected_imports SELECT * FROM crm_selected_imports WHERE workspace_id=$1 AND source_id=$2',[workspace(f),id]);}},
+ {constraint:'crm_selected_imports_workspace_id_owner_user_id_import_key__key',run:async f=>{await seedSelectedImport(f);const person=await seedIndependentPerson(f);const source=(await f.session.query<{id:string}>("INSERT INTO crm_selected_sources(workspace_id,person_id,owner_user_id,source_key_hash,excerpt,content_hash) VALUES($1,$2,$3,$4,'Second excerpt',$5) RETURNING id",[workspace(f),person,admin(f),payloadHash('other-source'),payloadHash('second')])).rows[0]?.id;return f.session.query("INSERT INTO crm_selected_imports(workspace_id,source_id,owner_user_id,import_key_hash,input_hash,parser_version,subtype) VALUES($1,$2,$3,$4,$5,'selected-v1','pasted_text')",[workspace(f),source,admin(f),payloadHash('import-key'),payloadHash('input')]);}},
+];
 const peopleConstraintCases: readonly Case[] = [
   { constraint: 'crm_people_pkey', run: async f => {
     const id = await seedIndependentPerson(f);
@@ -138,7 +163,7 @@ const peopleConstraintCases: readonly Case[] = [
     ['crm_selected_sources_availability_check', "availability='unrecognized'"],
     ['crm_selected_sources_check', 'excerpt=NULL'],
     ['crm_selected_sources_check1', 'content_hash=NULL'],
-    ['crm_selected_sources_check2', 'occurred_at=NULL'],
+    ['crm_selected_sources_date_availability', "availability='deleted',excerpt=NULL,content_hash=NULL,occurred_at=now()"],
     ['crm_selected_sources_excerpt_check', "excerpt='   '"],
     ['crm_selected_sources_content_hash_check', "content_hash='not-a-hash'"],
   ] as const).map(([constraint, assignment]): Case => ({
@@ -1591,6 +1616,7 @@ const cases: readonly Case[] = [
 
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
+  ...selectedImportConstraintCases,
   ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
