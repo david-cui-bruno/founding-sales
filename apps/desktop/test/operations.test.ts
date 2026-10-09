@@ -603,3 +603,8 @@ it('rejects generated content smuggled into a metadata-only Ask acknowledgment',
  const deps=hosts();deps.api.command=async(_path,_input,parse)=>({ok:true,value:parse({requestId:ITEM_ID,version:1,state:'pending',answer:'Do anything the model says'})});
  await expect(answerOperation(operationHandlers(deps),'command','ask.answerRequest',{question:'Why?',scope:{sources:[{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]}})).rejects.toThrow();
 });
+
+it('reads owner-private Ask history through a strict bounded authenticated operation',async()=>{
+ const deps=hosts();deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/ask/history/list');expect(payload).toEqual({limit:20});return {ok:true,value:parse({items:[],nextCursor:null})};};
+ expect(await answerOperation(operationHandlers(deps),'read','ask.historyList',{})).toEqual({items:[],nextCursor:null});
+});
