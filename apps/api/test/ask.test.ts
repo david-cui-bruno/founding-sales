@@ -156,3 +156,17 @@ it('deduplicates repeated passage text while preserving each citation and omitti
   expect(read.body).toMatchObject({coverage:{omittedSignatures:2,chunkerVersion:'lexical-original-v1'}});
  }finally{await fixture.stop();}
 });
+
+it('retrieves dated operational activity separately from copied conversation coverage',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const firmId=await seedFirm(fixture,{name:'Dated activity firm',assignedUserId:fixture.alpha.salesperson.userId});
+  await fixture.db.query("INSERT INTO call_logs(workspace_id,firm_id,outcome,step_effect,occurred_at,recorded_at,actor_user_id) VALUES($1,$2,'no_answer','none','2026-10-01T12:00:00Z',now(),$3),($1,$2,'no_answer','none','2026-09-01T12:00:00Z',now(),$3)",[fixture.alpha.workspaceId,firmId,fixture.alpha.salesperson.userId]);
+  const scope={firmId,from:'2026-10-01T00:00:00.000Z',to:'2026-11-01T00:00:00.000Z'};
+  const read=await post('/ask/read',{operation:'activity',scope});
+  expect(read.status).toBe(200);expect(read.body).toMatchObject({operation:'activity',scope,dateBasis:'operational_event_at',scanComplete:true,coverage:{acquisition:'unverified'}});
+  const events=(read.body as {events:unknown[]}).events;expect(events).toHaveLength(1);expect(events[0]).toMatchObject({kind:'call',code:'no_answer',at:'2026-10-01T12:00:00.000Z'});
+ }finally{await fixture.stop();}
+});

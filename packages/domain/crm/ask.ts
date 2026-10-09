@@ -1,6 +1,7 @@
 import type {z} from 'zod';
 import type {askReadSchema,FirmTaskDto,CanonicalSourceReference} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
+import {readFirmTimeline} from './firmActivity.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
 import {readPerson,listPeople} from './people.ts';
 import {lockIdentityContext,activeIdentityActor} from './identityAccess.ts';
@@ -50,6 +51,12 @@ export async function readAsk(context:RepositoryContext,input:z.infer<typeof ask
   return {operation:'records' as const,selection:input.afterId!==undefined||page.nextAfterId!==null?'unresolved' as const:records.length>1?'ambiguous' as const:records.length===1?'single' as const:'none' as const,records,nextAfterId:page.nextAfterId,scanComplete:page.nextAfterId===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
  }
  if(!await lockIdentityContext(context,{firmIds:[input.scope.firmId]}))return null;
+ if(input.operation==='activity'){
+  const page=await readFirmTimeline(context,input.scope.firmId,input.before);
+  if(!await activeIdentityActor(context))return null;
+  const events=page.events.filter(event=>(input.scope.from===undefined||Date.parse(event.at)>=Date.parse(input.scope.from))&&(input.scope.to===undefined||Date.parse(event.at)<Date.parse(input.scope.to)));
+  return {operation:'activity' as const,scope:input.scope,dateBasis:'operational_event_at' as const,events,nextBefore:page.nextBefore,scanComplete:page.nextBefore===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
+ }
  if(input.operation==='tasks'){
   const relation=`WITH tasks AS (
    SELECT 'callback:'||id::text AS key,'callback' AS kind,'callback' AS label,due_at,'open' AS status,NULL::jsonb AS deadline FROM callbacks WHERE workspace_id=$1 AND firm_id=$2 AND status='open'
