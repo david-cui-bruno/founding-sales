@@ -16,3 +16,13 @@ CREATE TABLE crm_selected_file_receipts (
  CHECK(state<>'selected' OR (file_hash IS NOT NULL AND source_content_hash IS NOT NULL AND file_name IS NOT NULL AND byte_length IS NOT NULL AND format IS NOT NULL AND parser_version IS NOT NULL AND origin IS NOT NULL))
 );
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_selected_file_receipts TO app_runtime,migration;
+CREATE FUNCTION redact_selected_file_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.availability='deleted' THEN
+  UPDATE crm_selected_file_receipts SET state='deleted',source_revision=NEW.revision,file_hash=NULL,source_content_hash=NULL,file_name=NULL,byte_length=NULL,format=NULL,parser_version=NULL,origin=NULL WHERE workspace_id=NEW.workspace_id AND source_id=NEW.id;
+ ELSIF NEW.availability='awaiting_recapture' THEN
+  UPDATE crm_selected_file_receipts SET state='awaiting_selection',source_revision=NEW.revision WHERE workspace_id=NEW.workspace_id AND source_id=NEW.id;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER selected_file_receipt_deletion AFTER UPDATE ON crm_selected_sources FOR EACH ROW EXECUTE FUNCTION redact_selected_file_receipt();

@@ -61,4 +61,30 @@ describe('explicit selected attachment analysis',()=>{
   expect(calls).toBe(0);
   expect((await post('/crm/attachments/read',{sourceId})).body).toMatchObject({processing:{state:'unavailable',claims:[]}});
  });
+ it('redacts selected file metadata when its source copy is deleted while reporting unavailable coverage',async()=>{
+  const person=await post('/crm/people/create',command({fullName:'Deleted file correspondent'}));
+  const personId=(person.body as {result:{personId:string}}).result.personId;
+  const file={fileName:'private-repairs.txt',declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'};
+  const preview=await post('/crm/attachments/preview',file);
+  const committed=await post('/crm/attachments/commit',command({file,personId,firmId:null,participants:[],occurredAt:null,importKey:'deleted-file-selection',previewHash:(preview.body as {previewHash:string}).previewHash}));
+  const sourceId=(committed.body as {result:{sourceId:string}}).result.sourceId;
+  expect((await post('/crm/imports/delete',command({sourceId,expectedSourceRevision:1,expectedMetadataRevision:1}))).status).toBe(200);
+  const read=await post('/crm/attachments/read',{sourceId});
+  expect(read.status).toBe(200);
+  expect(read.body).toMatchObject({file:{state:'deleted',fileName:null,fileHash:null,byteLength:null},source:{sourceId,revision:2,contentHash:null,availability:'deleted',occurredAt:null},processing:{state:'source_unavailable',reason:'source_deleted'}});
+  expect(JSON.stringify(read.body)).not.toContain('private-repairs');
+ });
+ it('restores only an unavailable file identity and requires fresh selection before analysis',async()=>{
+  const person=await post('/crm/people/create',command({fullName:'Restored file correspondent'}));
+  const personId=(person.body as {result:{personId:string}}).result.personId;
+  const file={fileName:'repairs.txt',declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'};
+  const preview=await post('/crm/attachments/preview',file);
+  const committed=await post('/crm/attachments/commit',command({file,personId,firmId:null,participants:[],occurredAt:null,importKey:'restored-file-selection',previewHash:(preview.body as {previewHash:string}).previewHash}));
+  const sourceId=(committed.body as {result:{sourceId:string}}).result.sourceId;
+  await post('/crm/imports/delete',command({sourceId,expectedSourceRevision:1,expectedMetadataRevision:1}));
+  expect((await post('/crm/imports/restore',command({sourceId,expectedSourceRevision:2,expectedMetadataRevision:2}))).status).toBe(200);
+  const read=await post('/crm/attachments/read',{sourceId});
+  expect(read.status).toBe(200);
+  expect(read.body).toMatchObject({file:{state:'awaiting_selection',fileName:null,fileHash:null},source:{revision:3,contentHash:null,availability:'awaiting_recapture'}});
+ });
 });

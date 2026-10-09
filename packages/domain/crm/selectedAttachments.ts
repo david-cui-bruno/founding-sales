@@ -6,7 +6,8 @@ import type {selectedAttachmentCommitSchema,selectedAttachmentAnalyzeSchema} fro
 import {previewSelectedImport,commitSelectedImport} from './selectedImports.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
 import {readCrmProcessing,requestCrmProcessing} from './processing.ts';
-import {activeIdentityActor} from './identityAccess.ts';
+import {activeIdentityActor,lockIdentityContext} from './identityAccess.ts';
+import {recordCrmAuditEvent} from './audit.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 const hash=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');
 export async function previewSelectedAttachment(context:RepositoryContext,input:z.infer<typeof selectedAttachmentFileSchema>){
@@ -33,11 +34,19 @@ export async function commitSelectedAttachment(context:RepositoryContext,input:z
  return result;
 }
 export async function readSelectedAttachment(context:RepositoryContext,sourceId:string){
- const row=(await context.db.query<{source_revision:number;metadata_revision:number;file_hash:string|null;source_content_hash:string|null;file_name:string|null;byte_length:number|null;format:string|null;origin:string|null;state:string}>('SELECT source_revision,metadata_revision,file_hash,source_content_hash,file_name,byte_length,format,origin,state FROM crm_selected_file_receipts WHERE workspace_id=$1 AND source_id=$2',[context.scope.workspaceId,sourceId])).rows[0];if(row===undefined)return null;
+ if(!await lockIdentityContext(context,{sourceIds:[sourceId]}))return null;
+ const head=(await context.db.query<{owner_user_id:string;revision:number;availability:'available'|'deleted'|'awaiting_recapture'|'unavailable';content_hash:string|null;occurred_at:Date|null;observed_at:Date;metadata_revision:number}>('SELECT s.owner_user_id,s.revision,s.availability,s.content_hash,s.occurred_at,s.observed_at,m.revision AS metadata_revision FROM crm_selected_sources s JOIN crm_selected_imports m ON m.workspace_id=s.workspace_id AND m.source_id=s.id WHERE s.workspace_id=$1 AND s.id=$2 FOR SHARE OF m',[context.scope.workspaceId,sourceId])).rows[0];if(head===undefined)return null;
+ const row=(await context.db.query<{source_revision:number;metadata_revision:number;file_hash:string|null;source_content_hash:string|null;file_name:string|null;byte_length:number|null;format:string|null;origin:string|null;state:string}>('SELECT source_revision,metadata_revision,file_hash,source_content_hash,file_name,byte_length,format,origin,state FROM crm_selected_file_receipts WHERE workspace_id=$1 AND source_id=$2 FOR SHARE',[context.scope.workspaceId,sourceId])).rows[0];if(row===undefined)return null;
+ const file={state:row.state,sourceRevision:row.source_revision,metadataRevision:head.metadata_revision,fileName:row.file_name,byteLength:row.byte_length,fileHash:row.file_hash,format:row.format,origin:row.origin};
+ if(head.availability!=='available'){
+  const actor=context.scope.actor;
+  if(actor.kind==='user'&&actor.role==='admin'&&actor.userId!==head.owner_user_id)await recordCrmAuditEvent(context,{action:'crm.selected_file_private_read',subjectKind:'selected_source',subjectId:sourceId,detail:{sourceRevision:head.revision,exceptionalAdminRead:true}});
+  return {file,source:{workspaceId:context.scope.workspaceId,sourceId,kind:'selected_note' as const,revision:head.revision,contentHash:head.content_hash,locator:null,speaker:null,occurredAt:head.occurred_at?.toISOString()??null,observedAt:head.observed_at.toISOString(),completeness:'unavailable' as const,availability:head.availability},processing:{state:'source_unavailable' as const,reason:head.availability==='deleted'?'source_deleted':'source_unavailable'}};
+ }
  const source={workspaceId:context.scope.workspaceId,sourceId,kind:'selected_note' as const,revision:row.source_revision,contentHash:row.source_content_hash,locator:null};
  const resolved=await resolveCrmSource(context,source);if(resolved===null)return null;
  const processing=await readCrmProcessing(context,source);if(processing===null)return null;
- return {file:{state:row.state,sourceRevision:row.source_revision,metadataRevision:row.metadata_revision,fileName:row.file_name,byteLength:row.byte_length,fileHash:row.file_hash,format:row.format,origin:row.origin},source:resolved.source,processing};
+ return {file,source:resolved.source,processing};
 }
 export async function requestSelectedAttachmentAnalysis(context:RepositoryContext,input:z.infer<typeof selectedAttachmentAnalyzeSchema>){
  const selected=await readSelectedAttachment(context,input.source.sourceId);
