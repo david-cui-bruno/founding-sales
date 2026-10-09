@@ -99,6 +99,7 @@ COPY packages/domain/notifications packages/domain/notifications
 COPY packages/domain/retention packages/domain/retention
 COPY packages/domain/release packages/domain/release
 # Call-to-booking (slice W): call sessions and Cal.com meetings.
+COPY packages/domain/business packages/domain/business
 COPY packages/domain/calls packages/domain/calls
 COPY packages/domain/meetings packages/domain/meetings
 COPY packages/contracts/src packages/contracts/src
