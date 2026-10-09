@@ -26,7 +26,7 @@ it('upgrades67 to68 without replacing legacy notification history, and accepts a
     return await withTransaction(database.session, async () => await receiveCalcomEvent(database.session, { workspaceId: seeded.alpha.workspaceId, body, rawBody: Buffer.from(JSON.stringify(body)) }));
   }
   // Persist the historical schema67 shape directly. Current application code is
-  // pinned to schema74 and must never be run against the old fixture schema.
+  // pinned to the current schema and must never be run against the old fixture schema.
   const original = { meetingId: randomUUID() };
   await database.session.query(`INSERT INTO meetings
     (workspace_id,id,booking_uid,current_booking_uid,firm_id,contact_id,opportunity_id,state,starts_at,ends_at,last_event_at,organizer_email,attendee_email)
@@ -41,16 +41,17 @@ it('upgrades67 to68 without replacing legacy notification history, and accepts a
 
   expect((await applyMigrations(database.session, { throughVersion: 68 })).map(result => result.version)).toEqual([68]);
   expect(await readAppliedSchemaVersion(database.session)).toBe(68);
+  const preserved=(await database.session.query<{event_key:string;status:string;target:unknown}>('SELECT event_key,status,target FROM actionable_notification_attempts WHERE workspace_id=$1 AND attempt_id=$2',[seeded.alpha.workspaceId,attemptId])).rows[0];
+  expect(preserved).toEqual({event_key:legacyEvent,status:'unknown',target:{kind:'meeting',firmId:crm.alpha.firmId,meetingId:original.meetingId,startsAt:'2026-09-15T03:30:00.000Z'}});
+  expect(await applyMigrations(database.session, { throughVersion: 68 })).toEqual([]);
+  // Historical preservation is checked at 68; all current product operations require its full pin.
+  await applyMigrations(database.session);
   expect(await acknowledgeNotification(context, { attemptId, deviceId, now })).toBeNull();
   const history = await readActionableNotifications(context, { deviceId, now });
   expect(history.recoveries).toMatchObject([{ eventKey: legacyEvent, current: false, receipt: { attemptId, status: 'acknowledged', attemptedAt: now, unknownAt: now } }]);
   const legacyCandidate = (await readNotificationCandidates(context, { now }))[0]!;
   expect(await claimNotification(context, { deviceId, eventKey: legacyCandidate.eventKey, now })).toBeNull();
 
-  expect(await applyMigrations(database.session, { throughVersion: 68 })).toEqual([]);
-  // Exact schema68 preservation above remains tested; new business operations run
-  // only after the remaining migrations establish the current application pin.
-  await applyMigrations(database.session);
   await book('call-upgrade-current');
   const current = (await readNotificationCandidates(context, { now })).find(candidate => candidate.target.kind === 'meeting' && candidate.target.bookingUid === 'call-upgrade-current');
   if (current === undefined) throw new Error('current booking candidate missing');
