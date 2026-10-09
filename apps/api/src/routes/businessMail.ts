@@ -1,3 +1,4 @@
+import {readMailConversationV2} from '@fss/domain/mail/crmMailOriginals.ts';
 import {
   mailSourceStateReadSchema,
   mailSourceAssociateSchema,
@@ -26,6 +27,7 @@ import { redactError } from '../limits.ts';
 import type { ApiRequest, RoutingOptions, RouteResult } from './types.ts';
 export const BUSINESS_MAIL_PATHS = [
   '/crm/business/mail/read',
+  '/crm/business/mail/read/v2',
   '/crm/business/mail/state/read',
   '/crm/business/mail/evidence/read',
   '/crm/business/mail/controls/read',
@@ -121,7 +123,7 @@ export async function routeBusinessMail(
     body: await withTransaction(options.auth.db, () =>
       request.path.endsWith('/evidence/read')
         ? resolveMailSource(scoped.context, parsed.data)
-        : readMailConversation(scoped.context, parsed.data),
+        : request.path.endsWith('/read/v2')?readMailConversationV2(scoped.context,parsed.data):readMailConversation(scoped.context, parsed.data),
     ),
   };
 }

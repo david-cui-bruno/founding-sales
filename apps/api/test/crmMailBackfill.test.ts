@@ -276,6 +276,11 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
   if(scenario==='body_quota')await fixture.db.query('UPDATE crm_mail_import_allocations SET user_limit_units=4,user_headroom_units=0 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
   const gmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'100',messages:[{id:'historical-business',threadId:'historical-business-thread',historyId:'50',internalDateEpochMilliseconds:Date.now()-89.5*86400000,headers:{From:'person@example.test',To:'business@example.test',Subject:'Historical business'},body:'Permitted historical business text'}]});
   const access={resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true}};
+  let originalMode:'unchanged'|'trashed'='unchanged';
+  const backfillGmail={...gmail,listMessageIds:async(...args:Parameters<typeof gmail.listMessageIds>)=>originalMode==='unchanged'?await gmail.listMessageIds(...args):{ok:true as const,messageIds:['historical-business'],nextPageToken:null},getMetadata:async(...args:Parameters<typeof gmail.getMetadata>)=>{
+   const metadata=await gmail.getMetadata(...args);
+   return originalMode==='trashed'&&metadata!==null?{...metadata,labelIds:['TRASH']}:metadata;
+  }};
   const captureGmail={...gmail,getMetadata:async(...args:Parameters<typeof gmail.getMetadata>)=>{
    const metadata=await gmail.getMetadata(...args);
    if(scenario==='disconnected')await fixture.db.query("UPDATE mailboxes SET status='disconnected',disconnected_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
@@ -289,7 +294,7 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
    return metadata;
   }};
   const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,
-   crmMailBackfill:{...access,gmail,observer:createApprovedBusinessMailObserver({categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'fixture-metadata-v1'})})},
+   crmMailBackfill:{...access,gmail:backfillGmail,observer:createApprovedBusinessMailObserver({categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'fixture-metadata-v1'})})},
    crmMailCapture:{proofVerifier:access.proofVerifier,provider:{read:async()=>{throw new Error('unmetered live provider must not be called');}},historicalProvider:createHistoricalGmailMailCaptureProvider({...access,gmail:captureGmail})},
   });
   const runtime=await fixture.database.appRuntimeSession();
@@ -308,11 +313,19 @@ it.each(['copy','body_quota','changed_generation','changed_account','disconnecte
   const copied=await registry.get('crm.mail_capture')!.handle({session:runtime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:capture});
   expect(copied).toMatchObject({progress:{outcome:'captured',sourceRevision:1}});
   expect((await post('/crm/business/mail/read',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{passage:'Permitted historical business text',completeness:'partial',ownerUserId:admin.userId,mailboxId:mailbox.id,accountBinding:binding}});
+  const originalPreview=await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')});
+  expect(originalPreview.status).toBe(200);
+  expect(originalPreview.body).toMatchObject({state:'available',source:{originalObservation:{state:'unknown',revision:'0',observedAt:null,observedGeneration:null,observedAccountBinding:null,reason:null,connectionState:'current'}}});
   expect(await runClaimedJob(runtime,{registry,job:capture})).toBe('completed');
   expect(gmail.bodyReads).toEqual(['historical-business']);
   expect(gmail.metadataReads).toEqual(['historical-business','historical-business']);
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:'current',quotaAccounting:{reservedUnits:'5',observedUnits:'5',unknownUnits:'0'}});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{scope:'permitted_import_corpus',coverage:'complete',retainedCopiedBodies:'1',unavailableCopies:'0',pendingCaptures:'0',reviewRequiredMetadata:'0',uncapturedMetadata:'0',unresolvedMetadata:'0'}});
+  originalMode='trashed';
+  expect(await runSchedulerPass(runtime,{sources:[workerDueWorkSources({crmMailBackfill:true}).find(source=>source.name==='crm-mail-backfill')!],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
+  const refresh=(await claimJobs(runtime,{owner:'original-state-refresh',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(await runClaimedJob(runtime,{registry,job:refresh})).toBe('completed');
+  expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{sourceRevision:1,passage:'Permitted historical business text',originalObservation:{state:'trashed',revision:'1',observedAt:expect.any(String),observedGeneration:1,observedAccountBinding:binding,reason:'verified_trash_label',connectionState:'current'}}});
   const outsideFirm=await seedFirm(fixture,{name:'Other assigned context',regionCode:'RI',postalCode:'02903',assignedUserId:fixture.alpha.salesperson.userId});
   expect((await post('/crm/business/mail/associate',{commandId:randomUUID(),clientVersion:'1.4.0',sourceId:copied?.progress['sourceId'],expectedRevision:1,firmId:outsideFirm})).body).toMatchObject({status:'accepted'});
   await fixture.db.query("CREATE FUNCTION test_refuse_backfill_coverage_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='crm.mail_source_admin_read' THEN RAISE EXCEPTION 'coverage audit unavailable'; END IF; RETURN NEW; END $$");

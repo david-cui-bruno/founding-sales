@@ -105,3 +105,17 @@ CREATE TABLE crm_mail_import_messages (
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_mail_import_messages TO app_runtime,migration;
 
 CREATE INDEX crm_mail_import_active_jobs ON jobs(workspace_id,(payload->>'importId')) WHERE kind='crm.mail_backfill' AND state IN ('queued','retryable','running');
+
+-- Dated provider-original observations are independent of the retained Callie copy.
+ALTER TABLE crm_mail_sources
+ ADD COLUMN original_availability text NOT NULL DEFAULT 'unknown' CHECK(original_availability IN ('unknown','available','trashed','confirmed_missing','transient_unavailable')),
+ ADD COLUMN original_observation_revision bigint NOT NULL DEFAULT 0 CHECK(original_observation_revision>=0),
+ ADD COLUMN original_observed_at timestamptz,
+ ADD COLUMN original_observed_generation integer CHECK(original_observed_generation>0),
+ ADD COLUMN original_observed_account_binding text CHECK(original_observed_account_binding ~ '^[a-f0-9]{64}$'),
+ ADD COLUMN original_observation_reason text CHECK(original_observation_reason IN ('verified_metadata','verified_trash_label','verified_message_not_found','grant_unavailable','rate_limited','provider_unavailable')),
+ ADD CONSTRAINT crm_mail_original_observation_shape CHECK(
+  (original_availability='unknown' AND original_observed_at IS NULL AND original_observed_generation IS NULL AND original_observed_account_binding IS NULL AND original_observation_reason IS NULL)
+  OR (original_observation_revision>0 AND original_observed_at IS NOT NULL AND original_observed_generation IS NOT NULL AND original_observed_account_binding IS NOT NULL
+   AND ((original_availability='available' AND original_observation_reason='verified_metadata') OR (original_availability='trashed' AND original_observation_reason='verified_trash_label') OR (original_availability='confirmed_missing' AND original_observation_reason='verified_message_not_found') OR (original_availability='transient_unavailable' AND original_observation_reason IN ('grant_unavailable','rate_limited','provider_unavailable'))))),
+ ADD CONSTRAINT crm_mail_deleted_original_observation CHECK(availability<>'deleted' OR original_availability='unknown');

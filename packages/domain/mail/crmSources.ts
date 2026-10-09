@@ -1158,7 +1158,7 @@ export async function changeMailSource(
       [context.scope.workspaceId, input.sourceId],
     );
     await context.db.query(
-      "UPDATE crm_mail_sources SET participants='[]',raw_sender_date=NULL,passage_ranges='[]',sent_proof=false,provider_at=NULL,observed_at=NULL,availability=$3,source_revision=$4 WHERE workspace_id=$1 AND source_id=$2",
+      "UPDATE crm_mail_sources SET original_availability='unknown',original_observation_revision=original_observation_revision+1,original_observed_at=NULL,original_observed_generation=NULL,original_observed_account_binding=NULL,original_observation_reason=NULL,participants='[]',raw_sender_date=NULL,passage_ranges='[]',sent_proof=false,provider_at=NULL,observed_at=NULL,availability=$3,source_revision=$4 WHERE workspace_id=$1 AND source_id=$2",
       [context.scope.workspaceId, input.sourceId, availability, revision],
     );
     await context.db.query(

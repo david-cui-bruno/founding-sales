@@ -1,3 +1,4 @@
+import {recordRetainedOriginalMetadata} from '@fss/domain/mail/crmMailOriginals.ts';
 import {z} from 'zod';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {readBackfillAuthority,type BackfillAuthority} from '@fss/domain/mail/crmBackfillAuthority.ts';
@@ -75,6 +76,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
       if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
       const metadata=await providerRead('metadata',bound,access=>adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS));
       if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
+      await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
       await withTransaction(input.session,async()=>{
        if(!await fenced(input))throw new BackfillFailure('acquisition_binding_changed');
        const current=await readBackfillAuthority(context,importId,true);
@@ -100,6 +102,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
     const metadata=await providerRead('metadata',authority,access=>adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS));
     if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
+    await recordRetainedOriginalMetadata(context,{authority,messageId,metadata,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     if(metadata!==null&&(BigInt(metadata.internalDateEpochMilliseconds)*1000n<BigInt(authority.fromEpochMicroseconds)||BigInt(metadata.internalDateEpochMilliseconds)*1000n>=BigInt(authority.toEpochMicroseconds)))continue;
     const expected=authority;
     await withTransaction(input.session,async()=>{
