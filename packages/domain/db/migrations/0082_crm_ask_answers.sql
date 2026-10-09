@@ -192,4 +192,11 @@ BEGIN
  RETURN NEW;
 END;
 $$;
-CREATE TRIGGER crm_ask_window_current_request BEFORE INSERT ON crm_ask_request_windows FOR EACH ROW EXECUTE FUNCTION guard_crm_ask_window();
+CREATE FUNCTION lock_crm_ask_window_parent() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ PERFORM id FROM crm_ask_requests WHERE workspace_id=NEW.workspace_id AND id=NEW.request_id FOR UPDATE;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER crm_ask_window_parent_lock BEFORE INSERT ON crm_ask_request_windows FOR EACH ROW EXECUTE FUNCTION lock_crm_ask_window_parent();
+CREATE CONSTRAINT TRIGGER crm_ask_window_current_request AFTER INSERT ON crm_ask_request_windows DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_crm_ask_window();
