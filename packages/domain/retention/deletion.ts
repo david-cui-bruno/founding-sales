@@ -1,3 +1,4 @@
+import {lockAskLifecycle} from '../crm/askAnswerLifecycle.ts';
 import {redactBackfillMetadataRows} from '../mail/crmBackfillMetadata.ts';
 import {
   mailContextPredicate,
@@ -1129,6 +1130,9 @@ export async function commitDeletion(
   const actor = context.scope.actor;
   if (actor.kind !== "user") return refuse("admin_only");
 
+  // Ask recovery has no surviving source authority after erasure. Serialize its
+  // bounded database stage before the existing deletion lock hierarchy.
+  await lockAskLifecycle(context);
   // The send gate first, before the request row and before anything is measured (Cal.com
   // slice M1, review fold 2, finding 3 (ii)). Every stop-fact writer takes it first —
   // the tombstones below do too — and so does a Cal.com booking: a booking that commits
