@@ -13,7 +13,15 @@ function purpose(f:Fixture):Row{return {workspace_id:f.seeded.alpha.workspaceId,
 async function window(f:Fixture):Promise<Row>{const parent=request(f);await insert(f,'crm_ask_requests',parent);const scope=JSON.parse(String(parent['scope'])) as {sources:{sourceId:string}[]};return {workspace_id:f.seeded.alpha.workspaceId,request_id:parent['id']!,id:randomUUID(),request_version:1,request_epoch:1,ordinal:1,source_kind:'selected_note',source_id:scope.sources[0]!.sourceId,source_revision:1,source_hash:hash,locator:'text:0:4',parser_version:'canonical-original-v1',chunker_version:'lexical-original-v1',context_hash:hash,text_hash:hash,group_hash:hash,context_snapshot:JSON.stringify(context),original_access_closure:JSON.stringify(closure)};}
 async function financial(f:Fixture):Promise<Row>{const parent=request(f);await insert(f,'crm_ask_requests',parent);const reservationId=randomUUID(),jobId=randomUUID();await insert(f,'provider_reservations',{workspace_id:f.seeded.alpha.workspaceId,id:reservationId,provider_key:'catalog-fake',subject_kind:'crm_ask_answer',subject_id:parent['id']!,attempt:1,business_date:'2026-10-09',business_time_zone:'Etc/UTC',cents:1,model_name:'catalog-v1',max_input_tokens:1000,max_output_tokens:100});await insert(f,'jobs',{workspace_id:f.seeded.alpha.workspaceId,id:jobId,kind:'crm.ask_answer',payload:'{}',idempotency_key:randomUUID()});return {workspace_id:f.seeded.alpha.workspaceId,id:randomUUID(),request_id:parent['id']!,request_version:1,request_epoch:1,stage:'answer',attempt:1,reservation_id:reservationId,job_id:jobId,fencing_token:1,purpose_revision:1,purpose_snapshot:'{}',config_fingerprint:hash,evaluation_fingerprint:hash,authorization_fingerprint:hash,input_hash:hash,input_price_micros:1,output_price_micros:1,max_input_tokens:1000,max_output_tokens:100,dispatch_state:'reserved'};}
 const builders:Record<string,(f:Fixture)=>Row|Promise<Row>>={crm_ask_requests:request,crm_ask_purposes:purpose,crm_ask_request_windows:window,crm_ask_financial_receipts:financial};
-function bad(constraint:string,table:string,patch:Row):Case{return {constraint,run:async f=>insert(f,table,{...await builders[table]!(f),...patch})};}
+function bad(constraint:string,table:string,patch:Row):Case{return {constraint,run:async f=>{
+ const row={...await builders[table]!(f),...patch};
+ if(table==='crm_ask_requests'&&patch['workspace_id']!==undefined){
+  const scope=JSON.parse(String(row['scope'])) as {sources:Record<string,unknown>[]};
+  for(const source of scope.sources)source['workspaceId']=patch['workspace_id'];
+  row['scope']=JSON.stringify(scope);
+ }
+ return insert(f,table,row);
+}};}
 const cases:Case[]=[];
 for(const [table,fields]of Object.entries({
  crm_ask_requests:{version:0,epoch:0,state:'bad',reason:'bad',purpose_revision:0,evaluation_fingerprint:'bad'},
@@ -35,4 +43,24 @@ for(const [table,constraint,patch]of [
  ['crm_ask_financial_receipts','crm_ask_financial_reservation',{attempt:2}],
 ]as const)cases.push({constraint,run:async f=>{const row=await builders[table]!(f);await insert(f,table,row);const changes:Row={...patch};if(changes['reservation_id']==='new'){const other=await financial(f);changes['reservation_id']=other['reservation_id']!;}return insert(f,table,{...row,...changes,id:randomUUID()});}});
 cases.push({constraint:'crm_ask_initial_identity_immutable',run:async f=>{const row=request(f);await insert(f,'crm_ask_requests',row);return f.session.query('UPDATE crm_ask_requests SET owner_user_id=$3 WHERE workspace_id=$1 AND id=$2',[row['workspace_id']!,row['id']!,f.seeded.alpha.admin.userId]);}});
+// Missing and JSON-null input keys must fail closed rather than SQL CHECK UNKNOWN.
+for(const patch of [
+ {scope:'{}'}, {scope:'{"sources":null}'}, {scope:'{"sources":[]}'},
+ {initial_contexts:'[]'}, {initial_contexts:'[null]'}, {initial_contexts:'[{}]'},
+ {initial_access_closure:'null'},
+])cases.push(bad('crm_ask_request_private_shape','crm_ask_requests',patch));
+for(const field of ['workspaceId','sourceId','kind','revision','contentHash','locator']) {
+ for(const mode of ['missing','null'] as const) {
+  if(field==='locator'&&mode==='null')continue;
+  cases.push({constraint:'crm_ask_request_private_shape',run:async f=>{
+   const row=request(f);const scope=JSON.parse(String(row['scope'])) as {sources:Record<string,unknown>[]};
+   if(mode==='missing')delete scope.sources[0]![field];else scope.sources[0]![field]=null;
+   return insert(f,'crm_ask_requests',{...row,scope:JSON.stringify(scope)});
+  }});
+ }
+}
+cases.push({constraint:'crm_ask_request_private_shape',run:async f=>{
+ const row=request(f);const scope=JSON.parse(String(row['scope'])) as {sources:Record<string,unknown>[]};
+ return insert(f,'crm_ask_requests',{...row,scope:JSON.stringify({sources:[...scope.sources,...scope.sources]}),initial_contexts:JSON.stringify([context,context])});
+}});
 export const ASK_ANSWER_CONSTRAINT_CASES:readonly Case[]=cases;
