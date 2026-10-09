@@ -276,6 +276,18 @@ export const reportSchema = z.strictObject({
   activationAllowed: z.literal(false),
 });
 
+/** Each isolated case binds its own live fixture corpus; no mutation contaminates another. */
+export const caseBindingSchema = z.strictObject({caseId:fixtureId, split:z.enum(['development','holdout']),
+  corpusSha256:sha256, sourceManifestSha256:sha256, labelSha256:sha256});
+export const frozenSuiteSchema = z.strictObject({version:z.literal('ask-evaluation-suite-v1'),
+  suiteId:fixtureId, fixtureVersion:version, caseBindings:z.array(caseBindingSchema).length(120),
+  split:frozenSplitSchema, suiteSha256:sha256});
+export const developmentSuiteSchema = z.strictObject({version:z.literal('ask-evaluation-development-v1'),
+  suiteId:fixtureId, fixtureVersion:version, caseBindings:z.array(caseBindingSchema.extend({split:z.literal('development')})).length(80),
+  labelSha256:sha256, suiteSha256:sha256});
+export type FrozenSuite = z.infer<typeof frozenSuiteSchema>;
+export type DevelopmentSuite = z.infer<typeof developmentSuiteSchema>;
+
 export type FrozenManifest = z.infer<typeof frozenManifestSchema>;
 export type FrozenCorpus = z.infer<typeof frozenCorpusSchema>;
 export type FrozenSplit = z.infer<typeof frozenSplitSchema>;
