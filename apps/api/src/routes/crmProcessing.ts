@@ -1,12 +1,12 @@
-import { readCrmProcessing, requestCrmProcessing, readCrmExtractionPurpose, saveCrmExtractionPurpose, readCrmProcessingHealth } from '@fss/domain/crm/processing.ts';
-import { crmSourceLookupSchema, crmProcessingReadSchema, crmProcessingRequestSchema, crmExtractionPurposeSaveSchema, crmProcessingHealthReadSchema } from '@fss/contracts';
+import { readCrmProcessing, requestCrmProcessing, readCrmExtractionPurpose, saveCrmExtractionPurpose, readCrmProcessingHealth,readCrmProcessingRecord } from '@fss/domain/crm/processing.ts';
+import { crmSourceLookupSchema, crmProcessingReadSchema, crmProcessingRequestSchema, crmExtractionPurposeSaveSchema, crmProcessingHealthReadSchema,crmProcessingRecordReadSchema } from '@fss/contracts';
 import { resolveCrmSource } from '@fss/domain/crm/sourceResolver.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import { redactError } from '../limits.ts';
 import type { ApiRequest, RoutingOptions, RouteResult } from './types.ts';
 
-export const CRM_PROCESSING_PATHS = ['/crm/processing/source/read', '/crm/processing/request', '/crm/processing/read', '/crm/processing/purpose/read', '/crm/processing/purpose/save', '/crm/processing/health/read'] as const;
+export const CRM_PROCESSING_PATHS = ['/crm/processing/source/read', '/crm/processing/request', '/crm/processing/read', '/crm/processing/purpose/read', '/crm/processing/purpose/save', '/crm/processing/health/read','/crm/processing/record/read'] as const;
 export async function routeCrmProcessing(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!(CRM_PROCESSING_PATHS as readonly string[]).includes(request.path)) return null;
   if (options.auth === undefined) return { status: 401, body: redactError('unauthenticated') };
@@ -15,6 +15,7 @@ export async function routeCrmProcessing(request: ApiRequest, options: RoutingOp
   const scoped = contextForPrincipal(options.auth, verified.principal);
   if (!scoped.ok) return scoped.result;
   if (request.method !== 'POST') return { status: 405, body: redactError('method_not_allowed') };
+  if(request.path==='/crm/processing/record/read'){const parsed=crmProcessingRecordReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};const result=await withTransaction(options.auth.db,()=>readCrmProcessingRecord(scoped.context,parsed.data));return result===null?{status:404,body:redactError('not_found')}:{status:200,body:result};}
   if (request.path === '/crm/processing/health/read') {
     const parsed = crmProcessingHealthReadSchema.safeParse(request.body);
     if (!parsed.success) return { status: 400, body: redactError('malformed_body') };

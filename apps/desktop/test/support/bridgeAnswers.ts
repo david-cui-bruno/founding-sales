@@ -246,6 +246,14 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
+ '/crm/processing/source/read':{state:'available',source:{workspaceId:FIXTURE_IDS.firm,sourceId:FIXTURE_IDS.item,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-01T00:00:00Z',completeness:'selected_excerpt',availability:'available'},extent:{unit:'utf16',length:0},passage:null},
+ '/crm/processing/read':{state:'not_requested',claims:[]},
+ '/crm/processing/request':{status:'accepted',replayed:false,result:{state:'not_requested',claims:[]}},
+ '/crm/processing/purpose/read':{configured:false,enabled:false,revision:0,modelVersion:null,endpoint:null,dailyCeilingCents:0,monthlyCeilingCents:0,unavailableReason:'purpose_not_configured'},
+ '/crm/processing/purpose/save':{status:'accepted',replayed:false,result:{revision:1,enabled:false}},
+ '/crm/processing/record/read':{sources:[],truncated:false},
+ '/crm/processing/health/read':{sourceId:FIXTURE_IDS.item,sourceRevision:1,availability:'available',generations:[],truncated:false,unknownAcceptance:false},
+
 '/firms':{firms:[]},
 '/crm/relationships/read':{"relationships": [], "nextAfterId": null},
 '/crm/relationships/save':{"status": "accepted", "replayed": false, "result": {"relationshipId": "11111111-1111-4111-8111-111111111111", "revision": 1}},

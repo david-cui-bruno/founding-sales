@@ -1,3 +1,6 @@
+import {nativeProcessingReference} from '@fss/domain/crm/sourceResolver.ts';
+import {createHash} from 'node:crypto';
+import {callTranscriptUtteranceSchema} from '@fss/contracts';
 import {
   CALL_HISTORY_INCLUDE_NOTES,
   CALL_HISTORY_INCLUDE_OUTCOME,
@@ -192,6 +195,12 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
     if (callSessionId === null) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const transcript = await readCallTranscript(scoped.context, callSessionId);
     if (transcript === null) return notFound;
+    if(request.query.getAll('include').includes('processing')){
+      const reference=await nativeProcessingReference(scoped.context,'call_transcript',callSessionId);
+      const parsed=callTranscriptUtteranceSchema.array().safeParse(transcript.utterances);
+      if(reference===null||!parsed.success||reference.contentHash!==createHash('sha256').update(JSON.stringify(parsed.data)).digest('hex'))return notFound;
+      transcript.processingSource=reference;
+    }
     return { status: 200, body: callTranscriptResponseSchema.parse(transcript) };
   }
 

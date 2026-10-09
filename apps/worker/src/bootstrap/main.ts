@@ -1,4 +1,6 @@
 import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
+import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts';
+import { crmExtractJobHandler } from '../handlers/crmExtract.ts';
 import {automaticEmailHandler,automaticEmailSource} from '../handlers/emailAdmission.ts';
 import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
@@ -219,6 +221,7 @@ export function registerHandlers(
     }),
   );
   registry.register(retentionBatchJobHandler());
+  registry.register(crmExtractJobHandler({}));
   registry.register(socialAssetsHandler(composition.socialAssets??null));
   // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,
   // so like `retention.batch` the deployment has nothing to say about them: one drains
@@ -502,6 +505,7 @@ export function workerDueWorkSources(
   } = {},
 ): readonly DueWorkSource[] {
   return [
+    crmExtractionRecoverySource(),
     socialDraftSource(options.socialDraft===true),
     outreachReplySource(),
     meetingAnalysesSource(options.meetingAnalysis === true),

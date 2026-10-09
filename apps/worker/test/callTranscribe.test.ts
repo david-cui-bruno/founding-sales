@@ -402,6 +402,16 @@ describe('the call.transcribe job', () => {
     expect(logs.find(line => line.event === 'call_transcription')?.fields).toMatchObject({ settled_cents: 2, utterances: 2 });
   });
 
+  it('queues exact call evidence with the original call actor only under enabled extraction configuration',async()=>{
+    await database.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2)",[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
+    try{
+      const sessionId=await call(60);await enqueue(sessionId);const provider=scripted([ok(60)]);await drain(provider);expect(provider.calls).toBe(1);
+      const generations=(await database.session.query("SELECT id,source_id,source_revision,requested_by,purpose_revision FROM crm_extraction_generations WHERE workspace_id=$1 AND source_kind='call_transcript'",[seeded.alpha.workspaceId])).rows;
+      expect(generations).toHaveLength(1);expect(generations[0]).toMatchObject({source_id:sessionId,source_revision:1,requested_by:seeded.alpha.salesperson.userId,purpose_revision:1});
+      expect((await database.session.query("SELECT payload FROM jobs WHERE workspace_id=$1 AND kind='crm.extract'",[seeded.alpha.workspaceId])).rows).toEqual([{payload:{generationId:generations[0]!['id']}}]);
+    }finally{await database.session.query('UPDATE crm_extraction_purposes SET enabled=false WHERE workspace_id=$1',[seeded.alpha.workspaceId]);}
+  });
+
   it('refuses with transcription_budget_exhausted when the day’s ceiling would be passed, and calls nobody', async () => {
     const sessionId = await call(600);
     expect((await enqueue(sessionId)).enqueued).toBe(true);

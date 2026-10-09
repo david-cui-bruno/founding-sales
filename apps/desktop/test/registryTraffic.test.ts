@@ -202,6 +202,13 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'crm.businessPolicySave':{mailboxId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedRevision:0,enabled:false,disclosure:null},
   'crm.businessReviewRead':{mailboxId:UUID,limit:50},
   'crm.businessReviewDecide':{mailboxId:UUID,conversationId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedPolicyRevision:1,expectedMetadataRevision:1,expectedDecisionRevision:0,decision:'exclude'},
+  'crm.processingSource':{workspaceId:UUID,sourceId:UUID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null},
+  'crm.processingRead':{source:{workspaceId:UUID,sourceId:UUID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null}},
+  'crm.processingRequest':{source:{workspaceId:UUID,sourceId:UUID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null}},
+  'crm.processingPurpose':{},
+  'crm.processingHealth':{sourceId:UUID,kind:'selected_note'},
+  'crm.processingRecordHealth':{recordId:UUID,kind:'meeting'},
+  'crm.processingPurposeSave':{expectedRevision:0,enabled:false,endpointId:'fixture',modelVersion:'fixture-v1',accessGrantVersion:'grant-v1',dataHandlingVersion:'handling-v1',dailyCeilingCents:10,monthlyCeilingCents:100,inputTokenPriceMicros:1,outputTokenPriceMicros:1},
   'crm.personList': {limit:50},
   'crm.personRead': {personId:UUID,limit:50},
   'crm.personCreate': {fullName:'Alex Example'},
@@ -401,7 +408,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
-    crm: (()=>{const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...bridge,...Object.fromEntries(['dealCreate','dealReopen','businessPolicyRead','businessPolicySave','businessReviewRead','businessReviewDecide','relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture'].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]))} as unknown as Host;})(),
+    crm: (()=>{const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...bridge,...Object.fromEntries(['processingSource','processingRead','processingRequest','processingPurpose','processingPurposeSave','processingHealth','processingRecordHealth','dealCreate','dealReopen','businessPolicyRead','businessPolicySave','businessReviewRead','businessReviewDecide','relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture'].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]))} as unknown as Host;})(),
     sequences: createSequenceBridge({ api, session }) as unknown as Host,
     settings: createAdminBridge({ api, session }) as unknown as Host,
     // Slice M1: answered by `operationHost.ts` against the client directly, like
@@ -560,6 +567,16 @@ describe('the registry records the traffic the bridges actually make', () => {
       await call(INPUTS[name] ?? {});
       expect(seen, `${name} never reached ${request}`).toContain(request);
     }
+  });
+
+  it('declares and exercises the negotiated native processing-source reads',async()=>{
+    const {seen,api}=requestsOf();const hosts=hostsFor(api);
+    await hosts['calling']!['transcript']!({callSessionId:UUID,includeProcessing:true});
+    await hosts['meetings']!['transcript']!({meetingId:UUID,includeProcessing:true});
+    await hosts['meetings']!['transcript']!({meetingId:UUID,cursor:'page',includeProcessing:true});
+    expect(seen).toEqual(['GET /calls/transcript?callSessionId={uuid}&include=processing','GET /meetings/transcript?meetingId={uuid}&include=processing','GET /meetings/transcript?meetingId={uuid}&cursor=page&include=processing']);
+    expect(OPERATIONS['calling.transcript'].calls).toContainEqual({method:'GET',path:'/calls/transcript?callSessionId={uuid}&include=processing'});
+    expect(OPERATIONS['meetings.transcript'].calls).toContainEqual({method:'GET',path:'/meetings/transcript?meetingId={uuid}&cursor={string}&include=processing'});
   });
 
   it('names the settings read with the query it actually sends', () => {

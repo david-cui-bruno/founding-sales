@@ -1,3 +1,4 @@
+import type {ProcessingPorts} from './ProcessingHealth.tsx';
 import type { ContextPorts } from "./SourceContexts.tsx";
 import type { EndpointPorts, EndpointEditingPorts } from "./Endpoints.tsx";
 import type { FirmAddressPorts } from "./FirmAddresses.tsx";
@@ -124,3 +125,5 @@ export const sourceContextPorts: ContextPorts = {
     await api().command("crm.sourceContextSave", input);
   },
 };
+
+export const processingPorts:ProcessingPorts={health:async input=>await api().read("crm.processingHealth",input),request:async source=>{await api().command("crm.processingRequest",{source});}};

@@ -1,4 +1,5 @@
 import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
+import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
 import type { ContextPorts } from "./SourceContexts.tsx";
 import {
   Endpoints,
@@ -52,8 +53,10 @@ export function People({
   endpoints,
   endpointEditing,
   imports,
+  processing,
 }: {
   enabled: boolean;
+  processing?:ProcessingPorts;
   ports: PeoplePorts;
   relationships?: RelationshipPorts;
   relationshipEditing?: RelationshipEditingPorts;
@@ -276,6 +279,7 @@ export function People({
           <ul>
             {page.sources.map((source) => (
               <li key={source.sourceId}>
+                {processing&&<ProcessingHealth source={source} ports={processing}/>}
                 {source.excerpt ? (
                   <>
                     <p>{source.excerpt}</p>

@@ -1,3 +1,4 @@
+import {nativeProcessingReference} from '@fss/domain/crm/sourceResolver.ts';
 import { randomUUID } from 'node:crypto';
 import { authorizeRecordingRecovery, completeRecordingRecovery, listRecordingRecoveries } from '@fss/domain/meetings/recordingRecovery.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
@@ -29,6 +30,18 @@ export async function routeMeetingTranscription(request: ApiRequest, options: Ro
         return { status: 400, body: { error: 'invalid_input' } };
     try {
         const value = await readMeetingTranscript(scoped.context, { meetingId: meetingId.data, ...(cursor === undefined ? {} : { cursor }) });
+        if(value!==null&&request.query?.getAll('include').includes('processing')){
+            const processingSources=[];
+            const sourceIds=[...new Set([...value.recordings.flatMap(row=>row.transcriptId===null?[]:[row.transcriptId]),...value.utterances.map(row=>row.transcriptId)])].sort();
+            value.processingSourcesTruncated=sourceIds.length>200||value.recordingsTruncated;
+            for(const sourceId of sourceIds.slice(0,200)){
+                const reference=await nativeProcessingReference(scoped.context,'meeting_transcript',sourceId);
+                const expected=value.recordings.find(row=>row.transcriptId===sourceId)?.transcriptVersion??value.utterances.find(row=>row.transcriptId===sourceId)?.transcriptVersion;
+                if(reference===null||reference.revision!==expected)return {status:404,body:{error:'not_found'}};
+                processingSources.push(reference);
+            }
+            value.processingSources=processingSources;
+        }
         return value === null ? { status: 404, body: { error: 'not_found' } } : { status: 200, body: value };
     }
     catch (error) {

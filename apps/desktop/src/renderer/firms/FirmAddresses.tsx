@@ -1,4 +1,5 @@
 import { SelectedImports, type SelectedImportPorts } from './SelectedImports.tsx';
+import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
 import { useEffect, useState, type JSX } from 'react';
 import { type z } from 'zod';
 import type { firmSourcePageSchema } from '@fss/contracts';
@@ -43,8 +44,10 @@ export function FirmAddresses({
   endpoints,
   editing,
   imports,
+  processing,
 }: {
   enabled: boolean;
+  processing?:ProcessingPorts;
   ports: FirmAddressPorts;
   endpoints: EndpointPorts;
   editing?: EndpointEditingPorts | undefined;
@@ -200,6 +203,7 @@ export function FirmAddresses({
           <ul>
             {page.sources.map((source) => (
               <li key={source.sourceId}>
+                {processing&&<ProcessingHealth source={source} ports={processing}/>}
                 {source.excerpt ? (
                   <>
                     <p>{source.excerpt}</p>

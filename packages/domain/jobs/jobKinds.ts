@@ -19,6 +19,7 @@ export const IDEMPOTENCY_PROTECTIONS = ['business_uniqueness', 'fencing_token', 
 export type IdempotencyProtection = (typeof IDEMPOTENCY_PROTECTIONS)[number];
 
 export const JOB_KINDS = [
+  'crm.extract',
   'sequence.action',
   'sequence.terminal_stop',
   'mail.sync',
@@ -65,6 +66,7 @@ export function isJobKind(value: string): value is JobKind {
 
 /** Appendix C, third column: the protection each kind's handler must carry. */
 export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection>> = Object.freeze({
+  'crm.extract': 'outbound_fence',
   // Execution state and the outbound fence; the send itself cannot be rolled back.
   'sequence.action': 'outbound_fence',
   // Appendix C does not name this work, because revision 3 describes the
@@ -315,6 +317,7 @@ export type JobClass = (typeof JOB_CLASSES)[number];
  * compiler runs.
  */
 export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze({
+  'crm.extract': 'bulk',
   // A person or the clock is waiting.
   'mail.sync': 'urgent',
   'crm.mail_capture': 'bulk',
