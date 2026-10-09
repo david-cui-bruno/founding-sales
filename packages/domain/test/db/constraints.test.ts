@@ -81,6 +81,74 @@ const admin = (fixture: Fixture): string => fixture.seeded.alpha.admin.userId;
 const salesperson = (fixture: Fixture): string => fixture.seeded.alpha.salesperson.userId;
 const device = (fixture: Fixture): string => fixture.seeded.alpha.salesperson.deviceId;
 
+/** Valid starting rows for schema70's database-enforced identity/source cases. */
+async function seedIndependentPerson(f: Fixture): Promise<string> {
+  const { rows } = await f.session.query<{ id: string }>(
+    "INSERT INTO crm_people(workspace_id,owner_user_id,full_name) VALUES($1,$2,'Constraint Person') RETURNING id",
+    [workspace(f), admin(f)],
+  );
+  return rows[0]?.id ?? '';
+}
+async function seedSelectedSource(f: Fixture, personId: string): Promise<string> {
+  const { rows } = await f.session.query<{ id: string }>(
+    "INSERT INTO crm_selected_sources(workspace_id,person_id,owner_user_id,source_key_hash,excerpt,content_hash,occurred_at) VALUES($1,$2,$3,$4,'Selected excerpt',$5,now()) RETURNING id",
+    [workspace(f), personId, admin(f), payloadHash('selected-source-key'), payloadHash('selected-excerpt')],
+  );
+  return rows[0]?.id ?? '';
+}
+const peopleConstraintCases: readonly Case[] = [
+  { constraint: 'crm_people_pkey', run: async f => {
+    const id = await seedIndependentPerson(f);
+    return await f.session.query("INSERT INTO crm_people(workspace_id,id,full_name) VALUES($1,$2,'Duplicate')", [workspace(f),id]);
+  } },
+  { constraint: 'crm_people_workspace_id_fkey', run: async f => await f.session.query("INSERT INTO crm_people(workspace_id,full_name) VALUES('00000000-0000-4000-8000-000000000000','No workspace')") },
+  { constraint: 'crm_people_workspace_id_owner_user_id_fkey', run: async f => await f.session.query("INSERT INTO crm_people(workspace_id,owner_user_id,full_name) VALUES($1,$2,'Other workspace owner')", [workspace(f),f.seeded.beta.admin.userId]) },
+  { constraint: 'crm_people_full_name_check', run: async f => await f.session.query("INSERT INTO crm_people(workspace_id,full_name) VALUES($1,'   ')", [workspace(f)]) },
+  { constraint: 'crm_people_revision_check', run: async f => await f.session.query("INSERT INTO crm_people(workspace_id,full_name,revision) VALUES($1,'Invalid revision',0)", [workspace(f)]) },
+  { constraint: 'crm_legacy_contact_people_pkey', run: async f => {
+    const first = await seedIndependentPerson(f);
+    const second = await seedIndependentPerson(f);
+    await f.session.query('INSERT INTO crm_legacy_contact_people(workspace_id,contact_id,person_id) VALUES($1,$2,$3)', [workspace(f),f.crm.alpha.contactId,first]);
+    return await f.session.query('INSERT INTO crm_legacy_contact_people(workspace_id,contact_id,person_id) VALUES($1,$2,$3)', [workspace(f),f.crm.alpha.contactId,second]);
+  } },
+  { constraint: 'crm_legacy_contact_people_workspace_id_person_id_key', run: async f => {
+    const person = await seedIndependentPerson(f);
+    const { rows } = await f.session.query<{ id: string }>("INSERT INTO contacts(workspace_id,firm_id,full_name) VALUES($1,$2,'Another Contact') RETURNING id", [workspace(f),f.crm.alpha.firmId]);
+    await f.session.query('INSERT INTO crm_legacy_contact_people(workspace_id,contact_id,person_id) VALUES($1,$2,$3)', [workspace(f),f.crm.alpha.contactId,person]);
+    return await f.session.query('INSERT INTO crm_legacy_contact_people(workspace_id,contact_id,person_id) VALUES($1,$2,$3)', [workspace(f),rows[0]?.id,person]);
+  } },
+  { constraint: 'crm_legacy_contact_people_workspace_id_contact_id_fkey', run: async f => await f.session.query('INSERT INTO crm_legacy_contact_people(workspace_id,contact_id,person_id) VALUES($1,$2,$3)', [workspace(f),f.crm.beta.contactId,await seedIndependentPerson(f)]) },
+  { constraint: 'crm_legacy_contact_people_workspace_id_person_id_fkey', run: async f => await f.session.query("INSERT INTO crm_legacy_contact_people(workspace_id,contact_id,person_id) VALUES($1,$2,'00000000-0000-4000-8000-000000000000')", [workspace(f),f.crm.alpha.contactId]) },
+  { constraint: 'crm_selected_sources_pkey', run: async f => {
+    const person = await seedIndependentPerson(f);
+    const id = await seedSelectedSource(f,person);
+    return await f.session.query("INSERT INTO crm_selected_sources(workspace_id,id,person_id,owner_user_id,source_key_hash,excerpt,content_hash,occurred_at) VALUES($1,$2,$3,$4,$5,'Other excerpt',$6,now())", [workspace(f),id,person,admin(f),payloadHash('different-source-key'),payloadHash('other-excerpt')]);
+  } },
+  { constraint: 'crm_selected_sources_workspace_id_owner_user_id_source_key__key', run: async f => {
+    const person = await seedIndependentPerson(f);
+    await seedSelectedSource(f,person);
+    return await seedSelectedSource(f,person);
+  } },
+  ...([
+    ['crm_selected_sources_workspace_id_person_id_fkey', "person_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_selected_sources_workspace_id_owner_user_id_fkey', "owner_user_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_selected_sources_source_key_hash_check', "source_key_hash='not-a-hash'"],
+    ['crm_selected_sources_revision_check', 'revision=0'],
+    ['crm_selected_sources_availability_check', "availability='unrecognized'"],
+    ['crm_selected_sources_check', 'excerpt=NULL'],
+    ['crm_selected_sources_check1', 'content_hash=NULL'],
+    ['crm_selected_sources_check2', 'occurred_at=NULL'],
+    ['crm_selected_sources_excerpt_check', "excerpt='   '"],
+    ['crm_selected_sources_content_hash_check', "content_hash='not-a-hash'"],
+  ] as const).map(([constraint, assignment]): Case => ({
+    constraint,
+    run: async f => {
+      const id = await seedSelectedSource(f,await seedIndependentPerson(f));
+      return await f.session.query(`UPDATE crm_selected_sources SET ${assignment} WHERE workspace_id=$1 AND id=$2`, [workspace(f),id]);
+    },
+  })),
+];
+
 const cases: readonly Case[] = [
   // ---------------------------------------------------------------- workspaces
   {
@@ -1385,6 +1453,7 @@ const cases: readonly Case[] = [
 
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
+  ...peopleConstraintCases,
   ...SOURCING_CONSTRAINT_CASES,
   ...OUTREACH_CONSTRAINT_CASES,
   ...SOCIAL_CONSTRAINT_CASES,

@@ -373,3 +373,18 @@ it('qualification discards evidence returned after switching workspace', async()
  const pending=answerOperation(operationHandlers(h),'read','sourcing.qualification',{candidateId:ITEM_ID});
  generation++;finish({ok:true,value:{}});expect(await pending).toEqual({view:null,reason:'not_found'});
 });
+
+it('returns a newly created person through the authenticated operation host without copying a source into the result',async()=>{
+ const deps=hosts();
+ deps.api.command=async(_path,_payload,parse)=>({ok:true,value:parse({personId:ITEM_ID})});
+ const result=await answerOperation(operationHandlers(deps),'command','crm.personCreate',{fullName:'Alex Example'});
+ expect(result).toEqual({personId:ITEM_ID});
+});
+it('vetoes people results when the authenticated identity changes while the request waits',async()=>{
+ const deps=hosts();let generation=0;let finish!:()=>void;
+ deps.recordings.identity.current=()=>generation;
+ deps.api.command=async(_path,_payload,parse)=>{await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse({personId:ITEM_ID})};};
+ const pending=answerOperation(operationHandlers(deps),'command','crm.personCreate',{fullName:'Alex Example'});
+ generation++;finish();
+ await expect(pending).rejects.toThrow('identity_changed');
+});

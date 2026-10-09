@@ -1,3 +1,4 @@
+import {personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,type NotificationRuntimeStatus} from '@fss/contracts';
@@ -388,6 +389,13 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'research.saveSettings': async (input: Parameters<ResearchBridgeHost['saveSettings']>[0]) =>
       await deps.research.saveSettings(input),
 
+    'crm.personList': async (input:OperationInput<'crm.personList'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/people/list',value=>peopleListSchema.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+    'crm.personRead': async (input:OperationInput<'crm.personRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/people/read',value=>personPageSchema.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+    'crm.personCreate': async (input:OperationInput<'crm.personCreate'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/people/create',input,value=>OPERATIONS['crm.personCreate'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+    'crm.personSourceAdd': async (input:OperationInput<'crm.personSourceAdd'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/people/source/add',input,value=>OPERATIONS['crm.personSourceAdd'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+    'crm.personSourceDelete': async (input:OperationInput<'crm.personSourceDelete'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/people/source/delete',input,value=>OPERATIONS['crm.personSourceDelete'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+    'crm.personSourceRecapture': async (input:OperationInput<'crm.personSourceRecapture'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/people/source/recapture',input,value=>OPERATIONS['crm.personSourceRecapture'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+    'crm.personSourceRestore': async (input:OperationInput<'crm.personSourceRestore'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/people/source/restore',input,value=>OPERATIONS['crm.personSourceRestore'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.state': async () => await deps.crm.state(),
     'crm.openFirm': async (input: { readonly firmId: string }) => await deps.crm.openFirm(input),
     'crm.firmTimeline': async (input: { readonly firmId: string; readonly before: string }) => await deps.crm.firmTimeline(input),
