@@ -16,10 +16,12 @@ import { bookingCapacityPorts } from '../meetings/bookingCapacityPorts.ts';
 import { FirmQualification } from '../sourcing/FirmQualification.tsx';
 import { selectedImportPorts } from './selectedImportPorts.ts';
 import {BusinessReview} from './BusinessReview.tsx';
+import {EmailTimeline} from './EmailTimeline.tsx';
+import {emailTimelinePorts} from './emailTimelinePorts.ts';
 import {businessReviewPorts} from './businessReviewPorts.ts';
 import { Candidates } from '../sourcing/Candidates.tsx';
 import { useKept } from '../replies/kept.ts';
-import { useEffect, useLayoutEffect, useRef, type JSX } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import type { Generation } from '../app/generation.ts';
 import { inWords } from '../dates.ts';
@@ -108,6 +110,8 @@ export function FirmsRoute({
   const crm = useCrm(route, identity, generation, guard, () => memory.panelFirmId, enterAtRoot);
   const state = crm.state;
   const [firmsTab, setFirmsTab] = useKept('firms:tab', 'firms');
+  const [mailSourceVersion, setMailSourceVersion] = useState(0);
+  const mailSourceChanged = useCallback(() => setMailSourceVersion(value => value + 1), []);
   // Which row asked for this view. The board answer is the same answer on both, so the
   // route says which reading of it to draw.
   const onPipelineRow = route.name === 'pipeline';
@@ -347,6 +351,7 @@ export function FirmsRoute({
               guard={guard}
               enabled={view.actionsEnabled}
             />
+          <EmailTimeline key={`email:${identity}:${generation}:${firm.read.firm.id}`} enabled={view.actionsEnabled} ports={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} firmId={firm.read.firm.id} firms={state.pipeline ? firmsOf(state.pipeline).map(value => ({id:value.id,name:value.name})) : [{id:firm.read.firm.id,name:firm.read.firm.name}]} />
           </>
         }
       />
@@ -558,7 +563,7 @@ export function FirmsRoute({
       ) : state.screen === 'pipeline' && state.pipeline !== null ? (
         <>
           {onFirmsList ? <div className="mb-5 flex gap-2" aria-label="Firms views"><Button size="sm" variant={firmsTab === 'firms' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'firms'} onClick={() => setFirmsTab('firms')}>All firms</Button><Button size="sm" variant={firmsTab === 'people' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'people'} onClick={() => setFirmsTab('people')}>People</Button><Button size="sm" variant={firmsTab === 'business' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'business'} onClick={() => setFirmsTab('business')}>Conversation review</Button>{state.role === 'admin' ? <Button size="sm" variant={firmsTab === 'candidates' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'candidates'} onClick={() => setFirmsTab('candidates')}>Candidates</Button> : null}</div> : null}
-          {onFirmsList && firmsTab === 'business' ? <BusinessReview key={`business:${identity}:${generation}`} enabled={view.actionsEnabled} ports={businessReviewPorts}/> : onFirmsList && firmsTab === 'people' ? <><People key={`${identity}:${generation}`} enabled={view.actionsEnabled} ports={peoplePorts} relationships={relationshipPorts} relationshipEditing={relationshipEditingPorts} contexts={sourceContextPorts} endpoints={endpointPorts} endpointEditing={endpointEditingPorts} imports={selectedImportPorts}/><FirmAddresses key={`firm-addresses:${identity}:${generation}`} enabled={view.actionsEnabled} ports={firmAddressPorts} endpoints={endpointPorts} editing={endpointEditingPorts} imports={selectedImportPorts}/></> : onFirmsList && state.role === 'admin' && firmsTab === 'candidates' ? <Candidates enabled={view.actionsEnabled} /> : <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />}
+          {onFirmsList && firmsTab === 'business' ? <BusinessReview key={`business:${identity}:${generation}`} enabled={view.actionsEnabled} ports={businessReviewPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} mailFirms={firmsOf(state.pipeline).map(firm => ({id:firm.id,name:firm.name}))}/> : onFirmsList && firmsTab === 'people' ? <><People key={`${identity}:${generation}`} enabled={view.actionsEnabled} ports={peoplePorts} relationships={relationshipPorts} relationshipEditing={relationshipEditingPorts} contexts={sourceContextPorts} endpoints={endpointPorts} endpointEditing={endpointEditingPorts} imports={selectedImportPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} mailFirms={firmsOf(state.pipeline).map(firm => ({id:firm.id,name:firm.name}))}/><FirmAddresses key={`firm-addresses:${identity}:${generation}`} enabled={view.actionsEnabled} ports={firmAddressPorts} endpoints={endpointPorts} editing={endpointEditingPorts} imports={selectedImportPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged}/></> : onFirmsList && state.role === 'admin' && firmsTab === 'candidates' ? <Candidates enabled={view.actionsEnabled} /> : <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />}
         </>
       ) : (
         // A screen with nothing in it is a state the main process should not produce, and

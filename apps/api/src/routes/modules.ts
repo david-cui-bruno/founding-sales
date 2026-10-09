@@ -1,4 +1,5 @@
 import { SELECTED_IMPORT_PATHS, routeSelectedImports } from './selectedImports.ts';
+import { BUSINESS_MAIL_PATHS, routeBusinessMail } from './businessMail.ts';
 import { BUSINESS_PATHS, routeBusinessAcquisition } from './businessAcquisition.ts';
 import { IDENTITY_PATHS,routePeopleRelationships } from './peopleRelationships.ts';
 import { PEOPLE_PATHS, routePeople } from './people.ts';
@@ -173,6 +174,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // The CRM surface. Exact paths, which is what every new endpoint should be: the
     // prefixes above are a record of the routers that already existed in that shape,
     // not an invitation.
+    moduleOf('business-mail', { paths: BUSINESS_MAIL_PATHS }, routeBusinessMail, routing),
     moduleOf('business-acquisition', { paths: BUSINESS_PATHS }, routeBusinessAcquisition, routing),
     moduleOf('people-relationships', { paths: IDENTITY_PATHS }, routePeopleRelationships, routing),
     moduleOf('selected-imports', { paths: SELECTED_IMPORT_PATHS }, routeSelectedImports, routing),

@@ -1,3 +1,4 @@
+import { MAIL_CAPTURE_CONSTRAINT_CASES } from './support/mailCaptureCases.ts';
 import {BUSINESS_ACQUISITION_CONSTRAINT_CASES} from './support/businessAcquisitionCases.ts';
 import { SOCIAL_CONSTRAINT_CASES } from './support/socialCases.ts';
 import { OUTREACH_CONSTRAINT_CASES } from './support/outreachCases.ts';
@@ -1618,6 +1619,7 @@ const cases: readonly Case[] = [
   // migration at the same time never both edit the middle of this array.
   ...selectedImportConstraintCases,
   ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,
+  ...MAIL_CAPTURE_CONSTRAINT_CASES,
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
   ...SOURCING_CONSTRAINT_CASES,
@@ -1712,7 +1714,7 @@ describe('foundation constraints', () => {
         expect(String((thrown as { message?: string }).message)).toContain('without an active admin');
         return;
       }
-      expect(thrown).toMatchObject({ constraint: name });
+      expect(thrown).toMatchObject({ constraint: name==='crm_mail_source_canonical_gate'||name==='crm_mail_message_canonical_gate' ? 'crm_mail_available_source_canonical' : name });
     },
   );
 

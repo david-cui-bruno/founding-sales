@@ -266,13 +266,13 @@ export async function redactBusinessMetadata(context: RepositoryContext, input: 
     return { ok: false as const, reason: 'metadata_deletion_scope_invalid' };
   const rows = (await context.db.query<{
     id: string;
-  }>(`SELECT id FROM crm_business_conversations WHERE workspace_id=$1 AND metadata_availability='available' AND (id=ANY($2::uuid[]) OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(participants) AS address WHERE address=ANY($3::text[])) OR ($4 AND latest_provider_at<clock_timestamp()-interval '90 days')) ORDER BY id LIMIT ${input.expiredOnly && ids.length === 0 && addresses.length === 0 ? 100 : 101} FOR UPDATE`, [context.scope.workspaceId, ids, addresses, input.expiredOnly ?? false])).rows;
+  }>(`SELECT id FROM crm_business_conversations WHERE workspace_id=$1 AND metadata_availability='available' AND (id=ANY($2::uuid[]) OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(participants) AS address WHERE address=ANY($3::text[])) OR ($4 AND latest_provider_at<clock_timestamp()-interval '90 days' AND NOT EXISTS(SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=crm_business_conversations.workspace_id AND s.conversation_id=crm_business_conversations.id AND s.availability='available'))) ORDER BY id LIMIT ${input.expiredOnly && ids.length === 0 && addresses.length === 0 ? 100 : 101} FOR UPDATE`, [context.scope.workspaceId, ids, addresses, input.expiredOnly ?? false])).rows;
   if (rows.length > 100)
     return { ok: false as const, reason: 'metadata_deletion_scope_limit' };
   if (actor.kind === 'user' && !await activeBusinessActor(context))
     return { ok: false as const, reason: 'metadata_deletion_denied' };
-  await context.db.query("UPDATE crm_business_conversations SET metadata_availability='deleted',subject='',participants='[]'::jsonb,latest_provider_at=NULL,category='uncertain',reason='metadata_deleted',classifier_version='redacted',metadata_hash=repeat('0',64),metadata_revision=metadata_revision+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[])", [context.scope.workspaceId, rows.map(row => row.id)]);
-  return { ok: true as const, value: { redacted: rows.length, conversationIds: rows.map(row => row.id) } };
+  const changed = await context.db.query<{id:string}>("UPDATE crm_business_conversations SET metadata_availability='deleted',subject='',participants='[]'::jsonb,latest_provider_at=NULL,category='uncertain',reason='metadata_deleted',classifier_version='redacted',metadata_hash=repeat('0',64),metadata_revision=metadata_revision+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND (NOT $3 OR NOT EXISTS(SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=crm_business_conversations.workspace_id AND s.conversation_id=crm_business_conversations.id AND s.availability='available')) RETURNING id", [context.scope.workspaceId, rows.map(row => row.id), Boolean(input.expiredOnly && ids.length===0 && addresses.length===0)]);
+  return { ok: true as const, value: { redacted: changed.rows.length, conversationIds: changed.rows.map(row => row.id) } };
 }
 
 /** Cross-account writer/deletion barrier for indivisible copies containing a known address. */
