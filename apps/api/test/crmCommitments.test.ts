@@ -180,21 +180,22 @@ it("projects exactly one internal task from an explicit dated human promise revi
     expect((await read()).body).toMatchObject({items:[{task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
     expect((await post("/crm/commitments/complete",complete)).body).toMatchObject({result:(done.body as {result:unknown}).result});
     await expect(runtime.query("UPDATE crm_internal_tasks SET completed_at=clock_timestamp(),version=version+1 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,originalTask])).rejects.toMatchObject({code:"23514",constraint:"crm_internal_task_guard"});
-    const revised={...review,commandId:randomUUID(),expectedCommitmentRevision:1,actionLabel:"Prepare the same agreed summary"};
+    const revised={...review,commandId:randomUUID(),expectedCommitmentRevision:1,actionLabel:"Prepare a revised repair summary"};
     expect((await post("/crm/commitments/review",revised)).status).toBe(200);
     await runOnce(fixture.db,{registry,owner:"commitment-projector-revised",limit:20});
-    expect((await read()).body).toMatchObject({items:[{revision:2,task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
+    const updated=await read();expect(updated.body).toMatchObject({items:[{revision:2,task:{status:"open",version:1,completedAt:null}}]});
+    const changedTask=(updated.body as {items:{task:{taskId:string}}[]}).items[0]!.task.taskId;expect(changedTask).not.toBe(originalTask);
 
-    expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toEqual({items:[],nextAfterId:null});
+    expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toMatchObject({items:[{task:{taskId:changedTask,status:"open"}}]});
     expect((await post("/today/actions/open/v2",{actionId:promiseAction.actionId,target:promiseAction.target})).body).toEqual({version:2,target:null});
     // Cycle3: changed interpretation cannot erase an already performed action.
     const correction=await post("/crm/evidence/decide",command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,action:"correct",correctedInterpretation:"This was tentative, not an agreed commitment"}));expect(correction.status).toBe(200);
     const corrected=await read();expect(corrected.status).toBe(200);
-    expect(corrected.body).toMatchObject({items:[{state:"review_required",actionLabel:null,due:null,quote:null,source:null,task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
+    expect(corrected.body).toMatchObject({items:[{state:"review_required",actionLabel:null,due:null,quote:null,source:null,task:{taskId:changedTask,status:"open",version:2,completedAt:null}}]});
     // Cycle4: whole-copy deletion scrubs private promise proof, not completion.
     expect((await post("/crm/people/source/delete",command({personId,sourceId:source.sourceId,expectedRevision:source.revision}))).status).toBe(200);
     const redacted=await post("/crm/commitments/read",{scope:{kind:"history"},limit:50});expect(redacted.status).toBe(200);
-    expect(redacted.body).toMatchObject({items:[{taskId:originalTask,status:"done",version:2,completedAt}],nextAfterId:null});
+    expect(redacted.body).toMatchObject({items:[{taskId:originalTask,status:"done",version:3,completedAt}],nextAfterId:null});
     expect(JSON.stringify(redacted.body)).not.toContain("repair summary");
     const scrubbed=(await runtime.query<Record<string,unknown>>("SELECT anchor_id,target,context_snapshot,original_access_closure,classification,actor,action_label,due,source_zone_receipt,projection_receipt FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2",[source.workspaceId,receipt.result.commitmentId])).rows[0]!;
     expect(Object.values(scrubbed)).toEqual(Array(10).fill(null));
@@ -221,8 +222,9 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const deletionPreview=await post("/retention/deletions/preview",command({targetKind:"firm",firmId}));expect(deletionPreview.status).toBe(200);
     const previewReceipt=(deletionPreview.body as {result:{requestId:string;previewHash:string;redacts:Record<string,number>}}).result;
     expect(previewReceipt.redacts["crm_commitment_reviews"]).toBe(1);
+    expect(previewReceipt.redacts["crm_internal_tasks"]).toBe(1);
     const deleted=await post("/retention/deletions/commit",command({requestId:previewReceipt.requestId,previewHash:previewReceipt.previewHash}));expect(deleted.status).toBe(200);
-    expect(deleted.body).toMatchObject({result:{redacted:{crm_commitment_reviews:1}}});
+    expect(deleted.body).toMatchObject({result:{redacted:{crm_commitment_reviews:1,crm_internal_tasks:1}}});
     const finalProof=(await runtime.query<Record<string,unknown>>("SELECT anchor_id,target,context_snapshot,original_access_closure,classification,actor,action_label,due,source_zone_receipt,projection_receipt FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2",[source.workspaceId,secondId])).rows[0]!;
     expect(Object.values(finalProof)).toEqual(Array(10).fill(null));
     const history=await post("/crm/commitments/read",{scope:{kind:"history"},limit:50});expect(history.status).toBe(200);

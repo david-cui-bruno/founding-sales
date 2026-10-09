@@ -5,7 +5,7 @@ import {crmEvidenceClaimTargetSchema} from './crmEvidenceDecisions.ts';
 import {canonicalSourceReferenceSchema} from './people.ts';
 const zone=z.string().max(100).refine(value=>{try{new Intl.DateTimeFormat('en',{timeZone:value});return true;}catch{return false;}},'Known time zone required');
 export const crmCommitmentDueSchema=z.union([z.null(),z.discriminatedUnion('kind',[
- z.strictObject({kind:z.literal('instant'),at:z.iso.datetime(),zone,expression:z.string().trim().min(1).max(200)}),
+ z.strictObject({kind:z.literal('instant'),at:z.iso.datetime().regex(/T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?Z$/u),zone,expression:z.string().trim().min(1).max(200)}),
  z.strictObject({kind:z.literal('date'),date:z.iso.date(),zone,expression:z.string().trim().min(1).max(200)}),
 ])]);
 export const crmCommitmentReviewSchema=crmEvidenceClaimTargetSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema,expectedCommitmentRevision:z.number().int().min(0),classification:z.enum(['internal_promise','commercial','ambiguous']),actor:z.enum(['self','counterparty','unknown']),actionLabel:z.string().trim().min(1).max(300),due:crmCommitmentDueSchema,sourceZoneReceipt:z.strictObject({sourceRevision:z.number().int().positive(),sourceHash:z.string().regex(/^[a-f0-9]{64}$/u),zone,eventAt:z.iso.datetime()}).optional()}).strict();
@@ -20,3 +20,8 @@ export const crmCommitmentCompletedSchema=z.strictObject({taskId:z.uuid(),versio
 export type CrmCommitmentComplete=z.infer<typeof crmCommitmentCompleteSchema>;
 
 export const crmCommitmentHistoryPageSchema=z.strictObject({items:z.array(z.strictObject({taskId:z.uuid(),status:z.enum(['done','cancelled']),version:z.number().int().positive(),completedAt:z.iso.datetime().nullable()})).max(50),nextAfterId:z.uuid().nullable()});
+
+export const crmCommitmentReviewPayloadSchema=crmCommitmentReviewSchema.omit({commandId:true,clientVersion:true});
+export const crmCommitmentCompletePayloadSchema=crmCommitmentCompleteSchema.omit({commandId:true,clientVersion:true});
+export const crmCommitmentReviewStatusSchema=crmEvidenceClaimTargetSchema;
+export const crmCommitmentReviewStatusResultSchema=z.strictObject({current:z.strictObject({commitmentId:z.uuid(),revision:z.number().int().positive(),state:z.enum(['pending','applied','suggestion','review_required'])}).nullable()});

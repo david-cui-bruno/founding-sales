@@ -108,6 +108,7 @@ describe('what the API mounts', () => {
       '/crm/commitments/complete',
       '/crm/commitments/read',
       '/crm/commitments/review',
+      '/crm/commitments/review/status',
       '/crm/endpoints/claim',
       '/crm/endpoints/correct',
       '/crm/endpoints/list',

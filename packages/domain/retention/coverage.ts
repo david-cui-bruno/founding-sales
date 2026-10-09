@@ -304,7 +304,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     ),
 
     crm_commitment_reviews: coverage(['retained','deletion_redacts'],'Structured human promise attestation follows its exact canonical evidence anchor and all original/current source authority. Copy deletion clears private label/date/actor/context/target fields via the anchor deletion hook; temporary access denial is not deletion. No copied quotation body.'),
-    crm_internal_tasks: coverage(['retained'],'Opaque workspace/task identity and completed action time survive evidence redaction to prevent reactivation. Quote/date/labels are resolved only from current permitted review/source; no outbound or stage authority.'),
+    crm_internal_tasks: coverage(['deletion_redacts','retained'],'Opaque workspace/task identity and completed action time survive evidence redaction to prevent reactivation. Private initial activation receipt and review binding are erased on whole-copy or terminal original-context deletion; quote/date/labels are resolved only from current permitted review/source; no outbound or stage authority.'),
     // ------------------------------------------------------------------- CRM
     crm_claim_review_anchors: coverage(
       ["retained", "deletion_redacts"],
