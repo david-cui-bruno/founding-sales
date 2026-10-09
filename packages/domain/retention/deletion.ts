@@ -1,3 +1,4 @@
+import { mailContextPredicate, eligibleObservedMailLabelRedactions, redactUnsupportedObservedMailLabels } from '../mail/crmSources.ts';
 import { redactBusinessMetadata, lockBusinessMetadataAddresses } from '../business/acquisition.ts';
 import { deleteMeetingOutcomeContent } from '../meetings/outcomeCorrections.ts';
 import { lockTodayForFirmChange } from '../today/build.ts';
@@ -173,7 +174,7 @@ const CRM_MAIL_MESSAGE_IDS = `SELECT x.mail_message_id AS id FROM mail_message_m
   WHERE x.workspace_id=$1 AND x.firm_id=$3 AND ${contactPredicate('x.contact_id', '$2')}
   UNION SELECT s.source_id FROM crm_mail_sources s WHERE s.workspace_id=$1 AND EXISTS(
     SELECT 1 FROM crm_mail_source_contexts cx WHERE cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id
-      AND (cx.context_kind='acquired' OR cx.source_revision=s.source_revision) AND cx.firm_id=$3
+      AND ${mailContextPredicate('s','cx')} AND cx.firm_id=$3
       AND ($2::uuid IS NULL OR cx.person_id IN (${CRM_TARGET_PEOPLE}) OR EXISTS(
         SELECT 1 FROM mail_message_matches mx WHERE mx.workspace_id=cx.workspace_id
         AND mx.id=cx.operational_match_id AND mx.contact_id=$2)))`;
@@ -536,7 +537,7 @@ async function measure(
       `SELECT count(*) AS count FROM crm_people p
        WHERE p.workspace_id=$1 AND ${CRM_PERSON_IN_SCOPE} AND p.full_name <> $4`,
       [...byContact, REDACTED_NAME],
-    ),
+    ) + (await eligibleObservedMailLabelRedactions(context, (await context.db.query<{id:string}>(CRM_MAIL_MESSAGE_IDS,byContact)).rows.map(row=>row.id))).length,
     crm_selected_sources: await countOf(
       context,
       `SELECT count(*) AS count FROM crm_selected_sources s
@@ -1083,6 +1084,7 @@ export async function commitDeletion(
   // Opaque identity survives canonical-row cascades. No provider replay may create
   // a replacement UUID after deleting an approved copy or a pending matched capture.
   const mailIds=closure.mailSources;
+  const observedMailNamesRedacted = await redactUnsupportedObservedMailLabels(context,mailIds);
   await context.db.query(`INSERT INTO crm_mail_acquisition_tombstones
     (workspace_id,capture_identity_id,source_id,owner_user_id,source_revision,content_hash,availability)
     SELECT workspace_id,capture_identity_id,source_id,owner_user_id,source_revision+1,content_hash,'deleted'
@@ -1093,9 +1095,10 @@ export async function commitDeletion(
   stopped['crm_mail_source_intents']=(await context.db.query(
     "UPDATE crm_mail_source_intents SET state='invalidated' WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) AND state<>'invalidated'",[workspace,mailIds])).rowCount??0;
   removed['mail_message_bodies']=measured.removes['mail_message_bodies']??0;
-  removed['crm_mail_sources']=measured.removes['crm_mail_sources']??0;
   removed['crm_mail_source_contexts']=measured.removes['crm_mail_source_contexts']??0;
   await remove('mail_messages','DELETE FROM mail_messages WHERE workspace_id=$1 AND id=ANY($2::uuid[])',[workspace,mailIds]);
+  // Unavailable heads survive ordinary copy deletion but terminal scoped deletion removes them.
+  await remove('crm_mail_sources','DELETE FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[])',[workspace,mailIds]);
   await remove('outreach_email_sources',`DELETE FROM outreach_email_sources WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id', '$2')}`,byContact);
   // Learning contains references only, but deleted interactions must stop contributing.
   await remove('sourcing_interactions', `DELETE FROM sourcing_interactions i WHERE i.workspace_id=$1 AND (
@@ -1383,7 +1386,7 @@ export async function commitDeletion(
       WHERE p.workspace_id=$1 AND p.full_name <> $4 AND ${CRM_PERSON_IN_SCOPE}`,
     [...byContact, REDACTED_NAME],
   );
-  redacted['crm_people'] = people.rowCount ?? 0;
+  redacted['crm_people'] = (people.rowCount ?? 0) + observedMailNamesRedacted;
   const selectedSources = await context.db.query<{ id: string }>(
     `UPDATE crm_selected_sources s SET availability='deleted',excerpt=NULL,content_hash=NULL,occurred_at=NULL,revision=revision+1
       WHERE s.workspace_id=$1 AND s.availability <> 'deleted' AND ${CRM_SOURCE_IN_SCOPE} RETURNING s.id`,

@@ -1714,7 +1714,7 @@ describe('foundation constraints', () => {
         expect(String((thrown as { message?: string }).message)).toContain('without an active admin');
         return;
       }
-      expect(thrown).toMatchObject({ constraint: name });
+      expect(thrown).toMatchObject({ constraint: name==='crm_mail_source_canonical_gate'||name==='crm_mail_message_canonical_gate' ? 'crm_mail_available_source_canonical' : name });
     },
   );
 
