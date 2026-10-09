@@ -50,3 +50,40 @@ it('includes a privately saved unanswered question in firm deletion before any a
     await fixture.stop();
   }
 });
+
+it('erases an unanswered question when its selected copy is deleted and cannot revive it after restore', async () => {
+  const fixture = await createAuthFixture();
+  try {
+    const token = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
+    const post = (path: string, body: unknown) => dispatch(
+      { method: 'POST', path, body, query: new URLSearchParams(), headers: { authorization: `Bearer ${token}` } },
+      { session: fixture.db, auth: fixture.deps, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false },
+    );
+    const command = (fields: object) => ({ commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, ...fields });
+    const person = await post('/crm/people/create', command({ fullName: 'Private question correspondent' }));
+    expect(person.status).toBe(200);
+    const personId = (person.body as { result: { personId: string } }).result.personId;
+    const text = 'Private maintenance triage instructions are retained in this selected note.';
+    const selection = { text, subtype: 'pasted_text', label: 'Private selected business note', direction: 'unknown', participants: [], occurredAt: null, attachments: [] };
+    const preview = await post('/crm/imports/preview', selection);
+    expect(preview.status).toBe(200);
+    const imported = await post('/crm/imports/commit', command({ ...selection, personId, firmId: null, importKey: randomUUID(), previewHash: (preview.body as { previewHash: string }).previewHash, parserVersion: 'selected-v1' }));
+    expect(imported.status).toBe(200);
+    const sourceId = (imported.body as { result: { sourceId: string } }).result.sourceId;
+    const question = 'Private maintenance triage';
+    const requested = await post('/ask/answers/request', command({ question, scope: { sources: [{ workspaceId: fixture.alpha.workspaceId, sourceId, kind: 'selected_note', revision: 1, contentHash: createHash('sha256').update(text).digest('hex'), locator: null }] } }));
+    expect(requested.status).toBe(200);
+    const requestId = (requested.body as { result: { requestId: string } }).result.requestId;
+    expect((await post('/ask/answers/read', { requestId })).body).toMatchObject({ question, fallback: { passages: [{ text }] } });
+    const deleted = await post('/crm/imports/delete', command({ sourceId, expectedSourceRevision: 1, expectedMetadataRevision: 1 }));
+    expect(deleted.status).toBe(200);
+    const erased = await post('/ask/answers/read', { requestId });
+    expect(erased.status).toBe(200);
+    expect(erased.body).toMatchObject({ state: 'deleted', reason: 'deleted', question: null, fallback: null, answer: null });
+    const restored = await post('/crm/imports/restore', command({ sourceId, expectedSourceRevision: 2, expectedMetadataRevision: 2 }));
+    expect(restored.status).toBe(200);
+    expect((await post('/ask/answers/read', { requestId })).body).toMatchObject({ state: 'deleted', reason: 'deleted', question: null, fallback: null, answer: null });
+  } finally {
+    await fixture.stop();
+  }
+});
