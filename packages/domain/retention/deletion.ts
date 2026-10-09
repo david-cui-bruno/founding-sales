@@ -528,6 +528,7 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    crm_selected_file_receipts: await countOf(context,`SELECT count(*) AS count FROM crm_selected_file_receipts f WHERE f.workspace_id=$1 AND f.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (f.file_name IS NOT NULL OR f.file_hash IS NOT NULL OR f.source_content_hash IS NOT NULL OR f.byte_length IS NOT NULL OR f.format IS NOT NULL OR f.origin IS NOT NULL OR f.parser_version IS NOT NULL)`,byContact),
     crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE} AND (request_provider_at IS NOT NULL OR sent_receipt_id IS NOT NULL)`,byContact),
     opportunities: scope.contactId === null ? await countOf(context,
       'SELECT count(*) AS count FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND display_name IS NOT NULL',
@@ -704,6 +705,8 @@ async function measure(
   }>(`WITH selected AS (${CRM_SELECTED_SOURCE_IDS})
     SELECT 'source' AS kind,id::text,revision,content_hash AS hash,availability AS state
       FROM crm_selected_sources WHERE workspace_id=$1 AND id IN (SELECT id FROM selected)
+    UNION ALL SELECT 'selected_file',source_id::text,metadata_revision,encode(sha256(convert_to(to_jsonb(crm_selected_file_receipts)::text,'UTF8')),'hex'),state
+      FROM crm_selected_file_receipts WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)
     UNION ALL SELECT 'relationship',id::text,revision,source_hash,source_invalidated::text || ':' || context_review
       FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)
     UNION ALL SELECT 'context',id::text,source_revision,source_hash,review
@@ -1392,6 +1395,7 @@ export async function commitDeletion(
     byContact,
   );
   const redacted: Record<string, number> = {crm_mail_reply_resolutions:progressCompletionsRedacted};
+  redacted['crm_selected_file_receipts'] = await countOf(context,`SELECT count(*) AS count FROM crm_selected_file_receipts f WHERE f.workspace_id=$1 AND f.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (f.file_name IS NOT NULL OR f.file_hash IS NOT NULL OR f.source_content_hash IS NOT NULL OR f.byte_length IS NOT NULL OR f.format IS NOT NULL OR f.origin IS NOT NULL OR f.parser_version IS NOT NULL)`,byContact);
   redacted['crm_selected_imports'] = await countOf(context,`SELECT count(*) AS count FROM crm_selected_imports m WHERE m.workspace_id=$1 AND m.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (m.label IS NOT NULL OR m.participants IS NOT NULL OR m.attachments IS NOT NULL OR m.direction IS NOT NULL OR m.attribution IS NOT NULL OR m.date_provenance IS NOT NULL)`,byContact);
   const metadataIds = measured.identityVersions.filter(value => value.kind==='business_metadata').map(value => value.id);
   redacted['crm_business_conversations'] = 0;

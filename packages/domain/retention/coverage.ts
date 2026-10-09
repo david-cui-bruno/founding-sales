@@ -52,6 +52,7 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  crm_selected_file_receipts: coverage(['retained','deletion_redacts'], 'Explicit original-file provenance follows its sole selected source copy. Source or scoped context deletion atomically clears names, hashes, format, parser, origin and byte count; only opaque identity/revisions and unavailable state remain. Restore requires fresh selection. Departed or unauthorized actors cannot read or analyze the copy; no duplicate original body or financial ledger.'),
   crm_selected_imports: coverage(['retained','deletion_redacts'], 'Selected source labels, participants and attachment references redact atomically via the source-deletion trigger; only body-free import hashes and source identity remain to block replay. No duplicate body store; disconnect does not delete approved copied history.'),
   crm_mail_capture_controls: coverage(['operational'], 'Disabled owner/account-bound capture configuration and exact evaluation/release proof hashes; no bodies, endpoints or sending authority.'),
   crm_mail_capture_identities: coverage(['retained', 'deletion_stops'], 'Opaque provider/account-to-canonical identity and body-free original context references survive copy deletion to prevent replay or replacement identities; scoped deletion terminally blocks pending and copied capture.'),

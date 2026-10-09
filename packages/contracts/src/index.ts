@@ -64,4 +64,5 @@ export * from './businessAcquisition.ts';
 export * from './crmMail.ts';
 
 export * from './crmProcessing.ts';
+export * from './selectedAttachments.ts';
 export * from './crmProgress.ts';

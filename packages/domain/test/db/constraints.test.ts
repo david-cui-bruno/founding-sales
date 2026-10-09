@@ -1,3 +1,4 @@
+import {SELECTED_FILE_CONSTRAINT_CASES} from './support/selectedFileCases.ts';
 import {CRM_PROGRESS_CONSTRAINT_CASES} from './support/crmProgressCases.ts';
 import { MAIL_CAPTURE_CONSTRAINT_CASES } from './support/mailCaptureCases.ts';
 import {BUSINESS_ACQUISITION_CONSTRAINT_CASES} from './support/businessAcquisitionCases.ts';
@@ -1620,6 +1621,7 @@ const cases: readonly Case[] = [
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
   ...selectedImportConstraintCases,
+  ...SELECTED_FILE_CONSTRAINT_CASES,
   ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,
   ...MAIL_CAPTURE_CONSTRAINT_CASES,
   ...CRM_EXTRACTION_CONSTRAINT_CASES,
