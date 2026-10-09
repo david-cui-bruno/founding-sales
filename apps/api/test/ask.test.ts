@@ -130,3 +130,25 @@ it('finds permitted original passages by PostgreSQL keywords with dates and sour
   expect(passages[0]?.sources[0]).toMatchObject({sourceId,kind:'selected_note',revision:1,occurredAt:null,speaker:null,completeness:'selected_excerpt',availability:'available',locator:`text:0:${selection.text.length}`});
  }finally{await fixture.stop();}
 });
+
+it('deduplicates repeated passage text while preserving each citation and omitting signatures',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const created=await post('/crm/people/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,fullName:'Repeated passage person'});
+  const personId=(created.body as {result:{personId:string}}).result.personId;
+  const original='Maintenance routing is our priority.';
+  for(const name of ['Alice','Bob']){
+   const selection={text:`${original}\n-- \n${name}\nSignature maintenance`,subtype:'pasted_text',label:'Repeated original',direction:'unknown',participants:[],occurredAt:null,attachments:[]};
+   const preview=await post('/crm/imports/preview',selection);
+   expect((await post('/crm/imports/commit',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...selection,personId,firmId:null,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash,parserVersion:'selected-v1'})).status).toBe(200);
+  }
+  const read=await post('/ask/read',{operation:'passages',scope:{personId},query:'maintenance',limit:20});
+  expect(read.status).toBe(200);
+  const passages=(read.body as {passages:{text:string;sources:{sourceId:string}[]}[]}).passages;
+  expect(passages).toHaveLength(1);expect(passages[0]?.text).toBe(original);expect(passages[0]?.sources).toHaveLength(2);
+  expect(new Set(passages[0]?.sources.map(source=>source.sourceId)).size).toBe(2);
+  expect(read.body).toMatchObject({coverage:{omittedSignatures:2,chunkerVersion:'lexical-original-v1'}});
+ }finally{await fixture.stop();}
+});

@@ -11,11 +11,15 @@ export async function readAsk(context:RepositoryContext,input:z.infer<typeof ask
   const page=await readPerson(context,input.scope.personId,{afterSourceId:input.scope.afterSourceId,limit:50});
   if(page===null)return null;
   const chunks:{text:string;source:typeof page.sources[number];start:number;end:number}[]=[];
+  let omittedSignatures=0;
   for(const source of page.sources){
    if(source.availability!=='available'||source.excerpt===null)continue;
-   for(let start=0;start<source.excerpt.length;){
-    let end=Math.min(start+2000,source.excerpt.length);
-    if(end<source.excerpt.length&&/[\uD800-\uDBFF]/u.test(source.excerpt[end-1]!)&&/[\uDC00-\uDFFF]/u.test(source.excerpt[end]!))end--;
+   const signature=source.excerpt.indexOf('\n-- \n');
+   if(signature>=0)omittedSignatures++;
+   const bodyEnd=signature<0?source.excerpt.length:signature;
+   for(let start=0;start<bodyEnd;){
+    let end=Math.min(start+2000,bodyEnd);
+    if(end<bodyEnd&&/[\uD800-\uDBFF]/u.test(source.excerpt[end-1]!)&&/[\uDC00-\uDFFF]/u.test(source.excerpt[end]!))end--;
     chunks.push({text:source.excerpt.slice(start,end),source,start,end});start=end;
    }
   }
@@ -28,7 +32,7 @@ export async function readAsk(context:RepositoryContext,input:z.infer<typeof ask
    const previous=grouped.get(key);if(previous===undefined)grouped.set(key,{text:chunk.text,sources:[resolved.source]});else if(previous.sources.length<50)previous.sources.push(resolved.source);
   }
   if(!await activeIdentityActor(context))return null;
-  return {operation:'passages' as const,scope:input.scope,passages:[...grouped.values()].slice(0,input.limit),nextAfterSourceId:page.nextAfterSourceId,truncated:grouped.size>input.limit,coverage:{scope:'selected_person_copies' as const,acquisition:'unverified' as const,semantic:'not_requested' as const,scanComplete:page.nextAfterSourceId===null,unavailableSources:page.sources.filter(source=>source.availability!=='available').length}};
+  return {operation:'passages' as const,scope:input.scope,passages:[...grouped.values()].slice(0,input.limit),nextAfterSourceId:page.nextAfterSourceId,truncated:grouped.size>input.limit,coverage:{scope:'selected_person_copies' as const,acquisition:'unverified' as const,semantic:'not_requested' as const,scanComplete:page.nextAfterSourceId===null,omittedSignatures,chunkerVersion:'lexical-original-v1' as const,unavailableSources:page.sources.filter(source=>source.availability!=='available').length}};
  }
  if(input.operation==='records'&&input.kind==='firms') {
   if(!await activeIdentityActor(context))return null;
