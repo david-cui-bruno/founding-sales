@@ -74,7 +74,7 @@ it('keeps bounded identity scans unresolved until their remaining pages are chec
   expect(page.records).toHaveLength(1);expect(page.nextAfterId).toEqual(expect.any(String));
   const second=await post('/ask/read',{operation:'records',query:'Alex Lee',kind:'people',limit:1,afterId:page.nextAfterId});
   expect(second.status).toBe(200);
-  expect(second.body).toMatchObject({scanComplete:true,nextAfterId:null});
+  expect(second.body).toMatchObject({selection:'unresolved',scanComplete:true,nextAfterId:null});
   expect((second.body as {records:{recordId:string}[]}).records[0]?.recordId).not.toBe(page.records[0]?.recordId);
  }finally{await fixture.stop();}
 });

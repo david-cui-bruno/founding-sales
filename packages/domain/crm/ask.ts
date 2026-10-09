@@ -37,13 +37,13 @@ export async function readAsk(context:RepositoryContext,input:z.infer<typeof ask
   const records=rows.slice(0,input.limit).filter(row=>row.name.normalize('NFKC').toLocaleLowerCase('en-US').includes(query)).map(row=>({recordId:row.id,kind:'firm' as const,name:row.name,firmId:row.id}));
   if(!await activeIdentityActor(context))return null;
   const nextAfterId=rows.length>input.limit?rows[input.limit-1]!.id:null;
-  return {operation:'records' as const,selection:nextAfterId!==null?'unresolved' as const:records.length>1?'ambiguous' as const:records.length===1?'single' as const:'none' as const,records,nextAfterId,scanComplete:nextAfterId===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
+  return {operation:'records' as const,selection:input.afterId!==undefined||nextAfterId!==null?'unresolved' as const:records.length>1?'ambiguous' as const:records.length===1?'single' as const:'none' as const,records,nextAfterId,scanComplete:nextAfterId===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
  }
  if(input.operation==='records') {
   const page=await listPeople(context,{afterId:input.afterId,limit:input.limit});
   const query=input.query.normalize('NFKC').toLocaleLowerCase('en-US');
   const records=page.people.filter(person=>person.fullName.normalize('NFKC').toLocaleLowerCase('en-US').includes(query)).map(person=>({recordId:person.personId,kind:'person' as const,name:person.fullName,firmId:person.firm?.firmId??null}));
-  return {operation:'records' as const,selection:page.nextAfterId!==null?'unresolved' as const:records.length>1?'ambiguous' as const:records.length===1?'single' as const:'none' as const,records,nextAfterId:page.nextAfterId,scanComplete:page.nextAfterId===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
+  return {operation:'records' as const,selection:input.afterId!==undefined||page.nextAfterId!==null?'unresolved' as const:records.length>1?'ambiguous' as const:records.length===1?'single' as const:'none' as const,records,nextAfterId:page.nextAfterId,scanComplete:page.nextAfterId===null,coverage:{scope:'current_permitted_crm_state' as const,acquisition:'unverified' as const,semantic:'not_requested' as const}};
  }
  if(!await lockIdentityContext(context,{firmIds:[input.scope.firmId]}))return null;
  if(input.operation==='tasks'){
