@@ -24,7 +24,7 @@ CREATE TRIGGER crm_ask_history_guard BEFORE UPDATE ON crm_ask_requests FOR EACH 
 CREATE TABLE crm_ask_actions (
  workspace_id uuid NOT NULL,id uuid NOT NULL DEFAULT gen_random_uuid(),owner_user_id uuid NOT NULL,
  source_request_id uuid NOT NULL,source_request_version integer NOT NULL CHECK(source_request_version>0),
- kind text NOT NULL CHECK(kind IN ('task','note','preference')),
+ kind text NOT NULL,
  status text NOT NULL,
  version integer NOT NULL DEFAULT 1 CHECK(version>0),private_state text NOT NULL DEFAULT 'available' CHECK(private_state IN ('available','stale','deleted')),
  target_firm_id uuid,target_person_id uuid,
