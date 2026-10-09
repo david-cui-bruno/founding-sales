@@ -67,6 +67,7 @@ it('requires a fresh record selection after changing identity search',async()=>{
  fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));
  fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));
  expect(screen.getByRole('button',{name:'Open opportunities'})).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Change record'}));
  fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Different firm'}});
  expect(screen.queryByRole('button',{name:'Open opportunities'})).toBeNull();
  expect(screen.queryByRole('heading',{name:'Orion'})).toBeNull();
@@ -149,4 +150,16 @@ it('pages source discovery through its exact kind and identity cursor',async()=>
  fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));fireEvent.click(screen.getByRole('button',{name:'Copied sources'}));
  fireEvent.click(await screen.findByRole('button',{name:'Next source page'}));
  await waitFor(()=>expect(read).toHaveBeenLastCalledWith({operation:'sources',scope:{firmId:one},limit:20,after}));
+});
+
+it('uses one retrieval input within the explicitly selected record scope',async()=>{
+ const read=vi.fn<AskPorts['read']>(async()=>({operation:'records',selection:'single',records:[{recordId:one,kind:'person',name:'Alex',firmId:null}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}));
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Alex'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));fireEvent.click(await screen.findByRole('button',{name:'Select Alex'}));
+ expect(screen.getAllByRole('textbox')).toHaveLength(1);
+ expect(screen.getByLabelText('Search original passages')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Change record'}));
+ expect(screen.getAllByRole('textbox')).toHaveLength(1);
+ expect(screen.getByLabelText('Find a person or firm')).toBeTruthy();
+ expect(screen.queryByRole('heading',{name:'Alex'})).toBeNull();
 });
