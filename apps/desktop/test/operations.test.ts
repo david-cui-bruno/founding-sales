@@ -395,3 +395,13 @@ it('reads durable extraction health through a closed authenticated operation and
  const pending=answerOperation(operationHandlers(deps),'read','crm.processingHealth',{sourceId:ITEM_ID,kind:'selected_note'});
  generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
 });
+
+it('reads Ask through strict authenticated transport',async()=>{
+ const deps=hosts();
+ const response={operation:'opportunities',scope:{firmId:FIRM_ID},dateBasis:'opportunity_opened_at',count:'0',records:[],truncated:false,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}};
+ deps.api.read=async(path,parse,payload)=>{
+  expect(path).toBe('/ask/read');expect(payload).toEqual({operation:'opportunities',scope:{firmId:FIRM_ID},status:'open',limit:20});
+  return {ok:true,value:parse(response)};
+ };
+ expect(await answerOperation(operationHandlers(deps),'read','ask.read',{operation:'opportunities',scope:{firmId:FIRM_ID},status:'open',limit:20})).toEqual(response);
+});
