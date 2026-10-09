@@ -49,6 +49,18 @@ describe('append-only privileges', () => {
     await expect(runtime.query("UPDATE crm_mail_reply_resolutions SET request_provider_at='2026-09-24T14:00:00Z' WHERE workspace_id=$1 AND request_message_id=$2",[workspaceId,requestId])).rejects.toMatchObject({code:'23514'});
   });
 
+  it('preserves Ask request and conserved financial history and protects canonical window proof', async () => {
+    for (const table of ['crm_ask_requests','crm_ask_financial_receipts']) {
+      await expect(runtime.query(`DELETE FROM ${table} WHERE false`)).rejects.toMatchObject({code:'42501'});
+      await expect(runtime.query(`TRUNCATE ${table}`)).rejects.toMatchObject({code:'42501'});
+    }
+    await expect(runtime.query("UPDATE crm_ask_request_windows SET source_hash=repeat('b',64) WHERE false")).rejects.toMatchObject({code:'42501'});
+    await expect(runtime.query('TRUNCATE crm_ask_request_windows')).rejects.toMatchObject({code:'42501'});
+    for (const table of ['crm_ask_requests','crm_ask_purposes','crm_ask_request_windows','crm_ask_financial_receipts']) {
+      await expect(runtime.query(`SELECT 1 FROM ${table} LIMIT 0`)).resolves.toMatchObject({rows:[]});
+    }
+  });
+
   it('runs as app_runtime, not as the owner', async () => {
     const { rows } = await runtime.query<{ current_user: string }>('SELECT current_user');
     expect(rows[0]?.current_user).toBe('app_runtime');
