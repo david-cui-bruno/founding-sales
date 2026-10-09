@@ -29,6 +29,8 @@ it('starts a separate exact ninety-day CRM import without claiming an operationa
     const post = (path:string,body:unknown) => dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}}, {session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,suppressionJournal:recordingSuppressionJournal()});
     const requested = await post('/crm/business/mail/import/request', {commandId:randomUUID(),clientVersion:'1.4.0',mailboxId:mailbox.id});
     expect(requested.status).toBe(200);
+    expect(requested.body).toMatchObject({result:{importId:expect.any(String),status:'queued'}});
+    expect(Object.keys((requested.body as {result:Record<string,unknown>}).result).sort()).toEqual(['importId','status']);
     const health = await post('/crm/business/mail/import/read', {mailboxId:mailbox.id});
     expect(health.status).toBe(200);
     expect(health.body).toMatchObject({state:'pending',generation:1,historyAnchor:null,historyComplete:false,completedSlices:0,totalSlices:90});
@@ -103,6 +105,7 @@ it('configured acquisition without a verified read allocation calls no Gmail met
   expect(committed.status).toBe(200);
   expect(committed.body).toMatchObject({result:{redacted:{crm_mail_import_messages:1}}});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({metadataCoverage:{retainedUniqueMessages:'2',availableMetadataMessages:'1',deletedMetadataMessages:'1'},quotaAccounting:{reservedUnits:'9',observedUnits:'7',unknownUnits:'2'}});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{coverage:'partial',unresolvedMetadata:'1'}});
   const refusedGmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'200',messages:[{id:'refused-inquiry',threadId:'refused-thread',historyId:'160',internalDateEpochMilliseconds:Date.parse(frozen.fromAt)+3*86400000+3600000,headers:{From:'refused@example.test',To:'business@example.test',Subject:'Refused inquiry'}}]});
   const refusedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:refusedGmail,resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:{observe:async()=>{}}}});
   await refusedRegistry.get('crm.mail_backfill')!.handle({session:workerRuntime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -257,7 +260,7 @@ it('uses bounded real runner retries and never rematerializes exhausted unchange
  }finally{await fixture.stop();}
 });
 
-it.each(['copy','body_quota','changed_generation','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
+it.each(['copy','body_quota','changed_generation','changed_account','disconnected','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
  const fixture=await createAuthFixture();
  try{
   const {workspaceId,admin}=fixture.alpha;
@@ -275,6 +278,8 @@ it.each(['copy','body_quota','changed_generation','excluded_after_metadata'])('r
   const access={resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true}};
   const captureGmail={...gmail,getMetadata:async(...args:Parameters<typeof gmail.getMetadata>)=>{
    const metadata=await gmail.getMetadata(...args);
+   if(scenario==='disconnected')await fixture.db.query("UPDATE mailboxes SET status='disconnected',disconnected_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
+   if(scenario==='changed_account')await fixture.db.query("UPDATE mailboxes SET provider_account_id='google-replacement' WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
    if(scenario==='changed_generation')await fixture.db.query('UPDATE mailboxes SET generation=2 WHERE workspace_id=$1 AND id=$2',[workspaceId,mailbox.id]);
    if(scenario==='excluded_after_metadata'){
     const review=(await post('/crm/business/review/read',{mailboxId:mailbox.id})).body as {conversations:{conversationId:string;metadataRevision:number;decisionRevision:number}[]};
@@ -297,7 +302,7 @@ it.each(['copy','body_quota','changed_generation','excluded_after_metadata'])('r
    expect(await runClaimedJob(runtime,{registry,job:capture,backoff:{baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0}})).toBe('retryable');
    expect(gmail.bodyReads).toEqual([]);
    expect(gmail.metadataReads).toEqual(['historical-business','historical-business']);
-   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({quotaAccounting:{reservedUnits:'4',observedUnits:'4',unknownUnits:'0'}});
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:scenario==='disconnected'?'disconnected':scenario==='changed_generation'||scenario==='changed_account'?'changed':'current',quotaAccounting:{reservedUnits:'4',observedUnits:'4',unknownUnits:'0'}});
    return;
   }
   const copied=await registry.get('crm.mail_capture')!.handle({session:runtime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:capture});
@@ -306,7 +311,48 @@ it.each(['copy','body_quota','changed_generation','excluded_after_metadata'])('r
   expect(await runClaimedJob(runtime,{registry,job:capture})).toBe('completed');
   expect(gmail.bodyReads).toEqual(['historical-business']);
   expect(gmail.metadataReads).toEqual(['historical-business','historical-business']);
-  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({quotaAccounting:{reservedUnits:'5',observedUnits:'5',unknownUnits:'0'}});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:'current',quotaAccounting:{reservedUnits:'5',observedUnits:'5',unknownUnits:'0'}});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{scope:'permitted_import_corpus',coverage:'complete',retainedCopiedBodies:'1',unavailableCopies:'0',pendingCaptures:'0',reviewRequiredMetadata:'0',uncapturedMetadata:'0',unresolvedMetadata:'0'}});
+  const outsideFirm=await seedFirm(fixture,{name:'Other assigned context',regionCode:'RI',postalCode:'02903',assignedUserId:fixture.alpha.salesperson.userId});
+  expect((await post('/crm/business/mail/associate',{commandId:randomUUID(),clientVersion:'1.4.0',sourceId:copied?.progress['sourceId'],expectedRevision:1,firmId:outsideFirm})).body).toMatchObject({status:'accepted'});
+  await fixture.db.query("CREATE FUNCTION test_refuse_backfill_coverage_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='crm.mail_source_admin_read' THEN RAISE EXCEPTION 'coverage audit unavailable'; END IF; RETURN NEW; END $$");
+  await fixture.db.query('CREATE TRIGGER test_refuse_backfill_coverage_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION test_refuse_backfill_coverage_audit()');
+  await expect(post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).rejects.toThrow('coverage audit unavailable');
+  await fixture.db.query('DROP TRIGGER test_refuse_backfill_coverage_audit ON audit_events');
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{coverage:'complete',retainedCopiedBodies:'1',unresolvedMetadata:'0'}});
+  await fixture.db.query("UPDATE mailboxes SET status='disconnected',disconnected_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:'disconnected',copyCoverage:{coverage:'complete',retainedCopiedBodies:'1'}});
+  await fixture.db.query("UPDATE mailboxes SET status='connected',disconnected_at=NULL,provider_account_id='replacement-provider-account',generation=2 WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:'changed',copyCoverage:{coverage:'complete',retainedCopiedBodies:'1'}});
+  await fixture.db.query("UPDATE mailboxes SET provider_account_id='google-business',generation=1 WHERE workspace_id=$1 AND id=$2",[workspaceId,mailbox.id]);
+  // Separate runtime sessions exercise the read/delete lock boundary through real commands.
+  const coverageSession=await fixture.database.appRuntimeSession();
+  const deletionSession=await fixture.database.appRuntimeSession();
+  const coveragePid=(await coverageSession.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+  const deletionPid=(await deletionSession.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+  const sessionPost=(session:typeof coverageSession,path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session,auth:{...fixture.deps,db:session},supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  await fixture.db.query('SELECT pg_advisory_lock(4842201)');
+  await fixture.db.query("CREATE FUNCTION test_pause_backfill_coverage() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='crm.mail_source_admin_read' THEN PERFORM pg_advisory_xact_lock(4842201); END IF; RETURN NEW; END $$");
+  await fixture.db.query('CREATE TRIGGER test_pause_backfill_coverage BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION test_pause_backfill_coverage()');
+  async function awaitBlocked(pid:number,blockingPid?:number){
+   for(let n=0;n<100;n++){
+    const row=(await fixture.db.query<{event:string|null;blocking:number[]}>('SELECT wait_event AS event,pg_blocking_pids(pid) AS blocking FROM pg_stat_activity WHERE pid=$1',[pid])).rows[0];
+    if(blockingPid===undefined?row?.event==='advisory':row?.blocking.includes(blockingPid))return;
+    await new Promise(resolve=>setTimeout(resolve,20));
+   }
+   throw new Error('Controlled PostgreSQL coverage barrier was not reached');
+  }
+  const coverageRun=sessionPost(coverageSession,'/crm/business/mail/import/read',{mailboxId:mailbox.id});
+  let deletionRun:ReturnType<typeof sessionPost>|undefined;
+  try{
+   await awaitBlocked(coveragePid);
+   deletionRun=sessionPost(deletionSession,'/crm/business/mail/delete',{commandId:randomUUID(),clientVersion:'1.4.0',sourceId:copied?.progress['sourceId'],expectedRevision:2});
+   await awaitBlocked(deletionPid,coveragePid);
+  }finally{await fixture.db.query('SELECT pg_advisory_unlock(4842201)');}
+  expect((await coverageRun).body).toMatchObject({copyCoverage:{retainedCopiedBodies:'1',coverage:'complete'}});
+  expect((await deletionRun!).body).toMatchObject({status:'accepted',result:{availability:'deleted'}});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{retainedCopiedBodies:'0',unresolvedMetadata:'1',coverage:'partial'}});
+  expect(gmail.bodyReads).toEqual(['historical-business']);
   expect(gmail.sends).toEqual([]);
- }finally{await fixture.stop();}
+ }finally{await fixture.db.query('SELECT pg_advisory_unlock_all()');await fixture.stop();}
 });

@@ -2386,3 +2386,56 @@ export function createApprovedBusinessMailObserver(
     },
   };
 }
+
+export interface MailCopyAuthorityBatchSnapshot {
+ readonly sources:readonly ExactMailSource[];
+ readonly allowUnavailable:boolean;
+ readonly maxSources:number;
+ readonly heads:readonly {source_id:string;source_revision:number;content_hash:string|null;availability:string;owner_user_id:string;capture_identity_id:string;mailbox_id:string;conversation_id:string}[];
+ readonly contextIdentity:string;
+ readonly firmIds:readonly string[];
+ readonly personIds:readonly string[];
+}
+/** A bounded body-free hint, never copy or processing authority. No locks or provider work. */
+export async function snapshotMailCopyAuthorityBatch(context:RepositoryContext,sources:readonly ExactMailSource[],options:{allowUnavailable?:boolean;maxSources?:number}={}):Promise<MailCopyAuthorityBatchSnapshot|null>{
+ const maxSources=options.maxSources??10;
+ const actor=context.scope.actor;if(actor.kind!=='user'||!Number.isInteger(maxSources)||maxSources<1||maxSources>100||sources.length>maxSources||!await activeBusinessActor(context))return null;
+ const ids=[...new Set(sources.map(source=>source.sourceId))].sort();
+ const heads=(await context.db.query<MailCopyAuthorityBatchSnapshot['heads'][number]>(`SELECT source_id,source_revision,content_hash,availability,owner_user_id,capture_identity_id,mailbox_id,conversation_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) AND ($3::boolean OR availability='available') ORDER BY source_id`,[context.scope.workspaceId,ids,options.allowUnavailable===true])).rows;
+ if(heads.length!==ids.length||heads.some(head=>actor.role!=='admin'&&head.owner_user_id!==actor.userId||!sources.some(source=>source.sourceId===head.source_id&&source.sourceRevision===head.source_revision&&(head.availability==='available'?source.contentHash===head.content_hash:options.allowUnavailable===true))))return null;
+ const contexts=(await context.db.query<MailContext>(`SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=ANY($2::uuid[]) AND ${mailContextPredicate()} ORDER BY cx.source_id,cx.id LIMIT $3`,[context.scope.workspaceId,ids,maxSources*100+1])).rows;
+ if(contexts.length>maxSources*100||ids.some(id=>contexts.filter(value=>value.source_id===id).length>100))return null;
+ const contextIdentity=createHash('sha256').update(JSON.stringify(contexts)).digest('hex');
+ return {maxSources,allowUnavailable:options.allowUnavailable===true,sources:[...sources].sort((a,b)=>a.sourceId.localeCompare(b.sourceId)),heads,contextIdentity,firmIds:[...new Set(contexts.flatMap(value=>value.firm_id===null?[]:[value.firm_id]))].sort(),personIds:[...new Set(contexts.flatMap(value=>value.person_id===null?[]:[value.person_id]))].sort()};
+}
+/** Caller already holds every mixed original/current firm/person lock. Refuse drift, never append authority locks. */
+export async function lockMailCopyAuthorityBatch(context:RepositoryContext,snapshot:MailCopyAuthorityBatchSnapshot,closure:{firmIds:readonly string[];personIds:readonly string[];lockMode?:'read'|'write'}):Promise<boolean>{
+ if(snapshot.firmIds.some(id=>!closure.firmIds.includes(id))||snapshot.personIds.some(id=>!closure.personIds.includes(id)))return false;
+ const before=await snapshotMailCopyAuthorityBatch(context,snapshot.sources,{allowUnavailable:snapshot.allowUnavailable,maxSources:snapshot.maxSources});if(JSON.stringify(before)!==JSON.stringify(snapshot))return false;
+ await lockMailGrantRows(context,snapshot.heads.map(value=>value.mailbox_id),snapshot.heads.map(value=>value.conversation_id));
+ const copyLock=closure.lockMode==='read'?'SHARE':'UPDATE';
+ await context.db.query(`SELECT id FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR ${copyLock}`,[context.scope.workspaceId,[...new Set(snapshot.heads.map(value=>value.capture_identity_id))].sort()]);
+ await context.db.query(`SELECT id FROM mail_messages WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR ${copyLock}`,[context.scope.workspaceId,snapshot.heads.map(value=>value.source_id).sort()]);
+ await context.db.query(`SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) ORDER BY source_id FOR ${copyLock}`,[context.scope.workspaceId,snapshot.heads.map(value=>value.source_id).sort()]);
+ const after=await snapshotMailCopyAuthorityBatch(context,snapshot.sources,{allowUnavailable:snapshot.allowUnavailable,maxSources:snapshot.maxSources});
+ return JSON.stringify(after)===JSON.stringify(snapshot);
+}
+
+/** Current copied-availability flags only; no copied content leaves this read. */
+export async function readMailCopyAvailabilityBatch(context:RepositoryContext,sourceIds:readonly string[]){
+ const actor=context.scope.actor;if(actor.kind!=='user'||sourceIds.length>100)return null;
+ const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];
+ if(member?.role!==actor.role||member.status!=='active')return null;
+ const ids=[...new Set(sourceIds)].sort();
+ const heads=(await context.db.query<{source_id:string;source_revision:number;content_hash:string|null}>('SELECT source_id,source_revision,content_hash FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) ORDER BY source_id',[context.scope.workspaceId,ids])).rows;
+ if(heads.length!==ids.length)return null;
+ const exact=heads.map(head=>({sourceId:head.source_id,sourceRevision:head.source_revision,contentHash:head.content_hash}));
+ const snapshot=await snapshotMailCopyAuthorityBatch(context,exact,{allowUnavailable:true,maxSources:100});
+ if(snapshot===null||!await lockIdentityContext(context,{firmIds:snapshot.firmIds,personIds:snapshot.personIds})||!await lockMailCopyAuthorityBatch(context,snapshot,{firmIds:snapshot.firmIds,personIds:snapshot.personIds,lockMode:'read'}))return null;
+ const contexts=(await context.db.query<MailContext>(`SELECT cx.* FROM crm_mail_source_contexts cx JOIN crm_mail_sources s ON s.workspace_id=cx.workspace_id AND s.source_id=cx.source_id WHERE s.workspace_id=$1 AND s.source_id=ANY($2::uuid[]) AND ${mailContextPredicate()} ORDER BY cx.source_id,cx.id LIMIT 10001`,[context.scope.workspaceId,ids])).rows;
+ if(createHash('sha256').update(JSON.stringify(contexts)).digest('hex')!==snapshot.contextIdentity)return null;
+ for(const head of snapshot.heads)await auditExceptionalMailRead(context,{sourceId:head.source_id,sourceRevision:head.source_revision,contentHash:head.content_hash},head.owner_user_id,contexts.filter(value=>value.source_id===head.source_id));
+ const flags=(await context.db.query<{source_id:string;availability:string;body_available:boolean}>(`SELECT s.source_id,s.availability,COALESCE(b.body_text IS NOT NULL AND encode(sha256(convert_to(b.body_text,'UTF8')),'hex')=s.content_hash,false) AS body_available FROM crm_mail_sources s LEFT JOIN mail_message_bodies b ON b.workspace_id=s.workspace_id AND b.mail_message_id=s.source_id WHERE s.workspace_id=$1 AND s.source_id=ANY($2::uuid[]) ORDER BY s.source_id`,[context.scope.workspaceId,ids])).rows;
+ if(!await activeBusinessActor(context))return null;
+ return flags.map(flag=>({sourceId:flag.source_id,availability:flag.availability,bodyAvailable:flag.body_available}));
+}
