@@ -1,3 +1,4 @@
+import {personCreateSchema,personReadSchema,personListSchema,personSourceAddSchema,personSourceChangeSchema,personSourceRecaptureSchema,personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,notificationRuntimeStatusSchema} from '@fss/contracts';
@@ -1100,6 +1101,13 @@ export const OPERATIONS = {
   },
 
   // --- Firms -------------------------------------------------------------
+  'crm.personList': {kind:'read', calls:[{method:'POST',path:'/crm/people/list'}],input:personListSchema,output:peopleListSchema,transform:'bounded current-access people list'},
+  'crm.personRead': {kind:'read', calls:[{method:'POST',path:'/crm/people/read'}],input:personReadSchema,output:personPageSchema,transform:'current-access selected evidence'},
+  'crm.personCreate': {kind:'command',calls:[{method:'POST',path:'/crm/people/create'}],input:personCreateSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({personId:uuid}),transform:'identifier only; main owns command envelope'},
+  'crm.personSourceAdd': {kind:'command',calls:[{method:'POST',path:'/crm/people/source/add'}],input:personSourceAddSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid}),transform:'identifier only; no copied source in receipts'},
+  'crm.personSourceDelete': {kind:'command',calls:[{method:'POST',path:'/crm/people/source/delete'}],input:personSourceChangeSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'deletion receipt without copied text'},
+  'crm.personSourceRecapture': {kind:'command',calls:[{method:'POST',path:'/crm/people/source/recapture'}],input:personSourceRecaptureSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'explicit selected recapture by source identity and current revision'},
+  'crm.personSourceRestore': {kind:'command',calls:[{method:'POST',path:'/crm/people/source/restore'}],input:personSourceChangeSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'explicit restore requires selected recapture'},
   'crm.state': {
     kind: 'read',
     calls: [

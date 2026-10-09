@@ -402,6 +402,22 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    crm_people: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_people p
+       JOIN crm_legacy_contact_people b ON b.workspace_id=p.workspace_id AND b.person_id=p.id
+       JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id
+       WHERE p.workspace_id=$1 AND c.firm_id=$3 AND ${contactPredicate('c.id', '$2')} AND p.full_name <> $4`,
+      [...byContact, REDACTED_NAME],
+    ),
+    crm_selected_sources: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_selected_sources s
+       JOIN crm_legacy_contact_people b ON b.workspace_id=s.workspace_id AND b.person_id=s.person_id
+       JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id
+       WHERE s.workspace_id=$1 AND c.firm_id=$3 AND ${contactPredicate('c.id', '$2')} AND s.availability <> 'deleted'`,
+      byContact,
+    ),
     // Outbound fences the trigger still lets us touch: `prepared` and `held`, which
     // are the ones with no attempt token and therefore provably unsent. A fence at or
     // past `dispatching` is a message that may have left, `DELETE` on the table is
@@ -704,6 +720,14 @@ export async function commitDeletion(
       scope.firmId,
     ]);
   }
+  await context.db.query(
+    `SELECT p.id FROM crm_people p
+      JOIN crm_legacy_contact_people b ON b.workspace_id=p.workspace_id AND b.person_id=p.id
+      JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id
+      WHERE p.workspace_id=$1 AND c.firm_id=$3 AND ${contactPredicate('c.id', '$2')}
+      ORDER BY p.id FOR UPDATE OF p`,
+    [context.scope.workspaceId, scope.contactId, scope.firmId],
+  );
   // Linked/attendee-matched meetings may include another firm; lock all before monthly spend.
   await context.db.query(`SELECT f.id FROM firms f WHERE f.workspace_id=$1 AND f.id IN
     (SELECT m.firm_id FROM meetings m WHERE m.workspace_id=$1 AND ${MEETING_IN_SCOPE}) ORDER BY f.id FOR UPDATE`,
@@ -1171,9 +1195,25 @@ export async function commitDeletion(
     `DELETE FROM record_aliases WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
   );
-
-
   const redacted: Record<string, number> = {};
+  const people = await context.db.query(
+    `UPDATE crm_people p SET full_name=$4,revision=revision+1
+      WHERE p.workspace_id=$1 AND p.full_name <> $4 AND p.id IN (
+        SELECT b.person_id FROM crm_legacy_contact_people b
+        JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id
+        WHERE b.workspace_id=$1 AND c.firm_id=$3 AND ${contactPredicate('c.id', '$2')})`,
+    [...byContact, REDACTED_NAME],
+  );
+  redacted['crm_people'] = people.rowCount ?? 0;
+  const selectedSources = await context.db.query(
+    `UPDATE crm_selected_sources s SET availability='deleted',excerpt=NULL,content_hash=NULL,occurred_at=NULL,revision=revision+1
+      WHERE s.workspace_id=$1 AND s.availability <> 'deleted' AND s.person_id IN (
+        SELECT b.person_id FROM crm_legacy_contact_people b
+        JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id
+        WHERE b.workspace_id=$1 AND c.firm_id=$3 AND ${contactPredicate('c.id', '$2')})`,
+    byContact,
+  );
+  redacted['crm_selected_sources'] = selectedSources.rowCount ?? 0;
   const fences = await context.db.query(
     `UPDATE outbound_messages
         SET subject = $4, body = $4, updated_at = now()

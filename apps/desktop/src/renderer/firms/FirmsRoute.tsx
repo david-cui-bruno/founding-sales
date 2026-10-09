@@ -1,3 +1,5 @@
+import {People} from './People.tsx';
+import {peoplePorts} from './peoplePorts.ts';
 import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
 import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
 import {FirmQualification} from '../sourcing/FirmQualification.tsx';
@@ -509,8 +511,8 @@ export function FirmsRoute({
         />
       ) : state.screen === 'pipeline' && state.pipeline !== null ? (
         <>
-          {onFirmsList && state.role === 'admin' ? <div className="mb-5 flex gap-2" aria-label="Firms views"><Button size="sm" variant={firmsTab === 'firms' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'firms'} onClick={() => setFirmsTab('firms')}>All firms</Button><Button size="sm" variant={firmsTab === 'candidates' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'candidates'} onClick={() => setFirmsTab('candidates')}>Candidates</Button></div> : null}
-          {onFirmsList && state.role === 'admin' && firmsTab === 'candidates' ? <Candidates enabled={view.actionsEnabled} /> : <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />}
+          {onFirmsList ? <div className="mb-5 flex gap-2" aria-label="Firms views"><Button size="sm" variant={firmsTab === 'firms' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'firms'} onClick={() => setFirmsTab('firms')}>All firms</Button><Button size="sm" variant={firmsTab === 'people' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'people'} onClick={() => setFirmsTab('people')}>People</Button>{state.role === 'admin' ? <Button size="sm" variant={firmsTab === 'candidates' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'candidates'} onClick={() => setFirmsTab('candidates')}>Candidates</Button> : null}</div> : null}
+          {onFirmsList && firmsTab === 'people' ? <People key={`${identity}:${generation}`} enabled={view.actionsEnabled} ports={peoplePorts}/> : onFirmsList && state.role === 'admin' && firmsTab === 'candidates' ? <Candidates enabled={view.actionsEnabled} /> : <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />}
         </>
       ) : (
         // A screen with nothing in it is a state the main process should not produce, and

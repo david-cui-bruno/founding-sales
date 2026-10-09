@@ -109,6 +109,9 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   oidc_authorization_requests: coverage(['operational'], 'Single-use digests of an in-flight sign-in.'),
 
   // ------------------------------------------------------------------- CRM
+  crm_people: coverage(['retained', 'deletion_redacts'], 'Independent business identity; operational contact deletion redacts its legacy bridge identity. Unknown-firm people are owner/admin sensitive and source-copy deletion does not delete the person.'),
+  crm_legacy_contact_people: coverage(['retained'], 'Body-free legacy contact/person bridge; operational identifiers remain unchanged through deletion and prevent duplicate identity backfill.'),
+  crm_selected_sources: coverage(['retained', 'deletion_redacts'], 'Approved selected-note copies stay with the business record until explicit source deletion. Source or bridged contact deletion removes excerpt/hash/event date and retains only minimal reimport identity and revision; explicit restore requires recapture.'),
   firms: coverage(['retained', 'deletion_redacts'], 'Business history; a deletion clears the identifying fields and keeps the row the append-only history references.'),
   contacts: coverage(['retained', 'deletion_redacts'], 'Business history; a deletion clears the person’s name and title (which carries the LinkedIn URL migration 0018 kept) and keeps the row the append-only history references.'),
   phone_routes: coverage(['deletion_removes'], 'A normalized personal handle; a deletion removes it and leaves a suppression tombstone.'),

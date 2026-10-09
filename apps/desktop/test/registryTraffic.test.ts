@@ -176,6 +176,13 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'research.run': { firmId: UUID },
   'research.addLink': { firmId: UUID, url: 'https://news.example.test/piece' },
   'research.saveSettings': { dailyFirmCeiling: 25 },
+  'crm.personList': {limit:50},
+  'crm.personRead': {personId:UUID,limit:50},
+  'crm.personCreate': {fullName:'Alex Example'},
+  'crm.personSourceAdd': {personId:UUID,sourceKey:'note-one',excerpt:'Selected evidence.',occurredAt:'2026-10-08T15:00:00.000Z'},
+  'crm.personSourceDelete': {personId:UUID,sourceId:UUID,expectedRevision:1},
+  'crm.personSourceRestore': {personId:UUID,sourceId:UUID,expectedRevision:2},
+  'crm.personSourceRecapture': {personId:UUID,sourceId:UUID,expectedRevision:3,excerpt:'Recaptured evidence.',occurredAt:'2026-10-08T15:00:00.000Z'},
   'crm.openFirm': { firmId: UUID },
   'crm.firmTimeline': { firmId: UUID, before: '2026-09-20T15:00:00.123456|call|abc' },
   'crm.saveContact': { contactId: UUID, fullName: 'Kim Placeholder', title: null, makePrimary: false },
@@ -366,7 +373,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
-    crm: createCrmBridge({ api, session, clientVersion: '1.0.13' }) as unknown as Host,
+    crm: (()=>{const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...bridge,...Object.fromEntries(['personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture'].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]))} as unknown as Host;})(),
     sequences: createSequenceBridge({ api, session }) as unknown as Host,
     settings: createAdminBridge({ api, session }) as unknown as Host,
     // Slice M1: answered by `operationHost.ts` against the client directly, like

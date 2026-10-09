@@ -1,0 +1,3 @@
+# Versioned evidence and PostgreSQL processing
+
+The approved broader CRM spec #479 retains versioned source evidence and durable human decisions, with rebuildable claims, summaries and retrieval projections processed through existing PostgreSQL jobs. This reuses current fencing, transactional effects and paid-attempt controls instead of introducing a workflow engine or full event sourcing; deletion and current access can invalidate content across all projections. A bounded PostgreSQL hybrid-retrieval prototype is authorized for evaluation, while production vectors and hosted processing remain conditional on their own checks.
