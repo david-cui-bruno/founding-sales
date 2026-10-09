@@ -485,4 +485,3 @@ it('retains the conservative charge and replay blocker when unknown acceptance r
   expect((await post('/crm/processing/health/read',{sourceId,kind:'mail'})).body).toMatchObject({availability:'deleted',unknownAcceptance:true,generations:expect.arrayContaining([expect.objectContaining({state:'deleted',financial:expect.objectContaining({dispatchState:'unknown_acceptance',settlementState:'estimated',settledCents:1})})])});
  }finally{await fixture.stop();}
 });
-

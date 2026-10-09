@@ -124,7 +124,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
   const timeout=new Promise<Awaited<ReturnType<CrmExtractionAdapter['run']>>>(resolve=>{
     timer=setTimeout(()=>{controller.abort();resolve({acceptance:'unknown',usage:null,claims:[]});},Math.max(1,Math.min(60000,options.providerTimeoutMs??60000)));
   });
-  try{answer=await Promise.race([options.adapter.run({source:reserved.source,text:dispatch.text,maxOutputTokens:4096,signal:controller.signal}),timeout]);}catch{answer={acceptance:'unknown',usage:null,claims:[]};}finally{if(timer!==undefined)clearTimeout(timer);} 
+  try{answer=await Promise.race([options.adapter.run({source:reserved.source,text:dispatch.text,maxOutputTokens:4096,signal:controller.signal}),timeout]);}catch{answer={acceptance:'unknown',usage:null,claims:[]};}finally{if(timer!==undefined)clearTimeout(timer);}
   const publicationAuthority=await verifyMail(input);
   await withTransaction(input.session,async()=>{
    const {context,source,row,reservationId}=reserved;
