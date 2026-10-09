@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useRef,useState} from 'react';
 import type {z} from 'zod';
 import type {askAnswerRequestPayloadSchema,askAnswerAcknowledgmentSchema,askAnswerReadSchema,AskAnswerReadResult,askAnswerSourceReadSchema,askAnswerSourceResultSchema} from '@fss/contracts';
 export interface AskAnswerPorts {
@@ -34,35 +34,42 @@ function resultNotice(result:AskAnswerReadResult){
  if(result.state==='unknown_acceptance')return reasons.provider_acceptance_unknown;
  return result.reason===null?null:reasons[result.reason];
 }
-export function AskAnswer({ports,enabled,question,scope}:{ports:Partial<AskAnswerPorts>;enabled:boolean}&z.infer<typeof askAnswerRequestPayloadSchema>){
+type AskAnswerProps={ports:Partial<AskAnswerPorts>;enabled:boolean;onUnavailable?:()=>void}&((z.infer<typeof askAnswerRequestPayloadSchema>&{existingRequestId?:never})|{existingRequestId:string;question?:never;scope?:never});
+export function AskAnswer({ports,enabled,question,scope,existingRequestId,onUnavailable}:AskAnswerProps){
  const [result,setResult]=useState<AskAnswerReadResult|null>(null);
  const [opened,setOpened]=useState<z.infer<typeof askAnswerSourceResultSchema>|null>(null);
  const sourceEpoch=useRef(0);
  const [notice,setNotice]=useState<string|null>(null);
- const [requestId,setRequestId]=useState<string|null>(null);
- const [requested,setRequested]=useState(false);
+ const [requestId,setRequestId]=useState<string|null>(existingRequestId??null);
+ const [requested,setRequested]=useState(existingRequestId!==undefined);
  const [reading,setReading]=useState(false);
  const epoch=useRef(0);
+ const invalidate=useCallback(()=>++epoch.current,[]);
+ const answerRead=ports.answerRead;
  const timer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
- useEffect(()=>()=>{epoch.current++;clearTimeout(timer.current);},[]);
- async function readAnswer(id:string,captured:number,remaining=10){
-  if(!ports.answerRead||captured!==epoch.current)return;
+ const readAnswer=useCallback(async function readCurrent(id:string,captured:number,remaining=10){
+  if(!answerRead||captured!==epoch.current)return;
   setReading(true);setOpened(null);sourceEpoch.current++;
   try{
-   const fresh=await ports.answerRead({requestId:id});
+   const fresh=await answerRead({requestId:id});
    if(captured!==epoch.current)return;
    if(fresh.requestId!==id)throw new Error('request_changed');
    setResult(fresh);
+   if(fresh.state==='stale'||fresh.state==='deleted'||fresh.reason==='source_unavailable')onUnavailable?.();
    if(fresh.state==='pending'){
     setNotice(remaining>1?'Explanation pending.':'Still pending. Automatic checks stopped; check this request again when ready.');
-    if(remaining>1)timer.current=setTimeout(()=>{void readAnswer(id,captured,remaining-1);},2000);
+    if(remaining>1)timer.current=setTimeout(()=>{void readCurrent(id,captured,remaining-1);},2000);
    }else setNotice(null);
   }catch{
-   if(captured===epoch.current){setResult(null);setNotice('Explanation unavailable. Search selected copies for original evidence.');}
+   if(captured===epoch.current){setResult(null);onUnavailable?.();setNotice('Explanation unavailable. Search selected copies for original evidence.');}
   }finally{if(captured===epoch.current)setReading(false);}
- }
+ },[answerRead,onUnavailable]);
+ useEffect(()=>{
+  if(existingRequestId!==undefined&&enabled)void readAnswer(existingRequestId,invalidate());
+  return ()=>{invalidate();clearTimeout(timer.current);};
+ },[existingRequestId,enabled,readAnswer,invalidate]);
  async function explain(){
-  if(!enabled||!ports.answerRequest||!ports.answerRead)return;
+  if(!enabled||existingRequestId!==undefined||question===undefined||scope===undefined||!ports.answerRequest||!ports.answerRead)return;
   const captured=++epoch.current;
   setRequested(true);setResult(null);setNotice('Requesting explanation…');
   try{
@@ -82,12 +89,13 @@ export function AskAnswer({ports,enabled,question,scope}:{ports:Partial<AskAnswe
    if(next.requestId!==result.requestId||next.version!==result.version||next.windowId!==windowId)throw new Error('source_changed');
    setOpened(next);setNotice(null);
   }catch{
-   if(captured===epoch.current&&selected===sourceEpoch.current){setOpened(null);setResult(null);setNotice('Citation unavailable. Check this explanation again before using it.');}
+   if(captured===epoch.current&&selected===sourceEpoch.current){setOpened(null);setResult(null);onUnavailable?.();setNotice('Citation unavailable. Check this explanation again before using it.');}
   }
  }
  return <div>
-  <button disabled={requested||!enabled||!question.trim()||!ports.answerRequest||!ports.answerRead} onClick={()=>{void explain();}}>Explain selected copies</button>
+  {existingRequestId===undefined&&<button disabled={requested||!enabled||!question?.trim()||!ports.answerRequest||!ports.answerRead} onClick={()=>{void explain();}}>Explain selected copies</button>}
   {requestId!==null&&<button disabled={!enabled||reading} onClick={()=>{clearTimeout(timer.current);setResult(null);void readAnswer(requestId,++epoch.current);}}>Check explanation</button>}
+  {existingRequestId!==undefined&&result?.question!=null&&<p>{result.question}</p>}
   {notice!==null&&<p role='status'>{notice}</p>}
   {result!==null&&resultNotice(result)!==null&&<p role='status'>{resultNotice(result)}</p>}
   {result?.state==='complete'&&result.answer!==null&&<div>

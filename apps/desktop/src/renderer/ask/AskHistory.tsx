@@ -1,20 +1,23 @@
-import {useEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useRef,useState} from 'react';
 import {askHistoryPageSchema,type AskHistoryList} from '@fss/contracts';
 import type {z} from 'zod';
+import {AskAnswer,type AskAnswerPorts} from './AskAnswer.tsx';
 export interface AskHistoryPorts {
  historyList(input:AskHistoryList):Promise<z.infer<typeof askHistoryPageSchema>>;
 }
 const status={pending:'Pending',complete:'Complete',unavailable:'Unavailable',unknown_acceptance:'Processing acceptance unknown',stale:'Stale',deleted:'Deleted'};
-export function AskHistory({ports,enabled}:{ports:Partial<AskHistoryPorts>;enabled:boolean}){
+export function AskHistory({ports,enabled}:{ports:Partial<AskHistoryPorts>&Partial<AskAnswerPorts>;enabled:boolean}){
  const [page,setPage]=useState<z.infer<typeof askHistoryPageSchema>|null>(null);
+ const [opened,setOpened]=useState<{requestId:string;epoch:number}|null>(null);
  const [notice,setNotice]=useState<string|null>(null);
  const [busy,setBusy]=useState(false);
  const epoch=useRef(0);
+ const clearPrivateList=useCallback(()=>setPage(null),[]);
  useEffect(()=>()=>{epoch.current++;},[]);
  async function list(cursor?:AskHistoryList['cursor']){
   if(!enabled||!ports.historyList||busy)return;
   const captured=++epoch.current;
-  setPage(null);setBusy(true);setNotice(null);
+  setPage(null);setOpened(null);setBusy(true);setNotice(null);
   try{
    const fresh=askHistoryPageSchema.parse(await ports.historyList({limit:20,...(cursor===undefined?{}:{cursor})}));
    if(captured===epoch.current)setPage(fresh);
@@ -32,7 +35,9 @@ export function AskHistory({ports,enabled}:{ports:Partial<AskHistoryPorts>;enabl
    <time dateTime={item.createdAt}>{item.createdAt}</time>
    <p>{status[item.state]}{item.pinned?' · Pinned':''}</p>
    {item.question!==null&&<p>{item.question}</p>}
+   <button disabled={!enabled||!ports.answerRead} onClick={()=>setOpened({requestId:item.requestId,epoch:++epoch.current})}>Open investigation</button>
   </article>)}
+  {opened!==null&&<AskAnswer key={`${opened.requestId}:${opened.epoch}`} ports={ports} enabled={enabled} existingRequestId={opened.requestId} onUnavailable={clearPrivateList}/> }
   {page?.nextCursor!=null&&<button disabled={!enabled||busy} onClick={()=>{void list(page.nextCursor??undefined);}}>Older investigations</button>}
  </section>;
 }

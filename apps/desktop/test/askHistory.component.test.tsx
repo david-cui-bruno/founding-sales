@@ -46,3 +46,25 @@ it('discards a late private history response after the owner session changes',as
  finish(await historyList());
  expect(screen.queryByText('Scheduling investigation')).toBeNull();
 });
+
+it('reopens saved history through a fresh answer read without requesting new inference',async()=>{
+ const answerRequest=vi.fn(async()=>({requestId,version:1,state:'pending' as const}));
+ const answerRead=vi.fn<NonNullable<AskPorts['answerRead']>>(async()=>({requestId,version:1,createdAt:'2026-10-09T11:00:00.000Z',state:'complete',reason:null,question:'What matters to Alex?',fallback:null,answer:{answeredAt:'2026-10-09T11:01:00.000Z',claims:[{text:'Scheduling is the supported concern.',kind:'extractive',citationWindowIds:['22222222-2222-4222-8222-222222222222'],verification:'supported'}],conflicts:[],missingEvidence:[],abstained:false,coverage:{acquisition:'unverified',semantic:'bounded_evaluated',input:'complete',sourceCeiling:10,windowCeiling:1000,groupCeiling:10,evaluationFingerprint:'a'.repeat(64)}}}));
+ render(<Ask ports={{read,historyList,answerRead,answerRequest}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Open investigation'}));
+ expect(await screen.findByText('Scheduling is the supported concern.')).toBeTruthy();
+ expect(answerRead).toHaveBeenCalledWith({requestId});
+ expect(answerRequest).not.toHaveBeenCalled();
+ expect(screen.queryByRole('button',{name:'Explain selected copies'})).toBeNull();
+});
+
+it('evicts old private history metadata when reopening discovers changed source evidence',async()=>{
+ const answerRead=vi.fn<NonNullable<AskPorts['answerRead']>>(async()=>({requestId,version:2,createdAt:'2026-10-09T11:00:00.000Z',state:'stale',reason:'source_changed',question:null,fallback:null,answer:null}));
+ render(<Ask ports={{read,historyList,answerRead}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Open investigation'}));
+ expect(await screen.findByText('This explanation is stale. Select current source versions again.')).toBeTruthy();
+ expect(screen.queryByText('Scheduling investigation')).toBeNull();
+ expect(screen.queryByText('What matters to Alex?')).toBeNull();
+});
