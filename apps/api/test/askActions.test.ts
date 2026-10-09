@@ -47,5 +47,8 @@ it('explicitly commits a human note from current keyword evidence without enabli
   const completion=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:taskId,expectedVersion:1,action:'complete_task'});
   expect(completion.status).toBe(200);
   expect(completion.body).toMatchObject({result:{actionId:taskId,version:2,status:'done',completedAt:expect.any(String)}});
+  const dismissal=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:proposalId,expectedVersion:1,action:'dismiss_preference'});
+  expect(dismissal.status).toBe(200);
+  expect(dismissal.body).toMatchObject({result:{actionId:proposalId,version:2,status:'dismissed',completedAt:null}});
  }finally{await fixture.stop();}
 });
