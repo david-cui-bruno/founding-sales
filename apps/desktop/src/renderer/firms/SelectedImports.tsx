@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import type { z } from "zod";
 import type {
   selectedImportInputSchema,
@@ -77,8 +77,11 @@ export function SelectedImports({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [importKey, setImportKey] = useState(() => crypto.randomUUID());
+  const sourceEpoch = useRef(0);
+  const invalidateReads = useCallback(() => ++sourceEpoch.current, []);
   useEffect(() => {
-    let active = true;
+    const ticket = invalidateReads();
+    setBusy(false);
     setPage(null);
     setText("");
     setLabel("Selected conversation");
@@ -96,21 +99,23 @@ export function SelectedImports({
     void ports
       .read(scope)
       .then((value) => {
-        if (active) setPage(value);
+        if (ticket === sourceEpoch.current) setPage(value);
       })
       .catch(() => {
-        if (active) setError("Imported conversations could not be loaded.");
+        if (ticket === sourceEpoch.current) setError("Imported conversations could not be loaded.");
       });
     return () => {
-      active = false;
+      invalidateReads();
     };
-  }, [ports, scope, sourceVersion]);
-  const run = async (work: () => Promise<void>) => {
+  }, [ports, scope, sourceVersion, invalidateReads]);
+  const run = async (work: (ticket: number) => Promise<void>) => {
+    const ticket = invalidateReads();
     setBusy(true);
     setError("");
     try {
-      await work();
+      await work(ticket);
     } catch (error) {
+      if (ticket !== sourceEpoch.current) return;
       setPage(null);
       setText("");
       setLabel("Selected conversation");
@@ -128,7 +133,7 @@ export function SelectedImports({
           : "The import could not be completed. Check the selected text, source versions and current access.",
       );
     } finally {
-      setBusy(false);
+      if (ticket === sourceEpoch.current) setBusy(false);
     }
   };
   const input = (): Input => ({
@@ -155,10 +160,13 @@ export function SelectedImports({
       ...otherAttachments,
     ],
   });
-  const refresh = async () => {
+  const refresh = async (ticket: number) => {
+    if (ticket !== sourceEpoch.current) return;
     setPage(null);
     await onChange?.();
-    setPage(await ports.read(scope));
+    if (ticket !== sourceEpoch.current) return;
+    const next = await ports.read(scope);
+    if (ticket === sourceEpoch.current) setPage(next);
   };
   const change = (item: Page["imports"][number]): Change => ({
     sourceId: item.source.sourceId,
@@ -183,9 +191,10 @@ export function SelectedImports({
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file)
-              void run(async () => {
+              void run(async (ticket) => {
                 setPreview(null);
                 const selected = await ports.readFile(file);
+                if (ticket !== sourceEpoch.current) return;
                 setText(selected.text);
                 setLabel(selected.label);
                 setSubtype("selected_file");
@@ -340,7 +349,10 @@ export function SelectedImports({
           !label.trim()
         }
         onClick={() =>
-          void run(async () => setPreview(await ports.preview(input())))
+          void run(async (ticket) => {
+            const value = await ports.preview(input());
+            if (ticket === sourceEpoch.current) setPreview(value);
+          })
         }
       >
         Preview selected conversation
@@ -373,7 +385,7 @@ export function SelectedImports({
       <Button
         disabled={!enabled || busy || preview === null}
         onClick={() =>
-          void run(async () => {
+          void run(async (ticket) => {
             if (preview === null) return;
             const selected = {
               ...input(),
@@ -390,11 +402,12 @@ export function SelectedImports({
             else if (editing.source.availability === "awaiting_recapture")
               await ports.recapture({ ...selected, ...change(editing) });
             else await ports.correct({ ...selected, ...change(editing) });
+            if (ticket !== sourceEpoch.current) return;
             setPreview(null);
             setEditing(null);
             setText("");
             setImportKey(crypto.randomUUID());
-            await refresh();
+            await refresh(ticket);
           })
         }
       >
@@ -456,9 +469,9 @@ export function SelectedImports({
               <Button
                 disabled={!enabled || busy}
                 onClick={() =>
-                  void run(async () => {
+                  void run(async (ticket) => {
                     await ports.restore(change(item));
-                    await refresh();
+                    await refresh(ticket);
                   })
                 }
               >
@@ -511,7 +524,7 @@ export function SelectedImports({
                 <Button
                   disabled={!enabled || busy}
                   onClick={() =>
-                    void run(async () => {
+                    void run(async (ticket) => {
                       setPage(null);
                       setText("");
                       setLabel("Selected conversation");
@@ -525,7 +538,7 @@ export function SelectedImports({
                       setOtherAttachments([]);
                       setExactOriginalDate(null);
                       await ports.remove(change(item));
-                      await refresh();
+                      await refresh(ticket);
                     })
                   }
                 >
@@ -540,14 +553,13 @@ export function SelectedImports({
         <Button
           disabled={busy}
           onClick={() =>
-            void run(async () => {
+            void run(async (ticket) => {
               setPage(null);
-              setPage(
-                await ports.read({
-                  ...scope,
-                  afterId: page.nextAfterId ?? undefined,
-                }),
-              );
+              const next = await ports.read({
+                ...scope,
+                afterId: page.nextAfterId ?? undefined,
+              });
+              if (ticket === sourceEpoch.current) setPage(next);
             })
           }
         >
