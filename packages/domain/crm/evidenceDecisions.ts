@@ -5,6 +5,8 @@ import {
 import { createHash } from "node:crypto";
 import {
   crmClaimContextSchema,
+  crmOriginalAccessClosureSchema,
+  type CrmOriginalAccessClosure,
   type CrmEvidenceDecide,
   type CrmEvidenceClaimTarget,
   type CrmConflictSave,
@@ -121,6 +123,52 @@ async function currentClaims(
     claims,
     ownerUserId: generation?.owner_user_id ?? null,
   };
+}
+/** Canonical capture authority, never inferred from a claim's semantic context. */
+async function originalSourceAccessClosure(
+  context: RepositoryContext,
+  source: SourceLookup,
+): Promise<CrmOriginalAccessClosure | null> {
+  if (source.kind === "selected_note") {
+    const row = (
+      await context.db.query<{ original_access_closure: unknown }>(
+        "SELECT original_access_closure FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2 AND revision=$3 AND content_hash=$4",
+        [
+          context.scope.workspaceId,
+          source.sourceId,
+          source.revision,
+          source.contentHash,
+        ],
+      )
+    ).rows[0];
+    const parsed = crmOriginalAccessClosureSchema.safeParse(
+      row?.original_access_closure,
+    );
+    return parsed.success ? parsed.data : null;
+  }
+  if (source.kind === "mail") {
+    const batch = await snapshotMailCopyAuthorityBatch(context, [
+      {
+        sourceId: source.sourceId,
+        sourceRevision: source.revision,
+        contentHash: source.contentHash ?? "",
+      },
+    ]);
+    if (batch === null) return null;
+    const parsed = crmOriginalAccessClosureSchema.safeParse({
+      firmIds: batch.firmIds,
+      personIds: batch.personIds,
+    });
+    return parsed.success ? parsed.data : null;
+  }
+  const row = (
+    await context.db.query<{ original_firm_id: string | null }>(
+      "SELECT original_firm_id FROM crm_extraction_generations WHERE workspace_id=$1 AND source_id=$2 AND source_kind=$3 ORDER BY observed_at,id LIMIT 1",
+      [context.scope.workspaceId, source.sourceId, source.kind],
+    )
+  ).rows[0];
+  if (row?.original_firm_id == null) return null;
+  return { firmIds: [row.original_firm_id], personIds: [] };
 }
 async function anchorFor(
   context: RepositoryContext,
@@ -371,9 +419,15 @@ export async function decideCrmEvidence(
   );
   if (evidence?.passage?.text !== claim.quote)
     return { ok: false as const, reason: "source_changed" };
+  const originalAccessClosure = await originalSourceAccessClosure(
+    context,
+    input.source,
+  );
+  if (originalAccessClosure === null)
+    return { ok: false as const, reason: "source_provenance_unavailable" };
   const identity = identities(input.source, claim);
   await context.db.query(
-    `INSERT INTO crm_claim_review_anchors(workspace_id,source_kind,source_id,source_revision,source_hash,context_hash,semantic_hash,review_family_hash,claim_kind,locator_hash,original_claim_id,original_claim_hash,original_claim_revision,owner_user_id,context_snapshot,original_event_at,original_observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,$13,$14::jsonb,$15,$16) ON CONFLICT(workspace_id,semantic_hash) DO NOTHING`,
+    `INSERT INTO crm_claim_review_anchors(workspace_id,source_kind,source_id,source_revision,source_hash,context_hash,semantic_hash,review_family_hash,claim_kind,locator_hash,original_claim_id,original_claim_hash,original_claim_revision,owner_user_id,context_snapshot,original_event_at,original_observed_at,original_access_closure) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,$13,$14::jsonb,$15,$16,$17::jsonb) ON CONFLICT(workspace_id,semantic_hash) DO NOTHING`,
     [
       context.scope.workspaceId,
       input.source.kind,
@@ -391,6 +445,7 @@ export async function decideCrmEvidence(
       JSON.stringify(current.context),
       current.canonical.source.occurredAt,
       current.canonical.source.observedAt,
+      JSON.stringify(originalAccessClosure),
     ],
   );
   const anchor = await anchorFor(context, identity.semanticHash, true);
@@ -426,6 +481,7 @@ export async function lockConflictSources(
   context: RepositoryContext,
   sources: SourceLookup[],
   snapshots: unknown[] = [],
+  accessSnapshots: unknown[] = [],
 ) {
   if (
     sources.some((source) => source.workspaceId !== context.scope.workspaceId)
@@ -436,6 +492,13 @@ export async function lockConflictSources(
   );
   if (parsed.some((value) => !value.success)) return false;
   const contexts = parsed.flatMap((value) =>
+    value.success ? [value.data] : [],
+  );
+  const accessParsed = accessSnapshots.map((value) =>
+    crmOriginalAccessClosureSchema.safeParse(value),
+  );
+  if (accessParsed.some((value) => !value.success)) return false;
+  const access = accessParsed.flatMap((value) =>
     value.success ? [value.data] : [],
   );
   const nativeSources = sources.filter(
@@ -485,6 +548,7 @@ export async function lockConflictSources(
   const firmIds = [
     ...new Set([
       ...contexts.flatMap((value) => value.firmIds),
+      ...access.flatMap((value) => value.firmIds),
       ...mail.firmIds,
       ...nativeBefore.flatMap((row) =>
         row.firmId === null ? [] : [row.firmId],
@@ -497,6 +561,7 @@ export async function lockConflictSources(
         value.personId === null ? [] : [value.personId],
       ),
       ...mail.personIds,
+      ...access.flatMap((value) => value.personIds),
       ...contexts.flatMap(
         (value) =>
           value.mailContexts?.flatMap((entry) =>
@@ -531,6 +596,7 @@ interface ConflictAnchor extends Anchor {
   context_hash: string;
   context_snapshot: unknown;
   owner_user_id: string;
+  original_access_closure: unknown;
   original_claim_id: string;
   semantic_hash: string;
   original_event_at: Date | null;
@@ -570,6 +636,7 @@ async function permittedConflict(
       context,
       sources,
       anchors.map((anchor) => anchor.context_snapshot),
+      anchors.map((anchor) => anchor.original_access_closure),
     ))
   )
     return null;
@@ -617,9 +684,14 @@ export async function targetAnchor(
     mail,
   );
   if (resolved?.passage?.text !== claim.quote) return null;
+  const originalAccessClosure = await originalSourceAccessClosure(
+    context,
+    input.source,
+  );
+  if (originalAccessClosure === null) return null;
   const identity = identities(input.source, claim);
   await context.db.query(
-    `INSERT INTO crm_claim_review_anchors(workspace_id,source_kind,source_id,source_revision,source_hash,context_hash,semantic_hash,review_family_hash,claim_kind,locator_hash,original_claim_id,original_claim_hash,original_claim_revision,owner_user_id,context_snapshot,original_event_at,original_observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,$13,$14::jsonb,$15,$16) ON CONFLICT(workspace_id,semantic_hash) DO NOTHING`,
+    `INSERT INTO crm_claim_review_anchors(workspace_id,source_kind,source_id,source_revision,source_hash,context_hash,semantic_hash,review_family_hash,claim_kind,locator_hash,original_claim_id,original_claim_hash,original_claim_revision,owner_user_id,context_snapshot,original_event_at,original_observed_at,original_access_closure) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,$13,$14::jsonb,$15,$16,$17::jsonb) ON CONFLICT(workspace_id,semantic_hash) DO NOTHING`,
     [
       context.scope.workspaceId,
       input.source.kind,
@@ -637,6 +709,7 @@ export async function targetAnchor(
       JSON.stringify(current.context),
       current.canonical.source.occurredAt,
       current.canonical.source.observedAt,
+      JSON.stringify(originalAccessClosure),
     ],
   );
   const anchor = await anchorFor(context, identity.semanticHash, true);
@@ -665,6 +738,7 @@ export async function saveCrmConflict(
         ...old.map((anchor) => sourceForAnchor(context, anchor)),
       ],
       old.map((anchor) => anchor.context_snapshot),
+      old.map((anchor) => anchor.original_access_closure),
     ))
   )
     return { ok: false as const, reason: "source_unavailable" };
@@ -719,6 +793,10 @@ export async function saveCrmConflict(
     "UPDATE crm_claim_conflicts SET current_revision=$3 WHERE workspace_id=$1 AND id=$2",
     [context.scope.workspaceId, conflictId, revision],
   );
+  await context.db.query(
+    "SELECT flag_crm_open_human_work($1,ARRAY(SELECT DISTINCT anchor_id FROM crm_claim_conflict_members WHERE workspace_id=$1 AND conflict_id=$2),'conflict_changed')",
+    [context.scope.workspaceId, conflictId],
+  );
   return { ok: true as const, value: { conflictId, revision } };
 }
 export async function resolveCrmConflict(
@@ -772,6 +850,10 @@ export async function resolveCrmConflict(
   await context.db.query(
     "UPDATE crm_claim_conflicts SET current_revision=$3 WHERE workspace_id=$1 AND id=$2",
     [context.scope.workspaceId, input.conflictId, revision],
+  );
+  await context.db.query(
+    "SELECT flag_crm_open_human_work($1,ARRAY(SELECT DISTINCT anchor_id FROM crm_claim_conflict_members WHERE workspace_id=$1 AND conflict_id=$2),'conflict_changed')",
+    [context.scope.workspaceId, input.conflictId],
   );
   return {
     ok: true as const,
@@ -871,16 +953,14 @@ export async function readCrmConflict(
     decidedAt: current.decided_at.toISOString(),
     rationale: current.rationale,
     members,
-    history: history
-      .slice(0, input.limit)
-      .map((row) => ({
-        revision: row.revision,
-        state: row.state,
-        resolution: row.resolution,
-        preferredAnchorId: row.preferred_anchor_id,
-        decidedAt: row.decided_at.toISOString(),
-        rationale: row.rationale,
-      })),
+    history: history.slice(0, input.limit).map((row) => ({
+      revision: row.revision,
+      state: row.state,
+      resolution: row.resolution,
+      preferredAnchorId: row.preferred_anchor_id,
+      decidedAt: row.decided_at.toISOString(),
+      rationale: row.rationale,
+    })),
     nextAfterRevision:
       history.length > input.limit
         ? (history[input.limit - 1]?.revision ?? null)
@@ -907,7 +987,10 @@ export async function readCrmDecisionHistory(
   )
     return null;
   const snapshot = crmClaimContextSchema.safeParse(anchor.context_snapshot);
-  if (!snapshot.success) return null;
+  const access = crmOriginalAccessClosureSchema.safeParse(
+    anchor.original_access_closure,
+  );
+  if (!snapshot.success || !access.success) return null;
   const head =
     input.kind === "mail"
       ? (
@@ -956,6 +1039,7 @@ export async function readCrmDecisionHistory(
   const firmIds = [
     ...new Set([
       ...snapshot.data.firmIds,
+      ...access.data.firmIds,
       ...(batch?.firmIds ?? []),
       ...(nativeBefore === undefined ? [] : [nativeBefore.firm_id]),
     ]),
@@ -967,6 +1051,7 @@ export async function readCrmDecisionHistory(
         value.personId === null ? [] : [value.personId],
       ) ?? []),
       ...(batch?.personIds ?? []),
+      ...access.data.personIds,
     ]),
   ].sort();
   if (
@@ -999,6 +1084,8 @@ export async function readCrmDecisionHistory(
   if (
     after === undefined ||
     after.owner_user_id !== anchor.owner_user_id ||
+    JSON.stringify(after.original_access_closure) !==
+      JSON.stringify(anchor.original_access_closure) ||
     JSON.stringify(after.context_snapshot) !==
       JSON.stringify(anchor.context_snapshot) ||
     !(await activeIdentityActor(context))
@@ -1051,17 +1138,15 @@ export async function readCrmDecisionHistory(
     originalObservedAt: after.original_observed_at?.toISOString() ?? null,
     currentDecisionRevision: after.current_decision_revision,
     basis,
-    decisions: rows
-      .slice(0, input.limit)
-      .map((row) => ({
-        revision: row.revision,
-        action: row.action,
-        decisionAt: row.decision_at.toISOString(),
-        correctedInterpretation:
-          basis === "available" ? row.corrected_interpretation : null,
-        rationale: basis === "available" ? row.rationale : null,
-        redacted: row.redacted_at !== null,
-      })),
+    decisions: rows.slice(0, input.limit).map((row) => ({
+      revision: row.revision,
+      action: row.action,
+      decisionAt: row.decision_at.toISOString(),
+      correctedInterpretation:
+        basis === "available" ? row.corrected_interpretation : null,
+      rationale: basis === "available" ? row.rationale : null,
+      redacted: row.redacted_at !== null,
+    })),
     nextBeforeRevision:
       rows.length > input.limit
         ? (rows[input.limit - 1]?.revision ?? null)

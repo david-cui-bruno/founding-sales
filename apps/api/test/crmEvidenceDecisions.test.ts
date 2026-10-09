@@ -1029,13 +1029,11 @@ it("resolves an explicit conflicting group without erasing either dated source",
       contextHash: entry.generation.contextHash,
       expectedDecisionRevision: 0,
     });
-    const saved = await post(
-      "/crm/evidence/conflict/save",
-      command({
-        expectedConflictRevision: 0,
-        members: [member(first, firstSource), member(second, source)],
-      }),
-    );
+    const saveCommand = command({
+      expectedConflictRevision: 0,
+      members: [member(first, firstSource), member(second, source)],
+    });
+    const saved = await post("/crm/evidence/conflict/save", saveCommand);
     expect(saved.status).toBe(200);
     const conflictId = (saved.body as { result: { conflictId: string } }).result
       .conflictId;
@@ -1081,6 +1079,9 @@ it("resolves an explicit conflicting group without erasing either dated source",
       members: expect.any(Array),
     });
     expect((resolved.body as { members: unknown[] }).members).toHaveLength(2);
+    expect(
+      (await post("/crm/evidence/conflict/save", saveCommand)).status,
+    ).toBe(409);
   } finally {
     await fixture.stop();
   }

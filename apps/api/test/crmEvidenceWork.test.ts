@@ -77,7 +77,11 @@ it("flags dependent open meeting work after correction while preserving complete
       contentHash: selected.contentHash,
       locator: null,
     };
-    async function process(modelVersion: string, expectedRevision: number) {
+    async function process(
+      modelVersion: string,
+      expectedRevision: number,
+      interpretation = "Needs repair coordination",
+    ) {
       expect(
         (
           await post(
@@ -123,7 +127,7 @@ it("flags dependent open meeting work after correction while preserving complete
                 {
                   kind: "need",
                   status: "stated",
-                  interpretation: "Needs repair coordination",
+                  interpretation,
                   locator: "text:0:12",
                   quote: "We need help",
                 },
@@ -201,17 +205,13 @@ it("flags dependent open meeting work after correction while preserving complete
     const completedAt = (doneBefore.body as { work: { completedAt: string } })
       .work.completedAt;
     expect(completedAt).toEqual(expect.any(String));
+    const openBindCommand = command({
+      ...target,
+      expectedDecisionRevision: 1,
+      work: { ...open, expectedVersion: "1" },
+    });
     expect(
-      (
-        await post(
-          "/crm/evidence/work/bind",
-          command({
-            ...target,
-            expectedDecisionRevision: 1,
-            work: { ...open, expectedVersion: "1" },
-          }),
-        )
-      ).status,
+      (await post("/crm/evidence/work/bind", openBindCommand)).status,
     ).toBe(200);
     expect(
       (
@@ -239,6 +239,9 @@ it("flags dependent open meeting work after correction while preserving complete
       ).status,
     ).toBe(200);
     expect(
+      (await post("/crm/evidence/work/bind", openBindCommand)).status,
+    ).toBe(409);
+    expect(
       (await post("/crm/evidence/work/read", { work: open })).body,
     ).toMatchObject({
       work: { status: "open", version: "1", completedAt: null },
@@ -257,6 +260,56 @@ it("flags dependent open meeting work after correction while preserving complete
       dependencies: [
         { reviewRequired: false, reason: null, observedDecisionRevision: 1 },
       ],
+    });
+    const second = await process(
+      "fixture-v2",
+      1,
+      "Has a different repair plan",
+    );
+    expect(
+      (
+        await post(
+          "/crm/evidence/work/bind",
+          command({
+            ...target,
+            expectedDecisionRevision: 2,
+            work: { ...open, expectedVersion: "1" },
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (await post("/crm/evidence/work/read", { work: open })).body,
+    ).toMatchObject({ dependencies: [{ reviewRequired: false }] });
+    const conflict = await post(
+      "/crm/evidence/conflict/save",
+      command({
+        expectedConflictRevision: 0,
+        members: [
+          { ...target, expectedDecisionRevision: 2 },
+          {
+            source,
+            claimId: second.claim.claimId,
+            claimRevision: 1,
+            claimHash: second.claim.claimHash,
+            contextHash: second.generation.contextHash,
+            expectedDecisionRevision: 0,
+          },
+        ],
+      }),
+    );
+    expect(conflict.status).toBe(200);
+    expect(
+      (await post("/crm/evidence/work/read", { work: open })).body,
+    ).toMatchObject({
+      work: { status: "open", version: "1" },
+      dependencies: [{ reviewRequired: true, reason: "conflict_changed" }],
+    });
+    expect(
+      (await post("/crm/evidence/work/read", { work: done })).body,
+    ).toMatchObject({
+      work: { status: "done", version: "2", completedAt },
+      dependencies: [{ reviewRequired: false, reason: null }],
     });
     expect(
       (

@@ -1,27 +1,46 @@
-import { mailContextPredicate, eligibleObservedMailLabelRedactions, redactUnsupportedObservedMailLabels } from '../mail/crmSources.ts';
-import { redactBusinessMetadata, lockBusinessMetadataAddresses } from '../business/acquisition.ts';
-import { deleteMeetingOutcomeContent } from '../meetings/outcomeCorrections.ts';
-import { lockTodayForFirmChange } from '../today/build.ts';
-import { createHash } from 'node:crypto';
-import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { isAdminScope } from '../db/workspaceScope.ts';
-import { recordCrmAuditEvent } from '../crm/audit.ts';
-import { invalidateSelectedIdentitySources } from '../crm/identityInvalidation.ts';
-import { sourceContextPredicate } from '../crm/identityAccess.ts';
-import { databaseNow } from '../policy/clock.ts';
-import { finaliseTranscriptionsOfSessions, lockSessionsForDeletion } from '../calls/transcription.ts';
-import { finaliseSummariesOfSessions, lockSummariesForDeletion } from '../calls/summary.ts';
-import { finaliseAnalysesOfSessions, lockAnalysesForDeletion } from '../calls/analysisPaid.ts';
-import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
-import { lockMonthlySpend } from '../research/ledger.ts';
-import { lockRun } from '../research/runs.ts';
-import { recordSuppression } from '../suppression/events.ts';
-import { canonicalizeHandle } from '../src/rules/suppressionCanonicalization.ts';
-import { deletionTombstoneKeyOf } from '../meetings/attendee.ts';
-import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import type { SuppressionJournal } from '../suppression/journal.ts';
-import { CALL_ANALYSIS_PENDING_SOURCE } from '@fss/contracts';
-import { accept, refuse, type RetentionResult } from './result.ts';
+import {
+  mailContextPredicate,
+  eligibleObservedMailLabelRedactions,
+  redactUnsupportedObservedMailLabels,
+} from "../mail/crmSources.ts";
+import {
+  redactBusinessMetadata,
+  lockBusinessMetadataAddresses,
+} from "../business/acquisition.ts";
+import { deleteMeetingOutcomeContent } from "../meetings/outcomeCorrections.ts";
+import { lockTodayForFirmChange } from "../today/build.ts";
+import { createHash } from "node:crypto";
+import type { RepositoryContext } from "../db/workspaceScope.ts";
+import { isAdminScope } from "../db/workspaceScope.ts";
+import { recordCrmAuditEvent } from "../crm/audit.ts";
+import { invalidateSelectedIdentitySources } from "../crm/identityInvalidation.ts";
+import { sourceContextPredicate } from "../crm/identityAccess.ts";
+import { databaseNow } from "../policy/clock.ts";
+import {
+  finaliseTranscriptionsOfSessions,
+  lockSessionsForDeletion,
+} from "../calls/transcription.ts";
+import {
+  finaliseSummariesOfSessions,
+  lockSummariesForDeletion,
+} from "../calls/summary.ts";
+import {
+  finaliseAnalysesOfSessions,
+  lockAnalysesForDeletion,
+} from "../calls/analysisPaid.ts";
+import {
+  finaliseSubjectReservations,
+  settleAttempt,
+} from "../research/reservations.ts";
+import { lockMonthlySpend } from "../research/ledger.ts";
+import { lockRun } from "../research/runs.ts";
+import { recordSuppression } from "../suppression/events.ts";
+import { canonicalizeHandle } from "../src/rules/suppressionCanonicalization.ts";
+import { deletionTombstoneKeyOf } from "../meetings/attendee.ts";
+import { lockSendGateForStopFact } from "../policy/sendGate.ts";
+import type { SuppressionJournal } from "../suppression/journal.ts";
+import { CALL_ANALYSIS_PENDING_SOURCE } from "@fss/contracts";
+import { accept, refuse, type RetentionResult } from "./result.ts";
 
 /**
  * The documented deletion workflow (specification 10.3).
@@ -79,16 +98,16 @@ import { accept, refuse, type RetentionResult } from './result.ts';
  * silently deleting more than was approved.
  */
 
-export type DeletionTargetKind = 'firm' | 'contact';
+export type DeletionTargetKind = "firm" | "contact";
 
 export type DeletionRefusal =
-  | 'admin_only'
-  | 'firm_unknown'
-  | 'contact_unknown'
-  | 'request_unknown'
-  | 'preview_stale'
-  | 'already_committed'
-  | 'handle_uncanonical';
+  | "admin_only"
+  | "firm_unknown"
+  | "contact_unknown"
+  | "request_unknown"
+  | "preview_stale"
+  | "already_committed"
+  | "handle_uncanonical";
 
 export interface DeletionPreview {
   readonly requestId: string;
@@ -128,7 +147,7 @@ export interface DeletionOutcome {
 }
 
 /** What a redacted firm or contact is called afterwards. Non-blank, because the CHECK requires it. */
-export const REDACTED_NAME = '[deleted]';
+export const REDACTED_NAME = "[deleted]";
 
 interface Scope {
   readonly firmId: string;
@@ -145,14 +164,14 @@ const contactPredicate = (column: string, parameter: string): string =>
  * deleting it because somebody asked for their own record removed would destroy the
  * evidence behind a judgment nobody asked about. A firm-scoped deletion takes them all.
  */
-const FIRM_SCOPED_ONLY = '$2::uuid IS NULL';
+const FIRM_SCOPED_ONLY = "$2::uuid IS NULL";
 
 const CRM_TARGET_PEOPLE = `SELECT b.person_id FROM crm_legacy_contact_people b
   JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id
-  WHERE b.workspace_id=$1 AND c.firm_id=$3 AND ${contactPredicate('c.id', '$2')}`;
-const CRM_SOURCE_CONTEXT = sourceContextPredicate('s', 'x');
+  WHERE b.workspace_id=$1 AND c.firm_id=$3 AND ${contactPredicate("c.id", "$2")}`;
+const CRM_SOURCE_CONTEXT = sourceContextPredicate("s", "x");
 // Explicit original context wins over the legacy default. A mixed copy is indivisible.
-const CRM_SOURCE_IN_SCOPE = `((${FIRM_SCOPED_ONLY} AND ((s.firm_id IS NOT NULL AND s.firm_id=$3) OR
+const CRM_SOURCE_IN_SCOPE = `((s.original_access_closure->'firmIds' ? $3::uuid::text AND (${FIRM_SCOPED_ONLY} OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(s.original_access_closure->'personIds') original_person(id) WHERE original_person.id IN (SELECT person_id::text FROM (${CRM_TARGET_PEOPLE}) target_people)))) OR (${FIRM_SCOPED_ONLY} AND ((s.firm_id IS NOT NULL AND s.firm_id=$3) OR
     EXISTS (SELECT 1 FROM crm_source_relationship_contexts x WHERE ${CRM_SOURCE_CONTEXT} AND x.firm_id=$3))) OR
   EXISTS (SELECT 1 FROM crm_source_relationship_contexts x WHERE ${CRM_SOURCE_CONTEXT}
     AND x.firm_id=$3 AND x.person_id IN (${CRM_TARGET_PEOPLE})) OR
@@ -171,10 +190,10 @@ const CRM_SELECTED_SOURCE_IDS = `SELECT s.id FROM crm_selected_sources s
   WHERE s.workspace_id=$1 AND s.availability<>'deleted' AND ${CRM_SOURCE_IN_SCOPE}`;
 // Original acquired context and current reviewed context select an indivisible copy.
 const CRM_MAIL_MESSAGE_IDS = `SELECT x.mail_message_id AS id FROM mail_message_matches x
-  WHERE x.workspace_id=$1 AND x.firm_id=$3 AND ${contactPredicate('x.contact_id', '$2')}
+  WHERE x.workspace_id=$1 AND x.firm_id=$3 AND ${contactPredicate("x.contact_id", "$2")}
   UNION SELECT s.source_id FROM crm_mail_sources s WHERE s.workspace_id=$1 AND EXISTS(
     SELECT 1 FROM crm_mail_source_contexts cx WHERE cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id
-      AND ${mailContextPredicate('s','cx')} AND cx.firm_id=$3
+      AND ${mailContextPredicate("s", "cx")} AND cx.firm_id=$3
       AND ($2::uuid IS NULL OR cx.person_id IN (${CRM_TARGET_PEOPLE}) OR EXISTS(
         SELECT 1 FROM mail_message_matches mx WHERE mx.workspace_id=cx.workspace_id
         AND mx.id=cx.operational_match_id AND mx.contact_id=$2)))`;
@@ -184,7 +203,7 @@ const CRM_MAIL_CAPTURE_IDS = `SELECT i.id FROM crm_mail_capture_identities i WHE
       WHERE captured->>'firmId'=$3::text AND ($2::uuid IS NULL OR captured->>'contactId'=$2::text)))`;
 // Only explicit supported endpoint evidence contributes; metadata never invents firm membership.
 const BUSINESS_TARGET_ADDRESSES = `SELECT address FROM email_addresses
-  WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id', '$2')}
+  WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate("contact_id", "$2")}
   UNION SELECT e.value AS address FROM crm_identity_endpoints e
   JOIN crm_endpoint_claims c ON c.workspace_id=e.workspace_id AND c.endpoint_id=e.id
   JOIN crm_selected_sources s ON s.workspace_id=c.workspace_id AND s.id=c.source_id
@@ -200,25 +219,60 @@ const BUSINESS_METADATA_IN_SCOPE = `b.metadata_availability='available' AND (
     WHERE i.workspace_id=$1 AND i.id IN (${CRM_MAIL_CAPTURE_IDS}) AND b.mailbox_id=i.mailbox_id
       AND b.account_binding=i.account_binding AND b.id::text=j.payload->>'conversationId'))`;
 
-
 /** Collect the identity dependency closure before any firm/person/source locks. */
-async function lockBusinessMetadataForDeletion(context: RepositoryContext, scope: Scope): Promise<void> {
-  const metadataAddresses=(await context.db.query<{address:string}>(
-    `${BUSINESS_TARGET_ADDRESSES}`,
-    [context.scope.workspaceId,scope.contactId,scope.firmId])).rows.map(value=>value.address);
-  await lockBusinessMetadataAddresses(context,metadataAddresses);
-  await context.db.query(`SELECT b.id FROM crm_business_conversations b WHERE b.workspace_id=$1
+async function lockBusinessMetadataForDeletion(
+  context: RepositoryContext,
+  scope: Scope,
+): Promise<void> {
+  const metadataAddresses = (
+    await context.db.query<{ address: string }>(
+      `${BUSINESS_TARGET_ADDRESSES}`,
+      [context.scope.workspaceId, scope.contactId, scope.firmId],
+    )
+  ).rows.map((value) => value.address);
+  await lockBusinessMetadataAddresses(context, metadataAddresses);
+  await context.db.query(
+    `SELECT b.id FROM crm_business_conversations b WHERE b.workspace_id=$1
     AND ${BUSINESS_METADATA_IN_SCOPE} ORDER BY b.id FOR UPDATE`,
-    [context.scope.workspaceId,scope.contactId,scope.firmId]);
+    [context.scope.workspaceId, scope.contactId, scope.firmId],
+  );
 }
 
-async function identityDeletionClosure(context: RepositoryContext, scope: Scope) {
-  return (await context.db.query<{ firms: string[]; people: string[]; sources: string[]; selected: string[]; mailSources: string[]; mailIdentities: string[] }>(`
+async function identityDeletionClosure(
+  context: RepositoryContext,
+  scope: Scope,
+) {
+  return (
+    await context.db.query<{
+      firms: string[];
+      people: string[];
+      sources: string[];
+      selected: string[];
+      mailSources: string[];
+      mailIdentities: string[];
+      mailSelected: string[];
+      mailIdentitiesSelected: string[];
+      humanAnchors: string[];
+      humanVersions: string[];
+    }>(
+      `
     WITH selected AS (${CRM_SELECTED_SOURCE_IDS}),
-    mail_selected AS (${CRM_MAIL_MESSAGE_IDS}), mail_identities AS (${CRM_MAIL_CAPTURE_IDS}),
+    human_selected AS (${CRM_HUMAN_ANCHOR_IDS}),
+    human_groups AS (SELECT DISTINCT conflict_id FROM crm_claim_conflict_members WHERE workspace_id=$1 AND anchor_id IN(SELECT id FROM human_selected)),
+    human_anchors AS (
+      SELECT a.* FROM crm_claim_review_anchors a WHERE a.workspace_id=$1 AND (a.id IN(SELECT id FROM human_selected)
+        OR a.id IN(SELECT anchor_id FROM crm_claim_conflict_members WHERE workspace_id=$1 AND conflict_id IN(SELECT conflict_id FROM human_groups)))
+    ),
+    mail_selected AS (${CRM_MAIL_MESSAGE_IDS}),
+    mail_locked AS (SELECT id FROM mail_selected UNION SELECT source_id FROM human_anchors WHERE source_kind='mail'),
+    mail_identities AS (${CRM_MAIL_CAPTURE_IDS} UNION SELECT capture_identity_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN(SELECT id FROM mail_locked)),
     affected_people AS (
       ${CRM_TARGET_PEOPLE}
-      UNION SELECT person_id FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id IN(SELECT id FROM mail_selected) AND person_id IS NOT NULL
+      UNION SELECT captured.id::uuid FROM human_anchors a CROSS JOIN LATERAL jsonb_array_elements_text(a.original_access_closure->'personIds') captured(id)
+      UNION SELECT (context_snapshot->>'personId')::uuid FROM human_anchors WHERE context_snapshot->>'personId' IS NOT NULL
+      UNION SELECT (captured->>'personId')::uuid FROM human_anchors a CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.context_snapshot->'mailContexts','[]'::jsonb)) captured WHERE captured->>'personId' IS NOT NULL
+      UNION SELECT person_id FROM crm_selected_sources WHERE workspace_id=$1 AND id IN(SELECT source_id FROM human_anchors WHERE source_kind='selected_note') AND person_id IS NOT NULL
+      UNION SELECT person_id FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id IN(SELECT id FROM mail_locked) AND person_id IS NOT NULL
       UNION SELECT person_id FROM crm_selected_sources WHERE workspace_id=$1 AND id IN (SELECT id FROM selected) AND person_id IS NOT NULL
       UNION SELECT person_id FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)
       UNION SELECT person_id FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected) AND person_id IS NOT NULL
@@ -228,6 +282,7 @@ async function identityDeletionClosure(context: RepositoryContext, scope: Scope)
     ),
     sources AS (
       SELECT id FROM crm_selected_sources WHERE workspace_id=$1 AND (id IN (SELECT id FROM selected)
+        OR id IN(SELECT source_id FROM human_anchors WHERE source_kind='selected_note')
         OR person_id IN (SELECT person_id FROM affected_people)
         OR id IN (SELECT source_id FROM crm_relationships WHERE workspace_id=$1 AND person_id IN (SELECT person_id FROM affected_people))
         OR id IN (SELECT source_id FROM crm_endpoint_claims WHERE workspace_id=$1 AND person_id IN (SELECT person_id FROM affected_people))
@@ -235,12 +290,20 @@ async function identityDeletionClosure(context: RepositoryContext, scope: Scope)
     ),
     firms_to_lock AS (
       SELECT $3::uuid AS id
-      UNION SELECT cx.firm_id FROM crm_mail_source_contexts cx WHERE cx.workspace_id=$1 AND cx.source_id IN(SELECT id FROM mail_selected) AND cx.firm_id IS NOT NULL
+      UNION SELECT captured.id::uuid FROM human_anchors a CROSS JOIN LATERAL jsonb_array_elements_text(a.original_access_closure->'firmIds') captured(id)
+      UNION SELECT captured.id::uuid FROM human_anchors a CROSS JOIN LATERAL jsonb_array_elements_text(a.context_snapshot->'firmIds') captured(id)
+      UNION SELECT (captured->>'firmId')::uuid FROM human_anchors a CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.context_snapshot->'mailContexts','[]'::jsonb)) captured WHERE captured->>'firmId' IS NOT NULL
+      UNION SELECT s.firm_id FROM call_sessions s WHERE s.workspace_id=$1 AND s.id IN(SELECT source_id FROM human_anchors WHERE source_kind='call_transcript')
+      UNION SELECT m.firm_id FROM meeting_transcripts t JOIN meeting_recordings r ON r.workspace_id=t.workspace_id AND r.id=t.recording_id JOIN meetings m ON m.workspace_id=r.workspace_id AND m.id=r.meeting_id WHERE t.workspace_id=$1 AND t.id IN(SELECT source_id FROM human_anchors WHERE source_kind='meeting_transcript') AND m.firm_id IS NOT NULL
+      UNION SELECT t.firm_id FROM crm_claim_work_dependencies d JOIN call_tasks t ON t.workspace_id=d.workspace_id AND t.id=d.work_id WHERE d.workspace_id=$1 AND d.work_kind='call_task' AND d.anchor_id IN(SELECT id FROM human_anchors)
+      UNION SELECT t.firm_id FROM crm_claim_work_dependencies d JOIN meeting_tasks t ON t.workspace_id=d.workspace_id AND t.id=d.work_id WHERE d.workspace_id=$1 AND d.work_kind='meeting_task' AND d.anchor_id IN(SELECT id FROM human_anchors)
+      UNION SELECT cx.firm_id FROM crm_mail_source_contexts cx WHERE cx.workspace_id=$1 AND cx.source_id IN(SELECT id FROM mail_locked) AND cx.firm_id IS NOT NULL
       UNION SELECT (captured->>'firmId')::uuid FROM crm_mail_capture_identities i CROSS JOIN LATERAL jsonb_array_elements(i.context_snapshot) captured WHERE i.workspace_id=$1 AND i.id IN(SELECT id FROM mail_identities) AND captured->>'firmId' IS NOT NULL
       UNION SELECT m.firm_id FROM meetings m WHERE m.workspace_id=$1 AND ${MEETING_IN_SCOPE} AND m.firm_id IS NOT NULL
       UNION SELECT c.firm_id FROM crm_legacy_contact_people b JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id
         WHERE b.workspace_id=$1 AND b.person_id IN (SELECT person_id FROM affected_people)
       UNION SELECT firm_id FROM crm_selected_sources WHERE workspace_id=$1 AND id IN (SELECT id FROM sources) AND firm_id IS NOT NULL
+      UNION SELECT original_firm.id::uuid FROM crm_selected_sources s CROSS JOIN LATERAL jsonb_array_elements_text(s.original_access_closure->'firmIds') original_firm(id) WHERE s.workspace_id=$1 AND s.id IN(SELECT id FROM sources)
       UNION SELECT firm_id FROM crm_relationships WHERE workspace_id=$1 AND person_id IN (SELECT person_id FROM affected_people)
       UNION SELECT firm_id FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (SELECT id FROM sources) AND firm_id IS NOT NULL
       UNION SELECT firm_id FROM crm_source_relationship_contexts WHERE workspace_id=$1 AND source_id IN (SELECT id FROM sources)
@@ -249,9 +312,16 @@ async function identityDeletionClosure(context: RepositoryContext, scope: Scope)
       ARRAY(SELECT person_id::text FROM affected_people ORDER BY person_id) AS people,
       ARRAY(SELECT id::text FROM sources ORDER BY id) AS sources,
       ARRAY(SELECT id::text FROM selected ORDER BY id) AS selected,
-      ARRAY(SELECT id::text FROM mail_selected ORDER BY id) AS "mailSources",
-      ARRAY(SELECT id::text FROM mail_identities ORDER BY id) AS "mailIdentities"`,
-    [context.scope.workspaceId, scope.contactId, scope.firmId])).rows[0];
+      ARRAY(SELECT id::text FROM mail_locked ORDER BY id) AS "mailSources",
+      ARRAY(SELECT id::text FROM mail_selected ORDER BY id) AS "mailSelected",
+      ARRAY(SELECT id::text FROM (${CRM_MAIL_CAPTURE_IDS}) selected_identities ORDER BY id) AS "mailIdentitiesSelected",
+      ARRAY(SELECT id::text FROM mail_identities ORDER BY id) AS "mailIdentities",
+      ARRAY(SELECT id::text FROM human_anchors ORDER BY id) AS "humanAnchors",
+      ARRAY(SELECT concat(id::text,':',source_revision,':',source_hash,':',context_hash,':',original_access_closure::text,':',current_decision_revision,':',availability) FROM human_anchors ORDER BY id) ||
+       ARRAY(SELECT concat(id::text,':',current_revision) FROM crm_claim_conflicts WHERE workspace_id=$1 AND id IN(SELECT conflict_id FROM human_groups) ORDER BY id) AS "humanVersions"`,
+      [context.scope.workspaceId, scope.contactId, scope.firmId],
+    )
+  ).rows[0];
 }
 
 /**
@@ -264,10 +334,10 @@ async function identityDeletionClosure(context: RepositoryContext, scope: Scope)
  * still exist: the meetings go before the routes.
  */
 const MEETING_IN_SCOPE = `(
-  (m.firm_id = $3 AND ${contactPredicate('m.contact_id', '$2')})
+  (m.firm_id = $3 AND ${contactPredicate("m.contact_id", "$2")})
   OR m.attendee_email IN (
     SELECT a.address FROM email_addresses a
-     WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate('a.contact_id', '$2')}))`;
+     WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate("a.contact_id", "$2")}))`;
 
 /**
  * The review items opened for one of those meetings, which name no firm when unmatched:
@@ -276,6 +346,20 @@ const MEETING_IN_SCOPE = `(
  * its members is taken — found by the complete membership in `detail.meetingIds`, every
  * id comma-separated, never by its hashed key.
  */
+const CRM_HUMAN_ANCHOR_IN_SCOPE = `(
+ (a.original_access_closure->'firmIds' ? $3::uuid::text AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(a.original_access_closure->'personIds') original_person(id) WHERE original_person.id IN(SELECT person_id::text FROM (${CRM_TARGET_PEOPLE}) target_people)))) OR
+ (($2::uuid IS NULL OR a.context_snapshot->>'personId' IN (SELECT person_id::text FROM (${CRM_TARGET_PEOPLE}) target_people))
+   AND a.context_snapshot->'firmIds' ? $3::text)
+ OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(a.context_snapshot->'mailContexts','[]'::jsonb)) cx
+   WHERE cx->>'firmId'=$3::text AND ($2::uuid IS NULL OR cx->>'personId' IN(SELECT person_id::text FROM (${CRM_TARGET_PEOPLE}) target_people)))
+ OR (a.source_kind='selected_note' AND a.source_id IN (${CRM_SELECTED_SOURCE_IDS}))
+ OR (a.source_kind='mail' AND a.source_id IN (${CRM_MAIL_MESSAGE_IDS}))
+ OR (a.source_kind='call_transcript' AND a.source_id IN(SELECT id FROM call_sessions WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate("contact_id", "$2")}))
+ OR (a.source_kind='meeting_transcript' AND a.source_id IN(SELECT t.id FROM meeting_transcripts t JOIN meeting_recordings r ON r.workspace_id=t.workspace_id AND r.id=t.recording_id JOIN meetings m ON m.workspace_id=r.workspace_id AND m.id=r.meeting_id WHERE t.workspace_id=$1 AND ${MEETING_IN_SCOPE}))
+)`;
+const CRM_HUMAN_ANCHOR_IDS = `SELECT a.id FROM crm_claim_review_anchors a WHERE a.workspace_id=$1 AND ${CRM_HUMAN_ANCHOR_IN_SCOPE}`;
+const CRM_HUMAN_CONFLICT_IN_SCOPE = `EXISTS(SELECT 1 FROM crm_claim_conflict_members members WHERE members.workspace_id=r.workspace_id AND members.conflict_id=r.conflict_id AND members.anchor_id IN (${CRM_HUMAN_ANCHOR_IDS}))`;
+
 const MEETING_REVIEW_IN_SCOPE = `((evidence_kind = 'meeting.booked' AND evidence_id IN (
   SELECT m.id::text FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}))
   OR (evidence_kind = 'meeting.attendee_conflict' AND EXISTS (
@@ -301,7 +385,7 @@ async function countOf(
   values: readonly unknown[],
 ): Promise<number> {
   const { rows } = await context.db.query<{ count: string }>(sql, values);
-  return Number(rows[0]?.count ?? '0');
+  return Number(rows[0]?.count ?? "0");
 }
 
 /**
@@ -320,7 +404,13 @@ async function measure(
   readonly stops: Record<string, number>;
   readonly retains: Record<string, number>;
   readonly handles: string[];
-  readonly identityVersions: readonly { kind: string; id: string; revision: number; hash: string | null; state: string }[];
+  readonly identityVersions: readonly {
+    kind: string;
+    id: string;
+    revision: number;
+    hash: string | null;
+    state: string;
+  }[];
   /** Meeting attendees the canonicalizer refuses, tombstoned under their fallback key. */
   readonly attendeeKeys: string[];
 }> {
@@ -333,13 +423,13 @@ async function measure(
     email_addresses: await countOf(
       context,
       `SELECT count(*) AS count FROM email_addresses
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     phone_routes: await countOf(
       context,
       `SELECT count(*) AS count FROM phone_routes
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     mail_messages: await countOf(
@@ -347,16 +437,25 @@ async function measure(
       `SELECT count(*) AS count FROM mail_messages WHERE workspace_id=$1 AND id IN (${CRM_MAIL_MESSAGE_IDS})`,
       byContact,
     ),
-    mail_message_bodies: await countOf(context,
-      `SELECT count(*) AS count FROM mail_message_bodies WHERE workspace_id=$1 AND mail_message_id IN (${CRM_MAIL_MESSAGE_IDS})`, byContact),
-    crm_mail_sources: await countOf(context,
-      `SELECT count(*) AS count FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})`, byContact),
-    crm_mail_source_contexts: await countOf(context,
-      `SELECT count(*) AS count FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})`, byContact),
+    mail_message_bodies: await countOf(
+      context,
+      `SELECT count(*) AS count FROM mail_message_bodies WHERE workspace_id=$1 AND mail_message_id IN (${CRM_MAIL_MESSAGE_IDS})`,
+      byContact,
+    ),
+    crm_mail_sources: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})`,
+      byContact,
+    ),
+    crm_mail_source_contexts: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})`,
+      byContact,
+    ),
     evidence_items: await countOf(
       context,
       `SELECT count(*) AS count FROM evidence_items
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     // Lane R's four. They carry no `contact_id`: a fact is about the firm, not about
@@ -396,54 +495,60 @@ async function measure(
     call_logs: await countOf(
       context,
       `SELECT count(*) AS count FROM call_logs
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     // Migration 0025. Previewed as well as removed, because the preview is what a
     // person approves and "one permission to write to this person" is exactly the kind
     // of row somebody would want to see named before it goes.
-    human_reply_send_intents: await countOf(context,
+    human_reply_send_intents: await countOf(
+      context,
       `SELECT count(*) AS count FROM human_reply_send_intents i JOIN outbound_messages o
        ON o.workspace_id=i.workspace_id AND o.id=i.outbound_message_id
-       WHERE o.workspace_id=$1 AND o.firm_id=$3 AND ${contactPredicate('o.contact_id','$2')}`,byContact),
-    outreach_reply_deliveries: await countOf(context,
+       WHERE o.workspace_id=$1 AND o.firm_id=$3 AND ${contactPredicate("o.contact_id", "$2")}`,
+      byContact,
+    ),
+    outreach_reply_deliveries: await countOf(
+      context,
       `SELECT count(*) AS count FROM outreach_reply_deliveries d JOIN outreach_plans p ON p.workspace_id=d.workspace_id
        JOIN outreach_reply_requests r ON r.workspace_id=d.workspace_id AND r.id=d.request_id AND r.plan_id=p.id
-       WHERE p.workspace_id=$1 AND p.firm_id=$3 AND ${contactPredicate('p.contact_id','$2')}`,byContact),
+       WHERE p.workspace_id=$1 AND p.firm_id=$3 AND ${contactPredicate("p.contact_id", "$2")}`,
+      byContact,
+    ),
     follow_up_permissions: await countOf(
       context,
       `SELECT count(*) AS count FROM follow_up_permissions
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     callbacks: await countOf(
       context,
       `SELECT count(*) AS count FROM callbacks
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     dial_tickets: await countOf(
       context,
       `SELECT count(*) AS count FROM dial_tickets
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     today_items: await countOf(
       context,
       `SELECT count(*) AS count FROM today_items
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     today_snoozes: await countOf(
       context,
       `SELECT count(*) AS count FROM today_snoozes
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     record_aliases: await countOf(
       context,
       `SELECT count(*) AS count FROM record_aliases
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     // Migration 0028: the Twilio sessions (a recording reference), the Cal.com meetings
@@ -452,7 +557,7 @@ async function measure(
     call_sessions: await countOf(
       context,
       `SELECT count(*) AS count FROM call_sessions
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     // Slice C2 (0030): a call's transcript is what the prospect said; it goes with the
@@ -461,7 +566,7 @@ async function measure(
       context,
       `SELECT count(*) AS count FROM call_transcripts t
          JOIN call_sessions s ON s.workspace_id = t.workspace_id AND s.id = t.call_session_id
-        WHERE t.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+        WHERE t.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}`,
       byContact,
     ),
     // Slice 3a (0035): a call's analysis versions quote the prospect; counted in their own right.
@@ -469,7 +574,7 @@ async function measure(
       context,
       `SELECT count(*) AS count FROM call_analyses a
          JOIN call_sessions s ON s.workspace_id = a.workspace_id AND s.id = a.call_session_id
-        WHERE a.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+        WHERE a.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}`,
       byContact,
     ),
     // Slice C3b (0032): a call's summary quotes the prospect; counted in its own right too.
@@ -477,7 +582,7 @@ async function measure(
       context,
       `SELECT count(*) AS count FROM call_summaries x
          JOIN call_sessions s ON s.workspace_id = x.workspace_id AND s.id = x.call_session_id
-        WHERE x.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+        WHERE x.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}`,
       byContact,
     ),
     // Slice 3a (0036): a promise made on a call, quoting it; it outlives its session, so it
@@ -485,7 +590,7 @@ async function measure(
     call_tasks: await countOf(
       context,
       `SELECT count(*) AS count FROM call_tasks
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     meetings: await countOf(
@@ -518,26 +623,68 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
-    opportunities: scope.contactId === null ? await countOf(context,
-      'SELECT count(*) AS count FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND display_name IS NOT NULL',
-      [workspace, firm]) : 0,
-    crm_selected_imports: await countOf(context,`SELECT count(*) AS count FROM crm_selected_imports m WHERE m.workspace_id=$1 AND m.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (m.label IS NOT NULL OR m.participants IS NOT NULL OR m.attachments IS NOT NULL OR m.direction IS NOT NULL OR m.attribution IS NOT NULL OR m.date_provenance IS NOT NULL)`,byContact),
+    crm_claim_review_anchors: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_claim_review_anchors a WHERE a.workspace_id=$1 AND ${CRM_HUMAN_ANCHOR_IN_SCOPE} AND (a.availability<>'deleted' OR a.original_event_at IS NOT NULL OR a.original_observed_at IS NOT NULL)`,
+      byContact,
+    ),
+    crm_claim_decision_revisions: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_claim_decision_revisions d WHERE d.workspace_id=$1 AND d.anchor_id IN (${CRM_HUMAN_ANCHOR_IDS}) AND (d.corrected_interpretation IS NOT NULL OR d.rationale IS NOT NULL OR d.redacted_at IS NULL)`,
+      byContact,
+    ),
+    crm_claim_conflict_revisions: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_claim_conflict_revisions r WHERE r.workspace_id=$1 AND ${CRM_HUMAN_CONFLICT_IN_SCOPE} AND (r.rationale IS NOT NULL OR r.redacted_at IS NULL)`,
+      byContact,
+    ),
+    opportunities:
+      scope.contactId === null
+        ? await countOf(
+            context,
+            "SELECT count(*) AS count FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND display_name IS NOT NULL",
+            [workspace, firm],
+          )
+        : 0,
+    crm_selected_imports: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_selected_imports m WHERE m.workspace_id=$1 AND m.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (m.label IS NOT NULL OR m.participants IS NOT NULL OR m.attachments IS NOT NULL OR m.direction IS NOT NULL OR m.attribution IS NOT NULL OR m.date_provenance IS NOT NULL)`,
+      byContact,
+    ),
 
-    crm_identity_endpoints: await countOf(context,
+    crm_identity_endpoints: await countOf(
+      context,
       `SELECT count(*) AS count FROM crm_identity_endpoints e WHERE e.workspace_id=$1 AND e.value IS NOT NULL
        AND e.id IN (SELECT endpoint_id FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS}))
        AND NOT EXISTS (SELECT 1 FROM crm_endpoint_claims c JOIN crm_selected_sources s ON s.workspace_id=c.workspace_id AND s.id=c.source_id
          WHERE c.workspace_id=e.workspace_id AND c.endpoint_id=e.id AND NOT c.source_invalidated
            AND s.availability='available' AND s.revision=c.source_revision AND s.content_hash=c.source_hash
-           AND s.id NOT IN (${CRM_SELECTED_SOURCE_IDS}))`, byContact),
-    crm_business_conversations: await countOf(context,
-      `SELECT count(*) AS count FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}`, byContact),
-    crm_people: await countOf(
+           AND s.id NOT IN (${CRM_SELECTED_SOURCE_IDS}))`,
+      byContact,
+    ),
+    crm_business_conversations: await countOf(
       context,
-      `SELECT count(*) AS count FROM crm_people p
+      `SELECT count(*) AS count FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}`,
+      byContact,
+    ),
+    crm_people:
+      (await countOf(
+        context,
+        `SELECT count(*) AS count FROM crm_people p
        WHERE p.workspace_id=$1 AND ${CRM_PERSON_IN_SCOPE} AND p.full_name <> $4`,
-      [...byContact, REDACTED_NAME],
-    ) + (await eligibleObservedMailLabelRedactions(context, (await context.db.query<{id:string}>(CRM_MAIL_MESSAGE_IDS,byContact)).rows.map(row=>row.id))).length,
+        [...byContact, REDACTED_NAME],
+      )) +
+      (
+        await eligibleObservedMailLabelRedactions(
+          context,
+          (
+            await context.db.query<{ id: string }>(
+              CRM_MAIL_MESSAGE_IDS,
+              byContact,
+            )
+          ).rows.map((row) => row.id),
+        )
+      ).length,
     crm_selected_sources: await countOf(
       context,
       `SELECT count(*) AS count FROM crm_selected_sources s
@@ -552,14 +699,14 @@ async function measure(
     outbound_messages: await countOf(
       context,
       `SELECT count(*) AS count FROM outbound_messages
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
           AND attempt_token IS NULL AND subject <> $4`,
       [...byContact, REDACTED_NAME],
     ),
     contacts: await countOf(
       context,
       `SELECT count(*) AS count FROM contacts
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("id", "$2")}`,
       byContact,
     ),
     // The funnel (0022). A fact is a count, so the count stays: what a deletion
@@ -570,7 +717,7 @@ async function measure(
     funnel_facts: await countOf(
       context,
       `SELECT count(*) AS count FROM funnel_facts
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
     firms: contact === null ? 1 : 0,
@@ -587,48 +734,78 @@ async function measure(
    * than inventing a reason of its own.
    */
   const stops: Record<string, number> = {
-    crm_mail_capture_identities: await countOf(context,
-      `SELECT count(*) AS count FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id IN (${CRM_MAIL_CAPTURE_IDS}) AND state<>'blocked'`, byContact),
-    crm_mail_source_intents: await countOf(context,
-      `SELECT count(*) AS count FROM crm_mail_source_intents WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS}) AND state<>'invalidated'`, byContact),
-    crm_relationships: await countOf(context,
-      `SELECT count(*) AS count FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS})`, byContact),
-    crm_source_relationship_contexts: await countOf(context,
+    crm_mail_capture_identities: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id IN (${CRM_MAIL_CAPTURE_IDS}) AND state<>'blocked'`,
+      byContact,
+    ),
+    crm_mail_source_intents: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_mail_source_intents WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS}) AND state<>'invalidated'`,
+      byContact,
+    ),
+    crm_relationships: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS})`,
+      byContact,
+    ),
+    crm_source_relationship_contexts: await countOf(
+      context,
       `SELECT count(*) AS count FROM crm_source_relationship_contexts WHERE workspace_id=$1 AND
        (source_id IN (${CRM_SELECTED_SOURCE_IDS}) OR relationship_id IN
-         (SELECT id FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS})))`, byContact),
-    crm_endpoint_claims: await countOf(context,
-      `SELECT count(*) AS count FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS})`, byContact),
+         (SELECT id FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS})))`,
+      byContact,
+    ),
+    crm_endpoint_claims: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS})`,
+      byContact,
+    ),
     sequence_enrollments: await countOf(
       context,
       `SELECT count(*) AS count FROM sequence_enrollments
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
           AND state = 'active'`,
       byContact,
     ),
     step_executions: await countOf(
       context,
       `SELECT count(*) AS count FROM step_executions
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
           AND state IN ('pending', 'held')`,
       byContact,
     ),
   };
 
   const retains: Record<string, number> = {
+    crm_claim_review_anchors: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_claim_review_anchors a WHERE a.workspace_id=$1 AND ${CRM_HUMAN_ANCHOR_IN_SCOPE}`,
+      byContact,
+    ),
+    crm_claim_decision_revisions: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_claim_decision_revisions WHERE workspace_id=$1 AND anchor_id IN (${CRM_HUMAN_ANCHOR_IDS})`,
+      byContact,
+    ),
+    crm_claim_conflict_revisions: await countOf(
+      context,
+      `SELECT count(*) AS count FROM crm_claim_conflict_revisions r WHERE r.workspace_id=$1 AND ${CRM_HUMAN_CONFLICT_IN_SCOPE}`,
+      byContact,
+    ),
     opportunity_stage_events: await countOf(
       context,
-      'SELECT count(*) AS count FROM opportunity_stage_events WHERE workspace_id = $1 AND firm_id = $2',
+      "SELECT count(*) AS count FROM opportunity_stage_events WHERE workspace_id = $1 AND firm_id = $2",
       [workspace, firm],
     ),
     crm_domain_events: await countOf(
       context,
-      'SELECT count(*) AS count FROM crm_domain_events WHERE workspace_id = $1 AND firm_id = $2',
+      "SELECT count(*) AS count FROM crm_domain_events WHERE workspace_id = $1 AND firm_id = $2",
       [workspace, firm],
     ),
     opportunities: await countOf(
       context,
-      'SELECT count(*) AS count FROM opportunities WHERE workspace_id = $1 AND firm_id = $2',
+      "SELECT count(*) AS count FROM opportunities WHERE workspace_id = $1 AND firm_id = $2",
       [workspace, firm],
     ),
     // The honest line in the report, and the one an approver would otherwise
@@ -644,7 +821,7 @@ async function measure(
       `SELECT count(DISTINCT a.id) AS count FROM email_addresses a
          JOIN outbound_messages o
            ON o.workspace_id = a.workspace_id AND o.recipient_route_id = a.id
-        WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate('a.contact_id', '$2')}
+        WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate("a.contact_id", "$2")}
           AND o.attempt_token IS NOT NULL`,
       byContact,
     ),
@@ -652,10 +829,10 @@ async function measure(
 
   const { rows: handleRows } = await context.db.query<{ handle: string }>(
     `SELECT address AS handle FROM email_addresses
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
      UNION
      SELECT e164 AS handle FROM phone_routes
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
      UNION SELECT address AS handle FROM (${BUSINESS_TARGET_ADDRESSES}) business_addresses
      ORDER BY handle`,
     byContact,
@@ -673,7 +850,7 @@ async function measure(
       WHERE m.workspace_id = $1 AND m.attendee_email IS NOT NULL AND ${MEETING_IN_SCOPE}`,
     byContact,
   );
-  const handles = new Set(handleRows.map(row => row.handle));
+  const handles = new Set(handleRows.map((row) => row.handle));
   const attendeeKeys = new Set<string>();
   for (const row of attendeeRows) {
     const canonical = canonicalizeHandle(row.handle);
@@ -687,9 +864,15 @@ async function measure(
 
   // Body-free versions bind approval to the evidence shown by this preview, even
   // when a correction leaves all table counts unchanged.
-  const identityVersions = (await context.db.query<{
-    kind: string; id: string; revision: number; hash: string | null; state: string;
-  }>(`WITH selected AS (${CRM_SELECTED_SOURCE_IDS})
+  const identityVersions = (
+    await context.db.query<{
+      kind: string;
+      id: string;
+      revision: number;
+      hash: string | null;
+      state: string;
+    }>(
+      `WITH selected AS (${CRM_SELECTED_SOURCE_IDS})
     SELECT 'source' AS kind,id::text,revision,content_hash AS hash,availability AS state
       FROM crm_selected_sources WHERE workspace_id=$1 AND id IN (SELECT id FROM selected)
     UNION ALL SELECT 'relationship',id::text,revision,source_hash,source_invalidated::text || ':' || context_review
@@ -705,7 +888,10 @@ async function measure(
       FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id IN (${CRM_MAIL_CAPTURE_IDS})
     UNION ALL SELECT 'business_metadata',b.id::text,b.metadata_revision,b.metadata_hash,b.metadata_availability
       FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}
-    ORDER BY kind,id`, byContact)).rows;
+    ORDER BY kind,id`,
+      byContact,
+    )
+  ).rows;
 
   return {
     removes,
@@ -714,12 +900,15 @@ async function measure(
     retains,
     identityVersions,
     handles: [...handles].sort(),
-    attendeeKeys: [...attendeeKeys].filter(key => !handles.has(key)).sort(),
+    attendeeKeys: [...attendeeKeys].filter((key) => !handles.has(key)).sort(),
   };
 }
 
-function hashOf(scope: Scope, measured: Awaited<ReturnType<typeof measure>>): string {
-  return createHash('sha256')
+function hashOf(
+  scope: Scope,
+  measured: Awaited<ReturnType<typeof measure>>,
+): string {
+  return createHash("sha256")
     .update(
       JSON.stringify({
         firmId: scope.firmId,
@@ -732,27 +921,32 @@ function hashOf(scope: Scope, measured: Awaited<ReturnType<typeof measure>>): st
         attendeeKeys: measured.attendeeKeys,
       }),
     )
-    .digest('hex');
+    .digest("hex");
 }
 
 async function resolveScope(
   context: RepositoryContext,
-  input: { readonly targetKind: DeletionTargetKind; readonly firmId: string; readonly contactId?: string | undefined },
+  input: {
+    readonly targetKind: DeletionTargetKind;
+    readonly firmId: string;
+    readonly contactId?: string | undefined;
+  },
 ): Promise<RetentionResult<Scope, DeletionRefusal>> {
   const { rows } = await context.db.query<{ id: string }>(
-    'SELECT id FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+    "SELECT id FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE",
     [context.scope.workspaceId, input.firmId],
   );
-  if (rows.length === 0) return refuse('firm_unknown');
+  if (rows.length === 0) return refuse("firm_unknown");
 
-  if (input.targetKind === 'firm') return accept({ firmId: input.firmId, contactId: null });
+  if (input.targetKind === "firm")
+    return accept({ firmId: input.firmId, contactId: null });
 
-  if (input.contactId === undefined) return refuse('contact_unknown');
+  if (input.contactId === undefined) return refuse("contact_unknown");
   const contact = await context.db.query<{ id: string }>(
-    'SELECT id FROM contacts WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 FOR UPDATE',
+    "SELECT id FROM contacts WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 FOR UPDATE",
     [context.scope.workspaceId, input.contactId, input.firmId],
   );
-  if (contact.rows.length === 0) return refuse('contact_unknown');
+  if (contact.rows.length === 0) return refuse("contact_unknown");
   return accept({ firmId: input.firmId, contactId: input.contactId });
 }
 
@@ -766,7 +960,7 @@ export async function previewDeletion(
   context: RepositoryContext,
   input: PreviewDeletionInput,
 ): Promise<RetentionResult<DeletionPreview, DeletionRefusal>> {
-  if (!isAdminScope(context.scope)) return refuse('admin_only');
+  if (!isAdminScope(context.scope)) return refuse("admin_only");
   const scoped = await resolveScope(context, input);
   if (!scoped.ok) return refuse(scoped.reason);
   const scope = scoped.value;
@@ -776,8 +970,8 @@ export async function previewDeletion(
   const previewHash = hashOf(scope, measured);
 
   const actor = context.scope.actor;
-  const requestedBy = actor.kind === 'user' ? actor.userId : null;
-  if (requestedBy === null) return refuse('admin_only');
+  const requestedBy = actor.kind === "user" ? actor.userId : null;
+  if (requestedBy === null) return refuse("admin_only");
 
   const { rows } = await context.db.query<{ id: string }>(
     `INSERT INTO deletion_requests
@@ -802,11 +996,11 @@ export async function previewDeletion(
   );
 
   await recordCrmAuditEvent(context, {
-    action: 'deletion.previewed',
+    action: "deletion.previewed",
     subjectKind: input.targetKind,
     subjectId: scope.contactId ?? scope.firmId,
     detail: {
-      requestId: rows[0]?.id ?? '',
+      requestId: rows[0]?.id ?? "",
       removes: measured.removes,
       redacts: measured.redacts,
       stops: measured.stops,
@@ -814,7 +1008,7 @@ export async function previewDeletion(
   });
 
   return accept({
-    requestId: rows[0]?.id ?? '',
+    requestId: rows[0]?.id ?? "",
     targetKind: input.targetKind,
     firmId: scope.firmId,
     contactId: scope.contactId,
@@ -838,9 +1032,9 @@ export async function commitDeletion(
   context: RepositoryContext,
   input: CommitDeletionInput,
 ): Promise<RetentionResult<DeletionOutcome, DeletionRefusal>> {
-  if (!isAdminScope(context.scope)) return refuse('admin_only');
+  if (!isAdminScope(context.scope)) return refuse("admin_only");
   const actor = context.scope.actor;
-  if (actor.kind !== 'user') return refuse('admin_only');
+  if (actor.kind !== "user") return refuse("admin_only");
 
   // The send gate first, before the request row and before anything is measured (Cal.com
   // slice M1, review fold 2, finding 3 (ii)). Every stop-fact writer takes it first —
@@ -855,66 +1049,77 @@ export async function commitDeletion(
     firm_id: string;
     contact_id: string | null;
     preview_hash: string;
-    state: 'previewed' | 'committed';
+    state: "previewed" | "committed";
   }>(
     `SELECT id, target_kind, firm_id, contact_id, preview_hash, state
        FROM deletion_requests WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
     [context.scope.workspaceId, input.requestId],
   );
   const row = request.rows[0];
-  if (row === undefined) return refuse('request_unknown');
-  if (row.state === 'committed') return refuse('already_committed');
+  if (row === undefined) return refuse("request_unknown");
+  if (row.state === "committed") return refuse("already_committed");
 
   const scope: Scope = { firmId: row.firm_id, contactId: row.contact_id };
   // Every identity writer takes sorted firms, then people, then copied sources. Include
   // independent people and surviving contexts so deletion cannot race a context change
   // or acquire a second firm's lock after already holding the person's row.
   const closure = await identityDeletionClosure(context, scope);
-  if (closure === undefined) return refuse('preview_stale');
+  if (closure === undefined) return refuse("preview_stale");
   for (const firmId of closure.firms) {
-    await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
-      [context.scope.workspaceId, firmId]);
+    await context.db.query(
+      "SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [context.scope.workspaceId, firmId],
+    );
   }
   if (scope.contactId !== null) {
-    await context.db.query('SELECT id FROM contacts WHERE workspace_id=$1 AND id=$2 AND firm_id=$3 FOR UPDATE',
-      [context.scope.workspaceId, scope.contactId, scope.firmId]);
+    await context.db.query(
+      "SELECT id FROM contacts WHERE workspace_id=$1 AND id=$2 AND firm_id=$3 FOR UPDATE",
+      [context.scope.workspaceId, scope.contactId, scope.firmId],
+    );
   }
   for (const personId of closure.people) {
-    await context.db.query('SELECT id FROM crm_people WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
-      [context.scope.workspaceId, personId]);
+    await context.db.query(
+      "SELECT id FROM crm_people WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [context.scope.workspaceId, personId],
+    );
   }
   for (const sourceId of closure.sources) {
-    await context.db.query('SELECT id FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
-      [context.scope.workspaceId, sourceId]);
+    await context.db.query(
+      "SELECT id FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [context.scope.workspaceId, sourceId],
+    );
   }
   // A writer may have completed while those locks waited. Never extend the closure
   // out of order; require a fresh preview instead.
-  if (JSON.stringify(await identityDeletionClosure(context, scope)) !== JSON.stringify(closure))
-    return refuse('preview_stale');
+  if (
+    JSON.stringify(await identityDeletionClosure(context, scope)) !==
+    JSON.stringify(closure)
+  )
+    return refuse("preview_stale");
   // Slice C2 (review fold 1, P1): every call session this deletion removes is locked now,
   // after the gate and before anything is measured — its transcription lock and its row —
   // and held to the commit. A transcription that has not begun waits and then finds the
   // session gone; one that is mid-call finishes first and its transcript is removed below.
   const { rows: targetedSessions } = await context.db.query<{ id: string }>(
-    `SELECT id FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    `SELECT id FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     [context.scope.workspaceId, scope.contactId, scope.firmId],
   );
   // Slice C3b: their summary locks first — a subject lock, after the firm and before the
   // sessions' own locks and rows, which a summary's chunk 3 takes in that order too.
   await lockSummariesForDeletion(
     context,
-    targetedSessions.map(session => session.id),
+    targetedSessions.map((session) => session.id),
   );
   // Slice 3a: their analysis locks beside them, `call_analysis:<session>` in id order — after
   // the firm and before the sessions' own locks and rows, the order every analysis writer
   // takes them in (`lockCallAnalysisForSession`).
   await lockAnalysesForDeletion(
     context,
-    targetedSessions.map(session => session.id),
+    targetedSessions.map((session) => session.id),
   );
   await lockSessionsForDeletion(
     context,
-    targetedSessions.map(session => session.id),
+    targetedSessions.map((session) => session.id),
   );
   // And, for a firm, every active research run — running, or still holding an open
   // reservation — before the monthly lock and before any deletion (fix rounds 2 and 3). A run
@@ -939,18 +1144,37 @@ export async function commitDeletion(
   // Then the month: every settlement and every message deletion below comes after it.
   await lockMonthlySpend(context);
   await lockBusinessMetadataForDeletion(context, scope);
-  for (const identityId of closure.mailIdentities) await context.db.query(
-    'SELECT id FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,identityId]);
+  for (const identityId of closure.mailIdentities)
+    await context.db.query(
+      "SELECT id FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [context.scope.workspaceId, identityId],
+    );
   for (const sourceId of closure.mailSources) {
-    await context.db.query('SELECT id FROM mail_messages WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,sourceId]);
-    await context.db.query('SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 FOR UPDATE',[context.scope.workspaceId,sourceId]);
+    await context.db.query(
+      "SELECT id FROM mail_messages WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [context.scope.workspaceId, sourceId],
+    );
+    await context.db.query(
+      "SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 FOR UPDATE",
+      [context.scope.workspaceId, sourceId],
+    );
   }
-  if (JSON.stringify(await identityDeletionClosure(context,scope))!==JSON.stringify(closure)) return refuse('preview_stale');
+  for (const anchorId of closure.humanAnchors)
+    await context.db.query(
+      "SELECT id FROM crm_claim_review_anchors WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [context.scope.workspaceId, anchorId],
+    );
+  if (
+    JSON.stringify(await identityDeletionClosure(context, scope)) !==
+    JSON.stringify(closure)
+  )
+    return refuse("preview_stale");
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
   // Both comparisons. The presented hash catches a client approving somebody else's
   // preview; the stored one catches the world changing since it was shown.
-  if (input.previewHash !== currentHash || row.preview_hash !== currentHash) return refuse('preview_stale');
+  if (input.previewHash !== currentHash || row.preview_hash !== currentHash)
+    return refuse("preview_stale");
 
   // The tombstones first, while the handles still exist to be read. Every one is
   // journalled before its row by `recordSuppression` (10.2), so a lost journal write
@@ -959,47 +1183,83 @@ export async function commitDeletion(
   const tombstoneEventIds: string[] = [];
   for (const handle of measured.handles) {
     const recorded = await recordSuppression(context, {
-      scope: 'handle',
+      scope: "handle",
       value: handle,
-      source: 'deletion_tombstone',
+      source: "deletion_tombstone",
       // A deleted person is never contacted again, on any channel.
-      channel: 'all',
+      channel: "all",
       commandId: `${input.commandId}:${handle}`,
       journal: input.journal,
     });
-    if (!recorded.ok) return refuse('handle_uncanonical');
+    if (!recorded.ok) return refuse("handle_uncanonical");
     tombstoneEventIds.push(recorded.value.eventId);
   }
   for (const key of measured.attendeeKeys) {
     const recorded = await recordSuppression(context, {
-      scope: 'handle',
+      scope: "handle",
       fallbackKey: key,
-      source: 'deletion_tombstone',
-      channel: 'all',
+      source: "deletion_tombstone",
+      channel: "all",
       commandId: `${input.commandId}:${key}`,
       journal: input.journal,
     });
-    if (!recorded.ok) return refuse('handle_uncanonical');
+    if (!recorded.ok) return refuse("handle_uncanonical");
     tombstoneEventIds.push(recorded.value.eventId);
   }
-  if (row.target_kind === 'firm') {
+  if (row.target_kind === "firm") {
     const recorded = await recordSuppression(context, {
-      scope: 'firm',
+      scope: "firm",
       firmId: scope.firmId,
-      source: 'deletion_tombstone',
-      channel: 'all',
+      source: "deletion_tombstone",
+      channel: "all",
       commandId: input.commandId,
       journal: input.journal,
     });
-    if (!recorded.ok) return refuse('firm_unknown');
+    if (!recorded.ok) return refuse("firm_unknown");
     tombstoneEventIds.push(recorded.value.eventId);
   }
 
   const workspace = context.scope.workspaceId;
   const byContact = [workspace, scope.contactId, scope.firmId] as const;
   const removed: Record<string, number> = {};
+  const redacted: Record<string, number> = {};
+  const affectedAnchorIds = (
+    await context.db.query<{ id: string }>(
+      `${CRM_HUMAN_ANCHOR_IDS} ORDER BY a.id`,
+      byContact,
+    )
+  ).rows.map((value) => value.id);
+  redacted["crm_claim_review_anchors"] =
+    (
+      await context.db.query(
+        "UPDATE crm_claim_review_anchors SET availability='deleted',original_event_at=NULL,original_observed_at=NULL WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND (availability<>'deleted' OR original_event_at IS NOT NULL OR original_observed_at IS NOT NULL)",
+        [workspace, affectedAnchorIds],
+      )
+    ).rowCount ?? 0;
+  redacted["crm_claim_decision_revisions"] =
+    (
+      await context.db.query(
+        "UPDATE crm_claim_decision_revisions SET corrected_interpretation=NULL,rationale=NULL,redacted_at=COALESCE(redacted_at,now()) WHERE workspace_id=$1 AND anchor_id=ANY($2::uuid[]) AND (corrected_interpretation IS NOT NULL OR rationale IS NOT NULL OR redacted_at IS NULL)",
+        [workspace, affectedAnchorIds],
+      )
+    ).rowCount ?? 0;
+  redacted["crm_claim_conflict_revisions"] =
+    (
+      await context.db.query(
+        "UPDATE crm_claim_conflict_revisions r SET rationale=NULL,redacted_at=COALESCE(redacted_at,now()) WHERE r.workspace_id=$1 AND EXISTS(SELECT 1 FROM crm_claim_conflict_members m WHERE m.workspace_id=r.workspace_id AND m.conflict_id=r.conflict_id AND m.anchor_id=ANY($2::uuid[])) AND (r.rationale IS NOT NULL OR r.redacted_at IS NULL)",
+        [workspace, affectedAnchorIds],
+      )
+    ).rowCount ?? 0;
+  await context.db.query(
+    "SELECT flag_crm_open_human_work($1,$2::uuid[],'source_deleted')",
+    [workspace, affectedAnchorIds],
+  );
 
-  const remove = async (table: string, sql: string, values: readonly unknown[]): Promise<void> => {
+  const remove = async (
+    table: string,
+    sql: string,
+    values: readonly unknown[],
+  ): Promise<void> => {
     const { rowCount } = await context.db.query(sql, values);
     removed[table] = rowCount ?? 0;
   };
@@ -1021,21 +1281,24 @@ export async function commitDeletion(
     `UPDATE step_executions
         SET state = 'cancelled', cancelled_at = now(), cancel_reason = 'deleted under 10.3',
             hold_reason_code = NULL, updated_at = now()
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
         AND state IN ('pending', 'held')`,
     byContact,
   );
-  stopped['step_executions'] = executions.rowCount ?? 0;
+  stopped["step_executions"] = executions.rowCount ?? 0;
   const enrollments = await context.db.query(
     `UPDATE sequence_enrollments
         SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop', updated_at = now()
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
         AND state = 'active'`,
     byContact,
   );
-  stopped['sequence_enrollments'] = enrollments.rowCount ?? 0;
-  const outreach=await context.db.query(`UPDATE outreach_plans SET state='stopped',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id','$2')} AND state NOT IN ('completed','stopped')`,byContact);
-  stopped['outreach_plans']=outreach.rowCount??0;
+  stopped["sequence_enrollments"] = enrollments.rowCount ?? 0;
+  const outreach = await context.db.query(
+    `UPDATE outreach_plans SET state='stopped',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate("contact_id", "$2")} AND state NOT IN ('completed','stopped')`,
+    byContact,
+  );
+  stopped["outreach_plans"] = outreach.rowCount ?? 0;
 
   // Then migration 0025's permissions, and before the evidence they rest on: a
   // permission's foreign keys onto `call_logs` and `mail_messages` are what make that
@@ -1048,33 +1311,42 @@ export async function commitDeletion(
   await context.db.query(
     `UPDATE sequence_enrollments
         SET permission_id = NULL, updated_at = now()
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
         AND permission_id IS NOT NULL`,
     byContact,
   );
   // Remove envelope/thread approval metadata; the original draft fence retains only
   // the established outbound history and source identity for no-repeat readback.
-  await remove('human_reply_send_intents',
+  await remove(
+    "human_reply_send_intents",
     `DELETE FROM human_reply_send_intents i USING outbound_messages o
      WHERE i.workspace_id=$1 AND o.workspace_id=i.workspace_id AND o.id=i.outbound_message_id
-     AND o.firm_id=$3 AND ${contactPredicate('o.contact_id','$2')}`,byContact);
-  await remove('outreach_reply_deliveries',
+     AND o.firm_id=$3 AND ${contactPredicate("o.contact_id", "$2")}`,
+    byContact,
+  );
+  await remove(
+    "outreach_reply_deliveries",
     `DELETE FROM outreach_reply_deliveries d USING outreach_reply_requests r,outreach_plans p
      WHERE d.workspace_id=$1 AND r.workspace_id=d.workspace_id AND r.id=d.request_id
-     AND p.workspace_id=r.workspace_id AND p.id=r.plan_id AND p.firm_id=$3 AND ${contactPredicate('p.contact_id','$2')}`,byContact);
-  await context.db.query(`UPDATE outreach_reply_requests r SET state='expired',decision=NULL,reason='deleted',revision=r.revision+1,updated_at=now()
-    FROM outreach_plans p WHERE r.workspace_id=$1 AND p.workspace_id=r.workspace_id AND p.id=r.plan_id AND p.firm_id=$3 AND ${contactPredicate('p.contact_id','$2')}`,byContact);
+     AND p.workspace_id=r.workspace_id AND p.id=r.plan_id AND p.firm_id=$3 AND ${contactPredicate("p.contact_id", "$2")}`,
+    byContact,
+  );
+  await context.db.query(
+    `UPDATE outreach_reply_requests r SET state='expired',decision=NULL,reason='deleted',revision=r.revision+1,updated_at=now()
+    FROM outreach_plans p WHERE r.workspace_id=$1 AND p.workspace_id=r.workspace_id AND p.id=r.plan_id AND p.firm_id=$3 AND ${contactPredicate("p.contact_id", "$2")}`,
+    byContact,
+  );
   await remove(
-    'follow_up_permissions',
+    "follow_up_permissions",
     `DELETE FROM follow_up_permissions
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
 
   // G7b's confirmations before the messages that would cascade them, because a
   // confirmation also references a callback this workflow is about to remove.
   await remove(
-    'mail_reply_confirmations',
+    "mail_reply_confirmations",
     `DELETE FROM mail_reply_confirmations c
       WHERE c.workspace_id = $1 AND c.firm_id = $3 AND ${CONFIRMATION_IN_SCOPE}`,
     byContact,
@@ -1083,37 +1355,78 @@ export async function commitDeletion(
   // classifier calls and effects with them through the cascades of 0009 and 0011.
   // Opaque identity survives canonical-row cascades. No provider replay may create
   // a replacement UUID after deleting an approved copy or a pending matched capture.
-  const mailIds=closure.mailSources;
-  const observedMailNamesRedacted = await redactUnsupportedObservedMailLabels(context,mailIds);
-  await context.db.query(`INSERT INTO crm_mail_acquisition_tombstones
+  const mailIds = closure.mailSelected;
+  const observedMailNamesRedacted = await redactUnsupportedObservedMailLabels(
+    context,
+    mailIds,
+  );
+  await context.db.query(
+    `INSERT INTO crm_mail_acquisition_tombstones
     (workspace_id,capture_identity_id,source_id,owner_user_id,source_revision,content_hash,availability)
     SELECT workspace_id,capture_identity_id,source_id,owner_user_id,source_revision+1,content_hash,'deleted'
     FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[])
-    ON CONFLICT(workspace_id,source_id,source_revision) DO UPDATE SET availability='deleted'`,[workspace,mailIds]);
-  stopped['crm_mail_capture_identities']=(await context.db.query(
-    "UPDATE crm_mail_capture_identities SET state='blocked' WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state<>'blocked'",[workspace,closure.mailIdentities])).rowCount??0;
-  stopped['crm_mail_source_intents']=(await context.db.query(
-    "UPDATE crm_mail_source_intents SET state='invalidated' WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) AND state<>'invalidated'",[workspace,mailIds])).rowCount??0;
-  removed['mail_message_bodies']=measured.removes['mail_message_bodies']??0;
-  removed['crm_mail_source_contexts']=measured.removes['crm_mail_source_contexts']??0;
-  await remove('mail_messages','DELETE FROM mail_messages WHERE workspace_id=$1 AND id=ANY($2::uuid[])',[workspace,mailIds]);
+    ON CONFLICT(workspace_id,source_id,source_revision) DO UPDATE SET availability='deleted'`,
+    [workspace, mailIds],
+  );
+  stopped["crm_mail_capture_identities"] =
+    (
+      await context.db.query(
+        "UPDATE crm_mail_capture_identities SET state='blocked' WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state<>'blocked'",
+        [workspace, closure.mailIdentitiesSelected],
+      )
+    ).rowCount ?? 0;
+  stopped["crm_mail_source_intents"] =
+    (
+      await context.db.query(
+        "UPDATE crm_mail_source_intents SET state='invalidated' WHERE workspace_id=$1 AND source_id=ANY($2::uuid[]) AND state<>'invalidated'",
+        [workspace, mailIds],
+      )
+    ).rowCount ?? 0;
+  removed["mail_message_bodies"] = measured.removes["mail_message_bodies"] ?? 0;
+  removed["crm_mail_source_contexts"] =
+    measured.removes["crm_mail_source_contexts"] ?? 0;
+  await remove(
+    "mail_messages",
+    "DELETE FROM mail_messages WHERE workspace_id=$1 AND id=ANY($2::uuid[])",
+    [workspace, mailIds],
+  );
   // Unavailable heads survive ordinary copy deletion but terminal scoped deletion removes them.
-  await remove('crm_mail_sources','DELETE FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[])',[workspace,mailIds]);
-  await remove('outreach_email_sources',`DELETE FROM outreach_email_sources WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id', '$2')}`,byContact);
+  await remove(
+    "crm_mail_sources",
+    "DELETE FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=ANY($2::uuid[])",
+    [workspace, mailIds],
+  );
+  await remove(
+    "outreach_email_sources",
+    `DELETE FROM outreach_email_sources WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate("contact_id", "$2")}`,
+    byContact,
+  );
   // Learning contains references only, but deleted interactions must stop contributing.
-  await remove('sourcing_interactions', `DELETE FROM sourcing_interactions i WHERE i.workspace_id=$1 AND (
-   (i.kind='call' AND (i.subject_id IN (SELECT id FROM call_sessions s WHERE s.workspace_id=$1 AND s.firm_id=$3 AND ${contactPredicate('s.contact_id', '$2')})
-    OR i.subject_id IN (SELECT id FROM call_logs l WHERE l.workspace_id=$1 AND l.firm_id=$3 AND ${contactPredicate('l.contact_id', '$2')})))
-   OR (i.kind='meeting' AND i.subject_id IN (SELECT id FROM meetings m WHERE m.workspace_id=$1 AND m.firm_id=$3 AND ${contactPredicate('m.contact_id', '$2')})))`, byContact);
-  if(scope.contactId===null)await remove('sourcing_attributions','DELETE FROM sourcing_attributions WHERE workspace_id=$1 AND firm_id=$2',[workspace,scope.firmId]);
+  await remove(
+    "sourcing_interactions",
+    `DELETE FROM sourcing_interactions i WHERE i.workspace_id=$1 AND (
+   (i.kind='call' AND (i.subject_id IN (SELECT id FROM call_sessions s WHERE s.workspace_id=$1 AND s.firm_id=$3 AND ${contactPredicate("s.contact_id", "$2")})
+    OR i.subject_id IN (SELECT id FROM call_logs l WHERE l.workspace_id=$1 AND l.firm_id=$3 AND ${contactPredicate("l.contact_id", "$2")})))
+   OR (i.kind='meeting' AND i.subject_id IN (SELECT id FROM meetings m WHERE m.workspace_id=$1 AND m.firm_id=$3 AND ${contactPredicate("m.contact_id", "$2")})))`,
+    byContact,
+  );
+  if (scope.contactId === null)
+    await remove(
+      "sourcing_attributions",
+      "DELETE FROM sourcing_attributions WHERE workspace_id=$1 AND firm_id=$2",
+      [workspace, scope.firmId],
+    );
 
   // Migration 0028's rows before the tickets and call logs they point at. A session's
   // open reservation is closed first, as the research sweep closes a run's: `reserved`
   // is released (no call can have happened), `calling` is estimated (one may have).
-  const { rows: openSessions } = await context.db.query<{ reservation_id: string; state: string }>(
+  const { rows: openSessions } = await context.db.query<{
+    reservation_id: string;
+    state: string;
+  }>(
     `SELECT s.reservation_id, r.state FROM call_sessions s
        JOIN provider_reservations r ON r.workspace_id = s.workspace_id AND r.id = s.reservation_id
-      WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}
+      WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}
         AND r.state IN ('reserved', 'calling')`,
     byContact,
   );
@@ -1123,7 +1436,10 @@ export async function commitDeletion(
       await settleAttempt(context, {
         reservationId: open.reservation_id,
         at,
-        outcome: open.state === 'calling' ? { kind: 'estimated' } : { kind: 'released' },
+        outcome:
+          open.state === "calling"
+            ? { kind: "estimated" }
+            : { kind: "released" },
       });
     }
   }
@@ -1132,7 +1448,7 @@ export async function commitDeletion(
   // released, `calling` estimated — and then its transcript is removed.
   const { rows: transcribedSessions } = await context.db.query<{ id: string }>(
     `SELECT s.id FROM call_sessions s
-      WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}
+      WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}
         AND EXISTS (SELECT 1 FROM provider_reservations p
                      WHERE p.workspace_id = s.workspace_id AND p.subject_kind = 'call_transcription'
                        AND p.subject_id = s.id AND p.state IN ('reserved', 'calling'))`,
@@ -1141,7 +1457,7 @@ export async function commitDeletion(
   if (transcribedSessions.length > 0) {
     await finaliseTranscriptionsOfSessions(
       context,
-      transcribedSessions.map(row => row.id),
+      transcribedSessions.map((row) => row.id),
       await databaseNow(context),
     );
   }
@@ -1151,7 +1467,7 @@ export async function commitDeletion(
   // finds the session gone.
   const { rows: summarizedSessions } = await context.db.query<{ id: string }>(
     `SELECT s.id FROM call_sessions s
-      WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}
+      WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}
         AND EXISTS (SELECT 1 FROM provider_reservations p
                      WHERE p.workspace_id = s.workspace_id AND p.subject_kind = 'call_summary'
                        AND p.subject_id = s.id AND p.state IN ('reserved', 'calling'))`,
@@ -1160,15 +1476,15 @@ export async function commitDeletion(
   if (summarizedSessions.length > 0) {
     await finaliseSummariesOfSessions(
       context,
-      summarizedSessions.map(row => row.id),
+      summarizedSessions.map((row) => row.id),
       await databaseNow(context),
     );
   }
   await remove(
-    'call_summaries',
+    "call_summaries",
     `DELETE FROM call_summaries x USING call_sessions s
       WHERE x.workspace_id = $1 AND s.workspace_id = x.workspace_id AND s.id = x.call_session_id
-        AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+        AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}`,
     byContact,
   );
   // Slice 3a: each session's open analysis attempts finalised as the sweep does it, under
@@ -1176,21 +1492,21 @@ export async function commitDeletion(
   // would also go with the session, ON DELETE CASCADE; removed here so they are counted).
   await finaliseAnalysesOfSessions(
     context,
-    targetedSessions.map(session => session.id),
+    targetedSessions.map((session) => session.id),
     await databaseNow(context),
   );
   await remove(
-    'call_analyses',
+    "call_analyses",
     `DELETE FROM call_analyses a USING call_sessions s
       WHERE a.workspace_id = $1 AND s.workspace_id = a.workspace_id AND s.id = a.call_session_id
-        AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+        AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}`,
     byContact,
   );
   await remove(
-    'call_transcripts',
+    "call_transcripts",
     `DELETE FROM call_transcripts t USING call_sessions s
       WHERE t.workspace_id = $1 AND s.workspace_id = t.workspace_id AND s.id = t.call_session_id
-        AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+        AND s.firm_id = $3 AND ${contactPredicate("s.contact_id", "$2")}`,
     byContact,
   );
   // Slice 3a (0036): a pending-review hold names its session; the session going takes the
@@ -1203,64 +1519,75 @@ export async function commitDeletion(
       WHERE workspace_id = $1 AND source_event_kind = $2 AND released_at IS NULL
         AND source_event_id = ANY($3::text[])
       RETURNING id`,
-    [context.scope.workspaceId, CALL_ANALYSIS_PENDING_SOURCE, targetedSessions.map(session => session.id)],
+    [
+      context.scope.workspaceId,
+      CALL_ANALYSIS_PENDING_SOURCE,
+      targetedSessions.map((session) => session.id),
+    ],
   );
   // Before the sessions, whose deletion would only clear the task's link.
   await remove(
-    'call_tasks',
-    `DELETE FROM call_tasks WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "call_tasks",
+    `DELETE FROM call_tasks WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   await remove(
-    'call_sessions',
-    `DELETE FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "call_sessions",
+    `DELETE FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   // The review items first: their meeting predicate reads the meetings about to go.
   await remove(
-    'stage_review_items',
+    "stage_review_items",
     `DELETE FROM stage_review_items
       WHERE workspace_id = $1 AND ((firm_id = $3 AND ${FIRM_SCOPED_ONLY}) OR ${MEETING_REVIEW_IN_SCOPE})`,
     byContact,
   );
   await remove(
-    'calcom_events',
+    "calcom_events",
     `DELETE FROM calcom_events e USING meetings m
       WHERE e.workspace_id = $1 AND m.workspace_id = e.workspace_id AND m.id = e.meeting_id
         AND ${MEETING_IN_SCOPE}`,
     byContact,
   );
-  const outcomeMeetings = (await context.db.query<{ id: string }>(`SELECT m.id FROM meetings m WHERE m.workspace_id=$1 AND ${MEETING_IN_SCOPE}`, byContact)).rows;
-  await deleteMeetingOutcomeContent(context, { meetingIds: outcomeMeetings.map(m => m.id) });
+  const outcomeMeetings = (
+    await context.db.query<{ id: string }>(
+      `SELECT m.id FROM meetings m WHERE m.workspace_id=$1 AND ${MEETING_IN_SCOPE}`,
+      byContact,
+    )
+  ).rows;
+  await deleteMeetingOutcomeContent(context, {
+    meetingIds: outcomeMeetings.map((m) => m.id),
+  });
   await remove(
-    'meetings',
+    "meetings",
     `DELETE FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}`,
     byContact,
   );
   // Then the things that point at a route, then the routes.
   await remove(
-    'dial_tickets',
-    `DELETE FROM dial_tickets WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "dial_tickets",
+    `DELETE FROM dial_tickets WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   await remove(
-    'call_logs',
-    `DELETE FROM call_logs WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "call_logs",
+    `DELETE FROM call_logs WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   await remove(
-    'callbacks',
-    `DELETE FROM callbacks WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "callbacks",
+    `DELETE FROM callbacks WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   await remove(
-    'today_snoozes',
-    `DELETE FROM today_snoozes WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "today_snoozes",
+    `DELETE FROM today_snoozes WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   await remove(
-    'today_items',
-    `DELETE FROM today_items WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "today_items",
+    `DELETE FROM today_items WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   // Detach the unsent fences from the routes that are about to go. 0010's trigger
@@ -1270,19 +1597,19 @@ export async function commitDeletion(
   await context.db.query(
     `UPDATE outbound_messages
         SET recipient_route_id = NULL, recipient_route_version = NULL, updated_at = now()
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
         AND attempt_token IS NULL AND recipient_route_id IS NOT NULL`,
     byContact,
   );
   await remove(
-    'phone_routes',
-    `DELETE FROM phone_routes WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "phone_routes",
+    `DELETE FROM phone_routes WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   await remove(
-    'email_addresses',
+    "email_addresses",
     `DELETE FROM email_addresses a
-      WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate('a.contact_id', '$2')}
+      WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate("a.contact_id", "$2")}
         AND NOT EXISTS (
           SELECT 1 FROM outbound_messages o
            WHERE o.workspace_id = a.workspace_id AND o.recipient_route_id = a.id)`,
@@ -1326,7 +1653,7 @@ export async function commitDeletion(
         // and its reservation is closed by the time this reads it.
         if ((await lockRun(context, run.id)) === null) continue;
         await finaliseSubjectReservations(context, {
-          subjectKind: 'research_run',
+          subjectKind: "research_run",
           subjectId: run.id,
           at,
         });
@@ -1337,48 +1664,56 @@ export async function commitDeletion(
   // judgment references the run, the facts reference the run *and* the evidence item,
   // so both go before `research_runs` and before `evidence_items` below.
   await remove(
-    'firm_judgments',
+    "firm_judgments",
     `DELETE FROM firm_judgments WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
   await remove(
-    'firm_facts',
+    "firm_facts",
     `DELETE FROM firm_facts WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
   await remove(
-    'research_runs',
+    "research_runs",
     `DELETE FROM research_runs WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
   await remove(
-    'firm_prepared_briefs',
+    "firm_prepared_briefs",
     `DELETE FROM firm_prepared_briefs WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
   await remove(
-    'firm_links',
+    "firm_links",
     `DELETE FROM firm_links WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
   await remove(
-    'evidence_items',
-    `DELETE FROM evidence_items WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "evidence_items",
+    `DELETE FROM evidence_items WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
   await remove(
-    'record_aliases',
-    `DELETE FROM record_aliases WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    "record_aliases",
+    `DELETE FROM record_aliases WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
-  const redacted: Record<string, number> = {};
-  redacted['crm_selected_imports'] = await countOf(context,`SELECT count(*) AS count FROM crm_selected_imports m WHERE m.workspace_id=$1 AND m.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (m.label IS NOT NULL OR m.participants IS NOT NULL OR m.attachments IS NOT NULL OR m.direction IS NOT NULL OR m.attribution IS NOT NULL OR m.date_provenance IS NOT NULL)`,byContact);
-  const metadataIds = measured.identityVersions.filter(value => value.kind==='business_metadata').map(value => value.id);
-  redacted['crm_business_conversations'] = 0;
-  for (let offset=0; offset<metadataIds.length; offset+=100) {
-    const result = await redactBusinessMetadata(context,{ conversationIds: metadataIds.slice(offset,offset+100) });
-    if (!result.ok) throw new Error('Scoped business metadata deletion refused');
-    redacted['crm_business_conversations'] += result.value.redacted;
+  redacted["crm_selected_imports"] = await countOf(
+    context,
+    `SELECT count(*) AS count FROM crm_selected_imports m WHERE m.workspace_id=$1 AND m.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (m.label IS NOT NULL OR m.participants IS NOT NULL OR m.attachments IS NOT NULL OR m.direction IS NOT NULL OR m.attribution IS NOT NULL OR m.date_provenance IS NOT NULL)`,
+    byContact,
+  );
+  const metadataIds = measured.identityVersions
+    .filter((value) => value.kind === "business_metadata")
+    .map((value) => value.id);
+  redacted["crm_business_conversations"] = 0;
+  for (let offset = 0; offset < metadataIds.length; offset += 100) {
+    const result = await redactBusinessMetadata(context, {
+      conversationIds: metadataIds.slice(offset, offset + 100),
+    });
+    if (!result.ok)
+      throw new Error("Scoped business metadata deletion refused");
+    redacted["crm_business_conversations"] += result.value.redacted;
   }
 
   const people = await context.db.query(
@@ -1386,49 +1721,53 @@ export async function commitDeletion(
       WHERE p.workspace_id=$1 AND p.full_name <> $4 AND ${CRM_PERSON_IN_SCOPE}`,
     [...byContact, REDACTED_NAME],
   );
-  redacted['crm_people'] = (people.rowCount ?? 0) + observedMailNamesRedacted;
+  redacted["crm_people"] = (people.rowCount ?? 0) + observedMailNamesRedacted;
   const selectedSources = await context.db.query<{ id: string }>(
     `UPDATE crm_selected_sources s SET availability='deleted',excerpt=NULL,content_hash=NULL,occurred_at=NULL,revision=revision+1
       WHERE s.workspace_id=$1 AND s.availability <> 'deleted' AND ${CRM_SOURCE_IN_SCOPE} RETURNING s.id`,
     byContact,
   );
-  redacted['crm_selected_sources'] = selectedSources.rowCount ?? 0;
-  const invalidated = await invalidateSelectedIdentitySources(context, selectedSources.rows.map(source => source.id));
-  stopped['crm_relationships'] = invalidated.relationships;
-  stopped['crm_source_relationship_contexts'] = invalidated.contexts;
-  stopped['crm_endpoint_claims'] = invalidated.claims;
-  redacted['crm_identity_endpoints'] = invalidated.endpoints;
+  redacted["crm_selected_sources"] = selectedSources.rowCount ?? 0;
+  const invalidated = await invalidateSelectedIdentitySources(
+    context,
+    selectedSources.rows.map((source) => source.id),
+  );
+  stopped["crm_relationships"] = invalidated.relationships;
+  stopped["crm_source_relationship_contexts"] = invalidated.contexts;
+  stopped["crm_endpoint_claims"] = invalidated.claims;
+  redacted["crm_identity_endpoints"] = invalidated.endpoints;
   const fences = await context.db.query(
     `UPDATE outbound_messages
         SET subject = $4, body = $4, updated_at = now()
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
         AND attempt_token IS NULL AND subject <> $4`,
     [...byContact, REDACTED_NAME],
   );
-  redacted['outbound_messages'] = fences.rowCount ?? 0;
+  redacted["outbound_messages"] = fences.rowCount ?? 0;
 
   const facts = await context.db.query(
     `UPDATE funnel_facts
         SET detail = '{}'::jsonb
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
     byContact,
   );
-  redacted['funnel_facts'] = facts.rowCount ?? 0;
+  redacted["funnel_facts"] = facts.rowCount ?? 0;
 
   const contacts = await context.db.query(
     `UPDATE contacts
         SET full_name = $4, title = NULL, status = 'inactive', is_primary = false,
             updated_at = now()
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('id', '$2')} AND status <> 'merged'`,
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("id", "$2")} AND status <> 'merged'`,
     [...byContact, REDACTED_NAME],
   );
-  redacted['contacts'] = contacts.rowCount ?? 0;
+  redacted["contacts"] = contacts.rowCount ?? 0;
 
   if (scope.contactId === null) {
-    const opportunityLabels=await context.db.query(
-      'UPDATE opportunities SET display_name=NULL,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND display_name IS NOT NULL',
-      [workspace,scope.firmId]);
-    redacted['opportunities']=opportunityLabels.rowCount ?? 0;
+    const opportunityLabels = await context.db.query(
+      "UPDATE opportunities SET display_name=NULL,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND display_name IS NOT NULL",
+      [workspace, scope.firmId],
+    );
+    redacted["opportunities"] = opportunityLabels.rowCount ?? 0;
     const firms = await context.db.query(
       `UPDATE firms
           SET name = $3, website = NULL, address_line = NULL, locality = NULL, postal_code = NULL,
@@ -1436,7 +1775,7 @@ export async function commitDeletion(
         WHERE workspace_id = $1 AND id = $2`,
       [workspace, scope.firmId, REDACTED_NAME],
     );
-    redacted['firms'] = firms.rowCount ?? 0;
+    redacted["firms"] = firms.rowCount ?? 0;
   }
 
   await context.db.query(
@@ -1455,7 +1794,7 @@ export async function commitDeletion(
   );
 
   await recordCrmAuditEvent(context, {
-    action: 'deletion.committed',
+    action: "deletion.committed",
     subjectKind: row.target_kind,
     subjectId: scope.contactId ?? scope.firmId,
     detail: {
@@ -1465,9 +1804,15 @@ export async function commitDeletion(
       stopped,
       tombstones: tombstoneEventIds.length,
       // The pending-review holds released with their sessions (slice 3a): ids, not personal data.
-      releasedPendingHoldIds: releasedPendingHolds.map(hold => hold.id),
+      releasedPendingHoldIds: releasedPendingHolds.map((hold) => hold.id),
     },
   });
 
-  return accept({ requestId: row.id, removed, redacted, stopped, tombstoneEventIds });
+  return accept({
+    requestId: row.id,
+    removed,
+    redacted,
+    stopped,
+    tombstoneEventIds,
+  });
 }

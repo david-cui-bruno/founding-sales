@@ -27,6 +27,7 @@ interface Dependency extends Record<string, unknown> {
   source_revision: number;
   source_hash: string;
   context_snapshot: CrmClaimContext;
+  original_access_closure: unknown;
   observed_work_version: string;
   observed_decision_revision: number;
   review_required: boolean;
@@ -129,7 +130,7 @@ export async function readCrmEvidenceWork(
   if (work === null) return null;
   const dependencies = (
     await context.db.query<Dependency>(
-      `SELECT d.*,a.owner_user_id,a.source_kind,a.source_id,a.source_revision,a.source_hash,a.context_snapshot FROM crm_claim_work_dependencies d JOIN crm_claim_review_anchors a ON a.workspace_id=d.workspace_id AND a.id=d.anchor_id WHERE d.workspace_id=$1 AND d.work_kind=$2 AND d.work_id=$3 ORDER BY d.id LIMIT 501`,
+      `SELECT d.*,a.owner_user_id,a.source_kind,a.source_id,a.source_revision,a.source_hash,a.context_snapshot,a.original_access_closure FROM crm_claim_work_dependencies d JOIN crm_claim_review_anchors a ON a.workspace_id=d.workspace_id AND a.id=d.anchor_id WHERE d.workspace_id=$1 AND d.work_kind=$2 AND d.work_id=$3 ORDER BY d.id LIMIT 501`,
       [context.scope.workspaceId, input.work.kind, input.work.id],
     )
   ).rows;
@@ -153,6 +154,7 @@ export async function readCrmEvidenceWork(
         workContext(work.firm_id),
         ...dependencies.map((row) => row.context_snapshot),
       ],
+      dependencies.map((row) => row.original_access_closure),
     ))
   )
     return null;
@@ -165,7 +167,7 @@ export async function readCrmEvidenceWork(
     return null;
   const rows = (
     await context.db.query<Dependency>(
-      `SELECT d.*,a.owner_user_id,a.source_kind,a.source_id,a.source_revision,a.source_hash,a.context_snapshot FROM crm_claim_work_dependencies d JOIN crm_claim_review_anchors a ON a.workspace_id=d.workspace_id AND a.id=d.anchor_id WHERE d.workspace_id=$1 AND d.work_kind=$2 AND d.work_id=$3 ORDER BY d.id LIMIT 501`,
+      `SELECT d.*,a.owner_user_id,a.source_kind,a.source_id,a.source_revision,a.source_hash,a.context_snapshot,a.original_access_closure FROM crm_claim_work_dependencies d JOIN crm_claim_review_anchors a ON a.workspace_id=d.workspace_id AND a.id=d.anchor_id WHERE d.workspace_id=$1 AND d.work_kind=$2 AND d.work_id=$3 ORDER BY d.id LIMIT 501`,
       [context.scope.workspaceId, input.work.kind, input.work.id],
     )
   ).rows;
@@ -201,4 +203,42 @@ export async function readCrmEvidenceWork(
     nextAfterDependencyId:
       after.length > input.limit ? (page.at(-1)?.id ?? null) : null,
   };
+}
+
+/** Replayed receipts are identities, never permission or a stale binding acknowledgement. */
+export async function validateCrmEvidenceWorkReceipt(
+  context: RepositoryContext,
+  input: {
+    work: CrmEvidenceWorkBind["work"];
+    dependencyId: string;
+    revision: number;
+  },
+  mail: CrmMailEvidencePort = createNativeCrmMailEvidence(),
+) {
+  const current = await readCrmEvidenceWork(
+    context,
+    { work: input.work, limit: 50 },
+    mail,
+  );
+  if (current === null) return "unavailable" as const;
+  const dependency = (
+    await context.db.query<{
+      invalidation_revision: number;
+      observed_work_version: string;
+    }>(
+      "SELECT invalidation_revision,observed_work_version FROM crm_claim_work_dependencies WHERE workspace_id=$1 AND id=$2 AND work_kind=$3 AND work_id=$4 FOR SHARE",
+      [
+        context.scope.workspaceId,
+        input.dependencyId,
+        input.work.kind,
+        input.work.id,
+      ],
+    )
+  ).rows[0];
+  if (dependency === undefined) return "unavailable" as const;
+  return current.work.version === input.work.expectedVersion &&
+    dependency.observed_work_version === input.work.expectedVersion &&
+    dependency.invalidation_revision === input.revision
+    ? ("current" as const)
+    : ("changed" as const);
 }

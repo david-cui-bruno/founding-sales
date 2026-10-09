@@ -1,6 +1,8 @@
+import { z } from "zod";
 import {
   bindCrmEvidenceWork,
   readCrmEvidenceWork,
+  validateCrmEvidenceWorkReceipt,
 } from "@fss/domain/crm/evidenceWork.ts";
 import {
   crmEvidenceReadSchema,
@@ -79,16 +81,27 @@ export async function routeCrmEvidence(
         bindCrmEvidenceWork(context, body, options.crmMailEvidence),
     );
     if (result.status !== 200) return result;
+    const receipt = z
+      .strictObject({
+        dependencyId: z.uuid(),
+        revision: z.number().int().positive(),
+      })
+      .parse((result.body as { result: unknown }).result);
     const current = await withTransaction(options.auth.db, () =>
-      readCrmEvidenceWork(
+      validateCrmEvidenceWorkReceipt(
         scoped.context,
-        { work: parsed.data.work, limit: 50 },
+        { ...receipt, work: parsed.data.work },
         options.crmMailEvidence,
       ),
     );
-    return current === null
-      ? { status: 404, body: redactError("not_found") }
-      : result;
+    if (current === "unavailable")
+      return { status: 404, body: redactError("not_found") };
+    if (current === "changed")
+      return {
+        status: 409,
+        body: { status: "refused", reason: "work_binding_changed" },
+      };
+    return result;
   }
   if (request.path === "/crm/evidence/decision/history/read") {
     const parsed = crmDecisionHistoryReadSchema.safeParse(request.body);
@@ -133,8 +146,13 @@ export async function routeCrmEvidence(
             resolveCrmConflict(context, body, options.crmMailEvidence),
         );
     if (reply.status !== 200) return reply;
-    const conflictId = (reply.body as { result: { conflictId: string } }).result
-      .conflictId;
+    const receipt = z
+      .strictObject({
+        conflictId: z.uuid(),
+        revision: z.number().int().positive(),
+      })
+      .parse((reply.body as { result: unknown }).result);
+    const conflictId = receipt.conflictId;
     const current = await withTransaction(options.auth.db, () =>
       readCrmConflict(
         scoped.context,
@@ -142,9 +160,14 @@ export async function routeCrmEvidence(
         options.crmMailEvidence,
       ),
     );
-    return current === null
-      ? { status: 404, body: redactError("not_found") }
-      : reply;
+    if (current === null)
+      return { status: 404, body: redactError("not_found") };
+    if (current.revision !== receipt.revision)
+      return {
+        status: 409,
+        body: { status: "refused", reason: "conflict_changed" },
+      };
+    return reply;
   }
   if (request.path === "/crm/evidence/decide") {
     const parsed = crmEvidenceDecideSchema.safeParse(request.body);

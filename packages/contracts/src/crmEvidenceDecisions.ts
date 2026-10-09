@@ -6,6 +6,25 @@ import {
   crmExtractionClaimSchema,
 } from "./crmProcessing.ts";
 import { canonicalSourceReferenceSchema } from "./people.ts";
+
+/** Capture authority is separate from semantic subject attribution. */
+export const crmOriginalAccessClosureSchema = z
+  .strictObject({
+    firmIds: z.array(z.uuid()).max(100),
+    personIds: z.array(z.uuid()).max(100),
+  })
+  .refine(
+    (value) =>
+      [value.firmIds, value.personIds].every(
+        (ids) =>
+          JSON.stringify(ids) === JSON.stringify([...new Set(ids)].sort()),
+      ),
+    "Access identities must be unique and sorted",
+  );
+export type CrmOriginalAccessClosure = z.infer<
+  typeof crmOriginalAccessClosureSchema
+>;
+
 export const crmEvidenceReadSchema = z.strictObject({
   source: crmSourceLookupSchema,
   afterClaimId: z.uuid().optional(),
