@@ -70,6 +70,8 @@ const goldClaimSchema = z.strictObject({
   supportedBy: z.array(fixtureId).min(1).max(50),
   forbiddenTextVariants: z.array(z.string().min(1).max(2000)).max(10),
 });
+export const expectedRefusalSchema = z.strictObject({stage:z.enum(['canonical_read','final_read']),
+ code:z.literal('source_unavailable'),scenario:z.enum(['delete_before','delete_during','revision_during','reassign_during','audit_refusal'])});
 export const labeledCaseSchema = z.strictObject({
   id: fixtureId,
   category: categorySchema,
@@ -83,6 +85,7 @@ export const labeledCaseSchema = z.strictObject({
   exactExpected: askResponseSchema.nullable(),
   labelVersion: version,
   labelAuthoringState: z.literal('independent_before_candidate_outputs'),
+  expectedRefusal: expectedRefusalSchema.nullable().optional(),
   lifecycleScenario: z.enum(['none', 'delete_before', 'delete_during',
     'reassign_during', 'revision_during', 'audit_refusal']),
 });
@@ -241,6 +244,9 @@ export const rankingOutputSchema = z.strictObject({
   }),
 });
 export const measurementSchema = z.strictObject({
+  controlOutcome:z.enum(['not_applicable','passed','failed','unverified']).optional(),
+  expectedRefusal:expectedRefusalSchema.nullable().optional(),
+  publishedClaimCount:count.optional(),publishedCitationCount:count.optional(),prohibitedPublication:z.boolean().optional(),
   caseId: fixtureId,
   category: categorySchema,
   path: z.enum(['exact_sql', 'lexical', 'fake_exact_vector', 'fake_hybrid', 'fake_answer']),
@@ -266,6 +272,8 @@ export const reportSchema = z.strictObject({
   baselineMeasured: z.boolean(),
   realVectorMeasured: z.literal(false), realModelMeasured: z.literal(false),
   syntheticOrchestrationPassed: z.boolean(),
+  syntheticControlsPassed:z.boolean().optional(),
+  criticalControlFailureCount:count.optional(),expectedRefusalCount:count.optional(),
   modelEvaluationState: z.enum(['not_run', 'fake_only_complete',
     'fake_only_unjudged_claims']),
   caseResults: z.array(measurementSchema).max(600),
