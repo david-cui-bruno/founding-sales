@@ -74,3 +74,20 @@ it('keeps separately saved private preference proposals accessible inside Ask',a
  expect(await screen.findByText('Prefer weekday planning calls.')).toBeTruthy();
  expect(actionRead).toHaveBeenCalledWith({scope:{kind:'history'},limit:20});
 });
+
+it('allows a separately confirmed human action on current keyword evidence while semantic answers are unavailable',async()=>{
+ const source={workspaceId:requestId,sourceId:actionId,kind:'selected_note' as const,revision:3,contentHash:'a'.repeat(64),locator:'text:0:24',speaker:null,occurredAt:null,observedAt:'2026-10-09T11:00:00.000Z',completeness:'selected_excerpt' as const,availability:'available' as const};
+ const fallback:NonNullable<Awaited<ReturnType<NonNullable<AskPorts['answerRead']>>>['fallback']>={operation:'passages',scope:{sources:[{workspaceId:requestId,sourceId:actionId,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]},passages:[{text:'Scheduling is difficult.',sources:[source]}],nextAfterSourceId:null,truncated:false,coverage:{scope:'explicit_copied_sources',acquisition:'unverified',semantic:'not_requested',scanComplete:true,requestedSources:1,inspectedSources:1,unavailableSources:0,refusedSources:0,truncatedSources:0,inspectedWindows:1,textBytes:24,sourceByteCeiling:80000,textByteCeiling:800000,windowCeiling:1000,omittedSignatures:0,chunkerVersion:'lexical-original-v1'}};
+ const unavailable:NonNullable<AskPorts['answerRead']>=async()=>({requestId,version:4,createdAt:'2026-10-09T11:00:00.000Z',state:'unavailable',reason:'evaluation_unavailable',question:'What matters?',answer:null,fallback});
+ const actionCreate=vi.fn(async()=>({actionId,version:1,kind:'preference' as const}));
+ const answerRequest=vi.fn();
+ render(<Ask ports={{read,historyList,answerRead:unavailable,answerRequest,actionCreate}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read private history'}));fireEvent.click(await screen.findByRole('button',{name:'Open investigation'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Act on keyword passage 1'}));
+ fireEvent.change(screen.getByLabelText('Follow-on action'),{target:{value:'preference'}});
+ fireEvent.change(screen.getByLabelText('Proposed preference'),{target:{value:'Prefer explicit scheduling questions.'}});
+ fireEvent.click(screen.getByLabelText('Confirm this preference proposal'));fireEvent.click(screen.getByRole('button',{name:'Save preference proposal'}));
+ expect(await screen.findByText('Preference proposal saved.')).toBeTruthy();
+ expect(actionCreate).toHaveBeenCalledWith({requestId,expectedVersion:4,finding:{kind:'keyword_passage',index:0},action:{kind:'preference',text:'Prefer explicit scheduling questions.'}});
+ expect(answerRequest).not.toHaveBeenCalled();
+});
