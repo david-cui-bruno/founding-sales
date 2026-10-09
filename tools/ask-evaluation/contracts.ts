@@ -18,7 +18,8 @@ const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
 const gitCommit = z.string().regex(/^[a-f0-9]{40}$/u);
 const finite = z.number().finite();
 const count = z.number().int().min(0).max(1_000_000);
-const milliseconds = finite.min(0).max(600_000);
+// Observed time may exceed a deadline when scheduling is delayed; never clamp evidence.
+const milliseconds = finite.min(0).max(Number.MAX_SAFE_INTEGER);
 const ratio = finite.min(0).max(1);
 const sourceKind = canonicalSourceReferenceSchema.shape.kind;
 export const categorySchema = z.enum([
