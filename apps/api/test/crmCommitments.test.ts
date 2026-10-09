@@ -34,6 +34,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
           sendingEnabled: false,
         },
       );
+    const get=(path:string)=>dispatch({method:"GET",path,body:null,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}}, {session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
     const command = (fields: object) => ({
       commandId: randomUUID(),
       clientVersion: CURRENT_CLIENT_VERSION,
@@ -154,6 +155,13 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const visible=await read();expect(visible.status).toBe(200);
     expect(visible.body).toMatchObject({items:[{commitmentId:receipt.result.commitmentId,task:{status:"open"},actionLabel:"Prepare the repair summary",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago",expression:"by October 12"},quote:"I will prepare the repair summary by October 12.",source:{occurredAt:"2026-10-01T14:00:00.000Z"}}]});
     const originalTask=(visible.body as {items:{task:{taskId:string}}[]}).items[0]!.task.taskId;
+    const actionsV1=await get("/today/actions");expect(actionsV1.status).toBe(200);expect(actionsV1.body).toMatchObject({version:1,actions:[]});
+    const actionsV2=await get("/today/actions/v2");expect(actionsV2.status).toBe(200);
+    expect(actionsV2.body).toMatchObject({version:2,actions:[{kind:"promise",reason:"dated_promise",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago"},target:{kind:"internal_task",taskId:originalTask,expectedVersion:1,review:{commitmentId:receipt.result.commitmentId,revision:1,projectionVersion:1}}}]});
+    expect((await get("/today/actions")).body).toMatchObject({version:1,actions:[]});
+    const promiseAction=(actionsV2.body as {actions:{actionId:string;target:unknown}[]}).actions[0]!;
+    expect((await post("/today/actions/open/v2",{actionId:promiseAction.actionId,target:promiseAction.target})).body).toEqual({version:2,target:promiseAction.target});
+
     const runtime=await fixture.database.appRuntimeSession();
     await expect(runtime.query("UPDATE crm_commitment_reviews SET original_access_closure='{\"firmIds\":[],\"personIds\":[]}'::jsonb,revision=revision+1 WHERE workspace_id=$1 AND id=$2",[source.workspaceId,receipt.result.commitmentId])).rejects.toMatchObject({code:"23514",constraint:"crm_commitment_review_guard"});
     await expect(runtime.query("UPDATE crm_commitment_reviews SET state='suggestion' WHERE workspace_id=$1 AND id=$2",[source.workspaceId,receipt.result.commitmentId])).rejects.toMatchObject({code:"23514",constraint:"crm_commitment_review_guard"});
@@ -178,6 +186,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
     expect((await read()).body).toMatchObject({items:[{revision:2,task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
 
     expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toEqual({items:[],nextAfterId:null});
+    expect((await post("/today/actions/open/v2",{actionId:promiseAction.actionId,target:promiseAction.target})).body).toEqual({version:2,target:null});
     // Cycle3: changed interpretation cannot erase an already performed action.
     const correction=await post("/crm/evidence/decide",command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,action:"correct",correctedInterpretation:"This was tentative, not an agreed commitment"}));expect(correction.status).toBe(200);
     const corrected=await read();expect(corrected.status).toBe(200);

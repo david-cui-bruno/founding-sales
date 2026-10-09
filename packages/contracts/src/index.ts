@@ -69,3 +69,5 @@ export * from './crmProgress.ts';
 
 export * from './crmEvidenceDecisions.ts';
 export * from './crmCommitments.ts';
+
+export * from './todayActionsV2.ts';

@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import type {CrmCommitmentRead,CrmCommitmentReview,CrmCommitmentComplete} from '@fss/contracts';
+import type {CrmCommitmentRead,CrmCommitmentReview,CrmCommitmentComplete,TodayPromiseTarget} from '@fss/contracts';
 import {crmEvidenceClaimTargetSchema,crmCommitmentDueSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
@@ -106,4 +106,21 @@ export async function completeCrmCommitment(context:RepositoryContext,input:CrmC
  const changed=(await context.db.query<{version:number;completed_at:Date}>("UPDATE crm_internal_tasks SET status='done',version=version+1,completed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND version=$3 RETURNING version,completed_at",[context.scope.workspaceId,input.taskId,input.expectedVersion])).rows[0]!;
  await recordCrmAuditEvent(context,{action:'crm.internal_task_completed',subjectKind:'crm_internal_task',subjectId:input.taskId,detail:{version:changed.version}});
  return {ok:true as const,value:{taskId:input.taskId,version:changed.version,completedAt:changed.completed_at.toISOString()}};
+}
+
+/** Private action proof is resolved under the same source/context locks as current work. */
+export async function readCrmCommitmentActionProofs(context:RepositoryContext){
+ const page=await readCrmCommitments(context,{scope:{kind:'today'},limit:50});
+ if(page===null||page.nextAfterId!==null||page.items.some(item=>!('commitmentId' in item)))return null;
+ const items=page.items.filter(item=>'commitmentId' in item);
+ const result=[];
+ for(const item of items){
+  if(item.task===null||item.task.status!=='open'||item.due===null||item.actionLabel===null)continue;
+  const row=(await context.db.query<Review>('SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.scope.workspaceId,item.commitmentId])).rows[0];
+  if(row===undefined||row.revision!==item.revision||row.state!=='applied')return null;
+  const target=crmEvidenceClaimTargetSchema.parse(row.target);
+  const proof:TodayPromiseTarget={kind:'internal_task',taskId:item.task.taskId,expectedVersion:item.task.version,review:{commitmentId:row.id,revision:row.revision,projectionVersion:row.projection_version},support:{sourceKind:target.source.kind,sourceId:target.source.sourceId,sourceRevision:target.source.revision,sourceHash:target.source.contentHash!,contextHash:target.contextHash,decisionRevision:target.expectedDecisionRevision}};
+  result.push({target:proof,subject:item.actionLabel,due:item.due});
+ }
+ return result;
 }
