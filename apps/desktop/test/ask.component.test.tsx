@@ -41,3 +41,13 @@ it('clears selected records on privacy change and discards late reads',async()=>
  view.rerender(<Ask ports={{read}} privacyKey="owner:3" enabled={false}/>);finish(response);
  await waitFor(()=>expect(screen.queryByRole('button',{name:'Select Private Person'})).toBeNull());
 });
+
+it('reads exact open opportunities for an explicitly selected firm without invoking inference',async()=>{
+ const read=vi.fn<AskPorts['read']>(async input=>input.operation==='records'?{operation:'records',selection:'single',records:[{recordId:one,kind:'firm',name:'Orion',firmId:one}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:{operation:'opportunities',scope:{firmId:one},dateBasis:'opportunity_opened_at',count:'2',records:[],truncated:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}});
+ render(<Ask ports={{read}} privacyKey="owner:1" enabled/>);
+ fireEvent.change(screen.getByLabelText('Record kind'),{target:{value:'firms'}});fireEvent.change(screen.getByLabelText('Find a person or firm'),{target:{value:'Orion'}});fireEvent.click(screen.getByRole('button',{name:'Find records'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Select Orion'}));fireEvent.click(screen.getByRole('button',{name:'Open opportunities'}));
+ expect(await screen.findByText('2 open opportunities')).toBeTruthy();
+ expect(screen.getByText('Exact CRM state. Conversation coverage is unverified.')).toBeTruthy();
+ expect(read).toHaveBeenLastCalledWith({operation:'opportunities',scope:{firmId:one},status:'open',limit:20});
+});
