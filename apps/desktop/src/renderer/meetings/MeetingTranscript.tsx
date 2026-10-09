@@ -1,3 +1,4 @@
+import type {EvidenceWorkIdentity} from '../firms/EvidenceReview.tsx';
 import {ProcessingRecordHealth,type ProcessingRecordPorts} from '../firms/ProcessingRecordHealth.tsx';
 import {ProcessingHealth,type ProcessingPorts} from '../firms/ProcessingHealth.tsx';
 import {processingPorts} from '../firms/peoplePorts.ts';
@@ -7,9 +8,11 @@ import { useSessionEpoch } from '../app/drafts.tsx';
 import { Button } from '../ui/button.tsx';
 import { RecordingRecoveryAction, type RecoveryPorts } from '../recordings/RecordingRecoveryAction.tsx';
 export interface TranscriptPorts extends RecoveryPorts {
+  tasks?(meetingId:string):Promise<readonly {id:string;meetingId:string;version:number}[]>;
   read(input: { meetingId: string; cursor?: string }): Promise<{ page: MeetingTranscriptPage | null; reason: string | null }>;
 }
 export const transcriptPorts: TranscriptPorts = {
+  tasks:async meetingId=>{const answer=await globalThis.callieApi?.read('meetings.outcomes',{meetingId});return answer?.view?.meetingId===meetingId?answer.view.tasks:[];},
   read: async input => await globalThis.callieApi?.read('meetings.transcript', {...input,includeProcessing:true}) ?? { page: null, reason: 'unavailable' },
   reupload: async recordingId => await globalThis.callieApi?.command('recordings.reupload', { recordingId }) ?? { status: 'unavailable' },
   chooseFile: async recordingId => await globalThis.callieImport?.chooseRecordingRecoveryFile(recordingId) ?? { status: 'unavailable' },
@@ -25,7 +28,7 @@ function sourceStatus(source: RecordingProcessingView): string {
   return 'Transcript is being prepared.';
 }
 const timestamp = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
-interface View { epoch: object | null; meetingId: string; page: MeetingTranscriptPage | null; reason: string | null }
+interface View { workContexts:readonly EvidenceWorkIdentity[]; epoch: object | null; meetingId: string; page: MeetingTranscriptPage | null; reason: string | null }
 export function MeetingTranscript({ meetingId, ports = transcriptPorts, actionsEnabled = true,processing=processingPorts,recordHealth }: { meetingId: string; ports?: TranscriptPorts; actionsEnabled?: boolean;processing?:ProcessingPorts;recordHealth?:ProcessingRecordPorts }): JSX.Element {
   const epoch = useSessionEpoch();
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [view, setView] = useState<View | null>(null);
@@ -40,19 +43,21 @@ export function MeetingTranscript({ meetingId, ports = transcriptPorts, actionsE
       let answer = await ports.read({ meetingId, ...(cursor === undefined ? {} : { cursor }) });
       let append = cursor !== undefined;
       if (answer.reason === 'transcript_changed' && append) { answer = await ports.read({ meetingId }); append = false; }
+      const tasks=processing.evidence&&actionsEnabled&&ports.tasks?await ports.tasks(meetingId).catch(()=>[]):[];
+      const workContexts:EvidenceWorkIdentity[]=tasks.filter(task=>task.meetingId===meetingId).map(task=>({kind:'meeting_task',id:task.id}));
       if (!alive.current || mine !== request.current) return;
       if (answer.page !== null && answer.page.meetingId !== meetingId) return;
       setView(previous => {
         const next = answer.page;
         const old = previous?.epoch === epoch && previous.meetingId === meetingId ? previous.page : null;
         if (append && next !== null && old !== null && old.coverage.sourceRevision === next.coverage.sourceRevision) {
-          return { epoch, meetingId, reason: null, page: { ...next, utterances: [...new Map([...old.utterances, ...next.utterances].map(row => [row.id, row])).values()] } };
+          return { epoch, meetingId, workContexts, reason: null, page: { ...next, utterances: [...new Map([...old.utterances, ...next.utterances].map(row => [row.id, row])).values()] } };
         }
-        return { epoch, meetingId, page: next, reason: answer.reason };
+        return { epoch, meetingId, workContexts, page: next, reason: answer.reason };
       });
-    } catch { if (alive.current && mine === request.current) setView({ epoch, meetingId, page: null, reason: 'unavailable' }); }
+    } catch { if (alive.current && mine === request.current) setView({ epoch, meetingId, workContexts:[], page: null, reason: 'unavailable' }); }
     finally { if (alive.current && mine === request.current) setBusy(false); }
-  }, [ports, meetingId, epoch]);
+  }, [ports, meetingId, epoch,processing.evidence,actionsEnabled]);
   const toggle = () => { if (open) { setOpen(false); request.current++; setBusy(false); } else { setOpen(true); void load(); } };
   const sourceIds = page === null ? [] : [...new Set([...page.recordings.map(row => row.recordingId), ...page.utterances.map(row => row.recordingId)])];
   return <div className="min-w-0" data-testid="meeting-transcript">
@@ -79,7 +84,7 @@ export function MeetingTranscript({ meetingId, ports = transcriptPorts, actionsE
             </li>)}</ol>
           </section>;
         })}
-        {page.processingSources?.map(source=><ProcessingHealth key={`${source.sourceId}:${source.revision}:${source.contentHash}`} source={source} ports={processing}/>)}
+        {page.processingSources?.map(source=><ProcessingHealth key={`${source.sourceId}:${source.revision}:${source.contentHash}`} source={source} comparisonSources={page.processingSources??[]} ports={processing} enabled={actionsEnabled} recordId={meetingId} privacyKey={epoch} sourceVersion={String(page.coverage.sourceRevision)} workContexts={view?.epoch===epoch&&view.meetingId===meetingId?view.workContexts:[]}/>)}
         {page.processingSourcesTruncated?<p className="text-xs text-muted-foreground">Some processing sources are outside this page.</p>:null}
         {page.recordingsTruncated ? <p className="text-xs text-muted-foreground">Some source labels are omitted from this large meeting.</p> : null}
         {page.nextCursor === null ? null : <Button size="sm" variant="quiet" className="self-start" disabled={busy} onClick={() => { void load(page.nextCursor ?? undefined); }}>Load more</Button>}

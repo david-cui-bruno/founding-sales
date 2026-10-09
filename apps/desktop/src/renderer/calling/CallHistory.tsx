@@ -1,3 +1,5 @@
+import type {EvidenceWorkIdentity} from '../firms/EvidenceReview.tsx';
+import {useSessionEpoch} from "../app/drafts.tsx";
 import {ProcessingRecordHealth} from '../firms/ProcessingRecordHealth.tsx';
 import {ProcessingHealth,type ProcessingPorts} from '../firms/ProcessingHealth.tsx';
 import {processingPorts} from '../firms/peoplePorts.ts';
@@ -144,11 +146,14 @@ export function TranscriptDisclosure({
   callSessionId,
   read,
   processing=processingPorts,
+  workContexts,
 }: {
   readonly callSessionId: string;
   readonly read: NonNullable<CallHistoryPorts['transcript']>;
   readonly processing?:ProcessingPorts;
+  readonly workContexts?:readonly EvidenceWorkIdentity[];
 }): JSX.Element | null {
+  const epoch=useSessionEpoch();
   const [state, setState] = useState<TranscriptState | null>(null);
   const mounted = useRef(true);
   useEffect(() => {
@@ -189,7 +194,7 @@ export function TranscriptDisclosure({
           {reasonSentence(hasReasonSentence(state.reason) ? state.reason : 'transcript_unavailable')}
         </p>
       ) : state.kind === 'shown' ? (
-        <><TranscriptLines transcript={state.transcript} />{state.transcript.processingSource===null||state.transcript.processingSource===undefined?null:<ProcessingHealth key={`${state.transcript.processingSource.sourceId}:${state.transcript.processingSource.revision}:${state.transcript.processingSource.contentHash}`} source={state.transcript.processingSource} ports={processing}/>}</>
+        <><TranscriptLines transcript={state.transcript} />{state.transcript.processingSource===null||state.transcript.processingSource===undefined?null:<ProcessingHealth key={`${state.transcript.processingSource.sourceId}:${state.transcript.processingSource.revision}:${state.transcript.processingSource.contentHash}`} source={state.transcript.processingSource} ports={processing} enabled={epoch!==null} recordId={callSessionId} privacyKey={epoch} {...(workContexts===undefined?{}:{workContexts})}/>}</>
       ) : null}
     </details>
   );
@@ -219,8 +224,10 @@ export function CallHistory({
   firmId,
   timeZone = null,
   ports = registryHistoryPorts(),
+  workContexts,
 }: {
   readonly firmId: string;
+  readonly workContexts?:readonly EvidenceWorkIdentity[];
   /** The firm's zone, for a corrected callback's day and time. */
   readonly timeZone?: string | null;
   readonly ports?: CallHistoryPorts | null;
@@ -417,7 +424,7 @@ export function CallHistory({
             {call.summary === undefined ? null : <CallSummaryBlock summary={call.summary} />}
             <ProcessingRecordHealth key={`processing:${call.sessionId}`} kind="call_session" recordId={call.sessionId}/>
             {call.hasTranscript === true && ports?.transcript !== undefined ? (
-              <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} />
+              <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} {...(workContexts===undefined?{}:{workContexts})}/>
             ) : null}
           </li>
     );

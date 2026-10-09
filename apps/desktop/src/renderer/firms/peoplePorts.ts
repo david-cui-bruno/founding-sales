@@ -1,3 +1,4 @@
+import {evidenceReviewPorts} from "./evidenceReviewPorts.ts";
 import type {ProcessingPorts} from './ProcessingHealth.tsx';
 import type { ContextPorts } from "./SourceContexts.tsx";
 import type { EndpointPorts, EndpointEditingPorts } from "./Endpoints.tsx";
@@ -126,4 +127,4 @@ export const sourceContextPorts: ContextPorts = {
   },
 };
 
-export const processingPorts:ProcessingPorts={health:async input=>await api().read("crm.processingHealth",input),request:async source=>{await api().command("crm.processingRequest",{source});}};
+export const processingPorts:ProcessingPorts={evidence:evidenceReviewPorts,health:async input=>await api().read("crm.processingHealth",input),request:async source=>{await api().command("crm.processingRequest",{source});}};

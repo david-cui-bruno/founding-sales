@@ -448,3 +448,88 @@ it.each(['crm.selectedAttachmentCommit','crm.selectedAttachmentAnalyze','crm.sel
  await expect(answerOperation(operationHandlers(deps),'command',name,{...input,path:'/arbitrary',commandId:ITEM_ID})).rejects.toThrow();
  expect(command).not.toHaveBeenCalled();
 });
+it('reads bounded current and reviewed evidence through a closed authenticated source operation',async()=>{
+ const deps=hosts();
+ const source={workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note' as const,revision:1,contentHash:'a'.repeat(64),locator:null};
+ const result={source:{...source,speaker:null,occurredAt:null,observedAt:'2026-10-09T00:00:00Z',completeness:'selected_excerpt',availability:'available'},claims:[],reviewedHistory:[],nextAfterReviewedAnchorId:null,nextAfterClaimId:null,projection:{scope:'bounded_source_page',counts:{current:0,reviewedHistory:0,confirmed:0,dismissed:0,corrected:0,unreviewed:0,reviewRequired:0},truncated:false,revisionFingerprint:'b'.repeat(64)}};
+ deps.api.read=async(path,parse,input)=>{expect(path).toBe('/crm/evidence/read');expect(input).toEqual({source,limit:50});return {ok:true,value:parse(result)};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.evidenceRead',{source,limit:50})).toEqual(result);
+});
+it('confirms only an exact reviewed claim and returns a body-free dated decision identity through the main host',async()=>{
+ const deps=hosts();
+ const input={source:{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null},claimId:ITEM_ID,claimRevision:1,claimHash:'b'.repeat(64),contextHash:'c'.repeat(64),expectedDecisionRevision:0,action:'confirm'};
+ deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/crm/evidence/decide');expect(payload).toEqual(input);return {ok:true,value:parse({anchorId:ITEM_ID,decisionRevision:1})};};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.evidenceDecide',input)).toEqual({anchorId:ITEM_ID,decisionRevision:1});
+});
+it('discovers body-free decision history for an actual unavailable source through a closed read',async()=>{
+ const deps=hosts();const input={kind:'selected_note',sourceId:ITEM_ID,limit:50};
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/evidence/decision/history/list');expect(payload).toEqual(input);return {ok:true,value:parse({anchors:[{anchorId:ITEM_ID,currentDecisionRevision:2,basis:'deleted_redacted'}],nextAfterId:null})};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.evidenceHistoryList',input)).toEqual({anchors:[{anchorId:ITEM_ID,currentDecisionRevision:2,basis:'deleted_redacted'}],nextAfterId:null});
+});
+it('reads dated redacted decisions without source dates or removed correction text through the main host',async()=>{
+ const deps=hosts();const input={kind:'selected_note',sourceId:ITEM_ID,anchorId:FIRM_ID,limit:50};
+ const result={anchorId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',availability:'deleted',originalEventAt:null,originalObservedAt:null,currentDecisionRevision:2,basis:'deleted_redacted',decisions:[{revision:2,action:'correct',decisionAt:'2026-10-09T10:00:00Z',correctedInterpretation:null,rationale:null,redacted:true}],nextBeforeRevision:null};
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/evidence/decision/history/read');expect(payload).toEqual(input);return {ok:true,value:parse(result)};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.evidenceHistoryRead',input)).toEqual(result);
+});
+it('discovers protected conflict groups by an actual source identity without accepting arbitrary IDs or paths',async()=>{
+ const deps=hosts();const input={kind:'selected_note',sourceId:ITEM_ID,limit:50};
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/evidence/conflict/list');expect(payload).toEqual(input);return {ok:true,value:parse({conflicts:[{conflictId:FIRM_ID,revision:2,state:'open'}],nextAfterId:null})};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.evidenceConflictList',input)).toEqual({conflicts:[{conflictId:FIRM_ID,revision:2,state:'open'}],nextAfterId:null});
+});
+it('reads an exact conflict group with dated membership history through the authenticated host',async()=>{
+ const deps=hosts();const other='22222222-2222-4222-8222-222222222222';
+ const claim={claimId:ITEM_ID,claimRevision:1,claimHash:'a'.repeat(64),context:{personId:null,firmIds:[FIRM_ID],relationships:[],review:'current'},kind:'need',interpretation:'Needs intake triage',status:'inferred',quote:'Original words',source:{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:1,contentHash:'b'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-09T00:00:00Z',completeness:'selected_excerpt',availability:'available'}};
+ const result={conflictId:FIRM_ID,revision:1,state:'open',resolution:null,preferredAnchorId:null,decidedAt:'2026-10-09T10:00:00Z',rationale:null,members:[{...claim,anchorId:ITEM_ID},{...claim,claimId:other,anchorId:other}],history:[{revision:1,state:'open',resolution:null,preferredAnchorId:null,decidedAt:'2026-10-09T10:00:00Z',rationale:null,memberAnchorIds:[ITEM_ID,other]}],nextAfterRevision:null};
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/evidence/conflict/read');expect(payload).toEqual({conflictId:FIRM_ID,limit:50});return {ok:true,value:parse(result)};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.evidenceConflictRead',{conflictId:FIRM_ID,limit:50})).toEqual(result);
+});
+it('resolves an exact conflict revision through the closed host without changing evidence',async()=>{
+ const deps=hosts();const input={conflictId:FIRM_ID,expectedConflictRevision:2,resolution:'keep_both',rationale:'Both accounts remain supported'};
+ deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/crm/evidence/conflict/resolve');expect(payload).toEqual(input);return {ok:true,value:parse({conflictId:FIRM_ID,revision:3})};};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.evidenceConflictResolve',input)).toEqual({conflictId:FIRM_ID,revision:3});
+});
+it('saves only exact distinct conflict member targets through the registered command',async()=>{
+ const deps=hosts();const member={source:{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null},claimId:ITEM_ID,claimRevision:1,claimHash:'b'.repeat(64),contextHash:'c'.repeat(64),expectedDecisionRevision:0};const input={expectedConflictRevision:0,members:[member,{...member,claimId:FIRM_ID}]};
+ deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/crm/evidence/conflict/save');expect(payload).toEqual(input);return {ok:true,value:parse({conflictId:FIRM_ID,revision:1})};};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.evidenceConflictSave',input)).toEqual({conflictId:FIRM_ID,revision:1});
+});
+it('discovers existing source dependent work without inventing task identities',async()=>{
+ const deps=hosts();const input={kind:'selected_note',sourceId:ITEM_ID,limit:50};const result={works:[{work:{kind:'call_task',id:FIRM_ID},version:'2026-10-09T00:00:00Z',status:'done',completedAt:'2026-10-09T11:00:00Z',dependencyCount:1,reviewRequired:true}],nextAfter:null};
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/evidence/work/list');expect(payload).toEqual(input);return {ok:true,value:parse(result)};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.evidenceWorkList',input)).toEqual(result);
+});
+it('reads immutable actual work completion separately from changed evidence dependency flags',async()=>{
+ const deps=hosts();const input={work:{kind:'call_task',id:FIRM_ID},limit:50};const result={work:{kind:'call_task',id:FIRM_ID,version:'2026-10-09T00:00:00Z',status:'done',completedAt:'2026-10-09T11:00:00Z'},dependencies:[{dependencyId:ITEM_ID,anchorId:ITEM_ID,source:{kind:'selected_note',sourceId:ITEM_ID,workspaceId:FIRM_ID,revision:1,contentHash:'a'.repeat(64),locator:null},observedDecisionRevision:1,observedWorkVersion:'2026-10-09T00:00:00Z',reviewRequired:true,reason:'source_deleted',revision:2}],nextAfterDependencyId:null};
+ deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/crm/evidence/work/read');expect(payload).toEqual(input);return {ok:true,value:parse(result)};};
+ expect(await answerOperation(operationHandlers(deps),'read','crm.evidenceWorkRead',input)).toEqual(result);
+});
+it('binds an exact interpretation to a real task version without changing the task status',async()=>{
+ const deps=hosts();const input={source:{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null},claimId:ITEM_ID,claimRevision:1,claimHash:'b'.repeat(64),contextHash:'c'.repeat(64),expectedDecisionRevision:0,work:{kind:'meeting_task',id:FIRM_ID,expectedVersion:'2'}};
+ deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/crm/evidence/work/bind');expect(payload).toEqual(input);return {ok:true,value:parse({dependencyId:ITEM_ID,revision:1})};};
+ expect(await answerOperation(operationHandlers(deps),'command','crm.evidenceWorkBind',input)).toEqual({dependencyId:ITEM_ID,revision:1});
+});
+it('all evidence operations reject path injection, malformed output and changed authenticated identity before publishing',async()=>{
+ const source={workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null};const member={source,claimId:ITEM_ID,claimRevision:1,claimHash:'b'.repeat(64),contextHash:'c'.repeat(64),expectedDecisionRevision:0};
+ const cases=[
+  ['read','crm.evidenceRead',{source,limit:50}],
+  ['command','crm.evidenceDecide',{...member,action:'confirm'}],
+  ['read','crm.evidenceHistoryList',{kind:'selected_note',sourceId:ITEM_ID,limit:50}],
+  ['read','crm.evidenceHistoryRead',{kind:'selected_note',sourceId:ITEM_ID,anchorId:ITEM_ID,limit:50}],
+  ['read','crm.evidenceConflictList',{kind:'selected_note',sourceId:ITEM_ID,limit:50}],
+  ['read','crm.evidenceConflictRead',{conflictId:ITEM_ID,limit:50}],
+  ['command','crm.evidenceConflictSave',{expectedConflictRevision:0,members:[member,{...member,claimId:FIRM_ID}]}],
+  ['command','crm.evidenceConflictResolve',{conflictId:ITEM_ID,expectedConflictRevision:1,resolution:'keep_both'}],
+  ['read','crm.evidenceWorkList',{kind:'selected_note',sourceId:ITEM_ID,limit:50}],
+  ['read','crm.evidenceWorkRead',{work:{kind:'call_task',id:ITEM_ID},limit:50}],
+  ['command','crm.evidenceWorkBind',{...member,work:{kind:'meeting_task',id:ITEM_ID,expectedVersion:'1'}}],
+ ] as const;
+ for(const [kind,name,input] of cases){
+  const malformed=hosts();malformed.api.read=async(_path,parse)=>({ok:true,value:parse({sensitiveUnexpectedBody:'must not publish'})});malformed.api.command=async(_path,_input,parse)=>({ok:true,value:parse({sensitiveUnexpectedBody:'must not publish'})});
+  await expect(answerOperation(operationHandlers(malformed),kind,name,input)).rejects.toThrow();
+  const changed=hosts();let generation=0;changed.recordings.identity.current=()=>generation;changed.api.read=async()=>{generation++;return {ok:false,reason:'offline',offline:true};};changed.api.command=async()=>{generation++;return {ok:false,reason:'offline',offline:true};};
+  await expect(answerOperation(operationHandlers(changed),kind,name,input)).rejects.toThrow('identity_changed');
+  const injected=hosts();const read=vi.fn(),command=vi.fn();injected.api.read=read;injected.api.command=command;
+  await expect(answerOperation(operationHandlers(injected),kind,name,{...input,path:'/unrelated',clientVersion:'forged'})).rejects.toThrow();expect(read).not.toHaveBeenCalled();expect(command).not.toHaveBeenCalled();
+ }
+});

@@ -1072,7 +1072,7 @@ describe("selected conversation imports", () => {
       assignedUserId: fixture.alpha.salesperson.userId,
     });
     const personId = await seedContact(fixture, {
-      firmId: firmA,
+      firmId: firmB,
       fullName: "Historical person",
     });
     await post("/crm/people/bridge", command({ contactIds: [personId] }));
@@ -1113,6 +1113,8 @@ describe("selected conversation imports", () => {
       "/crm/relationships/context/save",
       command({ personId, relationshipId, relationshipRevision: 1, evidence }),
     );
+    // Source captured under B; its current legacy pointer later moves to A.
+    await fixture.db.query("UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2", [fixture.alpha.workspaceId, personId, firmA]);
     await withTransaction(fixture.db, () =>
       reassignFirm(
         repositoryContext(
