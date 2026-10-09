@@ -135,7 +135,7 @@ CREATE TABLE crm_ask_financial_receipts (
  job_id uuid NOT NULL,
  fencing_token bigint NOT NULL CHECK(fencing_token>0),
  purpose_revision integer NOT NULL CHECK(purpose_revision>0),
- purpose_snapshot jsonb NOT NULL CHECK(jsonb_typeof(purpose_snapshot)='object'),
+ purpose_snapshot jsonb NOT NULL,
  config_fingerprint text NOT NULL CHECK(config_fingerprint ~ '^[a-f0-9]{64}$'),
  evaluation_fingerprint text NOT NULL CHECK(evaluation_fingerprint ~ '^[a-f0-9]{64}$'),
  authorization_fingerprint text NOT NULL CHECK(authorization_fingerprint ~ '^[a-f0-9]{64}$'),
@@ -217,3 +217,14 @@ END;
 $$;
 CREATE TRIGGER crm_ask_window_parent_lock BEFORE INSERT ON crm_ask_request_windows FOR EACH ROW EXECUTE FUNCTION lock_crm_ask_window_parent();
 CREATE CONSTRAINT TRIGGER crm_ask_window_current_request AFTER INSERT ON crm_ask_request_windows DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_crm_ask_window();
+
+CREATE FUNCTION guard_crm_ask_financial_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF (to_jsonb(NEW)-'dispatch_state') IS DISTINCT FROM (to_jsonb(OLD)-'dispatch_state')
+ OR NEW.dispatch_state<>OLD.dispatch_state AND NOT (OLD.dispatch_state='reserved' AND NEW.dispatch_state IN ('calling','released') OR OLD.dispatch_state='calling' AND NEW.dispatch_state IN ('settled','unknown_acceptance')) THEN
+  RAISE EXCEPTION USING ERRCODE='23514',CONSTRAINT='crm_ask_financial_immutable',MESSAGE='Ask priced financial proof is immutable';
+ END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER crm_ask_financial_immutable AFTER UPDATE ON crm_ask_financial_receipts DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_crm_ask_financial_immutable();
