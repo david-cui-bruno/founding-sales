@@ -23,12 +23,29 @@ it('includes a privately saved unanswered question in firm deletion before any a
     const imported = await post('/crm/imports/commit', command({ ...selection, personId: null, firmId, importKey: randomUUID(), previewHash: (importedPreview.body as { previewHash: string }).previewHash, parserVersion: 'selected-v1' }));
     expect(imported.status).toBe(200);
     const sourceId = (imported.body as { result: { sourceId: string } }).result.sourceId;
-    const requested = await post('/ask/answers/request', command({ question: 'Who handles maintenance triage?', scope: { sources: [{ workspaceId: fixture.alpha.workspaceId, sourceId, kind: 'selected_note', revision: 1, contentHash: createHash('sha256').update(text).digest('hex'), locator: null }] } }));
+    const question = 'Maintenance triage';
+    const requestCommand = command({ question, scope: { sources: [{ workspaceId: fixture.alpha.workspaceId, sourceId, kind: 'selected_note', revision: 1, contentHash: createHash('sha256').update(text).digest('hex'), locator: null }] } });
+    const requested = await post('/ask/answers/request', requestCommand);
     expect(requested.status).toBe(200);
     expect(requested.body).toMatchObject({ result: { state: 'unavailable' } });
+    const requestId = (requested.body as { result: { requestId: string } }).result.requestId;
+    const beforeDeletion = await post('/ask/answers/read', { requestId });
+    expect(beforeDeletion.status).toBe(200);
+    expect(beforeDeletion.body).toMatchObject({ question, fallback: { passages: [{ text }] }, answer: null });
     const deletionPreview = await post('/retention/deletions/preview', command({ targetKind: 'firm', firmId }));
     expect(deletionPreview.status).toBe(200);
     expect(deletionPreview.body).toMatchObject({ result: { redacts: { crm_ask_requests: 1 } } });
+    const shown = (deletionPreview.body as { result: { requestId: string; previewHash: string } }).result;
+    const committed = await post('/retention/deletions/commit', command({ requestId: shown.requestId, previewHash: shown.previewHash }));
+    expect(committed.status).toBe(200);
+    const afterDeletion = await post('/ask/answers/read', { requestId });
+    expect(afterDeletion.status).toBe(200);
+    expect(afterDeletion.body).toMatchObject({ state: 'deleted', reason: 'deleted', question: null, fallback: null, answer: null });
+    const replayed = await post('/ask/answers/request', requestCommand);
+    expect(replayed.status).toBe(200);
+    expect(replayed.body).toMatchObject({ replayed: true, result: { requestId, version: 1, state: 'unavailable' } });
+    expect(JSON.stringify(replayed.body)).not.toContain(question);
+    expect(JSON.stringify(replayed.body)).not.toContain(text);
   } finally {
     await fixture.stop();
   }
