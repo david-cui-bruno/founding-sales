@@ -34,7 +34,7 @@ it('upgrades67 to68 without replacing legacy notification history, and accepts a
   [seeded.alpha.workspaceId, attemptId, seeded.alpha.salesperson.userId, deviceId, legacyEvent, `meeting:${original.meetingId}`,
     JSON.stringify({ kind: 'meeting', firmId: crm.alpha.firmId, meetingId: original.meetingId, startsAt: '2026-09-15T03:30:00.000Z' }), now]);
 
-  expect((await applyMigrations(database.session)).map(result => result.version)).toEqual([68]);
+  expect((await applyMigrations(database.session, { throughVersion: 68 })).map(result => result.version)).toEqual([68]);
   expect(await readAppliedSchemaVersion(database.session)).toBe(68);
   expect(await acknowledgeNotification(context, { attemptId, deviceId, now })).toBeNull();
   const history = await readActionableNotifications(context, { deviceId, now });
@@ -47,5 +47,5 @@ it('upgrades67 to68 without replacing legacy notification history, and accepts a
   if (current === undefined) throw new Error('current booking candidate missing');
   expect(await claimNotification(context, { deviceId, eventKey: current.eventKey, now })).toMatchObject({ target: { bookingUid: 'call-upgrade-current' }, receipt: { status: 'attempting', nativeShownAt: null } });
   expect(await claimNotification(context, { deviceId, eventKey: current.eventKey, now })).toBeNull();
-  expect(await applyMigrations(database.session)).toEqual([]);
+  expect(await applyMigrations(database.session, { throughVersion: 68 })).toEqual([]);
 });

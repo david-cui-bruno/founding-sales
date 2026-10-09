@@ -1,9 +1,9 @@
 import { useCallback,useEffect,useReducer } from 'react';
-import type { MeetingDraftEdit,MeetingFollowThroughView } from '@fss/contracts';
+import type { MeetingDraftEdit,MeetingFollowThroughViewV2 } from '@fss/contracts';
 import { useSessionEpoch } from '../app/drafts.tsx';
 export interface RecapForm { subject:string;body:string;planId:string;expectedPlanVersion:number;expectedDraftVersion:number; }
 export interface FollowThroughEntry {
-  open:boolean;view:MeetingFollowThroughView|null;form:RecapForm|null;editingUi:boolean;
+  open:boolean;view:MeetingFollowThroughViewV2|null;form:RecapForm|null;editingUi:boolean;
   pending:(MeetingDraftEdit&{commandId:string})|null;busy:boolean;loading:boolean;generation:number;message:string|null;unavailable:boolean;gone:boolean;
 }
 let current:{epoch:object|null;entries:Map<string,FollowThroughEntry>}={epoch:null,entries:new Map()};

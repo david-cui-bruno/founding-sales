@@ -3,6 +3,7 @@ import { saveMeetingNotesSchema, type MeetingNoteItem, type MeetingNotesRevision
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { noDefiniteAnswer } from '../today/afterCallModel.ts';
+import { MeetingQuickReview } from './MeetingQuickReview.tsx';
 import { MeetingDebrief } from './MeetingDebrief.tsx';
 import { DeadlineEditor, MeetingTaskControls, type TaskChanger } from './MeetingTaskControls.tsx';
 import { notesDraft, outcomeEntry, useOutcomesMemory } from './outcomesMemory.ts';
@@ -109,6 +110,7 @@ export function MeetingOutcomes({ meetingId, ports = outcomesPorts, actionsEnabl
         {view.holds.includes('analysis_disabled') ? <p className="text-xs text-muted-foreground">Analysis is off. You can still save your notes. Enable meeting analysis in Calling & calendar when ready.</p> : null}
         {view.holds.includes('merged_notes_review') ? <p className="text-sm text-muted-foreground">Bookings were combined. Review the merged notes and speaker mappings, then save before analysis continues.</p> : null}
         {view.overview === '' ? null : <p className="text-sm leading-relaxed">{view.overview}</p>}
+        <MeetingQuickReview view={view} draft={draft} enabled={actionsEnabled && !entry.gone && !entry.busy && entry.pending === null} onChange={value => { entry.draft = value; touch(); }} />
         <MeetingDebrief draft={draft} busy={entry.busy} pending={entry.pending !== null && !entry.busy} enabled={actionsEnabled && !entry.gone} onChange={value => { entry.draft = value; touch(); }} onSave={() => { void save(); }} onDiscard={() => { entry.draft = notesDraft(view); entry.message = null; touch(); }} />
         {entry.message === null ? null : <p role="status" className="text-xs text-muted-foreground">{entry.message}</p>}
         {draft.expectedRevision !== view.notes.revision ? <div className="space-y-2"><p className="whitespace-pre-wrap text-xs text-muted-foreground">Latest saved notes: {view.notes.debrief || '(empty)'}</p><Button size="sm" variant="outline" disabled={entry.busy} onClick={() => { entry.draft = notesDraft(view); entry.message = null; touch(); }}>Use latest saved notes</Button></div> : null}

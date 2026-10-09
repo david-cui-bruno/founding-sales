@@ -1,3 +1,4 @@
+import {verifyMeetingPlanApproval} from './followThroughApproval.ts';
 import { meetingDeliveryHistory } from './followThroughHistory.ts';
 import { meetingPlanInterruption } from './followThroughLifecycle.ts';
 import { recapIsStale, nextMeetingFollowThroughAction } from './followThroughSchedule.ts';
@@ -14,6 +15,8 @@ import type { MeetingResult } from './outcomeTypes.ts';
 export { resolveMeetingFollowThroughScope } from './followThroughScope.ts';
 
 async function planAuthority(context: RepositoryContext, plan: FollowThroughRow, at: string): Promise<MeetingResult<{ planId: string; planVersion: number }>> {
+  const approvalReason = await verifyMeetingPlanApproval(context,plan,await currentMeetingDraft(context,plan));
+  if (approvalReason !== null) return {ok:false,reason:approvalReason};
   if (plan.contact_id === null || plan.owner_user_id === null || plan.sequence_version_id === null) return { ok: false, reason: 'recipient_unresolved' };
   if (['cancelled', 'completed', 'needs_review'].includes(plan.status) || plan.blockers.length > 0) return { ok: false, reason: 'plan_held' };
   if (plan.editing) return { ok: false, reason: 'editing' };

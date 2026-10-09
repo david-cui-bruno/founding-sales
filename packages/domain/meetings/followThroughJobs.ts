@@ -1,3 +1,4 @@
+import {verifyMeetingPlanApproval} from './followThroughApproval.ts';
 import { meetingDeliveryHistory } from './followThroughHistory.ts';
 export { meetingDeliveryHistory } from './followThroughHistory.ts';
 import { composeBodyForWorkspace } from '../outbound/footer.ts';
@@ -46,6 +47,8 @@ export async function runMeetingFollowThrough(context: RepositoryContext, input:
   const interruption = await meetingPlanInterruption(context, plan);
   if (interruption !== null) { await invalidateMeetingFollowThrough(context, { meetingId: plan.meeting_id, reason: interruption, eventId: plan.id }); return; }
   if (requiresExplicitMeetingReview(plan.blockers)) return;
+  const approvalReason = await verifyMeetingPlanApproval(context,plan,await currentMeetingDraft(context,plan));
+  if (approvalReason !== null) return;
   if (plan.blockers.includes('opportunity_required')) {
     // The current prerequisite was rechecked above; clear only this recoverable fact.
     await context.db.query("UPDATE meeting_follow_through SET blockers=$3::jsonb,status='draft',pause_observed_at=COALESCE(pause_observed_at,$4),version=version+1,next_wake_at=$4,updated_at=$4 WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, plan.id, JSON.stringify(plan.blockers.filter(r => r !== 'opportunity_required')), input.at]);

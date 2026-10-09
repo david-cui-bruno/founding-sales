@@ -1,9 +1,11 @@
-import { requiresExplicitMeetingReview } from './followThroughLifecycle.ts';
+import {readApprovedAnswerBlocks} from '../outreach/facts.ts';
+import {meetingApprovalHash,meetingPlannedMessages,meetingPlanSources,verifyMeetingPlanApproval} from './followThroughApproval.ts';
+import { meetingPlanInterruption,requiresExplicitMeetingReview } from './followThroughLifecycle.ts';
 import { meetingDeliveryHistory } from './followThroughHistory.ts';
 import { resolveMeetingFollowThroughScope } from './followThroughScope.ts';
 import { stopEnrollments } from '../sequences/enrollments.ts';
-import { hasOptOutLink, meetingDraftEditSchema, meetingFollowThroughSettingSchema, meetingFollowThroughViewSchema,
-  type MeetingDraftEdit, type MeetingFollowThroughView, type MeetingOutcomesView } from '@fss/contracts';
+import { hasOptOutLink, meetingDraftEditSchema, meetingFollowThroughSettingSchema, meetingFollowThroughViewV2Schema,
+  type MeetingDraftEdit, type MeetingFollowThroughViewV2, type MeetingOutcomesView } from '@fss/contracts';
 import { holdPreparedMeetingFence } from './followThroughDelivery.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
@@ -50,7 +52,7 @@ export async function lockMeetingFollowThrough(context: RepositoryContext, meeti
   return view === null ? { ok: false, reason: 'meeting_unknown' } : { ok: true, value: view };
 }
 
-export async function readMeetingFollowThrough(context: RepositoryContext, input: { meetingId: string }): Promise<MeetingFollowThroughView | null> {
+export async function readMeetingFollowThrough(context: RepositoryContext, input: { meetingId: string }): Promise<MeetingFollowThroughViewV2 | null> {
   const outcomes = await readMeetingOutcomes(context, input);
   if (outcomes === null) return null;
   const workspace = context.scope.workspaceId;
@@ -58,6 +60,9 @@ export async function readMeetingFollowThrough(context: RepositoryContext, input
   const draft = plan === undefined ? null : await currentMeetingDraft(context, plan);
   const sendingPaused = await meetingSendingPaused(context, plan?.owner_user_id);
   const blockers = [...(plan?.blockers ?? [])];
+  const approvalReason = plan === undefined ? null : await verifyMeetingPlanApproval(context,plan,draft);
+  const approvalRequired = approvalReason !== null;
+  if (approvalReason !== null) blockers.push(approvalReason);
   if (plan !== undefined && plan.source_hash !== outcomes.sourceHash) blockers.push('source_changed');
   if (plan?.editing === true) blockers.push('editing');
   if (sendingPaused) blockers.push('sending_paused');
@@ -65,13 +70,13 @@ export async function readMeetingFollowThrough(context: RepositoryContext, input
   const sent = plan === undefined ? [] : await meetingDeliveryHistory(context, plan.id);
   const final = await readMeetingOutcomes(context, input);
   if (final === null || final.firmId !== outcomes.firmId || final.sourceHash !== outcomes.sourceHash) return null;
-  return meetingFollowThroughViewSchema.parse({ meetingId: input.meetingId, firmId: outcomes.firmId, contactId: plan?.contact_id ?? null,
+  return meetingFollowThroughViewV2Schema.parse({ meetingId: input.meetingId, firmId: outcomes.firmId, contactId: plan?.contact_id ?? null,
     planId: plan?.id ?? null, version: plan?.version ?? 0, sourceHash: plan?.source_hash ?? outcomes.sourceHash, notesRevision: plan?.notes_revision ?? outcomes.notes.revision,
-    sequenceVersionId: plan?.sequence_version_id ?? null, status: plan?.status === 'cancelled' || plan?.status === 'completed' ? plan.status : blockers.includes('source_changed') ? 'needs_review' : plan?.editing === true ? 'held' : plan?.status ?? 'draft',
+    sequenceVersionId: plan?.sequence_version_id ?? null, status: plan?.status === 'cancelled' || plan?.status === 'completed' ? plan.status : plan?.editing === true ? 'held' : (blockers.includes('source_changed') || approvalRequired) ? 'needs_review' : plan?.status ?? 'draft',
     currentDraft: draft === null ? null : { id: draft.id, version: draft.version, ordinal: draft.ordinal, subject: draft.subject, body: draft.body,
       renderedHash: draft.rendered_hash, templateVersionId: draft.template_version_id, sourceHash: draft.source_hash, materialReferences: draft.material_references,
       createdAt: draft.created_at.toISOString(), notBefore: draft.not_before.toISOString(), state: draft.state },
-    scope: plan?.scope ?? null, blockers: [...new Set(blockers)].slice(0, 30), sendingPaused, plannedSteps: steps.map(s => ({ ordinal: s.ordinal, dueAt: s.due_at.toISOString(), state: s.state })), sentMessages: sent });
+    scope: plan?.scope ?? null, approvalRequired, approvedAt: plan?.approval?.at ?? null, approvalHash: plan === undefined || draft === null ? null : await meetingApprovalHash(context,plan,draft), facts: plan?.fact_refs ?? [], plannedMessages: plan === undefined || draft === null ? [] : await meetingPlannedMessages(context,plan,draft), blockers: [...new Set(blockers)].slice(0, 30), sendingPaused, plannedSteps: steps.map(s => ({ ordinal: s.ordinal, dueAt: s.due_at.toISOString(), state: s.state })), sentMessages: sent });
 }
 
 export async function appendMeetingDraft(context: RepositoryContext, plan: FollowThroughRow, content: {
@@ -80,6 +85,7 @@ export async function appendMeetingDraft(context: RepositoryContext, plan: Follo
   const at = new Date(content.at).toISOString();
   const template = await readTemplateVersion(context, content.templateVersionId);
   if (template === null || template.approvedAt === null || template.retiredAt !== null) return { ok: false, reason: 'template_unapproved' };
+  const priorDraft = await currentMeetingDraft(context,plan);
   const composed = await composeBodyForWorkspace(context, { body: content.body, signOff: template.footerSignOff });
   if (!composed.composed) return { ok: false, reason: `presentation_${composed.reason}` };
   const references = content.materialReferences.filter(url => composed.body.includes(url));
@@ -91,11 +97,13 @@ export async function appendMeetingDraft(context: RepositoryContext, plan: Follo
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15::jsonb)`, [context.scope.workspaceId, plan.id, plan.current_draft_version + 1, content.ordinal ?? 1,
     content.subject, composed.body, renderedHash(content.subject, composed.body), content.templateVersionId, content.sourceHash, JSON.stringify(references), at,
     new Date(Date.parse(at) + RECAP_EDIT_WINDOW_MS).toISOString(), context.scope.actor.kind === 'user' ? context.scope.actor.userId : null, template.contentHash, JSON.stringify(materialTaskIds)]);
+  const changedApprovedContent = priorDraft !== null && (priorDraft.source_hash !== content.sourceHash || (priorDraft.ordinal === (content.ordinal ?? 1) && priorDraft.rendered_hash !== renderedHash(content.subject,composed.body)));
+  if (changedApprovedContent) await context.db.query("UPDATE meeting_follow_through SET approval_mode='human',approval=NULL,fact_refs='[]' WHERE workspace_id=$1 AND id=$2",[context.scope.workspaceId,plan.id]);
   await context.db.query('UPDATE meeting_follow_through SET current_draft_version=current_draft_version+1,version=version+1,editing=false,updated_at=$3 WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, plan.id, at]);
   return { ok: true, value: null };
 }
 
-export async function prepareMeetingRecap(context: RepositoryContext, input: { meetingId: string; expectedSourceHash: string; at: string }): Promise<MeetingResult<MeetingFollowThroughView>> {
+export async function prepareMeetingRecap(context: RepositoryContext, input: { meetingId: string; expectedSourceHash: string; at: string }): Promise<MeetingResult<MeetingFollowThroughViewV2>> {
   const locked = await lockMeetingFollowThrough(context, input.meetingId);
   if (!locked.ok) return locked;
   const outcomes = locked.value, workspace = context.scope.workspaceId;
@@ -132,6 +140,13 @@ export async function prepareMeetingRecap(context: RepositoryContext, input: { m
     const appended = await appendMeetingDraft(context, plan, { ...content, ...(sameSource ? { subject: draft.subject, body: presentation.body, materialReferences: draft.material_references } : {}), templateVersionId: template.id, sourceHash: outcomes.sourceHash, at: input.at });
     if (!appended.ok) blockers.push(appended.reason);
   }
+  const refreshedPlan = (await readMeetingPlan(context,plan.id))!;
+  const refreshedDraft = await currentMeetingDraft(context,refreshedPlan);
+  if (refreshedDraft !== null && refreshedPlan.approval_mode === 'human' && refreshedPlan.approval === null) {
+    const sources = await meetingPlanSources(context,refreshedPlan,refreshedDraft);
+    if (sources.ok) await context.db.query('UPDATE meeting_follow_through SET fact_refs=$3::jsonb WHERE workspace_id=$1 AND id=$2',[workspace,plan.id,JSON.stringify(sources.value.facts)]);
+    else blockers.push(sources.reason);
+  }
   const paused = await meetingSendingPaused(context, plan.owner_user_id);
   await context.db.query(`UPDATE meeting_follow_through SET source_hash=$3,notes_revision=$4,analysis_id=$5,blockers=$6::jsonb,status=$7,
     pause_observed_at=CASE WHEN $8 THEN COALESCE(pause_observed_at,$9) ELSE pause_observed_at END,updated_at=$9,
@@ -141,7 +156,7 @@ export async function prepareMeetingRecap(context: RepositoryContext, input: { m
   return { ok: true, value: (await readMeetingFollowThrough(context, input))! };
 }
 
-export async function editMeetingRecap(context: RepositoryContext, input: MeetingDraftEdit, at?: string): Promise<MeetingResult<MeetingFollowThroughView>> {
+export async function editMeetingRecap(context: RepositoryContext, input: MeetingDraftEdit, at?: string): Promise<MeetingResult<MeetingFollowThroughViewV2>> {
   const parsed = meetingDraftEditSchema.safeParse(input);
   if (!parsed.success || context.scope.actor.kind !== 'user') return { ok: false, reason: 'invalid_input' };
   const located = await readMeetingPlan(context, input.planId);
@@ -152,8 +167,25 @@ export async function editMeetingRecap(context: RepositoryContext, input: Meetin
   if (plan === undefined) return { ok: false, reason: 'meeting_unknown' };
   const draft = await currentMeetingDraft(context, plan);
   if (plan.version !== input.expectedPlanVersion || draft?.version !== input.expectedDraftVersion) return { ok: false, reason: 'draft_changed' };
-  if ((draft.state === 'submitted' || draft.state === 'sent') && input.action !== 'cancel') return { ok: false, reason: 'delivery_in_progress' };
+  if ((draft.state === 'submitted' || draft.state === 'sent') && input.action !== 'cancel' && !(input.action === 'approve' && draft.state === 'sent')) return { ok: false, reason: 'delivery_in_progress' };
   if (plan.status === 'cancelled' || plan.status === 'completed') return { ok: false, reason: 'plan_finished' };
+  if (input.action === 'approve') {
+    if (plan.editing || (draft.state !== 'ready' && draft.state !== 'sent')) return {ok:false,reason:'draft_not_ready'};
+    if (draft.state === 'sent' && !(await meetingDeliveryHistory(context,plan.id)).some(d=>d.ordinal===draft.ordinal && d.messageId===(draft.manual_message_id??draft.outbound_message_id))) return {ok:false,reason:'delivery_in_progress'};
+    if (plan.source_hash !== locked.value.sourceHash) return {ok:false,reason:'source_changed'};
+    if (requiresExplicitMeetingReview(plan.blockers)) return {ok:false,reason:'plan_held'};
+    const interruption = await meetingPlanInterruption(context,plan);
+    if (interruption !== null && interruption !== 'opportunity_required') return {ok:false,reason:interruption};
+    if (draft.state !== 'sent' && plan.fact_refs.length > 0) { const facts = await readApprovedAnswerBlocks(context,plan.fact_refs); if (!facts.ok) return {ok:false,reason:`facts_${facts.reason}`}; }
+    const sources = await meetingPlanSources(context,plan,draft); if (!sources.ok) return sources;
+    if (await meetingApprovalHash(context,plan,draft) !== input.expectedApprovalHash) return {ok:false,reason:'approval_changed'};
+    const now = at ?? new Date().toISOString();
+    const messages = await meetingPlannedMessages(context,plan,draft);
+    const approval = {sourceHash:plan.source_hash,sequenceVersionId:plan.sequence_version_id!,templates:sources.value.templates,facts:sources.value.facts,draftHashes:{...plan.approval?.draftHashes,[String(draft.ordinal)]:draft.rendered_hash,...Object.fromEntries(messages.map(m=>[String(m.ordinal),renderedHash(m.subject,m.body)]))},at:now};
+    await context.db.query("UPDATE meeting_follow_through SET approval_mode='human',approval=$3::jsonb,fact_refs=$4::jsonb,version=version+1,next_wake_at=$5,updated_at=$5 WHERE workspace_id=$1 AND id=$2",[context.scope.workspaceId,plan.id,JSON.stringify(approval),JSON.stringify(sources.value.facts),now]);
+    await recordCrmAuditEvent(context,{action:'meeting.plan_approved',subjectKind:'meeting',subjectId:plan.meeting_id,detail:{planId:plan.id,draftVersion:draft.version,sourceHash:plan.source_hash,sequenceVersionId:plan.sequence_version_id,renderedHash:draft.rendered_hash,factRefs:sources.value.facts.map(f=>({id:f.id,version:f.version}))}});
+    return {ok:true,value:(await readMeetingFollowThrough(context,{meetingId:plan.meeting_id}))!};
+  }
   await holdPreparedMeetingFence(context, plan);
   if (input.action === 'cancel' && plan.enrollment_id !== null) await stopEnrollments(context, { enrollmentId: plan.enrollment_id, reason: 'admin_stop', cancelReason: 'terminal_stop' });
   const now = at ?? (await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();

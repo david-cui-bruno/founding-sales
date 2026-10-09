@@ -4,13 +4,14 @@ import {
   matchMeetingCommandSchema,
   meetingAttendanceSetSchema,
   meetingBriefResponseSchema,
+  meetingPreparationResponseSchema,
   meetingMatchedSchema,
   setMeetingAttendanceCommandSchema,
   unmatchedMeetingsResponseSchema,
   uuid,
 } from '@fss/contracts';
 import { setMeetingAttendance } from '@fss/domain/meetings/attendance.ts';
-import { readMeetingBrief } from '@fss/domain/meetings/brief.ts';
+import { readMeetingBrief, readMeetingPreparation } from '@fss/domain/meetings/brief.ts';
 import { listFirmMeetings, listUnmatchedMeetings, matchMeetingToFirm, readFirmStageSuggestion } from '@fss/domain/meetings/match.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
@@ -90,9 +91,12 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
   if (request.path === '/meetings/brief') {
     const meetingId = uuid.safeParse(request.query.get('meetingId') ?? '');
     if (!meetingId.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
-    const brief = await readMeetingBrief(scoped.context, meetingId.data, { includeMeetingTasks: request.query.getAll('include').includes('meeting_tasks') });
+    const version = request.query.get('version');
+    if (version !== null && version !== '1' && version !== '2') return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const read = version === '2' ? readMeetingPreparation : readMeetingBrief;
+    const brief = await read(scoped.context, meetingId.data, { includeMeetingTasks: request.query.getAll('include').includes('meeting_tasks') });
     if (brief === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
-    return { status: 200, body: meetingBriefResponseSchema.parse(brief) };
+    return { status: 200, body: version === '2' ? meetingPreparationResponseSchema.parse(brief) : meetingBriefResponseSchema.parse(brief) };
   }
   if (request.path === '/meetings/unmatched') {
     const meetings = await listUnmatchedMeetings(scoped.context);

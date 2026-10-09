@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { meetingBriefResponseSchema } from '@fss/contracts';
+import { meetingBriefResponseSchema, meetingPreparationResponseSchema } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
-import { readMeetingBrief } from '../../meetings/brief.ts';
+import { readMeetingBrief, readMeetingPreparation } from '../../meetings/brief.ts';
 import { answer, lines } from '../calls/analysisFixtures.ts';
 import { createApplyWorld, type ApplyWorld, type TestFirm } from '../calls/support/applyWorld.ts';
 
@@ -108,7 +108,7 @@ describe('the meeting brief, read', () => {
     const brief = await readMeetingBrief(world.salesperson(), meetingId);
     expect(brief).not.toBeNull();
     expect(meetingBriefResponseSchema.safeParse(brief).success).toBe(true);
-    const texts = (key: keyof NonNullable<typeof brief>['sections']) => brief?.sections[key].items.map(entry => entry.text);
+    const texts = (key: keyof NonNullable<typeof brief>['sections']) => brief?.sections[key]?.items.map(entry => entry.text);
     expect(brief?.meeting).toMatchObject({ title: 'Callie demo', attendeeName: 'Dana Example', locationType: 'zoom_video' });
     expect(texts('whyThisDemo')).toEqual(['Texts are a mess.', '240', 'Can you show us a demo?', 'Send the calendar link (today)']);
     expect(texts('firm')).toEqual(['Ask for Dana, the operations lead.', 'Uses AppFolio.', '240 doors.']);
@@ -120,6 +120,46 @@ describe('the meeting brief, read', () => {
     ]);
     expect(brief?.sections.objections.items.map(entry => [entry.label, entry.text])).toEqual([['price', 'It sounds expensive though.']]);
     expect(brief?.sections.commitments.items.map(entry => [entry.label, entry.text])).toEqual([['You', 'I will send you a calendar link today']]);
+  });
+
+  it('prepares a call objective and unanswered workflow questions without inventing workflow facts', async () => {
+    const brief = await readMeetingPreparation(world.salesperson(), meetingId);
+    expect(brief?.sections).toMatchObject({
+      workflow: { items: [], omitted: 0 },
+      openQuestions: { items: [{ text: 'How do maintenance requests reach your team today?', provenance: 'inferred', source: 'preparation_prompt' }], omitted: 0 },
+      objective: { items: [{ text: 'Understand the current maintenance workflow and confirm whether a next step is useful.', provenance: 'inferred', source: 'preparation_prompt' }], omitted: 0 },
+    });
+    expect(brief?.sections.conversations.items.map(entry => entry.text)).toContain('Re: Callie demo');
+    expect(meetingPreparationResponseSchema.safeParse(brief).success).toBe(true);
+  });
+
+  it('shows the quoted workflow with its source and asks for confirmation rather than treating it as current truth', async () => {
+    const supported = await world.newFirm({ opportunity: 'open' });
+    const id = await insertMeeting(supported.firmId, 'brief454workflow');
+    const run = await world.session.query<{ id: string }>(
+      "INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome) VALUES ($1,$2,1,'sweep',now(),'completed') RETURNING id",
+      [workspaceId(), supported.firmId],
+    );
+    const evidence = await world.session.query<{ id: string }>(
+      "INSERT INTO evidence_items (workspace_id, firm_id, provider, source_reference, content_hash) VALUES ($1,$2,'company_page','https://workflow.example.test/maintenance',$3) RETURNING id",
+      [workspaceId(), supported.firmId, 'e'.repeat(64)],
+    );
+    await world.session.query(
+      "INSERT INTO firm_facts (workspace_id, firm_id, run_id, evidence_id, key, block_id, quote, retrieved_at) VALUES ($1,$2,$3,$4,'maintenance_workflow','b1','Residents submit requests through the portal.',TIMESTAMPTZ '2026-10-01 12:00:00Z')",
+      [workspaceId(), supported.firmId, run.rows[0]?.id, evidence.rows[0]?.id],
+    );
+    const brief = await readMeetingPreparation(world.salesperson(), id);
+    expect(brief?.sections.workflow?.items).toEqual([{
+      label: 'Maintenance workflow', text: 'Residents submit requests through the portal.', source: 'research_fact', provenance: 'observed',
+      at: '2026-10-01T12:00:00.000Z', sourceUrl: 'https://workflow.example.test/maintenance',
+    }]);
+    expect(brief?.sections.openQuestions?.items[0]?.text).toBe('Is the recorded maintenance workflow still accurate, and where does coordination get difficult?');
+    expect(JSON.stringify(await readMeetingPreparation(world.salesperson(), meetingId))).not.toContain('Residents submit requests');
+    await world.session.query('UPDATE firm_facts SET first_party = false WHERE workspace_id=$1 AND firm_id=$2', [workspaceId(), supported.firmId]);
+    const external = await readMeetingPreparation(world.salesperson(), id);
+    expect(external?.sections.workflow?.items[0]?.label).toBe('External report · maintenance workflow');
+    expect(external?.sections.firm.items[0]?.label).toBe('External report · maintenance workflow');
+    expect(external?.sections.openQuestions?.items[0]?.text).toBe('How do maintenance requests reach your team today?');
   });
 
   it('is the same null for a colleague, another workspace, an unknown meeting and an unmatched one; an administrator reads it', async () => {

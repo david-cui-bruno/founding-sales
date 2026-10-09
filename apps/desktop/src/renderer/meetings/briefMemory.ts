@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer } from 'react';
-import type { MeetingBriefResponse } from '@fss/contracts';
+import type { MeetingPreparationResponse } from '@fss/contracts';
 import { useSessionEpoch } from '../app/drafts.tsx';
 
 /**
@@ -20,7 +20,7 @@ import { useSessionEpoch } from '../app/drafts.tsx';
 
 export interface BriefMemory {
   readonly open: Set<string>;
-  readonly briefs: Map<string, MeetingBriefResponse>;
+  readonly briefs: Map<string, MeetingPreparationResponse>;
   readonly unavailable: Set<string>;
   readonly gone: Set<string>;
   readonly generation: Map<string, number>;

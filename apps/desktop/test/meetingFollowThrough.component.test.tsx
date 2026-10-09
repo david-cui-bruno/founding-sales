@@ -40,3 +40,21 @@ it.each(['submitted','sent'] as const)('can cancel future work without editing a
   fireEvent.click(screen.getByRole('button',{name:'Cancel future follow-ups'}));
   await waitFor(()=>expect(p.edit).toHaveBeenCalledWith(expect.objectContaining({action:'cancel'})));
 });
+it('shows shared fact versions and approves the exact displayed plan only on click',async()=>{
+ const p=ports();p.read=vi.fn<FollowThroughPorts['read']>(async()=>({view:{...followThroughView(),approvalRequired:true,approvalHash:'a'.repeat(64),approvedAt:null,facts:[{id:MID,version:2,kind:'product',text:'Callie coordinates maintenance.',approvedAt:'2026-10-08T12:00:00Z',retiredAt:null}]},reason:null}));
+ p.edit=vi.fn(async()=>({view:{...followThroughView(),version:2,approvalRequired:false,approvedAt:'2026-10-08T12:00:00Z'},reason:null}));
+ render(<DraftsProvider><MeetingFollowThrough meetingId={MID} ports={p}/></DraftsProvider>);open();
+ expect(await screen.findByText('Callie coordinates maintenance.')).toBeTruthy();expect(p.edit).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:'Approve recap and plan'}));
+ await waitFor(()=>expect(p.edit).toHaveBeenCalledWith(expect.objectContaining({action:'approve',planId:followThroughView().planId,expectedPlanVersion:1,expectedDraftVersion:1})));
+ expect(await screen.findByText('Recap and follow-up plan approved.')).toBeTruthy();
+});
+it('offers approval of remaining follow-up after a recorded sent recap without offering edits',async()=>{
+ const p=ports();const base=followThroughView();
+ p.read=vi.fn<FollowThroughPorts['read']>(async()=>({view:{...base,approvalRequired:true,approvalHash:'a'.repeat(64),currentDraft:{...base.currentDraft!,state:'sent'},sentMessages:[{ordinal:1,messageId:MID,sentAt:'2026-10-08T12:00:00Z'}],plannedMessages:[{ordinal:2,subject:'Checking in',body:'Any useful next step?'}]},reason:null}));
+ p.edit=vi.fn<FollowThroughPorts['edit']>(async()=>({view:{...base,approvalRequired:false,currentDraft:{...base.currentDraft!,state:'sent'}},reason:null}));
+ render(<DraftsProvider><MeetingFollowThrough meetingId={MID} ports={p}/></DraftsProvider>);open();
+ const approve=await screen.findByRole('button',{name:'Approve remaining follow-up plan'});expect(screen.queryByRole('button',{name:'Edit recap'})).toBeNull();expect(p.edit).not.toHaveBeenCalled();
+ fireEvent.click(approve);await waitFor(()=>expect(p.edit).toHaveBeenCalledWith(expect.objectContaining({action:'approve',expectedApprovalHash:'a'.repeat(64)})));
+ expect(await screen.findByText('Remaining follow-up plan approved.')).toBeTruthy();
+});

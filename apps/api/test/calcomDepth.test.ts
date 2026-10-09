@@ -380,6 +380,16 @@ describe('Cal.com depth, over HTTP', () => {
     const brief = await get(`/meetings/brief?meetingId=${meetingId}`, salespersonToken);
     expect(brief.status).toBe(200);
     expect(meetingBriefResponseSchema.safeParse(brief.body).success).toBe(true);
+    // A shipped strict v1 client receives exactly its established section keys.
+    expect(Object.keys(brief.body['sections'] as object).sort()).toEqual(['commitments', 'conversations', 'firm', 'objections', 'whyThisDemo']);
+    const preparation = await get(`/meetings/brief?meetingId=${meetingId}&version=2`, salespersonToken);
+    expect(preparation.status).toBe(200);
+    expect(preparation.body['sections']).toMatchObject({
+      workflow: { items: [], omitted: 0 },
+      openQuestions: { items: [{ provenance: 'inferred', source: 'preparation_prompt' }] },
+      objective: { items: [{ text: 'Understand the current maintenance workflow and confirm whether a next step is useful.', provenance: 'inferred' }] },
+      whyThisDemo: { items: [{ text: 'Maintenance requests come in by text.', provenance: 'stated' }, { text: 'AppFolio', provenance: 'stated' }] },
+    });
     expect(brief.body['meeting']).toMatchObject({ title: 'Callie demo between David and Dana Example', attendeeName: 'Dana Example', locationType: 'zoom_video' });
     const why = (brief.body['sections'] as { whyThisDemo: { items: { text: string }[] } }).whyThisDemo.items.map(entry => entry.text);
     expect(why).toEqual(['Maintenance requests come in by text.', 'AppFolio']);
@@ -389,6 +399,7 @@ describe('Cal.com depth, over HTTP', () => {
     // A colleague's firm: the same 404.
     await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [world.firmId, fixture.alpha.admin.userId]);
     expect((await get(`/meetings/brief?meetingId=${meetingId}`, salespersonToken)).status).toBe(404);
+    expect((await get(`/meetings/brief?meetingId=${meetingId}&version=2`, salespersonToken)).status).toBe(404);
   });
 
   // ---- no reminder of Callie's own ------------------------------------------------------

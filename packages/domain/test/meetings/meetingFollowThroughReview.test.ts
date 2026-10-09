@@ -1,3 +1,4 @@
+import {saveAnswerBlock,approveAnswerBlock,retireAnswerBlock} from '../../outreach/facts.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { withTransaction } from '../../db/queryable.ts';
@@ -85,6 +86,49 @@ describe('meeting follow-through review regressions', () => {
     expect((await f.db.query('SELECT ordinal,state FROM step_executions WHERE enrollment_id=$1 ORDER BY ordinal',[p.enrollment_id])).rows).toEqual([{ordinal:1,state:'completed'},{ordinal:2,state:'pending'}]);
     expect((await f.db.query('SELECT id FROM outbound_messages WHERE enrollment_id=$1',[p.enrollment_id])).rows).toEqual([]);
     expect(await meetingDeliveryHistory(f.context,f.planId)).toEqual([{ordinal:1,messageId:id,sentAt:f.at}]);
+  });
+  it('approves remaining nudges after an exact manual recap without resubmitting ordinal one',async()=>{
+    const f=await preparedMeetingFixture({steps:3,paused:true,approve:false});stop=()=>f.world.stop();
+    const id=(await f.db.query<{id:string}>(`INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,header_from,header_to,header_cc,subject,matched) VALUES($1,$2,'manual-before-approval','manual-before-approval','outgoing',$3,$4,$5::text[],'{}',$6,true) RETURNING id`,[f.workspace,f.world.alpha.mailboxId,f.at,f.world.alpha.address,[f.address],f.draft.subject])).rows[0]!.id;
+    await f.db.query('INSERT INTO mail_message_bodies(workspace_id,mail_message_id,body_text,truncated) VALUES($1,$2,$3,false)',[f.workspace,id,f.draft.body]);
+    const message=(await readMessage(f.context,id))!;
+    await withTransaction(f.db,()=>applyDirectSendEffects(f.context,{message,candidate:{firmId:f.firmId,contactId:f.contactId,opportunityId:f.opportunityId,rule:'thread',viaClosedOpportunity:false}}));
+    const v=(await readMeetingFollowThrough(f.admin,{meetingId:f.meetingId}))!;
+    expect(v).toMatchObject({approvalRequired:true,currentDraft:{state:'sent'}});
+    expect(await withTransaction(f.db,()=>editMeetingRecap(f.admin,{planId:f.planId,expectedPlanVersion:v.version,expectedDraftVersion:v.currentDraft!.version,expectedApprovalHash:v.approvalHash!,action:'approve'},f.at))).toMatchObject({ok:true,value:{approvalRequired:false,currentDraft:{state:'sent'}}});
+    await f.db.query('UPDATE sending_domains SET automated_sending_enabled=true,automated_sending_enabled_at=now() WHERE workspace_id=$1',[f.workspace]);
+    for(let i=0;i<2;i++)await withTransaction(f.db,()=>runMeetingFollowThrough(f.context,{meetingId:f.meetingId,at:f.at}));
+    expect(await readMeetingFollowThrough(f.admin,{meetingId:f.meetingId})).toMatchObject({sentMessages:[{ordinal:1,messageId:id}],plannedSteps:[{ordinal:1,state:'completed'},{ordinal:2,state:'pending'}]});
+    const plan=(await readMeetingPlan(f.context,f.planId))!;
+    const ordinalOne=(await f.db.query<{id:string}>('SELECT id FROM step_executions WHERE enrollment_id=$1 AND ordinal=1',[plan.enrollment_id])).rows[0]!;
+    const gmail=f.world.clientWith(f.world.alpha,{});
+    const handoff={prepare:async(c:typeof f.context,request:Parameters<typeof prepareOutboundMessage>[1])=>{const p=await prepareOutboundMessage(c,request);if(!p.ok)throw new Error(p.reason);return {ok:true as const,...p.value};},dispatch:async()=>({ok:true as const}),readOutcome:readOutboundOutcome};
+    await withTransaction(f.db,()=>runDueStepExecution(f.context,{stepExecutionId:ordinalOne.id,now:f.at,eligibility:composeEligibility(),sendHandoff:handoff}));
+    const duplicate=await readFenceByStepExecution(f.context,ordinalOne.id);
+    if(duplicate!==null)await dispatchOutboundMessage(f.context,f.world.sendDeps(f.world.alpha,{gmail,now:()=>new Date(f.at)}),{outboundMessageId:duplicate.id});
+    expect(duplicate).toBeNull();expect(gmail.sends).toHaveLength(0);
+  });
+  it('reviews changed future fact bindings after provider delivery and sends only the remaining nudge',async()=>{
+    const f=await enrolled(),{fence,gmail,sent}=await deliver(f);
+    const receipt=(await readFence(f.context,fence.id))!;
+    const fact=await withTransaction(f.db,()=>saveAnswerBlock(f.admin,{kind:'product',text:'Following up on our conversation. Is there a useful next step?'}));if(!fact.ok)throw new Error(fact.reason);await withTransaction(f.db,()=>approveAnswerBlock(f.admin,fact.value));
+    let v=(await readMeetingFollowThrough(f.admin,{meetingId:f.meetingId}))!;expect(v).toMatchObject({approvalRequired:true,blockers:expect.arrayContaining(['facts_changed']),currentDraft:{state:'sent'}});
+    expect(await withTransaction(f.db,()=>editMeetingRecap(f.admin,{planId:f.planId,expectedPlanVersion:v.version,expectedDraftVersion:v.currentDraft!.version,expectedApprovalHash:v.approvalHash!,action:'approve'},f.at))).toMatchObject({ok:true,value:{approvalRequired:false}});
+    const plan=(await readMeetingPlan(f.context,f.planId))!;
+    const next=nextMeetingFollowThroughAction({plan:{scope:plan.scope,maxMessages:3},deliveryHistory:sent,at:sent[0]!.sentAt,zone:'Etc/UTC',calendar:{version:'none',dates:[]}});if(next.kind!=='nudge')throw new Error('nudge missing');
+    await withTransaction(f.db,()=>runMeetingFollowThrough(f.context,{meetingId:f.meetingId,at:next.dueAt}));
+    v=(await readMeetingFollowThrough(f.admin,{meetingId:f.meetingId}))!;expect(v).toMatchObject({approvalRequired:false,currentDraft:{ordinal:2}});
+    const execution=(await f.db.query<{id:string}>('SELECT id FROM step_executions WHERE enrollment_id=$1 AND ordinal=2',[plan.enrollment_id])).rows[0]!;
+    const at=new Date(Date.parse(next.dueAt)+31*60_000).toISOString();
+    const handoff={prepare:async(c:typeof f.context,request:Parameters<typeof prepareOutboundMessage>[1])=>{const p=await prepareOutboundMessage(c,request);if(!p.ok)throw new Error(p.reason);return {ok:true as const,...p.value};},dispatch:async()=>({ok:true as const}),readOutcome:readOutboundOutcome};
+    expect(await withTransaction(f.db,()=>runDueStepExecution(f.context,{stepExecutionId:execution.id,now:at,eligibility:composeEligibility(),sendHandoff:handoff}))).toMatchObject({kind:'handed_to_send'});
+    const nudge=(await readFenceByStepExecution(f.context,execution.id))!;
+    expect(await dispatchOutboundMessage(f.context,f.world.sendDeps(f.world.alpha,{gmail,now:()=>new Date(at)}),{outboundMessageId:nudge.id})).toMatchObject({outcome:'sent'});
+    expect(gmail.sends).toHaveLength(2);expect(await readFence(f.context,fence.id)).toMatchObject({state:'sent',providerMessageId:receipt.providerMessageId,renderedHash:receipt.renderedHash,body:receipt.body});
+    await withTransaction(f.db,()=>retireAnswerBlock(f.admin,fact.value));v=(await readMeetingFollowThrough(f.admin,{meetingId:f.meetingId}))!;
+    expect(v.blockers).toContain('facts_block_retired');
+    expect(await withTransaction(f.db,()=>editMeetingRecap(f.admin,{planId:f.planId,expectedPlanVersion:v.version,expectedDraftVersion:v.currentDraft!.version,expectedApprovalHash:v.approvalHash??'a'.repeat(64),action:'approve'},at))).toMatchObject({ok:false,reason:'facts_block_retired'});
+    await withTransaction(f.db,()=>runMeetingFollowThrough(f.context,{meetingId:f.meetingId,at}));expect(gmail.sends).toHaveLength(2);
   });
   it.each(['sent','ambiguous'])('cancels future work while preserving the %s delivery and reconciliation',async kind=>{
     const f=await enrolled(), fence=await f.prepare(), gmail=f.world.clientWith(f.world.alpha,kind==='ambiguous'?{sendBehaviour:'indeterminate_but_delivered'}:{});
