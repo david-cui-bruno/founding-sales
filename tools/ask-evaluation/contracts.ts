@@ -432,3 +432,29 @@ export function groupEvaluationWindows(windows: EvaluationRankingInput['windows'
   }
   return [...groups.values()].sort((a,b) => a.firstOrdinal-b.firstOrdinal || a.groupId.localeCompare(b.groupId));
 }
+
+/** Fixed synthetic script; independent gold never supplies vectors or answers. */
+export const fakeCandidateScriptSchema = z.strictObject({
+  version: z.literal('ask-evaluation-fake-script-v1'),
+  purpose: z.literal('synthetic_orchestration_only'),
+  realCallsAllowed: z.literal(false),
+  maxSpendCents: z.literal(0),
+  labelAccess: z.literal('none'),
+  generationInputs: z.tuple([z.literal('frozen_window_ordinal'), z.literal('frozen_window_id'), z.literal('literal_configuration')]),
+  embedding: z.strictObject({
+    dimensions: z.literal(2),
+    queryVector: z.tuple([z.literal(1), z.literal(0)]),
+    windowVectorsByOrdinalModulo4: z.tuple([
+      z.tuple([z.literal(1), z.literal(0)]),
+      z.tuple([z.literal(-1), z.literal(0)]),
+      z.tuple([z.literal(1), z.literal(0)]),
+      z.tuple([z.literal(0), z.literal(1)]),
+    ]),
+    topK: z.literal(10), rrfConstant: z.literal(60),
+    numericConfigurationSha256: z.literal('39b665313b10286ed0421cd6fa933529a2bef82608280e0d66149c36814eebd9'),
+  }),
+  answer: z.strictObject({version: z.literal('controlled-abstention-v1'), claims: z.tuple([]), abstained: z.literal(true)}),
+  claims: z.strictObject({selectionPermitted: z.literal(false), semanticQualityMeasured: z.literal(false), realQualityState: z.literal('pending')}),
+  executionState: z.literal('frozen_before_outputs'),
+});
+export type FakeCandidateScript = z.infer<typeof fakeCandidateScriptSchema>;
