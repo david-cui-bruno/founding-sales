@@ -91,6 +91,41 @@ async function awaitEvaluationStage<T>(
     controller.abort();
   }
 }
+/** Score the full frozen permitted group census; duplicate hits count once before top ten. */
+function scoreRetrievalGroups(
+  groups: readonly { groupId: string; windowIds: readonly string[] }[],
+  relevance: FrozenCorpus["cases"][number]["relevance"],
+  orderedGroupIds: readonly string[],
+): Pick<CaseMeasurement, "recallAt10" | "precisionAt10" | "ndcgAt10"> {
+  const grades = new Map(
+    groups.map((group) => [
+      group.groupId,
+      Math.max(
+        0,
+        ...relevance
+          .filter((label) => group.windowIds.includes(label.windowId))
+          .map((label) => label.grade),
+      ),
+    ]),
+  );
+  const selected = [...new Set(orderedGroupIds)].slice(0, 10);
+  const relevant = [...grades.values()].filter((grade) => grade > 0).length;
+  const hits = selected.filter((id) => (grades.get(id) ?? 0) > 0).length;
+  const dcg = (values: readonly number[]) =>
+    values.reduce(
+      (sum, grade, index) => sum + (2 ** grade - 1) / Math.log2(index + 2),
+      0,
+    );
+  const ideal = dcg([...grades.values()].sort((a, b) => b - a).slice(0, 10));
+  return {
+    recallAt10: relevant === 0 ? null : hits / relevant,
+    precisionAt10: selected.length === 0 ? null : hits / selected.length,
+    ndcgAt10:
+      ideal === 0
+        ? null
+        : dcg(selected.map((id) => grades.get(id) ?? 0)) / ideal,
+  };
+}
 export interface EvaluationPublicReads {
   read(
     actorFixtureId: string,
@@ -524,42 +559,10 @@ async function runBoundedEvaluation(
               if ((await readWindow(window, true)) === null) break;
             }
             if (result.failures.length === 0) {
-              const grades = new Map(
-                groups.map((group) => [
-                  group.groupId,
-                  Math.max(
-                    0,
-                    ...item.relevance
-                      .filter((label) =>
-                        group.windowIds.includes(label.windowId),
-                      )
-                      .map((label) => label.grade),
-                  ),
-                ]),
+              Object.assign(
+                result,
+                scoreRetrievalGroups(groups, item.relevance, ranked),
               );
-              const relevant = [...grades.values()].filter(
-                (grade) => grade > 0,
-              ).length;
-              const selected = ranked.slice(0, 10);
-              const hits = selected.filter(
-                (id) => (grades.get(id) ?? 0) > 0,
-              ).length;
-              result.recallAt10 = relevant === 0 ? null : hits / relevant;
-              result.precisionAt10 =
-                selected.length === 0 ? null : hits / selected.length;
-              const dcg = (values: number[]) =>
-                values.reduce(
-                  (sum, grade, index) =>
-                    sum + (2 ** grade - 1) / Math.log2(index + 2),
-                  0,
-                );
-              const ideal = dcg(
-                [...grades.values()].sort((a, b) => b - a).slice(0, 10),
-              );
-              result.ndcgAt10 =
-                ideal === 0
-                  ? null
-                  : dcg(selected.map((id) => grades.get(id) ?? 0)) / ideal;
               result.qualityScoringState = "scored";
             }
           }
@@ -1338,49 +1341,20 @@ export async function runFakeCandidateSuite(input: FakeCandidateSuiteInput) {
           for (const failure of model.failures)
             fail(failure.code, failure.stage);
         else {
-          const groups = ranking.groups;
-          const grades = new Map(
-            groups.map((group) => [
-              group.groupId,
-              Math.max(
-                0,
-                ...row.corpus.cases[0]!.relevance.filter((label) =>
-                  group.windowIds.includes(label.windowId),
-                ).map((label) => label.grade),
-              ),
-            ]),
-          );
-          const dcg = (grades: readonly number[]) =>
-            grades.reduce(
-              (sum, grade, i) => sum + (2 ** grade - 1) / Math.log2(i + 2),
-              0,
-            );
-          const ideal = dcg(
-            [...grades.values()].sort((a, b) => b - a).slice(0, 10),
-          );
           for (const [result, ranked] of [
             [vectorResult, ranking.vector],
             [hybridResult, ranking.hybrid],
           ] as const) {
             result.qualityScoringState = ranked.qualityScoringState;
             result.failures = [...ranked.failures];
-            const hits = ranked.ranked.filter(
-              (group) => (grades.get(group.groupId) ?? 0) > 0,
-            ).length;
-            const relevant = [...grades.values()].filter(
-              (grade) => grade > 0,
-            ).length;
-            result.recallAt10 = relevant === 0 ? null : hits / relevant;
-            result.precisionAt10 =
-              ranked.ranked.length === 0 ? null : hits / ranked.ranked.length;
-            result.ndcgAt10 =
-              ideal === 0
-                ? null
-                : dcg(
-                    ranked.ranked.map(
-                      (group) => grades.get(group.groupId) ?? 0,
-                    ),
-                  ) / ideal;
+            Object.assign(
+              result,
+              scoreRetrievalGroups(
+                ranking.groups,
+                row.corpus.cases[0]!.relevance,
+                ranked.ranked.map((group) => group.groupId),
+              ),
+            );
             result.finalReadObservations = model.finalReadObservations;
           }
         }
