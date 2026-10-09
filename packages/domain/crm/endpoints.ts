@@ -4,6 +4,7 @@ import type { endpointClaimSchema, endpointListSchema } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { QueryResultRowLike } from '../db/queryable.ts';
 import { activeIdentityActor, evidenceAvailable, sourceAccessPredicate, lockIdentityContext, readIdentityPerson, sourceVisible } from './identityAccess.ts';
+import { recordCrmAuditEvent } from './audit.ts';
 export type EndpointInput = z.infer<typeof endpointClaimSchema>;
 interface Claim extends QueryResultRowLike {
   id: string;
@@ -74,7 +75,21 @@ async function claimDto(context: RepositoryContext, row: Claim): Promise<z.infer
   const person = row.person_id === null ? null : await readIdentityPerson(context, row.person_id);
   if (row.person_id !== null && person === null)
     return null;
-  return { claimId: row.id, endpointId: row.endpoint_id, kind: row.kind, value: row.value, personId: row.person_id, personName: person?.fullName ?? null, firmId: row.firm_id, firmName: row.firm_name, shared: row.shared, status: row.status, startDate: row.start_date, endDate: row.end_date, revision: row.revision, evidence, sourceState: !row.source_invalidated && await evidenceAvailable(context, evidence) ? 'available' : 'unavailable' };
+  const available = !row.source_invalidated && await evidenceAvailable(context, evidence);
+  if (available && context.scope.actor.kind === 'user' && context.scope.actor.role === 'admin') {
+    // Callers hold the source/context locks. Audit exceptional access before publishing derived identity.
+    const source = (await context.db.query<{ owner_user_id: string }>(
+      `SELECT owner_user_id FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2
+       AND availability='available' AND revision=$3 AND content_hash=$4`,
+      [context.scope.workspaceId, row.source_id, row.source_revision, row.source_hash],
+    )).rows[0];
+    if (source !== undefined && source.owner_user_id !== context.scope.actor.userId)
+      await recordCrmAuditEvent(context, {
+        action: 'crm.endpoint_private_evidence_read', subjectKind: 'selected_source', subjectId: row.source_id,
+        detail: { endpointId: row.endpoint_id, claimId: row.id, sourceRevision: row.source_revision },
+      });
+  }
+  return { claimId: row.id, endpointId: row.endpoint_id, kind: row.kind, value: row.value, personId: row.person_id, personName: person?.fullName ?? null, firmId: row.firm_id, firmName: row.firm_name, shared: row.shared, status: row.status, startDate: row.start_date, endDate: row.end_date, revision: row.revision, evidence, sourceState: available ? 'available' : 'unavailable' };
 }
 interface EndpointMatchInput {
   kind: 'email' | 'phone';

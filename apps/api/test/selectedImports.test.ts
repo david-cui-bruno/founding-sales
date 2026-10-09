@@ -460,6 +460,51 @@ describe("selected conversation imports", () => {
       });
     }
   });
+  it("refuses administrator private-evidence candidates when their audit cannot be recorded", async () => {
+    const adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
+    const created = await post("/crm/people/create", command({ fullName: "Audited private identity" }));
+    const personId = (created.body as { result: { personId: string } }).result.personId;
+    expect((await post("/crm/people/source/add", command({
+      personId, sourceKey: randomUUID(), excerpt: "Owner's selected identity proof",
+      occurredAt: "2026-09-15T14:00:00.000Z",
+    }))).status).toBe(200);
+    const page = (await post("/crm/people/read", { personId })).body as {
+      sources: { sourceId: string; revision: number; contentHash: string }[];
+    };
+    const source = page.sources[0]!;
+    const endpoint = "audit-required@preview.example.test";
+    expect((await post("/crm/endpoints/claim", command({
+      personId, firmId: null, shared: false, kind: "email", value: endpoint,
+      status: "current", startDate: "2026-01-01", endDate: null,
+      evidence: { sourceId: source.sourceId, sourceRevision: source.revision, contentHash: source.contentHash },
+    }))).status).toBe(200);
+    const input = {
+      text: "Selected passage", subtype: "pasted_text", label: "Audited preview",
+      direction: "unknown", occurredAt: null, attachments: [],
+      participants: [{ label: "Participant", endpoint, provenance: "user_supplied" }],
+    };
+    // Failure injection controls the audit sink; all outcomes use authenticated reads.
+    await fixture.database.session.query(`CREATE FUNCTION refuse_private_endpoint_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.action = 'crm.endpoint_private_evidence_read' THEN
+        RAISE EXCEPTION 'fixture_private_audit_unavailable'; END IF; RETURN NEW; END $$`);
+    await fixture.database.session.query(`CREATE TRIGGER refuse_private_endpoint_audit BEFORE INSERT ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION refuse_private_endpoint_audit()`);
+    try {
+      await expect(post("/crm/imports/preview", input, adminToken)).rejects.toThrow("fixture_private_audit_unavailable");
+      const ownerPreview = await post("/crm/imports/preview", input);
+      expect(ownerPreview.status).toBe(200);
+      expect(ownerPreview.body).toMatchObject({ candidates: [{ outcome: "person_match", personId }] });
+      expect((await post("/crm/people/read", { personId })).body).toMatchObject({
+        sources: [{ sourceId: source.sourceId, availability: "available" }],
+      });
+    } finally {
+      await fixture.database.session.query("DROP TRIGGER refuse_private_endpoint_audit ON audit_events");
+      await fixture.database.session.query("DROP FUNCTION refuse_private_endpoint_audit()");
+    }
+    const adminPreview = await post("/crm/imports/preview", input, adminToken);
+    expect(adminPreview.status).toBe(200);
+    expect(adminPreview.body).toMatchObject({ candidates: [{ outcome: "person_match", personId }] });
+  });
   it("preserves supported public-preview candidates when another participant has private evidence", async () => {
     const adminToken = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
