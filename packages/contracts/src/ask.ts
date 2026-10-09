@@ -110,10 +110,16 @@ export const askSourcesReadSchema = z.strictObject({
   after: askSourceCursorSchema.optional(),
   limit: z.number().int().min(1).max(50).default(20),
 });
+export const askDiscoverySourceSchema = canonicalSourceReferenceSchema
+  .extend({ observedAt: z.iso.datetime().nullable() })
+  .refine(
+    (source) =>
+      source.availability !== "available" || source.observedAt !== null,
+  );
 const askSourcesResponseSchema = z.strictObject({
   operation: z.literal("sources"),
   scope: askSourcesScopeSchema,
-  sources: z.array(canonicalSourceReferenceSchema).max(50),
+  sources: z.array(askDiscoverySourceSchema).max(50),
   nextAfter: askSourceCursorSchema.nullable(),
   coverage: z.strictObject({
     scope: z.literal("record_copied_sources"),
@@ -121,6 +127,7 @@ const askSourcesResponseSchema = z.strictObject({
     semantic: z.literal("not_requested"),
     scanComplete: z.boolean(),
     candidateCeiling: z.literal(50),
+    sizeBoundReached: z.boolean(),
   }),
 });
 export const askReadSchema = z.discriminatedUnion("operation", [

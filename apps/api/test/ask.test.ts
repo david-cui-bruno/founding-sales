@@ -934,6 +934,25 @@ it("searches original meeting utterance windows with the recorded speaker and or
         semantic: "not_requested",
       },
     });
+    const discovery = await post("/ask/read", {
+      operation: "sources",
+      scope: { firmId },
+    });
+    expect(discovery.status).toBe(200);
+    expect(discovery.body).toMatchObject({
+      sources: [
+        {
+          ...source,
+          availability: "available",
+          completeness: "partial",
+          occurredAt: "2026-10-01T14:00:00.000Z",
+        },
+      ],
+      coverage: { scanComplete: true, sizeBoundReached: false },
+    });
+    expect(JSON.stringify(discovery.body)).not.toContain(
+      "Drainage coordination",
+    );
   } finally {
     await fixture.stop();
   }
@@ -1169,6 +1188,25 @@ it("retrieves call speech with the original channel label and an unknown origina
         inspectedWindows: 1,
       },
     });
+    const discovery = await post("/ask/read", {
+      operation: "sources",
+      scope: { firmId },
+    });
+    expect(discovery.status).toBe(200);
+    expect(discovery.body).toMatchObject({
+      sources: [
+        {
+          ...source,
+          availability: "available",
+          completeness: "partial",
+          occurredAt: null,
+        },
+      ],
+      coverage: { scanComplete: true, sizeBoundReached: false },
+    });
+    expect(JSON.stringify(discovery.body)).not.toContain(
+      "Drainage coordination",
+    );
   } finally {
     await fixture.stop();
   }
