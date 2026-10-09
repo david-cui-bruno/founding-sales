@@ -401,6 +401,7 @@ export async function logCallOutcome(
   // C04, C17, C13: the Today task the call was placed from, and what is behind it.
   let bound: BoundStep | null = null;
   let boundCallbackId: string | null = null;
+  let boundItemOpportunityId: string | null | undefined;
   let boundNeedsTimeKey: string | null = null;
   if (input.itemId !== undefined) {
     const item = await readTodayItem(context, input.itemId);
@@ -412,9 +413,25 @@ export async function logCallOutcome(
       bound = await loadBoundCallStep(context, { stepExecutionId: item.sourceId, firmId: input.firmId });
       if (bound === null) return refusePolicy('item_unknown');
     } else if (item.sourceKind === 'callback' && item.sourceId !== null) {
+      const callback = (
+        await context.db.query<{ opportunity_id: string | null }>(
+          'SELECT opportunity_id FROM callbacks WHERE workspace_id=$1 AND id=$2 AND firm_id=$3',
+          [context.scope.workspaceId, item.sourceId, input.firmId],
+        )
+      ).rows[0];
+      if (callback === undefined) return refusePolicy('item_unknown');
       boundCallbackId = item.sourceId;
+      boundItemOpportunityId = callback.opportunity_id;
     } else if (callLogIdOfItemKey(item.itemKey) !== null) {
+      const original = (
+        await context.db.query<{ opportunity_id: string | null }>(
+          'SELECT opportunity_id FROM call_logs WHERE workspace_id=$1 AND id::text=$2 AND firm_id=$3',
+          [context.scope.workspaceId, callLogIdOfItemKey(item.itemKey), input.firmId],
+        )
+      ).rows[0];
+      if (original === undefined) return refusePolicy('item_unknown');
       boundNeedsTimeKey = item.itemKey;
+      boundItemOpportunityId = original.opportunity_id;
     }
   }
 
@@ -469,10 +486,15 @@ export async function logCallOutcome(
     followUps.push({ kind: 'route_not_named', reason: input.outcome });
   }
 
-  if (bound!==null && input.opportunityId!==undefined && input.opportunityId!==bound.enrollment.opportunityId) return refusePolicy('invalid_input');
-  const selectedOpportunityId=bound===null ? input.opportunityId : bound.enrollment.opportunityId;
-  const opportunity=bound!==null && selectedOpportunityId===null ? null : await readOperationalOpportunity(context,input.firmId,selectedOpportunityId);
-  if(input.opportunityId!==undefined && opportunity===null)return refusePolicy('invalid_input');
+  if (bound !== null && input.opportunityId !== undefined && input.opportunityId !== bound.enrollment.opportunityId)
+    return refusePolicy('invalid_input');
+  if (boundItemOpportunityId !== undefined && input.opportunityId !== undefined && input.opportunityId !== boundItemOpportunityId)
+    return refusePolicy('invalid_input');
+  const selectedOpportunityId =
+    bound !== null ? bound.enrollment.opportunityId : boundItemOpportunityId !== undefined ? boundItemOpportunityId : input.opportunityId;
+  const opportunity =
+    selectedOpportunityId === null ? null : await readOperationalOpportunity(context, input.firmId, selectedOpportunityId);
+  if (input.opportunityId !== undefined && opportunity === null) return refusePolicy('invalid_input');
 
   // ---- 2. Record ----------------------------------------------------------
   //
