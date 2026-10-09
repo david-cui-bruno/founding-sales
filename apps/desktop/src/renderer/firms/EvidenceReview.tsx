@@ -1,3 +1,4 @@
+import { SourcePromises } from "./SourcePromises.tsx";
 import {
   useCallback,
   useLayoutEffect,
@@ -1108,6 +1109,16 @@ export function EvidenceReview({
           ) : null}
           {page ? (
             <section aria-label="Selected source interpretations">
+              <SourcePromises
+                source={page.source}
+                enabled={enabled && !busy}
+                privacyKey={privacyKey}
+                onUnavailable={() => {
+                  invalidate();
+                  clearSource();
+                  setError("Source promises are unavailable.");
+                }}
+              />
               <p>
                 {page.source.occurredAt === null
                   ? "Original event date unknown"
