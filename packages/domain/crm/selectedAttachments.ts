@@ -25,7 +25,7 @@ export async function previewSelectedAttachment(context:RepositoryContext,input:
  let text:string;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}catch{return {state:'unsupported' as const,reason:'unreadable_text' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};}
  if(text.includes('\0'))return {state:'unsupported' as const,reason:'unreadable_text' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
  if(text.length>20000)return {state:'unsupported' as const,reason:'selection_limit_exceeded' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
- if(!text.trim())return null;
+ if(!text.trim())return {state:'unsupported' as const,reason:'empty_selection' as const,processing:'unavailable' as const,supportedFormats:[...SELECTED_ATTACHMENT_FORMATS],maxBytes:80000 as const,maxCharacters:20000 as const};
  return {state:'supported' as const,fileName:input.fileName,byteLength:bytes.length,fileHash:hash(bytes),sourceContentHash:hash(text),format,origin:'user_selected_original' as const,completeness:'complete' as const,processing:'not_requested' as const,previewHash:hash(JSON.stringify(input))};
 }
 export async function commitSelectedAttachment(context:RepositoryContext,input:z.infer<typeof selectedAttachmentCommitSchema>){

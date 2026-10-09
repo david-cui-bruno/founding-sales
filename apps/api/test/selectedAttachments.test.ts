@@ -241,4 +241,71 @@ describe('explicit selected attachment analysis',()=>{
   expect((await post('/crm/attachments/read',{sourceId})).body).toMatchObject({file:{state:'deleted',fileName:null,fileHash:null}});
  });
 
+ it('reports a whitespace-only selected file as empty instead of missing identity',async()=>{
+  const result=await post('/crm/attachments/preview',{fileName:'blank.txt',declaredByteLength:3,bytesBase64:'IAoJ',completeness:'complete'});
+  expect(result.status).toBe(200);
+  expect(result.body).toMatchObject({state:'unsupported',reason:'empty_selection',processing:'unavailable'});
+  expect(result.body).not.toHaveProperty('fileHash');
+ });
+
+ it('returns supported selected-file claims only after an explicit authorized analysis request',async()=>{
+  const fixture=await createAuthFixture();
+  const localToken=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${localToken}`},body},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const adminToken=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+  const purpose=await dispatch({method:'POST',path:'/crm/processing/purpose/save',query:new URLSearchParams(),headers:{authorization:`Bearer ${adminToken}`},body:command({expectedRevision:0,enabled:false,endpointId:'attachment-fixture',modelVersion:'fixture-model-v1',accessGrantVersion:'fixture-grant-v1',dataHandlingVersion:'fixture-handling-v1',dailyCeilingCents:100,monthlyCeilingCents:100,inputTokenPriceMicros:2,outputTokenPriceMicros:8})},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  // This controlled adapter fixture grants only the existing extraction purpose.
+  expect(purpose.status).toBe(200);
+  await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[fixture.alpha.workspaceId]);
+  try{
+   const person=await post('/crm/people/create',command({fullName:'Supported selected file'}));
+   const personId=(person.body as {result:{personId:string}}).result.personId;
+   const file={fileName:'supported.txt',declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'};
+   const preview=await post('/crm/attachments/preview',file);
+   const imported=await post('/crm/attachments/commit',command({file,personId,firmId:null,participants:[],occurredAt:null,importKey:'supported-file-analysis',previewHash:(preview.body as {previewHash:string}).previewHash}));
+   expect(imported.status).toBe(200);
+   const sourceId=(imported.body as {result:{sourceId:string}}).result.sourceId;
+   const page=await post('/crm/attachments/read',{sourceId});
+   const ref=(page.body as {source:{workspaceId:string;sourceId:string;kind:string;revision:number;contentHash:string}}).source;
+   let calls=0;const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter:{endpointId:'attachment-fixture',modelVersion:'fixture-model-v1',accessGrantVersion:'fixture-grant-v1',dataHandlingVersion:'fixture-handling-v1',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{calls++;return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:30},claims:[{kind:'need',interpretation:'Repair coordination',status:'stated',locator:'text:0:28',quote:'We need repair coordination.'}]};}}}));
+   await runOnce(fixture.db,{registry,owner:'file-before-explicit-analysis',limit:100});expect(calls).toBe(0);
+   expect((await post('/crm/attachments/analyze',command({source:{workspaceId:ref.workspaceId,sourceId,kind:ref.kind,revision:ref.revision,contentHash:ref.contentHash,locator:null},fileHash:'25ee8c81049e3d9309107bf3b7b9b807b1a7ed83121acb6c43b978889d86d3b1'}))).status).toBe(200);
+   await runOnce(fixture.db,{registry,owner:'file-explicit-analysis',limit:100});expect(calls).toBe(1);
+   expect((await post('/crm/attachments/read',{sourceId})).body).toMatchObject({file:{state:'selected',origin:'user_selected_original'},source:{speaker:null,occurredAt:null,completeness:'selected_excerpt'},processing:{state:'complete',claims:[{quote:'We need repair coordination.',source:{sourceId,revision:1,speaker:null,occurredAt:null}}],financial:{dispatchState:'settled',settledCents:1}}});
+  }finally{await fixture.stop();}
+ });
+
+ it('redacts a selected-file result when deletion commits during the model wait',async()=>{
+  const fixture=await createAuthFixture();
+  const localToken=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${localToken}`},body},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const adminToken=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+  const purpose=await dispatch({method:'POST',path:'/crm/processing/purpose/save',query:new URLSearchParams(),headers:{authorization:`Bearer ${adminToken}`},body:command({expectedRevision:0,enabled:false,endpointId:'attachment-fixture',modelVersion:'fixture-model-v1',accessGrantVersion:'fixture-grant-v1',dataHandlingVersion:'fixture-handling-v1',dailyCeilingCents:100,monthlyCeilingCents:100,inputTokenPriceMicros:2,outputTokenPriceMicros:8})},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  // This controlled adapter fixture grants only the existing extraction purpose.
+  expect(purpose.status).toBe(200);
+  await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[fixture.alpha.workspaceId]);
+  try{
+   const person=await post('/crm/people/create',command({fullName:'Supported selected file'}));
+   const personId=(person.body as {result:{personId:string}}).result.personId;
+   const file={fileName:'supported.txt',declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'};
+   const preview=await post('/crm/attachments/preview',file);
+   const imported=await post('/crm/attachments/commit',command({file,personId,firmId:null,participants:[],occurredAt:null,importKey:'file-delete-during-analysis',previewHash:(preview.body as {previewHash:string}).previewHash}));
+   expect(imported.status).toBe(200);
+   const sourceId=(imported.body as {result:{sourceId:string}}).result.sourceId;
+   const page=await post('/crm/attachments/read',{sourceId});
+   const ref=(page.body as {source:{workspaceId:string;sourceId:string;kind:string;revision:number;contentHash:string}}).source;
+   let started!:()=>void;let release!:()=>void;const entered=new Promise<void>(resolve=>{started=resolve;});const waiting=new Promise<void>(resolve=>{release=resolve;});
+   let calls=0;const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter:{endpointId:'attachment-fixture',modelVersion:'fixture-model-v1',accessGrantVersion:'fixture-grant-v1',dataHandlingVersion:'fixture-handling-v1',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{calls++;started();await waiting;return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:30},claims:[{kind:'need',interpretation:'Repair coordination',status:'stated',locator:'text:0:28',quote:'We need repair coordination.'}]};}}}));
+   await runOnce(fixture.db,{registry,owner:'file-before-explicit-analysis',limit:100});expect(calls).toBe(0);
+   expect((await post('/crm/attachments/analyze',command({source:{workspaceId:ref.workspaceId,sourceId,kind:ref.kind,revision:ref.revision,contentHash:ref.contentHash,locator:null},fileHash:'25ee8c81049e3d9309107bf3b7b9b807b1a7ed83121acb6c43b978889d86d3b1'}))).status).toBe(200);
+   const pending=runOnce(fixture.db,{registry,owner:'file-explicit-analysis',limit:100});
+   await entered;
+   try{expect((await post('/crm/imports/delete',command({sourceId,expectedSourceRevision:1,expectedMetadataRevision:1}))).status).toBe(200);}finally{release();}
+   await pending;expect(calls).toBe(1);
+   const removed=await post('/crm/attachments/read',{sourceId});
+   expect(removed.body).toMatchObject({file:{state:'deleted',fileName:null,fileHash:null},source:{availability:'deleted',contentHash:null},processingHealth:{availability:'deleted',generations:[{state:'deleted',claims:[],financial:{dispatchState:'settled',settledCents:1}}]}});
+   expect(JSON.stringify(removed.body)).not.toContain('We need repair coordination.');
+  }finally{await fixture.stop();}
+ });
+
 });
