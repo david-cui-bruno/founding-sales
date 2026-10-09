@@ -34,3 +34,17 @@ it('refuses an invalid calendar date in a manually scheduled task',async()=>{
  await database.session.query(`INSERT INTO crm_ask_requests(workspace_id,id,owner_user_id,question,scope,initial_contexts,initial_access_closure,state,reason) VALUES($1,$2,$3,'What needs review?',$4::jsonb,$5::jsonb,$6::jsonb,'unavailable','purpose_unavailable')`,[seeded.alpha.workspaceId,requestId,seeded.alpha.salesperson.userId,scope,contexts,closure]);
  await expect(database.session.query(`INSERT INTO crm_ask_actions(workspace_id,owner_user_id,source_request_id,source_request_version,kind,status,target_person_id,human_text,due,input_scope,initial_contexts,original_access_closure,support_refs) VALUES($1,$2,$3,1,'task','open',$4,'Review the task.',$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb)`,[seeded.alpha.workspaceId,seeded.alpha.salesperson.userId,requestId,personId,JSON.stringify({kind:'date',date:'2026-13-99',zone:'America/New_York',expression:'User chosen date'}),scope,contexts,closure,JSON.stringify([{...source,locator:'text:0:4'}])])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_action_due'});
 });
+it('erases independent manual annotations when an original selected copy is physically removed',async()=>{
+ const requestId=randomUUID(),personId=randomUUID(),sourceId=randomUUID(),actionId=randomUUID();
+ await database.session.query('INSERT INTO crm_people(workspace_id,id,owner_user_id,full_name) VALUES($1,$2,$3,$4)',[seeded.alpha.workspaceId,personId,seeded.alpha.salesperson.userId,'Original manual annotation context']);
+ await database.session.query(`INSERT INTO crm_selected_sources(workspace_id,id,person_id,owner_user_id,source_key_hash,excerpt,content_hash,occurred_at) VALUES($1,$2,$3,$4,$5,'Review source text.',$5,'2026-10-01T14:00:00Z')`,[seeded.alpha.workspaceId,sourceId,personId,seeded.alpha.salesperson.userId,'a'.repeat(64)]);
+ const source={workspaceId:seeded.alpha.workspaceId,sourceId,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null};
+ const scope=JSON.stringify({sources:[source]});
+ const contexts=JSON.stringify([{personId,firmIds:[],relationships:[],review:'current'}]);
+ const closure=JSON.stringify({firmIds:[],personIds:[personId]});
+ await database.session.query(`INSERT INTO crm_ask_requests(workspace_id,id,owner_user_id,question,scope,initial_contexts,initial_access_closure,state,reason) VALUES($1,$2,$3,'What needs review?',$4::jsonb,$5::jsonb,$6::jsonb,'unavailable','purpose_unavailable')`,[seeded.alpha.workspaceId,requestId,seeded.alpha.salesperson.userId,scope,contexts,closure]);
+ await database.session.query(`INSERT INTO crm_ask_actions(workspace_id,id,owner_user_id,source_request_id,source_request_version,kind,status,target_person_id,human_text,input_scope,initial_contexts,original_access_closure,support_refs) VALUES($1,$2,$3,$4,1,'note','active',$5,'Copied private annotation.',$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb)`,[seeded.alpha.workspaceId,actionId,seeded.alpha.salesperson.userId,requestId,personId,scope,contexts,closure,JSON.stringify([{...source,locator:'text:0:4'}])]);
+ await database.session.query('DELETE FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,sourceId]);
+ const row=(await database.session.query('SELECT human_text,private_state,input_scope,support_refs,target_person_id FROM crm_ask_actions WHERE workspace_id=$1 AND id=$2',[seeded.alpha.workspaceId,actionId])).rows[0];
+ expect(row).toEqual({human_text:null,private_state:'deleted',input_scope:null,support_refs:null,target_person_id:null});
+});

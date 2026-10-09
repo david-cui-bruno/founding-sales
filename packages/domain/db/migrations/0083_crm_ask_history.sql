@@ -101,3 +101,27 @@ BEGIN
  EXCEPTION WHEN OTHERS THEN RETURN false;
 END $$;
 ALTER TABLE crm_ask_actions ADD CONSTRAINT crm_ask_action_due CHECK(crm_ask_action_due_valid(due));
+
+CREATE FUNCTION invalidate_crm_ask_manual_copy() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE old_row jsonb=to_jsonb(OLD);new_row jsonb=to_jsonb(NEW);copy_kind text;copy_id text;changed boolean;erased boolean;action_id uuid;
+BEGIN
+ CASE TG_TABLE_NAME
+ WHEN 'crm_selected_sources' THEN copy_kind='selected_note';copy_id=old_row->>'id';changed=jsonb_build_array(old_row->'availability',old_row->'revision',old_row->'content_hash') IS DISTINCT FROM jsonb_build_array(new_row->'availability',new_row->'revision',new_row->'content_hash');
+ WHEN 'crm_mail_sources' THEN copy_kind='mail';copy_id=old_row->>'source_id';changed=jsonb_build_array(old_row->'availability',old_row->'source_revision',old_row->'content_hash') IS DISTINCT FROM jsonb_build_array(new_row->'availability',new_row->'source_revision',new_row->'content_hash');
+ WHEN 'meeting_transcripts' THEN copy_kind='meeting_transcript';copy_id=old_row->>'id';changed=jsonb_build_array(old_row->'version',old_row->'utterances') IS DISTINCT FROM jsonb_build_array(new_row->'version',new_row->'utterances');
+ WHEN 'call_transcripts' THEN copy_kind='call_transcript';copy_id=old_row->>'call_session_id';changed=jsonb_build_array(old_row->'crm_revision',old_row->'utterances') IS DISTINCT FROM jsonb_build_array(new_row->'crm_revision',new_row->'utterances');
+ ELSE RAISE EXCEPTION 'Unknown manual action copy kind';
+ END CASE;
+ IF TG_OP='DELETE' OR changed THEN
+  erased=TG_OP='DELETE' OR COALESCE(new_row->>'availability'='deleted',false);
+  FOR action_id IN SELECT a.id FROM crm_ask_actions a WHERE a.workspace_id=OLD.workspace_id AND a.private_state='available' AND EXISTS(SELECT 1 FROM jsonb_array_elements(a.input_scope->'sources') src WHERE src->>'kind'=copy_kind AND src->>'sourceId'=copy_id) ORDER BY a.id FOR UPDATE LOOP
+   UPDATE crm_ask_actions SET private_state=CASE WHEN erased THEN 'deleted' ELSE 'stale' END,target_firm_id=NULL,target_person_id=NULL,human_text=NULL,due=NULL,input_scope=NULL,initial_contexts=NULL,original_access_closure=NULL,support_refs=NULL,review_required=(kind='task' AND status='open'),version=version+1,updated_at=clock_timestamp() WHERE workspace_id=OLD.workspace_id AND id=action_id AND private_state='available';
+  END LOOP;
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER crm_ask_manual_selected_invalidation AFTER UPDATE OR DELETE ON crm_selected_sources FOR EACH ROW EXECUTE FUNCTION invalidate_crm_ask_manual_copy();
+CREATE TRIGGER crm_ask_manual_mail_invalidation AFTER UPDATE OR DELETE ON crm_mail_sources FOR EACH ROW EXECUTE FUNCTION invalidate_crm_ask_manual_copy();
+CREATE TRIGGER crm_ask_manual_meeting_invalidation AFTER UPDATE OR DELETE ON meeting_transcripts FOR EACH ROW EXECUTE FUNCTION invalidate_crm_ask_manual_copy();
+CREATE TRIGGER crm_ask_manual_call_invalidation AFTER UPDATE OR DELETE ON call_transcripts FOR EACH ROW EXECUTE FUNCTION invalidate_crm_ask_manual_copy();
