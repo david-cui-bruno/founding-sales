@@ -17,6 +17,8 @@ import {
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 import { seedFirm } from "./support/crmSeed.ts";
+const hashText = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
 const hash = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -546,8 +548,10 @@ it("checks an independently seeded exact opportunity baseline without semantic i
 it("measures all eighty isolated development baselines without loading sealed holdout gold", async () => {
   const fixture = await createAuthFixture();
   try {
-    const { DEVELOPMENT_LABELS, DEVELOPMENT_LABEL_SHA256 } =
-      await import("../../../tools/ask-evaluation/labels.ts");
+    const {
+      DEVELOPMENT_COMPARISON_LABELS,
+      DEVELOPMENT_COMPARISON_LABEL_SHA256,
+    } = await import("../../../tools/ask-evaluation/labels.ts");
     const { runDevelopmentSuite } =
       await import("../../../tools/ask-evaluation/runner.ts");
     const { developmentSuiteSchema } =
@@ -880,29 +884,39 @@ it("measures all eighty isolated development baselines without loading sealed ho
       const source = crmResolvedSourceSchema.parse(sourceRead.body).source;
       return { sourceId, contentHash, source, text };
     };
-    for (const [index, label] of DEVELOPMENT_LABELS.entries()) {
+    for (const [index, label] of DEVELOPMENT_COMPARISON_LABELS.entries()) {
       const firmId = await seedFirm(fixture, {
         name: label.identityName,
         regionCode: "RI",
         assignedUserId: fixture.alpha.salesperson.userId,
       });
-      const { sourceId, contentHash, source, text } = await createCopy(
-        label,
-        index,
-        firmId,
-      );
-      const caseLookup = {
+      const copies = [];
+      for (const [ordinal, gold] of label.sourceLabels.entries()) {
+        const copied = await createCopy(
+          {
+            ...label,
+            caseId: `${label.caseId}_copy_${ordinal}`,
+            identityName: `${label.identityName} Copy ${ordinal}`,
+            originalText: gold.originalText,
+          },
+          index * 4 + ordinal,
+          firmId,
+        );
+        copies.push({ ...copied, gold, ordinal });
+      }
+      const { sourceId, source } = copies[0]!;
+      const caseLookups = copies.map(({ source }) => ({
         workspaceId: source.workspaceId,
         sourceId: source.sourceId,
         kind: source.kind,
         revision: source.revision,
         contentHash: source.contentHash,
         locator: null,
-      };
+      }));
       let exactExpected: unknown = null;
       let request: unknown = {
         operation: "passages",
-        scope: { sources: [caseLookup] },
+        scope: { sources: caseLookups },
         query: label.query,
         limit: 50,
       };
@@ -962,23 +976,21 @@ it("measures all eighty isolated development baselines without loading sealed ho
       const corpusDefinition = {
         id: `${label.caseId}_corpus`,
         fixtureVersion: "synthetic-v1",
-        sources: [
-          {
-            id: `${label.caseId}_source`,
-            kind: label.sourceKind,
-            setupId: `synthetic_${label.sourceKind === "mail" ? "copied_mail" : label.sourceKind}`,
-            originalSha256: contentHash,
-            windows: [
-              {
-                id: `${label.caseId}_window`,
-                source,
-                textSha256: createHash("sha256").update(text).digest("hex"),
-                chunkerVersion: "lexical-original-v1",
-                ordinal: 0,
-              },
-            ],
-          },
-        ],
+        sources: copies.map((copy) => ({
+          id: `${label.caseId}_source_${copy.gold.slot}`,
+          kind: label.sourceKind,
+          setupId: `synthetic_${label.sourceKind === "mail" ? "copied_mail" : label.sourceKind}`,
+          originalSha256: copy.contentHash,
+          windows: [
+            {
+              id: `${label.caseId}_window_${copy.gold.slot}`,
+              source: copy.source,
+              textSha256: hashText(copy.gold.originalText),
+              chunkerVersion: "lexical-original-v1",
+              ordinal: copy.ordinal,
+            },
+          ],
+        })),
         cases: [
           {
             id: label.caseId,
@@ -986,12 +998,10 @@ it("measures all eighty isolated development baselines without loading sealed ho
             actorFixtureId: `${label.caseId}_actor`,
             corpusId: `${label.caseId}_corpus`,
             request,
-            relevance: [
-              {
-                windowId: `${label.caseId}_window`,
-                grade: label.relevantGrade,
-              },
-            ],
+            relevance: label.sourceLabels.map((gold) => ({
+              windowId: `${label.caseId}_window_${gold.slot}`,
+              grade: gold.relevanceGrade,
+            })),
             acceptableClaims:
               label.acceptableClaimText.length === 0
                 ? []
@@ -999,7 +1009,7 @@ it("measures all eighty isolated development baselines without loading sealed ho
                     {
                       id: `${label.caseId}_claim`,
                       acceptableTextVariants: label.acceptableClaimText,
-                      supportedBy: [`${label.caseId}_window`],
+                      supportedBy: [`${label.caseId}_window_original`],
                       forbiddenTextVariants: label.forbiddenClaimText,
                     },
                   ],
@@ -1116,12 +1126,32 @@ it("measures all eighty isolated development baselines without loading sealed ho
         sourceManifestSha256: runtime.input.manifest.sourceManifestSha256,
         labelSha256: hash(runtime.independentLabel),
       })),
-      labelSha256: DEVELOPMENT_LABEL_SHA256,
+      labelSha256: DEVELOPMENT_COMPARISON_LABEL_SHA256,
     };
     const suite = developmentSuiteSchema.parse({
       ...definition,
       suiteSha256: hash(definition),
     });
+    if (process.env["ASK_EVALUATION_EXPORT_BASELINE"] === "1")
+      await writeFile(
+        new URL(
+          "../../../.context/492-development-freeze-v2.json",
+          import.meta.url,
+        ),
+        JSON.stringify(
+          {
+            suite,
+            labelsSha256: DEVELOPMENT_COMPARISON_LABEL_SHA256,
+            caseManifests: cases.map((runtime) => ({
+              manifest: runtime.input.manifest,
+              corpus: runtime.input.development,
+              label: runtime.independentLabel,
+            })),
+          },
+          null,
+          2,
+        ),
+      );
     const corrupted = {
       ...definition,
       caseBindings: definition.caseBindings.map((binding, index) =>
@@ -1144,7 +1174,7 @@ it("measures all eighty isolated development baselines without loading sealed ho
     if (process.env["ASK_EVALUATION_EXPORT_BASELINE"] === "1")
       await writeFile(
         new URL(
-          "../../../.context/492-development-baseline.json",
+          "../../../.context/492-development-baseline-v2.json",
           import.meta.url,
         ),
         JSON.stringify(report, null, 2),
@@ -1192,6 +1222,13 @@ it("measures all eighty isolated development baselines without loading sealed ho
       report.caseResults.every(
         (row) => row.usage.calls === 0 && row.usage.reservedCents === "0",
       ),
+    ).toBe(true);
+    expect(
+      report.caseResults
+        .filter((row) => row.category === "topic" && row.recallAt10 === 1)
+        .every(
+          (row) => row.precisionAt10 === 2 / 3 && row.validCitations === 4,
+        ),
     ).toBe(true);
     expect(report.realVectorMeasured).toBe(false);
     expect(report.realModelMeasured).toBe(false);
