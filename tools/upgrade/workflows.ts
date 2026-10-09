@@ -1,3 +1,6 @@
+import {createPerson} from '@fss/domain/crm/people.ts';
+import {previewSelectedAttachment,commitSelectedAttachment,readSelectedAttachment} from '@fss/domain/crm/selectedAttachments.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
 import { randomUUID } from 'node:crypto';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
@@ -279,6 +282,24 @@ export async function runWorkflows(
   const businessDate = await businessDateOf(admin, now);
 
   const steps: readonly Step[] = [
+    {
+      name: 'crm.selectedFile (explicit import)',
+      run: async () => {
+        const sourceId=await withTransaction(session,async()=>{
+          const person=await createPerson(admin,'Upgrade selected-file correspondent');
+          if(!person.ok||person.value.personId===undefined)throw new Error('selected-file person was refused');
+          const file={fileName:'upgrade-original.txt',declaredByteLength:13,bytesBase64:'T3JpZ2luYWwgdGV4dA==',completeness:'complete' as const};
+          const preview=await previewSelectedAttachment(admin,file);
+          if(preview?.state!=='supported')throw new Error('exact original file was refused');
+          const imported=await commitSelectedAttachment(admin,{commandId:randomUUID(),clientVersion:'1.0.13',file,personId:person.value.personId,firmId:null,participants:[],occurredAt:null,importKey:randomUUID(),previewHash:preview.previewHash});
+          if(!imported.ok)throw new Error(`selected-file import refused: ${imported.reason}`);
+          return imported.value.sourceId;
+        });
+        const read=await withTransaction(session,()=>readSelectedAttachment(admin,sourceId));
+        if(read===null||read.file.state!=='selected'||read.source.availability!=='available'||read.source.revision!==1||read.source.occurredAt!==null||read.processing.state!=='not_requested')throw new Error('file import lost its selected revision or requested analysis implicitly');
+        return 'selected original revision1; unknown event date; processing not_requested; no provider call';
+      },
+    },
     {
       name: 'today.build',
       run: async () => {

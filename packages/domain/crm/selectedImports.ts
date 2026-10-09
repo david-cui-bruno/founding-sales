@@ -29,6 +29,10 @@ export async function previewSelectedImport(
 ): Promise<z.infer<typeof selectedImportPreviewSchema> | null> {
   return buildSelectedImportPreview(context, input, true);
 }
+/** Prepare exact selected content without acquiring endpoint candidate authority. */
+export async function prepareSelectedImport(context:RepositoryContext,input:Input){
+ return buildSelectedImportPreview(context,input,false);
+}
 async function buildSelectedImportPreview(
   context: RepositoryContext,
   input: Input,

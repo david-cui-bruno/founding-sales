@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import type { z } from "zod";
 import type {
   selectedImportInputSchema,
@@ -9,6 +9,7 @@ import type {
   selectedImportChangePayloadSchema,
   selectedImportResultSchema,
 } from "@fss/contracts";
+import { SelectedAttachments, type SelectedAttachmentPorts } from "./SelectedAttachments.tsx";
 import { Button } from "../ui/button.tsx";
 import { Select } from "../ui/select.tsx";
 type Input = z.infer<typeof selectedImportInputSchema>;
@@ -16,6 +17,7 @@ type Preview = z.infer<typeof selectedImportPreviewSchema>;
 type Page = z.infer<typeof selectedImportPageSchema>;
 type Change = z.infer<typeof selectedImportChangePayloadSchema>;
 export interface SelectedImportPorts {
+  attachments?: SelectedAttachmentPorts;
   read(scope: {
     personId?: string;
     firmId?: string;
@@ -42,13 +44,15 @@ export function SelectedImports({
   enabled,
   onChange,
   sourceVersion,
+  privacyKey,
 }: {
   personId?: string;
   firmId?: string;
   ports: SelectedImportPorts;
   enabled: boolean;
-  onChange?: () => Promise<void>;
+  onChange?: (isCurrent?: () => boolean) => Promise<void>;
   sourceVersion?: string;
+  privacyKey?: string;
 }): JSX.Element {
   const scope = useMemo(
     () => ({
@@ -79,7 +83,7 @@ export function SelectedImports({
   const [importKey, setImportKey] = useState(() => crypto.randomUUID());
   const sourceEpoch = useRef(0);
   const invalidateReads = useCallback(() => ++sourceEpoch.current, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const ticket = invalidateReads();
     setBusy(false);
     setPage(null);
@@ -96,6 +100,7 @@ export function SelectedImports({
     setOtherAttachments([]);
     setExactOriginalDate(null);
     setError("");
+    if (!enabled) return () => { invalidateReads(); };
     void ports
       .read(scope)
       .then((value) => {
@@ -107,7 +112,7 @@ export function SelectedImports({
     return () => {
       invalidateReads();
     };
-  }, [ports, scope, sourceVersion, invalidateReads]);
+  }, [ports, scope, sourceVersion, privacyKey, enabled, invalidateReads]);
   const run = async (work: (ticket: number) => Promise<void>) => {
     const ticket = invalidateReads();
     setBusy(true);
@@ -163,7 +168,7 @@ export function SelectedImports({
   const refresh = async (ticket: number) => {
     if (ticket !== sourceEpoch.current) return;
     setPage(null);
-    await onChange?.();
+    await onChange?.(() => ticket === sourceEpoch.current);
     if (ticket !== sourceEpoch.current) return;
     const next = await ports.read(scope);
     if (ticket === sourceEpoch.current) setPage(next);
@@ -181,7 +186,7 @@ export function SelectedImports({
         references only.
       </p>
       {error ? <p role="alert">{error}</p> : null}
-      <label>
+      {ports.attachments ? <SelectedAttachments ports={ports.attachments} enabled={enabled} personId={personId} firmId={firmId} privacyKey={privacyKey} sourceVersion={sourceVersion} sources={page?.imports.filter(item => item.metadata.subtype === "selected_file").map(item => ({sourceId:item.source.sourceId,label:item.metadata.label ?? "Deleted file"})) ?? []} onChange={async()=>{ const ticket=sourceEpoch.current; await onChange?.(() => ticket === sourceEpoch.current); if(ticket!==sourceEpoch.current)return; const value=await ports.read(scope); if(ticket===sourceEpoch.current)setPage(value); }} /> : <label>
         Selected text file
         <input
           aria-label="Selected text file"
@@ -202,7 +207,7 @@ export function SelectedImports({
             event.target.value = "";
           }}
         />
-      </label>
+      </label>}
       <label>
         Import label
         <input

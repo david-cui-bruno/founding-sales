@@ -246,6 +246,11 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
+ '/crm/attachments/commit':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:1,metadataRevision:1}},
+ '/crm/attachments/reselect':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:2,metadataRevision:2}},
+ '/crm/attachments/analyze':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:1,generationId:FIXTURE_IDS.firm,state:'pending',reason:'adapter_unavailable'}},
+ '/crm/attachments/preview':{state:'unsupported',reason:'unsupported_format',processing:'unavailable',supportedFormats:['utf8_text','utf8_markdown','utf8_csv','utf8_srt','utf8_vtt'],maxBytes:80000,maxCharacters:20000},
+ '/crm/attachments/read':{file:{state:'selected',sourceRevision:1,metadataRevision:1,fileName:'original.txt',byteLength:13,fileHash:'a'.repeat(64),format:'utf8_text',origin:'user_selected_original'},source:{workspaceId:FIXTURE_IDS.firm,sourceId:FIXTURE_IDS.item,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-09T00:00:00Z',completeness:'selected_excerpt',availability:'available'},processing:{state:'not_requested',claims:[]}},
  '/crm/progress/read':{version:1,events:[],truncated:false,coverage:'partial'},
  '/crm/processing/source/read':{state:'available',source:{workspaceId:FIXTURE_IDS.firm,sourceId:FIXTURE_IDS.item,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-01T00:00:00Z',completeness:'selected_excerpt',availability:'available'},extent:{unit:'utf16',length:0},passage:null},
  '/crm/processing/read':{state:'not_requested',claims:[]},

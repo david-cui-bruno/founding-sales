@@ -1,3 +1,4 @@
+import {flagPublishedCrmEvidence} from '@fss/domain/crm/evidenceDecisions.ts';
 import {unavailableMailEvidence,type CrmMailEvidencePort,type MailProcessingAuthority} from '@fss/domain/crm/mailEvidence.ts';
 import {createHash} from 'node:crypto';
 import {readProcessingContext,parsedProcessingContext,sameProcessingContext,processingContextHash,NATIVE_PROCESSING_AUTHORIZATION_HASH,UNAVAILABLE_MAIL_AUTHORIZATION_HASH} from '@fss/domain/crm/processingContext.ts';
@@ -153,6 +154,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    if(!claims.success||answer.acceptance!=='accepted'){await setState(context,row.id,'failed','invalid_extraction');return;}
    for(const claim of claims.data){const citation=await resolveCrmSource(context,{...source,locator:claim.locator},mailEvidence);if(citation?.passage?.text!==claim.quote){await setState(context,row.id,'failed','invalid_quote');return;}}
    for(const claim of claims.data)await context.db.query('INSERT INTO crm_extraction_claims(workspace_id,generation_id,kind,interpretation,status,locator,quote,claim_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[context.scope.workspaceId,row.id,claim.kind,claim.interpretation,claim.status,claim.locator,claim.quote,createHash('sha256').update(JSON.stringify({source,context:capturedContext,...claim})).digest('hex')]);
+   await flagPublishedCrmEvidence(context,source,row.context_hash,claims.data);
    await setState(context,row.id,'complete',null);
   });
  }};

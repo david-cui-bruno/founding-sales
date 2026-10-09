@@ -287,7 +287,7 @@ export function FirmAddresses({
               More firm notes
             </Button>
           ) : null}
-          {imports ? <SelectedImports key={firmId} enabled={enabled} firmId={firmId} ports={imports} sourceVersion={page.sources.map(source=>`${source.sourceId}:${source.revision}:${source.availability}`).join('|')} onChange={async()=>setPage(await ports.read(firmId))}/> : null}
+          {imports ? <SelectedImports key={firmId} privacyKey={privacyKey} enabled={enabled} firmId={firmId} ports={imports} sourceVersion={page.sources.map(source=>`${source.sourceId}:${source.revision}:${source.availability}`).join('|')} onChange={async(isCurrent)=>{ const next=await ports.read(firmId); if(isCurrent?.() ?? true)setPage(next); }}/> : null}
             <Endpoints
             key={firmId}
             firmId={firmId}

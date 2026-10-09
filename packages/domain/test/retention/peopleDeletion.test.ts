@@ -121,8 +121,11 @@ it('preserves independent identity and another firm history while deleting an in
       return { sourceId: source.sourceId, sourceRevision: source.revision, contentHash: source.contentHash };
     };
     const defaultA = await capture('default-a', 'Legacy firm conversation');
-    const onlyB = await capture('only-b', 'Separate firm conversation survives');
     const mixed = await capture('mixed-ab', 'Indivisible conversation about both firms');
+    // Capture the genuinely B-only copy while B is the actual legacy authority.
+    await isolated.session.query('UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2', [workspaceId, personId, firmB]);
+    const onlyB = await capture('only-b', 'Separate firm conversation survives');
+    await isolated.session.query('UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2', [workspaceId, personId, firmA]);
     const assertion = async (firmId: string, evidence: typeof onlyB) => {
       const result = await saveRelationship(context, {
         commandId: '11111111-1111-4111-8111-111111111111', clientVersion: '1.0.13',
@@ -298,7 +301,10 @@ it('deletion and a permitted surviving-context read both finish without exposing
     await isolated.session.query('INSERT INTO firms(workspace_id,id,name,assigned_user_id) VALUES($1,$2,$3,$4)',
       [workspaceId, firmB, 'Surviving concurrent history', workspaces.alpha.salesperson.userId]);
     await bridgeLegacyContacts(context, [personId]);
+    // Establish B capture authority before the later legacy move to A.
+    await isolated.session.query('UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2', [workspaceId, personId, firmB]);
     await addSelectedSource(context, { personId, sourceKey: 'concurrent-b-only', excerpt: 'Surviving B history', occurredAt: '2026-10-01T14:00:00.000Z' });
+    await isolated.session.query('UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2', [workspaceId, personId, records.alpha.firmId]);
     const source = (await readPerson(context, personId))?.sources[0];
     if (source === undefined || source.contentHash === null) throw new Error('source fixture failed');
     const evidence = { sourceId: source.sourceId, sourceRevision: source.revision, contentHash: source.contentHash };
