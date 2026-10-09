@@ -34,3 +34,8 @@ it('admits independently priced Ask stages to the conserved provider ledger',asy
 it('refuses a private question without its initial source list',async()=>{
  await expect(database.session.query(`INSERT INTO crm_ask_requests(workspace_id,owner_user_id,question,scope,initial_contexts,initial_access_closure,state,reason) VALUES($1,$2,'Private question','{}','[{"personId":null,"firmIds":[],"relationships":[],"review":"current"}]','{"firmIds":[],"personIds":[]}','unavailable','purpose_unavailable')`,[seeded.alpha.workspaceId,seeded.alpha.admin.userId])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_request_private_shape'});
 });
+it('refuses a late canonical window after the private request was erased',async()=>{
+ const id=randomUUID(),sourceId=randomUUID();
+ await database.session.query(`INSERT INTO crm_ask_requests(workspace_id,id,owner_user_id,state,reason) VALUES($1,$2,$3,'deleted','deleted')`,[seeded.alpha.workspaceId,id,seeded.alpha.admin.userId]);
+ await expect(database.session.query(`INSERT INTO crm_ask_request_windows(workspace_id,request_id,request_version,request_epoch,ordinal,source_kind,source_id,source_revision,source_hash,locator,context_hash,text_hash,group_hash,context_snapshot,original_access_closure) VALUES($1,$2,1,1,1,'selected_note',$3,1,$4,'text:0:10',$4,$4,$4,'{"personId":null,"firmIds":[],"relationships":[],"review":"current"}','{"firmIds":[],"personIds":[]}')`,[seeded.alpha.workspaceId,id,sourceId,'a'.repeat(64)])).rejects.toMatchObject({code:'23514',constraint:'crm_ask_window_current_request'});
+});

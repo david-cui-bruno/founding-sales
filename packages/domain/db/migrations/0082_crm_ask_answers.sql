@@ -176,3 +176,20 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER crm_ask_mail_invalidation AFTER UPDATE OR DELETE ON crm_mail_sources FOR EACH ROW EXECUTE FUNCTION invalidate_crm_ask_mail_copy();
+
+CREATE FUNCTION guard_crm_ask_window() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE parent crm_ask_requests%ROWTYPE; selected jsonb; position integer;
+BEGIN
+ SELECT * INTO parent FROM crm_ask_requests WHERE workspace_id=NEW.workspace_id AND id=NEW.request_id FOR UPDATE;
+ IF NOT FOUND THEN RETURN NEW; END IF; -- The workspace-bound FK reports a missing parent.
+ IF parent.state<>'pending' OR parent.version<>NEW.request_version OR parent.epoch<>NEW.request_epoch THEN
+  RAISE EXCEPTION USING ERRCODE='23514',CONSTRAINT='crm_ask_window_current_request',MESSAGE='Ask window requires current private request';
+ END IF;
+ SELECT src,ordinality::integer-1 INTO selected,position FROM jsonb_array_elements(parent.scope->'sources') WITH ORDINALITY AS sources(src,ordinality) WHERE src->>'kind'=NEW.source_kind AND src->>'sourceId'=NEW.source_id::text;
+ IF selected IS NULL OR selected->>'revision'<>NEW.source_revision::text OR selected->>'contentHash'<>NEW.source_hash OR parent.initial_contexts->position IS DISTINCT FROM NEW.context_snapshot OR parent.initial_access_closure IS DISTINCT FROM NEW.original_access_closure THEN
+  RAISE EXCEPTION USING ERRCODE='23514',CONSTRAINT='crm_ask_window_current_request',MESSAGE='Ask window requires original input authority';
+ END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER crm_ask_window_current_request BEFORE INSERT ON crm_ask_request_windows FOR EACH ROW EXECUTE FUNCTION guard_crm_ask_window();
