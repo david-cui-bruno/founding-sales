@@ -1,41 +1,593 @@
-import {useEffect,useRef,useState} from 'react';
-import type {z} from 'zod';
-import type {askReadSchema,askResponseSchema} from '@fss/contracts';
-export type AskRead=z.infer<typeof askReadSchema>;
-export type AskResponse=z.infer<typeof askResponseSchema>;
-export interface AskPorts {read(input:AskRead):Promise<AskResponse>}
-export function Ask({ports,privacyKey,enabled}:{ports:AskPorts;privacyKey:string;enabled:boolean}){
- const [selectedSources,setSelectedSources]=useState<Extract<AskResponse,{operation:'sources'}>['sources']>([]);const [copyQuery,setCopyQuery]=useState('');
- const [selected,setSelected]=useState<Extract<AskResponse,{operation:'records'}>['records'][number]|null>(null);const [passageQuery,setPassageQuery]=useState('');
- const [query,setQuery]=useState('');const [kind,setKind]=useState<'people'|'firms'>('people');
- const [result,setResult]=useState<AskResponse|null>(null);const [error,setError]=useState<string|null>(null);
- const epoch=useRef(0);const key=`${privacyKey}:${enabled}`;const current=useRef(key);if(current.current!==key){current.current=key;epoch.current++;}
- useEffect(()=>{setResult(null);setSelected(null);setSelectedSources([]);setCopyQuery('');setQuery('');setPassageQuery('');setError(null);},[key]);
- useEffect(()=>()=>{epoch.current++;},[]);
- async function searchCopies(){if(selectedSources.length===0)return;const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'passages',scope:{sources:selectedSources.map(source=>({workspaceId:source.workspaceId,sourceId:source.sourceId,kind:source.kind,revision:source.revision,contentHash:source.contentHash,locator:null}))},query:copyQuery,limit:20});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current){setSelectedSources([]);setCopyQuery('');setError('Selected copies are unavailable. Read their current versions again.');}}}
- async function sources(after?:Extract<AskRead,{operation:'sources'}>['after']){if(selected===null)return;setSelectedSources([]);setCopyQuery('');const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'sources',scope:selected.kind==='firm'?{firmId:selected.recordId}:{personId:selected.recordId},limit:20,...(after===undefined?{}:{after})});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Copied sources are unavailable. Try reading again.');}}
- async function activity(before?:string){if(selected?.kind!=='firm')return;const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'activity',scope:{firmId:selected.recordId},...(before===undefined?{}:{before})});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Activity is unavailable. Try reading again.');}}
- async function replies(){if(selected?.kind!=='firm')return;const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'reply_status',scope:{firmId:selected.recordId}});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Reply evidence is unavailable. Try reading again.');}}
- async function tasks(){if(selected?.kind!=='firm')return;const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'tasks',scope:{firmId:selected.recordId},limit:20});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Current work is unavailable. Try reading again.');}}
- async function opportunities(){if(selected?.kind!=='firm')return;const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'opportunities',scope:{firmId:selected.recordId},status:'open',limit:20});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Current CRM state is unavailable. Try reading again.');}}
- async function passages(afterSourceId?:string){if(selected?.kind!=='person')return;const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'passages',scope:{personId:selected.recordId,...(afterSourceId===undefined?{}:{afterSourceId})},query:passageQuery,limit:20});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Passages are unavailable. Try reading again.');}}
- async function find(afterId?:string){const captured=++epoch.current;setResult(null);setError(null);try{const next=await ports.read({operation:'records',query,kind,limit:20,...(afterId===undefined?{}:{afterId})});if(captured===epoch.current)setResult(next);}catch{if(captured===epoch.current)setError('Records are unavailable. Try reading again.');}}
- return <section aria-label="Ask" className="space-y-4 p-6"><h1 className="text-xl font-semibold">Ask</h1><p>Retrieve records and original evidence. Conversation coverage may be incomplete.</p>
-  {selected===null&&<div><label>Find a person or firm<input aria-label="Find a person or firm" value={query} onChange={event=>{epoch.current++;setResult(null);setSelected(null);setSelectedSources([]);setCopyQuery('');setPassageQuery('');setQuery(event.target.value);}}/></label>
-  <label>Record kind<select value={kind} onChange={event=>{epoch.current++;setResult(null);setSelected(null);setSelectedSources([]);setCopyQuery('');setPassageQuery('');setKind(event.target.value==='firms'?'firms':'people');}}><option value="people">People</option><option value="firms">Firms</option></select></label>
-  <button disabled={!enabled||!query.trim()} onClick={()=>{void find();}}>Find records</button></div>}
-  {error!==null&&<p role="alert">{error}</p>}
-  {result?.operation==='records'&&<div>{result.selection==='ambiguous'&&<p>Choose a record; these names are not unique.</p>}{!result.scanComplete&&<p>More records remain. Identity selection is unresolved.</p>}{result.nextAfterId!==null&&<button disabled={!enabled} onClick={()=>{void find(result.nextAfterId??undefined);}}>Next record page</button>}{result.records.map(record=><div key={record.recordId}><button onClick={()=>{epoch.current++;setResult(null);setSelectedSources([]);setCopyQuery('');setSelected(record);}}>Select {record.name}</button><span>{record.kind==='person'?'Person':'Firm'}</span></div>)}</div>}
-  {selected!==null&&<button onClick={()=>{epoch.current++;setSelected(null);setSelectedSources([]);setCopyQuery('');setPassageQuery('');setResult(null);setQuery('');setError(null);}}>Change record</button>}
-  {selected!==null&&<button disabled={!enabled} onClick={()=>{void sources();}}>Copied sources</button>}
-  {result?.operation==='sources'&&<div><p>Bounded copied sources for this record. Acquisition coverage is unverified.</p>{!result.coverage.scanComplete&&<p>More copied sources may remain.</p>}{result.coverage.sizeBoundReached&&<p>The source size limit was reached; this discovery page is partial.</p>}{result.nextAfter!==null&&<button disabled={!enabled} onClick={()=>{void sources(result.nextAfter??undefined);}}>Next source page</button>}{result.sources.map(source=><label key={`${source.kind}:${source.sourceId}`}><input type="checkbox" aria-label={`Include ${source.kind==='selected_note'?'Selected note':source.kind==='call_transcript'?'Call transcript':source.kind==='meeting_transcript'?'Meeting transcript':'Email'} version ${source.revision}`} disabled={!enabled||source.availability!=='available'||(selectedSources.length>=10&&!selectedSources.some(item=>item.kind===source.kind&&item.sourceId===source.sourceId))} checked={selectedSources.some(item=>item.kind===source.kind&&item.sourceId===source.sourceId)} onChange={event=>{epoch.current++;setSelectedSources(current=>event.target.checked?[...current,source]:current.filter(item=>item.kind!==source.kind||item.sourceId!==source.sourceId));}}/>{source.kind==='selected_note'?'Selected note':source.kind==='call_transcript'?'Call transcript':source.kind==='meeting_transcript'?'Meeting transcript':'Email'} · Version {source.revision} · {source.occurredAt??'Date unknown'} · {source.availability}</label>)}</div>}
-  {selected?.kind==='firm'&&<div><h2>{selected.name}</h2><button disabled={!enabled} onClick={()=>{void opportunities();}}>Open opportunities</button><button disabled={!enabled} onClick={()=>{void tasks();}}>Open work</button><button disabled={!enabled} onClick={()=>{void replies();}}>Reply evidence</button><button disabled={!enabled} onClick={()=>{void activity();}}>Activity</button></div>}
-  {result?.operation==='opportunities'&&<div><p>{result.count} open opportunities</p><p>Exact CRM state. Conversation coverage is unverified.</p>{result.truncated&&<p>Some opportunity records are not displayed.</p>}{result.records.map(record=><p key={record.opportunityId}>{record.name??'Unnamed opportunity'} · {record.stageKey}</p>)}</div>}
-  {result?.operation==='activity'&&<div><p>Operational event dates. Conversation coverage is unverified.</p>{!result.scanComplete&&<p>More operational events may remain.</p>}{result.nextBefore!==null&&<button disabled={!enabled} onClick={()=>{void activity(result.nextBefore??undefined);}}>Older activity page</button>}{result.events.map(event=><p key={event.key}>{event.at} · {event.kind} · {event.detail??event.code??'Details unknown'}</p>)}</div>}
-  {result?.operation==='reply_status'&&<div><p>{result.withoutVerifiedReplyCount} verified outgoing messages lack a verified reply receipt.</p><p>This does not establish unanswered mail; captured history is partial.</p>{result.truncated&&<p>More authorized progress receipts may remain.</p>}</div>}
-  {result?.operation==='tasks'&&<div><p>{result.count} open tasks</p><p>Exact CRM state. Conversation coverage is unverified.</p>{result.truncated&&<p>Some work records are not displayed.</p>}{result.records.map(record=><p key={record.key}>{record.label} · {record.dueAt} · {record.status}</p>)}</div>}
-  {selected?.kind==='person'&&selectedSources.length===0&&<div><h2>{selected.name}</h2><label>Search original passages<input aria-label="Search original passages" value={passageQuery} onChange={event=>{epoch.current++;setResult(null);setPassageQuery(event.target.value);}}/></label><button disabled={!enabled||!passageQuery.trim()} onClick={()=>{void passages();}}>Find passages</button></div>}
-  {selectedSources.length>0&&<div><p>{selectedSources.length} selected copies (maximum 10)</p><label>Search selected copies<input aria-label="Search selected copies" value={copyQuery} onChange={event=>{epoch.current++;setResult(null);setCopyQuery(event.target.value);}}/></label><button disabled={!enabled||!copyQuery.trim()} onClick={()=>{void searchCopies();}}>Search selected copies</button></div>}
-  {result?.operation==='passages'&&<div><p>{result.coverage.scope==='explicit_copied_sources'?'Explicit selected copies only. Acquisition coverage is unverified.':'Selected copies only. Inbox coverage is unverified.'}</p>{(!result.coverage.scanComplete||result.truncated)&&<p>More copied evidence may remain.</p>}{result.nextAfterSourceId!==null&&<button disabled={!enabled} onClick={()=>{void passages(result.nextAfterSourceId??undefined);}}>Next copied-source page</button>}{result.passages.map((passage,index)=><article key={index}><pre className="whitespace-pre-wrap break-words">{passage.text}</pre>{passage.sources.map((source,sourceIndex)=><p key={sourceIndex}>{source.occurredAt===null?'Date unknown':source.occurredAt} · {source.speaker===null?'Speaker unknown':source.speaker} · Version {source.revision}</p>)}</article>)}</div>}
- </section>;
+import { useEffect, useRef, useState } from "react";
+import type { z } from "zod";
+import type { askReadSchema, askResponseSchema } from "@fss/contracts";
+export type AskRead = z.infer<typeof askReadSchema>;
+export type AskResponse = z.infer<typeof askResponseSchema>;
+export interface AskPorts {
+  read(input: AskRead): Promise<AskResponse>;
+}
+export function Ask({
+  ports,
+  privacyKey,
+  enabled,
+}: {
+  ports: AskPorts;
+  privacyKey: string;
+  enabled: boolean;
+}) {
+  const [selectedSources, setSelectedSources] = useState<
+    Extract<AskResponse, { operation: "sources" }>["sources"]
+  >([]);
+  const [copyQuery, setCopyQuery] = useState("");
+  const [selected, setSelected] = useState<
+    Extract<AskResponse, { operation: "records" }>["records"][number] | null
+  >(null);
+  const [passageQuery, setPassageQuery] = useState("");
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<"people" | "firms">("people");
+  const [result, setResult] = useState<AskResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const epoch = useRef(0);
+  const key = `${privacyKey}:${enabled}`;
+  const current = useRef(key);
+  if (current.current !== key) {
+    current.current = key;
+    epoch.current++;
+  }
+  useEffect(() => {
+    setResult(null);
+    setSelected(null);
+    setSelectedSources([]);
+    setCopyQuery("");
+    setQuery("");
+    setPassageQuery("");
+    setError(null);
+  }, [key]);
+  useEffect(
+    () => () => {
+      epoch.current++;
+    },
+    [],
+  );
+  async function searchCopies() {
+    if (selectedSources.length === 0) return;
+    const captured = ++epoch.current;
+    setResult(null);
+    setError(null);
+    try {
+      const next = await ports.read({
+        operation: "passages",
+        scope: {
+          sources: selectedSources.map((source) => ({
+            workspaceId: source.workspaceId,
+            sourceId: source.sourceId,
+            kind: source.kind,
+            revision: source.revision,
+            contentHash: source.contentHash,
+            locator: null,
+          })),
+        },
+        query: copyQuery,
+        limit: 20,
+      });
+      if (captured === epoch.current) setResult(next);
+    } catch {
+      if (captured === epoch.current) {
+        setSelectedSources([]);
+        setCopyQuery("");
+        setError(
+          "Selected copies are unavailable. Read their current versions again.",
+        );
+      }
+    }
+  }
+  async function sources(
+    after?: Extract<AskRead, { operation: "sources" }>["after"],
+  ) {
+    if (selected === null) return;
+    setSelectedSources([]);
+    setCopyQuery("");
+    const captured = ++epoch.current;
+    setResult(null);
+    setError(null);
+    try {
+      const next = await ports.read({
+        operation: "sources",
+        scope:
+          selected.kind === "firm"
+            ? { firmId: selected.recordId }
+            : { personId: selected.recordId },
+        limit: 20,
+        ...(after === undefined ? {} : { after }),
+      });
+      if (captured === epoch.current) setResult(next);
+    } catch {
+      if (captured === epoch.current)
+        setError("Copied sources are unavailable. Try reading again.");
+    }
+  }
+  async function activity(before?: string) {
+    if (selected?.kind !== "firm") return;
+    const captured = ++epoch.current;
+    setResult(null);
+    setError(null);
+    try {
+      const next = await ports.read({
+        operation: "activity",
+        scope: { firmId: selected.recordId },
+        ...(before === undefined ? {} : { before }),
+      });
+      if (captured === epoch.current) setResult(next);
+    } catch {
+      if (captured === epoch.current)
+        setError("Activity is unavailable. Try reading again.");
+    }
+  }
+  async function replies() {
+    if (selected?.kind !== "firm") return;
+    const captured = ++epoch.current;
+    setResult(null);
+    setError(null);
+    try {
+      const next = await ports.read({
+        operation: "reply_status",
+        scope: { firmId: selected.recordId },
+      });
+      if (captured === epoch.current) setResult(next);
+    } catch {
+      if (captured === epoch.current)
+        setError("Reply evidence is unavailable. Try reading again.");
+    }
+  }
+  async function tasks() {
+    if (selected?.kind !== "firm") return;
+    const captured = ++epoch.current;
+    setResult(null);
+    setError(null);
+    try {
+      const next = await ports.read({
+        operation: "tasks",
+        scope: { firmId: selected.recordId },
+        limit: 20,
+      });
+      if (captured === epoch.current) setResult(next);
+    } catch {
+      if (captured === epoch.current)
+        setError("Current work is unavailable. Try reading again.");
+    }
+  }
+  async function opportunities() {
+    if (selected?.kind !== "firm") return;
+    const captured = ++epoch.current;
+    setResult(null);
+    setError(null);
+    try {
+      const next = await ports.read({
+        operation: "opportunities",
+        scope: { firmId: selected.recordId },
+        status: "open",
+        limit: 20,
+      });
+      if (captured === epoch.current) setResult(next);
+    } catch {
+      if (captured === epoch.current)
+        setError("Current CRM state is unavailable. Try reading again.");
+    }
+  }
+  async function passages(afterSourceId?: string) {
+    if (selected?.kind !== "person") return;
+    const captured = ++epoch.current;
+    setResult(null);
+    setError(null);
+    try {
+      const next = await ports.read({
+        operation: "passages",
+        scope: {
+          personId: selected.recordId,
+          ...(afterSourceId === undefined ? {} : { afterSourceId }),
+        },
+        query: passageQuery,
+        limit: 20,
+      });
+      if (captured === epoch.current) setResult(next);
+    } catch {
+      if (captured === epoch.current)
+        setError("Passages are unavailable. Try reading again.");
+    }
+  }
+  async function find(afterId?: string) {
+    const captured = ++epoch.current;
+    setResult(null);
+    setError(null);
+    try {
+      const next = await ports.read({
+        operation: "records",
+        query,
+        kind,
+        limit: 20,
+        ...(afterId === undefined ? {} : { afterId }),
+      });
+      if (captured === epoch.current) setResult(next);
+    } catch {
+      if (captured === epoch.current)
+        setError("Records are unavailable. Try reading again.");
+    }
+  }
+  return (
+    <section aria-label="Ask" className="space-y-4 p-6">
+      <h1 className="text-xl font-semibold">Ask</h1>
+      <p>
+        Retrieve records and original evidence. Conversation coverage may be
+        incomplete.
+      </p>
+      {selected === null && (
+        <div>
+          <label>
+            Find a person or firm
+            <input
+              aria-label="Find a person or firm"
+              value={query}
+              onChange={(event) => {
+                epoch.current++;
+                setResult(null);
+                setSelected(null);
+                setSelectedSources([]);
+                setCopyQuery("");
+                setPassageQuery("");
+                setQuery(event.target.value);
+              }}
+            />
+          </label>
+          <label>
+            Record kind
+            <select
+              value={kind}
+              onChange={(event) => {
+                epoch.current++;
+                setResult(null);
+                setSelected(null);
+                setSelectedSources([]);
+                setCopyQuery("");
+                setPassageQuery("");
+                setKind(event.target.value === "firms" ? "firms" : "people");
+              }}
+            >
+              <option value="people">People</option>
+              <option value="firms">Firms</option>
+            </select>
+          </label>
+          <button
+            disabled={!enabled || !query.trim()}
+            onClick={() => {
+              void find();
+            }}
+          >
+            Find records
+          </button>
+        </div>
+      )}
+      {error !== null && <p role="alert">{error}</p>}
+      {result?.operation === "records" && (
+        <div>
+          {result.selection === "ambiguous" && (
+            <p>Choose a record; these names are not unique.</p>
+          )}
+          {!result.scanComplete && (
+            <p>More records remain. Identity selection is unresolved.</p>
+          )}
+          {result.nextAfterId !== null && (
+            <button
+              disabled={!enabled}
+              onClick={() => {
+                void find(result.nextAfterId ?? undefined);
+              }}
+            >
+              Next record page
+            </button>
+          )}
+          {result.records.map((record) => (
+            <div key={record.recordId}>
+              <button
+                onClick={() => {
+                  epoch.current++;
+                  setResult(null);
+                  setSelectedSources([]);
+                  setCopyQuery("");
+                  setSelected(record);
+                }}
+              >
+                Select {record.name}
+              </button>
+              <span>{record.kind === "person" ? "Person" : "Firm"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {selected !== null && (
+        <button
+          onClick={() => {
+            epoch.current++;
+            setSelected(null);
+            setSelectedSources([]);
+            setCopyQuery("");
+            setPassageQuery("");
+            setResult(null);
+            setQuery("");
+            setError(null);
+          }}
+        >
+          Change record
+        </button>
+      )}
+      {selected !== null && (
+        <button
+          disabled={!enabled}
+          onClick={() => {
+            void sources();
+          }}
+        >
+          Copied sources
+        </button>
+      )}
+      {result?.operation === "sources" && (
+        <div>
+          <p>
+            Bounded copied sources for this record. Acquisition coverage is
+            unverified.
+          </p>
+          {!result.coverage.scanComplete && (
+            <p>More copied sources may remain.</p>
+          )}
+          {result.coverage.sizeBoundReached && (
+            <p>
+              The source size limit was reached; this discovery page is partial.
+            </p>
+          )}
+          {result.nextAfter !== null && (
+            <button
+              disabled={!enabled}
+              onClick={() => {
+                void sources(result.nextAfter ?? undefined);
+              }}
+            >
+              Next source page
+            </button>
+          )}
+          {result.sources.map((source) => (
+            <label key={`${source.kind}:${source.sourceId}`}>
+              <input
+                type="checkbox"
+                aria-label={`Include ${source.kind === "selected_note" ? "Selected note" : source.kind === "call_transcript" ? "Call transcript" : source.kind === "meeting_transcript" ? "Meeting transcript" : "Email"} version ${source.revision}`}
+                disabled={
+                  !enabled ||
+                  source.availability !== "available" ||
+                  (selectedSources.length >= 10 &&
+                    !selectedSources.some(
+                      (item) =>
+                        item.kind === source.kind &&
+                        item.sourceId === source.sourceId,
+                    ))
+                }
+                checked={selectedSources.some(
+                  (item) =>
+                    item.kind === source.kind &&
+                    item.sourceId === source.sourceId,
+                )}
+                onChange={(event) => {
+                  epoch.current++;
+                  setSelectedSources((current) =>
+                    event.target.checked
+                      ? [...current, source]
+                      : current.filter(
+                          (item) =>
+                            item.kind !== source.kind ||
+                            item.sourceId !== source.sourceId,
+                        ),
+                  );
+                }}
+              />
+              {source.kind === "selected_note"
+                ? "Selected note"
+                : source.kind === "call_transcript"
+                  ? "Call transcript"
+                  : source.kind === "meeting_transcript"
+                    ? "Meeting transcript"
+                    : "Email"}{" "}
+              · Version {source.revision} ·{" "}
+              {source.occurredAt ?? "Date unknown"} · {source.availability}
+            </label>
+          ))}
+        </div>
+      )}
+      {selected?.kind === "firm" && (
+        <div>
+          <h2>{selected.name}</h2>
+          <button
+            disabled={!enabled}
+            onClick={() => {
+              void opportunities();
+            }}
+          >
+            Open opportunities
+          </button>
+          <button
+            disabled={!enabled}
+            onClick={() => {
+              void tasks();
+            }}
+          >
+            Open work
+          </button>
+          <button
+            disabled={!enabled}
+            onClick={() => {
+              void replies();
+            }}
+          >
+            Reply evidence
+          </button>
+          <button
+            disabled={!enabled}
+            onClick={() => {
+              void activity();
+            }}
+          >
+            Activity
+          </button>
+        </div>
+      )}
+      {result?.operation === "opportunities" && (
+        <div>
+          <p>{result.count} open opportunities</p>
+          <p>Exact CRM state. Conversation coverage is unverified.</p>
+          {result.truncated && (
+            <p>Some opportunity records are not displayed.</p>
+          )}
+          {result.records.map((record) => (
+            <p key={record.opportunityId}>
+              {record.name ?? "Unnamed opportunity"} · {record.stageKey}
+            </p>
+          ))}
+        </div>
+      )}
+      {result?.operation === "activity" && (
+        <div>
+          <p>Operational event dates. Conversation coverage is unverified.</p>
+          {!result.scanComplete && <p>More operational events may remain.</p>}
+          {result.nextBefore !== null && (
+            <button
+              disabled={!enabled}
+              onClick={() => {
+                void activity(result.nextBefore ?? undefined);
+              }}
+            >
+              Older activity page
+            </button>
+          )}
+          {result.events.map((event) => (
+            <p key={event.key}>
+              {event.at} · {event.kind} ·{" "}
+              {event.detail ?? event.code ?? "Details unknown"}
+            </p>
+          ))}
+        </div>
+      )}
+      {result?.operation === "reply_status" && (
+        <div>
+          <p>
+            {result.withoutVerifiedReplyCount} verified outgoing messages lack a
+            verified reply receipt.
+          </p>
+          <p>
+            This does not establish unanswered mail; captured history is
+            partial.
+          </p>
+          {result.truncated && (
+            <p>More authorized progress receipts may remain.</p>
+          )}
+        </div>
+      )}
+      {result?.operation === "tasks" && (
+        <div>
+          <p>{result.count} open tasks</p>
+          <p>Exact CRM state. Conversation coverage is unverified.</p>
+          {result.truncated && <p>Some work records are not displayed.</p>}
+          {result.records.map((record) => (
+            <p key={record.key}>
+              {record.label} · {record.dueAt} · {record.status}
+            </p>
+          ))}
+        </div>
+      )}
+      {selected?.kind === "person" && selectedSources.length === 0 && (
+        <div>
+          <h2>{selected.name}</h2>
+          <label>
+            Search original passages
+            <input
+              aria-label="Search original passages"
+              value={passageQuery}
+              onChange={(event) => {
+                epoch.current++;
+                setResult(null);
+                setPassageQuery(event.target.value);
+              }}
+            />
+          </label>
+          <button
+            disabled={!enabled || !passageQuery.trim()}
+            onClick={() => {
+              void passages();
+            }}
+          >
+            Find passages
+          </button>
+        </div>
+      )}
+      {selectedSources.length > 0 && (
+        <div>
+          <p>{selectedSources.length} selected copies (maximum 10)</p>
+          <label>
+            Search selected copies
+            <input
+              aria-label="Search selected copies"
+              value={copyQuery}
+              onChange={(event) => {
+                epoch.current++;
+                setResult(null);
+                setCopyQuery(event.target.value);
+              }}
+            />
+          </label>
+          <button
+            disabled={!enabled || !copyQuery.trim()}
+            onClick={() => {
+              void searchCopies();
+            }}
+          >
+            Search selected copies
+          </button>
+        </div>
+      )}
+      {result?.operation === "passages" && (
+        <div>
+          <p>
+            {result.coverage.scope === "explicit_copied_sources"
+              ? "Explicit selected copies only. Acquisition coverage is unverified."
+              : "Selected copies only. Inbox coverage is unverified."}
+          </p>
+          {(!result.coverage.scanComplete || result.truncated) && (
+            <p>More copied evidence may remain.</p>
+          )}
+          {result.nextAfterSourceId !== null && (
+            <button
+              disabled={!enabled}
+              onClick={() => {
+                void passages(result.nextAfterSourceId ?? undefined);
+              }}
+            >
+              Next copied-source page
+            </button>
+          )}
+          {result.passages.map((passage, index) => (
+            <article key={index}>
+              <pre className="whitespace-pre-wrap break-words">
+                {passage.text}
+              </pre>
+              {passage.sources.map((source, sourceIndex) => (
+                <p key={sourceIndex}>
+                  {source.occurredAt === null
+                    ? "Date unknown"
+                    : source.occurredAt}{" "}
+                  ·{" "}
+                  {source.speaker === null ? "Speaker unknown" : source.speaker}{" "}
+                  · Version {source.revision}
+                </p>
+              ))}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
