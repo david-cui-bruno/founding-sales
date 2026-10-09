@@ -1,4 +1,4 @@
--- changes: call_transcripts, meeting_recordings, provider_reservations
+-- changes: call_transcripts, meeting_recordings, provider_reservations, crm_mail_source_intents
 -- Versioned processing receipts contain source identity, never copied source text.
 CREATE TABLE crm_extraction_generations (
   workspace_id uuid NOT NULL REFERENCES workspaces(id),
@@ -259,3 +259,6 @@ END;
 $$;
 CREATE TRIGGER crm_mail_extraction_invalidation AFTER UPDATE OR DELETE ON crm_mail_sources
 FOR EACH ROW EXECUTE FUNCTION invalidate_crm_mail_extraction();
+
+-- Body-free fair scan marker; it never changes copy or processing authority.
+ALTER TABLE crm_mail_source_intents ADD COLUMN last_processing_scan_at timestamptz;
