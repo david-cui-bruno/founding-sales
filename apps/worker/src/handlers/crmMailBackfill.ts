@@ -1,3 +1,4 @@
+import type {ExactMailSource} from '@fss/domain/mail/crmSources.ts';
 import {prepareRetainedCopyTraversal,completeRetainedCopyTraversal} from '@fss/domain/mail/crmRetainedReconciliation.ts';
 import {readHistoryRecovery,replaceHistoryRecoveryConfiguration,beginExpiredHistoryRecovery,freezeHistoryRecovery,advanceHistoryRecovery,type HistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
 import {backfillConfigurationHash} from '@fss/domain/mail/crmBackfillWork.ts';
@@ -50,7 +51,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(latest===null||latest.mailboxId!==proofInput.mailboxId||latest.providerAccountId!==proofInput.providerAccountId||latest.generation!==proofInput.generation||current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof))throw new BackfillFailure('acquisition_binding_changed');
    return result;
   }
-  async function providerMetadata(bound:BackfillAuthority,messageId:string){
+  async function providerMetadata(bound:BackfillAuthority,messageId:string,expected?:{source:ExactMailSource;contextIdentity:string}){
    let transientReason:'grant_unavailable'|'rate_limited'|'provider_unavailable'|undefined;
    try{
     const metadata=await providerRead('metadata',bound,async access=>{
@@ -60,13 +61,13 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      }
     });
     if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
-    await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
-    return metadata;
+    const originalUpdated=await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata,...expected===undefined?{}:{expectedSource:expected.source,expectedContextIdentity:expected.contextIdentity},observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    return {metadata,originalUpdated:originalUpdated===true};
    }catch(error){
     if(transientReason!==undefined){
      const latest=await adapters.resolveAccess({mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation});
      if(latest!==null&&latest.mailboxId===bound.proof.mailboxId&&latest.providerAccountId===bound.proof.providerAccountId&&latest.generation===bound.proof.generation)
-      await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata:null,transientReason,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+      await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata:null,transientReason,...expected===undefined?{}:{expectedSource:expected.source,expectedContextIdentity:expected.contextIdentity},observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     }
     throw error;
    }
@@ -77,9 +78,8 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     if(traversal!==undefined){
      let refreshed=false;
      if(traversal.snapshot!==null){
-      const metadata=await providerRead('metadata',authority,access=>adapters.gmail.getMetadata(access,traversal.messageId,METADATA_HEADERS));
-      if(metadata!==null&&(metadata.id!==traversal.messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
-      refreshed=await recordRetainedOriginalMetadata(context,{authority,messageId:traversal.messageId,metadata,expectedSource:traversal.exact,expectedContextIdentity:traversal.snapshot.contextIdentity,observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken})===true;
+      const observed=await providerMetadata(authority,traversal.messageId,{source:traversal.exact,contextIdentity:traversal.snapshot.contextIdentity});
+      refreshed=observed.originalUpdated;
      }
      await completeRetainedCopyTraversal(context,{authority,traversal,refreshed,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
      return;
@@ -104,7 +104,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      const outcome=await advanceHistoryRecovery(context,{authority:bound,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},{
       list:async request=>await providerRead('list',bound,access=>adapters.gmail.listMessageIds(access,request)),
       history:async request=>await providerRead('history',bound,access=>adapters.gmail.listHistory(access,request)),
-      metadata:async messageId=>await providerMetadata(bound,messageId),observer:adapters.observer,
+      metadata:async messageId=>(await providerMetadata(bound,messageId)).metadata,observer:adapters.observer,
      });
      if(outcome==='provider_unavailable')throw new BackfillFailure('provider_read_unavailable');
      if(outcome==='invalid_evidence')throw new BackfillFailure('provider_evidence_invalid');
@@ -143,7 +143,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      const unique=new Set(record.changes.map(change=>change.messageId));
      for(const messageId of unique){
       if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
-      const metadata=await providerMetadata(bound,messageId);
+      const metadata=(await providerMetadata(bound,messageId)).metadata;
       await withTransaction(input.session,async()=>{
        if(!await fenced(input))throw new BackfillFailure('acquisition_binding_changed');
        const current=await readBackfillAuthority(context,importId,true);
@@ -167,7 +167,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(!listed.ok)throw new BackfillFailure('provider_read_unavailable');
    for(const messageId of listed.messageIds){
     if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
-    const metadata=await providerMetadata(authority,messageId);
+    const metadata=(await providerMetadata(authority,messageId)).metadata;
     if(metadata!==null&&(BigInt(metadata.internalDateEpochMilliseconds)*1000n<BigInt(authority.fromEpochMicroseconds)||BigInt(metadata.internalDateEpochMilliseconds)*1000n>=BigInt(authority.toEpochMicroseconds)))continue;
     const expected=authority;
     await withTransaction(input.session,async()=>{

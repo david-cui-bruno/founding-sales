@@ -2,7 +2,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {repositoryContext,workspaceScope} from '../db/workspaceScope.ts';
 import {withTransaction} from '../db/queryable.ts';
 import {lockIdentityContext} from '../crm/identityAccess.ts';
-import {snapshotMailCopyAuthorityBatch,lockMailCopyAuthorityBatch,type ExactMailSource,type MailCopyAuthorityBatchSnapshot} from './crmSources.ts';
+import {snapshotMailCopyAuthorityBatch,lockMailCopyAuthorityBatch,readMailCopyAvailabilityBatch,type ExactMailSource,type MailCopyAuthorityBatchSnapshot} from './crmSources.ts';
 import {readBackfillAuthority,type BackfillAuthority} from './crmBackfillAuthority.ts';
 interface Fence{authority:BackfillAuthority;jobId:string;leaseOwner:string;fencingToken:string}
 interface Progress extends Record<string,unknown>{reconciliation_after_source_id:string|null;reconciliation_visited:string;reconciliation_exhausted:boolean}
@@ -31,9 +31,11 @@ export async function prepareRetainedCopyTraversal(context:RepositoryContext,inp
    return undefined;
   }
   const exact={sourceId:row.source_id,sourceRevision:row.source_revision,contentHash:row.content_hash};
-  let snapshot=await snapshotMailCopyAuthorityBatch(owner,[exact]);
+  const availability=await readMailCopyAvailabilityBatch(owner,[exact.sourceId]);
+  let snapshot=availability?.[0]?.availability==='available'&&availability[0].bodyAvailable?await snapshotMailCopyAuthorityBatch(owner,[exact]):null;
   if(snapshot!==null&&(!await lockIdentityContext(owner,{firmIds:snapshot.firmIds,personIds:snapshot.personIds})||!await lockMailCopyAuthorityBatch(owner,snapshot,{firmIds:snapshot.firmIds,personIds:snapshot.personIds,lockMode:'read'})))snapshot=null;
-  const current=await readBackfillAuthority(context,input.authority.importId,true);
+  await context.db.query('SELECT id FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.authority.importId]);
+  const current=await readBackfillAuthority(context,input.authority.importId);
   if(current===null||JSON.stringify(current.proof)!==JSON.stringify(proof))return undefined;
   return {exact,messageId:row.provider_message_id,snapshot,progress,hasMore:rows.length>1} satisfies RetainedCopyTraversal;
  });
@@ -46,7 +48,8 @@ export async function completeRetainedCopyTraversal(context:RepositoryContext,in
   const snapshot=input.traversal.snapshot;
   let unchanged=false;
   if(snapshot!==null&&await lockIdentityContext(owner,{firmIds:snapshot.firmIds,personIds:snapshot.personIds}))unchanged=await lockMailCopyAuthorityBatch(owner,snapshot,{firmIds:snapshot.firmIds,personIds:snapshot.personIds,lockMode:'read'});
-  const current=await readBackfillAuthority(context,input.authority.importId,true);
+  await context.db.query('SELECT id FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.authority.importId]);
+  const current=await readBackfillAuthority(context,input.authority.importId);
   if(current===null||JSON.stringify(current.proof)!==JSON.stringify(input.authority.proof))return;
   const refreshed=input.refreshed&&unchanged;
   await context.db.query(`UPDATE crm_mail_imports SET reconciliation_after_source_id=$3,reconciliation_visited=reconciliation_visited+1,reconciliation_refreshed=reconciliation_refreshed+$4,reconciliation_unresolved=reconciliation_unresolved+$5,reconciliation_exhausted=$6

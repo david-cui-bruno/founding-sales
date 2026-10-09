@@ -261,7 +261,7 @@ it('uses bounded real runner retries and never rematerializes exhausted unchange
  }finally{await fixture.stop();}
 });
 
-it.each(['copy','older_reconciliation','body_quota','changed_generation','changed_account','disconnected','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
+it.each(['copy','older_reconciliation','older_denied','body_quota','changed_generation','changed_account','disconnected','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
  const fixture=await createAuthFixture();
  try{
   const {workspaceId,admin}=fixture.alpha;
@@ -306,7 +306,7 @@ it.each(['copy','older_reconciliation','body_quota','changed_generation','change
   expect(gmail.bodyReads).toEqual([]);
   const capture=(await claimJobs(runtime,{owner:'historical-copy-capture',kinds:['crm.mail_capture'],limit:1,leaseSeconds:120}))[0]!;
   expect(capture.payload).toMatchObject({acquisitionOrigin:{importId:expect.any(String)}});
-  if(scenario!=='copy'&&scenario!=='older_reconciliation'){
+  if(scenario!=='copy'&&!scenario.startsWith('older_')){
    expect(await runClaimedJob(runtime,{registry,job:capture,backoff:{baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0}})).toBe('retryable');
    expect(gmail.bodyReads).toEqual([]);
    expect(gmail.metadataReads).toEqual(['historical-business','historical-business']);
@@ -324,7 +324,7 @@ it.each(['copy','older_reconciliation','body_quota','changed_generation','change
   expect(gmail.metadataReads).toEqual(['historical-business','historical-business']);
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({connectionState:'current',quotaAccounting:{reservedUnits:'5',observedUnits:'5',unknownUnits:'0'}});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({copyCoverage:{scope:'permitted_import_corpus',coverage:'complete',retainedCopiedBodies:'1',unavailableCopies:'0',pendingCaptures:'0',reviewRequiredMetadata:'0',uncapturedMetadata:'0',unresolvedMetadata:'0'}});
-  if(scenario==='older_reconciliation'){
+  if(scenario.startsWith('older_')){
    // A retained older copy is fixture state; the registered backfill worker measures metadata-only reconciliation.
    olderOriginal=true;
    await fixture.db.query("UPDATE crm_mail_sources SET provider_at=clock_timestamp()-interval '120 days' WHERE workspace_id=$1 AND source_id=$2",[workspaceId,copied?.progress['sourceId']]);
@@ -333,15 +333,23 @@ it.each(['copy','older_reconciliation','body_quota','changed_generation','change
    const source=workerDueWorkSources({crmMailBackfill:true}).find(value=>value.name==='crm-mail-backfill')!;
    expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});
    const reconcile=(await claimJobs(runtime,{owner:'older-copy-reconciliation',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
-   expect(await runClaimedJob(runtime,{registry,job:reconcile})).toBe('completed');
-   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({olderCopyReconciliation:{kind:'bounded_current_copy_traversal',coverage:'partial',visitedCopies:'1',refreshedCopies:'1',unresolvedCopies:'0',traversalExhausted:true},quotaAccounting:{reservedUnits:'6',observedUnits:'6',unknownUnits:'0'},copyCoverage:{retainedCopiedBodies:'1'}});
-   expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{passage:'Permitted historical business text',originalObservation:{state:'available',revision:'1',reason:'verified_metadata'}}});
+   if(scenario==='older_denied'){
+    originalMode='denied';
+    expect(await runClaimedJob(runtime,{registry,job:reconcile,backoff:{baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0}})).toBe('retryable');
+    expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{passage:'Permitted historical business text',originalObservation:{state:'transient_unavailable',revision:'1',reason:'grant_unavailable'}}});
+    expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({olderCopyReconciliation:{visitedCopies:'0',refreshedCopies:'0',unresolvedCopies:'0',traversalExhausted:false},quotaAccounting:{reservedUnits:'6',observedUnits:'5',unknownUnits:'1'}});
+    originalMode='unchanged';
+    const retry=(await claimJobs(runtime,{owner:'older-copy-reconciliation-retry',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+    expect(await runClaimedJob(runtime,{registry,job:retry})).toBe('completed');
+   }else expect(await runClaimedJob(runtime,{registry,job:reconcile})).toBe('completed');
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({olderCopyReconciliation:{kind:'bounded_current_copy_traversal',coverage:'partial',visitedCopies:'1',refreshedCopies:'1',unresolvedCopies:'0',traversalExhausted:true},quotaAccounting:scenario==='older_denied'?{reservedUnits:'7',observedUnits:'6',unknownUnits:'1'}:{reservedUnits:'6',observedUnits:'6',unknownUnits:'0'},copyCoverage:{retainedCopiedBodies:'1'}});
+   expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{passage:'Permitted historical business text',originalObservation:{state:'available',revision:scenario==='older_denied'?'2':'1',reason:'verified_metadata'}}});
    expect(gmail.bodyReads).toEqual(['historical-business']);
-   expect(gmail.metadataReads).toEqual(['historical-business','historical-business','historical-business']);
+   expect(gmail.metadataReads).toEqual(scenario==='older_denied'?['historical-business','historical-business','historical-business','historical-business']:['historical-business','historical-business','historical-business']);
    expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
    const finish=(await claimJobs(runtime,{owner:'older-copy-history-finish',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
    expect(await runClaimedJob(runtime,{registry,job:finish})).toBe('completed');
-   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyComplete:true,olderCopyReconciliation:{visitedCopies:'1',refreshedCopies:'1',traversalExhausted:true},quotaAccounting:{reservedUnits:'7',observedUnits:'7',unknownUnits:'0'}});
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyComplete:true,olderCopyReconciliation:{visitedCopies:'1',refreshedCopies:'1',traversalExhausted:true},quotaAccounting:scenario==='older_denied'?{reservedUnits:'8',observedUnits:'7',unknownUnits:'1'}:{reservedUnits:'7',observedUnits:'7',unknownUnits:'0'}});
    expect(gmail.bodyReads).toEqual(['historical-business']);
    expect(gmail.sends).toEqual([]);
    return;
