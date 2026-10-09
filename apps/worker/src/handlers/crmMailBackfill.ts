@@ -44,7 +44,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(access===null||access.mailboxId!==proofInput.mailboxId||access.providerAccountId!==proofInput.providerAccountId||access.generation!==proofInput.generation)throw new BackfillFailure('acquisition_binding_changed');
    const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,...recoveryScope===undefined?{}:{expectedRecovery:{id:recoveryScope.id,revision:recoveryScope.revision,epoch:recoveryScope.epoch,configurationHash:recoveryScope.configuration_hash}},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
    if(reservation===null)throw new BackfillFailure('quota_or_authority_unavailable');
-   if(original!==undefined&&(method!=='metadata'||!await revalidateRetainedCopyTraversal(context,{authority:bound,traversal:original,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken})))throw new BackfillFailure('original_copy_authority_changed');
+   if(original!==undefined&&(method!=='metadata'||!await revalidateRetainedCopyTraversal(context,{authority:bound,traversal:original,...recoveryScope===undefined?{}:{recovery:recoveryScope},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken})))throw new BackfillFailure('original_copy_authority_changed');
    let result:T;
    try{result=await read(access.access);}catch{throw new BackfillFailure('provider_read_unavailable');}
    await observeBackfillRead(context,reservation.reservationId);
@@ -88,7 +88,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      return;
     }
    }
-   const recovery=await readHistoryRecovery(context,importId);
+   let recovery=await readHistoryRecovery(context,importId);
    recoveryScope=recovery;
    if(recovery!==undefined){
     if(['pending_profile','enumerating','draining'].includes(recovery.state)){
@@ -103,6 +103,18 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      const profile=await providerRead('profile',authority,access=>adapters.gmail.getProfile(access));
      await freezeHistoryRecovery(context,{authority,recovery,historyAnchor:profile.historyId,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     }else if(recovery.state==='enumerating'||recovery.state==='draining'){
+     if(!recovery.reconciliation_exhausted){
+      const traversal=await prepareRetainedCopyTraversal(context,{authority,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+      if(traversal!==undefined){
+       let refreshed=false;
+       if(traversal.snapshot!==null){try{refreshed=(await providerMetadata(authority,traversal.messageId,{source:traversal.exact,contextIdentity:traversal.snapshot.contextIdentity,traversal})).originalUpdated;}catch(error){if(!(error instanceof BackfillFailure&&error.message==='original_copy_authority_changed'))throw error;}}
+       await completeRetainedCopyTraversal(context,{authority,recovery,traversal,refreshed,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+       return;
+      }
+      const currentRecovery=await readHistoryRecovery(context,importId);
+      if(currentRecovery===undefined||currentRecovery.id!==recovery.id||currentRecovery.configuration_hash!==recovery.configuration_hash||!currentRecovery.reconciliation_exhausted||currentRecovery.state!==recovery.state)return;
+      recovery=currentRecovery;recoveryScope=currentRecovery;
+     }
      const bound=authority;
      const outcome=await advanceHistoryRecovery(context,{authority:bound,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},{
       list:async request=>await providerRead('list',bound,access=>adapters.gmail.listMessageIds(access,request)),

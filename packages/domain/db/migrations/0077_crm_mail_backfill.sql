@@ -142,6 +142,14 @@ CREATE INDEX crm_mail_history_recovery_unfinished ON crm_mail_history_recoveries
 GRANT SELECT,INSERT,UPDATE ON crm_mail_history_recoveries TO app_runtime,migration;
 ALTER TABLE crm_mail_history_recoveries ADD CONSTRAINT crm_mail_recovery_completion_shape CHECK((state='complete')=(completed_at IS NOT NULL)), ADD CONSTRAINT crm_mail_recovery_reason_shape CHECK((state IN ('blocked','deleted'))=(reason IS NOT NULL));
 
+ALTER TABLE crm_mail_history_recoveries ADD COLUMN reconciliation_after_source_id uuid,
+ ADD COLUMN reconciliation_visited numeric(40,0) NOT NULL DEFAULT 0,
+ ADD COLUMN reconciliation_refreshed numeric(40,0) NOT NULL DEFAULT 0,
+ ADD COLUMN reconciliation_unresolved numeric(40,0) NOT NULL DEFAULT 0,
+ ADD COLUMN reconciliation_exhausted boolean NOT NULL DEFAULT false,
+ ADD CONSTRAINT crm_mail_recovery_reconciliation_counts CHECK(reconciliation_visited>=0 AND reconciliation_refreshed>=0 AND reconciliation_unresolved>=0 AND reconciliation_refreshed+reconciliation_unresolved<=reconciliation_visited),
+ ADD CONSTRAINT crm_mail_recovery_reconciliation_phase CHECK((state NOT IN ('pending_profile','deleted') OR (reconciliation_after_source_id IS NULL AND reconciliation_visited=0 AND reconciliation_refreshed=0 AND reconciliation_unresolved=0 AND NOT reconciliation_exhausted)) AND (state<>'complete' OR reconciliation_exhausted));
+
 CREATE FUNCTION enforce_crm_mail_recovery_progress() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF ROW(NEW.workspace_id,NEW.id,NEW.import_id,NEW.epoch,NEW.account_binding,NEW.generation,NEW.controls_revision,NEW.policy_revision,NEW.allocation_revision,NEW.configuration_hash)
@@ -151,7 +159,10 @@ BEGIN
  IF NEW.state='deleted' THEN RETURN NEW; END IF;
  IF (OLD.state='pending_profile' AND NEW.state NOT IN ('pending_profile','enumerating','blocked'))
  OR (OLD.state='enumerating' AND NEW.state NOT IN ('enumerating','draining','blocked'))
- OR (OLD.to_at IS NULL AND NEW.to_at IS NOT NULL AND (NEW.next_day_ordinal<>0 OR NEW.history_cursor IS DISTINCT FROM NEW.history_anchor OR NEW.history_page_token IS NOT NULL OR NEW.next_day_page_token IS NOT NULL))
+ OR (OLD.to_at IS NULL AND NEW.to_at IS NOT NULL AND (NEW.next_day_ordinal<>0 OR NEW.history_cursor IS DISTINCT FROM NEW.history_anchor OR NEW.history_page_token IS NOT NULL OR NEW.next_day_page_token IS NOT NULL OR NEW.reconciliation_after_source_id IS NOT NULL OR NEW.reconciliation_visited<>0 OR NEW.reconciliation_refreshed<>0 OR NEW.reconciliation_unresolved<>0 OR NEW.reconciliation_exhausted))
+ OR NEW.reconciliation_visited<OLD.reconciliation_visited OR NEW.reconciliation_visited>OLD.reconciliation_visited+1
+ OR NEW.reconciliation_refreshed<OLD.reconciliation_refreshed OR NEW.reconciliation_unresolved<OLD.reconciliation_unresolved
+ OR (OLD.reconciliation_exhausted AND NOT NEW.reconciliation_exhausted)
  OR NEW.from_at IS DISTINCT FROM OLD.from_at OR (OLD.to_at IS NOT NULL AND ROW(NEW.to_at,NEW.history_anchor,NEW.total_days) IS DISTINCT FROM ROW(OLD.to_at,OLD.history_anchor,OLD.total_days))
  OR NEW.next_day_ordinal<OLD.next_day_ordinal OR NEW.next_day_ordinal>OLD.next_day_ordinal+1
  OR (OLD.history_cursor IS NOT NULL AND NEW.history_cursor::numeric<OLD.history_cursor::numeric)

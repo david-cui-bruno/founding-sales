@@ -4,14 +4,14 @@ import {withTransaction} from '../db/queryable.ts';
 import {readBackfillAuthority,type BackfillAuthority} from './crmBackfillAuthority.ts';
 import {readBackfillAllocation,type BackfillAllocationVerifier} from './crmBackfillBudget.ts';
 import {backfillConfigurationHash} from './crmBackfillWork.ts';
-export interface HistoryRecovery extends Record<string,unknown>{id:string;epoch:number;revision:number;state:'pending_profile'|'enumerating'|'draining'|'complete'|'blocked'|'deleted';reason:string|null;configuration_hash:string;allocation_revision:number;from_at:Date|null;to_at:Date|null;history_anchor:string|null;history_cursor:string|null;history_page_token:string|null;total_days:number|null;next_day_ordinal:number;next_day_page_token:string|null}
+export interface HistoryRecovery extends Record<string,unknown>{reconciliation_after_source_id:string|null;reconciliation_visited:string;reconciliation_refreshed:string;reconciliation_unresolved:string;reconciliation_exhausted:boolean;id:string;epoch:number;revision:number;state:'pending_profile'|'enumerating'|'draining'|'complete'|'blocked'|'deleted';reason:string|null;configuration_hash:string;allocation_revision:number;from_at:Date|null;to_at:Date|null;history_anchor:string|null;history_cursor:string|null;history_page_token:string|null;total_days:number|null;next_day_ordinal:number;next_day_page_token:string|null}
 export async function readHistoryRecovery(context:RepositoryContext,importId:string){
  return (await context.db.query<HistoryRecovery>('SELECT * FROM crm_mail_history_recoveries WHERE workspace_id=$1 AND import_id=$2 ORDER BY epoch DESC LIMIT 1',[context.scope.workspaceId,importId])).rows[0];
 }
 /** Caller has already authorized the exact import read. Scope is enumeration, not lost event history. */
 export async function readHistoryRecoveryCoverage(context:RepositoryContext,importId:string){
  const row=await readHistoryRecovery(context,importId);if(row===undefined)return null;
- return crmMailRecoveryCoverageSchema.parse({kind:'surviving_message_enumeration_and_fresh_history',epoch:row.epoch,state:row.state,originalCursor:'unavailable',fromAt:row.from_at?.toISOString()??null,toAt:row.to_at?.toISOString()??null,windowFrozen:row.history_anchor!==null,totalDays:row.total_days,completedDays:row.next_day_ordinal,historyComplete:row.state==='complete',reason:row.reason});
+ return crmMailRecoveryCoverageSchema.parse({olderCopyReconciliation:{kind:'bounded_current_copy_traversal',coverage:'partial',visitedCopies:row.reconciliation_visited,refreshedCopies:row.reconciliation_refreshed,unresolvedCopies:row.reconciliation_unresolved,traversalExhausted:row.reconciliation_exhausted},kind:'surviving_message_enumeration_and_fresh_history',epoch:row.epoch,state:row.state,originalCursor:'unavailable',fromAt:row.from_at?.toISOString()??null,toAt:row.to_at?.toISOString()??null,windowFrozen:row.history_anchor!==null,totalDays:row.total_days,completedDays:row.next_day_ordinal,historyComplete:row.state==='complete',reason:row.reason});
 }
 interface RecoveryFence{authority:BackfillAuthority;jobId:string;leaseOwner:string;fencingToken:string}
 async function lockedAuthority(context:RepositoryContext,input:RecoveryFence){
@@ -93,6 +93,7 @@ async function lockedRecovery(context:RepositoryContext,input:RecoveryFence&{rec
 /** One metered page per job. No provider wait occurs in the locked observer or progress stages. */
 export async function advanceHistoryRecovery(context:RepositoryContext,input:RecoveryFence&{recovery:HistoryRecovery},readers:RecoveryReaders){
  const recovery=input.recovery;
+ if(!recovery.reconciliation_exhausted)return 'authority_changed' as const;
  async function observe(messageId:string,metadata:GmailMessageMetadata|null){
   await withTransaction(context.db,async()=>{
    const authority=await lockedRecovery(context,input);if(authority===null)return;
@@ -153,5 +154,5 @@ export async function expireHistoryRecoveries(context:RepositoryContext,limit:nu
  if(context.scope.actor.kind!=='system'||context.scope.actor.component!=='worker'||!Number.isInteger(limit)||limit<1||limit>500)return 0;
  const ids=(await context.db.query<{id:string}>("SELECT id FROM crm_mail_history_recoveries WHERE workspace_id=$1 AND state<>'deleted' AND observed_at<clock_timestamp()-interval '90 days' ORDER BY id LIMIT $2 FOR UPDATE",[context.scope.workspaceId,limit])).rows.map(row=>row.id);
  if(ids.length===0)return 0;
- return (await context.db.query("UPDATE crm_mail_history_recoveries SET state='deleted',reason='retention_expired',from_at=NULL,to_at=NULL,history_anchor=NULL,history_cursor=NULL,history_page_token=NULL,total_days=NULL,next_day_ordinal=0,next_day_page_token=NULL,completed_at=NULL,revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state<>'deleted' AND observed_at<clock_timestamp()-interval '90 days'",[context.scope.workspaceId,ids])).rowCount??0;
+ return (await context.db.query("UPDATE crm_mail_history_recoveries SET state='deleted',reason='retention_expired',reconciliation_after_source_id=NULL,reconciliation_visited=0,reconciliation_refreshed=0,reconciliation_unresolved=0,reconciliation_exhausted=false,from_at=NULL,to_at=NULL,history_anchor=NULL,history_cursor=NULL,history_page_token=NULL,total_days=NULL,next_day_ordinal=0,next_day_page_token=NULL,completed_at=NULL,revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state<>'deleted' AND observed_at<clock_timestamp()-interval '90 days'",[context.scope.workspaceId,ids])).rowCount??0;
 }

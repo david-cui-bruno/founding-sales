@@ -261,7 +261,7 @@ it('uses bounded real runner retries and never rematerializes exhausted unchange
  }finally{await fixture.stop();}
 });
 
-it.each(['copy','older_reconciliation','older_denied','older_missing','older_head_changed','older_verifier_changed','older_audit','body_quota','changed_generation','changed_account','disconnected','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
+it.each(['copy','older_reconciliation','older_recovery','older_recovery_denied','older_denied','older_missing','older_head_changed','older_verifier_changed','older_audit','body_quota','changed_generation','changed_account','disconnected','excluded_after_metadata'])('reserves actual historical metadata and body reads through the native capture boundary (%s)',async(scenario)=>{
  const fixture=await createAuthFixture();
  try{
   const {workspaceId,admin}=fixture.alpha;
@@ -281,9 +281,9 @@ it.each(['copy','older_reconciliation','older_denied','older_missing','older_hea
    if(olderOriginal&&scenario==='older_verifier_changed'&&!copyAuthorityChanged){copyAuthorityChanged=true;await fixture.db.query('UPDATE crm_mail_sources SET source_revision=source_revision+1 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);}
    return true;
   }},allocationVerifier:{verify:async()=>true}};
-  let olderOriginal=false;
+  let olderOriginal=false,expireNextHistory=false,recoveringOlder=false;
   let originalMode:'unchanged'|'trashed'|'missing'|'denied'='unchanged';
-  const backfillGmail={...gmail,listMessageIds:async(...args:Parameters<typeof gmail.listMessageIds>)=>originalMode==='unchanged'?await gmail.listMessageIds(...args):{ok:true as const,messageIds:['historical-business'],nextPageToken:null},getMetadata:async(...args:Parameters<typeof gmail.getMetadata>)=>{
+  const backfillGmail={...gmail,listHistory:async(...args:Parameters<typeof gmail.listHistory>)=>{if(expireNextHistory){expireNextHistory=false;return {ok:false as const,reason:'history_expired' as const};}return gmail.listHistory(...args);},listMessageIds:async(...args:Parameters<typeof gmail.listMessageIds>)=>recoveringOlder?{ok:true as const,messageIds:[],nextPageToken:null}:originalMode==='unchanged'?await gmail.listMessageIds(...args):{ok:true as const,messageIds:['historical-business'],nextPageToken:null},getMetadata:async(...args:Parameters<typeof gmail.getMetadata>)=>{
    const metadata=await gmail.getMetadata(...args);
    if(olderOriginal&&scenario==='older_head_changed')await fixture.db.query("UPDATE crm_mail_sources SET source_revision=source_revision+1 WHERE workspace_id=$1 AND mailbox_id=$2 AND availability='available'",[workspaceId,mailbox.id]);
    if(originalMode==='denied')throw new GmailClientError('unexpected_status','Controlled metadata denial',403);
@@ -367,6 +367,23 @@ it.each(['copy','older_reconciliation','older_denied','older_missing','older_hea
    expect((await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:scenario==='older_head_changed'||scenario==='older_verifier_changed'?2:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body).toMatchObject({state:'available',source:{passage:'Permitted historical business text',originalObservation:scenario==='older_head_changed'||scenario==='older_verifier_changed'?{state:'unknown',revision:'0',reason:null}:scenario==='older_missing'?{state:'confirmed_missing',revision:'1',reason:'verified_message_not_found'}:{state:'available',revision:scenario==='older_denied'?'2':'1',reason:'verified_metadata'}}});
    expect(gmail.bodyReads).toEqual(['historical-business']);
    expect(gmail.metadataReads).toEqual(scenario==='older_verifier_changed'?['historical-business','historical-business']:scenario==='older_denied'?['historical-business','historical-business','historical-business','historical-business']:['historical-business','historical-business','historical-business']);
+   if(scenario.startsWith('older_recovery')){
+    const initial=(await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body as {source:{originalObservation:{observedAt:string}}};
+    expireNextHistory=true;recoveringOlder=true;originalMode=scenario==='older_recovery_denied'?'denied':'missing';
+    const runRecovery=async(outcome:'completed'|'retryable'='completed')=>{expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1});const job=(await claimJobs(runtime,{owner:'older-recovery-epoch',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;expect(await runClaimedJob(runtime,{registry,job,backoff:{baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0}})).toBe(outcome);};
+    await runRecovery();await runRecovery();await runRecovery(scenario==='older_recovery_denied'?'retryable':'completed');
+    if(scenario==='older_recovery_denied'){
+     expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({gapCoverage:{olderCopyReconciliation:{visitedCopies:'0',traversalExhausted:false}},quotaAccounting:{reservedUnits:'9',observedUnits:'8',unknownUnits:'1'}});
+     originalMode='missing';const retry=(await claimJobs(runtime,{owner:'older-recovery-retry',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;expect(await runClaimedJob(runtime,{registry,job:retry})).toBe('completed');
+    }
+    const changed=(await post('/crm/business/mail/read/v2',{sourceId:copied?.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update('Permitted historical business text').digest('hex')})).body as {source:{originalObservation:{observedAt:string}}};
+    expect(changed).toMatchObject({state:'available',source:{passage:'Permitted historical business text',originalObservation:{state:'confirmed_missing',revision:scenario==='older_recovery_denied'?'3':'2',reason:'verified_message_not_found'}}});
+    expect(changed.source.originalObservation.observedAt).not.toBe(initial.source.originalObservation.observedAt);
+    expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({olderCopyReconciliation:{visitedCopies:'1',refreshedCopies:'1',traversalExhausted:true},gapCoverage:{epoch:1,olderCopyReconciliation:{visitedCopies:'1',refreshedCopies:'1',unresolvedCopies:'0',traversalExhausted:true}}});
+    await runRecovery();await runRecovery();
+    expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({historyComplete:false,gapCoverage:{state:'complete',historyComplete:true,olderCopyReconciliation:{coverage:'partial',visitedCopies:'1'}},quotaAccounting:scenario==='older_recovery_denied'?{reservedUnits:'12',observedUnits:'11',unknownUnits:'1'}:{reservedUnits:'11',observedUnits:'11',unknownUnits:'0'}});
+    expect(gmail.bodyReads).toEqual(['historical-business']);expect(gmail.sends).toEqual([]);return;
+   }
    expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
    const finish=(await claimJobs(runtime,{owner:'older-copy-history-finish',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
    expect(await runClaimedJob(runtime,{registry,job:finish})).toBe('completed');
@@ -606,8 +623,8 @@ it.each(['unchanged','changed','exhausted','disconnected_profile','changed_profi
   expect(gmail.bodyReads).toEqual([]);
   if(scenario==='unchanged'){
    // A legitimately completed historical recovery is fixture state; the registered retention seam measures cleanup.
-   await fixture.db.query(`WITH instant AS(SELECT clock_timestamp() AS at) INSERT INTO crm_mail_history_recoveries(workspace_id,import_id,epoch,account_binding,generation,controls_revision,policy_revision,allocation_revision,configuration_hash,from_at,to_at,history_anchor,history_cursor,total_days,next_day_ordinal,state,observed_at,completed_at)
-    SELECT workspace_id,import_id,2,account_binding,generation,controls_revision,policy_revision,allocation_revision,configuration_hash,instant.at-interval '93 days',instant.at-interval '92 days',history_anchor,history_cursor,1,1,'complete',instant.at-interval '91 days',instant.at-interval '91 days' FROM crm_mail_history_recoveries CROSS JOIN instant WHERE workspace_id=$1 AND import_id=$2 AND epoch=1`,[workspaceId,original.importId]);
+   await fixture.db.query(`WITH instant AS(SELECT clock_timestamp() AS at) INSERT INTO crm_mail_history_recoveries(workspace_id,import_id,epoch,account_binding,generation,controls_revision,policy_revision,allocation_revision,configuration_hash,from_at,to_at,history_anchor,history_cursor,total_days,next_day_ordinal,state,observed_at,completed_at,reconciliation_exhausted)
+    SELECT workspace_id,import_id,2,account_binding,generation,controls_revision,policy_revision,allocation_revision,configuration_hash,instant.at-interval '93 days',instant.at-interval '92 days',history_anchor,history_cursor,1,1,'complete',instant.at-interval '91 days',instant.at-interval '91 days',true FROM crm_mail_history_recoveries CROSS JOIN instant WHERE workspace_id=$1 AND import_id=$2 AND epoch=1`,[workspaceId,original.importId]);
    expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({gapCoverage:{epoch:2,state:'complete',windowFrozen:true}});
    const now=new Date().toISOString();
    await registry.get('retention.batch')!.handle({session:runtime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:{id:randomUUID(),workspaceId,kind:'retention.batch',idempotencyKey:'recovery-retention-fixture',payload:{dataKind:'unmatched_gmail_metadata',period:now.slice(0,10)},attempt:1,maxAttempts:6,fencingToken:'1',leaseOwner:'recovery-retention',leaseExpiresAt:now}});
