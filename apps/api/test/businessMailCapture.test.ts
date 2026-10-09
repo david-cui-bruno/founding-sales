@@ -1145,7 +1145,7 @@ it('registered sync stages approved metadata then capture through the pinned acc
       ],
     });
     const observer = createApprovedBusinessMailObserver({
-      classify: () => ({
+      categorizeMetadata: () => ({
         category: 'business',
         reason: 'business_metadata',
         classifierVersion: 'fixture-metadata-v1',
@@ -2044,7 +2044,7 @@ it('serializes registered metadata observation and capture without reversing the
         replyPromoter: { async promoteReply() {} },
         pushTopicName: 'projects/example/topics/mail',
         businessMailObserver: createApprovedBusinessMailObserver({
-          classify: () => ({
+          categorizeMetadata: () => ({
             category: 'business',
             reason: 'business_metadata',
             classifierVersion: 'fixture-v1',
