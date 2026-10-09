@@ -8,6 +8,7 @@ import type {MailCaptureProofVerifier} from '@fss/domain/mail/crmSources.ts';
 import {METADATA_HEADERS} from '@fss/domain/mail/types.ts';
 import type {BusinessMailMetadataObserver} from '@fss/domain/mail/pipeline.ts';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
+class BackfillFailure extends Error{}
 const importPayload=z.strictObject({importId:z.string().uuid()});
 export interface CrmMailBackfillDeps {
  gmail:GmailClient;
@@ -30,22 +31,23 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   if(authority===null){await block('acquisition_binding_changed');return;}
   if(await readBackfillAllocation(context,authority.proof.mailboxId)===null){await block('quota_configuration_required');return;}
   async function providerRead<T>(method:BackfillReadMethod,bound:BackfillAuthority,read:(access:GmailAccessGrant)=>Promise<T>):Promise<T>{
-   if(!await adapters.proofVerifier.verify(bound.proof))throw new Error('acquisition_verification_required');
+   if(!await adapters.proofVerifier.verify(bound.proof))throw new BackfillFailure('acquisition_verification_required');
    const proofInput={mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation};
    const access=await adapters.resolveAccess(proofInput);
-   if(access===null||access.mailboxId!==proofInput.mailboxId||access.providerAccountId!==proofInput.providerAccountId||access.generation!==proofInput.generation)throw new Error('acquisition_binding_changed');
+   if(access===null||access.mailboxId!==proofInput.mailboxId||access.providerAccountId!==proofInput.providerAccountId||access.generation!==proofInput.generation)throw new BackfillFailure('acquisition_binding_changed');
    const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
-   if(reservation===null)throw new Error('quota_or_authority_unavailable');
-   const result=await read(access.access);
+   if(reservation===null)throw new BackfillFailure('quota_or_authority_unavailable');
+   let result:T;
+   try{result=await read(access.access);}catch{throw new BackfillFailure('provider_read_unavailable');}
    await observeBackfillRead(context,reservation.reservationId);
    const latest=await adapters.resolveAccess(proofInput),current=await readBackfillAuthority(context,importId);
-   if(latest===null||latest.mailboxId!==proofInput.mailboxId||latest.providerAccountId!==proofInput.providerAccountId||latest.generation!==proofInput.generation||current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof))throw new Error('acquisition_binding_changed');
+   if(latest===null||latest.mailboxId!==proofInput.mailboxId||latest.providerAccountId!==proofInput.providerAccountId||latest.generation!==proofInput.generation||current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof))throw new BackfillFailure('acquisition_binding_changed');
    return result;
   }
   try{
    if(authority.historyAnchor===null){
     const profile=await providerRead('profile',authority,access=>adapters.gmail.getProfile(access));
-    if(!/^[0-9]{1,20}$/u.test(profile.historyId))throw new Error('provider_evidence_invalid');
+    if(!/^[0-9]{1,20}$/u.test(profile.historyId))throw new BackfillFailure('provider_evidence_invalid');
     const original=authority;
     await withTransaction(input.session,async()=>{
      if(!await fenced(input))return;
@@ -59,18 +61,18 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    const slice=(await input.session.query<{ordinal:number;from_epoch_seconds:string;to_epoch_seconds:string;next_page_token:string|null}>("SELECT ordinal,from_epoch_seconds,to_epoch_seconds,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' ORDER BY ordinal LIMIT 1",[input.scope.workspaceId,importId])).rows[0];
    if(slice===undefined)return;
    const listed=await providerRead('list',authority,access=>adapters.gmail.listMessageIds(access,{afterEpochSeconds:Number(slice.from_epoch_seconds)-1,beforeEpochSeconds:Number(slice.to_epoch_seconds)+1,maxResults:25,...slice.next_page_token===null?{}:{pageToken:slice.next_page_token}}));
-   if(!listed.ok)throw new Error('provider_read_unavailable');
+   if(!listed.ok)throw new BackfillFailure('provider_read_unavailable');
    for(const messageId of listed.messageIds){
-    if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new Error('provider_evidence_invalid');
+    if(!/^[A-Za-z0-9_-]{1,128}$/u.test(messageId))throw new BackfillFailure('provider_evidence_invalid');
     const metadata=await providerRead('metadata',authority,access=>adapters.gmail.getMetadata(access,messageId,METADATA_HEADERS));
     if(metadata===null)continue;
-    if(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds))throw new Error('provider_evidence_invalid');
+    if(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds))throw new BackfillFailure('provider_evidence_invalid');
     if(metadata.internalDateEpochMilliseconds<Date.parse(authority.fromAt)||metadata.internalDateEpochMilliseconds>=Date.parse(authority.toAt))continue;
     const expected=authority;
     await withTransaction(input.session,async()=>{
-     if(!await fenced(input))throw new Error('acquisition_binding_changed');
+     if(!await fenced(input))throw new BackfillFailure('acquisition_binding_changed');
      const current=await readBackfillAuthority(context,importId,true);
-     if(current===null||JSON.stringify(current.proof)!==JSON.stringify(expected.proof)||current.fromAt!==expected.fromAt||current.toAt!==expected.toAt)throw new Error('acquisition_binding_changed');
+     if(current===null||JSON.stringify(current.proof)!==JSON.stringify(expected.proof)||current.fromAt!==expected.fromAt||current.toAt!==expected.toAt)throw new BackfillFailure('acquisition_binding_changed');
      await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
     });
    }
@@ -85,6 +87,6 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     await input.session.query("UPDATE crm_mail_import_slices SET state=$4,next_page_token=$5 WHERE workspace_id=$1 AND import_id=$2 AND ordinal=$3",[input.scope.workspaceId,importId,slice.ordinal,listed.nextPageToken===null?'complete':'pending',listed.nextPageToken]);
     await input.session.query("UPDATE crm_mail_imports SET state='partial',reason=NULL WHERE workspace_id=$1 AND id=$2 AND state<>'complete'",[input.scope.workspaceId,importId]);
    });
-  }catch(error){await block(error instanceof Error&&/^[a-z][a-z0-9_]{0,99}$/u.test(error.message)?error.message:'provider_read_unavailable');}
+  }catch(error){if(error instanceof BackfillFailure)await block(error.message);else throw error;}
  },
 };}

@@ -80,5 +80,9 @@ it('configured acquisition without a verified read allocation calls no Gmail met
   await resumedRegistry.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'quota_or_authority_unavailable',completedSlices:3,quotaAccounting:{reservedUnits:'8',observedUnits:'7',unknownUnits:'1'}});
   expect(resumedGmail.calls).toHaveLength(callsBeforeRevision);
+  await fixture.db.query('UPDATE crm_mail_import_allocations SET revision=3,user_limit_units=1000,user_headroom_units=100 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
+  const privateFailureRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...resumedGmail,listMessageIds:async()=>{throw new Error('private_provider_response');}},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver()}});
+  await privateFailureRegistry.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({reason:'provider_read_unavailable',quotaAccounting:{reservedUnits:'9',observedUnits:'7',unknownUnits:'2'}});
  }finally{await fixture.stop();}
 });
