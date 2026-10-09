@@ -1,4 +1,4 @@
-import {unavailableMailEvidence} from './mailEvidence.ts';
+import {unavailableMailEvidence,type CrmMailEvidencePort} from './mailEvidence.ts';
 import { callTranscriptUtteranceSchema, transcriptIsChannelLabelled, meetingSpeechSchema, type CanonicalSourceReference } from '@fss/contracts';
 import { createHash } from 'node:crypto';
 import { activeIdentityActor } from './identityAccess.ts';
@@ -16,9 +16,9 @@ export interface SourceLookup {
 }
 
 /** Resolve allowed original text, never content or attribution supplied by a caller. */
-export async function resolveCrmSource(context: RepositoryContext, input: SourceLookup) {
+export async function resolveCrmSource(context: RepositoryContext, input: SourceLookup,mailEvidence:CrmMailEvidencePort=unavailableMailEvidence) {
   if (input.workspaceId !== context.scope.workspaceId) return null;
-  if(input.kind==='mail'){const mail=await unavailableMailEvidence.resolve(context,input);return mail===null?null:{state:'available' as const,...mail};}
+  if(input.kind==='mail'){const mail=await mailEvidence.resolve(context,input);return mail===null?null:{state:'available' as const,...mail};}
   if (input.kind === 'meeting_transcript') return resolveMeeting(context,input);
   if(input.kind==='call_transcript')return resolveCall(context,input);
   if (input.kind !== 'selected_note'

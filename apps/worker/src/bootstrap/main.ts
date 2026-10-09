@@ -115,6 +115,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
   /** Controlled composition only; no live proof verifier is configured by startup. */
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
@@ -222,7 +223,7 @@ export function registerHandlers(
     }),
   );
   registry.register(retentionBatchJobHandler());
-  registry.register(crmExtractJobHandler({}));
+  registry.register(crmExtractJobHandler(composition.crmExtraction??{}));
   registry.register(crmCaptureExtractionJobHandler());
   registry.register(socialAssetsHandler(composition.socialAssets??null));
   // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,

@@ -1,4 +1,5 @@
-import {readProcessingContext,parsedProcessingContext,sameProcessingContext,processingContextHash,NATIVE_PROCESSING_AUTHORIZATION_HASH} from './processingContext.ts';
+import {unavailableMailEvidence,type CrmMailEvidencePort} from './mailEvidence.ts';
+import {readProcessingContext,parsedProcessingContext,sameProcessingContext,processingContextHash,NATIVE_PROCESSING_AUTHORIZATION_HASH,UNAVAILABLE_MAIL_AUTHORIZATION_HASH} from './processingContext.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import type { QueryResultRowLike } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -13,34 +14,38 @@ function dto(row: Generation) {
   return { generationId: row.id, contextHash:row.context_hash,authorizationHash:row.authorization_hash,purposeRevision: row.purpose_revision, sourceRevision: row.source_revision, processorVersion: row.processor_version,
     modelVersion: row.model_version, state: row.state, reason: row.reason, claims: [] };
 }
-export async function readCrmProcessing(context: RepositoryContext, source: SourceLookup) {
-  if (await resolveCrmSource(context, { ...source, locator: null }) === null) return null;
+export async function readCrmProcessing(context: RepositoryContext, source: SourceLookup,mailEvidence:CrmMailEvidencePort=unavailableMailEvidence) {
+  if (await resolveCrmSource(context, { ...source, locator: null },mailEvidence) === null) return null;
+  const mailAuthority=source.kind==='mail'&&context.scope.actor.kind==='user'?await mailEvidence.authorizeProcessing(context,source,context.scope.actor.userId):null;
+  const authorizationHash=source.kind==='mail'?(mailAuthority?.authorizationFingerprint??UNAVAILABLE_MAIL_AUTHORIZATION_HASH):NATIVE_PROCESSING_AUTHORIZATION_HASH;
   const purpose = await readCrmExtractionPurpose(context);
-  const liveContext=await readProcessingContext(context,source);if(liveContext===null)return null;
+  const liveContext=await readProcessingContext(context,source,mailEvidence);if(liveContext===null)return null;
   const contextHash=processingContextHash(liveContext);
   const row = (await context.db.query<Generation>(`SELECT id,purpose_revision,source_revision,processor_version,model_version,state,reason,source_kind,source_id,source_hash,requested_by,context_snapshot,context_hash,authorization_hash
     FROM crm_extraction_generations WHERE workspace_id=$1 AND source_kind=$2 AND source_id=$3 AND source_revision=$4
     AND source_hash=$5 AND processor_version=$6 AND purpose_revision=$7 AND context_hash=$8 AND authorization_hash=$9`,
-  [context.scope.workspaceId, source.kind, source.sourceId, source.revision, source.contentHash, PROCESSOR_VERSION, purpose?.revision ?? 0,contextHash,NATIVE_PROCESSING_AUTHORIZATION_HASH])).rows[0];
+  [context.scope.workspaceId, source.kind, source.sourceId, source.revision, source.contentHash, PROCESSOR_VERSION, purpose?.revision ?? 0,contextHash,authorizationHash])).rows[0];
   if(row===undefined)return {state:'not_requested',claims:[]};
   const claims=[];
   const originalContext=parsedProcessingContext(row.context_snapshot);
-  const currentContext=row.state==='complete'?await readProcessingContext(context,source):null;
+  const currentContext=row.state==='complete'?await readProcessingContext(context,source,mailEvidence):null;
   if(row.state==='complete'&&(originalContext===null||currentContext===null||!sameProcessingContext(originalContext,currentContext)))return {...dto(row),state:'stale',reason:'source_context_changed',claims:[]};
   if(row.state==='complete')for(const claim of (await context.db.query<{id:string;kind:string;interpretation:string;status:string;locator:string;quote:string;claim_hash:string}>('SELECT id,kind,interpretation,status,locator,quote,claim_hash FROM crm_extraction_claims WHERE workspace_id=$1 AND generation_id=$2 ORDER BY id LIMIT 51',[context.scope.workspaceId,row.id])).rows){
-    const evidence=await resolveCrmSource(context,{...source,locator:claim.locator});
+    const evidence=await resolveCrmSource(context,{...source,locator:claim.locator},mailEvidence);
     if(evidence?.passage?.text!==claim.quote)return {...dto(row),state:'stale',reason:'source_changed',claims:[]};
     claims.push({claimId:claim.id,claimRevision:1,claimHash:claim.claim_hash,context:currentContext,kind:claim.kind,interpretation:claim.interpretation,status:claim.status,quote:claim.quote,source:evidence.source});
   }
   const financial=(await context.db.query<{dispatch_state:string;settled_cents:number;settlement_state:string}>(`SELECT f.dispatch_state,p.settled_cents,p.state AS settlement_state FROM crm_extraction_financial_receipts f JOIN provider_reservations p ON p.workspace_id=f.workspace_id AND p.id=f.reservation_id WHERE f.workspace_id=$1 AND f.generation_id=$2`,[context.scope.workspaceId,row.id])).rows[0];
   return {...dto(row),claims,financial:financial===undefined?null:{dispatchState:financial.dispatch_state,settlementState:financial.settlement_state,settledCents:financial.settled_cents}};
 }
-export async function requestCrmProcessing(context: RepositoryContext, source: SourceLookup) {
+export async function requestCrmProcessing(context: RepositoryContext, source: SourceLookup,mailEvidence:CrmMailEvidencePort=unavailableMailEvidence) {
   const actor = context.scope.actor;
-  if (actor.kind !== 'user' || await resolveCrmSource(context, { ...source, locator: null }) === null)
+  if (actor.kind !== 'user' || await resolveCrmSource(context, { ...source, locator: null },mailEvidence) === null)
     return { ok: false as const, reason: 'source_unavailable' };
+  const mailAuthority=source.kind==='mail'&&context.scope.actor.kind==='user'?await mailEvidence.authorizeProcessing(context,source,context.scope.actor.userId):null;
+  const authorizationHash=source.kind==='mail'?(mailAuthority?.authorizationFingerprint??UNAVAILABLE_MAIL_AUTHORIZATION_HASH):NATIVE_PROCESSING_AUTHORIZATION_HASH;
   const purpose = await readCrmExtractionPurpose(context);
-  const capturedContext=await readProcessingContext(context,source);if(capturedContext===null)return {ok:false as const,reason:'source_unavailable'};
+  const capturedContext=await readProcessingContext(context,source,mailEvidence);if(capturedContext===null)return {ok:false as const,reason:'source_unavailable'};
   const contextHash=processingContextHash(capturedContext);
   await context.db.query("UPDATE crm_extraction_generations SET state='stale',reason='source_context_changed' WHERE workspace_id=$1 AND source_id=$2 AND source_kind=$3 AND source_revision=$4 AND source_hash=$5 AND processor_version=$6 AND purpose_revision=$7 AND context_hash<>$8 AND state NOT IN ('deleted','stale')",[context.scope.workspaceId,source.sourceId,source.kind,source.revision,source.contentHash,PROCESSOR_VERSION,purpose?.revision??0,contextHash]);
   const originalFirm=source.kind==='call_transcript'?(await context.db.query<{firm_id:string}>('SELECT firm_id FROM call_sessions WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,source.sourceId])).rows[0]?.firm_id:source.kind==='meeting_transcript'?(await context.db.query<{firm_id:string}>('SELECT m.firm_id FROM meeting_transcripts t JOIN meeting_recordings r ON r.workspace_id=t.workspace_id AND r.id=t.recording_id JOIN meetings m ON m.workspace_id=r.workspace_id AND m.id=r.meeting_id WHERE t.workspace_id=$1 AND t.id=$2',[context.scope.workspaceId,source.sourceId])).rows[0]?.firm_id:null;
@@ -49,8 +54,8 @@ export async function requestCrmProcessing(context: RepositoryContext, source: S
   await context.db.query(`INSERT INTO crm_extraction_generations
     (workspace_id,source_id,source_kind,source_revision,source_hash,requested_by,processor_version,purpose_revision,model_version,state,reason,original_firm_id,context_hash,context_snapshot,authorization_hash,source_owner_user_id,original_meeting_id,original_recording_id)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'unavailable',$10,$11,$12,$13::jsonb,$14,$15,$16,$17) ON CONFLICT DO NOTHING`,
-  [context.scope.workspaceId, source.sourceId, source.kind, source.revision, source.contentHash, actor.userId, PROCESSOR_VERSION, purpose?.revision ?? 0, purpose?.modelVersion ?? null, purpose?.unavailableReason ?? 'purpose_not_configured',(source.kind==='call_transcript'||source.kind==='meeting_transcript'?capturedContext.firmIds[0]:originalFirm)??null,contextHash,JSON.stringify(capturedContext),NATIVE_PROCESSING_AUTHORIZATION_HASH,selectedOwner??native?.owner_user_id??actor.userId,native?.meeting_id??null,native?.recording_id??null]);
-  const value=await readCrmProcessing(context,source);
+  [context.scope.workspaceId, source.sourceId, source.kind, source.revision, source.contentHash, actor.userId, PROCESSOR_VERSION, purpose?.revision ?? 0, purpose?.modelVersion ?? null, source.kind==='mail'&&mailAuthority===null?'mail_processing_authority_unavailable':purpose?.unavailableReason ?? 'purpose_not_configured',(source.kind==='call_transcript'||source.kind==='meeting_transcript'?capturedContext.firmIds[0]:originalFirm)??null,contextHash,JSON.stringify(capturedContext),authorizationHash,(source.kind==='mail'?(await mailEvidence.resolve(context,{...source,locator:null}))?.ownerUserId:undefined)??selectedOwner??native?.owner_user_id??actor.userId,native?.meeting_id??null,native?.recording_id??null]);
+  const value=await readCrmProcessing(context,source,mailEvidence);
   if(value!==null&&'generationId' in value)await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'crm.extract',idempotencyKey:`crm-extract:${value.generationId}`,payload:{generationId:value.generationId},maxAttempts:3});
   return { ok: true as const, value };
 }
@@ -99,12 +104,12 @@ export async function saveCrmExtractionPurpose(context: RepositoryContext, input
   return { ok: true as const, value: { revision: input.expectedRevision + 1, enabled: false } };
 }
 
-export async function readCrmProcessingHealth(context: RepositoryContext, input: { sourceId: string; kind: SourceLookup['kind'] }) {
+export async function readCrmProcessingHealth(context: RepositoryContext, input: { sourceId: string; kind: SourceLookup['kind'] },mailEvidence:CrmMailEvidencePort=unavailableMailEvidence) {
   const { lockIdentityContext } = await import('./identityAccess.ts');
   if(input.kind==='selected_note'&&!await lockIdentityContext(context,{sourceIds:[input.sourceId]}))return null;
   const source=input.kind==='selected_note'?(await context.db.query<{ revision: number; availability: string }>(
     'SELECT revision,availability FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2',
-    [context.scope.workspaceId, input.sourceId])).rows[0]:await readNativeCrmSourceState(context,input);
+    [context.scope.workspaceId, input.sourceId])).rows[0]:input.kind==='mail'?await mailEvidence.readState(context,input):await readNativeCrmSourceState(context,input);
   if (source == null) return null;
   const generations = (await context.db.query<Generation>(`SELECT id,purpose_revision,source_revision,processor_version,model_version,state,reason,source_kind,source_id,source_hash,requested_by,context_snapshot,context_hash,authorization_hash
     FROM crm_extraction_generations WHERE workspace_id=$1 AND source_kind=$2 AND source_id=$3

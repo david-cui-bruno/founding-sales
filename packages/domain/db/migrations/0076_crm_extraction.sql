@@ -239,3 +239,23 @@ ALTER TABLE crm_extraction_generations ADD COLUMN original_meeting_id uuid,ADD C
  ADD COLUMN source_owner_user_id uuid,
  ADD CONSTRAINT crm_extraction_source_owner_fk FOREIGN KEY(workspace_id,source_owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id);
 CREATE INDEX crm_extraction_record_history ON crm_extraction_generations(workspace_id,original_meeting_id,source_owner_user_id,observed_at DESC,id DESC) WHERE original_meeting_id IS NOT NULL;
+
+-- Native mail remains the sole body authority; every copy lifecycle invalidates
+-- projections but leaves ambiguous financial receipts conserved independently.
+CREATE FUNCTION invalidate_crm_mail_extraction() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE is_deleted boolean;
+BEGIN
+ IF TG_OP='DELETE' OR OLD.source_revision IS DISTINCT FROM NEW.source_revision
+    OR OLD.content_hash IS DISTINCT FROM NEW.content_hash OR OLD.availability IS DISTINCT FROM NEW.availability THEN
+  is_deleted := TG_OP='DELETE' OR NEW.availability='deleted';
+  UPDATE crm_extraction_generations SET state=CASE WHEN is_deleted THEN 'deleted' ELSE 'stale' END,
+    reason=CASE WHEN is_deleted THEN 'source_deleted' ELSE 'source_changed' END
+  WHERE workspace_id=OLD.workspace_id AND source_id=OLD.source_id AND source_kind='mail'
+    AND (state NOT IN ('deleted','stale') OR is_deleted AND state='stale');
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER crm_mail_extraction_invalidation AFTER UPDATE OR DELETE ON crm_mail_sources
+FOR EACH ROW EXECUTE FUNCTION invalidate_crm_mail_extraction();

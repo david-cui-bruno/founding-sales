@@ -1,10 +1,11 @@
+import {unavailableMailEvidence,type CrmMailEvidencePort} from './mailEvidence.ts';
 import {createHash} from 'node:crypto';
 import {crmClaimContextSchema,type CrmClaimContext} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {SourceLookup} from './sourceResolver.ts';
 /** This describes the exact original source context; it never infers a speaker or firm from text. */
-export async function readProcessingContext(context:RepositoryContext,source:SourceLookup):Promise<CrmClaimContext|null>{
- if(source.kind==='mail')return null;
+export async function readProcessingContext(context:RepositoryContext,source:SourceLookup,mailEvidence:CrmMailEvidencePort=unavailableMailEvidence):Promise<CrmClaimContext|null>{
+ if(source.kind==='mail')return mailEvidence.readContext(context,source);
  if(source.kind==='selected_note'){
   const row=(await context.db.query<{person_id:string|null;firm_id:string|null}>('SELECT person_id,firm_id FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2 AND revision=$3 AND content_hash=$4',[context.scope.workspaceId,source.sourceId,source.revision,source.contentHash])).rows[0];if(row===undefined)return null;
   const contexts=(await context.db.query<{firm_id:string;relationship_id:string;relationship_revision:number;review:'current'|'required'}>('SELECT firm_id,relationship_id,relationship_revision,review FROM crm_source_relationship_contexts WHERE workspace_id=$1 AND source_id=$2 AND source_revision=$3 AND source_hash=$4 ORDER BY relationship_id,relationship_revision LIMIT 101',[context.scope.workspaceId,source.sourceId,source.revision,source.contentHash])).rows;
@@ -28,3 +29,5 @@ export function processingContextHash(value:CrmClaimContext){
 }
 
 export const NATIVE_PROCESSING_AUTHORIZATION_HASH=createHash('sha256').update('none/native').digest('hex');
+
+export const UNAVAILABLE_MAIL_AUTHORIZATION_HASH=createHash('sha256').update('none/mail').digest('hex');

@@ -19,7 +19,7 @@ export async function routeCrmProcessing(request: ApiRequest, options: RoutingOp
   if (request.path === '/crm/processing/health/read') {
     const parsed = crmProcessingHealthReadSchema.safeParse(request.body);
     if (!parsed.success) return { status: 400, body: redactError('malformed_body') };
-    const result = await withTransaction(options.auth.db, () => readCrmProcessingHealth(scoped.context, parsed.data));
+    const result = await withTransaction(options.auth.db, () => readCrmProcessingHealth(scoped.context, parsed.data,options.crmMailEvidence));
     return result === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: result };
   }
   if (request.path === '/crm/processing/purpose/save')
@@ -31,15 +31,15 @@ export async function routeCrmProcessing(request: ApiRequest, options: RoutingOp
   }
   if (request.path === '/crm/processing/request')
     return runRouteCommand({ auth: options.auth, request, principal: verified.principal }, crmProcessingRequestSchema,
-      'crm.processing_requested', (context, body) => requestCrmProcessing(context, body.source));
+      'crm.processing_requested', (context, body) => requestCrmProcessing(context, body.source,options.crmMailEvidence));
   if (request.path === '/crm/processing/read') {
     const parsed = crmProcessingReadSchema.safeParse(request.body);
     if (!parsed.success) return { status: 400, body: redactError('malformed_body') };
-    const result = await withTransaction(options.auth.db, () => readCrmProcessing(scoped.context, parsed.data.source));
+    const result = await withTransaction(options.auth.db, () => readCrmProcessing(scoped.context, parsed.data.source,options.crmMailEvidence));
     return result === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: result };
   }
   const input = crmSourceLookupSchema.safeParse(request.body);
   if (!input.success) return { status: 400, body: redactError('malformed_body') };
-  const resolved = await withTransaction(options.auth.db, () => resolveCrmSource(scoped.context, input.data));
+  const resolved = await withTransaction(options.auth.db, () => resolveCrmSource(scoped.context, input.data,options.crmMailEvidence));
   return resolved === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: resolved };
 }

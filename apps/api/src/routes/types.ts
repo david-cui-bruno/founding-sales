@@ -1,3 +1,4 @@
+import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingCapacityDeps} from './bookingCapacity.ts';
 import type {SocialMediaStore} from '../social/mediaStore.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
@@ -52,6 +53,7 @@ export interface RouteResult {
 }
 
 export interface RoutingOptions {
+  readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly bookingCapacity?:BookingCapacityDeps;
   readonly replyComposer?:HumanReplyDraftPort|null;
   readonly session: SessionQueryable;
