@@ -1,0 +1,9 @@
+# Separate acquisition review from conversation authority
+
+The approved broader CRM spec #479 and acquisition slice #482 distinguish metadata review, conversation capture and sending permission. A reviewed subject and participant list does not authorize fetching a body, processing it with a hosted model, creating an operational route or enrolling a recipient. Acquisition controls default off and public commands cannot activate them before the evaluation and release gates.
+
+Metadata decisions bind the proven provider account, mailbox owner, acquisition generation and disclosed policy revision. Reconnecting the same proven account preserves human decisions; changing accounts cannot carry them forward. Unknown or uncertain correspondence remains in a compact review outside Today, without automatic firm inference or body capture.
+
+Metadata copies are indivisible. Scoped deletion includes exact operational addresses and explicitly supported current source-backed endpoints, binds metadata revisions in its preview and redacts the whole affected copy. Sorted address barriers serialize new observations with deletion so a concurrent new thread cannot escape the deletion scope. Normal deletion tombstones prevent later capture involving the deleted address; ordinary outreach suppression alone does not prohibit CRM metadata capture. Opaque copied identities survive redaction and refuse replay. Unrelated correspondence survives.
+
+The registered retention worker expires available review metadata after ninety days without retaining subjects, participants or dates in its tombstone. This review horizon is distinct from existing unmatched operational-mail retention. These are source contracts, not evidence of production migration, inbox grants, model quality or activation. The release hold and all sending safeguards remain in force.

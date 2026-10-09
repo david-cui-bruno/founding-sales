@@ -1,4 +1,5 @@
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
+import {businessPolicySchema,businessPolicyReadSchema,businessPolicySavePayloadSchema,businessReviewSchema,businessReviewReadSchema,businessReviewDecidePayloadSchema} from '@fss/contracts';
 import {endpointClaimPayloadSchema,endpointCorrectPayloadSchema} from '@fss/contracts';
 import {sourceContextSaveSchema,sourceContextListSchema} from '@fss/contracts';
 import {endpointListInputSchema,endpointListSchema,endpointMatchInputSchema,endpointMatchSchema,firmSourceAddSchema,firmSourceChangeSchema,firmSourcePageSchema,firmSourceReadSchema,firmSourceRecaptureSchema} from '@fss/contracts';
@@ -1129,6 +1130,10 @@ export const OPERATIONS = {
   'crm.selectedImportDelete': {kind:'command',calls:[{method:'POST',path:'/crm/imports/delete'}],input:selectedImportChangePayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
   'crm.selectedImportRestore': {kind:'command',calls:[{method:'POST',path:'/crm/imports/restore'}],input:selectedImportChangePayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
   'crm.selectedImportRecapture': {kind:'command',calls:[{method:'POST',path:'/crm/imports/recapture'}],input:selectedImportCorrectPayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
+  'crm.businessPolicyRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/policy/read'}],input:businessPolicyReadSchema,output:businessPolicySchema,transform:'actual actor mailbox configuration; capture remains disabled'},
+  'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
+  'crm.businessReviewRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/review/read'}],input:businessReviewReadSchema,output:businessReviewSchema,transform:'bounded proven account metadata; no bodies'},
+  'crm.businessReviewDecide': {kind:'command',calls:[{method:'POST',path:'/crm/business/review/decide'}],input:businessReviewDecidePayloadSchema,output:z.strictObject({decisionRevision:z.number().int().positive(),captureAllowed:z.literal(false)}),transform:'versioned human inclusion/exclusion; no capture authority'},
   'crm.personList': {kind:'read', calls:[{method:'POST',path:'/crm/people/list'}],input:personListSchema,output:peopleListSchema,transform:'bounded current-access people list'},
   'crm.personRead': {kind:'read', calls:[{method:'POST',path:'/crm/people/read'}],input:personReadSchema,output:personPageSchema,transform:'current-access selected evidence'},
   'crm.personCreate': {kind:'command',calls:[{method:'POST',path:'/crm/people/create'}],input:personCreateSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({personId:uuid}),transform:'identifier only; main owns command envelope'},

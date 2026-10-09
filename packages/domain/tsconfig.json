@@ -11,6 +11,7 @@
     "db/**/*.ts",
     "jobs/**/*.ts",
     "crm/**/*.ts",
+    "business/**/*.ts",
     "policy/**/*.ts",
     "suppression/**/*.ts",
     "classification/**/*.ts",

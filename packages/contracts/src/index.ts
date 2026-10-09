@@ -59,3 +59,4 @@ export {bookingCapacityResponseSchema,BOOKING_CAPACITY_REASONS,type BookingCapac
 export * from './people.ts';
 export * from './peopleRelationships.ts';
 export * from './selectedImports.ts';
+export * from './businessAcquisition.ts';

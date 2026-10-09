@@ -198,6 +198,10 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'crm.selectedImportDelete': {sourceId:UUID,expectedSourceRevision:1,expectedMetadataRevision:1},
   'crm.selectedImportRestore': {sourceId:UUID,expectedSourceRevision:1,expectedMetadataRevision:1},
   'crm.selectedImportRecapture': {...{text:'Selected passage',subtype:'pasted_text',label:'Selected note',direction:'draft',participants:[],occurredAt:null,attachments:[]},sourceId:UUID,expectedSourceRevision:1,expectedMetadataRevision:1,previewHash:'a'.repeat(64),parserVersion:'selected-v1'},
+  'crm.businessPolicyRead':{},
+  'crm.businessPolicySave':{mailboxId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedRevision:0,enabled:false,disclosure:null},
+  'crm.businessReviewRead':{mailboxId:UUID,limit:50},
+  'crm.businessReviewDecide':{mailboxId:UUID,conversationId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedPolicyRevision:1,expectedMetadataRevision:1,expectedDecisionRevision:0,decision:'exclude'},
   'crm.personList': {limit:50},
   'crm.personRead': {personId:UUID,limit:50},
   'crm.personCreate': {fullName:'Alex Example'},
@@ -395,7 +399,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
-    crm: (()=>{const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...bridge,...Object.fromEntries(['relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture'].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]))} as unknown as Host;})(),
+    crm: (()=>{const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...bridge,...Object.fromEntries(['businessPolicyRead','businessPolicySave','businessReviewRead','businessReviewDecide','relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture'].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]))} as unknown as Host;})(),
     sequences: createSequenceBridge({ api, session }) as unknown as Host,
     settings: createAdminBridge({ api, session }) as unknown as Host,
     // Slice M1: answered by `operationHost.ts` against the client directly, like

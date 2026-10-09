@@ -32,6 +32,8 @@ describe('append-only privileges', () => {
     await database.drop();
   });
 
+  it('preserves immutable body-free business decisions as app_runtime',async()=>{await expect(runtime.query("UPDATE crm_business_decision_revisions SET decision='include'")).rejects.toMatchObject({code:'42501'});await expect(runtime.query('DELETE FROM crm_business_decision_revisions')).rejects.toMatchObject({code:'42501'});await expect(runtime.query('TRUNCATE crm_business_decision_revisions')).rejects.toMatchObject({code:'42501'});});
+
   it('runs as app_runtime, not as the owner', async () => {
     const { rows } = await runtime.query<{ current_user: string }>('SELECT current_user');
     expect(rows[0]?.current_user).toBe('app_runtime');

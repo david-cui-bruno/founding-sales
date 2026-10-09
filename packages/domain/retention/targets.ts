@@ -1,3 +1,4 @@
+import { redactBusinessMetadata } from '../business/acquisition.ts';
 import { archiveCompletedPayloads } from '../jobs/jobStore.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { RetentionLedgerKind } from './kinds.ts';
@@ -108,8 +109,8 @@ function requireBoundary(input: RetentionSweepInput, dataKind: string): string {
 const unmatchedGmailMetadata: RetentionTarget = {
   dataKind: 'unmatched_gmail_metadata',
   state: 'implemented',
-  tables: ['mail_messages', 'mail_message_bodies'],
-  note: 'Unmatched Gmail metadata is deleted thirty days after it was recorded; matched correspondence is not.',
+  tables: ['mail_messages', 'mail_message_bodies', 'crm_business_conversations'],
+  note: 'Unmatched Gmail metadata follows its policy; compact business review metadata expires at the fixed ninety-day review horizon without resurrecting copied identity.',
   sweep: async (context, input) => {
     const boundaryAt = requireBoundary(input, 'unmatched_gmail_metadata');
     const { rowCount } = await context.db.query(
@@ -123,7 +124,10 @@ const unmatchedGmailMetadata: RetentionTarget = {
       [context.scope.workspaceId, boundaryAt, input.limit],
     );
     const deleted = rowCount ?? 0;
-    return { boundaryAt, rowsDeleted: deleted, rowsRedacted: 0, detail: { mail_messages: deleted } };
+    const metadata = await redactBusinessMetadata(context,{expiredOnly:true});
+    if (!metadata.ok) throw new Error('Business metadata expiry refused');
+    return { boundaryAt, rowsDeleted: deleted, rowsRedacted: metadata.value.redacted,
+      detail: { mail_messages: deleted, crm_business_conversations: metadata.value.redacted } };
   },
 };
 

@@ -1,3 +1,4 @@
+import {BUSINESS_ACQUISITION_CONSTRAINT_CASES} from './support/businessAcquisitionCases.ts';
 import { SOCIAL_CONSTRAINT_CASES } from './support/socialCases.ts';
 import { OUTREACH_CONSTRAINT_CASES } from './support/outreachCases.ts';
 import { SOURCING_CONSTRAINT_CASES } from './support/sourcingCases.ts';
@@ -1616,6 +1617,7 @@ const cases: readonly Case[] = [
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
   ...selectedImportConstraintCases,
+  ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
   ...SOURCING_CONSTRAINT_CASES,
