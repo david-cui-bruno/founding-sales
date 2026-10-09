@@ -67,6 +67,6 @@ export async function requestCrmMailImport(context: RepositoryContext, input: { 
     SELECT i.workspace_id,i.id,n,extract(epoch FROM i.from_at)::bigint+n*86400,
       extract(epoch FROM i.from_at)::bigint+(n+1)*86400 FROM crm_mail_imports i CROSS JOIN generate_series(0,89) n
     WHERE i.workspace_id=$1 AND i.id=$2 ON CONFLICT DO NOTHING`,[context.scope.workspaceId,imported.id]);
-  await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'crm.mail_backfill',idempotencyKey:`crm-mail-backfill:${imported.id}`,payload:{importId:imported.id}});
+  await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'crm.mail_backfill',idempotencyKey:`crm-mail-backfill:${imported.id}`,payload:{importId:imported.id,accountBinding:binding,generation:mailbox.generation,controlsRevision:controls.revision,policyRevision:controls.policy_revision}});
   return { ok: true as const, value: await readCrmMailImport(context,input) };
 }

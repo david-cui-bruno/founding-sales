@@ -1,3 +1,4 @@
+import {crmMailBackfillSource} from '../scheduler/crmMailBackfillSource.ts';
 import {crmMailBackfillJobHandler} from '../handlers/crmMailBackfill.ts';
 import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
 import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
@@ -499,6 +500,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
 export function workerDueWorkSources(
   options: {
     readonly crmMailProcessing?:CrmMailEvidencePort;
+    readonly crmMailBackfill?:boolean;
     readonly socialDraft?: boolean;
     readonly qualification?: boolean;
     readonly discovery?: boolean;
@@ -517,6 +519,7 @@ export function workerDueWorkSources(
 ): readonly DueWorkSource[] {
   return [
     crmExtractionRecoverySource(),
+    crmMailBackfillSource(options.crmMailBackfill===true),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
     outreachReplySource(),

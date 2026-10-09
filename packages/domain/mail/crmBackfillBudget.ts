@@ -1,3 +1,4 @@
+import {backfillAttemptHashes} from './crmBackfillWork.ts';
 import {readBackfillAuthority} from './crmBackfillAuthority.ts';
 import type {MailCaptureProof} from './crmSources.ts';
 import {createHash} from 'node:crypto';
@@ -20,7 +21,7 @@ export async function reserveBackfillRead(context:RepositoryContext,input:{impor
  if(before===null||before.owner_user_id!==input.ownerUserId||before.account_binding!==input.accountBinding||before.generation!==input.generation||!await verifier.verify(before))return null;
  return withTransaction(context.db,async()=>{
   const actor=context.scope.actor;if(actor.kind!=='system'||actor.component!=='worker')return null;
-  const leased=await context.db.query("SELECT id FROM jobs WHERE workspace_id=$1 AND id=$2 AND state='running' AND lease_owner=$3 AND fencing_token=$4::bigint AND lease_expires_at>clock_timestamp() FOR UPDATE",[context.scope.workspaceId,input.jobId,input.leaseOwner,input.fencingToken]);
+  const leased=await context.db.query("SELECT id,kind FROM jobs WHERE workspace_id=$1 AND id=$2 AND state='running' AND lease_owner=$3 AND fencing_token=$4::bigint AND lease_expires_at>clock_timestamp() FOR UPDATE",[context.scope.workspaceId,input.jobId,input.leaseOwner,input.fencingToken]);
   if(!leased.rows.length)return null;
   const authority=await readBackfillAuthority(context,input.importId,true);
   if(authority===null||JSON.stringify(authority.proof)!==JSON.stringify(input.expectedProof))return null;
@@ -30,6 +31,10 @@ export async function reserveBackfillRead(context:RepositoryContext,input:{impor
   if(!imported.rows.length)return null;
   for(const key of [`crm-mail-project:${current.project_hash}`,`crm-mail-user:${current.user_hash}`].sort())await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[key]);
   const sums=(await context.db.query<{project:string;user:string}>(`SELECT COALESCE(sum(units) FILTER(WHERE project_hash=$1),0)::text AS project,COALESCE(sum(units) FILTER(WHERE user_hash=$2),0)::text AS "user" FROM crm_mail_import_read_reservations WHERE reserved_at>clock_timestamp()-interval '60 seconds' AND (project_hash=$1 OR user_hash=$2)`,[current.project_hash,current.user_hash])).rows[0]!;
+  if(leased.rows[0]?.['kind']==='crm.mail_backfill'){
+   const slice=(await context.db.query<{ordinal:number;next_page_token:string|null}>("SELECT ordinal,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' ORDER BY ordinal LIMIT 1",[context.scope.workspaceId,input.importId])).rows[0];
+   await context.db.query('UPDATE jobs SET payload=payload||$3::jsonb WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.jobId,JSON.stringify(backfillAttemptHashes(authority,current,slice))]);
+  }
   const units=current[`${input.method}_units`];
   if(typeof units!=='number'||BigInt(sums.project)+BigInt(units)>BigInt(current.project_limit_units-current.project_headroom_units)||BigInt(sums.user)+BigInt(units)>BigInt(current.user_limit_units-current.user_headroom_units))return null;
   const reservation=(await context.db.query<{id:string}>(`INSERT INTO crm_mail_import_read_reservations(workspace_id,import_id,project_hash,user_hash,allocation_revision,method,units) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,[context.scope.workspaceId,input.importId,current.project_hash,current.user_hash,current.revision,input.method,units])).rows[0]!;

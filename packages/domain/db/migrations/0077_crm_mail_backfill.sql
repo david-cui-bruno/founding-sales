@@ -13,7 +13,7 @@ CREATE TABLE crm_mail_imports (
  history_complete boolean NOT NULL DEFAULT false,
  state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','partial','complete','blocked')),
  reason text CHECK(reason ~ '^[a-z][a-z0-9_]{0,99}$'),
- completed_at timestamptz, observed_at timestamptz NOT NULL DEFAULT now(),
+ last_scheduled_scan_at timestamptz, completed_at timestamptz, observed_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY(workspace_id,id),
  UNIQUE(workspace_id,mailbox_id,account_binding,generation,controls_revision,policy_revision),
  FOREIGN KEY(workspace_id,mailbox_id) REFERENCES mailboxes(workspace_id,id),
@@ -24,6 +24,7 @@ CREATE TABLE crm_mail_imports (
  CHECK((state='complete')=(completed_at IS NOT NULL)),
  CHECK(state<>'complete' OR history_complete)
 );
+CREATE INDEX crm_mail_import_pending_scan ON crm_mail_imports(last_scheduled_scan_at,workspace_id,id) WHERE state<>'complete';
 CREATE TABLE crm_mail_import_slices (
  workspace_id uuid NOT NULL, import_id uuid NOT NULL, ordinal integer NOT NULL CHECK(ordinal BETWEEN 0 AND 89),
  from_epoch_seconds bigint NOT NULL, to_epoch_seconds bigint NOT NULL,
@@ -100,3 +101,5 @@ CREATE TABLE crm_mail_import_messages (
    OR (state='deleted' AND provider_message_id IS NULL AND provider_thread_id IS NULL AND provider_at IS NULL AND reason='metadata_deleted'))
 );
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_mail_import_messages TO app_runtime,migration;
+
+CREATE INDEX crm_mail_import_active_jobs ON jobs(workspace_id,(payload->>'importId')) WHERE kind='crm.mail_backfill' AND state IN ('queued','retryable','running');

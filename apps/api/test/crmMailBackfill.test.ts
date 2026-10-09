@@ -8,7 +8,9 @@ import { claimJobs } from '@fss/domain/jobs/jobStore.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import { workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import { registerHandlers } from '../../worker/src/bootstrap/main.ts';
+import {runClaimedJob} from '../../worker/src/runner/jobRunner.ts';
+import {runSchedulerPass} from '../../worker/src/scheduler/schedulerPass.ts';
+import { registerHandlers,workerDueWorkSources } from '../../worker/src/bootstrap/main.ts';
 import { METADATA_REVIEW_DISCLOSURE,businessAccountBinding } from '@fss/domain/business/acquisition.ts';
 import { createAuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -72,7 +74,7 @@ it('configured acquisition without a verified read allocation calls no Gmail met
   const resumedGmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'200',messages:[{id:'interrupted-inquiry',threadId:'interrupted-thread',historyId:'150',internalDateEpochMilliseconds:Date.parse(frozen.fromAt)+2*86400000+3600000,headers:{From:'second@example.test',To:'business@example.test',Subject:'Interrupted inquiry'}}]});
   let interrupted=true;
   const resumedRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...resumedGmail,getMetadata:async(...args)=>{if(interrupted){interrupted=false;throw new Error('simulated transport');}return resumedGmail.getMetadata(...args);}},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver()}});
-  await resumedRegistry.get('crm.mail_backfill')!.handle({session:workerRuntime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  await expect(resumedRegistry.get('crm.mail_backfill')!.handle({session:workerRuntime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job})).rejects.toThrow('provider_read_unavailable');
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'provider_read_unavailable',quotaAccounting:{scope:'callie_backfill_allocation',reservedUnits:'6',observedUnits:'5',unknownUnits:'1'},completedSlices:2,historyAnchor:frozen.historyAnchor,fromAt:frozen.fromAt});
   await resumedRegistry.get('crm.mail_backfill')!.handle({session:workerRuntime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',metadataCoverage:{retainedUniqueMessages:'2',availableMetadataMessages:'2',refusedMetadataMessages:'0',confirmedMissingMessages:'0',deletedMetadataMessages:'0'},quotaAccounting:{scope:'callie_backfill_allocation',reservedUnits:'8',observedUnits:'7',unknownUnits:'1'},completedSlices:3,historyAnchor:frozen.historyAnchor,fromAt:frozen.fromAt});
@@ -81,12 +83,12 @@ it('configured acquisition without a verified read allocation calls no Gmail met
   expect(resumedGmail.bodyReads).toEqual([]);
   const callsBeforeRevision=resumedGmail.calls.length;
   await fixture.db.query('UPDATE crm_mail_import_allocations SET revision=2,user_limit_units=9,user_headroom_units=1 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
-  await resumedRegistry.get('crm.mail_backfill')!.handle({session:workerRuntime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  await expect(resumedRegistry.get('crm.mail_backfill')!.handle({session:workerRuntime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job})).rejects.toThrow('quota_or_authority_unavailable');
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'quota_or_authority_unavailable',completedSlices:3,quotaAccounting:{reservedUnits:'8',observedUnits:'7',unknownUnits:'1'}});
   expect(resumedGmail.calls).toHaveLength(callsBeforeRevision);
   await fixture.db.query('UPDATE crm_mail_import_allocations SET revision=3,user_limit_units=1000,user_headroom_units=100 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
   const privateFailureRegistry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...resumedGmail,listMessageIds:async()=>{throw new Error('private_provider_response');}},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver()}});
-  await privateFailureRegistry.get('crm.mail_backfill')!.handle({session:workerRuntime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  await expect(privateFailureRegistry.get('crm.mail_backfill')!.handle({session:workerRuntime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job})).rejects.toThrow('provider_read_unavailable');
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({reason:'provider_read_unavailable',quotaAccounting:{reservedUnits:'9',observedUnits:'7',unknownUnits:'2'}});
   const firmId=await seedFirm(fixture,{name:'Historical contact firm',regionCode:'RI',postalCode:'02903',assignedUserId:admin.userId});
   const contactId=await seedContact(fixture,{firmId,fullName:'Historical contact'});
@@ -175,5 +177,54 @@ it('uses exact frozen microseconds for provider millisecond timestamps at the ad
   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'partial',completedSlices:90,historyComplete:false,metadataCoverage:{retainedUniqueMessages:'2',availableMetadataMessages:'1',refusedMetadataMessages:'1'}});
   expect(endEdges.metadataReads).toEqual(['inside-exact-to','after-exact-to']);
   expect(endEdges.bodyReads).toEqual([]);
+  // Actual runner completion and scheduler continuation must not confuse finished enumeration with history coverage.
+  expect(await runClaimedJob(fixture.db,{registry:endBounded,job})).toBe('completed');
+  const source=workerDueWorkSources({crmMailBackfill:true}).find(value=>value.name==='crm-mail-backfill');
+  expect(source).toBeDefined();
+  const scheduler=await fixture.database.appRuntimeSession();
+  const callsBeforeSchedule=endEdges.calls.length;
+  const pass=await runSchedulerPass(scheduler,{sources:[source!],now:new Date().toISOString()});
+  expect(pass).toMatchObject({outcome:'ran',inserted:1,externalActions:0});
+  expect(await runSchedulerPass(scheduler,{sources:[source!],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
+  expect(endEdges.calls).toHaveLength(callsBeforeSchedule);
+  const continuation=(await claimJobs(scheduler,{owner:'history-continuation',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+  expect(continuation.payload).toMatchObject({importId:expect.any(String),accountBinding:binding,generation:1,controlsRevision:1,policyRevision:1});
+ }finally{await fixture.stop();}
+});
+
+it('uses bounded real runner retries and never rematerializes exhausted unchanged import work',async()=>{
+ const fixture=await createAuthFixture();
+ try{
+  const {workspaceId,admin}=fixture.alpha;
+  const token=(await issueSessionFor(fixture,fixture.alpha,admin)).accessToken;
+  const mailbox=(await fixture.db.query<{id:string;owner_user_id:string;email_address:string;provider_account_id:string;generation:number;status:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'business@example.test','google-business','connected') RETURNING *",[workspaceId,admin.userId])).rows[0]!;
+  const binding=businessAccountBinding(workspaceId,mailbox)!;
+  await fixture.db.query("INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled) VALUES($1,$2,$3,'google-business',$4,1,1,true)",[workspaceId,mailbox.id,admin.userId,binding]);
+  await fixture.db.query("INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'google-business',$4,1,1,true,1,'fixture',repeat('b',64),'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')",[workspaceId,mailbox.id,admin.userId,binding]);
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,suppressionJournal:recordingSuppressionJournal()});
+  await fixture.db.query('UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id,METADATA_REVIEW_DISCLOSURE.version,METADATA_REVIEW_DISCLOSURE.sha256]);
+  expect((await post('/crm/business/mail/import/request',{commandId:randomUUID(),clientVersion:'1.4.0',mailboxId:mailbox.id})).status).toBe(200);
+  await fixture.db.query("INSERT INTO crm_mail_import_allocations(workspace_id,mailbox_id,revision,owner_user_id,account_binding,generation,project_hash,user_hash,user_limit_units,project_limit_units,user_headroom_units,project_headroom_units,profile_units,list_units,history_units,metadata_units,body_units,verification_sha256,verified_until) VALUES($1,$2,1,$3,$4,1,repeat('c',64),repeat('d',64),1000,1000,100,100,1,1,1,1,1,repeat('e',64),clock_timestamp()+interval '1 hour')",[workspaceId,mailbox.id,admin.userId,binding]);
+  const gmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'100',messages:[]});
+  let listAttempts=0;
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail:{...gmail,listMessageIds:async()=>{listAttempts++;throw new Error('private_provider_failure');}},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver()}});
+  const runtime=await fixture.database.appRuntimeSession();
+  const source=workerDueWorkSources({crmMailBackfill:true}).find(value=>value.name==='crm-mail-backfill')!;
+  const backoff={baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0};
+  for(let attempt=1;attempt<=4;attempt++){
+   const job=(await claimJobs(runtime,{owner:'bounded-backfill-retry',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+   expect(job).toBeDefined();
+   expect(await runClaimedJob(runtime,{registry,job,backoff})).toBe(attempt===4?'dead':'retryable');
+   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
+  }
+  expect(listAttempts).toBe(4);
+  expect(gmail.calls.filter(call=>call.method==='getProfile')).toHaveLength(1);
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({state:'blocked',reason:'provider_read_unavailable',completedSlices:0,historyAnchor:'100',quotaAccounting:{reservedUnits:'5',observedUnits:'1',unknownUnits:'4'}});
+  // Operator fixture changes the verified configuration; this creates one new exact key, never refunds prior unknown usage.
+  await fixture.db.query('UPDATE crm_mail_import_allocations SET revision=2 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id]);
+  expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:1,externalActions:0});
+  expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
+  expect(listAttempts).toBe(4);
+  expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({quotaAccounting:{reservedUnits:'5',observedUnits:'1',unknownUnits:'4'}});
  }finally{await fixture.stop();}
 });

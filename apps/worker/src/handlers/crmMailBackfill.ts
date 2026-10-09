@@ -10,7 +10,7 @@ import {METADATA_HEADERS} from '@fss/domain/mail/types.ts';
 import type {BusinessMailMetadataObserver} from '@fss/domain/mail/pipeline.ts';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
 class BackfillFailure extends Error{}
-const importPayload=z.strictObject({importId:z.string().uuid()});
+const importPayload=z.strictObject({importId:z.string().uuid(),accountBinding:z.string().regex(/^[a-f0-9]{64}$/u),generation:z.number().int().positive(),controlsRevision:z.number().int().positive(),policyRevision:z.number().int().positive(),attemptConfigurationHash:z.string().regex(/^[a-f0-9]{64}$/u).optional(),attemptProgressHash:z.string().regex(/^[a-f0-9]{64}$/u).optional()});
 export interface CrmMailBackfillDeps {
  gmail:GmailClient;
  /** Already-proven token resolver; no Gmail data reads may be hidden here. */
@@ -29,7 +29,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   if(deps===undefined){await block('backfill_configuration_required');return;}
   const adapters=deps;
   let authority=await readBackfillAuthority(context,importId);
-  if(authority===null){await block('acquisition_binding_changed');return;}
+  if(authority===null||authority.proof.accountBinding!==parsed.data.accountBinding||authority.proof.generation!==parsed.data.generation||authority.proof.controlsRevision!==parsed.data.controlsRevision||authority.proof.policyRevision!==parsed.data.policyRevision){await block('acquisition_binding_changed');return;}
   if(await readBackfillAllocation(context,authority.proof.mailboxId)===null){await block('quota_configuration_required');return;}
   async function providerRead<T>(method:BackfillReadMethod,bound:BackfillAuthority,read:(access:GmailAccessGrant)=>Promise<T>):Promise<T>{
    if(!await adapters.proofVerifier.verify(bound.proof))throw new BackfillFailure('acquisition_verification_required');
@@ -88,6 +88,6 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     await input.session.query("UPDATE crm_mail_import_slices SET state=$4,next_page_token=$5 WHERE workspace_id=$1 AND import_id=$2 AND ordinal=$3",[input.scope.workspaceId,importId,slice.ordinal,listed.nextPageToken===null?'complete':'pending',listed.nextPageToken]);
     await input.session.query("UPDATE crm_mail_imports SET state='partial',reason=NULL WHERE workspace_id=$1 AND id=$2 AND state<>'complete'",[input.scope.workspaceId,importId]);
    });
-  }catch(error){if(error instanceof BackfillFailure)await block(error.message);else throw error;}
+  }catch(error){if(error instanceof BackfillFailure){await block(error.message);if(error.message==='provider_read_unavailable'||error.message==='quota_or_authority_unavailable')throw error;}else throw error;}
  },
 };}
