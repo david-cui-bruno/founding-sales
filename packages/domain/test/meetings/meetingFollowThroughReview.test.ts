@@ -16,6 +16,7 @@ import { nextMeetingFollowThroughAction } from '../../meetings/followThroughSche
 import { invalidateMeetingFollowThrough } from '../../meetings/followThroughLifecycle.ts';
 import { applyDirectSendEffects } from '../../mail/effects.ts';
 import { readMessage } from '../../mail/messages.ts';
+import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
 
 describe('meeting follow-through review regressions', () => {
   let stop: (() => Promise<void>) | undefined;
@@ -119,11 +120,14 @@ describe('meeting follow-through review regressions', () => {
     await withTransaction(f.db,()=>runMeetingFollowThrough(f.context,{meetingId:f.meetingId,at:next.dueAt}));
     v=(await readMeetingFollowThrough(f.admin,{meetingId:f.meetingId}))!;expect(v).toMatchObject({approvalRequired:false,currentDraft:{ordinal:2}});
     const execution=(await f.db.query<{id:string}>('SELECT id FROM step_executions WHERE enrollment_id=$1 AND ordinal=2',[plan.enrollment_id])).rows[0]!;
-    const at=new Date(Date.parse(next.dueAt)+31*60_000).toISOString();
+    // The durable sent receipt uses database time. The pacing delay can cross
+    // closing time; choose a lawful fixture window instead of depending on wall-clock minute.
+    const at=placeEmailSend(new Date(Date.parse(next.dueAt)+31*60_000).toISOString(),'Etc/UTC').sendAt;
     const handoff={prepare:async(c:typeof f.context,request:Parameters<typeof prepareOutboundMessage>[1])=>{const p=await prepareOutboundMessage(c,request);if(!p.ok)throw new Error(p.reason);return {ok:true as const,...p.value};},dispatch:async()=>({ok:true as const}),readOutcome:readOutboundOutcome};
     expect(await withTransaction(f.db,()=>runDueStepExecution(f.context,{stepExecutionId:execution.id,now:at,eligibility:composeEligibility(),sendHandoff:handoff}))).toMatchObject({kind:'handed_to_send'});
     const nudge=(await readFenceByStepExecution(f.context,execution.id))!;
-    expect(await dispatchOutboundMessage(f.context,f.world.sendDeps(f.world.alpha,{gmail,now:()=>new Date(at)}),{outboundMessageId:nudge.id})).toMatchObject({outcome:'sent'});
+    const dispatch = await dispatchOutboundMessage(f.context,f.world.sendDeps(f.world.alpha,{gmail,now:()=>new Date(at)}),{outboundMessageId:nudge.id});
+    expect(dispatch, JSON.stringify(dispatch)).toMatchObject({outcome:'sent'});
     expect(gmail.sends).toHaveLength(2);expect(await readFence(f.context,fence.id)).toMatchObject({state:'sent',providerMessageId:receipt.providerMessageId,renderedHash:receipt.renderedHash,body:receipt.body});
     await withTransaction(f.db,()=>retireAnswerBlock(f.admin,fact.value));v=(await readMeetingFollowThrough(f.admin,{meetingId:f.meetingId}))!;
     expect(v.blockers).toContain('facts_block_retired');
