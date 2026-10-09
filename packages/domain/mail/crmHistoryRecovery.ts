@@ -147,3 +147,11 @@ export async function advanceHistoryRecovery(context:RepositoryContext,input:Rec
  }
  return 'invalid_evidence' as const;
 }
+
+/** Registered retention clears old private checkpoints; opaque epoch and cost barriers survive. */
+export async function expireHistoryRecoveries(context:RepositoryContext,limit:number){
+ if(context.scope.actor.kind!=='system'||context.scope.actor.component!=='worker'||!Number.isInteger(limit)||limit<1||limit>500)return 0;
+ const ids=(await context.db.query<{id:string}>("SELECT id FROM crm_mail_history_recoveries WHERE workspace_id=$1 AND state<>'deleted' AND observed_at<clock_timestamp()-interval '90 days' ORDER BY id LIMIT $2 FOR UPDATE",[context.scope.workspaceId,limit])).rows.map(row=>row.id);
+ if(ids.length===0)return 0;
+ return (await context.db.query("UPDATE crm_mail_history_recoveries SET state='deleted',reason='retention_expired',from_at=NULL,to_at=NULL,history_anchor=NULL,history_cursor=NULL,history_page_token=NULL,total_days=NULL,next_day_ordinal=0,next_day_page_token=NULL,completed_at=NULL,revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state<>'deleted' AND observed_at<clock_timestamp()-interval '90 days'",[context.scope.workspaceId,ids])).rowCount??0;
+}

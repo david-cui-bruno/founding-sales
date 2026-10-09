@@ -1,3 +1,4 @@
+import {expireHistoryRecoveries} from '../mail/crmHistoryRecovery.ts';
 import {expireUnavailableBackfillMetadata} from '../mail/crmBackfillMetadata.ts';
 import { redactBusinessMetadata } from '../business/acquisition.ts';
 import { archiveCompletedPayloads } from '../jobs/jobStore.ts';
@@ -110,7 +111,7 @@ function requireBoundary(input: RetentionSweepInput, dataKind: string): string {
 const unmatchedGmailMetadata: RetentionTarget = {
   dataKind: 'unmatched_gmail_metadata',
   state: 'implemented',
-  tables: ['mail_messages', 'mail_message_bodies', 'crm_business_conversations','crm_mail_import_messages'],
+  tables: ['mail_messages', 'mail_message_bodies', 'crm_business_conversations','crm_mail_import_messages','crm_mail_history_recoveries'],
   note: 'Unmatched Gmail metadata follows its policy; compact business review metadata expires at the fixed ninety-day review horizon. An available, exactly linked approved business copy follows business correspondence retention without manufacturing an operational match.',
   sweep: async (context, input) => {
     const boundaryAt = requireBoundary(input, 'unmatched_gmail_metadata');
@@ -138,8 +139,9 @@ const unmatchedGmailMetadata: RetentionTarget = {
     const metadata = await redactBusinessMetadata(context,{expiredOnly:true});
     if (!metadata.ok) throw new Error('Business metadata expiry refused');
     const unavailableImportMetadata=await expireUnavailableBackfillMetadata(context,input.limit);
-    return { boundaryAt, rowsDeleted: deleted, rowsRedacted: metadata.value.redacted+metadata.value.importMetadataRedacted+unavailableImportMetadata,
-      detail: { mail_messages: deleted, crm_business_conversations: metadata.value.redacted,crm_mail_import_messages:metadata.value.importMetadataRedacted+unavailableImportMetadata } };
+    const expiredRecoveries=await expireHistoryRecoveries(context,input.limit);
+    return { boundaryAt, rowsDeleted: deleted, rowsRedacted: metadata.value.redacted+metadata.value.importMetadataRedacted+unavailableImportMetadata+expiredRecoveries,
+      detail: { mail_messages: deleted, crm_business_conversations: metadata.value.redacted,crm_mail_import_messages:metadata.value.importMetadataRedacted+unavailableImportMetadata,crm_mail_history_recoveries:expiredRecoveries } };
   },
 };
 

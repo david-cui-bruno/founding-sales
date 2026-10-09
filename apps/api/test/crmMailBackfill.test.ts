@@ -472,7 +472,15 @@ it.each(['unchanged','changed','exhausted','disconnected_profile','changed_profi
   expect(gapMetadataReads).toBe(2);
   expect(await runSchedulerPass(runtime,{sources:[source],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
   expect(gmail.bodyReads).toEqual([]);
-
+  if(scenario==='unchanged'){
+   // A legitimately completed historical recovery is fixture state; the registered retention seam measures cleanup.
+   await fixture.db.query(`WITH instant AS(SELECT clock_timestamp() AS at) INSERT INTO crm_mail_history_recoveries(workspace_id,import_id,epoch,account_binding,generation,controls_revision,policy_revision,allocation_revision,configuration_hash,from_at,to_at,history_anchor,history_cursor,total_days,next_day_ordinal,state,observed_at,completed_at)
+    SELECT workspace_id,import_id,2,account_binding,generation,controls_revision,policy_revision,allocation_revision,configuration_hash,instant.at-interval '93 days',instant.at-interval '92 days',history_anchor,history_cursor,1,1,'complete',instant.at-interval '91 days',instant.at-interval '91 days' FROM crm_mail_history_recoveries CROSS JOIN instant WHERE workspace_id=$1 AND import_id=$2 AND epoch=1`,[workspaceId,original.importId]);
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({gapCoverage:{epoch:2,state:'complete',windowFrozen:true}});
+   const now=new Date().toISOString();
+   await registry.get('retention.batch')!.handle({session:runtime,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:{id:randomUUID(),workspaceId,kind:'retention.batch',idempotencyKey:'recovery-retention-fixture',payload:{dataKind:'unmatched_gmail_metadata',period:now.slice(0,10)},attempt:1,maxAttempts:6,fencingToken:'1',leaseOwner:'recovery-retention',leaseExpiresAt:now}});
+   expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({gapCoverage:{epoch:2,state:'deleted',reason:'retention_expired',windowFrozen:false,fromAt:null,toAt:null,totalDays:null,completedDays:0,historyComplete:false},quotaAccounting:{reservedUnits:'8',observedUnits:'8',unknownUnits:'0'},metadataCoverage:{retainedUniqueMessages:'1',availableMetadataMessages:'1'}});
+  }
   expect(gmail.sends).toEqual([]);
  }finally{await fixture.stop();}
 });
