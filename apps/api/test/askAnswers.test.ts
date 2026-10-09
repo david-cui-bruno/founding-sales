@@ -19,10 +19,14 @@ it('acknowledges a selected-source answer request without exposing its question 
   const selected=await post('/crm/imports/commit',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...selection,personId,firmId:null,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash,parserVersion:'selected-v1'});
   expect(selected.status).toBe(200);
   const sourceId=(selected.body as {result:{sourceId:string}}).result.sourceId;
-  const requested=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'What maintenance process is needed?',scope:{sources:[{workspaceId:fixture.alpha.workspaceId,sourceId,kind:'selected_note',revision:1,contentHash:createHash('sha256').update(text).digest('hex'),locator:null}]}});
+  const requested=await post('/ask/answers/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,question:'maintenance process',scope:{sources:[{workspaceId:fixture.alpha.workspaceId,sourceId,kind:'selected_note',revision:1,contentHash:createHash('sha256').update(text).digest('hex'),locator:null}]}});
   expect(requested.status).toBe(200);
   expect(requested.body).toMatchObject({result:{requestId:expect.any(String),version:1,state:'unavailable'}});
   expect(JSON.stringify(requested.body)).not.toContain(text);
-  expect(JSON.stringify(requested.body)).not.toContain('What maintenance process is needed?');
+  expect(JSON.stringify(requested.body)).not.toContain('maintenance process');
+  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
+  const read=await post('/ask/answers/read',{requestId});
+  expect(read.status).toBe(200);
+  expect(read.body).toMatchObject({requestId,state:'unavailable',reason:'purpose_unavailable',question:'maintenance process',answer:null,fallback:{operation:'passages',passages:[{text,sources:[{sourceId}]}]}});
  }finally{await fixture.stop();}
 });
