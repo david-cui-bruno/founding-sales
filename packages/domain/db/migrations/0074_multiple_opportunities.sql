@@ -1,3 +1,5 @@
+-- changes: opportunities
+-- Preserve existing commercial stages with explicit legacy authority; new labels are nullable.
 DROP INDEX opportunities_one_open_per_firm;
 CREATE INDEX opportunities_open_by_firm ON opportunities(workspace_id,firm_id,id) WHERE status='open';
 ALTER TABLE opportunities ADD COLUMN display_name text;
