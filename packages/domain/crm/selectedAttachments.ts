@@ -53,7 +53,8 @@ export async function readSelectedAttachment(context:RepositoryContext,sourceId:
  const source={workspaceId:context.scope.workspaceId,sourceId,kind:'selected_note' as const,revision:head.revision,contentHash:head.content_hash,locator:null};
  const resolved=await resolveCrmSource(context,source);if(resolved===null)return null;
  const processing=await readCrmProcessing(context,source);if(processing===null)return null;
- return {file,source:resolved.source,processing};
+ const processingHealth=await readCrmProcessingHealth(context,{sourceId,kind:'selected_note'});if(processingHealth===null)return null;
+ return {file,source:resolved.source,processing,processingHealth};
 }
 export async function requestSelectedAttachmentAnalysis(context:RepositoryContext,input:z.infer<typeof selectedAttachmentAnalyzeSchema>){
  const selected=await readSelectedAttachment(context,input.source.sourceId);

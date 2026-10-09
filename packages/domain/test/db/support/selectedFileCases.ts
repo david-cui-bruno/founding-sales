@@ -11,6 +11,7 @@ async function seed(f:Fixture){
  return [workspace,source] as const;
 }
 export const SELECTED_FILE_CONSTRAINT_CASES:readonly Case[]=[
+ {constraint:'crm_selected_file_deleted_proof_empty',run:async f=>f.session.query("UPDATE crm_selected_file_receipts SET state='deleted' WHERE workspace_id=$1 AND source_id=$2",await seed(f))},
  ...[
   ['source_revision','source_revision=0'],['metadata_revision','metadata_revision=0'],
   ['file_hash',"file_hash='invalid'"],['source_content_hash',"source_content_hash='invalid'"],

@@ -200,6 +200,7 @@ describe('explicit selected attachment analysis',()=>{
    await post('/crm/imports/restore',command({sourceId,expectedSourceRevision:2,expectedMetadataRevision:2}));
    const fresh=await post('/crm/attachments/preview',file);
    expect((await post('/crm/attachments/reselect',command({sourceId,expectedSourceRevision:3,expectedMetadataRevision:2,file,participants:[],occurredAt:null,previewHash:(fresh.body as {previewHash:string}).previewHash}))).status).toBe(200);
+   expect((await post('/crm/attachments/read',{sourceId})).body).toMatchObject({processingHealth:{availability:'available',unknownAcceptance:true,generations:[{financial:{dispatchState:'unknown_acceptance',settledCents:4}}]}});
    await post('/crm/attachments/analyze',command({source:await lookup(),fileHash:'25ee8c81049e3d9309107bf3b7b9b807b1a7ed83121acb6c43b978889d86d3b1'}));
    await runOnce(fixture.db,{registry,owner:'attachment-unknown-acceptance',limit:100});
    expect(calls).toBe(1);

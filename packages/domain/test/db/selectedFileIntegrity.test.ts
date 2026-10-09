@@ -23,4 +23,14 @@ describe('selected original file database integrity',()=>{
   await expect(runtime.query('UPDATE crm_selected_imports SET revision=2 WHERE workspace_id=$1 AND source_id=$2',[workspace,source])).rejects.toMatchObject({code:'23514',constraint:'crm_selected_file_current_metadata'});
  });
 
+ it('rejects private file proof being refilled on a deleted receipt',async()=>{
+  const workspace=seeded.alpha.workspaceId;const owner=seeded.alpha.admin.userId;
+  const person=(await runtime.query<{id:string}>("INSERT INTO crm_people(workspace_id,owner_user_id,full_name) VALUES($1,$2,'Deleted file integrity fixture') RETURNING id",[workspace,owner])).rows[0]!.id;
+  const source=(await runtime.query<{id:string}>("INSERT INTO crm_selected_sources(workspace_id,person_id,owner_user_id,source_key_hash,excerpt,content_hash) VALUES($1,$2,$3,repeat('9',64),'Original text',repeat('b',64)) RETURNING id",[workspace,person,owner])).rows[0]!.id;
+  await runtime.query("INSERT INTO crm_selected_imports(workspace_id,source_id,owner_user_id,import_key_hash,input_hash,parser_version,subtype) VALUES($1,$2,$3,repeat('9',64),repeat('d',64),'selected-v1','selected_file')",[workspace,source,owner]);
+  await runtime.query("INSERT INTO crm_selected_file_receipts(workspace_id,source_id,source_revision,metadata_revision,file_hash,source_content_hash,file_name,byte_length,format,parser_version,origin,state) VALUES($1,$2,1,1,repeat('e',64),repeat('b',64),'original.txt',13,'utf8_text','selected-file-utf8-v1','user_selected_original','selected')",[workspace,source]);
+  await runtime.query("UPDATE crm_selected_sources SET availability='deleted',excerpt=NULL,content_hash=NULL,occurred_at=NULL,revision=2 WHERE workspace_id=$1 AND id=$2",[workspace,source]);
+  await expect(runtime.query("UPDATE crm_selected_file_receipts SET file_name='private-refill.txt' WHERE workspace_id=$1 AND source_id=$2",[workspace,source])).rejects.toMatchObject({code:'23514',constraint:'crm_selected_file_deleted_proof_empty'});
+ });
+
 });

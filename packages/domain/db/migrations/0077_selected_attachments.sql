@@ -13,6 +13,7 @@ CREATE TABLE crm_selected_file_receipts (
  state text NOT NULL CHECK(state IN ('selected','stale','deleted','awaiting_selection')),
  PRIMARY KEY(workspace_id,source_id),
  FOREIGN KEY(workspace_id,source_id) REFERENCES crm_selected_sources(workspace_id,id),
+ CONSTRAINT crm_selected_file_deleted_proof_empty CHECK(state NOT IN ('deleted','awaiting_selection') OR (file_hash IS NULL AND source_content_hash IS NULL AND file_name IS NULL AND byte_length IS NULL AND format IS NULL AND parser_version IS NULL AND origin IS NULL)),
  CHECK(state<>'selected' OR (file_hash IS NOT NULL AND source_content_hash IS NOT NULL AND file_name IS NOT NULL AND byte_length IS NOT NULL AND format IS NOT NULL AND parser_version IS NOT NULL AND origin IS NOT NULL))
 );
 GRANT SELECT,INSERT,UPDATE,DELETE ON crm_selected_file_receipts TO app_runtime,migration;
