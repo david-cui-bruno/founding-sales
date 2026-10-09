@@ -73,6 +73,9 @@ async function approveCaptureFixture(
 
 
 it.each([
+ {name:'unknown native context',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'multiple native people',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
+ {name:'review required recaptured native context',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
  {name:'human review veto',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
  {name:'dated human dismissal veto',quote:'I will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
  {name:'old dated promise',quote:'I will prepare the repair summary by 2020-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:true},
@@ -101,12 +104,46 @@ it.each([
   expect((await post('/crm/people/bridge',command({contactIds:[contactId]}))).status).toBe(200);
   const message=(await fixture.db.query<{id:string}>("INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,matched) VALUES($1,$2,'approved-message','approved-thread','outgoing','2026-10-08T15:00:00Z',true) RETURNING id",[workspaceId,mailbox.id])).rows[0]!;
   const opportunityId=(await fixture.db.query<{id:string}>('INSERT INTO opportunities(workspace_id,firm_id,stage_id,control_mode_changed_at) VALUES($1,$2,(SELECT id FROM pipeline_stages WHERE workspace_id=$1 ORDER BY position LIMIT 1),now()) RETURNING id',[workspaceId,firmId])).rows[0]!.id;
-  await fixture.db.query("INSERT INTO mail_message_matches(workspace_id,mail_message_id,firm_id,contact_id,opportunity_id,match_rule) VALUES($1,$2,$3,$4,$5,'thread')",[workspaceId,message.id,firmId,contactId,opportunityId]);
+  if(name!=='unknown native context'&&name!=='review required recaptured native context')await fixture.db.query("INSERT INTO mail_message_matches(workspace_id,mail_message_id,firm_id,contact_id,opportunity_id,match_rule) VALUES($1,$2,$3,$4,$5,'thread')",[workspaceId,message.id,firmId,contactId,opportunityId]);
+  let secondPersonId:string|null=null;
+  if(name==='multiple native people'){
+   const otherId=await seedContact(fixture,{firmId,fullName:'Second distinct correspondent'});
+   expect((await post('/crm/people/bridge',command({contactIds:[otherId]}))).status).toBe(200);
+   secondPersonId=otherId;
+   const otherOpportunity=(await fixture.db.query<{id:string}>('INSERT INTO opportunities(workspace_id,firm_id,stage_id,control_mode_changed_at) VALUES($1,$2,(SELECT id FROM pipeline_stages WHERE workspace_id=$1 ORDER BY position LIMIT 1),now()) RETURNING id',[workspaceId,firmId])).rows[0]!.id;
+   await fixture.db.query("INSERT INTO mail_message_matches(workspace_id,mail_message_id,firm_id,contact_id,opportunity_id,match_rule) VALUES($1,$2,$3,$4,$5,'thread')",[workspaceId,message.id,firmId,otherId,otherOpportunity]);
+  }
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:{verify:async proof=>proof.accountBinding===binding},provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:name==='draft label'?['DRAFT']:['SENT'],origin,providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:name==='other sender'?'someoneelse@example.test':'business@example.test',to:['known@example.test'],cc:[],subject:'Repair summary',body:quote,parserVersion:'controlled-authored-mime-v1',representation:'plain_text',completeness,ranges:[{start:0,end:quote.length,kind:rangeKind}]})}}});
   const handler=capture.get('crm.mail_capture');if(!handler)throw new Error('capture registration missing');
   const captured=await handler.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
   expect(captured?.progress['sourceId']).toBe(message.id);
-  const source={workspaceId,sourceId:message.id,kind:'mail' as const,revision:1,contentHash:createHash('sha256').update(quote).digest('hex'),locator:null};
+  let revision=1;
+  if(name!=='unknown native context'&&name!=='review required recaptured native context'){
+   expect((await post('/crm/business/mail/associate',command({sourceId:message.id,expectedRevision:1,personId:contactId,firmId}))).status).toBe(200);
+   revision=2;
+   if(secondPersonId!==null){
+    // Controlled native-copy context fixture; the native adapter resolves both real rows.
+    await fixture.db.query("INSERT INTO crm_mail_source_contexts(workspace_id,source_id,source_revision,person_id,firm_id,context_kind,review) VALUES($1,$2,$3,$4,$5,'reviewed','current')",[workspaceId,message.id,revision,secondPersonId,firmId]);
+   }
+  }
+  if(name==='review required recaptured native context'){
+   expect((await post('/crm/business/mail/associate',command({sourceId:message.id,expectedRevision:1,personId:contactId,firmId}))).status).toBe(200);
+   expect((await post('/crm/business/mail/delete',command({sourceId:message.id,expectedRevision:2}))).status).toBe(200);
+   expect((await post('/crm/business/mail/restore',command({sourceId:message.id,expectedRevision:3}))).status).toBe(200);
+   expect((await post('/crm/business/mail/recapture',command({sourceId:message.id,expectedRevision:4}))).status).toBe(200);
+   const next=(await claimJobs(fixture.db,{owner:'required-context-recapture',kinds:['crm.mail_capture'],limit:1,leaseSeconds:120}))[0]!;
+   expect(await handler.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:next})).toMatchObject({progress:{outcome:'captured',sourceRevision:5}});
+   revision=5;
+  }
+  const source={workspaceId,sourceId:message.id,kind:'mail' as const,revision,contentHash:createHash('sha256').update(quote).digest('hex'),locator:null};
+  if(name==='unknown native context'||name==='multiple native people'||name==='review required recaptured native context'){
+   const nativeContext=await port.readContext({db:fixture.db,scope:workspaceScope(workspaceId,{kind:'user',userId:fixture.alpha.admin.userId,role:'admin'})},source);
+   expect(nativeContext).toMatchObject({review:'required'});
+   if(name==='review required recaptured native context')expect(nativeContext?.personId).not.toBeNull();
+   else expect(nativeContext?.personId).toBeNull();
+   if(name==='multiple native people')expect(new Set(nativeContext?.mailContexts?.flatMap(cx=>cx.personId===null?[]:[cx.personId])).size).toBe(2);
+  }
+
   expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:'promise-evaluation',modelVersion:'fixture-promises-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
   await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[workspaceId]);
   expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
@@ -129,7 +166,7 @@ it.each([
   }
   await runOnce(fixture.db,{registry,owner:'promise-intent',limit:20});
   await runOnce(fixture.db,{registry,owner:'promise-projector',limit:20});
-  const page=await post('/crm/commitments/read',{scope:{kind:'firm',firmId},limit:50});expect(page.status).toBe(200);
+  const page=await post('/crm/commitments/read',{scope:{kind:'source',sourceId:source.sourceId,sourceKind:'mail'},limit:50});expect(page.status).toBe(200);
   if(!eligible){expect(page.body).toMatchObject({items:name==='human review veto'?[{basis:'human',state:'suggestion',task:null}]:[]});return;}
   expect(page.body).toMatchObject({items:[{basis:'verified_original',actor:'self',actionLabel:'Prepare the repair summary',due:{kind:'date',date:name==='old dated promise'?'2020-10-12':'2026-10-12',zone:'UTC'},quote,task:{status:'open'}}]});
   if(name==='same verified action after completed rerun'){

@@ -276,7 +276,7 @@ export async function admitVerifiedCommitmentIntent(context:RepositoryContext,in
  const current=(await context.db.query<Review>("SELECT * FROM crm_commitment_reviews WHERE workspace_id=$1 AND family_key=$2 AND state<>'redacted' FOR SHARE",[context.scope.workspaceId,familyKey])).rows[0];
  const tasksCurrent=before===undefined?[]:(await context.db.query<Task>('SELECT * FROM crm_internal_tasks WHERE workspace_id=$1 AND review_id=$2 ORDER BY id LIMIT 101',[context.scope.workspaceId,before.id])).rows;
  if(JSON.stringify(current)!==JSON.stringify(before)||JSON.stringify(tasksCurrent)!==JSON.stringify(tasksBefore)||JSON.stringify(await locate())!==JSON.stringify(metadata)||!await fence())return;
- const sourceContext=await readProcessingContext(context,input.source,mail);if(sourceContext===null||processingContextHash(sourceContext)!==input.contextHash)return;
+ const sourceContext=await readProcessingContext(context,input.source,mail);if(sourceContext===null||sourceContext.review!=='current'||processingContextHash(sourceContext)!==input.contextHash)return;
  const proof=await mail.resolveCommitmentProof(context,{...input.source,locator:metadata.locator});
  if(proof===null||proof.ownerUserId!==actor.userId||proof.sourceRevision!==input.source.revision||proof.sourceHash!==input.source.contentHash)return;
  const quote=(await context.db.query<{quote:string}>('SELECT quote FROM crm_extraction_claims WHERE workspace_id=$1 AND id=$2 AND claim_hash=$3',[context.scope.workspaceId,input.claimId,metadata.claim_hash])).rows[0]?.quote;
