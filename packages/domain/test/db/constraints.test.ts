@@ -1,3 +1,4 @@
+import {CRM_PROGRESS_CONSTRAINT_CASES} from './support/crmProgressCases.ts';
 import { MAIL_CAPTURE_CONSTRAINT_CASES } from './support/mailCaptureCases.ts';
 import {BUSINESS_ACQUISITION_CONSTRAINT_CASES} from './support/businessAcquisitionCases.ts';
 import {CRM_EXTRACTION_CONSTRAINT_CASES} from './support/crmExtractionCases.ts';
@@ -1622,6 +1623,7 @@ const cases: readonly Case[] = [
   ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,
   ...MAIL_CAPTURE_CONSTRAINT_CASES,
   ...CRM_EXTRACTION_CONSTRAINT_CASES,
+  ...CRM_PROGRESS_CONSTRAINT_CASES,
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
   ...SOURCING_CONSTRAINT_CASES,

@@ -50,6 +50,7 @@ describe('job kind classes', () => {
       'telephony.sweep',
     ]);
     expect(kindsOfClass('bulk')).toEqual([
+      'crm.mail_progress',
       'crm.extract',
       'crm.capture_extraction',
       'sequence.action',

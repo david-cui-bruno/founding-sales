@@ -246,6 +246,7 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
+ '/crm/progress/read':{version:1,events:[],truncated:false,coverage:'partial'},
  '/crm/processing/source/read':{state:'available',source:{workspaceId:FIXTURE_IDS.firm,sourceId:FIXTURE_IDS.item,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:null,observedAt:'2026-10-01T00:00:00Z',completeness:'selected_excerpt',availability:'available'},extent:{unit:'utf16',length:0},passage:null},
  '/crm/processing/read':{state:'not_requested',claims:[]},
  '/crm/processing/request':{status:'accepted',replayed:false,result:{state:'not_requested',claims:[]}},

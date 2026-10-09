@@ -158,6 +158,7 @@ describe('J/K then Enter run no command (K4)', () => {
       if (name === 'research.open') return { firm: null, settings: null, worstCaseRunCents: null, spend: null, notice: null, mayMutate: true, role: 'salesperson' };
       if (name === 'calling.history') return { calls: null };
       if (name === 'meetings.forFirm' || name === 'meetings.unmatched') return { meetings: [] };
+      if (name === 'crm.progressRead') return {version:1,events:[],truncated:false,coverage:'partial'};
       if (name === 'crm.businessMailList') return {sources:[],nextAfterId:null};
       if (name === 'crm.businessMailControls') return {mailboxId:FIRM_ID,enabled:false,ready:false,reason:'activation_not_available',revision:0};
       if (name === 'crm.personList') return {people:[],nextAfterId:null};

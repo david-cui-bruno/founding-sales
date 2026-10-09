@@ -178,6 +178,12 @@ const CRM_MAIL_MESSAGE_IDS = `SELECT x.mail_message_id AS id FROM mail_message_m
       AND ($2::uuid IS NULL OR cx.person_id IN (${CRM_TARGET_PEOPLE}) OR EXISTS(
         SELECT 1 FROM mail_message_matches mx WHERE mx.workspace_id=cx.workspace_id
         AND mx.id=cx.operational_match_id AND mx.contact_id=$2)))`;
+const CRM_PROGRESS_IN_SCOPE = `r.workspace_id=$1 AND (r.source_id IN (${CRM_MAIL_MESSAGE_IDS})
+ OR r.prerequisite_source_id IN (${CRM_MAIL_MESSAGE_IDS})
+ OR ($2::uuid IS NULL AND $3=ANY(r.original_firm_ids))
+ OR r.original_person_ids && ARRAY(${CRM_TARGET_PEOPLE}))`;
+const CRM_PROGRESS_IDS = `SELECT r.id FROM crm_mail_progress_receipts r WHERE ${CRM_PROGRESS_IN_SCOPE}`;
+const CRM_COMPLETION_IN_SCOPE = `workspace_id=$1 AND (request_message_id IN (${CRM_MAIL_MESSAGE_IDS}) OR sent_receipt_id IN (${CRM_PROGRESS_IDS}))`;
 const CRM_MAIL_CAPTURE_IDS = `SELECT i.id FROM crm_mail_capture_identities i WHERE i.workspace_id=$1
   AND (i.source_id IN (${CRM_MAIL_MESSAGE_IDS}) OR EXISTS(
     SELECT 1 FROM jsonb_array_elements(i.context_snapshot) captured
@@ -213,11 +219,12 @@ async function lockBusinessMetadataForDeletion(context: RepositoryContext, scope
 }
 
 async function identityDeletionClosure(context: RepositoryContext, scope: Scope) {
-  return (await context.db.query<{ firms: string[]; people: string[]; sources: string[]; selected: string[]; mailSources: string[]; mailIdentities: string[] }>(`
+  return (await context.db.query<{ firms: string[]; people: string[]; sources: string[]; selected: string[]; mailSources: string[]; mailIdentities: string[]; progressReceipts:string[] }>(`
     WITH selected AS (${CRM_SELECTED_SOURCE_IDS}),
-    mail_selected AS (${CRM_MAIL_MESSAGE_IDS}), mail_identities AS (${CRM_MAIL_CAPTURE_IDS}),
+    mail_selected AS (${CRM_MAIL_MESSAGE_IDS}), mail_identities AS (${CRM_MAIL_CAPTURE_IDS}), progress_selected AS (${CRM_PROGRESS_IDS}),
     affected_people AS (
       ${CRM_TARGET_PEOPLE}
+      UNION SELECT unnest(original_person_ids) FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id IN(SELECT id FROM progress_selected)
       UNION SELECT person_id FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id IN(SELECT id FROM mail_selected) AND person_id IS NOT NULL
       UNION SELECT person_id FROM crm_selected_sources WHERE workspace_id=$1 AND id IN (SELECT id FROM selected) AND person_id IS NOT NULL
       UNION SELECT person_id FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)
@@ -235,6 +242,7 @@ async function identityDeletionClosure(context: RepositoryContext, scope: Scope)
     ),
     firms_to_lock AS (
       SELECT $3::uuid AS id
+      UNION SELECT unnest(original_firm_ids) FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id IN(SELECT id FROM progress_selected)
       UNION SELECT cx.firm_id FROM crm_mail_source_contexts cx WHERE cx.workspace_id=$1 AND cx.source_id IN(SELECT id FROM mail_selected) AND cx.firm_id IS NOT NULL
       UNION SELECT (captured->>'firmId')::uuid FROM crm_mail_capture_identities i CROSS JOIN LATERAL jsonb_array_elements(i.context_snapshot) captured WHERE i.workspace_id=$1 AND i.id IN(SELECT id FROM mail_identities) AND captured->>'firmId' IS NOT NULL
       UNION SELECT m.firm_id FROM meetings m WHERE m.workspace_id=$1 AND ${MEETING_IN_SCOPE} AND m.firm_id IS NOT NULL
@@ -250,7 +258,8 @@ async function identityDeletionClosure(context: RepositoryContext, scope: Scope)
       ARRAY(SELECT id::text FROM sources ORDER BY id) AS sources,
       ARRAY(SELECT id::text FROM selected ORDER BY id) AS selected,
       ARRAY(SELECT id::text FROM mail_selected ORDER BY id) AS "mailSources",
-      ARRAY(SELECT id::text FROM mail_identities ORDER BY id) AS "mailIdentities"`,
+      ARRAY(SELECT id::text FROM mail_identities ORDER BY id) AS "mailIdentities",
+      ARRAY(SELECT id::text FROM progress_selected ORDER BY id) AS "progressReceipts"`,
     [context.scope.workspaceId, scope.contactId, scope.firmId])).rows[0];
 }
 
@@ -330,6 +339,7 @@ async function measure(
   const byContact = [workspace, contact, firm] as const;
 
   const removes: Record<string, number> = {
+    crm_mail_progress_receipts:await countOf(context,`SELECT count(*) AS count FROM crm_mail_progress_receipts r WHERE ${CRM_PROGRESS_IN_SCOPE}`,byContact),
     email_addresses: await countOf(
       context,
       `SELECT count(*) AS count FROM email_addresses
@@ -518,6 +528,7 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE} AND (request_provider_at IS NOT NULL OR sent_receipt_id IS NOT NULL)`,byContact),
     opportunities: scope.contactId === null ? await countOf(context,
       'SELECT count(*) AS count FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND display_name IS NOT NULL',
       [workspace, firm]) : 0,
@@ -616,6 +627,7 @@ async function measure(
   };
 
   const retains: Record<string, number> = {
+    crm_mail_reply_resolutions:await countOf(context,`SELECT count(*) AS count FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE}`,byContact),
     opportunity_stage_events: await countOf(
       context,
       'SELECT count(*) AS count FROM opportunity_stage_events WHERE workspace_id = $1 AND firm_id = $2',
@@ -699,6 +711,10 @@ async function measure(
         OR relationship_id IN (SELECT id FROM crm_relationships WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)))
     UNION ALL SELECT 'claim',id::text,revision,source_hash,source_invalidated::text
       FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (SELECT id FROM selected)
+    UNION ALL SELECT 'mail_progress',r.id::text,r.source_revision,encode(sha256(convert_to(to_jsonb(r)::text,'UTF8')),'hex'),r.state
+      FROM crm_mail_progress_receipts r WHERE ${CRM_PROGRESS_IN_SCOPE}
+    UNION ALL SELECT 'mail_completion',request_message_id::text,1,encode(sha256(convert_to(to_jsonb(crm_mail_reply_resolutions)::text,'UTF8')),'hex'),'completed'
+      FROM crm_mail_reply_resolutions WHERE ${CRM_COMPLETION_IN_SCOPE}
     UNION ALL SELECT 'mail_source',source_id::text,source_revision,content_hash,availability
       FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})
     UNION ALL SELECT 'mail_capture',id::text,1,encode(sha256(convert_to(concat(source_id::text,context_snapshot::text,job_id::text,lease_fencing_token::text,account_binding),'UTF8')),'hex'),state
@@ -946,6 +962,7 @@ export async function commitDeletion(
     await context.db.query('SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 FOR UPDATE',[context.scope.workspaceId,sourceId]);
   }
   if (JSON.stringify(await identityDeletionClosure(context,scope))!==JSON.stringify(closure)) return refuse('preview_stale');
+  for(const receiptId of closure.progressReceipts)await context.db.query('SELECT id FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,receiptId]);
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
   // Both comparisons. The presented hash catches a client approving somebody else's
@@ -1084,6 +1101,9 @@ export async function commitDeletion(
   // Opaque identity survives canonical-row cascades. No provider replay may create
   // a replacement UUID after deleting an approved copy or a pending matched capture.
   const mailIds=closure.mailSources;
+  // Completion identity survives; scrub metadata before removing sensitive proof receipts.
+  const progressCompletionsRedacted=(await context.db.query(`UPDATE crm_mail_reply_resolutions SET request_provider_at=NULL WHERE ${CRM_COMPLETION_IN_SCOPE} AND (request_provider_at IS NOT NULL OR sent_receipt_id IS NOT NULL)`,byContact)).rowCount??0;
+  await remove('crm_mail_progress_receipts','DELETE FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=ANY($2::uuid[])',[workspace,closure.progressReceipts]);
   const observedMailNamesRedacted = await redactUnsupportedObservedMailLabels(context,mailIds);
   await context.db.query(`INSERT INTO crm_mail_acquisition_tombstones
     (workspace_id,capture_identity_id,source_id,owner_user_id,source_revision,content_hash,availability)
@@ -1371,7 +1391,7 @@ export async function commitDeletion(
     `DELETE FROM record_aliases WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
   );
-  const redacted: Record<string, number> = {};
+  const redacted: Record<string, number> = {crm_mail_reply_resolutions:progressCompletionsRedacted};
   redacted['crm_selected_imports'] = await countOf(context,`SELECT count(*) AS count FROM crm_selected_imports m WHERE m.workspace_id=$1 AND m.source_id IN (${CRM_SELECTED_SOURCE_IDS}) AND (m.label IS NOT NULL OR m.participants IS NOT NULL OR m.attachments IS NOT NULL OR m.direction IS NOT NULL OR m.attribution IS NOT NULL OR m.date_provenance IS NOT NULL)`,byContact);
   const metadataIds = measured.identityVersions.filter(value => value.kind==='business_metadata').map(value => value.id);
   redacted['crm_business_conversations'] = 0;

@@ -443,6 +443,8 @@ describe('review M1R', () => {
     const answer = (name: string, input: unknown): unknown => {
       calls.push({ name, input });
       switch (name) {
+        case 'crm.progressRead':
+          return {version:1,events:[],truncated:false,coverage:'partial'};
         case 'crm.businessMailList':
           return {sources:[],nextAfterId:null};
         case 'meetings.forFirm':

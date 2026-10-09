@@ -1,3 +1,5 @@
+import {crmMailProgressSource} from '../scheduler/crmMailProgressSource.ts';
+import {crmMailProgressJobHandler} from '../handlers/crmMailProgress.ts';
 import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
 import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
 import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
@@ -200,6 +202,7 @@ export function registerHandlers(
 ): HandlerRegistry {
   const { classifier } = composition;
   registry.register(canaryHandler());
+  registry.register(crmMailProgressJobHandler());
   registry.register(businessMailCaptureHandler(composition.crmMailCapture ?? { provider: { async read() { throw new Error('mail_capture_provider_unavailable'); } } }));
   registry.register(humanReplySendJobHandler(composition.send));
   registry.register(meetingFollowThroughJobHandler());
@@ -513,6 +516,7 @@ export function workerDueWorkSources(
   } = {},
 ): readonly DueWorkSource[] {
   return [
+    crmMailProgressSource(),
     crmExtractionRecoverySource(),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
