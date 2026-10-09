@@ -1716,11 +1716,28 @@ export interface CapturedMailProcessingAuthority {
   acquiredGeneration: number;
   authorizationFingerprint: string;
 }
-/** DB-only unverified snapshot. This never grants provider or model authority. */
+/** DB-only locked snapshot. A separately verified token is required for paid work. */
 export async function prepareMailProcessingAuthority(
   context: RepositoryContext,
   exact: ExactMailSource,
   purposeOwner: string,
+) {
+  return prepareMailProcessingSnapshot(context, exact, purposeOwner, true);
+}
+/** Nonlocking scheduler hint: no body, verifier or retained per-source locks.
+ * A worker must verify externally and then lock/revalidate the entire exact copy. */
+export async function snapshotMailProcessingAuthority(
+  context: RepositoryContext,
+  exact: ExactMailSource,
+  purposeOwner: string,
+) {
+  return prepareMailProcessingSnapshot(context, exact, purposeOwner, false);
+}
+async function prepareMailProcessingSnapshot(
+  context: RepositoryContext,
+  exact: ExactMailSource,
+  purposeOwner: string,
+  lock: boolean,
 ): Promise<
   | { ok: true; authority: CapturedMailProcessingAuthority }
   | { ok: false; reason: string }
@@ -1732,8 +1749,21 @@ export async function prepareMailProcessingAuthority(
     !(await activeBusinessActor(context))
   )
     return { ok: false, reason: 'processing_authority_unavailable' };
-  const copyContext = await lockMailCopyContext(context, exact.sourceId);
-  if (!copyContext) return { ok: false, reason: 'source_unknown' };
+  if (lock) {
+    if (!(await lockMailCopyContext(context, exact.sourceId)))
+      return { ok: false, reason: 'source_unknown' };
+  } else {
+    // This unverified scheduler hint never bypasses the immutable owner or the
+    // current firm scope. Concurrent changes are refused by worker revalidation.
+    const visible = await context.db.query(
+      `SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=$1 AND s.source_id=$2 AND s.owner_user_id=$3
+       AND NOT EXISTS(SELECT 1 FROM crm_mail_source_contexts cx JOIN firms f ON f.workspace_id=cx.workspace_id AND f.id=cx.firm_id
+         WHERE cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id AND ${mailContextPredicate()}
+           AND (f.status<>'active' OR (NOT $4::boolean AND f.assigned_user_id IS DISTINCT FROM $3)))`,
+      [context.scope.workspaceId, exact.sourceId, actor.userId, actor.role === 'admin'],
+    );
+    if (!visible.rows.length) return { ok: false, reason: 'source_unknown' };
+  }
   const source = (
     await context.db.query<
       Control & {
@@ -1886,50 +1916,6 @@ export async function prepareMailProcessingAuthority(
     },
   };
 }
-export async function authorizeMailProcessing(
-  context: RepositoryContext,
-  exact: ExactMailSource,
-  purposeOwner: string,
-  verifier?: MailCaptureProofVerifier,
-): Promise<
-  | { ok: true; authority: CapturedMailProcessingAuthority }
-  | { ok: false; reason: string }
-> {
-  if (!verifier) return { ok: false, reason: 'verification_unavailable' };
-  const before = await prepareMailProcessingAuthority(
-    context,
-    exact,
-    purposeOwner,
-  );
-  if (!before.ok) return before;
-  if (!(await verifier.verify(before.authority.proof)))
-    return { ok: false, reason: 'verification_unavailable' };
-  const after = await prepareMailProcessingAuthority(
-    context,
-    exact,
-    purposeOwner,
-  );
-  return after.ok &&
-    JSON.stringify(after.authority) === JSON.stringify(before.authority)
-    ? after
-    : { ok: false, reason: 'processing_authority_changed' };
-}
-export async function revalidateMailProcessing(
-  context: RepositoryContext,
-  authority: CapturedMailProcessingAuthority,
-  verifier?: MailCaptureProofVerifier,
-): Promise<boolean> {
-  const current = await authorizeMailProcessing(
-    context,
-    authority.exact,
-    authority.purposeOwner,
-    verifier,
-  );
-  return (
-    current.ok &&
-    JSON.stringify(current.authority) === JSON.stringify(authority)
-  );
-}
 /** DB-only current snapshot comparison; a separate verified token is required before paid work. */
 export async function revalidatePreparedMailProcessing(
   context: RepositoryContext,
@@ -1946,47 +1932,6 @@ export async function revalidatePreparedMailProcessing(
   );
 }
 
-/** Full bounded original bytes are transient provider input, never another retained body store. */
-export async function loadMailSourceInput(
-  context: RepositoryContext,
-  exact: ExactMailSource,
-  authority: CapturedMailProcessingAuthority,
-  verifier?: MailCaptureProofVerifier,
-) {
-  if (
-    JSON.stringify(exact) !== JSON.stringify(authority.exact) ||
-    !(await revalidateMailProcessing(context, authority, verifier))
-  )
-    return {
-      state: 'unavailable',
-      reason: 'processing_authority_unavailable',
-      text: null,
-    } as const;
-  const original = await readMailConversation(context, exact);
-  if (original.state !== 'available' || original.source.passage === null)
-    return {
-      state: 'unavailable',
-      reason: 'body_unavailable',
-      text: null,
-    } as const;
-  if (!(await revalidateMailProcessing(context, authority, verifier)))
-    return {
-      state: 'unavailable',
-      reason: 'processing_authority_unavailable',
-      text: null,
-    } as const;
-  return {
-    state: 'available',
-    text: original.source.passage,
-    sourceId: exact.sourceId,
-    sourceRevision: exact.sourceRevision,
-    contentHash: exact.contentHash,
-    parserVersion: original.source.parserVersion,
-    representation: original.source.representation,
-    completeness: original.source.completeness,
-    ranges: original.source.ranges,
-  } as const;
-}
 /** DB-only original input under exact retained-copy locks; not a provider/model grant. */
 export async function loadPreparedMailSourceInput(
   context: RepositoryContext,
