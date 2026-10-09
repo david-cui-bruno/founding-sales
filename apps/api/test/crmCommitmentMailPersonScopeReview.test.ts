@@ -447,6 +447,100 @@ it("keeps unrelated Today work when a mail person loses current legacy firm acce
         .map((x) => x.target.taskId),
     ).toEqual([taskIds[1]]);
     expect(JSON.stringify(remaining.body)).not.toContain(taskIds[0]);
+    // Controlled authority fixture: capture the independent proof genuinely
+    // under A, then return the legacy contact to denied C. This does not model
+    // a product identity-correction command or alter captured source authority.
+    await fixture.db.query(
+      "UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2",
+      [workspaceId, contactId, firmId],
+    );
+    const selectedAdd = await post(
+      "/crm/people/source/add",
+      command({
+        personId: contactId,
+        sourceKey: "permitted-identity-proof-A",
+        excerpt: "Correspondent has a supported relationship with firm A.",
+        occurredAt: "2026-10-08T15:00:00.000Z",
+      }),
+    );
+    expect(selectedAdd.status).toBe(200);
+    const selectedId = (selectedAdd.body as { result: { sourceId: string } })
+      .result.sourceId;
+    const selectedPage = await post("/crm/people/read", {
+      personId: contactId,
+    });
+    expect(selectedPage.status).toBe(200);
+    const selected = (
+      selectedPage.body as {
+        sources: { sourceId: string; revision: number; contentHash: string }[];
+      }
+    ).sources.find((value) => value.sourceId === selectedId)!;
+    const evidence = {
+      sourceId: selected.sourceId,
+      sourceRevision: selected.revision,
+      contentHash: selected.contentHash,
+    };
+    // Infrastructure premise assertion: actual capture-time authority was A,
+    // never inferred retroactively from the subsequently selected relationship.
+    expect(
+      (
+        await fixture.db.query<{
+          original_access_closure: { firmIds: string[] };
+        }>(
+          "SELECT original_access_closure FROM crm_selected_sources WHERE workspace_id=$1 AND id=$2",
+          [workspaceId, selectedId],
+        )
+      ).rows[0]!.original_access_closure.firmIds,
+    ).toEqual([firmId]);
+    const savedRelationship = await post(
+      "/crm/relationships/save",
+      command({
+        personId: contactId,
+        firmId,
+        status: "current",
+        startDate: null,
+        endDate: null,
+        evidence,
+      }),
+    );
+    expect(savedRelationship.status).toBe(200);
+    const relationship = (
+      savedRelationship.body as {
+        result: { relationshipId: string; revision: number };
+      }
+    ).result;
+    expect(
+      (
+        await post(
+          "/crm/relationships/context/save",
+          command({
+            personId: contactId,
+            relationshipId: relationship.relationshipId,
+            relationshipRevision: relationship.revision,
+            evidence,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    await fixture.db.query(
+      "UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2",
+      [workspaceId, contactId, firmC],
+    );
+    expect(
+      (await post("/crm/processing/source/read", firstSource)).status,
+    ).toBe(200);
+    const restored = await get("/today/actions/v2");
+    expect(restored.status).toBe(200);
+    expect(
+      (
+        restored.body as {
+          actions: { kind: string; target: { taskId: string } }[];
+        }
+      ).actions
+        .filter((value) => value.kind === "promise")
+        .map((value) => value.target.taskId)
+        .sort(),
+    ).toEqual([...taskIds].sort());
     expect(
       (
         await post(
