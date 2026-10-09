@@ -465,6 +465,9 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    opportunities: scope.contactId === null ? await countOf(context,
+      'SELECT count(*) AS count FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND display_name IS NOT NULL',
+      [workspace, firm]) : 0,
     crm_identity_endpoints: await countOf(context,
       `SELECT count(*) AS count FROM crm_identity_endpoints e WHERE e.workspace_id=$1 AND e.value IS NOT NULL
        AND e.id IN (SELECT endpoint_id FROM crm_endpoint_claims WHERE workspace_id=$1 AND source_id IN (${CRM_SELECTED_SOURCE_IDS}))
@@ -1327,6 +1330,10 @@ export async function commitDeletion(
   redacted['contacts'] = contacts.rowCount ?? 0;
 
   if (scope.contactId === null) {
+    const opportunityLabels=await context.db.query(
+      'UPDATE opportunities SET display_name=NULL,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND display_name IS NOT NULL',
+      [workspace,scope.firmId]);
+    redacted['opportunities']=opportunityLabels.rowCount ?? 0;
     const firms = await context.db.query(
       `UPDATE firms
           SET name = $3, website = NULL, address_line = NULL, locality = NULL, postal_code = NULL,
