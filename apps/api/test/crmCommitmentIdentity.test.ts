@@ -11,7 +11,7 @@ import {
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 
-it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict"] as const)("preserves completed action identity across %s", async scenario => {
+it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict", "equivalent_open", "identical_open"] as const)("preserves completed action identity across %s", async scenario => {
   const fixture = await createAuthFixture();
   try {
     let token = (
@@ -118,7 +118,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
                 {
                   kind: "commitment",
                   status: "stated",
-                  interpretation: modelVersion === "fixture-v1" ? "Promise to prepare summary" : "Commitment to prepare the repair summary",
+                  interpretation: modelVersion === "fixture-v1" || scenario === "identical_open" ? "Promise to prepare summary" : "Commitment to prepare the repair summary",
                   locator: "text:0:48",
                   quote: "I will prepare the repair summary by October 12.",
                 },
@@ -169,7 +169,14 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toEqual({items:[],nextAfterId:null});return;
     }
     const task=((await read()).body as {items:{task:{taskId:string}}[]}).items[0]!.task;
+    if(scenario==='equivalent_open'||scenario==='identical_open'){
+      await process('fixture-v2',1);
+      expect((await read()).body).toMatchObject({items:[{state:'applied',actionLabel:'Prepare the repair summary',quote:'I will prepare the repair summary by October 12.',task:{taskId:task.taskId,status:'open',version:1}}]});
+      expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toMatchObject({items:[{task:{taskId:task.taskId,status:'open'}}]});
+      expect((await post('/crm/commitments/complete',command({taskId:task.taskId,expectedVersion:1}))).status).toBe(200);return;
+    }
     if(scenario==='conflict'){
+
       const other=first.generation.claims.find(value=>value.kind==='need')!;
       const conflict=await post('/crm/evidence/conflict/save',command({expectedConflictRevision:0,members:[target,{source,claimId:other.claimId,claimRevision:1,claimHash:other.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0}]}));expect(conflict.status).toBe(200);
       expect((await read()).body).toMatchObject({items:[{state:'review_required',actionLabel:null,due:null,quote:null,source:null}]});
