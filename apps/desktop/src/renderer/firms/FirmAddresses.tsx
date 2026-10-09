@@ -9,6 +9,7 @@ import {
 } from './Endpoints.tsx';
 import { Button } from '../ui/button.tsx';
 import { Select } from '../ui/select.tsx';
+import { EmailTimeline, type EmailTimelinePorts } from './EmailTimeline.tsx';
 type Page = z.infer<typeof firmSourcePageSchema>;
 export interface FirmAddressPorts {
   firms(): Promise<{ firmId: string; name: string }[]>;
@@ -43,12 +44,20 @@ export function FirmAddresses({
   endpoints,
   editing,
   imports,
+  mail,
+  privacyKey = 'firm-addresses',
+  sourceVersion,
+  onSourceChange,
 }: {
   enabled: boolean;
   ports: FirmAddressPorts;
   endpoints: EndpointPorts;
   editing?: EndpointEditingPorts | undefined;
   imports?: SelectedImportPorts;
+  mail?: EmailTimelinePorts;
+  privacyKey?: string;
+  sourceVersion?: number | undefined;
+  onSourceChange?: (() => void) | undefined;
 }): JSX.Element {
   const [firms, setFirms] = useState<{ firmId: string; name: string }[]>([]);
   const [firmId, setFirmId] = useState('');
@@ -136,6 +145,7 @@ export function FirmAddresses({
       </label>
       {firmId && page ? (
         <>
+          {mail ? <EmailTimeline key={`email:${firmId}`} enabled={enabled} ports={mail} firmId={firmId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} firms={firms.map(firm => ({id:firm.firmId,name:firm.name}))} /> : null}
           <label>
             Firm note reference
             <input
