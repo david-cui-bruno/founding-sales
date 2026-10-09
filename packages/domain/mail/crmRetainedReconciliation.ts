@@ -56,3 +56,19 @@ export async function completeRetainedCopyTraversal(context:RepositoryContext,in
    WHERE workspace_id=$1 AND id=$2 AND reconciliation_after_source_id IS NOT DISTINCT FROM $7::uuid AND reconciliation_visited=$8::numeric AND NOT reconciliation_exhausted`,[context.scope.workspaceId,input.authority.importId,input.traversal.exact.sourceId,refreshed?1:0,refreshed?0:1,!input.traversal.hasMore,input.traversal.progress.reconciliation_after_source_id,input.traversal.progress.reconciliation_visited]);
  });
 }
+
+/** Last copy-authority stage after external verifiers/reservation, before the SDK read. */
+export async function revalidateRetainedCopyTraversal(context:RepositoryContext,input:Fence&{traversal:RetainedCopyTraversal}){
+ return withTransaction(context.db,async()=>{
+  if(!await fence(context,input)||input.traversal.snapshot===null)return false;
+  const owner=await ownerContext(context,input);if(owner===null)return false;
+  const before=await snapshotMailCopyAuthorityBatch(owner,[input.traversal.exact]);
+  if(JSON.stringify(before)!==JSON.stringify(input.traversal.snapshot))return false;
+  const availability=await readMailCopyAvailabilityBatch(owner,[input.traversal.exact.sourceId]);
+  if(availability?.[0]?.availability!=='available'||!availability[0].bodyAvailable)return false;
+  const after=await snapshotMailCopyAuthorityBatch(owner,[input.traversal.exact]);
+  if(JSON.stringify(after)!==JSON.stringify(input.traversal.snapshot))return false;
+  const current=await readBackfillAuthority(context,input.authority.importId);
+  return current!==null&&JSON.stringify(current.proof)===JSON.stringify(input.authority.proof)&&current.fromEpochMicroseconds===input.authority.fromEpochMicroseconds&&current.toEpochMicroseconds===input.authority.toEpochMicroseconds&&current.historyAnchor===input.authority.historyAnchor;
+ });
+}

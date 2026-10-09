@@ -1,5 +1,5 @@
 import type {ExactMailSource} from '@fss/domain/mail/crmSources.ts';
-import {prepareRetainedCopyTraversal,completeRetainedCopyTraversal} from '@fss/domain/mail/crmRetainedReconciliation.ts';
+import {prepareRetainedCopyTraversal,completeRetainedCopyTraversal,revalidateRetainedCopyTraversal,type RetainedCopyTraversal} from '@fss/domain/mail/crmRetainedReconciliation.ts';
 import {readHistoryRecovery,replaceHistoryRecoveryConfiguration,beginExpiredHistoryRecovery,freezeHistoryRecovery,advanceHistoryRecovery,type HistoryRecovery} from '@fss/domain/mail/crmHistoryRecovery.ts';
 import {backfillConfigurationHash} from '@fss/domain/mail/crmBackfillWork.ts';
 import {recordRetainedOriginalMetadata} from '@fss/domain/mail/crmMailOriginals.ts';
@@ -37,13 +37,14 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   if(authority===null||authority.proof.accountBinding!==parsed.data.accountBinding||authority.proof.generation!==parsed.data.generation||authority.proof.controlsRevision!==parsed.data.controlsRevision||authority.proof.policyRevision!==parsed.data.policyRevision){await block('acquisition_binding_changed');return;}
   if(await readBackfillAllocation(context,authority.proof.mailboxId)===null){await block('quota_configuration_required');return;}
   let recoveryScope:HistoryRecovery|undefined;
-  async function providerRead<T>(method:BackfillReadMethod,bound:BackfillAuthority,read:(access:GmailAccessGrant)=>Promise<T>):Promise<T>{
+  async function providerRead<T>(method:BackfillReadMethod,bound:BackfillAuthority,read:(access:GmailAccessGrant)=>Promise<T>,original?:RetainedCopyTraversal):Promise<T>{
    if(!await adapters.proofVerifier.verify(bound.proof))throw new BackfillFailure('acquisition_verification_required');
    const proofInput={mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation};
    const access=await adapters.resolveAccess(proofInput);
    if(access===null||access.mailboxId!==proofInput.mailboxId||access.providerAccountId!==proofInput.providerAccountId||access.generation!==proofInput.generation)throw new BackfillFailure('acquisition_binding_changed');
    const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,...recoveryScope===undefined?{}:{expectedRecovery:{id:recoveryScope.id,revision:recoveryScope.revision,epoch:recoveryScope.epoch,configurationHash:recoveryScope.configuration_hash}},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
    if(reservation===null)throw new BackfillFailure('quota_or_authority_unavailable');
+   if(original!==undefined&&(method!=='metadata'||!await revalidateRetainedCopyTraversal(context,{authority:bound,traversal:original,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken})))throw new BackfillFailure('original_copy_authority_changed');
    let result:T;
    try{result=await read(access.access);}catch{throw new BackfillFailure('provider_read_unavailable');}
    await observeBackfillRead(context,reservation.reservationId);
@@ -51,7 +52,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(latest===null||latest.mailboxId!==proofInput.mailboxId||latest.providerAccountId!==proofInput.providerAccountId||latest.generation!==proofInput.generation||current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof))throw new BackfillFailure('acquisition_binding_changed');
    return result;
   }
-  async function providerMetadata(bound:BackfillAuthority,messageId:string,expected?:{source:ExactMailSource;contextIdentity:string}){
+  async function providerMetadata(bound:BackfillAuthority,messageId:string,expected?:{source:ExactMailSource;contextIdentity:string;traversal:RetainedCopyTraversal}){
    let transientReason:'grant_unavailable'|'rate_limited'|'provider_unavailable'|undefined;
    try{
     const metadata=await providerRead('metadata',bound,async access=>{
@@ -59,7 +60,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
       transientReason=error instanceof GmailClientError&&(error.status===401||error.status===403)?'grant_unavailable':error instanceof GmailClientError&&error.status===429?'rate_limited':'provider_unavailable';
       throw error;
      }
-    });
+    },expected?.traversal);
     if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
     const originalUpdated=await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata,...expected===undefined?{}:{expectedSource:expected.source,expectedContextIdentity:expected.contextIdentity},observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     return {metadata,originalUpdated:originalUpdated===true};
@@ -78,8 +79,10 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     if(traversal!==undefined){
      let refreshed=false;
      if(traversal.snapshot!==null){
-      const observed=await providerMetadata(authority,traversal.messageId,{source:traversal.exact,contextIdentity:traversal.snapshot.contextIdentity});
-      refreshed=observed.originalUpdated;
+      try{
+       const observed=await providerMetadata(authority,traversal.messageId,{source:traversal.exact,contextIdentity:traversal.snapshot.contextIdentity,traversal});
+       refreshed=observed.originalUpdated;
+      }catch(error){if(!(error instanceof BackfillFailure&&error.message==='original_copy_authority_changed'))throw error;}
      }
      await completeRetainedCopyTraversal(context,{authority,traversal,refreshed,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
      return;
