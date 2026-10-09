@@ -1,7 +1,16 @@
 import { upsertTodayItem } from '@fss/domain/today/snapshots.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { z } from 'zod';
-import { explicitOpportunityResultSchema, pluralFirmPageResponseSchema, pluralPipelineBoardResponseSchema } from '@fss/contracts';
+import {
+  callLogsOpportunityContextResponseSchema,
+  callbacksOpportunityContextResponseSchema,
+  callLogRowSchema,
+  callbackOpportunityContextSchema,
+  todayFirmResponseSchema,
+  explicitOpportunityResultSchema,
+  pluralFirmPageResponseSchema,
+  pluralPipelineBoardResponseSchema,
+} from '@fss/contracts';
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { dispatch } from '../src/server.ts';
@@ -9,6 +18,35 @@ import { createAuthFixture, CURRENT_CLIENT_VERSION } from './support/authFixture
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedFirm } from './support/crmSeed.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
+
+async function productRead(
+  fixture: Awaited<ReturnType<typeof createAuthFixture>>,
+  token: string,
+  path: string,
+  query: Record<string, string>,
+) {
+  return dispatch(
+    { method: 'GET', path, body: undefined, query: new URLSearchParams(query), headers: { authorization: `Bearer ${token}` } },
+    {
+      session: fixture.db,
+      auth: fixture.deps,
+      supportedClientVersions: fixture.deps.config.supportedClientVersions,
+      sendingEnabled: false,
+      upgradeUrl: 'https://callie.example/downloads/mac',
+      suppressionJournal: localNoopSuppressionJournal(),
+    },
+  );
+}
+async function callContext(fixture: Awaited<ReturnType<typeof createAuthFixture>>, token: string, firmId: string) {
+  const response = await productRead(fixture, token, '/calls', { firmId, include: 'opportunity_context' });
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  return callLogsOpportunityContextResponseSchema.parse(response.body).calls;
+}
+async function callbackContext(fixture: Awaited<ReturnType<typeof createAuthFixture>>, token: string) {
+  const response = await productRead(fixture, token, '/callbacks', { include: 'opportunity_context' });
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  return callbacksOpportunityContextResponseSchema.parse(response.body).callbacks;
+}
 
 it('versioned commands expose distinct deals and old singleton reads refuse ambiguity', async () => {
   const fixture = await createAuthFixture();
@@ -154,12 +192,10 @@ it.each(['known', 'unresolved'])(
         sourceKind: 'callback',
         sourceId: callback.id,
       });
-      const before = (await fixture.db.query('SELECT id FROM call_logs WHERE workspace_id=$1', [fixture.alpha.workspaceId])).rows.length;
+      const before = (await callContext(fixture, token, firmId)).length;
       const conflict = await post('/calls/log', command({ firmId, itemId, opportunityId: mode === 'known' ? b : a, outcome: 'no_answer' }));
       expect(conflict.body).toMatchObject({ status: 'refused', reason: 'invalid_input' });
-      expect((await fixture.db.query('SELECT id FROM call_logs WHERE workspace_id=$1', [fixture.alpha.workspaceId])).rows).toHaveLength(
-        before,
-      );
+      expect(await callContext(fixture, token, firmId)).toHaveLength(before);
       const logged = await post(
         '/calls/log',
         command({
@@ -173,22 +209,20 @@ it.each(['known', 'unresolved'])(
       const result = z
         .object({ result: z.object({ callLogId: z.string().uuid(), callbackId: z.string().uuid() }) })
         .parse(logged.body).result;
-      expect(
-        (
-          await fixture.db.query('SELECT opportunity_id FROM call_logs WHERE workspace_id=$1 AND id=$2', [
-            fixture.alpha.workspaceId,
-            result.callLogId,
-          ])
-        ).rows[0],
-      ).toEqual({ opportunity_id: mode === 'known' ? a : null });
-      expect(
-        (
-          await fixture.db.query('SELECT opportunity_id FROM callbacks WHERE workspace_id=$1 AND id=$2', [
-            fixture.alpha.workspaceId,
-            result.callbackId,
-          ])
-        ).rows[0],
-      ).toEqual({ opportunity_id: mode === 'known' ? a : null });
+      expect((await callContext(fixture, token, firmId)).find((row) => row.id === result.callLogId)?.opportunityId).toBe(
+        mode === 'known' ? a : null,
+      );
+      expect((await callbackContext(fixture, token)).find((row) => row.id === result.callbackId)?.opportunityId).toBe(
+        mode === 'known' ? a : null,
+      );
+      const legacyCalls = await productRead(fixture, token, '/calls', { firmId });
+      expect(legacyCalls.status).toBe(200);
+      z.strictObject({ calls: z.array(callLogRowSchema.strict()) }).parse(legacyCalls.body);
+      const legacyCallbacks = await productRead(fixture, token, '/callbacks', {});
+      expect(legacyCallbacks.status).toBe(200);
+      z.strictObject({ callbacks: z.array(callbackOpportunityContextSchema.omit({ opportunityId: true })) }).parse(legacyCallbacks.body);
+      const contextRows = await callContext(fixture, token, firmId);
+      expect(callLogsOpportunityContextResponseSchema.safeParse({ calls: contextRows, unexpected: true }).success).toBe(false);
     } finally {
       await fixture.stop();
     }
@@ -235,26 +269,22 @@ it.each(['known', 'unresolved'])('callback-time Today work preserves %s originat
           )
         ).status,
       ).toBe(200);
-    const item = (
-      await fixture.db.query<{ id: string }>('SELECT id FROM today_items WHERE workspace_id=$1 AND item_key=$2', [
-        fixture.alpha.workspaceId,
-        `callback-time:${original}`,
-      ])
-    ).rows[0]!;
-    const before = (await fixture.db.query('SELECT id FROM call_logs WHERE workspace_id=$1', [fixture.alpha.workspaceId])).rows.length;
+    const today = await post('/today/firm', { firmId, cardVersion: 2 });
+    expect(today.status, JSON.stringify(today.body)).toBe(200);
+    const item = todayFirmResponseSchema.parse(today.body).tasks.find((task) => task.callLogId === original);
+    if (item === undefined) throw new Error('Public callback-time task missing');
+    const before = (await callContext(fixture, token, firmId)).length;
     const conflict = await post(
       '/calls/log',
-      command({ firmId, itemId: item.id, opportunityId: mode === 'known' ? b : a, outcome: 'no_answer' }),
+      command({ firmId, itemId: item.itemId, opportunityId: mode === 'known' ? b : a, outcome: 'no_answer' }),
     );
     expect(conflict.body).toMatchObject({ status: 'refused', reason: 'invalid_input' });
-    expect((await fixture.db.query('SELECT id FROM call_logs WHERE workspace_id=$1', [fixture.alpha.workspaceId])).rows).toHaveLength(
-      before,
-    );
+    expect(await callContext(fixture, token, firmId)).toHaveLength(before);
     const logged = await post(
       '/calls/log',
       command({
         firmId,
-        itemId: item.id,
+        itemId: item.itemId,
         outcome: 'callback_requested',
         callback: { localDate: '2026-10-12', localTime: '10:00', sourceTimeZone: 'America/New_York', dueAt: '2026-10-12T14:00:00Z' },
       }),
@@ -264,22 +294,8 @@ it.each(['known', 'unresolved'])('callback-time Today work preserves %s originat
       .object({ result: z.object({ callLogId: z.string().uuid(), callbackId: z.string().uuid() }) })
       .parse(logged.body).result;
     const expected = mode === 'known' ? a : null;
-    expect(
-      (
-        await fixture.db.query('SELECT opportunity_id FROM call_logs WHERE workspace_id=$1 AND id=$2', [
-          fixture.alpha.workspaceId,
-          result.callLogId,
-        ])
-      ).rows[0],
-    ).toEqual({ opportunity_id: expected });
-    expect(
-      (
-        await fixture.db.query('SELECT opportunity_id FROM callbacks WHERE workspace_id=$1 AND id=$2', [
-          fixture.alpha.workspaceId,
-          result.callbackId,
-        ])
-      ).rows[0],
-    ).toEqual({ opportunity_id: expected });
+    expect((await callContext(fixture, token, firmId)).find((row) => row.id === result.callLogId)?.opportunityId).toBe(expected);
+    expect((await callbackContext(fixture, token)).find((row) => row.id === result.callbackId)?.opportunityId).toBe(expected);
   } finally {
     await fixture.stop();
   }

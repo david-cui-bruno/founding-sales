@@ -1324,6 +1324,7 @@ async function withinSavepoint<T>(
 }
 
 export interface CallLogRow {
+  readonly opportunityId?: string | null;
   readonly id: string;
   readonly firmId: string;
   readonly contactId: string | null;
@@ -1354,7 +1355,7 @@ export interface CallLogRow {
  */
 export async function listCallLogs(
   context: RepositoryContext,
-  options: { readonly firmId: string; readonly limit?: number },
+  options: { readonly firmId: string; readonly limit?: number; readonly includeOpportunityContext?: boolean },
 ): Promise<readonly CallLogRow[]> {
   const { rows } = await context.db.query<{
     id: string;
@@ -1370,7 +1371,7 @@ export async function listCallLogs(
     duration_seconds: number | null;
     call_session_id: string | null;
   }>(
-    `SELECT l.id, l.firm_id, l.contact_id, l.outcome, l.step_effect, l.occurred_at, l.actor_user_id, l.note,
+    `SELECT l.id, l.firm_id, l.opportunity_id, l.contact_id, l.outcome, l.step_effect, l.occurred_at, l.actor_user_id, l.note,
             l.direction, l.duration_seconds,
             (SELECT s.id FROM call_sessions s
               WHERE s.workspace_id = l.workspace_id AND s.call_log_id = l.id
@@ -1384,6 +1385,7 @@ export async function listCallLogs(
   return rows.map(row => ({
     id: row.id,
     firmId: row.firm_id,
+    ...(options.includeOpportunityContext ? { opportunityId: row.opportunity_id } : {}),
     contactId: row.contact_id,
     outcome: row.outcome,
     stepEffect: row.step_effect,

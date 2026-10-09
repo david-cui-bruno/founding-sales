@@ -2,6 +2,8 @@ import {
   CALL_LOGS_INCLUDE_CORRECTIONS,
   callFollowUpCommandSchema,
   callLogsResponseSchema,
+  callLogsOpportunityContextResponseSchema,
+  OPPORTUNITY_CONTEXT_INCLUDE,
   correctCallOutcomeCommandSchema,
   correctionPreviewRequestSchema,
   correctionPreviewResponseSchema,
@@ -72,26 +74,27 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
     const firm = await readFirm(scoped.context, firmId);
     if (firm === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
     const visibility = decideFirmRead(scoped.context, firm);
-    const logs = await listCallLogs(scoped.context, { firmId });
     // S3X (RESET C): every log of the firm from the database alone — no provider gate — with
     // `direction`, `durationSeconds` and `callSessionId`; `include=corrections` (repeated or
     // comma-separated) adds each log's corrections, so an older reader never meets the key.
     const includes = new Set(
       request.query
         .getAll('include')
-        .flatMap(value => value.split(','))
-        .map(value => value.trim()),
+        .flatMap((value) => value.split(','))
+        .map((value) => value.trim()),
     );
+    const withOpportunityContext = includes.has(OPPORTUNITY_CONTEXT_INCLUDE);
+    const logs = await listCallLogs(scoped.context, { firmId, includeOpportunityContext: withOpportunityContext });
     const corrections = includes.has(CALL_LOGS_INCLUDE_CORRECTIONS)
       ? await readCallLogCorrections(
           scoped.context,
-          logs.map(log => log.id),
+          logs.map((log) => log.id),
         )
       : null;
     return {
       status: 200,
-      body: callLogsResponseSchema.parse({
-        calls: logs.map(log => ({
+      body: (withOpportunityContext ? callLogsOpportunityContextResponseSchema : callLogsResponseSchema).parse({
+        calls: logs.map((log) => ({
           ...(visibility === 'assigned_or_admin' ? log : { ...log, note: null }),
           ...(corrections === null ? {} : { corrections: corrections.get(log.id) ?? [] }),
         })),

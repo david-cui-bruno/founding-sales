@@ -926,3 +926,19 @@ export const disableCallingIdentityCommandSchema = z.strictObject({
   ...commandEnvelope,
   identityId: uuid,
 });
+
+/** Explicit recorded deal context; a null value stays unresolved. Legacy reads omit it. */
+export const OPPORTUNITY_CONTEXT_INCLUDE = 'opportunity_context';
+export const callbackOpportunityContextSchema = z.strictObject({
+  id: uuid,
+  firmId: uuid,
+  contactId: uuid.nullable(),
+  opportunityId: uuid.nullable(),
+  assignedUserId: uuid,
+  requestedLocalDate: z.string(),
+  requestedLocalTime: z.string().nullable(),
+  sourceTimeZone: z.string(),
+  dueAt: instant,
+  status: z.enum(['open', 'completed', 'cancelled']),
+});
+export const callbacksOpportunityContextResponseSchema = z.strictObject({ callbacks: z.array(callbackOpportunityContextSchema) });

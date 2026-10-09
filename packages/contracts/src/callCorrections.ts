@@ -290,3 +290,8 @@ export const callProposalCorrectedDetailSchema = z.object({
   callLogId: uuid,
 });
 export type CallProposalCorrectedDetail = z.infer<typeof callProposalCorrectedDetailSchema>;
+
+/** Negotiated recorded-deal context for independent initiatives; no inferred fallback. */
+export const callLogsOpportunityContextResponseSchema = z.strictObject({
+  calls: z.array(callLogRowSchema.extend({ opportunityId: uuid.nullable() }).strict()).max(500),
+});

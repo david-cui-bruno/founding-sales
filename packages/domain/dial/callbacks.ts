@@ -47,6 +47,7 @@ export interface CreateCallbackInput {
 }
 
 export interface CallbackRow {
+  readonly opportunityId?: string | null;
   readonly id: string;
   readonly firmId: string;
   readonly contactId: string | null;
@@ -59,6 +60,7 @@ export interface CallbackRow {
 }
 
 interface CallbackDbRow {
+  readonly opportunity_id: string | null;
   readonly id: string;
   readonly firm_id: string;
   readonly contact_id: string | null;
@@ -71,13 +73,14 @@ interface CallbackDbRow {
   readonly [column: string]: unknown;
 }
 
-const CALLBACK_COLUMNS = `id, firm_id, contact_id, assigned_user_id, requested_local_date::text AS requested_local_date,
+const CALLBACK_COLUMNS = `id, firm_id, opportunity_id, contact_id, assigned_user_id, requested_local_date::text AS requested_local_date,
   requested_local_time::text AS requested_local_time, source_time_zone, due_at, status`;
 
-function toCallback(row: CallbackDbRow): CallbackRow {
+function toCallback(row: CallbackDbRow, includeOpportunityContext = false): CallbackRow {
   return {
     id: row.id,
     firmId: row.firm_id,
+    ...(includeOpportunityContext ? { opportunityId: row.opportunity_id } : {}),
     contactId: row.contact_id,
     assignedUserId: row.assigned_user_id,
     requestedLocalDate: String(row.requested_local_date),
@@ -344,7 +347,7 @@ export async function scheduleCallbackForCall(
 
 export async function listCallbacks(
   context: RepositoryContext,
-  options: { readonly assignedUserId?: string; readonly openOnly?: boolean; readonly limit?: number } = {},
+  options: { readonly assignedUserId?: string; readonly openOnly?: boolean; readonly limit?: number; readonly includeOpportunityContext?: boolean } = {},
 ): Promise<readonly CallbackRow[]> {
   const { rows } = await context.db.query<CallbackDbRow>(
     `SELECT ${CALLBACK_COLUMNS} FROM callbacks
@@ -360,5 +363,5 @@ export async function listCallbacks(
       Math.trunc(options.limit ?? 200),
     ],
   );
-  return rows.map(toCallback);
+  return rows.map(row => toCallback(row, options.includeOpportunityContext));
 }
