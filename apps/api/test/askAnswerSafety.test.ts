@@ -54,3 +54,16 @@ it('refuses a fabricated citation window instead of publishing a source-shaped c
     await selected.fixture.stop();
   }
 });
+
+it('does not publish inference as verified evidence even when its citation is a current original', async () => {
+  const selected = await selectedAnswer();
+  try {
+    await selected.run(async input => ({ acceptance: 'accepted', usage: { inputTokens: 50, outputTokens: 10 }, answer: { claims: [{ text: 'The firm will purchase a maintenance product.', kind: 'inferred', citationWindowIds: [input.windows[0]!.id] }], abstained: false } }));
+    const read = await selected.post('/ask/answers/read', { requestId: selected.requestId });
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({ state: 'unavailable', reason: 'unsupported_answer', answer: null });
+    expect(JSON.stringify(read.body)).not.toContain('will purchase');
+  } finally {
+    await selected.fixture.stop();
+  }
+});
