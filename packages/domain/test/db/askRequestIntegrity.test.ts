@@ -26,3 +26,8 @@ it('keeps financial receipts bound to their request workspace',async()=>{
  await database.session.query(`INSERT INTO crm_ask_requests(workspace_id,id,owner_user_id,question,scope,initial_contexts,initial_access_closure,state,reason) VALUES($1,$2,$3,'What was promised?',$4::jsonb,'[]','{"firmIds":[],"personIds":[]}','unavailable','purpose_unavailable')`,[seeded.alpha.workspaceId,id,seeded.alpha.salesperson.userId,JSON.stringify(scope)]);
  await expect(database.session.query(`INSERT INTO crm_ask_financial_receipts(workspace_id,request_id,request_version,request_epoch,stage,attempt,reservation_id,job_id,fencing_token,purpose_revision,config_fingerprint,evaluation_fingerprint,authorization_fingerprint,input_hash,input_price_micros,output_price_micros,max_input_tokens,max_output_tokens,dispatch_state) VALUES($1,$2,1,1,'answer',1,$3,$4,1,1,$5,$5,$5,$5,1,1,1000,100,'reserved')`,[seeded.beta.workspaceId,id,reservationId,jobId,'a'.repeat(64)])).rejects.toMatchObject({code:'23503',constraint:'crm_ask_financial_receipts_workspace_id_request_id_fkey'});
 });
+it('admits independently priced Ask stages to the conserved provider ledger',async()=>{
+ for(const kind of ['crm_ask_answer','crm_ask_embedding','crm_ask_support']) {
+  await expect(database.session.query(`INSERT INTO provider_reservations(workspace_id,provider_key,subject_kind,subject_id,attempt,business_date,business_time_zone,cents,model_name,max_input_tokens,max_output_tokens) VALUES($1,'controlled-fixture',$2,$3,1,'2026-10-09','Etc/UTC',1,'fake-model',1000,100) RETURNING subject_kind`,[seeded.alpha.workspaceId,kind,randomUUID()])).resolves.toMatchObject({rows:[{subject_kind:kind}]});
+ }
+});

@@ -106,7 +106,7 @@ const toRow = (row: ReservationDbRow): ReservationRow => ({
 });
 
 /** The subjects priced by model and tokens: research runs, replies (slice P1) and call summaries (slice C3b). */
-export type TokenPricedSubjectKind = 'research_run' | 'reply_classification' | 'call_summary' | 'call_analysis' | 'meeting_analysis' | 'sourcing_qualification' | 'outreach_reply' | 'social_draft' | 'crm_extraction';
+export type TokenPricedSubjectKind = 'research_run' | 'reply_classification' | 'call_summary' | 'call_analysis' | 'meeting_analysis' | 'sourcing_qualification' | 'outreach_reply' | 'social_draft' | 'crm_extraction' | 'crm_ask_answer' | 'crm_ask_embedding' | 'crm_ask_support';
 
 export interface ReserveInput {
   readonly providerKey: string;
