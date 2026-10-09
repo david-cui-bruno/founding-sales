@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import type {
   BusinessPolicy,
   MailConversation,
+  MailConversationV2,
   MailSourceList,
 } from "@fss/contracts";
 import {
@@ -111,6 +112,10 @@ function conversation(): MailConversation {
       sentProof: false,
     },
   };
+}
+function conversationV2(): MailConversationV2 {
+ const retained=conversation();if(retained.state!=="available")return retained;
+ return {state:"available",source:{...retained.source,originalObservation:{state:"unknown",revision:"0",observedAt:null,observedGeneration:null,observedAccountBinding:null,reason:null,connectionState:"current"}}};
 }
 it("opens approved email with explicit partial, observed identity and date labels without asserting Sent proof", async () => {
   const user = userEvent.setup();
@@ -574,7 +579,7 @@ it("opens an email through the renderer adapter and authenticated operation host
                   }
                 : path.endsWith("/list")
                   ? list()
-                  : conversation(),
+                  : path.endsWith("/read/v2") ? conversationV2() : conversation(),
       };
     },
   });
@@ -605,7 +610,7 @@ it("opens an email through the renderer adapter and authenticated operation host
   expect(requests.sort()).toEqual([
     "/crm/business/mail/controls/read",
     "/crm/business/mail/list",
-    "/crm/business/mail/read",
+    "/crm/business/mail/read/v2",
     "/crm/people/list",
     "/firms",
   ]);
@@ -720,7 +725,7 @@ it("wires the authenticated email timeline onto the actual firm page", async () 
     }
     if (name === "crm.processingHealth") return {sourceId:SOURCE,sourceRevision:1,availability:'available',unknownAcceptance:false,truncated:false,generations:[]};
     if (name === "crm.processingRequest") {expect(input).toEqual({source:{workspaceId:PERSON,sourceId:SOURCE,kind:'mail',revision:1,contentHash:HASH,locator:null}});return {};}
-    if (name === "crm.businessMailRead") return conversation();
+    if (name === "crm.businessMailReadV2") return conversationV2();
     if (name === "crm.businessMailControls")
       return {
         mailboxId: PERSON,
@@ -921,4 +926,24 @@ it('binds copied email processing to the explicit workspace and clears health on
  rerender(<EmailTimeline enabled ports={ports} processing={processing} privacyKey="signed-out"/>);
  expect(screen.queryByRole('button',{name:'Request extraction'})).toBeNull();
  expect(screen.queryByRole('region',{name:'Evidence processing'})).toBeNull();
+});
+
+it("shows dated original observation separately from retained bytes through V2 without live availability claims", async () => {
+ const user=userEvent.setup(); const retained=conversation(); if(retained.state!=="available")throw new Error("fixture");
+ const readV2=async():Promise<MailConversationV2>=>({state:"available",source:{...retained.source,originalObservation:{state:"trashed",revision:"3",observedAt:OBSERVED_AT,observedGeneration:2,observedAccountBinding:HASH,reason:"verified_trash_label",connectionState:"disconnected"}}});
+ const ports:EmailTimelinePorts={list:async()=>list(),read:async()=>{throw new Error("V1 fallback forbidden");},readV2};
+ render(<EmailTimeline enabled ports={ports} firmId={FIRM} privacyKey="owner:2"/>);
+ await user.click(await screen.findByRole("button",{name:"Open email 1"}));
+ expect(await screen.findByText("Retained email text.")).toBeTruthy();
+ expect(screen.getByText("Last verified original status: trashed")).toBeTruthy();
+ expect(screen.getByText(`Original last checked: ${OBSERVED_AT}`)).toBeTruthy();
+ expect(screen.getByText("Original connection: disconnected")).toBeTruthy();
+ expect(screen.getByText("This dated observation does not establish live original availability or delete the retained copy.")).toBeTruthy();
+});
+it("refuses V1 fallback and removes copied text when V2 is denied or malformed",async()=>{
+ let fallback=0;const ports:EmailTimelinePorts={list:async()=>list(),read:async()=>{fallback++;return conversation();},readV2:async()=>{throw new Error('not_found');}};
+ render(<EmailTimeline enabled ports={ports} firmId={FIRM} privacyKey="owner:2"/>);
+ await userEvent.setup().click(await screen.findByRole('button',{name:'Open email 1'}));
+ expect(await screen.findByText('This copied email is unavailable. Refresh the history.')).toBeTruthy();
+ expect(screen.queryByText('Retained email text.')).toBeNull();expect(screen.queryByLabelText('Provider original observation')).toBeNull();expect(fallback).toBe(0);
 });

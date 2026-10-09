@@ -1,3 +1,4 @@
+import {redactBackfillMetadataRows} from '../mail/crmBackfillMetadata.ts';
 import {
   mailContextPredicate,
   eligibleObservedMailLabelRedactions,
@@ -225,6 +226,10 @@ const BUSINESS_METADATA_IN_SCOPE = `b.metadata_availability='available' AND (
     WHERE i.workspace_id=$1 AND i.id IN (${CRM_MAIL_CAPTURE_IDS}) AND b.mailbox_id=i.mailbox_id
       AND b.account_binding=i.account_binding AND b.id::text=j.payload->>'conversationId'))`;
 
+const IMPORT_METADATA_IN_SCOPE = `x.state<>'deleted' AND (
+ EXISTS(SELECT 1 FROM crm_mail_imports i JOIN crm_business_conversations b ON b.workspace_id=i.workspace_id AND b.mailbox_id=i.mailbox_id AND b.owner_user_id=i.owner_user_id AND b.account_binding=i.account_binding AND b.provider_thread_id=x.provider_thread_id WHERE i.workspace_id=x.workspace_id AND i.id=x.import_id AND ${BUSINESS_METADATA_IN_SCOPE})
+ OR EXISTS(SELECT 1 FROM crm_mail_imports i JOIN crm_mail_capture_identities c ON c.workspace_id=i.workspace_id AND c.mailbox_id=i.mailbox_id AND c.account_binding=i.account_binding AND c.provider_message_id=x.provider_message_id WHERE i.workspace_id=x.workspace_id AND i.id=x.import_id AND c.id IN (${CRM_MAIL_CAPTURE_IDS})))`;
+
 /** Collect the identity dependency closure before any firm/person/source locks. */
 async function lockBusinessMetadataForDeletion(
   context: RepositoryContext,
@@ -242,6 +247,7 @@ async function lockBusinessMetadataForDeletion(
     AND ${BUSINESS_METADATA_IN_SCOPE} ORDER BY b.id FOR UPDATE`,
     [context.scope.workspaceId, scope.contactId, scope.firmId],
   );
+  await context.db.query(`SELECT x.id FROM crm_mail_import_messages x WHERE x.workspace_id=$1 AND ${IMPORT_METADATA_IN_SCOPE} ORDER BY x.id FOR UPDATE`,[context.scope.workspaceId,scope.contactId,scope.firmId]);
 }
 
 async function identityDeletionClosure(
@@ -676,6 +682,7 @@ async function measure(
            AND s.id NOT IN (${CRM_SELECTED_SOURCE_IDS}))`,
       byContact,
     ),
+    crm_mail_import_messages: await countOf(context,`SELECT count(*) AS count FROM crm_mail_import_messages x WHERE x.workspace_id=$1 AND ${IMPORT_METADATA_IN_SCOPE}`,byContact),
     crm_business_conversations: await countOf(
       context,
       `SELECT count(*) AS count FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}`,
@@ -909,6 +916,7 @@ async function measure(
       FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id IN (${CRM_MAIL_CAPTURE_IDS})
     UNION ALL SELECT 'business_metadata',b.id::text,b.metadata_revision,b.metadata_hash,b.metadata_availability
       FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}
+    UNION ALL SELECT 'mail_import_metadata',x.id::text,x.revision,encode(sha256(convert_to(concat_ws(':',x.message_hash,x.provider_message_id,x.provider_thread_id,x.provider_at::text,x.scope,x.reason),'UTF8')),'hex'),x.state FROM crm_mail_import_messages x WHERE x.workspace_id=$1 AND ${IMPORT_METADATA_IN_SCOPE}
     ORDER BY kind,id`,
       byContact,
     )
@@ -1377,6 +1385,7 @@ export async function commitDeletion(
   // classifier calls and effects with them through the cascades of 0009 and 0011.
   // Opaque identity survives canonical-row cascades. No provider replay may create
   // a replacement UUID after deleting an approved copy or a pending matched capture.
+  redacted['crm_mail_import_messages']=await redactBackfillMetadataRows(context,measured.identityVersions.filter(value=>value.kind==='mail_import_metadata').map(value=>value.id));
   const mailIds = closure.mailSelected;
   redacted['crm_mail_reply_resolutions']=(await context.db.query(`UPDATE crm_mail_reply_resolutions SET request_provider_at=NULL WHERE ${CRM_COMPLETION_IN_SCOPE} AND (request_provider_at IS NOT NULL OR sent_receipt_id IS NOT NULL)`,byContact)).rowCount??0;
   await remove('crm_mail_progress_receipts','DELETE FROM crm_mail_progress_receipts WHERE workspace_id=$1 AND id=ANY($2::uuid[])',[workspace,closure.progressReceipts]);
