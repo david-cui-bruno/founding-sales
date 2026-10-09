@@ -1,3 +1,4 @@
+import { IDENTITY_PATHS,routePeopleRelationships } from './peopleRelationships.ts';
 import { PEOPLE_PATHS, routePeople } from './people.ts';
 import {BOOKING_CAPACITY_PATHS,routeBookingCapacity} from './bookingCapacity.ts';
 import {SOCIAL_PATHS,routeSocial} from './social.ts';
@@ -170,6 +171,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // The CRM surface. Exact paths, which is what every new endpoint should be: the
     // prefixes above are a record of the routers that already existed in that shape,
     // not an invitation.
+    moduleOf('people-relationships', { paths: IDENTITY_PATHS }, routePeopleRelationships, routing),
     moduleOf('people', { paths: PEOPLE_PATHS }, routePeople, routing),
     moduleOf('firm-page', { paths: FIRM_PAGE_PATHS }, routeFirmPage, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),

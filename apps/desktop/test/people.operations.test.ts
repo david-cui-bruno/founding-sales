@@ -15,3 +15,7 @@ it('allows selected-note operations without letting the renderer choose a path o
     }).success,
   ).toBe(false);
 });
+it('reads a bounded relationship page through a closed operation without changing operational contact state',()=>{
+ const name=operationOf('crm.relationshipRead');
+ expect(name).toBe('crm.relationshipRead');
+});

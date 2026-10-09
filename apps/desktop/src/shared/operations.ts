@@ -1,3 +1,8 @@
+import {endpointClaimPayloadSchema,endpointCorrectPayloadSchema} from '@fss/contracts';
+import {sourceContextSaveSchema,sourceContextListSchema} from '@fss/contracts';
+import {endpointListInputSchema,endpointListSchema,endpointMatchInputSchema,endpointMatchSchema,firmSourceAddSchema,firmSourceChangeSchema,firmSourcePageSchema,firmSourceReadSchema,firmSourceRecaptureSchema} from '@fss/contracts';
+import {relationshipSaveSchema,relationshipCorrectSchema,firmListResponseSchema} from '@fss/contracts';
+import {relationshipReadSchema,relationshipListSchema} from '@fss/contracts';
 import {personCreateSchema,personReadSchema,personListSchema,personSourceAddSchema,personSourceChangeSchema,personSourceRecaptureSchema,personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
@@ -1101,6 +1106,21 @@ export const OPERATIONS = {
   },
 
   // --- Firms -------------------------------------------------------------
+  'crm.relationshipSave':{kind:'command',calls:[{method:'POST',path:'/crm/relationships/save'}],input:relationshipSaveSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({relationshipId:uuid,revision:z.number().int().positive()}),transform:'body-free relationship revision'},
+  'crm.relationshipCorrect':{kind:'command',calls:[{method:'POST',path:'/crm/relationships/correct'}],input:relationshipCorrectSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({relationshipId:uuid,revision:z.number().int().positive()}),transform:'explicit supported correction; operational associations unchanged'},
+  'crm.relationshipFirms':{kind:'read',calls:[{method:'GET',path:'/firms'}],input:nothing,output:firmListResponseSchema,transform:'existing visible firm identities for explicit association'},
+  'crm.endpointList':{kind:'read',calls:[{method:'POST',path:'/crm/endpoints/list'}],input:endpointListInputSchema,output:endpointListSchema,transform:'current scope and exact revision; no operational route authority'},
+  'crm.endpointMatch':{kind:'read',calls:[{method:'POST',path:'/crm/endpoints/match'}],input:endpointMatchInputSchema,output:endpointMatchSchema,transform:'current scope and exact revision; no operational route authority'},
+  'crm.endpointClaim':{kind:'command',calls:[{method:'POST',path:'/crm/endpoints/claim'}],input:endpointClaimPayloadSchema,output:z.strictObject({endpointId:uuid,claimId:uuid,revision:z.number().int().positive()}),transform:'current scope and exact revision; no operational route authority'},
+  'crm.endpointCorrect':{kind:'command',calls:[{method:'POST',path:'/crm/endpoints/correct'}],input:endpointCorrectPayloadSchema,output:z.strictObject({endpointId:uuid,claimId:uuid,revision:z.number().int().positive()}),transform:'current scope and exact revision; no operational route authority'},
+  'crm.firmSourceRead':{kind:'read',calls:[{method:'POST',path:'/crm/firm-sources/read'}],input:firmSourceReadSchema,output:firmSourcePageSchema,transform:'current scope and exact revision; no operational route authority'},
+  'crm.firmSourceAdd':{kind:'command',calls:[{method:'POST',path:'/crm/firm-sources/add'}],input:firmSourceAddSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid}),transform:'current scope and exact revision; no operational route authority'},
+  'crm.firmSourceDelete':{kind:'command',calls:[{method:'POST',path:'/crm/firm-sources/delete'}],input:firmSourceChangeSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'current scope and exact revision; no operational route authority'},
+  'crm.firmSourceRestore':{kind:'command',calls:[{method:'POST',path:'/crm/firm-sources/restore'}],input:firmSourceChangeSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'current scope and exact revision; no operational route authority'},
+  'crm.firmSourceRecapture':{kind:'command',calls:[{method:'POST',path:'/crm/firm-sources/recapture'}],input:firmSourceRecaptureSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({sourceId:uuid,revision:z.number().int().positive()}),transform:'current scope and exact revision; no operational route authority'},
+  'crm.sourceContextRead':{kind:'read',calls:[{method:'POST',path:'/crm/relationships/context/read'}],input:relationshipReadSchema,output:sourceContextListSchema,transform:'original conversation firm and review state; no source bodies'},
+  'crm.sourceContextSave':{kind:'command',calls:[{method:'POST',path:'/crm/relationships/context/save'}],input:sourceContextSaveSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({contextId:uuid,sourceId:uuid,relationshipId:uuid,relationshipRevision:z.number().int().positive()}),transform:'explicit current source and relationship binding'},
+  'crm.relationshipRead':{kind:'read',calls:[{method:'POST',path:'/crm/relationships/read'}],input:relationshipReadSchema,output:relationshipListSchema,transform:'bounded permitted temporal relationships; no source snippets'},
   'crm.personList': {kind:'read', calls:[{method:'POST',path:'/crm/people/list'}],input:personListSchema,output:peopleListSchema,transform:'bounded current-access people list'},
   'crm.personRead': {kind:'read', calls:[{method:'POST',path:'/crm/people/read'}],input:personReadSchema,output:personPageSchema,transform:'current-access selected evidence'},
   'crm.personCreate': {kind:'command',calls:[{method:'POST',path:'/crm/people/create'}],input:personCreateSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({personId:uuid}),transform:'identifier only; main owns command envelope'},

@@ -149,6 +149,143 @@ const peopleConstraintCases: readonly Case[] = [
   })),
 ];
 
+/** Schema71 constraint fixtures; rows are rolled back independently for each case. */
+async function seedRelationshipConstraintRows(f: Fixture) {
+  const personId = await seedIndependentPerson(f);
+  const sourceId = await seedSelectedSource(f, personId);
+  const hash = payloadHash('relationship-source');
+  const relationship = await f.session.query<{ id: string }>(
+    "INSERT INTO crm_relationships(workspace_id,person_id,firm_id,status,source_id,source_revision,source_hash) VALUES($1,$2,$3,'current',$4,1,$5) RETURNING id",
+    [workspace(f), personId, f.crm.alpha.firmId, sourceId, hash],
+  );
+  const relationshipId = relationship.rows[0]?.id ?? '';
+  await f.session.query(
+    `INSERT INTO crm_relationship_revisions(workspace_id,relationship_id,revision,person_id,firm_id,status,source_id,source_revision,source_hash,actor_user_id)
+     SELECT workspace_id,id,revision,person_id,firm_id,status,source_id,source_revision,source_hash,$3 FROM crm_relationships WHERE workspace_id=$1 AND id=$2`,
+    [workspace(f), relationshipId, admin(f)],
+  );
+  await f.session.query(
+    'INSERT INTO crm_source_relationship_contexts(workspace_id,source_id,source_revision,source_hash,relationship_id,relationship_revision,person_id,firm_id) VALUES($1,$2,1,$3,$4,1,$5,$6)',
+    [workspace(f), sourceId, hash, relationshipId, personId, f.crm.alpha.firmId],
+  );
+  const endpoint = await f.session.query<{ id: string }>(
+    "INSERT INTO crm_identity_endpoints(workspace_id,kind,value,value_hash) VALUES($1,'email','shared@example.test',$2) RETURNING id",
+    [workspace(f), payloadHash('endpoint-value')],
+  );
+  const endpointId = endpoint.rows[0]?.id ?? '';
+  const claim = await f.session.query<{ id: string }>(
+    "INSERT INTO crm_endpoint_claims(workspace_id,endpoint_id,person_id,shared,status,source_id,source_revision,source_hash) VALUES($1,$2,$3,false,'current',$4,1,$5) RETURNING id",
+    [workspace(f), endpointId, personId, sourceId, hash],
+  );
+  const claimId = claim.rows[0]?.id ?? '';
+  await f.session.query(
+    `INSERT INTO crm_endpoint_claim_revisions(workspace_id,claim_id,revision,endpoint_id,person_id,shared,status,source_id,source_revision,source_hash,actor_user_id)
+     SELECT workspace_id,id,revision,endpoint_id,person_id,shared,status,source_id,source_revision,source_hash,$3 FROM crm_endpoint_claims WHERE workspace_id=$1 AND id=$2`,
+    [workspace(f), claimId, admin(f)],
+  );
+}
+
+const relationshipConstraintCases: readonly Case[] = [
+  ...([
+    ['crm_relationships_revision_check', 'crm_relationships', "revision=0"],
+    ['crm_relationships_source_revision_check', 'crm_relationships', "source_revision=0"],
+    ['crm_relationships_source_hash_check', 'crm_relationships', "source_hash='not-a-hash'"],
+    ['crm_relationships_status_check', 'crm_relationships', "status='invalid'"],
+    ['crm_relationships_workspace_id_person_id_fkey', 'crm_relationships', "person_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_relationships_workspace_id_firm_id_fkey', 'crm_relationships', "firm_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_relationships_workspace_id_source_id_fkey', 'crm_relationships', "source_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_relationships_check', 'crm_relationships', "start_date=DATE '2026-10-09',end_date=DATE '2026-10-08'"],
+    ['crm_relationship_revisions_revision_check', 'crm_relationship_revisions', "revision=0"],
+    ['crm_relationship_revisions_source_revision_check', 'crm_relationship_revisions', "source_revision=0"],
+    ['crm_relationship_revisions_source_hash_check', 'crm_relationship_revisions', "source_hash='not-a-hash'"],
+    ['crm_relationship_revisions_status_check', 'crm_relationship_revisions', "status='invalid'"],
+    ['crm_relationship_revisions_workspace_id_person_id_fkey', 'crm_relationship_revisions', "person_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_relationship_revisions_workspace_id_firm_id_fkey', 'crm_relationship_revisions', "firm_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_relationship_revisions_workspace_id_source_id_fkey', 'crm_relationship_revisions', "source_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_relationship_revisions_workspace_id_actor_user_id_fkey', 'crm_relationship_revisions', "actor_user_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_relationship_revisions_check', 'crm_relationship_revisions', "start_date=DATE '2026-10-09',end_date=DATE '2026-10-08'"],
+    ['crm_endpoint_claims_revision_check', 'crm_endpoint_claims', "revision=0"],
+    ['crm_endpoint_claims_source_revision_check', 'crm_endpoint_claims', "source_revision=0"],
+    ['crm_endpoint_claims_source_hash_check', 'crm_endpoint_claims', "source_hash='not-a-hash'"],
+    ['crm_endpoint_claims_status_check', 'crm_endpoint_claims', "status='invalid'"],
+    ['crm_endpoint_claims_workspace_id_person_id_fkey', 'crm_endpoint_claims', "person_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_endpoint_claims_workspace_id_firm_id_fkey', 'crm_endpoint_claims', "firm_id='00000000-0000-4000-8000-000000000000' ,person_id=NULL,shared=true"],
+    ['crm_endpoint_claims_workspace_id_source_id_fkey', 'crm_endpoint_claims', "source_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_endpoint_claims_workspace_id_endpoint_id_fkey', 'crm_endpoint_claims', "endpoint_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_endpoint_claims_check1', 'crm_endpoint_claims', "start_date=DATE '2026-10-09',end_date=DATE '2026-10-08'"],
+    ['crm_endpoint_claims_check', 'crm_endpoint_claims', "person_id=NULL,firm_id=NULL"],
+    ['crm_endpoint_claim_revisions_revision_check', 'crm_endpoint_claim_revisions', "revision=0"],
+    ['crm_endpoint_claim_revisions_source_revision_check', 'crm_endpoint_claim_revisions', "source_revision=0"],
+    ['crm_endpoint_claim_revisions_source_hash_check', 'crm_endpoint_claim_revisions', "source_hash='not-a-hash'"],
+    ['crm_endpoint_claim_revisions_status_check', 'crm_endpoint_claim_revisions', "status='invalid'"],
+    ['crm_endpoint_claim_revisions_workspace_id_person_id_fkey', 'crm_endpoint_claim_revisions', "person_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_endpoint_claim_revisions_workspace_id_firm_id_fkey', 'crm_endpoint_claim_revisions', "firm_id='00000000-0000-4000-8000-000000000000' ,person_id=NULL,shared=true"],
+    ['crm_endpoint_claim_revisions_workspace_id_source_id_fkey', 'crm_endpoint_claim_revisions', "source_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_endpoint_claim_revisions_workspace_id_endpoint_id_fkey', 'crm_endpoint_claim_revisions', "endpoint_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_endpoint_claim_revisions_workspace_id_claim_id_fkey', 'crm_endpoint_claim_revisions', "claim_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_endpoint_claim_revisions_workspace_id_actor_user_id_fkey', 'crm_endpoint_claim_revisions', "actor_user_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_endpoint_claim_revisions_check1', 'crm_endpoint_claim_revisions', "start_date=DATE '2026-10-09',end_date=DATE '2026-10-08'"],
+    ['crm_endpoint_claim_revisions_check', 'crm_endpoint_claim_revisions', "person_id=NULL,firm_id=NULL"],
+    ['crm_relationships_context_review_check', 'crm_relationships', "context_review='invalid'"],
+    ['crm_identity_endpoints_kind_check', 'crm_identity_endpoints', "kind='invalid'"],
+    ['crm_identity_endpoints_value_check', 'crm_identity_endpoints', "value='   '"],
+    ['crm_identity_endpoints_value_hash_check', 'crm_identity_endpoints', "value_hash='not-a-hash'"],
+    ['crm_selected_sources_firm_fk', 'crm_selected_sources', "person_id=NULL,firm_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_selected_sources_subject_xor', 'crm_selected_sources', "person_id=NULL,firm_id=NULL"],
+    ['crm_source_relationship_contexts_source_revision_check', 'crm_source_relationship_contexts', "source_revision=0"],
+    ['crm_source_relationship_contexts_relationship_revision_check', 'crm_source_relationship_contexts', "relationship_revision=0"],
+    ['crm_source_relationship_contexts_source_hash_check', 'crm_source_relationship_contexts', "source_hash='not-a-hash'"],
+    ['crm_source_relationship_contexts_review_check', 'crm_source_relationship_contexts', "review='invalid'"],
+    ['crm_source_relationship_contexts_workspace_id_person_id_fkey', 'crm_source_relationship_contexts', "person_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_source_relationship_contexts_workspace_id_firm_id_fkey', 'crm_source_relationship_contexts', "firm_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_source_relationship_contexts_workspace_id_source_id_fkey', 'crm_source_relationship_contexts', "source_id='00000000-0000-4000-8000-000000000000'"],
+    ['crm_source_relationship_conte_workspace_id_relationship_id_fkey', 'crm_source_relationship_contexts', "relationship_id='00000000-0000-4000-8000-000000000000'"],
+  ] as const).map(([constraint, table, assignment]): Case => ({
+    constraint,
+    run: async f => {
+      await seedRelationshipConstraintRows(f);
+      return await f.session.query(`UPDATE ${table} SET ${assignment} WHERE workspace_id=$1`, [workspace(f)]);
+    },
+  })),
+  { constraint: 'crm_relationships_pkey', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query('INSERT INTO crm_relationships SELECT * FROM crm_relationships WHERE workspace_id=$1', [workspace(f)]);
+  } },
+  { constraint: 'crm_relationship_revisions_pkey', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query('INSERT INTO crm_relationship_revisions SELECT * FROM crm_relationship_revisions WHERE workspace_id=$1', [workspace(f)]);
+  } },
+  { constraint: 'crm_source_relationship_contexts_pkey', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query('INSERT INTO crm_source_relationship_contexts SELECT * FROM crm_source_relationship_contexts WHERE workspace_id=$1', [workspace(f)]);
+  } },
+  { constraint: 'crm_identity_endpoints_pkey', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query('INSERT INTO crm_identity_endpoints SELECT * FROM crm_identity_endpoints WHERE workspace_id=$1', [workspace(f)]);
+  } },
+  { constraint: 'crm_endpoint_claims_pkey', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query('INSERT INTO crm_endpoint_claims SELECT * FROM crm_endpoint_claims WHERE workspace_id=$1', [workspace(f)]);
+  } },
+  { constraint: 'crm_endpoint_claim_revisions_pkey', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query('INSERT INTO crm_endpoint_claim_revisions SELECT * FROM crm_endpoint_claim_revisions WHERE workspace_id=$1', [workspace(f)]);
+  } },
+  { constraint: 'crm_relationship_revisions_workspace_id_relationship_id_fkey', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query("INSERT INTO crm_relationship_revisions(workspace_id,relationship_id,revision,person_id,firm_id,status,start_date,end_date,source_id,source_revision,source_hash,actor_user_id) SELECT workspace_id,'00000000-0000-4000-8000-000000000000',revision,person_id,firm_id,status,start_date,end_date,source_id,source_revision,source_hash,actor_user_id FROM crm_relationship_revisions WHERE workspace_id=$1", [workspace(f)]);
+  } },
+  { constraint: 'crm_identity_endpoints_workspace_id_fkey', run: async f => await f.session.query("INSERT INTO crm_identity_endpoints(workspace_id,kind,value_hash) VALUES('00000000-0000-4000-8000-000000000000','email',$1)", [payloadHash('missing-workspace-endpoint')]) },
+  { constraint: 'crm_identity_endpoints_workspace_id_kind_value_hash_key', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query('INSERT INTO crm_identity_endpoints(workspace_id,kind,value,value_hash) SELECT workspace_id,kind,value,value_hash FROM crm_identity_endpoints WHERE workspace_id=$1', [workspace(f)]);
+  } },
+  { constraint: 'crm_source_relationship_conte_workspace_id_source_id_relati_key', run: async f => {
+    await seedRelationshipConstraintRows(f);
+    return await f.session.query('INSERT INTO crm_source_relationship_contexts(workspace_id,source_id,source_revision,source_hash,relationship_id,relationship_revision,person_id,firm_id,review) SELECT workspace_id,source_id,source_revision,source_hash,relationship_id,relationship_revision,person_id,firm_id,review FROM crm_source_relationship_contexts WHERE workspace_id=$1', [workspace(f)]);
+  } },
+];
+
 const cases: readonly Case[] = [
   // ---------------------------------------------------------------- workspaces
   {
@@ -1454,6 +1591,7 @@ const cases: readonly Case[] = [
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
   ...peopleConstraintCases,
+  ...relationshipConstraintCases,
   ...SOURCING_CONSTRAINT_CASES,
   ...OUTREACH_CONSTRAINT_CASES,
   ...SOCIAL_CONSTRAINT_CASES,
@@ -1549,6 +1687,25 @@ describe('foundation constraints', () => {
       expect(thrown).toMatchObject({ constraint: name });
     },
   );
+
+  it.each(
+    (['crm_relationship_revisions', 'crm_endpoint_claim_revisions'] as const).flatMap(table =>
+      (['app_runtime', 'migration'] as const).flatMap(role =>
+        (['UPDATE', 'DELETE', 'TRUNCATE'] as const).map(operation => ({ table, role, operation })),
+      ),
+    ),
+  )('keeps $table append-only for $role against $operation', async ({ table, role, operation }) => {
+    await fixture.session.query('BEGIN');
+    try {
+      await seedRelationshipConstraintRows(fixture);
+      await fixture.session.query(`SET LOCAL ROLE ${role}`);
+      const statement = operation === 'UPDATE' ? `UPDATE ${table} SET status='historical'`
+        : operation === 'DELETE' ? `DELETE FROM ${table}` : `TRUNCATE ${table} CASCADE`;
+      await expect(fixture.session.query(statement)).rejects.toMatchObject({ code: '42501' });
+    } finally {
+      await fixture.session.query('ROLLBACK');
+    }
+  });
 
   it('has a case for every constraint the database enforces', async () => {
     const constraints = await database.session.query<{ name: string }>(`

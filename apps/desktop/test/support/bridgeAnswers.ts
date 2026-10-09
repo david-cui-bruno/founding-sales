@@ -246,6 +246,22 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
+'/firms':{firms:[]},
+'/crm/relationships/read':{"relationships": [], "nextAfterId": null},
+'/crm/relationships/save':{"status": "accepted", "replayed": false, "result": {"relationshipId": "11111111-1111-4111-8111-111111111111", "revision": 1}},
+'/crm/relationships/correct':{"status": "accepted", "replayed": false, "result": {"relationshipId": "11111111-1111-4111-8111-111111111111", "revision": 2}},
+'/crm/endpoints/list':{"claims": [], "nextAfterId": null},
+'/crm/endpoints/match':{"outcome": "no_supported_match", "reason": "no_supported_evidence", "personId": null, "firmId": null, "candidates": []},
+'/crm/firm-sources/read':{"sources": [], "nextAfterSourceId": null},
+'/crm/relationships/context/read':{"contexts": [], "nextAfterId": null},
+'/crm/endpoints/claim':{"status": "accepted", "replayed": false, "result": {"endpointId": "11111111-1111-4111-8111-111111111111", "claimId": "11111111-1111-4111-8111-111111111111", "revision": 1}},
+'/crm/endpoints/correct':{"status": "accepted", "replayed": false, "result": {"endpointId": "11111111-1111-4111-8111-111111111111", "claimId": "11111111-1111-4111-8111-111111111111", "revision": 1}},
+'/crm/firm-sources/add':{"status": "accepted", "replayed": false, "result": {"sourceId": "11111111-1111-4111-8111-111111111111"}},
+'/crm/firm-sources/delete':{"status": "accepted", "replayed": false, "result": {"sourceId": "11111111-1111-4111-8111-111111111111", "revision": 2}},
+'/crm/firm-sources/restore':{"status": "accepted", "replayed": false, "result": {"sourceId": "11111111-1111-4111-8111-111111111111", "revision": 2}},
+'/crm/firm-sources/recapture':{"status": "accepted", "replayed": false, "result": {"sourceId": "11111111-1111-4111-8111-111111111111", "revision": 2}},
+'/crm/relationships/context/save':{"status": "accepted", "replayed": false, "result": {"contextId": "11111111-1111-4111-8111-111111111111", "sourceId": "11111111-1111-4111-8111-111111111111", "relationshipId": "11111111-1111-4111-8111-111111111111", "relationshipRevision": 1}},
+
  '/crm/people/list':{people:[],nextAfterId:null},
  '/crm/people/read':{person:{personId:FIXTURE_IDS.firm,fullName:'Alex Example',firm:null,revision:1},sources:[],nextAfterSourceId:null},
  '/crm/people/create':{status:'accepted',replayed:false,result:{personId:FIXTURE_IDS.firm}},

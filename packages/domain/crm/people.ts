@@ -1,3 +1,6 @@
+import { prepareRecaptureContexts, recordRecaptureContexts } from './relationships.ts';
+import { activeIdentityActor, hasExplicitSourceContext, sourceContextPredicate, lockIdentityContext, readIdentityPerson, sourceAccessPredicate } from './identityAccess.ts';
+import { invalidateSelectedIdentitySources } from './identityInvalidation.ts';
 import { createHash } from 'node:crypto';
 import type { PersonPage } from '@fss/contracts';
 import { recordCrmAuditEvent } from './audit.ts';
@@ -102,24 +105,46 @@ export async function readPerson(context: RepositoryContext, personId: string, p
   afterSourceId?: string | undefined;
   limit?: number | undefined;
 } = {}): Promise<PersonPage | null> {
-  const row = await load(context, personId, true);
-  if (row === null || !await currentMembership(context) || !allowed(context, row))
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user')
     return null;
   const limit = paging.limit ?? 50;
-  const { rows } = await context.db.query<SourceRow>('SELECT id,revision,content_hash,excerpt,occurred_at,observed_at,availability FROM crm_selected_sources WHERE workspace_id=$1 AND person_id=$2 AND ($3::uuid IS NULL OR owner_user_id=$3) AND ($4::uuid IS NULL OR id>$4) ORDER BY id LIMIT $5', [context.scope.workspaceId, personId, context.scope.actor.kind === 'user' && context.scope.actor.role !== 'admin' ? context.scope.actor.userId : null, paging.afterSourceId ?? null, limit + 1]);
-  if (!await currentMembership(context))
+  const query = () => context.db.query<SourceRow>(`SELECT s.id,s.revision,s.content_hash,s.excerpt,s.occurred_at,s.observed_at,s.availability FROM crm_selected_sources s WHERE s.workspace_id=$1 AND s.person_id=$2 AND ${sourceAccessPredicate('$3', '$4')} AND ($5::uuid IS NULL OR s.id>$5) ORDER BY s.id LIMIT $6`, [context.scope.workspaceId, personId, actor.role === 'admin', actor.userId, paging.afterSourceId ?? null, limit + 1]);
+  let initial = (await query()).rows;
+  let locked = await lockIdentityContext(context, { personIds: [personId], sourceIds: initial.map(source => source.id), requireActiveFirms: false });
+  if (!locked) {
+    // A plain unknown-firm source can become a content-free tombstone while waiting.
+    // Retry only when no additional context firm lock can be introduced.
+    const person = await load(context, personId);
+    const contexts = await context.db.query('SELECT 1 FROM crm_source_relationship_contexts c JOIN crm_selected_sources s ON s.workspace_id=c.workspace_id AND s.id=c.source_id WHERE c.workspace_id=$1 AND c.source_id=ANY($2::uuid[]) AND c.source_revision=s.revision AND c.source_hash=s.content_hash LIMIT 1', [context.scope.workspaceId, initial.map(source => source.id)]);
+    if (person?.firm_id !== null || contexts.rows.length !== 0 || !await activeIdentityActor(context))
+      return null;
+    initial = (await query()).rows.filter(source => initial.some(old => old.id === source.id));
+    locked = await lockIdentityContext(context, { personIds: [personId], sourceIds: initial.map(source => source.id), requireActiveFirms: false });
+  }
+  if (!locked)
     return null;
-  if (context.scope.actor.kind === 'user' && context.scope.actor.role === 'admin')
+  const identity = await readIdentityPerson(context, personId), row = await load(context, personId);
+  if (identity === null || row === null)
+    return null;
+  const rows = (await query()).rows.filter(source => initial.some(old => old.id === source.id && old.revision === source.revision && old.content_hash === source.content_hash));
+  if (!await activeIdentityActor(context))
+    return null;
+  if (actor.role === 'admin')
     await recordCrmAuditEvent(context, { action: 'crm.person_source_read', subjectKind: 'person', subjectId: personId });
-  return { person: dto(row), nextAfterSourceId: rows.length > limit ? rows[limit - 1]?.id ?? null : null, sources: rows.slice(0, limit).map(source => ({ workspaceId: context.scope.workspaceId, sourceId: source.id, kind: 'selected_note', revision: source.revision, contentHash: source.content_hash, locator: source.availability === 'available' ? 'selected_excerpt' : null, speaker: null, occurredAt: source.occurred_at?.toISOString() ?? null, observedAt: source.observed_at.toISOString(), completeness: source.availability === 'available' ? 'selected_excerpt' : 'unavailable', availability: source.availability, excerpt: source.excerpt })) };
+  return { person: { ...dto(row), firm: identity.legacyFirmVisible ? dto(row).firm : null }, nextAfterSourceId: rows.length > limit ? rows[limit - 1]?.id ?? null : null, sources: rows.slice(0, limit).map(source => ({ workspaceId: context.scope.workspaceId, sourceId: source.id, kind: 'selected_note', revision: source.revision, contentHash: source.content_hash, locator: source.availability === 'available' ? 'selected_excerpt' : null, speaker: null, occurredAt: source.occurred_at?.toISOString() ?? null, observedAt: source.observed_at.toISOString(), completeness: source.availability === 'available' ? 'selected_excerpt' : 'unavailable', availability: source.availability, excerpt: source.excerpt })) };
 }
 export async function changeSelectedSource(context: RepositoryContext, input: {
   personId: string;
   sourceId: string;
   expectedRevision: number;
 }, action: 'delete' | 'restore') {
-  const person = await load(context, input.personId, true);
-  if (person === null || !await currentMembership(context) || !allowed(context, person) || (person.contact_id !== null && person.contact_status !== 'active') || context.scope.actor.kind !== 'user')
+  const contextual = await hasExplicitSourceContext(context, input.sourceId);
+  const initialPerson = await load(context, input.personId);
+  if (initialPerson === null || !await lockIdentityContext(context, { personIds: [input.personId], firmIds: contextual || initialPerson.firm_id === null ? [] : [initialPerson.firm_id], sourceIds: [input.sourceId] }))
+    return { ok: false as const, reason: 'person_access_denied' };
+  const person = await load(context, input.personId);
+  if (person === null || !await currentMembership(context) || (!contextual && (!allowed(context, person) || (person.contact_id !== null && person.contact_status !== 'active'))) || context.scope.actor.kind !== 'user')
     return { ok: false as const, reason: 'person_access_denied' };
   const { rows } = await context.db.query<{
     revision: number;
@@ -134,6 +159,8 @@ export async function changeSelectedSource(context: RepositoryContext, input: {
   if (action === 'restore' && source.availability !== 'deleted')
     return { ok: false as const, reason: 'source_not_deleted' };
   await context.db.query(`UPDATE crm_selected_sources SET availability=$3,excerpt=NULL,content_hash=NULL,occurred_at=NULL,revision=revision+1 WHERE workspace_id=$1 AND id=$2`, [context.scope.workspaceId, input.sourceId, action === 'delete' ? 'deleted' : 'awaiting_recapture']);
+  if (action === 'delete')
+    await invalidateSelectedIdentitySources(context, [input.sourceId]);
   return { ok: true as const, value: { sourceId: input.sourceId, revision: source.revision + 1 } };
 }
 /** Bounded explicit bridge. Equal labels never merge people; operational rows are untouched. */
@@ -184,10 +211,18 @@ export async function listPeople(context: RepositoryContext, input: {
   const actor = context.scope.actor;
   if (actor.kind !== 'user')
     return { people: [], nextAfterId: null };
-  const { rows } = await context.db.query<PersonRow>(`SELECT ${columns} FROM crm_people p LEFT JOIN crm_legacy_contact_people b ON b.workspace_id=p.workspace_id AND b.person_id=p.id LEFT JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id LEFT JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=c.firm_id WHERE p.workspace_id=$1 AND ($2::uuid IS NULL OR p.id>$2) AND ($3::boolean OR CASE WHEN b.contact_id IS NULL THEN p.owner_user_id=$4 ELSE f.assigned_user_id=$4 END) ORDER BY p.id LIMIT $5`, [context.scope.workspaceId, input.afterId ?? null, actor.role === 'admin', actor.userId, input.limit + 1]);
-  if (!await currentMembership(context))
+  const { rows } = await context.db.query<PersonRow>(`SELECT ${columns} FROM crm_people p LEFT JOIN crm_legacy_contact_people b ON b.workspace_id=p.workspace_id AND b.person_id=p.id LEFT JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id LEFT JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=c.firm_id WHERE p.workspace_id=$1 AND ($2::uuid IS NULL OR p.id>$2) AND ($3::boolean OR CASE WHEN b.contact_id IS NULL THEN p.owner_user_id=$4 ELSE (c.status='active' AND f.assigned_user_id=$4) OR EXISTS(SELECT 1 FROM crm_selected_sources s WHERE s.workspace_id=p.workspace_id AND s.person_id=p.id AND EXISTS(SELECT 1 FROM crm_source_relationship_contexts cx WHERE ${sourceContextPredicate()}) AND ${sourceAccessPredicate('$3', '$4')}) END) ORDER BY p.id LIMIT $5`, [context.scope.workspaceId, input.afterId ?? null, actor.role === 'admin', actor.userId, input.limit + 1]);
+  if (!await lockIdentityContext(context, { personIds: rows.map(row => row.id), requireActiveFirms: false }))
     return { people: [], nextAfterId: null };
-  return { people: rows.slice(0, input.limit).map(dto), nextAfterId: rows.length > input.limit ? rows[input.limit - 1]?.id ?? null : null };
+  const people = [];
+  for (const row of rows.slice(0, input.limit)) {
+    const identity = await readIdentityPerson(context, row.id);
+    if (identity !== null)
+      people.push({ ...dto(row), fullName: identity.fullName, firm: identity.legacyFirmVisible ? dto(row).firm : null });
+  }
+  if (!await activeIdentityActor(context))
+    return { people: [], nextAfterId: null };
+  return { people, nextAfterId: rows.length > input.limit ? rows[input.limit - 1]?.id ?? null : null };
 }
 export async function recaptureSelectedSource(context: RepositoryContext, input: {
   personId: string;
@@ -196,8 +231,12 @@ export async function recaptureSelectedSource(context: RepositoryContext, input:
   excerpt: string;
   occurredAt: string;
 }) {
-  const person = await load(context, input.personId, true);
-  if (person === null || !await currentMembership(context) || !allowed(context, person) || (person.contact_id !== null && person.contact_status !== 'active') || context.scope.actor.kind !== 'user')
+  const contextual = await hasExplicitSourceContext(context, input.sourceId);
+  const initialPerson = await load(context, input.personId);
+  if (initialPerson === null || !await lockIdentityContext(context, { personIds: [input.personId], firmIds: contextual || initialPerson.firm_id === null ? [] : [initialPerson.firm_id], sourceIds: [input.sourceId] }))
+    return { ok: false as const, reason: 'person_access_denied' };
+  const person = await load(context, input.personId);
+  if (person === null || !await currentMembership(context) || (!contextual && (!allowed(context, person) || (person.contact_id !== null && person.contact_status !== 'active'))) || context.scope.actor.kind !== 'user')
     return { ok: false as const, reason: 'person_access_denied' };
   const { rows } = await context.db.query<{
     revision: number;
@@ -211,6 +250,11 @@ export async function recaptureSelectedSource(context: RepositoryContext, input:
     return { ok: false as const, reason: 'source_not_restored' };
   if (source.revision !== input.expectedRevision)
     return { ok: false as const, reason: 'source_revision_changed' };
-  await context.db.query(`UPDATE crm_selected_sources SET availability='available',excerpt=$3,content_hash=$4,occurred_at=$5,observed_at=now(),revision=revision+1 WHERE workspace_id=$1 AND id=$2`, [context.scope.workspaceId, input.sourceId, input.excerpt, createHash('sha256').update(input.excerpt).digest('hex'), input.occurredAt]);
+  const contexts = await prepareRecaptureContexts(context, input.sourceId);
+  if (contexts === null)
+    return { ok: false as const, reason: 'source_context_limit' };
+  const contentHash = createHash('sha256').update(input.excerpt).digest('hex');
+  await context.db.query(`UPDATE crm_selected_sources SET availability='available',excerpt=$3,content_hash=$4,occurred_at=$5,observed_at=now(),revision=revision+1 WHERE workspace_id=$1 AND id=$2`, [context.scope.workspaceId, input.sourceId, input.excerpt, contentHash, input.occurredAt]);
+  await recordRecaptureContexts(context, { sourceId: input.sourceId, revision: source.revision + 1, contentHash }, contexts);
   return { ok: true as const, value: { sourceId: input.sourceId, revision: source.revision + 1 } };
 }
