@@ -1,0 +1,4 @@
+import {z} from 'zod';
+export const askReadSchema=z.strictObject({operation:z.literal('opportunities'),scope:z.strictObject({firmId:z.uuid()}),status:z.enum(['open','all']).default('open'),limit:z.number().int().min(1).max(50).default(20)});
+export const askCoverageSchema=z.strictObject({scope:z.literal('current_permitted_crm_state'),acquisition:z.literal('unverified'),semantic:z.literal('not_requested')});
+export const askResponseSchema=z.strictObject({operation:z.literal('opportunities'),count:z.string().regex(/^(0|[1-9]\d*)$/u),records:z.array(z.strictObject({opportunityId:z.uuid(),firmId:z.uuid(),name:z.string().nullable(),status:z.enum(['open','won','lost']),stageKey:z.string(),openedAt:z.iso.datetime()})).max(50),truncated:z.boolean(),coverage:askCoverageSchema});
