@@ -80,11 +80,10 @@ export async function readAskActions(context:RepositoryContext&{db:SessionQuerya
 export async function changeAskAction(context:RepositoryContext,input:AskActionChange){
  const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return {ok:false as const,reason:'source_unavailable'};
  await lockAskLifecycle(context);
- if(input.action==='dismiss_preference'){
-  const changed=(await context.db.query<{id:string;version:number;status:string}>(`UPDATE crm_ask_actions SET status='dismissed',version=version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3 AND version=$4 AND kind='preference' AND status='proposed' RETURNING id,version,status`,[context.scope.workspaceId,actor.userId,input.actionId,input.expectedVersion])).rows[0];
+ if(input.action==='dismiss_preference'||input.action==='cancel_task'){
+  const changed=(await context.db.query<{id:string;version:number;status:string}>(`UPDATE crm_ask_actions SET status=$5,version=version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3 AND version=$4 AND kind=$6 AND status=$7 RETURNING id,version,status`,[context.scope.workspaceId,actor.userId,input.actionId,input.expectedVersion,input.action==='cancel_task'?'cancelled':'dismissed',input.action==='cancel_task'?'task':'preference',input.action==='cancel_task'?'open':'proposed'])).rows[0];
   return changed===undefined?{ok:false as const,reason:'source_unavailable'}:{ok:true as const,value:askActionChangedSchema.parse({actionId:changed.id,version:changed.version,status:changed.status,completedAt:null})};
  }
- if(input.action!=='complete_task')return {ok:false as const,reason:'invalid_input'};
  const row=(await context.db.query<ActionProof>(`SELECT id,version,kind,status,private_state,target_firm_id,target_person_id,input_scope,initial_contexts,original_access_closure,support_refs,review_required,created_at,updated_at,completed_at FROM crm_ask_actions WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3`,[context.scope.workspaceId,actor.userId,input.actionId])).rows[0];
  if(row===undefined||row.version!==input.expectedVersion||row.kind!=='task'||row.status!=='open')return {ok:false as const,reason:'source_unavailable'};
  if((await currentActionSupport(context,row)).state!=='current'||row.review_required)return {ok:false as const,reason:'source_unavailable'};

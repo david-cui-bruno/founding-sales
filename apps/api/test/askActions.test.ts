@@ -50,5 +50,13 @@ it('explicitly commits a human note from current keyword evidence without enabli
   const dismissal=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:proposalId,expectedVersion:1,action:'dismiss_preference'});
   expect(dismissal.status).toBe(200);
   expect(dismissal.body).toMatchObject({result:{actionId:proposalId,version:2,status:'dismissed',completedAt:null}});
+  const undated=await post('/ask/actions/create',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Optional repair follow-up',due:null,target:{kind:'person',personId}}});
+  expect(undated.status).toBe(200);
+  const undatedId=(undated.body as {result:{actionId:string}}).result.actionId;
+  const datedOnly=await post('/ask/actions/read',{scope:{kind:'today'}});
+  expect(datedOnly.body).toEqual({items:[],nextAfterId:null});
+  const cancelled=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:undatedId,expectedVersion:1,action:'cancel_task'});
+  expect(cancelled.status).toBe(200);
+  expect(cancelled.body).toMatchObject({result:{actionId:undatedId,version:2,status:'cancelled',completedAt:null}});
  }finally{await fixture.stop();}
 });
