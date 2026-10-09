@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {askActionAcknowledgmentSchema,askActionPageSchema,askExplicitCorpusScopeSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,crmSourceLookupSchema,type AskActionCreate,type AskActionRead,type CanonicalSourceReference} from '@fss/contracts';
+import {askActionChangedSchema,askActionAcknowledgmentSchema,askActionPageSchema,askExplicitCorpusScopeSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,crmSourceLookupSchema,type AskActionChange,type AskActionCreate,type AskActionRead,type CanonicalSourceReference} from '@fss/contracts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from './identityAccess.ts';
@@ -74,4 +74,17 @@ export async function readAskActions(context:RepositoryContext&{db:SessionQuerya
  }
  if(!await activeIdentityActor(context))return null;
  return askActionPageSchema.parse({items,nextAfterId:rows.length>input.limit?rows[input.limit-1]!.id:null});
+}
+
+/** Completing a human task requires current evidence and an exact version. */
+export async function changeAskAction(context:RepositoryContext,input:AskActionChange){
+ const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return {ok:false as const,reason:'source_unavailable'};
+ await lockAskLifecycle(context);
+ if(input.action!=='complete_task')return {ok:false as const,reason:'invalid_input'};
+ const row=(await context.db.query<ActionProof>(`SELECT id,version,kind,status,private_state,target_firm_id,target_person_id,input_scope,initial_contexts,original_access_closure,support_refs,review_required,created_at,updated_at,completed_at FROM crm_ask_actions WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3`,[context.scope.workspaceId,actor.userId,input.actionId])).rows[0];
+ if(row===undefined||row.version!==input.expectedVersion||row.kind!=='task'||row.status!=='open')return {ok:false as const,reason:'source_unavailable'};
+ if((await currentActionSupport(context,row)).state!=='current'||row.review_required)return {ok:false as const,reason:'source_unavailable'};
+ const changed=(await context.db.query<{id:string;version:number;status:string;completed_at:Date}>(`UPDATE crm_ask_actions SET status='done',version=version+1,completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3 AND version=$4 AND status='open' AND private_state='available' RETURNING id,version,status,completed_at`,[context.scope.workspaceId,actor.userId,input.actionId,input.expectedVersion])).rows[0];
+ if(changed===undefined)return {ok:false as const,reason:'source_unavailable'};
+ return {ok:true as const,value:askActionChangedSchema.parse({actionId:changed.id,version:changed.version,status:changed.status,completedAt:changed.completed_at.toISOString()})};
 }

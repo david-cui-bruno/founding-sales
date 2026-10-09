@@ -44,5 +44,8 @@ it('explicitly commits a human note from current keyword evidence without enabli
   const history=await post('/ask/actions/read',{scope:{kind:'history'}});
   expect(history.status).toBe(200);
   expect(history.body).toMatchObject({items:expect.arrayContaining([{actionId:proposalId,version:1,kind:'preference',status:'proposed',provenance:'human',text:'Consider prioritizing repair routing examples.',label:null,due:null,target:null,supportState:'current',reviewRequired:false,createdAt:expect.any(String),updatedAt:expect.any(String),completedAt:null,sources:expect.any(Array)}])});
+  const completion=await post('/ask/actions/change',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,actionId:taskId,expectedVersion:1,action:'complete_task'});
+  expect(completion.status).toBe(200);
+  expect(completion.body).toMatchObject({result:{actionId:taskId,version:2,status:'done',completedAt:expect.any(String)}});
  }finally{await fixture.stop();}
 });
