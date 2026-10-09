@@ -76,7 +76,8 @@ BEGIN
  OR (OLD.private_state<>'available' AND NEW.private_state='available')
  OR (OLD.status IN ('done','cancelled','dismissed') AND NEW.status<>OLD.status)
  OR (OLD.completed_at IS NOT NULL AND NEW.completed_at IS DISTINCT FROM OLD.completed_at)
- OR NEW.version<OLD.version OR NEW.version>OLD.version+1 THEN
+ OR NEW.version<OLD.version OR NEW.version>OLD.version+1
+ OR (ROW(NEW.status,NEW.completed_at,NEW.private_state,NEW.review_required) IS DISTINCT FROM ROW(OLD.status,OLD.completed_at,OLD.private_state,OLD.review_required) AND NEW.version<>OLD.version+1) THEN
   RAISE EXCEPTION 'Human action identity and copied support are immutable' USING ERRCODE='23514',CONSTRAINT=TG_NAME;
  END IF;
  RETURN NEW;
