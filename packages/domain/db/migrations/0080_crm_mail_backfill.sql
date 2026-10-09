@@ -1,3 +1,4 @@
+-- changes: jobs
 -- #484 final schema80: integrated after evidence decisions schema79.
 -- No source text, participant address, token or provider credentials.
 CREATE TABLE crm_mail_imports (
