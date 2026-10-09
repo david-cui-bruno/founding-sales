@@ -95,12 +95,14 @@ function useColumnScroll(key: string | null, ready: boolean, offsets: Record<str
 
 export function FirmsRoute({
   route,
+  workspaceId,
   enterAtRoot = false,
   identity,
   generation,
   guard,
 }: {
   readonly route: Route;
+  readonly workspaceId?:string | undefined;
   /** Explicit navigation opens the requested list, even if a capture screen was left open. */
   readonly enterAtRoot?: boolean;
   readonly identity: string | null;
@@ -352,7 +354,7 @@ export function FirmsRoute({
               guard={guard}
               enabled={view.actionsEnabled}
             />
-          <EmailTimeline key={`email:${identity}:${generation}:${firm.read.firm.id}`} enabled={view.actionsEnabled} ports={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} firmId={firm.read.firm.id} firms={state.pipeline ? firmsOf(state.pipeline).map(value => ({id:value.id,name:value.name})) : [{id:firm.read.firm.id,name:firm.read.firm.name}]} />
+          <EmailTimeline processing={processingPorts} workspaceId={workspaceId} key={`email:${identity}:${generation}:${firm.read.firm.id}`} enabled={view.actionsEnabled} ports={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} firmId={firm.read.firm.id} firms={state.pipeline ? firmsOf(state.pipeline).map(value => ({id:value.id,name:value.name})) : [{id:firm.read.firm.id,name:firm.read.firm.name}]} />
           </>
         }
       />
@@ -564,7 +566,7 @@ export function FirmsRoute({
       ) : state.screen === 'pipeline' && state.pipeline !== null ? (
         <>
           {onFirmsList ? <div className="mb-5 flex gap-2" aria-label="Firms views"><Button size="sm" variant={firmsTab === 'firms' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'firms'} onClick={() => setFirmsTab('firms')}>All firms</Button><Button size="sm" variant={firmsTab === 'people' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'people'} onClick={() => setFirmsTab('people')}>People</Button><Button size="sm" variant={firmsTab === 'business' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'business'} onClick={() => setFirmsTab('business')}>Conversation review</Button>{state.role === 'admin' ? <Button size="sm" variant={firmsTab === 'candidates' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'candidates'} onClick={() => setFirmsTab('candidates')}>Candidates</Button> : null}</div> : null}
-          {onFirmsList && firmsTab === 'business' ? <BusinessReview key={`business:${identity}:${generation}`} enabled={view.actionsEnabled} ports={businessReviewPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} mailFirms={firmsOf(state.pipeline).map(firm => ({id:firm.id,name:firm.name}))}/> : onFirmsList && firmsTab === 'people' ? <><People processing={processingPorts} key={`${identity}:${generation}`} enabled={view.actionsEnabled} ports={peoplePorts} relationships={relationshipPorts} relationshipEditing={relationshipEditingPorts} contexts={sourceContextPorts} endpoints={endpointPorts} endpointEditing={endpointEditingPorts} imports={selectedImportPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} mailFirms={firmsOf(state.pipeline).map(firm => ({id:firm.id,name:firm.name}))}/><FirmAddresses processing={processingPorts} key={`firm-addresses:${identity}:${generation}`} enabled={view.actionsEnabled} ports={firmAddressPorts} endpoints={endpointPorts} editing={endpointEditingPorts} imports={selectedImportPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged}/></> : onFirmsList && state.role === 'admin' && firmsTab === 'candidates' ? <Candidates enabled={view.actionsEnabled} /> : <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />}
+          {onFirmsList && firmsTab === 'business' ? <BusinessReview processing={processingPorts} workspaceId={workspaceId} key={`business:${identity}:${generation}`} enabled={view.actionsEnabled} ports={businessReviewPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} mailFirms={firmsOf(state.pipeline).map(firm => ({id:firm.id,name:firm.name}))}/> : onFirmsList && firmsTab === 'people' ? <><People workspaceId={workspaceId} processing={processingPorts} key={`${identity}:${generation}`} enabled={view.actionsEnabled} ports={peoplePorts} relationships={relationshipPorts} relationshipEditing={relationshipEditingPorts} contexts={sourceContextPorts} endpoints={endpointPorts} endpointEditing={endpointEditingPorts} imports={selectedImportPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} mailFirms={firmsOf(state.pipeline).map(firm => ({id:firm.id,name:firm.name}))}/><FirmAddresses workspaceId={workspaceId} processing={processingPorts} key={`firm-addresses:${identity}:${generation}`} enabled={view.actionsEnabled} ports={firmAddressPorts} endpoints={endpointPorts} editing={endpointEditingPorts} imports={selectedImportPorts} mail={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged}/></> : onFirmsList && state.role === 'admin' && firmsTab === 'candidates' ? <Candidates enabled={view.actionsEnabled} /> : <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />}
         </>
       ) : (
         // A screen with nothing in it is a state the main process should not produce, and

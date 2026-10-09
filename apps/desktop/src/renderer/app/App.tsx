@@ -210,6 +210,7 @@ function Column({
           <SequencesRoute key={key} identity={session.identity} generation={session.generation} guard={session.guard} />
         ) : (
           <FirmsRoute
+            workspaceId={desktop.device?.workspaceId}
             key={key}
             route={route}
             enterAtRoot={epoch > 0}

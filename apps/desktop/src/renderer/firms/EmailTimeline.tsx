@@ -1,3 +1,4 @@
+import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import type {
   MailConversation,
@@ -89,6 +90,8 @@ function textSegments(source: NonNullable<MailConversation["source"]>) {
 }
 export function EmailTimeline({
   enabled,
+  processing,
+  workspaceId,
   ports,
   privacyKey,
   sourceVersion = 0,
@@ -100,6 +103,8 @@ export function EmailTimeline({
   firms = [],
 }: {
   enabled: boolean;
+  processing?:ProcessingPorts | undefined;
+  workspaceId?:string | undefined;
   ports: EmailTimelinePorts;
   privacyKey: string;
   sourceVersion?: number | undefined;
@@ -112,6 +117,7 @@ export function EmailTimeline({
 }): JSX.Element | null {
   const scope = JSON.stringify([
     privacyKey,
+    workspaceId,
     mailboxId,
     personId,
     firmId,
@@ -470,6 +476,7 @@ export function EmailTimeline({
       <ul>
         {page?.sources.map((row, index) => (
           <li key={row.sourceId}>
+            {processing&&workspaceId?<ProcessingHealth key={`${scope}:${row.sourceId}:${row.sourceRevision}:${row.contentHash}:${row.availability}`} ports={processing} source={{workspaceId,sourceId:row.sourceId,kind:'mail',revision:row.sourceRevision,contentHash:row.contentHash,locator:null,availability:row.availability}}/>:null}
             {row.availability === "available" ? (
               <>
                 <Button

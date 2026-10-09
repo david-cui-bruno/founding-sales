@@ -6,7 +6,7 @@ export interface ProcessingPorts {
  request(source:Pick<CanonicalSourceReference,'workspaceId'|'sourceId'|'kind'|'revision'|'contentHash'|'locator'>):Promise<void>;
 }
 /** Health survives source deletion; it contains no copied excerpts or model input. */
-export function ProcessingHealth({source,ports}:{source:CanonicalSourceReference;ports:ProcessingPorts}):JSX.Element{
+export function ProcessingHealth({source,ports}:{source:Pick<CanonicalSourceReference,'workspaceId'|'sourceId'|'kind'|'revision'|'contentHash'|'locator'|'availability'>;ports:ProcessingPorts}):JSX.Element{
  const [health,setHealth]=useState<CrmProcessingHealth|null>(null);
  const [error,setError]=useState('');
  const [busy,setBusy]=useState(false);
@@ -17,7 +17,7 @@ export function ProcessingHealth({source,ports}:{source:CanonicalSourceReference
   let current=true;epoch.current++;setHealth(null);setError('');setBusy(false);
   void ports.health({sourceId:source.sourceId,kind:source.kind}).then(result=>{if(current)setHealth(result);}).catch(()=>{if(current)setError('Processing status could not be loaded.');});
   return()=>{current=false;invalidate();};
- },[ports,source.sourceId,source.kind,source.revision,source.availability,refresh,invalidate]);
+ },[ports,source.sourceId,source.kind,source.revision,source.contentHash,source.workspaceId,source.availability,refresh,invalidate]);
  const unknown=health?.unknownAcceptance===true||(health?.generations.some(g=>g.financial?.dispatchState==='calling'||g.financial?.dispatchState==='unknown_acceptance')??false);
  return <section aria-label="Evidence processing">
   <p>Evidence processing</p>

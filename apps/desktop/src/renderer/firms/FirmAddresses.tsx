@@ -46,12 +46,14 @@ export function FirmAddresses({
   editing,
   imports,
   processing,
+  workspaceId,
   mail,
   privacyKey = 'firm-addresses',
   sourceVersion,
   onSourceChange,
 }: {
   enabled: boolean;
+  workspaceId?:string | undefined;
   processing?:ProcessingPorts;
   ports: FirmAddressPorts;
   endpoints: EndpointPorts;
@@ -148,7 +150,7 @@ export function FirmAddresses({
       </label>
       {firmId && page ? (
         <>
-          {mail ? <EmailTimeline key={`email:${firmId}`} enabled={enabled} ports={mail} firmId={firmId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} firms={firms.map(firm => ({id:firm.firmId,name:firm.name}))} /> : null}
+          {mail ? <EmailTimeline processing={processing} workspaceId={workspaceId} key={`email:${firmId}`} enabled={enabled} ports={mail} firmId={firmId} privacyKey={privacyKey} sourceVersion={sourceVersion} onSourceChange={onSourceChange} firms={firms.map(firm => ({id:firm.firmId,name:firm.name}))} /> : null}
           <label>
             Firm note reference
             <input
