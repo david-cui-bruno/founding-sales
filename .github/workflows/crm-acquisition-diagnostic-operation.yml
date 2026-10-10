@@ -1,0 +1,74 @@
+name: CRM acquisition diagnostic reviewed operation
+on:
+  workflow_dispatch:
+    inputs:
+      origin_run_id:
+        description: Active owned lifecycle run ID
+        type: string
+        required: true
+      origin_attempt:
+        description: Active owned lifecycle attempt
+        type: string
+        required: true
+      lease_sha256:
+        description: Exact reviewed originating lease hash
+        type: string
+        required: true
+      action_sha256:
+        description: Exact independently reviewed private action document hash
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: diagnostic-operation-${{ inputs.origin_run_id }}-${{ inputs.origin_attempt }}
+  cancel-in-progress: false
+jobs:
+  operation:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: rehearsal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+      - name: Install pinned existing contract dependencies
+        run: npm ci --ignore-scripts --omit=dev --no-audit --no-fund --workspace @fss/worker --workspace @fss/domain --workspace @fss/contracts
+      - name: Assume existing protected rehearsal role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: diagnostic-operation-${{ github.run_id }}
+      - name: Execute only the reviewed closed action
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGIN_RUN_ID: ${{ inputs.origin_run_id }}
+          ORIGIN_ATTEMPT: ${{ inputs.origin_attempt }}
+          LEASE_SHA256: ${{ inputs.lease_sha256 }}
+          ACTION_SHA256: ${{ inputs.action_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node --experimental-transform-types --disable-warning=ExperimentalWarning infra/scripts/diagnostic-operation.mjs execute \
+            "$ORIGIN_RUN_ID" "$ORIGIN_ATTEMPT" "$LEASE_SHA256" "$ACTION_SHA256" "$RUNNER_TEMP/diagnostic-operation"
+      - name: Erase private working files
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/diagnostic-operation"
+          rm -f -- infra/roots/rehearsal/run.auto.tfvars.json

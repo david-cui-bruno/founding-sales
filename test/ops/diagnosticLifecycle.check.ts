@@ -225,7 +225,29 @@ function applicationFixture(options: {archive?:string;legacy?:boolean} = {}) {
   );
   writeFileSync(join(directory, "outputs.json"), JSON.stringify(outputs));
   const programs = {
-    bash: `#!/usr/bin/env python3\nimport os,sys,json\na=sys.argv[1:];open(os.environ['CALLS'],'a').write(json.dumps({'program':'bash','args':a})+'\\n')\nif os.environ.get('FAIL_CLEANUP')=='1':print('PRIVATE_PROVIDER_ERROR');sys.exit(1)\n`,
+    bash: `#!/usr/bin/env python3
+import os,sys,json
+a=sys.argv[1:];open(os.environ['CALLS'],'a').write(json.dumps({'program':'bash','args':a})+'\\n')
+if os.environ.get('FAIL_CLEANUP')=='1':print('PRIVATE_PROVIDER_ERROR');sys.exit(1)
+if a[0].endswith('/record.sh'):
+ if a[1]=='from-ci':os.execv('/bin/bash',['bash']+a)
+ if os.environ.get('FAIL_RECORD_STAGE')==a[1]:print('PRIVATE_RECORD_ERROR');sys.exit(1)
+ print(json.dumps({'outcome':'created' if a[1]=='put' else 'existing'}))
+`,
+    gh: `#!/usr/bin/env python3
+import os,sys,json
+a=sys.argv[1:];open(os.environ['CALLS'],'a').write(json.dumps({'program':'gh','args':a})+'\\n')
+repo='david-cui-bruno/founding-sales';commit='b'*40
+if a[0]=='api':
+ path=a[1];images='greenfield-images' in path or path.endswith('/202');id=202 if images else 201
+ r={'id':id,'path':'.github/workflows/'+('greenfield-images.yml' if images else 'greenfield.yml'),'head_sha':commit,'event':'push','head_branch':'main','head_repository':{'full_name':repo},'status':'completed','conclusion':'failure' if os.environ.get('FAIL_RECORD_PROVENANCE')=='1' else 'success','created_at':'2026-10-10T00:00:00Z','updated_at':'2026-10-10T00:01:00Z','run_started_at':'2026-10-10T00:00:00Z','html_url':'https://github.com/'+repo+'/actions/runs/'+str(id)}
+ print(json.dumps({'workflow_runs':[r]} if '/workflows/' in path else r))
+elif a[:2]==['run','download']:
+ destination=a[a.index('--dir')+1]
+ value={'schema':'fss.image-digests.v1','commit':commit,'workflowRunId':'202','images':{k:{'repository':'fss-rh-'+k,'tag':'ci-'+commit,'digest':'sha256:'+n*64} for k,n in [('api','1'),('worker','2')]}}
+ open(destination+'/image-digests.json','w').write(json.dumps(value))
+else:sys.exit(1)
+`,
     aws: `#!/usr/bin/env python3
 import os,sys,json,shutil,hashlib
 a=sys.argv[1:];open(os.environ['CALLS'],'a').write(json.dumps({'program':'aws','args':a})+'\\n')
@@ -833,18 +855,23 @@ it("prepares only the applied owned stack with private clients, then migrates an
       activationAllowed: false,
       consentRequired: true,
       dnsVerified: false,
+      releaseRecordReference: `ci-gate-201-${fixture.lease.imageBuildCommit.slice(0,12)}`,
+      releaseRecordSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      gateRunId: "201",
+      imagesRunId: "202",
     });
     const calls = readFileSync(fixture.calls, "utf8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
     const scripts = calls.filter((call) => call.program === "bash");
-    expect(scripts[0].args.slice(1, 3)).toEqual([
+    const deployments=scripts.filter(call=>call.args[0].endsWith("/deploy.sh"));
+    expect(deployments[0].args.slice(1, 3)).toEqual([
       "release",
       expect.stringContaining("infra/roots/rehearsal"),
     ]);
-    expect(scripts[1].args).toContain("bootstrap");
-    expect(scripts[1].args).toContain(fixture.lease.bootstrapAdminEmail);
+    expect(deployments[1].args).toContain("bootstrap");
+    expect(deployments[1].args).toContain(fixture.lease.bootstrapAdminEmail);
     expect(scripts.flatMap((call) => call.args)).not.toContain(
       "--sending-domain",
     );
@@ -862,6 +889,45 @@ it("prepares only the applied owned stack with private clients, then migrates an
   } finally {
     rmSync(fixture.directory, { recursive: true, force: true });
   }
+});
+
+it("requires a CI-bound non-sending release record and durable readback before preparing the fresh database", () => {
+  const fixture = applicationFixture();
+  try {
+    expect(fixture.invoke("apply").status).toBe(0);
+    const prepared=fixture.invoke("prepare");
+    expect(prepared.status).toBe(0);
+    expect(JSON.parse(prepared.stdout)).toMatchObject({releaseRecordReference:`ci-gate-201-${fixture.lease.imageBuildCommit.slice(0,12)}`,gateRunId:"201",imagesRunId:"202",releaseRecordSha256:expect.stringMatching(/^[a-f0-9]{64}$/u)});
+    const receipt = JSON.parse(readFileSync(join(fixture.directory,"private/prepared-receipt.json"),"utf8"));
+    expect(receipt.releaseRecord).toMatchObject({gateRunId:"201",imagesRunId:"202",enablesSending:false,readBackVerified:true});
+    const record = JSON.parse(readFileSync(join(fixture.directory,"private/preparation/release-record.private.json"),"utf8"));
+    expect(record).toMatchObject({source:"ci-gate",commit:fixture.lease.imageBuildCommit,enablesSending:false,artifacts:{api:fixture.lease.images.api,worker:fixture.lease.images.worker,desktopCommitStamp:fixture.lease.imageBuildCommit}});
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it.each(["provenance","put","read-back"])("refuses preparation when authentic release record %s cannot be verified", stage => {
+ const fixture=applicationFixture();
+ try {
+  expect(fixture.invoke("apply").status).toBe(0);
+  if(stage==='provenance')fixture.env['FAIL_RECORD_PROVENANCE']='1';
+  else fixture.env['FAIL_RECORD_STAGE']=stage;
+  const result=fixture.invoke("prepare");
+  expect(result.status).toBe(1);
+  expect(existsSync(join(fixture.directory,'private/prepared-receipt.json'))).toBe(false);
+  expect(result.stdout+result.stderr).not.toContain('PRIVATE_RECORD_ERROR');
+ }finally{rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("refuses hold if the prepared authentic release record has changed", () => {
+ const fixture=applicationFixture();
+ try {
+  expect(fixture.invoke('apply').status).toBe(0);
+  expect(fixture.invoke('prepare').status).toBe(0);
+  writeFileSync(join(fixture.directory,'private/preparation/release-record.private.json'), '{}');
+  const result=fixture.invoke('hold');
+  expect(result.status).toBe(1);
+  expect(JSON.parse(result.stdout).reason).toBe('operation_refused_or_uncertain');
+ }finally{rmSync(fixture.directory,{recursive:true,force:true});}
 });
 
 it("holds without provider operations and reports interrupted cleanup as unknown with a named fallback", async () => {
