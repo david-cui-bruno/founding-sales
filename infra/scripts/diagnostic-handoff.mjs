@@ -140,7 +140,6 @@ export function parseLease(value) {
   for (const name of [value.owner, value.fallbackOwner])
     text(name, /^[A-Za-z][A-Za-z .'-]{1,79}$/u);
   if (
-    value.owner === value.fallbackOwner ||
     typeof value.proposedMaxUsd !== 'number' ||
     value.proposedMaxUsd <= 0 ||
     value.proposedMaxUsd > 5
