@@ -423,6 +423,17 @@ function verifyPreparedReleaseRecord(directory, receipt, lease) {
   if(current.commit!==lease.imageBuildCommit || current.enablesSending!==false || current.artifacts?.api!==lease.images.api || current.artifacts?.worker!==lease.images.worker || current.releaseGateReference!==record.reference)
     throw new Error("release_record_binding_changed");
 }
+function readBootstrapBindings(directory, lease) {
+  const path=resolve(directory,"reports","bootstrap-workspace.json"), stat=lstatSync(path);
+  if(!stat.isFile() || stat.isSymbolicLink() || stat.size>16384) throw new Error("bootstrap_bindings_unavailable");
+  const raw=readFileSync(path), report=JSON.parse(raw);
+  const keys=(value,names)=>value!==null && typeof value==='object' && !Array.isArray(value) && Object.keys(value).sort().join()===names.sort().join();
+  const uuid=value=>typeof value==='string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value);
+  if(!keys(report,['workspace','admin','membership','sendingDomain']) || !keys(report.workspace,['id','slug','displayName','businessTimeZone','outcome']) || !keys(report.admin,['userId','email','outcome']) || !keys(report.membership,['role','outcome']) ||
+    !uuid(report.workspace.id) || !uuid(report.admin.userId) || report.workspace.slug!==`diagnostic-${lease.prefix.slice(7)}` || report.workspace.displayName!==`Acquisition diagnostic ${lease.prefix}` || typeof report.workspace.businessTimeZone!=='string' || !['created','existing'].includes(report.workspace.outcome) || report.admin.email!==lease.bootstrapAdminEmail.toLowerCase() || !['provisional_created','provisional_existing','adopted_user'].includes(report.admin.outcome) || report.membership.role!=='admin' || !['created','existing','reactivated'].includes(report.membership.outcome) || report.sendingDomain!==null)
+    throw new Error("bootstrap_bindings_unavailable");
+  return {workspaceId:report.workspace.id,ownerUserId:report.admin.userId,bootstrapReportSha256:sha(raw)};
+}
 function prepare(leasePath, expectedHash, directory, lease, inputs) {
   assertApplied(directory, expectedHash, lease);
   uncertainStage = "preparation";
@@ -644,6 +655,7 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     undefined,
     environment,
   );
+  const bootstrapBindings=readBootstrapBindings(directory,lease);
   // A fresh isolated database has no release table before migration. Store the authentic
   // CI record after its first migration/rollout, then require normal existing readback.
   for (const stage of ["put", "read-back"]) {
@@ -658,6 +670,7 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
       sourceCommit: lease.sourceCommit,
       imageBuildCommit: lease.imageBuildCommit,
       releaseRecord: {...releaseRecord,readBackVerified:true},
+      bootstrapBindings,
       runId: process.env.GITHUB_RUN_ID,
       attempt: process.env.GITHUB_RUN_ATTEMPT,
     }),
@@ -669,6 +682,8 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     activationAllowed: false,
     consentRequired: true,
     dnsVerified: false,
+    workspaceId: bootstrapBindings.workspaceId,
+    ownerUserId: bootstrapBindings.ownerUserId,
     releaseRecordReference: releaseRecord.reference,
     releaseRecordSha256: releaseRecord.sha256,
     gateRunId: releaseRecord.gateRunId,
@@ -694,6 +709,7 @@ async function hold(directory, expectedHash, lease) {
   )
     throw new Error("lifecycle_run_changed");
   verifyPreparedReleaseRecord(directory, receipt, lease);
+  if(JSON.stringify(readBootstrapBindings(directory,lease))!==JSON.stringify(receipt.bootstrapBindings)) throw new Error("bootstrap_bindings_unavailable");
   await new Promise((resolveWait) => {
     let timer;
     const interrupted = () => {
