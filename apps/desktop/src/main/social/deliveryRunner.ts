@@ -31,14 +31,19 @@ export function createSocialDeliveryRunner(deps:Deps){
    if(item.submissionId!==null||item.receiptId!==null)return;
    try{await withQueuedSocialPost(item,{api:deps.api,root:deps.root,current,adapterVersion:registration.version,...(deps.send?{send:deps.send}:{})},async post=>{
     if(!current())return;
-    await registration.open(scope,async(adapter,browserCurrent)=>{
+    let deliveryEntered=false;
+    const opened=await registration.open(scope,async(adapter,browserCurrent)=>{
+     deliveryEntered=true;
      const active=()=>current()&&browserCurrent();if(!active())return;
      const result=await submitApprovedSocialPost(post,adapter,createSocialDeliveryPorts({api:deps.api,current:active,now:deps.now}));
      if(result.state==='not_submitted'&&active()){
-      const reason=['schedule_missed','account_identity_changed','staging_failed','claim_expired'].includes(result.reason)?result.reason:'preparation_unavailable';
+      const reason=result.reason==='staging_unavailable'?'staging_failed':['schedule_missed','account_identity_changed','staging_failed','claim_expired'].includes(result.reason)?result.reason:'preparation_unavailable';
       await hold(reason);
      }
     },{snapshot:structuredClone(item.snapshot),fingerprint:item.fingerprint,displayName:post.account.displayName});
+    // Runtime failures are returned, not thrown. A busy/changed session is not
+    // permission to fail another operation; once delivery starts it owns marker recovery.
+    if(!deliveryEntered&&opened!==null&&typeof opened==='object'&&'ok' in opened&&opened.ok===false&&'reason' in opened&&opened.reason==='browser_unavailable')await hold('preparation_unavailable');
    });}catch(error){
     const reason=error instanceof Error&&['account_not_verified','approved_image_changed'].includes(error.message)?error.message:'preparation_unavailable';
     await hold(reason);
