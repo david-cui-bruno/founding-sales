@@ -199,7 +199,7 @@ function applicationFixture(options: {archive?:string;legacy?:boolean} = {}) {
         "arn:aws:secretsmanager:us-east-1:326255650484:secret:rds!db-controlled",
       migration_database_secret_arn: `arn:aws:secretsmanager:us-east-1:326255650484:secret:${lease.prefix}/migration-database-controlled`,
       app_runtime_database_secret_arn: `arn:aws:secretsmanager:us-east-1:326255650484:secret:${lease.prefix}/app-runtime-database-controlled`,
-      secret_names: [
+      secret_names: Object.fromEntries([
         "migration-database",
         "app-runtime-database",
         "google-oidc-client",
@@ -212,7 +212,7 @@ function applicationFixture(options: {archive?:string;legacy?:boolean} = {}) {
         "calcom",
         "transcription",
         "zoom-meetings",
-      ],
+      ].map(name=>[name,`${lease.prefix}/${name}`])),
       crm_acquisition_diagnostic: {
         environment_id: lease.environmentId,
         database_name: lease.databaseName,
@@ -794,6 +794,31 @@ it("refuses unregistered cleanup and reuses exact registered configuration for t
     rmSync(fixture.directory, { recursive: true, force: true });
   }
 });
+
+it.each(["array", "wrong-prefix", "swapped", "missing", "extra"])(
+  "refuses an invalid secret-name map before credential writes or migration: %s", variant => {
+    const fixture = applicationFixture();
+    try {
+      expect(fixture.invoke("apply").status).toBe(0);
+      const outputPath = fixture.env["OUTPUTS"];
+      if (outputPath === undefined) throw new Error("Terraform adapter output path is missing");
+      const outputs = JSON.parse(readFileSync(outputPath,"utf8"));
+      const names = outputs.secret_names.value;
+      if (variant === "array") outputs.secret_names.value = Object.keys(names);
+      if (variant === "wrong-prefix") names["google-gmail-oauth-client"] = "fss-rh-other/google-gmail-oauth-client";
+      if (variant === "swapped") names["google-gmail-oauth-client"] = names["google-oidc-client"];
+      if (variant === "missing") delete names["calcom"];
+      if (variant === "extra") names["unreviewed"] = `${fixture.lease.prefix}/unreviewed`;
+      writeFileSync(outputPath, JSON.stringify(outputs));
+      const result = fixture.invoke("prepare");
+      expect(result.status).toBe(1);
+      const calls = readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+      expect(calls.some(call => call.program === "aws" && call.args[0] === "secretsmanager" && ["get-secret-value","put-secret-value"].includes(call.args[1]))).toBe(false);
+      expect(calls.some(call => call.program === "bash")).toBe(false);
+      expect(result.stdout+result.stderr).not.toMatch(/CONTROLLED_PRIVATE|CONTROLLED_MASTER|fss-rh-other/);
+    } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+  },
+);
 
 it("prepares only the applied owned stack with private clients, then migrates and bootstraps without sending authority", () => {
   const fixture = applicationFixture();
