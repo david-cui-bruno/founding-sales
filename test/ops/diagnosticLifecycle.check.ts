@@ -252,7 +252,7 @@ else:print(os.environ['GITHUB_SHA'])
 import os,sys,json
 a=sys.argv[1:];open(os.environ['CALLS'],'a').write(json.dumps({'program':'terraform','args':a})+'\\n')
 if a[0]=='version':print(json.dumps({'terraform_version':'1.15.8'}))
-elif a[:2]==['state','list']:print('No state file was found!',file=sys.stderr);sys.exit(1)\nelif a[:2]==['show','-json'] and len(a)==3:print(json.dumps({'format_version':'1.2','resource_changes':[{'mode':'managed','type':'aws_lambda_function','address':'module.stack.module.alerts.aws_lambda_function.digest','change':{'after':{'filename':os.environ.get('ARCHIVE_FILENAME','./.terraform/alarm-digest/fss-rh-cap90-o10a.zip'),'source_code_hash':os.environ['ARCHIVE_HASH']}}}]}))\nelif a[:2]==['show','-json']:\n if os.environ.get('FAIL_STATE_READ')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n count=os.environ['STORE']+'/state-read-count';n=int(open(count).read())+1 if os.path.exists(count) else 1;open(count,'w').write(str(n))\n print(os.environ.get('STATE_AFTER_REGISTRATION') if n>1 and os.environ.get('STATE_AFTER_REGISTRATION') else os.environ.get('STATE_JSON',json.dumps({'format_version':'1.0'})))\nelif a[0]=='output':print(open(os.environ['OUTPUTS']).read())
+elif a[:2]==['state','list']:print('No state file was found!',file=sys.stderr);sys.exit(1)\nelif a[:2]==['show','-json'] and len(a)==3:print(json.dumps({'format_version':'1.2','resource_changes':[{'mode':'managed','type':'aws_lambda_function','address':'module.stack.module.alerts.aws_lambda_function.digest','change':{'after':{'filename':os.environ.get('ARCHIVE_FILENAME','./.terraform/alarm-digest/fss-rh-cap90-o10a.zip'),'source_code_hash':os.environ['ARCHIVE_HASH']}}}]+json.loads(os.environ.get('EXTRA_PLAN_CHANGES','[]'))}))\nelif a[:2]==['show','-json']:\n if os.environ.get('FAIL_STATE_READ')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n count=os.environ['STORE']+'/state-read-count';n=int(open(count).read())+1 if os.path.exists(count) else 1;open(count,'w').write(str(n))\n print(os.environ.get('STATE_AFTER_REGISTRATION') if n>1 and os.environ.get('STATE_AFTER_REGISTRATION') else os.environ.get('STATE_JSON',json.dumps({'format_version':'1.0'})))\nelif a[0]=='output':print(open(os.environ['OUTPUTS']).read())
 elif a[0]=='apply':\n if os.environ.get('FAIL_APPLY')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n archive='.terraform/alarm-digest/fss-rh-cap90-o10a.zip'\n if not os.path.isfile(archive):print('PRIVATE_PROVIDER_ARCHIVE_MISSING',file=sys.stderr);sys.exit(1)\n import base64\n if open(archive,'rb').read()!=base64.b64decode(os.environ['ARCHIVE_BASE64']):sys.exit(1)\n open(os.environ['APPLIED_ARCHIVE'],'wb').write(open(archive,'rb').read())\n open(os.environ['APPLIED'],'wb').write(open(a[-1],'rb').read())
 elif a[0]!='init':sys.exit(1)
 `,
@@ -391,6 +391,53 @@ it("refuses a retained archive whose hash differs from the reviewed plan before 
     expect(calls.some(call=>call.program === "aws" && call.args[1] === "put-object")).toBe(false);
     expect(calls.some(call=>call.program === "terraform" && call.args[0] === "apply")).toBe(false);
     expect(result.stdout+result.stderr).not.toContain("PRIVATE_PROVIDER");
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("refuses unsupported saved-plan file dependencies before registering or applying", () => {
+  const fixture = applicationFixture();
+  try {
+    fixture.env["EXTRA_PLAN_CHANGES"] = JSON.stringify([{
+      mode: "managed", type: "aws_s3_object", address: "aws_s3_object.other",
+      change: {after: {source: "PRIVATE_UNSUPPORTED_FILE.zip"}},
+    }]);
+    const result = fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({ok:false,reason:"local_artifact_unsupported"});
+    const calls = readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.some(call=>call.program === "aws" && call.args[1] === "put-object")).toBe(false);
+    expect(calls.some(call=>call.program === "terraform" && call.args[0] === "apply")).toBe(false);
+    expect(result.stdout+result.stderr).not.toContain("PRIVATE_UNSUPPORTED_FILE");
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it.each([
+  {after: {filename: "PRIVATE_UNSUPPORTED_FILE.zip"}},
+  {after: {}, after_unknown: {source: true}},
+])("refuses file dependencies even on a normally file-free managed type", change => {
+  const fixture = applicationFixture();
+  try {
+    fixture.env["EXTRA_PLAN_CHANGES"] = JSON.stringify([{
+      mode: "managed", type: "aws_s3_bucket", address: "aws_s3_bucket.other", change,
+    }]);
+    const result = fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({ok:false,reason:"local_artifact_unsupported"});
+    const calls = readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.some(call=>call.program === "aws" && call.args[1] === "put-object")).toBe(false);
+    expect(calls.some(call=>call.program === "terraform" && call.args[0] === "apply")).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("preserves normal inline source-related attributes in the reviewed type set", () => {
+  const fixture = applicationFixture();
+  try {
+    fixture.env["EXTRA_PLAN_CHANGES"] = JSON.stringify([{
+      mode: "managed", type: "aws_security_group", address: "aws_security_group.other",
+      change: {after: {source_security_group_id: "sg-controlled"}},
+    }]);
+    const result = fixture.invoke("apply");
+    expect(result.status,result.stdout+result.stderr).toBe(0);
   } finally {rmSync(fixture.directory,{recursive:true,force:true});}
 });
 
