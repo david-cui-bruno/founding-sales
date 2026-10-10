@@ -168,7 +168,11 @@ it('rechecks a concurrent stop after recovery is reassessed during provider read
     const otherCtx=other.context(world.alpha.workspace.workspaceId);
     await withTransaction(other.session,async()=>{
       await lockSendGateForStopFact(otherCtx);
-      const standing=await readRampStanding(otherCtx,world.alpha.mailboxId,{now:new Date('2026-10-23T09:00Z')});
+      // Earlier dispatches stamp SQL now(); anchor this gap to their confirmed activity.
+      const activity=(await readRampStanding(otherCtx,world.alpha.mailboxId))?.lastActivityAt;
+      if(!activity)throw new Error('fixture confirmed sending activity unavailable');
+      const standing=await readRampStanding(otherCtx,world.alpha.mailboxId,{now:new Date(Date.parse(activity)+15*86400000)});
+      expect(standing!.inactivityDays).toBeGreaterThanOrEqual(14);
       expect(standing).toMatchObject({effectiveCap:5,recovery:{qualifyingDays:0}});
       expect(await recordSuppression(otherCtx,{scope:'firm',firmId:firm.firmId,source:'prospect_opt_out',channel:'email',journal:world.journal})).toMatchObject({ok:true});
     });
