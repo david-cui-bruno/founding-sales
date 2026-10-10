@@ -1,3 +1,4 @@
+import {crmInputTokenPriceMicrosSchema,crmTokenPriceMicrosSchema} from './crmPricing.ts';
 import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
@@ -19,7 +20,7 @@ export const crmExtractionPurposeSaveSchema = z.object({
   endpointId: z.string().trim().min(1).max(100), modelVersion: z.string().trim().min(1).max(200),
   accessGrantVersion: z.string().trim().min(1).max(200), dataHandlingVersion: z.string().trim().min(1).max(200),
   dailyCeilingCents: z.number().int().min(1).max(100000), monthlyCeilingCents: z.number().int().min(1).max(1000000),
-  inputTokenPriceMicros: z.number().int().min(1).max(1000000), outputTokenPriceMicros: z.number().int().min(1).max(1000000),
+  inputTokenPriceMicros: crmInputTokenPriceMicrosSchema, outputTokenPriceMicros: crmTokenPriceMicrosSchema,
 }).strict();
 
 export const crmProcessingHealthReadSchema = crmSourceLookupSchema.pick({ sourceId: true, kind: true }).strict();
@@ -63,7 +64,7 @@ export const crmResolvedSourceSchema = z.object({
 }).strict();
 export const crmExtractionPurposeSchema = z.union([
  z.object({configured:z.literal(false),enabled:z.literal(false),revision:z.literal(0),modelVersion:z.null(),endpoint:z.null(),dailyCeilingCents:z.literal(0),monthlyCeilingCents:z.literal(0),unavailableReason:z.literal('purpose_not_configured')}).strict(),
- z.object({configured:z.literal(true),enabled:z.boolean(),revision:z.number().int().positive(),modelVersion:z.string().max(200),endpointId:z.string().max(100),accessGrantVersion:z.string().max(200),dataHandlingVersion:z.string().max(200),dailyCeilingCents:z.number().int().positive(),monthlyCeilingCents:z.number().int().positive(),inputTokenPriceMicros:z.number().int().positive(),outputTokenPriceMicros:z.number().int().positive(),unavailableReason:z.string().nullable()}).strict(),
+ z.object({configured:z.literal(true),enabled:z.boolean(),revision:z.number().int().positive(),modelVersion:z.string().max(200),endpointId:z.string().max(100),accessGrantVersion:z.string().max(200),dataHandlingVersion:z.string().max(200),dailyCeilingCents:z.number().int().positive(),monthlyCeilingCents:z.number().int().positive(),inputTokenPriceMicros:crmInputTokenPriceMicrosSchema,outputTokenPriceMicros:crmTokenPriceMicrosSchema,unavailableReason:z.string().nullable()}).strict(),
 ]);
 
 export const crmProcessingRecordReadSchema=z.object({kind:z.enum(['call_session','meeting']),recordId:z.uuid()}).strict();

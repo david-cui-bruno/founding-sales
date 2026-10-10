@@ -1,3 +1,4 @@
+import {crmInputTokenPriceMicrosSchema,crmTokenPriceMicrosSchema,type CrmTokenPriceMicros} from '@fss/contracts';
 import {unavailableMailEvidence,type CrmMailEvidencePort} from './mailEvidence.ts';
 import {readProcessingContext,parsedProcessingContext,sameProcessingContext,processingContextHash,NATIVE_PROCESSING_AUTHORIZATION_HASH,UNAVAILABLE_MAIL_AUTHORIZATION_HASH} from './processingContext.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
@@ -79,13 +80,13 @@ export async function readCrmExtractionPurpose(context: RepositoryContext) {
   return { enabled: row.enabled, configured: true, revision: row.revision, endpointId: row.endpoint_id,
     modelVersion: row.model_version, accessGrantVersion: row.access_grant_version, dataHandlingVersion: row.data_handling_version,
     dailyCeilingCents: row.daily_ceiling_cents, monthlyCeilingCents: row.monthly_ceiling_cents,
-    inputTokenPriceMicros: row.input_token_price_micros, outputTokenPriceMicros: row.output_token_price_micros,
+    inputTokenPriceMicros: crmInputTokenPriceMicrosSchema.parse(row.input_token_price_micros), outputTokenPriceMicros: crmTokenPriceMicrosSchema.parse(row.output_token_price_micros),
     unavailableReason: row.enabled ? null : 'activation_not_available' };
 }
 export async function saveCrmExtractionPurpose(context: RepositoryContext, input: {
   expectedRevision: number; enabled: boolean; endpointId: string; modelVersion: string;
   accessGrantVersion: string; dataHandlingVersion: string; dailyCeilingCents: number;
-  monthlyCeilingCents: number; inputTokenPriceMicros: number; outputTokenPriceMicros: number;
+  monthlyCeilingCents: number; inputTokenPriceMicros: CrmTokenPriceMicros; outputTokenPriceMicros: CrmTokenPriceMicros;
 }) {
   const actor = context.scope.actor;
   const { activeIdentityActor } = await import('./identityAccess.ts');

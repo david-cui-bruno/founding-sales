@@ -1,3 +1,5 @@
+import {crmTokenCostCents} from '@fss/domain/crm/pricing.ts';
+import {crmTokenPriceMicrosSchema} from '@fss/contracts';
 import {enqueueJob} from '@fss/domain/jobs/jobStore.ts';
 import {flagPublishedCrmEvidence} from '@fss/domain/crm/evidenceDecisions.ts';
 import {unavailableMailEvidence,type CrmMailEvidencePort,type MailProcessingAuthority} from '@fss/domain/crm/mailEvidence.ts';
@@ -21,8 +23,8 @@ export interface CrmExtractionAdapter {
  run(input:{source:SourceLookup;text:string;maxOutputTokens:number;signal?:AbortSignal}):Promise<{acceptance:'accepted'|'unknown'|'not_accepted';usage:{inputTokens:number;outputTokens:number}|null;claims:unknown}>;
 }
 export interface CrmExtractOptions {mailEvidence?:CrmMailEvidencePort;adapter?:CrmExtractionAdapter;providerTimeoutMs?:number}
-interface Purpose { [key:string]:unknown;revision:number;enabled:boolean;endpoint_id:string;model_version:string;access_grant_version:string;data_handling_version:string;daily_ceiling_cents:number;monthly_ceiling_cents:number;input_token_price_micros:number;output_token_price_micros:number }
-interface Receipt { [key:string]:unknown;reservation_id:string;dispatch_state:string;job_id:string;fencing_token:string;endpoint_id:string;model_version:string;access_grant_version:string;data_handling_version:string;purpose_revision:number;input_price_micros:number;output_price_micros:number }
+interface Purpose { [key:string]:unknown;revision:number;enabled:boolean;endpoint_id:string;model_version:string;access_grant_version:string;data_handling_version:string;daily_ceiling_cents:number;monthly_ceiling_cents:number;input_token_price_micros:number|string;output_token_price_micros:number|string }
+interface Receipt { [key:string]:unknown;reservation_id:string;dispatch_state:string;job_id:string;fencing_token:string;endpoint_id:string;model_version:string;access_grant_version:string;data_handling_version:string;purpose_revision:number;input_price_micros:number|string;output_price_micros:number|string }
 async function locate(input:JobHandlerInput){
  const id=input.job.payload['generationId'];if(typeof id!=='string')return null;
  const row=(await input.session.query<Generation>('SELECT * FROM crm_extraction_generations WHERE workspace_id=$1 AND id=$2',[input.scope.workspaceId,id])).rows[0];if(row===undefined)return null;
@@ -37,7 +39,7 @@ async function purpose(context:RepositoryContext,row:Generation,adapter:CrmExtra
  const matches=p!==undefined&&p.enabled&&adapter!==undefined&&p.revision===row.purpose_revision&&p.model_version===row.model_version&&p.endpoint_id===adapter.endpointId&&p.model_version===adapter.modelVersion&&p.access_grant_version===adapter.accessGrantVersion&&p.data_handling_version===adapter.dataHandlingVersion&&p.daily_ceiling_cents>0&&p.monthly_ceiling_cents>0&&Date.parse(adapter.fundingVerifiedUntil)>Date.parse(await databaseNow(context));
  return matches?p:null;
 }
-function samePurposeSnapshot(p:Purpose,r:Receipt){return p.revision===r.purpose_revision&&p.endpoint_id===r.endpoint_id&&p.model_version===r.model_version&&p.access_grant_version===r.access_grant_version&&p.data_handling_version===r.data_handling_version&&p.input_token_price_micros===r.input_price_micros&&p.output_token_price_micros===r.output_price_micros;}
+function samePurposeSnapshot(p:Purpose,r:Receipt){return p.revision===r.purpose_revision&&p.endpoint_id===r.endpoint_id&&p.model_version===r.model_version&&p.access_grant_version===r.access_grant_version&&p.data_handling_version===r.data_handling_version&&crmTokenPriceMicrosSchema.parse(p.input_token_price_micros)===crmTokenPriceMicrosSchema.parse(r.input_price_micros)&&crmTokenPriceMicrosSchema.parse(p.output_token_price_micros)===crmTokenPriceMicrosSchema.parse(r.output_price_micros);}
 async function receipt(context:RepositoryContext,id:string){return (await context.db.query<Receipt>('SELECT * FROM crm_extraction_financial_receipts WHERE workspace_id=$1 AND generation_id=$2',[context.scope.workspaceId,id])).rows[0];}
 async function setState(context:RepositoryContext,id:string,state:string,reason:string|null){await context.db.query("UPDATE crm_extraction_generations SET state=$3,reason=$4 WHERE workspace_id=$1 AND id=$2 AND state NOT IN ('deleted','stale')",[context.scope.workspaceId,id,state,reason]);}
 async function centsWithin(context:RepositoryContext,p:Purpose,at:string,zone:string,extra:number,providerKey:string){
@@ -92,9 +94,9 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    if(text===null||text===undefined||Buffer.byteLength(text)>80000){await setState(context,row.id,'unavailable','input_unavailable');return null;}
    const inputTokens=Buffer.byteLength(text)+1024,maxOutputTokens=4096;
    // Prices are microdollars per token; each attempt rounds up to whole cents.
-   const cents=Math.ceil((inputTokens*p.input_token_price_micros+maxOutputTokens*p.output_token_price_micros)/10000);
+   const cents=crmTokenCostCents(inputTokens,maxOutputTokens,p.input_token_price_micros,p.output_token_price_micros);
    const at=await databaseNow(context),zone=await workspaceBusinessZone(context);
-   if(!await centsWithin(context,p,at,zone,cents,options.adapter.providerKey)){await setState(context,row.id,'unavailable','budget_held');return null;}
+   if(cents===null||!await centsWithin(context,p,at,zone,cents,options.adapter.providerKey)){await setState(context,row.id,'unavailable','budget_held');return null;}
    const attempt=await reserveAttempt(context,{providerKey:options.adapter.providerKey,subjectKind:'crm_extraction',subjectId:row.id,attempt:1,at,businessTimeZone:zone,cents,modelName:p.model_version,maxInputTokens:inputTokens,maxOutputTokens});
    await context.db.query(`INSERT INTO crm_extraction_financial_receipts(workspace_id,generation_id,reservation_id,job_id,fencing_token,dispatch_state,endpoint_id,model_version,access_grant_version,data_handling_version,purpose_revision,input_price_micros,output_price_micros) VALUES($1,$2,$3,$4,$5,'reserved',$6,$7,$8,$9,$10,$11,$12)`,[context.scope.workspaceId,row.id,attempt.id,input.job.id,input.job.fencingToken,p.endpoint_id,p.model_version,p.access_grant_version,p.data_handling_version,p.revision,p.input_token_price_micros,p.output_token_price_micros]);
    await setState(context,row.id,'pending',null);return {...located,reservationId:attempt.id};
@@ -139,7 +141,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    if(r?.dispatch_state!=='calling')return;
    const bounds=(await context.db.query<{max_input_tokens:number;max_output_tokens:number}>('SELECT max_input_tokens,max_output_tokens FROM provider_reservations WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,reservationId])).rows[0];
    const validUsage=answer.usage!==null&&Number.isSafeInteger(answer.usage.inputTokens)&&answer.usage.inputTokens>=0&&Number.isSafeInteger(answer.usage.outputTokens)&&answer.usage.outputTokens>=0;
-   const charged=validUsage&&answer.usage!==null?Math.ceil((answer.usage.inputTokens*r.input_price_micros+answer.usage.outputTokens*r.output_price_micros)/10000):null;
+   const charged=validUsage&&answer.usage!==null?crmTokenCostCents(answer.usage.inputTokens,answer.usage.outputTokens,r.input_price_micros,r.output_price_micros):null;
    // Take this purpose's budget lock before the shared monthly money lock.
    if(p!==null)await centsWithin(context,p,await databaseNow(context),await workspaceBusinessZone(context),0,options.adapter?.providerKey??'unavailable');
    const representableCharge=charged!==null&&Number.isSafeInteger(charged)&&charged>=0&&charged<=2147483647?charged:null;
