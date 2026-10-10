@@ -1277,6 +1277,7 @@ if (
       'certificate_mismatch',
       'terraform_version_mismatch',
       'nonempty_state',
+      'invalid_state_read',
       'unsafe_summary',
       'not_creation_plan',
       'empty_plan',

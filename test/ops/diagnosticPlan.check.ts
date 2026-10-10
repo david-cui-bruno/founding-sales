@@ -296,9 +296,16 @@ import sys,json,os,base64,shutil,hashlib
 def objectfile(key):
  return os.environ['OBJECT_STORE'] if '/diagnostic/plans/' in key else os.environ['OBJECT_STORE']+'.'+hashlib.sha256(key.encode()).hexdigest()
 a=sys.argv[1:];open(os.environ['CALLS'],'a').write('terraform '+ ' '.join(a)+'\n')
-if a[0]=='state' and os.environ.get('STATE_UNREADABLE')=='1':
- print('private-provider-sentinel',file=sys.stderr);sys.exit(1)
-elif a[0]=='state':print(os.environ.get('EXISTING_STATE',''))
+if a[0]=='state':
+ print('No state file was found!',file=sys.stderr);sys.exit(1)
+elif a[0]=='show' and len(a)==2:
+ if os.environ.get('STATE_UNREADABLE')=='1':
+  print('private-provider-sentinel',file=sys.stderr);sys.exit(1)
+ if os.environ.get('STATE_APPEARS')=='1' and 'terraform plan' in open(os.environ['CALLS']).read():print(json.dumps({'format_version':'1.0','values':{'root_module':{'resources':[{'address':'existing-after-plan'}]}}}))
+ elif os.environ.get('STATE_MALFORMED')=='1':print('{}')
+ elif os.environ.get('STATE_NESTED')=='1':print(json.dumps({'format_version':'1.0','values':{'root_module':{'child_modules':[{'resources':[{'address':'module.nested.existing'}]}]}}}))
+ elif os.environ.get('EXISTING_STATE'):print(json.dumps({'format_version':'1.0','values':{'root_module':{'resources':[{'address':os.environ['EXISTING_STATE']}]}}}))
+ else:print(json.dumps({'format_version':'1.0'}))
 elif a[0]=='plan' and os.environ.get('PLAN_FAIL')=='1':sys.exit(1)
 elif a[0]=='plan':open(next(x.split('=',1)[1] for x in a if x.startswith('-out=')),'wb').write(b'private-plan-fixture')
 elif a[0]=='show':
@@ -412,7 +419,7 @@ elif a[0]!='init':sys.exit(1)
     expect(() => readFileSync(join(preparedOut, "configuration.private.json"))).toThrow();
     const refusedPreparation = spawnSync(process.execPath, ["--experimental-transform-types", handoffScript, "prepare", storagePath, createHash("sha256").update(storageBytes).digest("hex"), cfg, join(dir, "state-refused-preparation"), root], { encoding: "utf8", env: { ...env, OBJECT_STORE: join(dir, "refused-store.json"), STATE_UNREADABLE: "1" } });
     expect(refusedPreparation.status).toBe(1);
-    expect(refusedPreparation.stderr).toContain("command_failed_terraform_state");
+    expect(refusedPreparation.stderr).toContain("command_failed_terraform_show");
     expect(refusedPreparation.stdout + refusedPreparation.stderr).not.toContain("private-provider-sentinel");
     const successCalls = ordinaryPlanCalls;
     writeFileSync(log, "");
@@ -453,6 +460,9 @@ elif a[0]!='init':sys.exit(1)
       { IMAGE_SOURCE_DRIFT: "1" },
       { SOURCE_DIRTY: "1" },
       { STATE_UNREADABLE: "1" },
+      { STATE_MALFORMED: "1" },
+      { STATE_NESTED: "1" },
+      { STATE_APPEARS: "1" },
       { PROVENANCE_FAIL: "1" },
       { FSS_DIAGNOSTIC_API_DIGEST: `sha256:${"3".repeat(64)}` },
     ]) {
@@ -478,7 +488,8 @@ elif a[0]!='init':sys.exit(1)
       );
       const refusedCalls = readFileSync(log, "utf8");
       expect(refusedCalls).not.toMatch(/apply|destroy|secret-value/);
-      if (!("PLAN_FAIL" in failure) && !("DRIFT_PLAN" in failure))
+      if ("STATE_APPEARS" in failure) expect(refused.stderr).toContain("state_changed");
+      if (!("PLAN_FAIL" in failure) && !("DRIFT_PLAN" in failure) && !("STATE_APPEARS" in failure))
         expect(refusedCalls).not.toContain("terraform plan");
     }
   } finally {

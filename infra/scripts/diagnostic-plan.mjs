@@ -208,6 +208,24 @@ function provenance(validatedPath, pinPath) {
       throw new Error("image_mismatch");
   return pin;
 }
+function requireEmptyState(root, nonemptyCode = "nonempty_state") {
+  // Successful show distinguishes a fresh backend from a failed state read.
+  // Terraform state list exits nonzero when a fresh backend has no state file.
+  const state = JSON.parse(command("terraform", ["show", "-json"], root));
+  const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!object(state) || state.format_version !== "1.0" ||
+      (state.values !== undefined && !object(state.values)))
+    throw new Error("invalid_state_read");
+  function inspect(module) {
+    if (!object(module) ||
+        (module.resources !== undefined && !Array.isArray(module.resources)) ||
+        (module.child_modules !== undefined && !Array.isArray(module.child_modules)))
+      throw new Error("invalid_state_read");
+    if (module.resources?.length) throw new Error(nonemptyCode);
+    for (const child of module.child_modules ?? []) inspect(child);
+  }
+  if (state.values?.root_module !== undefined) inspect(state.values.root_module);
+}
 export async function prepareDiagnosticPlan(configFile, directory, root, options = {}) {
   validate(configFile, directory);
   const input = read(resolve(directory, "validated.json"));
@@ -443,8 +461,7 @@ export async function prepareDiagnosticPlan(configFile, directory, root, options
     root,
     300000,
   );
-  if (command("terraform", ["state", "list"], root).trim() !== "")
-    throw new Error("nonempty_state");
+  requireEmptyState(root);
   const planPath = resolve(directory, "plan.tfplan");
   const publicPath = resolve(directory, "recipient.pem");
   try {
@@ -498,8 +515,7 @@ export async function prepareDiagnosticPlan(configFile, directory, root, options
     }
     if (!actions.some((item) => item.actions.includes("create")))
       throw new Error("empty_plan");
-    if (command("terraform", ["state", "list"], root).trim() !== "")
-      throw new Error("state_changed");
+    requireEmptyState(root, "state_changed");
     if (
       command("git", ["rev-parse", "HEAD"], repository).trim() !== input.commit ||
       command(
@@ -727,6 +743,7 @@ if (
           "certificate_mismatch",
           "terraform_version_mismatch",
           "nonempty_state",
+          "invalid_state_read",
           "unsafe_summary",
           "not_creation_plan",
           "empty_plan",
