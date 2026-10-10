@@ -398,6 +398,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     pendingNativeActivations.clear();
     notifications?.reset();
     socialPump.stop();
+    socialRunner.resetStatus();
     socialRuntime.signOut();
     socialPump.start();
     void resetBridges([

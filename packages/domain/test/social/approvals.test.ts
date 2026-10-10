@@ -47,5 +47,6 @@ it('rejects originals, removed images, and content beyond ordinary free-account 
  expect((await tx(()=>approveSocialPost(ctx(),{postId:p.value.postId,expectedRevision:2}))).ok).toBe(true);
  await tx(()=>deleteSocialAsset(ctx(),a.value.assetId));expect(await tx(()=>approveSocialPost(ctx(),{postId:p.value.postId,expectedRevision:2}))).toEqual({ok:false,reason:'image_unavailable'});
  const x=randomUUID();await db.session.query("INSERT INTO social_accounts(workspace_id,id,owner_user_id,platform,external_id,display_name,account_kind,state,adapter_version,verified_at,max_schedule_days) VALUES($1,$2,$3,'x','fixture-x','David','profile','connected','fixture-v1',now(),30)",[seed.alpha.workspaceId,x,seed.alpha.admin.userId]);
+ const overweight=await tx(()=>saveSocialPost(ctx(),{...draft(),accountId:x,text:'界'.repeat(141)}));if(!overweight.ok)throw new Error(overweight.reason);expect(await tx(()=>approveSocialPost(ctx(),{postId:overweight.value.postId,expectedRevision:1}))).toEqual({ok:false,reason:'content_needs_edit'});
  const xp=await tx(()=>saveSocialPost(ctx(),{...draft(),accountId:x,text:'x'.repeat(281)}));if(!xp.ok)throw new Error(xp.reason);expect(await tx(()=>approveSocialPost(ctx(),{postId:xp.value.postId,expectedRevision:1}))).toEqual({ok:false,reason:'content_needs_edit'});
 });

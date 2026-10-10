@@ -1,3 +1,4 @@
+import {inspectXPostText} from './xText.ts';
 import {createHash,randomUUID} from 'node:crypto';
 import {saveSocialPostSchema,type SaveSocialPost,type PostRevision,type SocialWorkspace} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -27,8 +28,8 @@ export async function socialApprovalSnapshot(ctx:RepositoryContext,post:PostRevi
  if(account.state!=='connected'||!account.adapter_version||!account.verified_at||!account.max_schedule_days)return {ok:false,reason:'destination_unverified'};
  const now=Date.now(),at=post.publishAt===null?NaN:Date.parse(post.publishAt);if(!Number.isFinite(at))return {ok:false,reason:'schedule_required'};if(at<=now)return {ok:false,reason:'schedule_in_past'};if(at>now+account.max_schedule_days*86400_000)return {ok:false,reason:'schedule_out_of_range'};
  const textLimit=account.platform==='x'?280:account.platform==='linkedin'?3000:10000;
- // Conservative free-X count: Unicode scalar count; platform adapter must additionally validate its displayed counter before submission.
- if([...post.text].length>textLimit||post.images.length>(account.platform==='x'?4:account.platform==='linkedin'?1:10))return {ok:false,reason:'content_needs_edit'};
+ // Official X weighted validation does not replace destination/submission authority.
+ if((account.platform==='x'?!inspectXPostText(post.text).valid:[...post.text].length>textLimit)||post.images.length>(account.platform==='x'?4:account.platform==='linkedin'?1:10))return {ok:false,reason:'content_needs_edit'};
  const images:Record<string,unknown>[]=[];const seen=new Set<string>();
  for(const image of post.images){const key=`${image.assetId}:${image.version}`;if(seen.has(key))return {ok:false,reason:'duplicate_image'};seen.add(key);const object=await socialAssetObject(ctx,{assetId:image.assetId,version:image.version},'download');if(!object||object.kind!=='derivative')return {ok:false,reason:'image_unavailable'};images.push({...image,sha256:object.sha256,mime:object.mime,width:object.width,height:object.height});}
  const snapshot={account:{id:account.id,platform:account.platform,externalId:account.external_id,revision:account.revision,adapterVersion:account.adapter_version},text:post.text,images,publishAt:new Date(at).toISOString(),zone:post.zone};
