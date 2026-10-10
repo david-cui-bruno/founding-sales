@@ -438,7 +438,9 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     !/^[-a-z0-9.]+\.rds\.amazonaws\.com:5432$/u.test(endpoint)
   )
     throw new Error("applied_outputs_changed");
-  const names = value("secret_names");
+  const secretNames = value("secret_names");
+  const names = secretNames && typeof secretNames === "object" && !Array.isArray(secretNames)
+    ? Object.keys(secretNames) : [];
   const expected = [
     "migration-database",
     "app-runtime-database",
@@ -454,9 +456,9 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     "zoom-meetings",
   ];
   if (
-    !Array.isArray(names) ||
     names.length !== expected.length ||
-    [...names].sort().join() !== expected.sort().join()
+    [...names].sort().join() !== expected.sort().join() ||
+    names.some(name => secretNames[name] !== `${lease.prefix}/${name}`)
   )
     throw new Error("applied_outputs_changed");
   const instanceArn = `arn:aws:rds:us-east-1:326255650484:db:${lease.prefix}-pg`;
@@ -556,7 +558,7 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
           ? migrationArn
           : name === "app-runtime-database"
             ? runtimeArn
-            : `${lease.prefix}/${name}`,
+            : secretNames[name],
         "--secret-string",
         `file://${file}`,
         "--output",
