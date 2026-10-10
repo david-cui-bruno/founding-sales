@@ -1,4 +1,4 @@
-import {emailAdmissionActivationProofSchema} from '@fss/contracts';
+import {emailAdmissionActivationProofSchema,type EmailAdmissionActivationProof} from '@fss/contracts';
 import {createHash,randomUUID} from 'node:crypto';
 import {isImageDigest,emailAdmissionEvaluationSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -10,13 +10,8 @@ import {inspectEmailAdmissionProof} from './emailActivationEvidence.ts';
 import {readSenderReadiness,readRampStanding} from '../outbound/ramp.ts';
 import {REQUIRED_SCHEMA} from '../db/schemaRange.ts';
 export interface EmailAdmissionRuntime {implementationCommit:string|null;imageDigest:string|null;side:'api'|'worker';production:boolean;schemaVersion:number;deploymentSendingEnabled:boolean}
-export interface EmailAdmissionActivationProof {
- version:1;evaluationReportJson:string;
- release:{recordReference:string;observedAt:string;apiDigest:string;workerDigest:string;schemaVersion:number;deploymentReceiptJson:string;postSmokeReadback:'existing'|'created'};
- received:{mailboxId:string;senderAddress:string;observedAt:string;messageReference:string;headerText:string;reviewReference:string};
- sequence:{sequenceVersionId:string;renderedEvidenceJson:string};
- interruptions:{originalOutboundId:string;originalEnrollmentId:string;providerId:string;observedAt:string;integrationEvidenceJson:string;reviewReference:string};
-}
+export type {EmailAdmissionActivationProof} from '@fss/contracts';
+
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 export interface EmailAdmissionReadiness {enabled:boolean;controlRevision:number;receiptId:string|null;readinessSha256:string|null;ready:boolean;reasons:string[]}
 type Row={enabled:boolean;revision:number;owner_user_id:string|null;mailbox_id:string|null;sequence_version_id:string|null;evaluation:unknown;mailbox_binding:string|null;sequence_binding:string|null;activation_receipt_id?:string|null}

@@ -37,13 +37,13 @@ async function configureFutureActivation(){
  await tx(()=>setProspectingAuthorization(admin(),{mailboxId,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));
  const seq=(await db.session.query<{id:string}>('INSERT INTO sequences(workspace_id,name,created_by_user_id) VALUES($1,$2,$3) RETURNING id',[seeded.alpha.workspaceId,'Reusable email',seeded.alpha.admin.userId])).rows[0]!.id;
  sequenceId=(await db.session.query<{id:string}>('INSERT INTO sequence_versions(workspace_id,sequence_id,version) VALUES($1,$2,1) RETURNING id',[seeded.alpha.workspaceId,seq])).rows[0]!.id;
- for(let i=0;i<5;i++)await db.session.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,$3,'email','elapsed',0,$4)",[seeded.alpha.workspaceId,sequenceId,i+1,sequences.alpha.template.templateVersionId]);
+ for(let i=0;i<5;i++)await db.session.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,$3,'email','elapsed',$5,$4)",[seeded.alpha.workspaceId,sequenceId,i+1,sequences.alpha.template.templateVersionId,[0,72,96,144,168][i]]);
  await db.session.query("UPDATE sequence_versions SET state='published',published_at=now(),published_by_user_id=$2 WHERE id=$1",[sequenceId,seeded.alpha.admin.userId]);
  const config={enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null};
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{...config,expectedRevision:0}))).toMatchObject({ok:true});
  const control=await readEmailAdmissionControl(admin());
  const fixture=await controlledActivationProof(admin(),mailboxId,sequenceId,process.env['FSS_BUILD_COMMIT']!);evaluationSha256=fixture.reportSha256;activationRuntime={...fixture.runtime,side:'worker',imageDigest:fixture.proof.release.workerDigest};
- const evaluation={policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',implementationCommit:process.env['FSS_BUILD_COMMIT'],configurationSha256:control.configurationSha256,reportSha256:fixture.reportSha256,reviewedEligible:1,falseEligible:0};
+ const evaluation={policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',implementationCommit:process.env['FSS_BUILD_COMMIT'],configurationSha256:control.configurationSha256,reportSha256:fixture.reportSha256,reviewedEligible:fixture.reviewedEligible,falseEligible:0};
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{...config,evaluation,expectedRevision:1}))).toMatchObject({ok:true});
  const prepared=await tx(()=>prepareEmailAdmissionActivation(admin(),{expectedControlRevision:2,proof:fixture.proof},fixture.runtime));if(!prepared.ok)throw new Error(prepared.reason);
  expect(await tx(()=>activateEmailAdmission(admin(),{expectedControlRevision:2,receiptId:prepared.value.receiptId,expectedReadinessSha256:prepared.value.readinessSha256},fixture.runtime))).toEqual({ok:true,value:{revision:3}});

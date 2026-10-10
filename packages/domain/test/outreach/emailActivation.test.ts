@@ -21,7 +21,7 @@ import {setProspectingAuthorization} from '../../outreach/authorization.ts';
 import {saveEmailAdmissionControl,readEmailAdmissionControl} from '../../outreach/emailControl.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {controlledActivationProof} from './support/emailActivationFixture.ts';
-async function configured(){
+async function configured(cadence=[0,72,96,144,168]){
  const commit='a'.repeat(40);vi.stubEnv('FSS_BUILD_COMMIT',commit);
  const sequences=await seedSequences(db.session,seed);
  const mailboxId=(await db.session.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status,sync_state,coverage_watermark_at,history_id,history_id_updated_at,baseline_completed_at,baseline_from_at) VALUES($1,$2,'owner@example.test','fixture','connected','ready',clock_timestamp(),'123',clock_timestamp(),clock_timestamp(),clock_timestamp()-interval '1 day') RETURNING id",[seed.alpha.workspaceId,seed.alpha.admin.userId])).rows[0]!.id;
@@ -30,13 +30,13 @@ async function configured(){
  await withTransaction(db.session,()=>setProspectingAuthorization(admin(),{mailboxId,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));
  const seq=(await db.session.query<{id:string}>('INSERT INTO sequences(workspace_id,name,created_by_user_id) VALUES($1,$2,$3) RETURNING id',[seed.alpha.workspaceId,'Activation fixture',seed.alpha.admin.userId])).rows[0]!.id;
  const sequenceId=(await db.session.query<{id:string}>('INSERT INTO sequence_versions(workspace_id,sequence_id,version) VALUES($1,$2,1) RETURNING id',[seed.alpha.workspaceId,seq])).rows[0]!.id;
- for(let i=0;i<5;i++)await db.session.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,$3,'email','elapsed',0,$4)",[seed.alpha.workspaceId,sequenceId,i+1,sequences.alpha.template.templateVersionId]);
+ for(let i=0;i<5;i++)await db.session.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,$3,'email','elapsed',$5,$4)",[seed.alpha.workspaceId,sequenceId,i+1,sequences.alpha.template.templateVersionId,cadence[i]]);
  await db.session.query("UPDATE sequence_versions SET state='published',published_at=now(),published_by_user_id=$2 WHERE id=$1",[sequenceId,seed.alpha.admin.userId]);
  const config={enabled:false,ownerUserId:seed.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null};
  expect(await withTransaction(db.session,()=>saveEmailAdmissionControl(admin(),{...config,expectedRevision:0}))).toMatchObject({ok:true});
  const f=await controlledActivationProof(admin(),mailboxId,sequenceId,commit);
  const c=await readEmailAdmissionControl(admin());
- const evaluation={policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',implementationCommit:commit,configurationSha256:c.configurationSha256,reportSha256:f.reportSha256,reviewedEligible:1,falseEligible:0};
+ const evaluation={policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',implementationCommit:commit,configurationSha256:c.configurationSha256,reportSha256:f.reportSha256,reviewedEligible:f.reviewedEligible,falseEligible:0};
  expect(await withTransaction(db.session,()=>saveEmailAdmissionControl(admin(),{...config,evaluation,expectedRevision:1}))).toMatchObject({ok:true});
  return {...f,mailboxId,sequenceId};
 }
@@ -72,7 +72,7 @@ it('reports the actual enabled control and workers fail closed without their own
  expect(await withTransaction(db.session,()=>automaticEmailConfiguration(worker,4,f.runtime))).toEqual({ok:false,reason:'automatic_email_disabled'});
 });
 it('rejects a retained report that claims reviewed positives while every case is synthetic',async()=>{
- const f=await configured();const report=JSON.parse(f.proof.evaluationReportJson);report.cases[0].provenance.kind='synthetic_boundary';f.proof.evaluationReportJson=JSON.stringify(report);
+ const f=await configured();const report=JSON.parse(f.proof.evaluationReportJson);for(const c of report.cases)c.provenance.kind='synthetic_boundary';f.proof.evaluationReportJson=JSON.stringify(report);
  const {createHash}=await import('node:crypto');const c=await readEmailAdmissionControl(admin());
  await withTransaction(db.session,()=>saveEmailAdmissionControl(admin(),{expectedRevision:2,enabled:false,ownerUserId:seed.alpha.admin.userId,mailboxId:f.mailboxId,sequenceVersionId:f.sequenceId,evaluation:{...c.evaluation!,reportSha256:createHash('sha256').update(f.proof.evaluationReportJson).digest('hex')}}));
  expect(await withTransaction(db.session,()=>prepareEmailAdmissionActivation(admin(),{expectedControlRevision:3,proof:f.proof},f.runtime))).toEqual({ok:false,reason:'evaluation_incomplete'});
@@ -110,4 +110,27 @@ it.each(['paused','absent'])('respects the current deployment sending pause thro
  expect(await withTransaction(db.session,()=>activateEmailAdmission(admin(),{expectedControlRevision:2,receiptId:prepared.value.receiptId,expectedReadinessSha256:prepared.value.readinessSha256},f.runtime))).toMatchObject({ok:true});
  const {automaticEmailConfiguration}=await import('../../outreach/emailControl.ts');const worker=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'worker'}),db.session);
  expect(await withTransaction(db.session,()=>automaticEmailConfiguration(worker,3,{...stopped,side:'worker',imageDigest:f.proof.release.workerDigest}))).toEqual({ok:false,reason:'deployment_sending_disabled'});
+});
+it('refuses a five-email published sequence whose zero delays violate the approved cumulative cadence',async()=>{
+ const f=await configured([0,0,0,0,0]);
+ expect(await withTransaction(db.session,()=>prepareEmailAdmissionActivation(admin(),{expectedControlRevision:2,proof:f.proof},f.runtime))).toEqual({ok:false,reason:'approved_email_cadence_required'});
+});
+it('refuses a positive-only documentary report despite complete flags and passed guard names',async()=>{
+ const f=await configured();const report=JSON.parse(f.proof.evaluationReportJson);report.cases=report.cases.filter((c:{expectedAdmission:boolean;provenance:{kind:string}})=>c.expectedAdmission&&c.provenance.kind==='recorded_first_party_extraction');f.proof.evaluationReportJson=JSON.stringify(report);
+ const {createHash}=await import('node:crypto');const c=await readEmailAdmissionControl(admin());
+ await withTransaction(db.session,()=>saveEmailAdmissionControl(admin(),{expectedRevision:2,enabled:false,ownerUserId:seed.alpha.admin.userId,mailboxId:f.mailboxId,sequenceVersionId:f.sequenceId,evaluation:{...c.evaluation!,reportSha256:createHash('sha256').update(f.proof.evaluationReportJson).digest('hex')}}));
+ expect(await withTransaction(db.session,()=>prepareEmailAdmissionActivation(admin(),{expectedControlRevision:3,proof:f.proof},f.runtime))).toEqual({ok:false,reason:'evaluation_incomplete'});
+});
+it.each(['missing_negative','relabel_negative','changed_corpus','missing_case_result','changed_evidence'])('rejects a report whose retained diagnostic coverage changed despite a matching saved report digest (%s)',async mutation=>{
+ const f=await configured();const report=JSON.parse(f.proof.evaluationReportJson);
+ const negative=report.cases.find((c:{id:string})=>c.id==='ambiguous-email');
+ if(mutation==='missing_negative')report.cases=report.cases.filter((c:{id:string})=>c.id!=='ambiguous-email');
+ if(mutation==='relabel_negative'){negative.expectedAdmission=true;negative.actual.actualAdmission=true;negative.actual.actualRank=negative.expectedRank;}
+ if(mutation==='changed_corpus')report.corpus[1].sha256='f'.repeat(64);
+ if(mutation==='missing_case_result')report.tests=report.tests.filter((t:{name:string})=>!t.name.endsWith('evaluates labeled email admission: ambiguous-email'));
+ if(mutation==='changed_evidence')negative.evidence[0].firstParty=false;
+ f.proof.evaluationReportJson=JSON.stringify(report);
+ const {createHash}=await import('node:crypto');const c=await readEmailAdmissionControl(admin());
+ await withTransaction(db.session,()=>saveEmailAdmissionControl(admin(),{expectedRevision:2,enabled:false,ownerUserId:seed.alpha.admin.userId,mailboxId:f.mailboxId,sequenceVersionId:f.sequenceId,evaluation:{...c.evaluation!,reportSha256:createHash('sha256').update(f.proof.evaluationReportJson).digest('hex')}}));
+ expect(await withTransaction(db.session,()=>prepareEmailAdmissionActivation(admin(),{expectedControlRevision:3,proof:f.proof},f.runtime))).toEqual({ok:false,reason:'evaluation_incomplete'});
 });
