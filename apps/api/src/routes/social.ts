@@ -28,7 +28,7 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  const ctx=scoped.context,deps={auth,request,principal:principal.principal};
  if(request.path==='/social/manual-handoff/read'){
   const parsed=socialManualHandoffInputSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
-  const answer=await withTransaction(auth.session,()=>readSocialManualHandoff(ctx,parsed.data));return answer.ok?{status:200,body:{view:socialManualHandoffViewSchema.parse(answer.value)}}:{status:409,body:{error:answer.reason}};
+  const answer=await withTransaction(auth.db,()=>readSocialManualHandoff(ctx,parsed.data));return answer.ok?{status:200,body:{view:socialManualHandoffViewSchema.parse(answer.value)}}:{status:409,body:{error:answer.reason}};
  }
  if(request.path==='/social/manual-handoff/confirm')return runRouteCommand(deps,socialManualHandoffConfirmCommandSchema,'social_manual_handoff_confirm',(c,input)=>confirmSocialManualHandoff(c,input));
  if(request.path==='/social/weekly'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialWeekly(ctx)};}

@@ -16,7 +16,7 @@ const sessionKeys=new WeakMap<object,number>();let nextSessionKey=0;
 export function ExperimentsPanel(props:{report:LearningReport}){const epoch=useSessionEpoch();let key=0;if(epoch){key=sessionKeys.get(epoch)??++nextSessionKey;sessionKeys.set(epoch,key);}return <PanelSession key={key} {...props}/>;}
 function PanelSession({report}:{report:LearningReport}){
  const [catalog,setCatalog]=useState<ExperimentCatalog|null>(null),[failed,setFailed]=useState(false);
- useEffect(()=>{let alive=true;const api=client();void Promise.all([api.read('sourcing.targeting',{}),api.read('sequences.state',{}),api.read('outreach.control',{})]).then(([targeting,sequences,control])=>{
+ useEffect(()=>{let alive=true;const api=operations();if(!api){setFailed(true);return;}void Promise.all([api.read('sourcing.targeting',{}),api.read('sequences.state',{}),api.read('outreach.control',{})]).then(([targeting,sequences,control])=>{
   if(!alive)return;
   if(!targeting.view||!control.view||sequences.readErrors.templates||!sequences.online){setFailed(true);return;}
   setCatalog({policy:targeting.view.policy,templates:sequences.templates.filter(t=>t.approvedAt!==null&&t.retiredAt===null).map(t=>({id:t.id,name:t.name,subject:t.subject,body:t.body})),sequences:control.view.sequences.filter(s=>s.kind==='email_first').map(s=>({id:s.id,label:s.label}))});
