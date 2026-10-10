@@ -181,7 +181,10 @@ function command(program, args, cwd, timeout = 60000) {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
-    throw new Error(`command_failed_${program.replaceAll(/[^a-z]/gu, "")}`);
+    const operation = program === "terraform" && ["version", "init", "state", "plan", "show"].includes(args[0])
+      ? `_${args[0]}`
+      : "";
+    throw new Error(`command_failed_${program.replaceAll(/[^a-z]/gu, "")}${operation}`);
   }
 }
 function provenance(validatedPath, pinPath) {
@@ -204,6 +207,24 @@ function provenance(validatedPath, pinPath) {
     )
       throw new Error("image_mismatch");
   return pin;
+}
+function requireEmptyState(root, nonemptyCode = "nonempty_state") {
+  // Successful show distinguishes a fresh backend from a failed state read.
+  // Terraform state list exits nonzero when a fresh backend has no state file.
+  const state = JSON.parse(command("terraform", ["show", "-json"], root));
+  const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!object(state) || state.format_version !== "1.0" ||
+      (state.values !== undefined && !object(state.values)))
+    throw new Error("invalid_state_read");
+  function inspect(module) {
+    if (!object(module) ||
+        (module.resources !== undefined && !Array.isArray(module.resources)) ||
+        (module.child_modules !== undefined && !Array.isArray(module.child_modules)))
+      throw new Error("invalid_state_read");
+    if (module.resources?.length) throw new Error(nonemptyCode);
+    for (const child of module.child_modules ?? []) inspect(child);
+  }
+  if (state.values?.root_module !== undefined) inspect(state.values.root_module);
 }
 export async function prepareDiagnosticPlan(configFile, directory, root, options = {}) {
   validate(configFile, directory);
@@ -440,8 +461,7 @@ export async function prepareDiagnosticPlan(configFile, directory, root, options
     root,
     300000,
   );
-  if (command("terraform", ["state", "list"], root).trim() !== "")
-    throw new Error("nonempty_state");
+  requireEmptyState(root);
   const planPath = resolve(directory, "plan.tfplan");
   const publicPath = resolve(directory, "recipient.pem");
   try {
@@ -495,8 +515,7 @@ export async function prepareDiagnosticPlan(configFile, directory, root, options
     }
     if (!actions.some((item) => item.actions.includes("create")))
       throw new Error("empty_plan");
-    if (command("terraform", ["state", "list"], root).trim() !== "")
-      throw new Error("state_changed");
+    requireEmptyState(root, "state_changed");
     if (
       command("git", ["rev-parse", "HEAD"], repository).trim() !== input.commit ||
       command(
@@ -724,6 +743,7 @@ if (
           "certificate_mismatch",
           "terraform_version_mismatch",
           "nonempty_state",
+          "invalid_state_read",
           "unsafe_summary",
           "not_creation_plan",
           "empty_plan",
@@ -737,6 +757,11 @@ if (
           "command_failed_bash",
           "command_failed_aws",
           "command_failed_terraform",
+          "command_failed_terraform_version",
+          "command_failed_terraform_init",
+          "command_failed_terraform_state",
+          "command_failed_terraform_plan",
+          "command_failed_terraform_show",
           "command_failed_git",
         ].includes(error.message)
           ? error.message
