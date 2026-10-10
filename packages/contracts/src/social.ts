@@ -20,6 +20,8 @@ export const socialPostRevisionSchema=z.strictObject({postId:uuid,revision:z.num
 export type PostRevision=z.infer<typeof socialPostRevisionSchema>;
 export const socialPostSaveCommandSchema=saveSocialPostSchema.safeExtend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const socialPostActionCommandSchema=z.strictObject({postId:uuid,expectedRevision:z.number().int().positive(),commandId:commandIdSchema,clientVersion:semanticVersionSchema});
+export const socialDeliveryHoldReasonSchema=z.enum(['schedule_missed','account_identity_changed','account_not_verified','adapter_unavailable','approved_image_changed','staging_failed','preparation_unavailable','claim_expired']);
+export const socialDeliveryHoldCommandSchema=socialPostActionCommandSchema.extend({reason:socialDeliveryHoldReasonSchema});
 export const socialBeginCommandSchema=z.strictObject({claimId:uuid,approvalId:uuid,fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 /** Original submission's approved-byte to native-media mapping, never inferred on restart. */
 export const socialMediaBindingSchema=z.strictObject({receiptId:z.string().min(1).max(500),fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),images:z.array(z.strictObject({sha256:z.string().regex(/^[a-f0-9]{64}$/u),platformId:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/u)})).min(1).max(20)}).refine(v=>new Set(v.images.map(i=>i.platformId)).size===v.images.length,'Duplicate native media');

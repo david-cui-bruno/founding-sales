@@ -310,6 +310,7 @@ describe('what the API mounts', () => {
       '/social/assets/upload-url',
       '/social/delivery/begin',
       '/social/delivery/claim',
+      '/social/delivery/hold',
       '/social/delivery/observe',
       '/social/delivery/queue',
       '/social/drafts',
