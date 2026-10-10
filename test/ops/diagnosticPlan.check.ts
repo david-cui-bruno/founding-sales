@@ -410,6 +410,10 @@ elif a[0]!='init':sys.exit(1)
     expect(prepared.stdout + prepared.stderr).not.toContain("opaque-key");
     expect(() => readFileSync(join(preparedOut, "plan.tfplan"))).toThrow();
     expect(() => readFileSync(join(preparedOut, "configuration.private.json"))).toThrow();
+    const refusedPreparation = spawnSync(process.execPath, ["--experimental-transform-types", handoffScript, "prepare", storagePath, createHash("sha256").update(storageBytes).digest("hex"), cfg, join(dir, "state-refused-preparation"), root], { encoding: "utf8", env: { ...env, OBJECT_STORE: join(dir, "refused-store.json"), STATE_UNREADABLE: "1" } });
+    expect(refusedPreparation.status).toBe(1);
+    expect(refusedPreparation.stderr).toContain("command_failed_terraform");
+    expect(refusedPreparation.stdout + refusedPreparation.stderr).not.toContain("private-provider-sentinel");
     const successCalls = ordinaryPlanCalls;
     writeFileSync(log, "");
     const refusedConfiguration = spawnSync(process.execPath, ["--experimental-transform-types", consumerScript, cfg, join(dir, "config-refused"), root, receipt], { encoding: "utf8", env: { ...env, CONFIGURATION_REFUSE: "1" } });
