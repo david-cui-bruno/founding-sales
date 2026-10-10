@@ -180,6 +180,13 @@ Eleven steps, each printing its wall-clock seconds:
       replacement view that returns nothing fails here; nothing else in the tool could
       see it.
 
+    - schema87 exact CRM pricing uses a disposable controlled Ask purpose and a fake
+      provider through the real registered Ask worker runner. A public request/read
+      and spend read verify immutable decimal pricing and a two-cent settlement.
+      This narrowly exercises the replaced JSON receipt validator. Other workflows
+      remain domain calls; API sign-in, command receipts and HTTP routes are not
+      exercised. No real provider call, production purpose or activation is implied.
+
     A migration that replaced a routine must have had it **called** —
     `pg_stat_user_functions` counts it, and an uncalled replacement fails the step. The
     evidence prints one row per overload with its signature; the rule sums them by bare
