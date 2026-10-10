@@ -127,7 +127,7 @@ Current schema90 reserves20units for each metadata/body messages.get and1unit fo
 
 ## Private proposal and bounded application support (#534)
 
-This section describes the independently reviewed source candidate, locally verified by634operations tests and statics, with exact-head CI and normal merge still required. It does not establish completed live setup or activation. The approved production release remains schema88/desktop1.0.51. Review the exact source checks and merge receipt before invoking new diagnostic workflows.
+This source is complete in PR535, merge8794aaf9, tree-identical to reviewed d7d18794; exact PR application/workflow/secrets, infrastructure and image checks passed. Local634operations tests and statics passed. The merged-source application gate failed on the separately reproduced browser-preparation mount race tracked by536; do not claim main green until its follow-up passes. It does not establish completed live setup or activation. The approved production release remains schema88/desktop1.0.51. Review the exact source checks and merge receipt before invoking new diagnostic workflows.
 
 Use separate approvals for private proposal storage and environment application. A storage approval authorizes one newly generated proposal under its exact source, configuration, images and namespace; it cannot pre-review a plan hash that does not yet exist. The resulting observed encrypted-object, manifest and binary-plan hashes must be reviewed before an application lease can authorize creation. Never supply the local RSA private key to GitHub, intercept temporary Terraform output or reinterpret an earlier encrypted artifact as application approval.
 
