@@ -1,3 +1,4 @@
+import {createSocialManualHandoffBridge} from '../src/main/social/manualHandoffBridge.ts';
 import {createSocialAccountsBridge} from '../src/main/social/accountsBridge.ts';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -45,6 +46,8 @@ import { BRIDGE_ANSWERS, FIXTURE_IDS, STALE_CALL_LOG_ID } from './support/bridge
  */
 
 const UUID = '11111111-1111-4111-8111-111111111111';
+const MANUAL_HANDOFF={postId:UUID,revision:1,fingerprint:'a'.repeat(64),approvalId:UUID,approvedAt:'2026-10-09T00:00:00Z',state:'manual_needed',accountEvidence:'human_review_required',snapshot:{account:{id:UUID,platform:'x',externalId:'example',displayName:'Example',accountKind:'profile',revision:1},text:'Reviewed example.',images:[],publishAt:'2030-10-19T16:00:00Z',zone:'America/New_York'}};
+
 
 /** One request as the registry writes it: the method and the path with its query. */
 function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeof createAuthedClient> } {
@@ -68,7 +71,7 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
        * that is how `today.expand`'s `/dial/check` and `replies.refresh`'s
        * `/replies/settings` stayed undeclared through the first review.
        */
-      const body = BRIDGE_ANSWERS[at.pathname];
+      const body = at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
       return await Promise.resolve({
         status: 200,
         body: body ?? { status: 'accepted', replayed: false, result: {} },
@@ -100,6 +103,16 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'social.manualHandoff':{postId:UUID,expectedRevision:1},
+  'social.confirmHandoff':{postId:UUID,expectedRevision:1,fingerprint:'a'.repeat(64),reviewedDestination:true,commandId:UUID},
+  'social.useHandoff':{postId:UUID,expectedRevision:1,fingerprint:'a'.repeat(64),approvalId:UUID,action:'copy'},
+  'social.registerManualDestination':{accountId:UUID,commandId:UUID,platform:'x',externalId:'example',displayName:'Example',accountKind:'profile'},
+  'social.deliveryStatus':{},
+  'sourcing.experiments':{},
+  'sourcing.saveExperiment':{commandId:UUID,expectedRevision:0,status:'accepted',content:{change:{kind:'discovery_query',basePolicyVersion:'v1',queryId:'query',query:'Example property management'},interval:{from:'2026-10-01T00:00:00Z',to:'2026-10-09T00:00:00Z',asOf:'2026-10-09T00:00:00Z'},rationale:'Review an example.',counterexamples:[],uncertainty:'Unknown.',successMeasures:['Supported prospects.']}},
+  'sourcing.activateExperiment':{commandId:UUID,id:UUID,expectedRevision:1,targetingDecision:true},
+  'sourcing.stopExperiment':{commandId:UUID,activationId:UUID,reason:'Stop the example.'},
+  'sourcing.eraseExperiment':{commandId:UUID,id:UUID,expectedRevision:1},
   'ask.read':{operation:'records',query:'Example',kind:'people',limit:20},
   'ask.answerRequest':{question:'Why?',scope:{sources:[{workspaceId:UUID,sourceId:UUID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null}]}},
   'ask.actionRead':{scope:{kind:'today'},limit:20},
@@ -437,7 +450,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     replies: createReplyBridge({ api, session }) as unknown as Host,
     notifications:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['read','runtime'].map(method=>[method,async(input:unknown)=>await handlers[`notifications.${method}` as OperationName](input as never)])) as Host;})(),
     replyComposer:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['context','generate','preview','sendStatus','send'].map(method=>[method,async(input:unknown)=>await handlers[`replyComposer.${method}` as OperationName](input as never)])) as Host;})(),
-    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const handlers=operationHandlers({api,socialAccounts,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
+    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const socialHandoff=createSocialManualHandoffBridge({api,generation:()=>0,copy:async()=>{},open:async()=>{},chooseDestination:async()=>null,write:async()=>{}});const handlers=operationHandlers({api,socialAccounts,socialHandoff,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['manualHandoff','confirmHandoff','useHandoff','registerManualDestination','deliveryStatus','connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
       const directory=await mkdtemp(join(tmpdir(),'social-traffic-'));
       try{const image=join(directory,'source.png');await sharp({create:{width:4,height:4,channels:3,background:'red'}}).png().toFile(image);
         const host=createSocialImageImport({directory,api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,chooseFile:async()=>({canceled:false,filePaths:[image]})});
@@ -449,7 +462,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','senderStanding','senderStandingV2','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
-      return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
+      return Object.fromEntries(['experiments','saveExperiment','activateExperiment','stopExperiment','eraseExperiment','list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
     crm: (()=>{const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...bridge,...Object.fromEntries(['commitmentsReview','commitmentsReviewStatus','commitmentsRead','commitmentsHistory','commitmentsComplete','evidenceWorkBind','evidenceWorkRead','evidenceWorkList','evidenceConflictSave','evidenceConflictResolve','evidenceConflictRead','evidenceConflictList','evidenceHistoryRead','evidenceHistoryList','evidenceDecide','evidenceRead','progressRead','processingSource','processingRead','processingRequest','processingPurpose','processingPurposeSave','processingHealth','processingRecordHealth','businessMailList','businessMailRead','businessMailReadV2','businessMailImportHealth','businessMailImportRequest','businessMailState','businessMailControls','businessMailDelete','businessMailRestore','businessMailRecapture','businessMailAssociate','dealCreate','dealReopen','businessPolicyRead','businessPolicySave','businessReviewRead','businessReviewDecide','relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedAttachmentReselect','selectedAttachmentAnalyze','selectedAttachmentCommit','selectedAttachmentRead','selectedAttachmentPreview','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture'].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]))} as unknown as Host;})(),
@@ -601,6 +614,7 @@ describe('the registry records the traffic the bridges actually make', () => {
       // The merge opens the firm it merged into, which reads the same three (item 10).
       ['crm.resolveMerge', 'POST /sequences/versions'],
       ['settings.show', 'GET /postures'],
+      ['social.useHandoff', 'POST /social/manual-handoff/read'],
     ];
     for (const [name, request] of branches) {
       const [family = '', method = ''] = name.split('.');
@@ -608,7 +622,9 @@ describe('the registry records the traffic the bridges actually make', () => {
       const host = hostsFor(api)[family];
       const call = host?.[method];
       if (call === undefined) throw new Error(`no host method for ${name}`);
-      await call(INPUTS[name] ?? {});
+      expect(OPERATIONS[name].input.safeParse(INPUTS[name]??{}).success,`${name} fixture input is invalid`).toBe(true);
+      const result=await call(INPUTS[name] ?? {});
+      if(name==='social.useHandoff')expect(result).toMatchObject({accepted:true,reason:null});
       expect(seen, `${name} never reached ${request}`).toContain(request);
     }
   });
