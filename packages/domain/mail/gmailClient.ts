@@ -199,6 +199,8 @@ export interface GmailHistoryRequest {
 }
 
 export interface GmailListRequest {
+  /** Ordinary recovery covers delivered/Sent originals, excluding unsent drafts. */
+  readonly excludeDrafts?: boolean | undefined;
   /** Epoch seconds. Appendix D: "Gmail recovery queries: epoch seconds, never
    *  ambiguous date strings." */
   readonly afterEpochSeconds: number;

@@ -55,7 +55,7 @@ function grant(): CrmAcquisitionDiagnosticAuthorization {
     implementationCommit: "c".repeat(40),
     apiImageDigest: "sha256:" + "a".repeat(64),
     workerImageDigest: "sha256:" + "b".repeat(64),
-    schemaVersion: 89,
+    schemaVersion: 90,
     releaseReference: "controlled release",
     disclosureVersion: CRM_MAIL_CAPTURE_DISCLOSURE.version,
     disclosureSha256: CRM_MAIL_CAPTURE_DISCLOSURE.sha256,
@@ -66,9 +66,9 @@ function grant(): CrmAcquisitionDiagnosticAuthorization {
     verifiedAt: new Date(Date.now() - 1000).toISOString(),
     validUntil: new Date(Date.now() + 3600000).toISOString(),
     maxReads: 4,
-    maxUnits: 12,
-    metadataUnits: 5,
-    bodyUnits: 5,
+    maxUnits: 42,
+    metadataUnits: 20,
+    bodyUnits: 20,
     messages: [
       {
         messageId: "controlled-message",
@@ -229,7 +229,7 @@ it("once-only read ledger conserves unknown dispatches and cannot rewrite observ
   expect((await run(encode(g))).code).toBe(0);
   const runtime = await db.appRuntimeSession();
   await runtime.query(
-    "INSERT INTO crm_acquisition_diagnostic_reads(workspace_id,authorization_id,message_id,operation,transport,state,units) VALUES($1,$2,'controlled-message','body','controlled','calling',5)",
+    "INSERT INTO crm_acquisition_diagnostic_reads(workspace_id,authorization_id,message_id,operation,transport,state,units) VALUES($1,$2,'controlled-message','body','controlled','calling',20)",
     [g.workspaceId, g.id],
   );
   await runtime.query(
@@ -255,5 +255,5 @@ it("once-only read ledger conserves unknown dispatches and cannot rewrite observ
         [g.id],
       )
     ).rows,
-  ).toEqual([{ state: "unknown", units: 5 }]);
+  ).toEqual([{ state: "unknown", units: 20 }]);
 });

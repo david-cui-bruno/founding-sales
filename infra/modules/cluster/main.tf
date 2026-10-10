@@ -57,7 +57,12 @@ locals {
   worker_declared_desired_count = 1
   worker_desired_count          = var.bootstrap ? 0 : local.worker_declared_desired_count
 
-  common_environment = merge(var.environment, {
+  diagnostic_environment = contains(keys(var.environment), "FSS_CRM_ACQUISITION_DIAGNOSTIC") ? {
+    FSS_CRM_ACQUISITION_DIAGNOSTIC = jsonencode(merge(jsondecode(var.environment["FSS_CRM_ACQUISITION_DIAGNOSTIC"]), {
+      ecsClusterArn = aws_ecs_cluster.main.arn
+    }))
+  } : {}
+  common_environment = merge(var.environment, local.diagnostic_environment, {
     FSS_NAME_PREFIX      = var.name_prefix
     FSS_METRIC_NAMESPACE = var.metric_namespace
     AWS_REGION           = var.aws_region

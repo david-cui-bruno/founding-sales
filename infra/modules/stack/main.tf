@@ -13,7 +13,7 @@ locals {
   is_production = var.environment == "production"
 
   diagnostic_enabled     = var.crm_acquisition_diagnostic != null
-  diagnostic_environment = local.diagnostic_enabled ? { FSS_CRM_ACQUISITION_DIAGNOSTIC = jsonencode({ environmentId = var.crm_acquisition_diagnostic.environment_id, region = local.aws_region, databaseSecretArn = module.secrets.app_runtime_database_secret_arn }) } : {}
+  diagnostic_environment = local.diagnostic_enabled ? { FSS_CRM_ACQUISITION_DIAGNOSTIC = jsonencode({ environmentId = var.crm_acquisition_diagnostic.environment_id, region = local.aws_region, databaseSecretArn = module.secrets.app_runtime_database_secret_arn, databaseInstanceArn = module.database.instance_arn }) } : {}
 
   tags = merge({
     Project     = "callie-fss"

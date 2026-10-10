@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { randomUUID, createHash } from "node:crypto";
 import {
   crmAcquisitionDiagnosticAuthorizationSchema,
@@ -11,14 +12,56 @@ import {
 } from "../db/workspaceScope.ts";
 import { businessAccountBinding } from "../business/acquisition.ts";
 import { CRM_MAIL_CAPTURE_DISCLOSURE } from "../crm/capabilityAuthority.ts";
-import { GMAIL_SCOPES } from "./types.ts";
 import { enqueueJob } from "../jobs/jobStore.ts";
+const legacyAuthorizationSchema = z
+  .strictObject({
+    ...crmAcquisitionDiagnosticAuthorizationSchema.shape,
+    schemaVersion: z.literal(89),
+    metadataUnits: z.literal(5),
+    bodyUnits: z.literal(5),
+    maxUnits: z.number().int().min(1).max(10000),
+  })
+  .superRefine((value, context) => {
+    if (Date.parse(value.validUntil) <= Date.parse(value.verifiedAt))
+      context.addIssue({ code: "custom", message: "invalid expiry" });
+    if (
+      new Set(value.messages.map((message) => message.messageId)).size !==
+      value.messages.length
+    )
+      context.addIssue({ code: "custom", message: "duplicate message" });
+    if (
+      value.messages.some(
+        (message) => Date.parse(message.fromAt) > Date.parse(message.toAt),
+      )
+    )
+      context.addIssue({ code: "custom", message: "invalid scope" });
+  });
+const diagnosticDocumentSchema = z.union([
+  crmAcquisitionDiagnosticAuthorizationSchema,
+  legacyAuthorizationSchema,
+]);
+type DiagnosticDocument = z.infer<typeof diagnosticDocumentSchema>;
+type IsolationPurpose =
+  | "acquisition_dispatch"
+  | "progress_read"
+  | "oauth_bootstrap";
+function documentFingerprint(input: DiagnosticDocument) {
+  return createHash("sha256")
+    .update(JSON.stringify(diagnosticDocumentSchema.parse(input)))
+    .digest("hex");
+}
 export interface CrmAcquisitionDiagnosticRuntime {
   environmentId: string;
   implementationCommit: string;
   imageDigest: string;
   side: "api" | "worker";
-  schemaVersion: 89;
+  schemaVersion: 90;
+  consentIsolationBinding?: {
+    databaseInstanceArn: string;
+    databaseSecretArn: string;
+    databaseEndpoint: string;
+    ecsClusterArn: string;
+  };
   verifyIsolation(input: {
     environmentId: string;
     databaseName: string;
@@ -28,6 +71,7 @@ export interface CrmAcquisitionDiagnosticRuntime {
     databaseEndpoint: string;
     ecsClusterArn: string;
     connectedServerAddress: string | null;
+    purpose?: IsolationPurpose;
   }): Promise<boolean>;
 }
 export interface DiagnosticIsolationProof {
@@ -41,28 +85,32 @@ const isolationProofs = new WeakMap<
     validUntil: number;
     serverAddress: string | null;
     databaseName: string;
+    purpose: IsolationPurpose;
   }
 >();
 function isolationCurrent(
   proof: DiagnosticIsolationProof | undefined,
-  a: CrmAcquisitionDiagnosticAuthorization,
+  a: DiagnosticDocument,
   runtime: CrmAcquisitionDiagnosticRuntime,
   connection: { name: string; address: string | null } | undefined,
+  purpose: IsolationPurpose = "acquisition_dispatch",
 ) {
   const current = proof ? isolationProofs.get(proof) : undefined;
   return (
     current?.runtime === runtime &&
+    current.purpose === purpose &&
     current.validUntil > Date.now() &&
     current.serverAddress === connection?.address &&
     current.databaseName === connection?.name &&
     proof?.authorizationId === a.id &&
-    proof.authorizationSha256 === crmAcquisitionDiagnosticFingerprint(a)
+    proof.authorizationSha256 === documentFingerprint(a)
   );
 }
 export async function prepareCrmAcquisitionDiagnosticIsolation(
   context: RepositoryContext,
   input: { authorizationId: string },
   runtime?: CrmAcquisitionDiagnosticRuntime,
+  purpose: IsolationPurpose = "acquisition_dispatch",
 ): Promise<DiagnosticIsolationProof | null> {
   if (!runtime) return null;
   const row = (
@@ -74,11 +122,10 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
       [context.scope.workspaceId, input.authorizationId],
     )
   ).rows[0];
-  const parsed = crmAcquisitionDiagnosticAuthorizationSchema.safeParse(
-    row?.authorization,
-  );
+  const parsed = diagnosticDocumentSchema.safeParse(row?.authorization);
   if (!parsed.success) return null;
   const a = parsed.data;
+  const legacyAudit = purpose === "progress_read" && a.schemaVersion === 89;
   const actor = context.scope.actor;
   if (
     (actor.kind === "user" && actor.userId !== a.ownerUserId) ||
@@ -86,12 +133,13 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
   )
     return null;
   if (
-    row?.authorization_sha256 !== crmAcquisitionDiagnosticFingerprint(a) ||
+    row?.authorization_sha256 !== documentFingerprint(a) ||
     a.environmentId !== runtime.environmentId ||
-    a.implementationCommit !== runtime.implementationCommit ||
-    a.schemaVersion !== runtime.schemaVersion ||
-    (runtime.side === "api" ? a.apiImageDigest : a.workerImageDigest) !==
-      runtime.imageDigest
+    (!legacyAudit &&
+      (a.implementationCommit !== runtime.implementationCommit ||
+        a.schemaVersion !== runtime.schemaVersion ||
+        (runtime.side === "api" ? a.apiImageDigest : a.workerImageDigest) !==
+          runtime.imageDigest))
   )
     return null;
   const db = (
@@ -114,6 +162,7 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
         databaseEndpoint: a.databaseEndpoint,
         ecsClusterArn: a.ecsClusterArn,
         connectedServerAddress: db.address,
+        purpose,
       }))
     )
       return null;
@@ -122,13 +171,14 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
   }
   const proof = Object.freeze({
     authorizationId: a.id,
-    authorizationSha256: crmAcquisitionDiagnosticFingerprint(a),
+    authorizationSha256: documentFingerprint(a),
   });
   isolationProofs.set(proof, {
     runtime,
     validUntil: Date.now() + 30000,
     serverAddress: db.address,
     databaseName: db.name,
+    purpose,
   });
   return proof;
 }
@@ -234,7 +284,9 @@ export async function verifyCrmAcquisitionDiagnostic(
   ).rows[0];
   if (
     !oauth ||
-    !GMAIL_SCOPES.every((scope) => oauth.granted_scopes.includes(scope))
+    !oauth.granted_scopes.includes(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    )
   )
     return null;
   const release = (
@@ -349,9 +401,7 @@ export async function readCrmAcquisitionDiagnostic(
       [context.scope.workspaceId, input.authorizationId],
     )
   ).rows[0];
-  const parsed = crmAcquisitionDiagnosticAuthorizationSchema.safeParse(
-    row?.authorization,
-  );
+  const parsed = diagnosticDocumentSchema.safeParse(row?.authorization);
   if (!parsed.success || parsed.data.ownerUserId !== context.scope.actor.userId)
     return null;
   const a = parsed.data;
@@ -363,13 +413,15 @@ export async function readCrmAcquisitionDiagnostic(
   if (
     a.environmentId !== runtime.environmentId ||
     a.databaseName !== dbrow?.name ||
-    a.implementationCommit !== runtime.implementationCommit ||
-    a.schemaVersion !== runtime.schemaVersion ||
-    (runtime.side === "api" ? a.apiImageDigest : a.workerImageDigest) !==
-      runtime.imageDigest
+    (a.schemaVersion !== 89 &&
+      (a.implementationCommit !== runtime.implementationCommit ||
+        a.schemaVersion !== runtime.schemaVersion ||
+        (runtime.side === "api" ? a.apiImageDigest : a.workerImageDigest) !==
+          runtime.imageDigest))
   )
     return null;
-  if (!isolationCurrent(isolationProof, a, runtime, dbrow)) return null;
+  if (!isolationCurrent(isolationProof, a, runtime, dbrow, "progress_read"))
+    return null;
   const active = await context.db.query(
     "SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active'",
     [context.scope.workspaceId, context.scope.actor.userId],
@@ -407,6 +459,25 @@ export async function readCrmAcquisitionDiagnostic(
       [context.scope.workspaceId, input.authorizationId],
     )
   ).rows.map((row) => row.outcome);
+  const accountingBuckets = (
+    await context.db.query<{
+      scheduleVersion: "gmail-2026-05-01" | "legacy-v89-recorded-unverified";
+      attemptedReads: number;
+      observedUnits: number;
+      conservedUnits: number;
+    }>(
+      `SELECT quota_schedule_version AS "scheduleVersion",count(*)::int AS "attemptedReads",COALESCE(sum(units) FILTER(WHERE state='observed'),0)::int AS "observedUnits",COALESCE(sum(units) FILTER(WHERE state IN ('calling','unknown')),0)::int AS "conservedUnits" FROM crm_acquisition_diagnostic_reads WHERE workspace_id=$1 AND authorization_id=$2 GROUP BY quota_schedule_version ORDER BY quota_schedule_version`,
+      [context.scope.workspaceId, input.authorizationId],
+    )
+  ).rows;
+  const accountingProvenance =
+    accountingBuckets.length === 0
+      ? ("not_started" as const)
+      : accountingBuckets.length > 1
+        ? ("mixed" as const)
+        : accountingBuckets[0]!.scheduleVersion === "gmail-2026-05-01"
+          ? ("documented_current_schedule" as const)
+          : ("legacy_recorded_unverified" as const);
   return {
     authorizationId: input.authorizationId,
     purpose: "acquisition_acceptance" as const,
@@ -416,7 +487,7 @@ export async function readCrmAcquisitionDiagnostic(
         : modes.length === 1
           ? modes[0]!.transport
           : ("mixed" as const),
-    authorizationSha256: crmAcquisitionDiagnosticFingerprint(parsed.data),
+    authorizationSha256: documentFingerprint(parsed.data),
     releaseReference: parsed.data.releaseReference,
     coverage: "explicit_scoped_partial" as const,
     outcomes,
@@ -425,6 +496,8 @@ export async function readCrmAcquisitionDiagnostic(
     observedUnits: usage.observed,
     conservedUnits: usage.conserved,
     releasedUnits: 0,
+    accountingProvenance,
+    accountingBuckets,
     copies,
     productionActivationAllowed: false as const,
   };
@@ -433,7 +506,12 @@ export async function provisionCrmAcquisitionDiagnostic(
   session: SessionQueryable,
   input: CrmAcquisitionDiagnosticAuthorization,
 ) {
-  const trusted = (await session.query<{allowed:boolean}>("SELECT pg_has_role(current_user,'migration','MEMBER') AS allowed")).rows[0]?.allowed === true;
+  const trusted =
+    (
+      await session.query<{ allowed: boolean }>(
+        "SELECT pg_has_role(current_user,'migration','MEMBER') AS allowed",
+      )
+    ).rows[0]?.allowed === true;
   if (!trusted)
     return { ok: false as const, reason: "trusted_operations_required" };
   const parsed = crmAcquisitionDiagnosticAuthorizationSchema.safeParse(input);
@@ -500,7 +578,12 @@ export async function revokeCrmAcquisitionDiagnostic(
   session: SessionQueryable,
   input: { workspaceId: string; authorizationId: string; reference: string },
 ) {
-  const trusted = (await session.query<{allowed:boolean}>("SELECT pg_has_role(current_user,'migration','MEMBER') AS allowed")).rows[0]?.allowed === true;
+  const trusted =
+    (
+      await session.query<{ allowed: boolean }>(
+        "SELECT pg_has_role(current_user,'migration','MEMBER') AS allowed",
+      )
+    ).rows[0]?.allowed === true;
   if (!trusted)
     return { ok: false as const, reason: "trusted_operations_required" };
   if (input.reference.length < 1 || input.reference.length > 200)
@@ -513,4 +596,38 @@ export async function revokeCrmAcquisitionDiagnostic(
     ok: true as const,
     value: { authorizationId: input.authorizationId },
   };
+}
+
+/** Pre-consent isolation has no acquisition grant or source scope. It authorizes neither
+ * capture nor sending; normal routes still verify their own current actor and OAuth state. */
+export async function prepareCrmAcquisitionDiagnosticConsentIsolation(
+  context: RepositoryContext,
+  runtime?: CrmAcquisitionDiagnosticRuntime,
+): Promise<boolean> {
+  if (!runtime?.consentIsolationBinding) return false;
+  const readConnection = async () =>
+    (
+      await context.db.query<{ name: string; address: string | null }>(
+        "SELECT current_database() AS name,inet_server_addr()::text AS address",
+      )
+    ).rows[0];
+  try {
+    const before = await readConnection();
+    if (!before || !/^fss[_-]diagnostic[_-]/u.test(before.name)) return false;
+    if (
+      !(await runtime.verifyIsolation({
+        ...runtime.consentIsolationBinding,
+        environmentId: runtime.environmentId,
+        databaseName: before.name,
+        connectedServerAddress: before.address,
+        deploymentIdentity: "",
+        purpose: "oauth_bootstrap",
+      }))
+    )
+      return false;
+    const after = await readConnection();
+    return after?.name === before.name && after.address === before.address;
+  } catch {
+    return false;
+  }
 }

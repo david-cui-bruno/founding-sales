@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import {afterEach,expect,it} from 'vitest';
-import {readLinkedInIdentity} from '../src/main/social/identity.ts';
+import {readLinkedInIdentity,readLinkedInIdentityDetailed} from '../src/main/social/identity.ts';
 afterEach(()=>{document.body.innerHTML='';});
 function profile(name='Example Founder',slug='example-founder'){return `<a href="https://www.linkedin.com/in/${slug}/"><p>Premium</p><svg aria-label="${name}"></svg><img alt="${name}"></a><a href="https://www.linkedin.com/in/${slug}/"><div aria-label="${name}, Founder"><p>${name}</p><p>Founder</p></div></a>`;}
 const url='https://www.linkedin.com/feed/';
@@ -26,7 +26,13 @@ it('ignores hidden account landmarks and rejects malformed names',()=>{
 
 it('survives serialization into an isolated browser world without module dependencies',()=>{
  document.body.innerHTML=`<aside aria-label="Sidebar">${profile()}</aside>`;
- const serialized=new Function('document','pageUrl',`return (${readLinkedInIdentity.toString()})(document,pageUrl)`);
+ const serialized=new Function('document','pageUrl',`return (${readLinkedInIdentityDetailed.toString()})(document,pageUrl)`);
  expect(serialized(document,url)).toEqual(readLinkedInIdentity(document,url));
 });
 it('reads the same sidebar while the native composer is open without navigating away',()=>{document.body.innerHTML=`<aside aria-label="Sidebar">${profile()}</aside><dialog open></dialog>`;expect(readLinkedInIdentity(document,'https://www.linkedin.com/sharing/compose')).toMatchObject({externalAccountId:'https://www.linkedin.com/in/example-founder/'});});
+it('classifies missing or ambiguous own-profile evidence without returning names or URLs',()=>{
+ document.body.innerHTML='';expect(readLinkedInIdentityDetailed(document,url)).toEqual({reason:'identity_sidebar_unavailable'});
+ document.body.innerHTML='<aside aria-label="Sidebar"></aside><aside aria-label="Sidebar"></aside>';expect(readLinkedInIdentityDetailed(document,url)).toEqual({reason:'identity_sidebar_ambiguous'});
+ document.body.innerHTML='<aside aria-label="Sidebar"></aside>';expect(readLinkedInIdentityDetailed(document,url)).toEqual({reason:'identity_profile_unavailable'});
+ document.body.innerHTML=`<aside aria-label="Sidebar">${profile()}${profile('Other','other')}</aside>`;expect(readLinkedInIdentityDetailed(document,url)).toEqual({reason:'identity_profile_ambiguous'});
+});

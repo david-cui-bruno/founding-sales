@@ -132,7 +132,7 @@ it("default startup is unavailable and explicit production connection is rejecte
     implementationCommit: "a".repeat(40),
     imageDigest: "sha256:" + "a".repeat(64),
     side: "worker" as const,
-    schemaVersion: 89,
+    schemaVersion: 90,
     connectionString: "postgres://user:secret@db.example.test/fss",
   };
   expect(createCrmAcquisitionDiagnosticStartup({}, identity)).toBeUndefined();
@@ -143,6 +143,8 @@ it("default startup is unavailable and explicit production connection is rejecte
           environmentId: binding.environmentId,
           region: "us-east-1",
           databaseSecretArn: binding.databaseSecretArn,
+          databaseInstanceArn: binding.databaseInstanceArn,
+          ecsClusterArn: binding.ecsClusterArn,
         }),
         ECS_CONTAINER_METADATA_URI_V4: "http://169.254.170.2/v4/current",
       },
@@ -193,4 +195,53 @@ it("refuses a secret bound to another task container even when image and tags ma
     });
   expect(await data.verify(binding)).toBe(false);
   expect(sdk.rdsSend).not.toHaveBeenCalled();
+});
+
+it("historical progress witnesses the current task and physical database, without granting historical dispatch", async () => {
+  const read = fixture();
+  expect(
+    await read.verify({
+      ...binding,
+      deploymentIdentity: "old-task",
+      purpose: "progress_read",
+    }),
+  ).toBe(true);
+  const dispatch = fixture();
+  expect(
+    await dispatch.verify({
+      ...binding,
+      deploymentIdentity: "old-task",
+      purpose: "acquisition_dispatch",
+    }),
+  ).toBe(false);
+  expect(dispatch.ecsSend).toHaveBeenCalledTimes(1);
+  const wrongDatabase = fixture();
+  expect(
+    await wrongDatabase.verify({
+      ...binding,
+      deploymentIdentity: "old-task",
+      purpose: "progress_read",
+      connectedServerAddress: "10.9.9.9",
+    }),
+  ).toBe(false);
+});
+
+it("consent bootstrap witnesses the actual running task without a fabricated acquisition grant", async () => {
+  const current = fixture();
+  expect(
+    await current.verify({
+      ...binding,
+      deploymentIdentity: "",
+      purpose: "oauth_bootstrap",
+    }),
+  ).toBe(true);
+  const wrongEndpoint = fixture();
+  expect(
+    await wrongEndpoint.verify({
+      ...binding,
+      deploymentIdentity: "",
+      purpose: "oauth_bootstrap",
+      connectedServerAddress: "10.9.9.9",
+    }),
+  ).toBe(false);
 });

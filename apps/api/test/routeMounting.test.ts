@@ -200,6 +200,7 @@ describe('what the API mounts', () => {
       '/follow-up-permissions',
       '/follow-up-permissions/list',
       '/follow-up-permissions/revoke',
+      '/gmail/acquisition/cleanup',
       '/gmail/connect',
       '/gmail/disconnect',
       '/gmail/status',
@@ -410,7 +411,7 @@ describe('what the API mounts', () => {
   it('answers the mail paths with not_found when the deployment has no Gmail configuration', async () => {
     // The same rule `auth` follows: a half-configured deployment serves nothing it
     // could only half do. `options()` supplies neither.
-    for (const path of ['/gmail/connect', '/gmail/status', '/oauth/gmail/callback', '/integrations/gmail/push']) {
+    for (const path of ['/gmail/acquisition/cleanup', '/gmail/connect', '/gmail/status', '/oauth/gmail/callback', '/integrations/gmail/push']) {
       const result = await route(path === '/oauth/gmail/callback' ? 'GET' : 'POST', path, options());
       expect(result.status, path).toBe(404);
     }

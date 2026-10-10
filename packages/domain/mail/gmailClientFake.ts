@@ -454,12 +454,13 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       const inRange = currentMessages().filter(message => {
         const seconds = Math.floor(message.internalDateEpochMilliseconds / 1000);
         const afterOk = strict ? seconds > request.afterEpochSeconds : seconds >= request.afterEpochSeconds;
-        return afterOk && seconds < request.beforeEpochSeconds;
+        return afterOk && seconds < request.beforeEpochSeconds &&
+          (!request.excludeDrafts || !message.labelIds?.includes('DRAFT'));
       });
       // Gmail's page tokens are opaque and belong to the query that issued them. The
       // HTTP client meets a token Gmail does not recognise as a 400, which it throws as
       // `unexpected_status`; the fake answers the same way rather than guessing.
-      const query = `${String(request.afterEpochSeconds)}:${String(request.beforeEpochSeconds)}:${String(request.maxResults)}`;
+      const query = `${String(request.afterEpochSeconds)}:${String(request.beforeEpochSeconds)}:${String(request.maxResults)}:${request.excludeDrafts ? "exclude-drafts" : "all"}`;
       let offset = 0;
       if (request.pageToken !== undefined) {
         const issued = listPageTokens.get(request.pageToken);

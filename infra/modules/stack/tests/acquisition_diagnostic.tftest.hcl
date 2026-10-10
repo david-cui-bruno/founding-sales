@@ -128,6 +128,10 @@ run "isolated_rehearsal_binding" {
     error_message = "Startup JSON and API/worker connections bind actual managed outputs."
   }
   assert {
+    condition     = alltrue([for env in [output.crm_acquisition_diagnostic.runtime.api_environment, output.crm_acquisition_diagnostic.runtime.worker_environment] : jsondecode(env.FSS_CRM_ACQUISITION_DIAGNOSTIC).databaseInstanceArn == output.crm_acquisition_diagnostic.database_instance_arn && jsondecode(env.FSS_CRM_ACQUISITION_DIAGNOSTIC).ecsClusterArn == output.crm_acquisition_diagnostic.ecs_cluster_arn])
+    error_message = "Pre-consent startup must bind the exact actual RDS and ECS resources, not inferred names."
+  }
+  assert {
     condition     = jsondecode(output.crm_acquisition_diagnostic.runtime.worker_environment.FSS_CRM_ACQUISITION_DIAGNOSTIC).environmentId == output.crm_acquisition_diagnostic.environment_id && output.crm_acquisition_diagnostic.runtime.worker_environment.FSS_SENDING_ENABLED == "false"
     error_message = "Worker shares exact diagnostic UUID and never enables sending."
   }

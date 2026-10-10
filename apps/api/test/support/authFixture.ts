@@ -1,9 +1,12 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
-import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
-import type { AuthConfig, AuthDeps } from '../../src/auth/config.ts';
-import { createGoogleClient, httpFetch } from '../../src/auth/googleClient.ts';
-import { startGoogleStub, type GoogleStub } from './googleStub.ts';
+import { randomBytes, randomUUID } from "node:crypto";
+import {
+  createTestDatabase,
+  type TestDatabase,
+} from "@fss/domain/db/testing/testDatabase.ts";
+import type { SessionQueryable } from "@fss/domain/db/queryable.ts";
+import type { AuthConfig, AuthDeps } from "../../src/auth/config.ts";
+import { createGoogleClient, httpFetch } from "../../src/auth/googleClient.ts";
+import { startGoogleStub, type GoogleStub } from "./googleStub.ts";
 
 /**
  * The fixture every identity test starts from.
@@ -14,14 +17,14 @@ import { startGoogleStub, type GoogleStub } from './googleStub.ts';
  * the state-signing key, every device secret — is generated when the fixture starts.
  */
 
-export const CURRENT_CLIENT_VERSION = '1.4.0';
-export const OUTDATED_CLIENT_VERSION = '1.0.0';
+export const CURRENT_CLIENT_VERSION = "1.4.0";
+export const OUTDATED_CLIENT_VERSION = "1.0.0";
 
 export interface SeededMember {
   readonly userId: string;
   readonly googleSub: string;
   readonly email: string;
-  readonly role: 'admin' | 'salesperson';
+  readonly role: "admin" | "salesperson";
 }
 
 export interface SeededWorkspace {
@@ -49,36 +52,43 @@ export interface AuthFixture {
   stop(): Promise<void>;
 }
 
-const HOSTED_DOMAIN = 'callie.example';
+const HOSTED_DOMAIN = "callie.example";
 
 async function seedUser(
   db: SessionQueryable,
-  role: 'admin' | 'salesperson',
+  role: "admin" | "salesperson",
   email: string,
 ): Promise<SeededMember> {
   const googleSub = `sub-${randomUUID()}`;
   const { rows } = await db.query<{ id: string }>(
-    'INSERT INTO users (google_sub, email, display_name) VALUES ($1, $2, $3) RETURNING id',
-    [googleSub, email, `${role} ${email.split('@')[0] ?? ''}`],
+    "INSERT INTO users (google_sub, email, display_name) VALUES ($1, $2, $3) RETURNING id",
+    [googleSub, email, `${role} ${email.split("@")[0] ?? ""}`],
   );
-  return { userId: rows[0]?.id ?? '', googleSub, email, role };
+  return { userId: rows[0]?.id ?? "", googleSub, email, role };
 }
 
-async function seedWorkspace(db: SessionQueryable, slug: string, sharedEmail: string): Promise<SeededWorkspace> {
+async function seedWorkspace(
+  db: SessionQueryable,
+  slug: string,
+  sharedEmail: string,
+): Promise<SeededWorkspace> {
   const created = await db.query<{ id: string }>(
-    'INSERT INTO workspaces (slug, display_name) VALUES ($1, $2) RETURNING id',
+    "INSERT INTO workspaces (slug, display_name) VALUES ($1, $2) RETURNING id",
     [slug, `Workspace ${slug}`],
   );
-  const workspaceId = created.rows[0]?.id ?? '';
-  const admin = await seedUser(db, 'admin', `admin-${slug}@${HOSTED_DOMAIN}`);
-  const salesperson = await seedUser(db, 'salesperson', sharedEmail);
-  const outsider = await seedUser(db, 'salesperson', `outsider-${slug}@${HOSTED_DOMAIN}`);
+  const workspaceId = created.rows[0]?.id ?? "";
+  const admin = await seedUser(db, "admin", `admin-${slug}@${HOSTED_DOMAIN}`);
+  const salesperson = await seedUser(db, "salesperson", sharedEmail);
+  const outsider = await seedUser(
+    db,
+    "salesperson",
+    `outsider-${slug}@${HOSTED_DOMAIN}`,
+  );
   for (const member of [admin, salesperson]) {
-    await db.query('INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, $3)', [
-      workspaceId,
-      member.userId,
-      member.role,
-    ]);
+    await db.query(
+      "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, $3)",
+      [workspaceId, member.userId, member.role],
+    );
   }
   return { workspaceId, slug, admin, salesperson, outsider };
 }
@@ -90,7 +100,7 @@ export function authConfigFor(google: GoogleStub): AuthConfig {
       discoveryUrl: google.discoveryUrl,
       clientId: google.clientId,
       clientSecret: google.clientSecret,
-      redirectUri: 'https://api.fss.example/auth/google/callback',
+      redirectUri: "https://api.fss.example/auth/google/callback",
       hostedDomain: HOSTED_DOMAIN,
       clockSkewSeconds: 60,
     },
@@ -101,26 +111,36 @@ export function authConfigFor(google: GoogleStub): AuthConfig {
     },
     // A ceiling on the 1.4 line: 1.2.0 to 1.4.999 are admitted. The fixture's
     // current client is 1.4.0 and its outdated one 1.0.0, as before.
-    supportedClientVersions: { minimum: '1.2.0', ceiling: '1.4.x', incompatible: [] },
+    supportedClientVersions: {
+      minimum: "1.2.0",
+      ceiling: "1.4.x",
+      incompatible: [],
+    },
     stateSigningKey: randomBytes(32),
   };
 }
 
-export async function createAuthFixture(): Promise<AuthFixture> {
-  const database = await createTestDatabase();
+export async function createAuthFixture(options?: {
+  purpose?: 'acquisition_diagnostic';
+  throughVersion?: number;
+}): Promise<AuthFixture> {
+  const database = await createTestDatabase(options);
   const google = await startGoogleStub();
   const sharedEmail = `shared.display@${HOSTED_DOMAIN}`;
-  const alpha = await seedWorkspace(database.session, 'alpha', sharedEmail);
-  const beta = await seedWorkspace(database.session, 'beta', sharedEmail);
+  const alpha = await seedWorkspace(database.session, "alpha", sharedEmail);
+  const beta = await seedWorkspace(database.session, "beta", sharedEmail);
 
   let current = Date.now();
   const config = authConfigFor(google);
   const deps: AuthDeps = {
     db: database.session,
     config,
-    google: createGoogleClient({ fetch: httpFetch, now: () => new Date(current) }),
+    google: createGoogleClient({
+      fetch: httpFetch,
+      now: () => new Date(current),
+    }),
     now: () => new Date(current),
-    randomSecret: () => randomBytes(32).toString('base64url'),
+    randomSecret: () => randomBytes(32).toString("base64url"),
   };
 
   return {
@@ -133,10 +153,10 @@ export async function createAuthFixture(): Promise<AuthFixture> {
     hostedDomain: HOSTED_DOMAIN,
     collidingDeviceLabel: "David's MacBook",
     collidingCommandId: randomUUID(),
-    advance: milliseconds => {
+    advance: (milliseconds) => {
       current += milliseconds;
     },
-    setNow: instant => {
+    setNow: (instant) => {
       current = instant.getTime();
     },
     stop: async () => {
@@ -148,10 +168,10 @@ export async function createAuthFixture(): Promise<AuthFixture> {
 
 /** The `state` a start-sign-in answer put in the authorization URL. */
 export function stateOf(authorizationUrl: string): string {
-  return new URL(authorizationUrl).searchParams.get('state') ?? '';
+  return new URL(authorizationUrl).searchParams.get("state") ?? "";
 }
 
 /** The `nonce` a start-sign-in answer put in the authorization URL. */
 export function nonceOf(authorizationUrl: string): string {
-  return new URL(authorizationUrl).searchParams.get('nonce') ?? '';
+  return new URL(authorizationUrl).searchParams.get("nonce") ?? "";
 }

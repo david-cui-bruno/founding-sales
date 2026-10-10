@@ -2,7 +2,7 @@ import {linkedInSaveSettlementScript} from './linkedinSaveSettlement.ts';
 import {randomUUID} from 'node:crypto';
 import {linkedInPublishedDetailScript} from './linkedinPublishedDetail.ts';
 import {z} from 'zod';
-import {probeLinkedInIdentity} from '../identityProbe.ts';
+import {probeLinkedInIdentity,probeLinkedInIdentityDetailed} from '../identityProbe.ts';
 import type {stageLinkedInText} from './linkedinStage.ts';
 import {linkedInListNavigationScript} from './linkedinListNavigation.ts';
 import {linkedInScheduledListScript} from './linkedinScheduledList.ts';
@@ -19,6 +19,8 @@ export function createLinkedInBrowserPorts(port:Port){
  async function compose(){if(!current())throw new Error('session_changed');await port.loadURL('https://www.linkedin.com/sharing/compose');if(!current())throw new Error('session_changed');}
  return {
  ...port,current,
+ preparationCurrent:port.current,
+ async probeAccount(){const a=await probeLinkedInIdentityDetailed(port.contents,port.current);return 'reason' in a?a:{identity:{platform:a.platform,externalId:a.externalAccountId,displayName:a.displayName}};},
  async account(){const a=await probeLinkedInIdentity(port.contents,current);return a?{platform:a.platform,externalId:a.externalAccountId,displayName:a.displayName}:null;},
  async openComposer(){await compose();},
  async waitForSave(){

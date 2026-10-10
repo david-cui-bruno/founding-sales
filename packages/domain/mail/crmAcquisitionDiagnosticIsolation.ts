@@ -111,7 +111,10 @@ export function createCrmAcquisitionDiagnosticIsolation(options: {
         tasks.tasks?.length !== 1 ||
         task?.taskArn !== metadata.TaskARN ||
         task.clusterArn !== binding.ecsClusterArn ||
-        task.taskDefinitionArn !== binding.deploymentIdentity ||
+        (binding.purpose !== "progress_read" &&
+          binding.purpose !== "oauth_bootstrap" &&
+          task.taskDefinitionArn !== binding.deploymentIdentity) ||
+        !task.taskDefinitionArn ||
         task.lastStatus !== "RUNNING" ||
         !tagged(task.tags) ||
         !task.containers?.some(
@@ -121,12 +124,12 @@ export function createCrmAcquisitionDiagnosticIsolation(options: {
         return false;
       const definition = await ecs.send(
         new DescribeTaskDefinitionCommand({
-          taskDefinition: binding.deploymentIdentity,
+          taskDefinition: task.taskDefinitionArn,
         }),
       );
       if (
         definition.taskDefinition?.taskDefinitionArn !==
-          binding.deploymentIdentity ||
+          task.taskDefinitionArn ||
         !definition.taskDefinition.containerDefinitions?.some(
           (container) =>
             task.containers?.some(

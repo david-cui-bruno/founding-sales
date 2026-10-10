@@ -67,6 +67,7 @@ export async function routeCrmAcquisitionDiagnostic(
     scoped.context,
     parsed.data,
     options.crmAcquisitionDiagnosticRuntime,
+    "progress_read",
   );
   const result = await withTransaction(options.auth.db, () =>
     readCrmAcquisitionDiagnostic(

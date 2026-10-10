@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest';
-import {probeLinkedInIdentity} from '../src/main/social/identityProbe.ts';
+import {probeLinkedInIdentity,probeLinkedInIdentityDetailed} from '../src/main/social/identityProbe.ts';
 const identity={platform:'linkedin',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example',accountKind:'profile'};
 function port(){return {getURL:vi.fn(()=> 'https://www.linkedin.com/feed/'),executeJavaScriptInIsolatedWorld:vi.fn(async()=>identity)};}
 it('runs a fixed read-only probe in an isolated world without user gesture',async()=>{
@@ -18,4 +18,13 @@ it('does not execute after cancellation or on an unexpected page; DOM errors fai
  const p=port();expect(await probeLinkedInIdentity(p,()=>false)).toBeNull();expect(p.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
  p.getURL.mockReturnValue('https://evil.test');expect(await probeLinkedInIdentity(p,()=>true)).toBeNull();expect(p.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
  const q=port();q.executeJavaScriptInIsolatedWorld.mockRejectedValue(new Error('destroyed'));expect(await probeLinkedInIdentity(q,()=>true)).toBeNull();
+});
+it('reports fixed body-free evidence categories while keeping unavailable separate from cancellation',async()=>{
+ const p=port();p.executeJavaScriptInIsolatedWorld.mockResolvedValue({reason:'identity_sidebar_unavailable'} as never);
+ expect(await probeLinkedInIdentityDetailed(p,()=>true)).toEqual({reason:'identity_sidebar_unavailable'});
+ expect(await probeLinkedInIdentityDetailed(p,()=>false)).toEqual({reason:'session_changed'});
+ p.getURL.mockReturnValue('https://www.linkedin.com/login');
+ expect(await probeLinkedInIdentityDetailed(p,()=>true)).toEqual({reason:'identity_page_unavailable'});
+ p.getURL.mockReturnValue('https://www.linkedin.com/feed/');p.executeJavaScriptInIsolatedWorld.mockRejectedValue(new Error('private URL/name'));
+ expect(await probeLinkedInIdentityDetailed(p,()=>true)).toEqual({reason:'identity_probe_unavailable'});
 });

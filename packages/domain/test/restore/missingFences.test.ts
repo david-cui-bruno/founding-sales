@@ -791,6 +791,14 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
         return metadata === null ? null : change(metadata);
       },
     });
+    // A Sent listing is not delivery proof when fetched metadata still identifies a draft.
+    for (const labelIds of [['DRAFT'], ['DRAFT', 'SENT'], []]) {
+      expect(await scan(reshaped(metadata => ({ ...metadata, labelIds })))).toMatchObject({
+        outcome: 'malformed_response',
+        listed: 0,
+        messages: [],
+      });
+    }
     // No Message-ID, or an empty one, on a message sent in the window: unread, not "not FSS's".
     expect(await scan(reshaped(metadata => ({ ...metadata, headers: {} })))).toMatchObject({ outcome: 'malformed_response' });
     expect(await scan(reshaped(metadata => ({ ...metadata, headers: { Subject: 'Lunch' } })))).toMatchObject({ outcome: 'malformed_response' });

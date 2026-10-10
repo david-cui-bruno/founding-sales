@@ -234,6 +234,7 @@ export async function recordMessage(
   if (existing === null) throw new Error('a message insert conflicted with a row that is not there');
 
   const proven =
+    !(await hasRecordedDraft(context, input.mailboxId, existing.providerMessageId)) &&
     existing.direction === m.direction &&
     existing.headerFrom === m.headerFrom &&
     existing.subject === m.subject &&
@@ -395,4 +396,16 @@ export async function listMessagesForOpportunity(
     [context.scope.workspaceId, input.opportunityId],
   );
   return rows.map(toMessage);
+}
+
+/** Historical drafts remain immutable evidence; fresh labels cannot promote their retained row. */
+export async function hasRecordedDraft(
+  context: RepositoryContext,
+  mailboxId: string,
+  providerMessageId: string,
+): Promise<boolean> {
+  const result = await context.db.query(`SELECT 1 FROM mail_messages
+    WHERE workspace_id=$1 AND mailbox_id=$2 AND provider_message_id=$3 AND 'DRAFT'=ANY(label_ids)`,
+    [context.scope.workspaceId, mailboxId, providerMessageId]);
+  return result.rows.length !== 0;
 }

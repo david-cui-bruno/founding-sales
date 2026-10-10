@@ -115,6 +115,8 @@ export async function createTemplateDatabase(adminUrl: string): Promise<Template
 }
 
 export interface CreateTestDatabaseOptions {
+  /** Fixture namespace only; never proves physical isolation or grants runtime authority. */
+  readonly purpose?: 'acquisition_diagnostic';
   /**
    * Stop after this migration version: an empty database migrated up to it rather than
    * a copy of the template. For the tests that need an older schema (0 is an empty
@@ -129,7 +131,8 @@ export interface CreateTestDatabaseOptions {
  */
 export async function createTestDatabase(options: CreateTestDatabaseOptions = {}): Promise<TestDatabase> {
   const adminUrl = fromGlobalSetup(CLUSTER_URL_ENVIRONMENT_VARIABLE);
-  const name = `fss_test_${randomUUID().replaceAll('-', '')}`;
+  const prefix = options.purpose === 'acquisition_diagnostic' ? 'fss_diagnostic_test' : 'fss_test';
+  const name = `${prefix}_${randomUUID().replaceAll('-', '')}`;
 
   await onCluster(
     adminUrl,

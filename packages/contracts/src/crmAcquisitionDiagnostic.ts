@@ -1,4 +1,12 @@
 import { z } from "zod";
+/** Gmail method costs published for the quota schedule updated 2026-05-01.
+ * These are reserved method units, not measured project-wide headroom. */
+export const CRM_DIAGNOSTIC_QUOTA_SCHEDULE = Object.freeze({
+  version: "gmail-2026-05-01",
+  profile: 1,
+  metadata: 20,
+  body: 20,
+});
 const hash = z.string().regex(/^[a-f0-9]{64}$/u),
   reference = z.string().min(1).max(200);
 export const crmAcquisitionDiagnosticAuthorizationSchema = z
@@ -23,7 +31,7 @@ export const crmAcquisitionDiagnosticAuthorizationSchema = z
     implementationCommit: z.string().regex(/^[a-f0-9]{40}$/u),
     apiImageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
     workerImageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
-    schemaVersion: z.literal(89),
+    schemaVersion: z.literal(90),
     releaseReference: reference,
     disclosureVersion: reference,
     disclosureSha256: hash,
@@ -34,9 +42,9 @@ export const crmAcquisitionDiagnosticAuthorizationSchema = z
     verifiedAt: z.iso.datetime(),
     validUntil: z.iso.datetime(),
     maxReads: z.number().int().min(1).max(8),
-    maxUnits: z.number().int().min(1).max(10000),
-    metadataUnits: z.literal(5),
-    bodyUnits: z.literal(5),
+    maxUnits: z.number().int().min(1).max(160),
+    metadataUnits: z.literal(20),
+    bodyUnits: z.literal(20),
     messages: z
       .array(
         z.strictObject({
@@ -91,6 +99,23 @@ export const crmAcquisitionDiagnosticReadResultSchema = z.strictObject({
   observedUnits: z.number().int().nonnegative(),
   conservedUnits: z.number().int().nonnegative(),
   releasedUnits: z.number().int().nonnegative(),
+  accountingProvenance: z.enum([
+    "not_started",
+    "documented_current_schedule",
+    "legacy_recorded_unverified",
+    "mixed",
+  ]),
+  accountingBuckets: z.array(
+    z.strictObject({
+      scheduleVersion: z.enum([
+        "gmail-2026-05-01",
+        "legacy-v89-recorded-unverified",
+      ]),
+      attemptedReads: z.number().int().nonnegative(),
+      observedUnits: z.number().int().nonnegative(),
+      conservedUnits: z.number().int().nonnegative(),
+    }),
+  ),
   copies: z.array(
     z.strictObject({
       sourceId: z.uuid(),
