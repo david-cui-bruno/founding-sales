@@ -89,6 +89,7 @@ import type { TodayBridgeHost } from './todayBridge.ts';
 
 export interface OperationHostDeps {
   readonly notifications?:{status():NotificationRuntimeStatus};
+  readonly socialDelivery?:{status():{queue:'unread'|'available'|'unavailable';lastReadAt:string|null}};
   readonly socialAccounts?: SocialAccountsBridge;
   readonly socialImages?: SocialImageImport;
   readonly api: AuthedClient;
@@ -204,6 +205,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'social.deliveryStatus':async()=>deps.socialDelivery?.status()??{queue:'unread',lastReadAt:null},
     'social.imageStage':async()=>deps.socialImages?deps.socialImages.state():{stage:null,reason:null,savedAssetId:null},
     'social.chooseImage':async(input:OperationInput<'social.chooseImage'>)=>deps.socialImages?deps.socialImages.choose(input):{stage:null,reason:'unavailable',savedAssetId:null},
     'social.pasteImage':async(input:OperationInput<'social.pasteImage'>)=>deps.socialImages?deps.socialImages.paste(input):{stage:null,reason:'unavailable',savedAssetId:null},

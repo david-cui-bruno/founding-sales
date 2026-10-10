@@ -874,6 +874,7 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'social.deliveryStatus': {kind:'read',calls:[],input:z.strictObject({}),output:z.strictObject({queue:z.enum(['unread','available','unavailable']),lastReadAt:z.string().datetime().nullable()}),transform:'Local authenticated queue transport status, never platform acceptance'},
   'social.imageStage': {kind:'read',calls:[],input:z.strictObject({}),output:socialImageImportViewSchema,transform:'Owner-private local image preparation'},
   'social.chooseImage': {kind:'command',calls:[],input:socialImageChooseSchema,output:socialImageImportViewSchema,transform:'Explicit native file picker; no renderer paths'},
   'social.pasteImage': {kind:'command',calls:[],input:z.strictObject({usageNote:z.string().trim().max(1000).nullable()}),output:socialImageImportViewSchema,transform:'Explicit clipboard image selection; no clipboard text access'},

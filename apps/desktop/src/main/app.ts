@@ -317,6 +317,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   }});
   const bridges = registerWindowBridges({
     notifications,
+    socialDelivery:socialRunner,
     socialAccounts,
     socialImages: createSocialImageImport({
       directory: configuration.userDataDirectory, api,

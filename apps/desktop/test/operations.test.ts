@@ -626,3 +626,11 @@ it('reads private manual work and changes a task through separate closed action 
  expect(await answerOperation(operationHandlers(deps),'read','ask.actionRead',{scope:{kind:'today'},limit:20})).toEqual({items:[],nextAfterId:null});
  expect(await answerOperation(operationHandlers(deps),'command','ask.actionChange',{actionId:ITEM_ID,expectedVersion:2,action:'complete_task'})).toMatchObject({status:'done',version:3});
 });
+
+it('delivery transport status stays local and never implies a successful platform submission',async()=>{
+ const deps=hosts();
+ expect(await answerOperation(operationHandlers(deps),'read','social.deliveryStatus',{})).toEqual({queue:'unread',lastReadAt:null});
+ const configured={...deps,socialDelivery:{status:()=>({queue:'unavailable' as const,lastReadAt:'2026-10-09T20:00:00.000Z'})}};
+ expect(await answerOperation(operationHandlers(configured),'read','social.deliveryStatus',{})).toEqual({queue:'unavailable',lastReadAt:'2026-10-09T20:00:00.000Z'});
+ expect(deps.api.read).not.toHaveBeenCalled();
+});
