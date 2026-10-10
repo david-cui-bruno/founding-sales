@@ -29,3 +29,14 @@ it('reports an unreadable queue without claiming that remote deliveries were hel
  expect(h.runner.status()).toEqual({queue:'unavailable',lastReadAt:null});
  expect(h.holds).toEqual([]);
 });
+it('clears the previous session delivery status explicitly before another owner uses the runner',async()=>{
+ const h=fixture();await expect(h.runner.read()).rejects.toThrow('queue_unavailable');
+ h.runner.resetStatus();expect(h.runner.status()).toEqual({queue:'unread',lastReadAt:null});
+});
+it('does not mark a new session available when the previous session read finishes late',async()=>{
+ let finish:(value:{ok:true;value:SocialDeliveryQueue})=>void=()=>{};
+ const api={read:()=>new Promise<{ok:true;value:SocialDeliveryQueue}>(resolve=>{finish=resolve;})} as unknown as AuthedClient;
+ const runner=createSocialDeliveryRunner({api,root:'/unused',identity:async()=>null,now:()=>0,adapters:{}});
+ const previous=runner.read();runner.resetStatus();finish({ok:true,value:{items:[]}});await previous;
+ expect(runner.status()).toEqual({queue:'unread',lastReadAt:null});
+});

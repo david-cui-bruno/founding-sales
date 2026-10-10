@@ -13,10 +13,11 @@ export interface VerifiedSocialAdapter {
 }
 interface Deps {api:AuthedClient;root:string;identity():Promise<{workspaceId:string;userId:string}|null>;now():number;adapters:Partial<Record<SocialPlatform,VerifiedSocialAdapter>>;send?:typeof fetch}
 export function createSocialDeliveryRunner(deps:Deps){
- let queue:'unread'|'available'|'unavailable'='unread',lastReadAt:string|null=null;
+ let queue:'unread'|'available'|'unavailable'='unread',lastReadAt:string|null=null,statusEpoch=0;
  return {
  status(){return {queue,lastReadAt};},
- async read():Promise<SocialDeliveryQueue>{try{const result=await deps.api.read('/social/delivery/queue',v=>socialDeliveryQueueSchema.parse(v),{});if(!result.ok)throw new Error('queue_unavailable');queue='available';lastReadAt=new Date(deps.now()).toISOString();return result.value;}catch{queue='unavailable';throw new Error('queue_unavailable');}},
+ resetStatus(){statusEpoch++;queue='unread';lastReadAt=null;},
+ async read():Promise<SocialDeliveryQueue>{const epoch=statusEpoch;try{const result=await deps.api.read('/social/delivery/queue',v=>socialDeliveryQueueSchema.parse(v),{});if(!result.ok)throw new Error('queue_unavailable');if(epoch===statusEpoch){queue='available';lastReadAt=new Date(deps.now()).toISOString();}return result.value;}catch{if(epoch===statusEpoch)queue='unavailable';throw new Error('queue_unavailable');}},
  async run(input:SocialDeliveryQueue['items'][number],current:()=>boolean):Promise<void>{
   if(!current())return;
   const item=socialDeliveryQueueSchema.parse({items:[input]}).items[0]!;

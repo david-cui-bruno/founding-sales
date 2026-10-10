@@ -50,3 +50,9 @@ it('shows missed-time recovery independently while retaining a successful siblin
  expect(screen.getAllByRole('button',{name:'Edit'})).toHaveLength(1);
  expect(mutate).not.toHaveBeenCalled();
 });
+it('shows unavailable delivery queue honestly with its last successful read, without holding or rescheduling posts',async()=>{
+ const mutate=vi.fn();render(<DraftsProvider><SocialRoute ports={{read:async()=>({view:{accounts:[account],posts:[]},reason:null}),mutate,deliveryStatus:async()=>({queue:'unavailable',lastReadAt:'2026-10-09T12:00:00Z'})}}/></DraftsProvider>);
+ expect(await screen.findByText('Delivery queue is unavailable. Existing schedules and uncertain submissions are unchanged.')).toBeTruthy();
+ expect(screen.getByText(/Last successful delivery check:/u)).toBeTruthy();
+ expect(mutate).not.toHaveBeenCalled();
+});
