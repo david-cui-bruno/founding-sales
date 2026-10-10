@@ -121,7 +121,7 @@ resource "aws_db_instance" "main" {
   instance_class              = var.instance_class
   multi_az                    = var.multi_az
 
-  db_name                       = "fss"
+  db_name                       = var.database_name
   username                      = "fss_admin"
   manage_master_user_password   = true
   master_user_secret_kms_key_id = aws_kms_key.database.arn

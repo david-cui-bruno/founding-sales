@@ -1,3 +1,4 @@
+import {CRM_ACQUISITION_DIAGNOSTIC_PATHS,routeCrmAcquisitionDiagnostic} from './crmAcquisitionDiagnostic.ts';
 import {CRM_CAPABILITY_PATHS,routeCrmCapabilities} from './crmCapabilities.ts';
 import {ASK_ACTION_PATHS,routeAskActions} from './askActions.ts';
 import {ASK_HISTORY_PATHS,routeAskHistory} from './askHistory.ts';
@@ -200,6 +201,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('crm-commitments',{paths:CRM_COMMITMENT_PATHS},routeCrmCommitments,routing),
     moduleOf('crm-evidence', {paths:CRM_EVIDENCE_PATHS},routeCrmEvidence,routing),
     moduleOf('crm-capabilities', { paths: CRM_CAPABILITY_PATHS }, routeCrmCapabilities, routing),
+    moduleOf('crm-acquisition-diagnostic', {paths:CRM_ACQUISITION_DIAGNOSTIC_PATHS},routeCrmAcquisitionDiagnostic,routing),
     moduleOf('crm-processing', { paths: CRM_PROCESSING_PATHS }, routeCrmProcessing, routing),
     moduleOf('firm-page', { paths: FIRM_PAGE_PATHS }, routeFirmPage, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),

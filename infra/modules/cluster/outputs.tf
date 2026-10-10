@@ -171,3 +171,12 @@ output "task_runtime_platform" {
     }
   }
 }
+
+output "diagnostic_witness_policies" {
+  description = "Additional readonly witness policies; empty when diagnostic mode is off."
+  value       = { for role, policy in aws_iam_role_policy.crm_acquisition_diagnostic_witness : role => jsondecode(policy.policy) }
+}
+output "diagnostic_runtime_binding" {
+  description = "Actual task environment and propagated service tags for diagnostic composition inspection."
+  value       = { api_environment = local.api_environment, worker_environment = local.worker_environment, api_tags = aws_ecs_service.api.tags, worker_tags = aws_ecs_service.worker.tags, api_task_definition_arn = aws_ecs_task_definition.api.arn, worker_task_definition_arn = aws_ecs_task_definition.worker.arn }
+}

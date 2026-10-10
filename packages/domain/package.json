@@ -15,7 +15,10 @@
     "@anthropic-ai/sdk": "^0.128.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1145.0",
     "@aws-sdk/client-cloudwatch": "^3.1141.0",
+    "@aws-sdk/client-ecs": "3.1145.0",
     "@aws-sdk/client-kms": "^3.1141.0",
+    "@aws-sdk/client-rds": "3.1145.0",
+    "@aws-sdk/client-secrets-manager": "3.1141.0",
     "@fss/contracts": "*",
     "pg": "^8.13.1",
     "twitter-text": "3.1.0"

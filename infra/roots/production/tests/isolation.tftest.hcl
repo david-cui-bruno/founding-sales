@@ -465,3 +465,11 @@ run "the_production_api_names_the_update_manifest_as_its_upgrade_address" {
     error_message = "The production API publishes the signed update manifest, releases/darwin-arm64/latest.json on the updates distribution, and the upgrade address is the API's alone."
   }
 }
+
+run "production_root_refuses_acquisition_diagnostic" {
+  command = plan
+  variables {
+    crm_acquisition_diagnostic = { environment_id = "11111111-2222-4333-8444-555555555555", database_name = "fss_diagnostic_fixture" }
+  }
+  expect_failures = [var.crm_acquisition_diagnostic]
+}

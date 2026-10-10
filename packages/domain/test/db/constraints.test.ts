@@ -1,3 +1,4 @@
+import {CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES} from './support/crmAcquisitionDiagnosticCases.ts';
 import {CRM_CAPABILITY_CONSTRAINT_CASES} from './support/crmCapabilityCases.ts';
 import {ROADMAP_ACTIVATION_CONSTRAINT_CASES} from './support/roadmapActivationCases.ts';
 import {ASK_ACTION_CONSTRAINT_CASES} from './support/askActionCases.ts';
@@ -2156,6 +2157,7 @@ const cases: readonly Case[] = [
   ...OUTREACH_CONSTRAINT_CASES,
   ...ROADMAP_ACTIVATION_CONSTRAINT_CASES,
   ...CRM_CAPABILITY_CONSTRAINT_CASES,
+  ...CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES,
   ...SOCIAL_CONSTRAINT_CASES,
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,

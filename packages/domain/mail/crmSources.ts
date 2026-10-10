@@ -112,6 +112,7 @@ const payloadSchema = z
     policyRevision: z.number().int().positive(),
     decisionRevision: z.number().int().nonnegative(),
     acquisitionOrigin:z.strictObject({importId:z.string().uuid()}).optional(),
+    diagnosticAuthorizationId:z.uuid().optional(),
     recapture: z
       .object({
         sourceId: z.string().uuid(),
@@ -121,7 +122,7 @@ const payloadSchema = z
       .optional(),
   })
   .strict();
-type CapturePayload = z.infer<typeof payloadSchema>;
+export type CapturePayload = z.infer<typeof payloadSchema>;
 interface Control extends Record<string, unknown> {
   enabled: boolean;
   revision: number;
@@ -155,7 +156,7 @@ interface Conversation extends Record<string, unknown> {
   human_decision: string | null;
   decision_revision: number;
 }
-interface CaptureAuthority {
+export interface CaptureAuthority {
   mailboxEmail: string;
   proof: MailCaptureProof;
   conversation: Conversation;
@@ -303,6 +304,14 @@ export function businessMailCaptureHandler(deps: {
   provider: MailCaptureProvider;
   proofVerifier?: MailCaptureProofVerifier;
   historicalProvider?: HistoricalMailCaptureProvider;
+  diagnostic?: {
+    provider: MailCaptureProvider;
+    proofVerifier: MailCaptureProofVerifier;
+    lockAuthority(
+      input: JobHandlerInput,
+      payload: CapturePayload,
+    ): Promise<CaptureAuthority | null>;
+  };
 }): JobHandler {
   return {
     kind: 'crm.mail_capture',
@@ -310,17 +319,46 @@ export function businessMailCaptureHandler(deps: {
     maxAttempts: 4,
     leaseSeconds: 120,
     async handle(input) {
+      // Absent authority disables the whole composition before examining legacy jobs.
+      if (!deps.proofVerifier && !deps.diagnostic)
+        return done('acquisition_disabled');
       const parsed = payloadSchema.safeParse(input.job.payload);
-      // No verifier is an unconditional disabled composition, even if a database row was toggled.
-      if (!deps.proofVerifier) return done('acquisition_disabled');
       if (!parsed.success) return done('invalid_capture_payload');
       const payload = parsed.data;
+      const diagnostic = payload.diagnosticAuthorizationId !== undefined;
+      if (
+        diagnostic &&
+        (!deps.diagnostic || payload.recapture || payload.acquisitionOrigin)
+      )
+        return done('diagnostic_unavailable');
+      const verifier = diagnostic
+        ? deps.diagnostic?.proofVerifier
+        : deps.proofVerifier;
+      if (!verifier) return done('acquisition_disabled');
+      async function lockAuthority(
+        input: JobHandlerInput,
+        payload: CapturePayload,
+        lockConversation = false,
+        beforeConversation?: () => Promise<boolean>,
+      ) {
+        if (diagnostic) {
+          if (beforeConversation && !(await beforeConversation())) return null;
+          return deps.diagnostic!.lockAuthority(input, payload);
+        }
+        return lockCaptureAuthority(
+          input,
+          payload,
+          lockConversation,
+          beforeConversation,
+        );
+      }
       // Historical reads require the separately reserved import adapter; never fall through to live reads.
-      if(payload.acquisitionOrigin&&!deps.historicalProvider)return done('historical_read_meter_required');
+      if (payload.acquisitionOrigin && !deps.historicalProvider)
+        return done('historical_read_meter_required');
       const staged = await withTransaction(input.session, async () => {
         const original = await lockOriginalMailContexts(input, payload);
         if (!original) return null;
-        const authority = await lockCaptureAuthority(input, payload, true);
+        const authority = await lockAuthority(input, payload, true);
         if (!authority) return null;
         await input.session.query(
           "INSERT INTO crm_mail_capture_identities(workspace_id,mailbox_id,account_binding,provider_message_id,lease_fencing_token,job_id,state) VALUES($1,$2,$3,$4,$5::bigint,$6,'pending') ON CONFLICT(workspace_id,mailbox_id,account_binding,provider_message_id) DO NOTHING",
@@ -382,6 +420,7 @@ export function businessMailCaptureHandler(deps: {
         if (
           identity.source_id !== null &&
           identity.source_id !== original.messageId &&
+          !diagnostic &&
           !(
             recaptureAllowed &&
             original.messageId === null &&
@@ -400,7 +439,7 @@ export function businessMailCaptureHandler(deps: {
           [
             input.scope.workspaceId,
             identity.id,
-            recaptureAllowed ? payload.recapture!.sourceId : original.messageId,
+            recaptureAllowed ? payload.recapture!.sourceId : diagnostic?identity.source_id:original.messageId,
             JSON.stringify(original.matches),
           ],
         );
@@ -412,7 +451,7 @@ export function businessMailCaptureHandler(deps: {
           staged.outcome,
           'sourceId' in staged ? { sourceId: staged.sourceId } : {},
         );
-      if (!(await deps.proofVerifier.verify(staged.authority.proof)))
+      if (!(await verifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
       const providerInput={
           expectedProof:structuredClone(staged.authority.proof),
@@ -423,7 +462,7 @@ export function businessMailCaptureHandler(deps: {
           generation: payload.generation,
       };
       const message = providerMessageSchema.safeParse(
-        payload.acquisitionOrigin===undefined?await deps.provider.read(providerInput):await deps.historicalProvider!.read({...providerInput,
+        payload.acquisitionOrigin===undefined?await (diagnostic?deps.diagnostic!.provider:deps.provider).read(providerInput):await deps.historicalProvider!.read({...providerInput,
           importId:payload.acquisitionOrigin.importId,conversationId:payload.conversationId,decisionRevision:payload.decisionRevision,
           expectedProof:staged.authority.proof,context:repositoryContext(input.scope,input.session),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken,
         }),
@@ -456,11 +495,11 @@ export function businessMailCaptureHandler(deps: {
       );
       if (participants.some((value) => value === null))
         return done('provider_evidence_invalid');
-      if (!(await deps.proofVerifier.verify(staged.authority.proof)))
+      if (!(await verifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
       return withTransaction(input.session, async () => {
         if(payload.acquisitionOrigin&&deps.historicalProvider?.revalidate&&!await deps.historicalProvider.revalidate(repositoryContext(input.scope,input.session),{importId:payload.acquisitionOrigin.importId,expectedProof:staged.authority.proof}))return done('verification_unavailable');
-        if (deps.proofVerifier?.revalidate && !await deps.proofVerifier.revalidate(repositoryContext(input.scope,input.session),staged.authority.proof)) return done('verification_unavailable');
+        if (verifier.revalidate && !await verifier.revalidate(repositoryContext(input.scope,input.session),staged.authority.proof)) return done('verification_unavailable');
         const senderEndpoint = participants[0]!;
         const senderHash = createHash('sha256')
           .update(senderEndpoint)
@@ -510,7 +549,7 @@ export function businessMailCaptureHandler(deps: {
             [input.scope.workspaceId, candidates[0]!.id],
           );
         let participantDeleted = false;
-        const current = await lockCaptureAuthority(
+        const current = await lockAuthority(
           input,
           payload,
           true,
@@ -632,10 +671,11 @@ export function businessMailCaptureHandler(deps: {
                 m.subject,
                 m.labels,
                 m.body === null,
-                payload.recapture?.sourceId ?? null,
+                payload.recapture?.sourceId ?? (diagnostic?identity.source_id:null),
               ],
             )
           ).rows[0]!.id;
+        if(diagnostic)await input.session.query('UPDATE mail_messages SET provider_thread_id=$3,direction=$4,internal_date=$5,header_from=$6,header_to=$7,header_cc=$8,subject=$9,label_ids=$10 WHERE workspace_id=$1 AND id=$2',[input.scope.workspaceId,sourceId,m.threadId,outgoing?'outgoing':'incoming',m.providerAt,m.from.toLowerCase(),m.to,m.cc,m.subject,m.labels]);
         const hash = createHash('sha256')
           .update(m.body ?? '')
           .digest('hex');
@@ -686,7 +726,7 @@ export function businessMailCaptureHandler(deps: {
           m.ranges.some((r) => r.kind === 'authored') &&
           !m.ranges.every((r) => r.kind === 'forwarded' || r.kind === 'quoted');
         await input.session.query(
-          `INSERT INTO crm_mail_sources(workspace_id,source_id,capture_identity_id,source_revision,content_hash,owner_user_id,mailbox_id,provider_account_id,account_binding,acquired_generation,controls_revision,policy_revision,conversation_id,decision_revision,disclosure_version,disclosure_sha256,verification_receipts,parser_version,representation,completeness,passage_ranges,participants,raw_sender_date,provider_at,sent_proof) VALUES($1,$2,$3,$25,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20::jsonb,$21::jsonb,$22,$23,$24) ON CONFLICT(workspace_id,source_id) DO UPDATE SET source_revision=EXCLUDED.source_revision,content_hash=EXCLUDED.content_hash,acquired_generation=EXCLUDED.acquired_generation,controls_revision=EXCLUDED.controls_revision,policy_revision=EXCLUDED.policy_revision,decision_revision=EXCLUDED.decision_revision,disclosure_version=EXCLUDED.disclosure_version,disclosure_sha256=EXCLUDED.disclosure_sha256,verification_receipts=EXCLUDED.verification_receipts,parser_version=EXCLUDED.parser_version,representation=EXCLUDED.representation,completeness=EXCLUDED.completeness,passage_ranges=EXCLUDED.passage_ranges,participants=EXCLUDED.participants,raw_sender_date=EXCLUDED.raw_sender_date,provider_at=EXCLUDED.provider_at,sent_proof=EXCLUDED.sent_proof,availability='available',observed_at=now()`,
+          `INSERT INTO crm_mail_sources(workspace_id,source_id,capture_identity_id,source_revision,content_hash,owner_user_id,mailbox_id,provider_account_id,account_binding,acquired_generation,controls_revision,policy_revision,conversation_id,decision_revision,disclosure_version,disclosure_sha256,verification_receipts,parser_version,representation,completeness,passage_ranges,participants,raw_sender_date,provider_at,sent_proof,diagnostic_authorization_id) VALUES($1,$2,$3,$25,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20::jsonb,$21::jsonb,$22,$23,$24,$26) ON CONFLICT(workspace_id,source_id) DO UPDATE SET source_revision=EXCLUDED.source_revision,content_hash=EXCLUDED.content_hash,acquired_generation=EXCLUDED.acquired_generation,controls_revision=EXCLUDED.controls_revision,policy_revision=EXCLUDED.policy_revision,decision_revision=EXCLUDED.decision_revision,disclosure_version=EXCLUDED.disclosure_version,disclosure_sha256=EXCLUDED.disclosure_sha256,verification_receipts=EXCLUDED.verification_receipts,parser_version=EXCLUDED.parser_version,representation=EXCLUDED.representation,completeness=EXCLUDED.completeness,passage_ranges=EXCLUDED.passage_ranges,participants=EXCLUDED.participants,raw_sender_date=EXCLUDED.raw_sender_date,provider_at=EXCLUDED.provider_at,sent_proof=EXCLUDED.sent_proof,availability='available',observed_at=now()`,
           [
             input.scope.workspaceId,
             sourceId,
@@ -699,7 +739,7 @@ export function businessMailCaptureHandler(deps: {
             p.generation,
             p.controlsRevision,
             p.policyRevision,
-            payload.conversationId,
+            diagnostic?null:payload.conversationId,
             payload.decisionRevision,
             p.disclosureVersion,
             p.disclosureSha256,
@@ -718,9 +758,11 @@ export function businessMailCaptureHandler(deps: {
             m.providerAt,
             sentProof,
             captureRevision,
+            payload.diagnosticAuthorizationId??null,
           ],
         );
         if (
+          !diagnostic &&
           safeLabel &&
           !knownIdentity &&
           !m.labels.includes('SENT') &&
@@ -760,7 +802,7 @@ export function businessMailCaptureHandler(deps: {
             [input.scope.workspaceId, sourceId, captureRevision],
           );
         }
-        for (const match of staged.original.matches) {
+        for (const match of diagnostic?[]:staged.original.matches) {
           await input.session.query(
             "INSERT INTO crm_mail_source_contexts(workspace_id,source_id,source_revision,firm_id,opportunity_id,context_kind,operational_match_id,operational_match_hash,review) VALUES($1,$2,$8,$3,$4,'acquired',$5,$6,$7)",
             [
@@ -790,7 +832,7 @@ export function businessMailCaptureHandler(deps: {
               },
             },
           );
-        await input.session.query(
+        if(!diagnostic)await input.session.query(
           "INSERT INTO crm_mail_source_intents(workspace_id,source_kind,source_id,source_revision,content_hash) VALUES($1,'mail',$2,$4,$3)",
           [input.scope.workspaceId, sourceId, hash, captureRevision],
         );
@@ -1410,6 +1452,7 @@ export async function resolveMailSource(
   context: RepositoryContext,
   exact: ExactMailSource,
 ) {
+  if ((await context.db.query('SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 AND diagnostic_authorization_id IS NOT NULL',[context.scope.workspaceId,exact.sourceId])).rows.length) return {state:'unavailable',reason:'diagnostic_source_unavailable',source:null} as const;
   const read = await readMailConversation(context, exact);
   if (read.state !== 'available') return read;
   const body = read.source.passage;
@@ -1728,6 +1771,7 @@ export async function associateMailSource(
     firmId?: string | undefined;
   },
 ) {
+  if ((await context.db.query('SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 AND diagnostic_authorization_id IS NOT NULL',[context.scope.workspaceId,input.sourceId])).rows.length) return {ok:false as const,reason:'diagnostic_source_unavailable'};
   const contexts = await lockMailCopyContext(context, input.sourceId, {
     personIds: input.personId ? [input.personId] : [],
     firmIds: input.firmId ? [input.firmId] : [],
@@ -1833,6 +1877,7 @@ async function prepareMailProcessingSnapshot(
   | { ok: true; authority: CapturedMailProcessingAuthority }
   | { ok: false; reason: string }
 > {
+  if((await context.db.query('SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 AND diagnostic_authorization_id IS NOT NULL',[context.scope.workspaceId,exact.sourceId])).rows.length)return {ok:false as const,reason:'diagnostic_source_unavailable'};
   const actor = context.scope.actor;
   if (
     actor.kind !== 'user' ||

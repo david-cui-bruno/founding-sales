@@ -139,3 +139,13 @@ variable "bootstrap" {
   type        = bool
   default     = true
 }
+
+variable "crm_acquisition_diagnostic" {
+  description = "Explicit isolated acquisition acceptance mode. Null preserves ordinary rehearsal and production defaults; never provisions mailbox consent or capture authority."
+  type        = object({ environment_id = string, database_name = string })
+  default     = null
+  validation {
+    condition     = var.crm_acquisition_diagnostic == null ? true : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", var.crm_acquisition_diagnostic.environment_id)) && can(regex("^fss_diagnostic_[a-z0-9_]{1,40}$", var.crm_acquisition_diagnostic.database_name))
+    error_message = "Diagnostic mode requires an explicit UUID and a bounded fss_diagnostic_ database name."
+  }
+}

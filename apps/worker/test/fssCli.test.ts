@@ -185,7 +185,7 @@ describe('the commands deploy.sh release runs on the migration task definition',
 
   it('every migration-identity command is one the parser knows, so the list holds no phantom', () => {
     for (const command of MIGRATION_IDENTITY_COMMANDS) {
-      const argv=command==='migration-auth-check'?[command,'--expected-database','fss','--expected-user','fss_admin','--expected-host','db.example.test']:(command==='admin crm-authority provision'||command==='admin crm-read-allocation put')?[...command.split(' '),'--json-base64','e30=','--sha256','a'.repeat(64)]:command==='admin crm-authority revoke'?[...command.split(' '),'--workspace','00000000-0000-4000-8000-000000000001','--receipt','00000000-0000-4000-8000-000000000002','--reference','review']:command.split(' ');
+      const argv=command==='migration-auth-check'?[command,'--expected-database','fss','--expected-user','fss_admin','--expected-host','db.example.test']:(command==='admin crm-authority provision'||command==='admin crm-read-allocation put'||command==='admin crm-acquisition-diagnostic provision')?[...command.split(' '),'--json-base64','e30=','--sha256','a'.repeat(64)]:command==='admin crm-acquisition-diagnostic revoke'?[...command.split(' '),'--workspace','00000000-0000-4000-8000-000000000001','--authorization','00000000-0000-4000-8000-000000000002','--reference','review']:command==='admin crm-authority revoke'?[...command.split(' '),'--workspace','00000000-0000-4000-8000-000000000001','--receipt','00000000-0000-4000-8000-000000000002','--reference','review']:command.split(' ');
       expect(parseFssCommand(argv).ok, command).toBe(true);
     }
   });

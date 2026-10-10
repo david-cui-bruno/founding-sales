@@ -67,3 +67,7 @@ _Avoid_: source completion when referring to operational readiness
 **Capability authority receipt**:
 A dated independent review authorizing one precisely configured capability for a particular owner and scope, subject to expiry and revocation.
 _Avoid_: settings, diagnostic result, sending permission
+
+**Acquisition diagnostic authorization**:
+A dated approval to test acquisition of explicitly selected business messages within an isolated environment and a conserved read allowance. It does not authorize production capture, hosted processing or outreach.
+_Avoid_: capability authority receipt, capture activation

@@ -56,6 +56,8 @@ const coverage = (
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   Object.freeze({
+  crm_acquisition_diagnostic_authorizations:coverage(['retained'],'Immutable body-free acquisition diagnostic owner consent and revocation audit; exact current owner/account/expiry/environment binding prevents reuse; no copied content or tokens.'),
+  crm_acquisition_diagnostic_reads:coverage(['retained'],'Body-free exact scoped provider read accounting survives source deletion and revocation; no original content or tokens.'),
   crm_capability_authority_receipts: coverage(
     ['retained'],
     'Immutable body-free reviewed capability configuration, evidence/release hashes and opaque review references, with one recorded revocation. Retained as authorization audit history after expiry, source deletion, disconnect and departure; never a copied body or token store. Active membership, exact owner/account/generation, current configuration, release, expiry and revocation are rechecked before use; retained history cannot restore authority.',

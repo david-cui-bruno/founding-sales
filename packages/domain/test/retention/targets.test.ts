@@ -76,6 +76,8 @@ describe('the registry covers the retention table', () => {
       'opportunity_stage_events',
       'crm_domain_events',
       'funnel_facts',
+      'crm_acquisition_diagnostic_authorizations',
+      'crm_acquisition_diagnostic_reads',
       'crm_capability_authority_receipts',
       'mailbox_oauth_grant_observations',
     ];

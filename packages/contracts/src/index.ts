@@ -87,3 +87,4 @@ export * from './emailAdmissionActivation.ts';
 export * from './crmPricing.ts';
 
 export * from './crmActivation.ts';
+export * from './crmAcquisitionDiagnostic.ts';

@@ -1,3 +1,4 @@
+import {crmAcquisitionDiagnosticProvisionCommand,crmAcquisitionDiagnosticRevokeCommand} from './fss/crmAcquisitionDiagnostic.ts';
 import {crmAuthorityProvisionCommand,crmAuthorityRevokeCommand,crmReadAllocationPutCommand} from './fss/crmAuthority.ts';
 import {migrationAuthenticationCheck} from './fss/migrationAuthentication.ts';
 import {discoveryResumeCommand} from './fss/discoveryResume.ts';
@@ -100,6 +101,8 @@ export const MIGRATION_IDENTITY_COMMANDS: readonly string[] = Object.freeze([
   // Lane RS-2: the two above, in one task, which is what the schema release runs.
   'release-prepare',
   'migration-auth-check',
+  'admin crm-acquisition-diagnostic provision',
+  'admin crm-acquisition-diagnostic revoke',
   'admin crm-authority provision',
   'admin crm-authority revoke',
   'admin crm-read-allocation put',
@@ -174,6 +177,8 @@ async function resolveJournalSource(config: ToolConfig): Promise<AdminInvocation
 type AdminRunner = (invocation: AdminInvocation) => Promise<AdminOutcome>;
 
 const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
+  'crm-acquisition-diagnostic provision':crmAcquisitionDiagnosticProvisionCommand,
+  'crm-acquisition-diagnostic revoke':crmAcquisitionDiagnosticRevokeCommand,
   'crm-read-allocation put': crmReadAllocationPutCommand,
   'crm-authority provision': crmAuthorityProvisionCommand,
   'crm-authority revoke': crmAuthorityRevokeCommand,
@@ -434,7 +439,7 @@ async function runCommand(
       ? { ok: true, value: { ...outcome.value } }
       : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
-  if (path === 'admin crm-authority provision' || path === 'admin crm-authority revoke' || path === 'admin crm-read-allocation put') {
+  if (path === 'admin crm-acquisition-diagnostic provision' || path === 'admin crm-acquisition-diagnostic revoke' || path === 'admin crm-authority provision' || path === 'admin crm-authority revoke' || path === 'admin crm-read-allocation put') {
     if (migrationSession === null) return missingMigrationCredential();
     const name = spec.path.slice(1).join(' ');
     const resolved = await adminInvocation(name, parsed, migrationSession, config, environment);

@@ -1,0 +1,7 @@
+# Isolate acquisition acceptance from activation
+
+Production capture requires independently earned acquisition acceptance under ADR0009. Exercise the normal provider, parser, private read and deletion boundaries with a separately provisioned diagnostic authorization in a verified isolated deployment, instead of temporarily enabling production capture or treating fixtures as provider acceptance. Bind the authorization to exact selected messages, account, consent, release, tasks and database, with a conserved read allowance and no ordinary CRM projections, AI processing or sending.
+
+Reserve private copy identity before external waits and preserve whole-copy deletion under ADR0006. Verify external deployment isolation outside database transactions, then recheck current authorization in short locked transactions before dispatch and publication. Preserve known and uncertain usage even after revocation; an uncertain attempt cannot be redispatched. Diagnostic copies remain available through canonical private read and deletion but cannot enter ordinary evidence or Ask processing.
+
+A controlled adapter proves source behavior only. Actual transport observations remain dated, scoped and potentially incomplete; their report cannot mint production capability authority or claim representative model quality. Ordinary startup stays disabled. A real diagnostic still requires its own isolated infrastructure, normal OAuth consent and explicit message/read-budget approval; source completion does not lift the release hold.

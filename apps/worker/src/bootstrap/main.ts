@@ -1,3 +1,6 @@
+import {createCrmAcquisitionDiagnosticStartup} from '@fss/domain/mail/crmAcquisitionDiagnosticStartup.ts';
+import {createCrmAcquisitionDiagnosticCapture} from '@fss/domain/mail/crmAcquisitionDiagnosticCapture.ts';
+import {createServerCrmGmailAccessResolver} from './crmGmail.ts';
 import {readCrmCapabilityStartup,createCrmCapabilityRuntime} from '@fss/domain/crm/capabilityStartup.ts';
 import {composeCrmCapabilities} from './crmCapabilities.ts';
 import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
@@ -653,6 +656,11 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const mediaAbort = new AbortController();
   const meetingAnalysis = readMeetingAnalysisComposition(classifier, environment);
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
+  const diagnosticRuntime=createCrmAcquisitionDiagnosticStartup(environment,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,connectionString:config.database.connectionString});
+  if(diagnosticRuntime&&(crmConfiguration.capture||crmConfiguration.extraction||crmConfiguration.answer))throw new Error('diagnostic_ordinary_capabilities_forbidden');
+  const diagnosticSessions=async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-acquisition-diagnostic'});await client.connect();return {session:asSession(client),close:()=>client.end()};};
+  const diagnostic=diagnosticRuntime&&deployment.gmail?createCrmAcquisitionDiagnosticCapture({runtime:diagnosticRuntime,transport:'actual_transport',gmail:deployment.gmail.gmail,openSession:diagnosticSessions,resolveAccess:createServerCrmGmailAccessResolver({...deployment.gmail,openSession:diagnosticSessions})}):undefined;
+  if(diagnosticRuntime&&!diagnostic)throw new Error('diagnostic_gmail_unavailable');
   const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.gmail!==undefined});
   const crm=await composeCrmCapabilities({configuration:crmConfiguration,runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-authority'});await client.connect();return {session:asSession(client),close:()=>client.end()};},...deployment.gmail?{gmail:{...deployment.gmail,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-oauth'});await client.connect();return {session:asSession(client),close:()=>client.end()};}}}:{}});
   const composition: HandlerComposition = {
@@ -711,8 +719,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         runners: sessions.slice(1, 1 + config.concurrency),
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
-      registry: registerHandlers(new HandlerRegistry(), composition),
-      sources: workerDueWorkSources(workerSourceFlags(composition)),
+      registry: diagnosticRuntime?new HandlerRegistry().register(businessMailCaptureHandler({provider:{async read(){throw new Error('ordinary_capture_unavailable');}},...diagnostic?{diagnostic}:{}})):registerHandlers(new HandlerRegistry(), composition),
+      sources: diagnosticRuntime?[]:workerDueWorkSources(workerSourceFlags(composition)),
       sink,
       log,
     });

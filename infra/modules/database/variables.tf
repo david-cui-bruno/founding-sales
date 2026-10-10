@@ -99,3 +99,13 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "database_name" {
+  description = "Initial database; ordinary environments remain fss. Only an explicitly isolated diagnostic stack supplies fss_diagnostic_*."
+  type        = string
+  default     = "fss"
+  validation {
+    condition     = var.database_name == "fss" || can(regex("^fss_diagnostic_[a-z0-9_]{1,40}$", var.database_name))
+    error_message = "Database name must be fss or the bounded diagnostic namespace."
+  }
+}
