@@ -5,7 +5,7 @@ import {SocialAccounts} from './SocialAccounts.tsx';
 import {SocialDraftStudio} from './DraftStudio.tsx';
 import {SocialImage} from './SocialImage.tsx';
 import {AssetLibrary} from './AssetLibrary.tsx';
-import {useEffect,useReducer,useRef,useState} from 'react';
+import {useEffect,useLayoutEffect,useReducer,useRef,useState} from 'react';
 import type {SocialWorkspace,SocialPostMutation,SaveSocialPost,PostRevision} from '@fss/contracts';
 import {useSessionEpoch} from '../app/drafts.tsx';import {operations} from '../app/bridges.ts';
 import {Button} from '../ui/button.tsx';import {Input} from '../ui/input.tsx';import {socialScheduleInstants} from './scheduleTime.ts';
@@ -14,7 +14,7 @@ export interface SocialPorts{checkPreparation?(accountId:string):Promise<SocialP
 const defaults:SocialPorts={checkPreparation:async(accountId)=>{const api=operations();if(!api)throw new Error('unavailable');return api.command('social.checkPreparation',{accountId});},deliveryStatus:async()=>{const api=operations();if(!api)throw new Error('unavailable');return api.read('social.deliveryStatus',{});},read:async()=>{const api=operations();if(!api)throw new Error('unavailable');return api.read('social.workspace',{});},mutate:async input=>{const api=operations();if(!api)throw new Error('unavailable');return api.command('social.mutate',input);}};
 function BrowserPreparationChecks({accounts,check}:{accounts:SocialWorkspace['accounts'];check:NonNullable<SocialPorts['checkPreparation']>}){
  const [busy,setBusy]=useState(false),[result,setResult]=useState<Awaited<ReturnType<typeof check>>|null>(null);const generation=useRef(0);
- useEffect(()=>{const lifetime=generation;lifetime.current++;setBusy(false);setResult(null);return()=>{lifetime.current++;};},[accounts]);
+ useLayoutEffect(()=>{const lifetime=generation;lifetime.current++;setBusy(false);setResult(null);return()=>{lifetime.current++;};},[accounts]);
  const run=async(accountId:string)=>{const g=++generation.current;setBusy(true);setResult(null);try{const answer=await check(accountId);if(g===generation.current)setResult(answer);}catch{if(g===generation.current)setResult({ready:false,reason:'preparation_unavailable',events:[]});}finally{if(g===generation.current)setBusy(false);}};
  return <details className="rounded-md border border-border p-3 text-sm"><summary>Check LinkedIn browser</summary><p>This check does not type, schedule or publish a post.</p>{accounts.filter(a=>a.platform==='linkedin'&&a.state==='connected').map(a=><div key={a.id}><span>{a.displayName} </span><Button disabled={busy} variant="outline" onClick={()=>void run(a.id)}>Check browser preparation</Button></div>)}{result&&<div role="status"><p>{result.ready?'Identity and empty composer verified. Scheduling acceptance is still unverified.':`Browser check needs attention: ${(result.reason??'unknown').replaceAll('_',' ')}.`}</p><ol>{result.events.map((e,i)=><li key={i}>{e.stage.replaceAll('_',' ')}: {e.outcome}{e.reason?` (${e.reason.replaceAll('_',' ')})`:''}</li>)}</ol></div>}</details>;
 }

@@ -63,3 +63,13 @@ it('runs an explicit read-only browser preparation check and explains it does no
  await screen.findByText('Browser check needs attention: existing draft.');
  expect(checkPreparation).toHaveBeenCalledWith(account.id);expect(screen.getByText('This check does not type, schedule or publish a post.')).toBeTruthy();
 });
+
+it('keeps a read-only preparation result when clicked immediately after the account mounts',async()=>{
+ const checkPreparation=vi.fn(async()=>({ready:false,reason:'existing_draft',events:[]}));
+ const clicked=new Promise<void>(resolve=>{const observer=new MutationObserver(()=>{const button=Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Check browser preparation');if(button){observer.disconnect();fireEvent.click(button);resolve();}});observer.observe(document.body,{childList:true,subtree:true});});
+ render(<DraftsProvider><SocialRoute ports={{read:async()=>({view:{accounts:[account],posts:[]},reason:null}),mutate:vi.fn(),checkPreparation}}/></DraftsProvider>);
+ await clicked;
+ expect(checkPreparation).toHaveBeenCalledExactlyOnceWith(account.id);
+ await screen.findByText('Browser check needs attention: existing draft.');
+ expect(checkPreparation).toHaveBeenCalledWith(account.id);expect(screen.getByText('This check does not type, schedule or publish a post.')).toBeTruthy();
+});
