@@ -5,7 +5,7 @@ type Fixture=CallToBookingFixture;
 type Case={constraint:string;run(f:Fixture):Promise<unknown>};
 const absent='00000000-0000-4000-8000-000000004880';
 const hash='a'.repeat(64);
-async function insert(f:Fixture,table:string,row:Record<string,SqlParameter>){const columns=Object.keys(row);return await f.session.query<{id:string}>(`INSERT INTO ${table}(${columns.join(',')}) VALUES(${columns.map((_,index)=>'$'+(index+1)).join(',')}) RETURNING *`,Object.values(row));}
+async function insert(f:Pick<Fixture,'session'>,table:string,row:Record<string,SqlParameter>){const columns=Object.keys(row);return await f.session.query<{id:string}>(`INSERT INTO ${table}(${columns.join(',')}) VALUES(${columns.map((_,index)=>'$'+(index+1)).join(',')}) RETURNING *`,Object.values(row));}
 function generation(f:Pick<Fixture,'session'|'seeded'|'crm'>,patch:Record<string,SqlParameter>={}){return {workspace_id:f.seeded.alpha.workspaceId,id:randomUUID(),source_id:randomUUID(),source_kind:'selected_note',source_revision:1,source_hash:hash,requested_by:f.seeded.alpha.salesperson.userId,processor_version:'crm-extract-v1',purpose_revision:1,model_version:'fixture-v1',state:'pending',reason:null,original_firm_id:f.crm.alpha.firmId,...patch};}
 function purpose(f:Fixture,patch:Record<string,SqlParameter>={}){return {workspace_id:f.seeded.alpha.workspaceId,revision:1,enabled:false,endpoint_id:'fixture',model_version:'fixture-v1',access_grant_version:'grant-v1',data_handling_version:'data-v1',daily_ceiling_cents:100,monthly_ceiling_cents:1000,input_token_price_micros:2,output_token_price_micros:8,approved_by:f.seeded.alpha.admin.userId,...patch};}
 async function financial(f:Pick<Fixture,'session'|'seeded'|'crm'>,patch:Record<string,SqlParameter>={}){
