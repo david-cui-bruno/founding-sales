@@ -1,0 +1,11 @@
+import {withTransaction,type SessionQueryable} from '@fss/domain/db/queryable.ts';
+import type {PilotPorts} from './realPilot.ts';
+/** Exact cosine over <=12 already-authorized windows, in disposable PostgreSQL.
+ * No fake-mode schema, production embeddings/table, access bypass or ANN claims. */
+export function createRealPilotSqlRanker(session:SessionQueryable):PilotPorts['rank'] {return async(windows,embeddings,query)=>{
+ if(windows.length<1||windows.length>12||query.length<1||query.length>4096||new Set(windows.map(row=>row.id)).size!==windows.length||embeddings.length!==windows.length||new Set(embeddings.map(row=>row.windowId)).size!==windows.length||embeddings.some(row=>!windows.some(window=>window.id===row.windowId)||row.vector.length!==query.length))throw new Error('invalid_vector_binding');
+ for(const vector of [query,...embeddings.map(row=>row.vector)]){const norm=vector.reduce((sum,value)=>sum+value*value,0);if(vector.some(value=>!Number.isFinite(value))||!Number.isFinite(norm)||norm===0)throw new Error('invalid_vector');}
+ return withTransaction(session,async()=>{await session.query('CREATE TEMP TABLE pilot_vectors(window_id text PRIMARY KEY,ordinal integer NOT NULL,embedding double precision[] NOT NULL) ON COMMIT DROP');await session.query('INSERT INTO pilot_vectors SELECT id,ordinal,ARRAY(SELECT jsonb_array_elements_text(vector)::double precision) FROM jsonb_to_recordset($1::jsonb) AS row(id text,ordinal integer,vector jsonb)',[JSON.stringify(windows.map((window,ordinal)=>({id:window.id,ordinal,vector:embeddings.find(row=>row.windowId===window.id)!.vector})))]);
+ const rows=(await session.query<{window_id:string;score:number}>(`WITH scores AS (SELECT window_id,ordinal,sum(v*q)/(sqrt(sum(v*v))*sqrt(sum(q*q))) AS raw_score FROM pilot_vectors CROSS JOIN LATERAL unnest(embedding,$1::double precision[]) AS dim(v,q) GROUP BY window_id,ordinal) SELECT window_id,raw_score AS score FROM scores ORDER BY raw_score DESC,ordinal,window_id COLLATE "C"`,[query])).rows;
+ if(rows.length!==windows.length||rows.some(row=>!Number.isFinite(row.score)||row.score< -1-1e-12||row.score>1+1e-12))throw new Error('invalid_vector_score');return rows.map(row=>({windowId:row.window_id,score:Math.max(-1,Math.min(1,row.score))}));});
+};}

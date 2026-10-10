@@ -24,7 +24,7 @@ export function createLinkedInTextAdapter(raw:SocialAdapterContext,port:Port):So
 /** Single-image path using saved content, schedule and loaded preview verification. */
 export function createLinkedInImageAdapter(raw:SocialAdapterContext,port:Port&{root:string}):SocialAdapter{return createAdapter(raw,port,port.root);}
 function createAdapter(raw:SocialAdapterContext,port:Port,imageRoot?:string):SocialAdapter{
- const context=structuredClone(raw),snapshot=context.snapshot;
+ const {diagnostic,...frozen}=raw;const context=structuredClone(frozen),snapshot=context.snapshot;
  let staged=false,attempted=false;
  let baseline:string[]|null=null,submissionToken:string|null=null;
  const unknown=():InspectionResult=>({state:'unknown',receiptId:null,permalink:null,observedAt:new Date(port.now()).toISOString(),accountExternalId:null,observedFingerprint:null,complete:false});
@@ -43,7 +43,7 @@ function createAdapter(raw:SocialAdapterContext,port:Port,imageRoot?:string):Soc
     if(list.total!==list.rows.length||new Set(list.rows.map(r=>r.receiptId)).size!==list.total||!await same())return {ready:false,reason:'baseline_unverified'};
     baseline=list.rows.map(r=>r.receiptId);
    }
-   await port.openComposer();if(!port.current())return {ready:false,reason:'session_changed'};const result=imageRoot===undefined?await stageLinkedInText(post,port):await stageLinkedInPost(post,{...port,root:imageRoot});staged=result.ready&&port.current();return result;}catch{return {ready:false,reason:'staging_unavailable'};}
+   diagnostic?.('composer','started');await port.openComposer();diagnostic?.('composer','succeeded');if(!port.current())return {ready:false,reason:'session_changed'};const result=imageRoot===undefined?await stageLinkedInText(post,{...port,diagnostic}):await stageLinkedInPost(post,{...port,diagnostic,root:imageRoot});staged=result.ready&&port.current();return result;}catch{diagnostic?.('composer','refused','staging_unavailable');return {ready:false,reason:'staging_unavailable'};}
  },
  async submit(post){
   if(!staged||attempted||!exact(post)||!port.current()||Date.parse(snapshot.publishAt)<=port.now())return {kind:'not_submitted',reason:'submission_not_ready'};

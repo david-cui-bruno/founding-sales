@@ -1,3 +1,4 @@
+import type {SocialDeliveryStatus,SocialPreparationResult} from '../shared/socialDiagnostics.ts';
 import type {createSocialManualHandoffBridge} from './social/manualHandoffBridge.ts';
 import {experimentsViewSchema,experimentSaveResultSchema,experimentActivateResultSchema,experimentStopResultSchema,experimentEraseResultSchema} from '@fss/contracts';
 import {todayActionsV2ResponseSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
@@ -92,7 +93,7 @@ import type { TodayBridgeHost } from './todayBridge.ts';
 export interface OperationHostDeps {
   readonly notifications?:{status():NotificationRuntimeStatus};
   readonly socialHandoff?:ReturnType<typeof createSocialManualHandoffBridge>;
-  readonly socialDelivery?:{status():{queue:'unread'|'available'|'unavailable';lastReadAt:string|null}};
+  readonly socialDelivery?:{status():SocialDeliveryStatus;checkPreparation?(accountId:string):Promise<SocialPreparationResult>};
   readonly socialAccounts?: SocialAccountsBridge;
   readonly socialImages?: SocialImageImport;
   readonly api: AuthedClient;
@@ -216,6 +217,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {accepted:false,reason:'session_changed'};
       return answer.ok?{accepted:true,reason:null}:{accepted:false,reason:answer.reason.slice(0,80)};
     },
+    'social.checkPreparation':async(input:OperationInput<'social.checkPreparation'>)=>deps.socialDelivery?.checkPreparation?.(input.accountId)??{ready:false,reason:'preparation_unavailable',events:[]},
     'social.deliveryStatus':async()=>deps.socialDelivery?.status()??{queue:'unread',lastReadAt:null},
     'social.imageStage':async()=>deps.socialImages?deps.socialImages.state():{stage:null,reason:null,savedAssetId:null},
     'social.chooseImage':async(input:OperationInput<'social.chooseImage'>)=>deps.socialImages?deps.socialImages.choose(input):{stage:null,reason:'unavailable',savedAssetId:null},

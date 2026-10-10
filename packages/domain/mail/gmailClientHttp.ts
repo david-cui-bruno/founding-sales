@@ -45,7 +45,7 @@ import { historyIdOf } from './historyIds.ts';
  * carry coded incident metadata to the pipeline; the caller persists a wait or hold
  * rather than treating an unclassified failure as automatic retry authority.
  *
- * **A body is the first `text/plain` part, decoded, bounded.** HTML-only mail is
+ * **A body is bounded inline MIME text, decoded without attachment bytes.** HTML-only mail is
  * flattened crudely on purpose: the deterministic classifier reads sentences, and a
  * dependency that parses HTML properly is a dependency that parses hostile HTML.
  */
@@ -186,45 +186,62 @@ interface MessagePart {
   readonly parts?: readonly MessagePart[];
 }
 
-/** The first `text/plain` part, depth first; then the first `text/html`, flattened. */
+/** A bounded retained representation. Completeness never asserts authorship. */
+function readRepresentation(payload: MessagePart | undefined, limit: number) {
+  let count = 0, remaining = limit, partial = false, truncated = false, plainText = true;
+  const walk = (part: MessagePart, depth: number): string => {
+    if (++count > 500 || depth > 20) { partial = true; return ''; }
+    if (part.filename || part.body?.attachmentId) { partial = true; return ''; }
+    const type = part.mimeType?.toLowerCase();
+    if (type?.startsWith('multipart/')) {
+      const children = part.parts ?? [];
+      if (children.length > 500) partial = true;
+      if (!children.length) partial = true;
+      // Alternatives represent the same passage; prefer a plain branch and never duplicate HTML.
+      if (type === 'multipart/alternative') {
+        const chosen = children.find(child => child.mimeType === 'text/plain') ?? children[0];
+        return chosen ? walk(chosen, depth + 1) : '';
+      }
+      return children.slice(0, 500).map(child => walk(child, depth + 1)).filter(Boolean).join('\n');
+    }
+    if (type !== 'text/plain' && type !== 'text/html') { partial = true; return ''; }
+    const data = part.body?.data;
+    if (typeof data !== 'string' || !/^[A-Za-z0-9_-]*={0,2}$/u.test(data)) { partial = true; return ''; }
+    // Bound decoding allocation independently of the MIME tree and provider-declared size.
+    if (data.length > Math.ceil((remaining + 1) * 4 / 3) + 4) { truncated = true; partial = true; }
+    const encoded = data.slice(0, Math.ceil((remaining + 1) * 4 / 3) + 4);
+    let text = decodeBase64Url(encoded);
+    if (type === 'text/html') {
+      partial = true; plainText = false;
+      text = text.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/[ \t]+/g, ' ').trim();
+    }
+    if (text.includes('\uFFFD')) partial = true;
+    if (text.length > remaining) { truncated = true; partial = true; }
+    const kept = text.slice(0, remaining); remaining -= kept.length;
+    return kept;
+  };
+  const text = payload ? walk(payload, 0) : '';
+  if (!payload) partial = true;
+  if (text.length > limit) { partial = true; truncated = true; }
+  return { text: text.slice(0, limit), truncated, plainText, completeness: partial ? 'partial' as const : 'complete' as const };
+}
+
 export function readBodyText(payload: MessagePart | undefined): string {
-  if (payload === undefined) return '';
-  const plain = findPart(payload, 'text/plain');
-  if (plain !== null) return decodeBase64Url(plain);
-  const html = findPart(payload, 'text/html');
-  if (html === null) return '';
-  return decodeBase64Url(html)
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/[ \t]+/g, ' ')
-    .trim();
+  return readRepresentation(payload, DEFAULT_MAX_BODY_CHARACTERS).text;
 }
-
-/** Whether the message carries a `text/plain` part at all: what `readBodyText` preferred. */
 export function hasPlainTextPart(payload: MessagePart | undefined): boolean {
-  return payload !== undefined && findPart(payload, 'text/plain') !== null;
-}
-
-function findPart(part: MessagePart, mimeType: string): string | null {
-  if (part.mimeType === mimeType && typeof part.body?.data === 'string') return part.body.data;
-  for (const child of part.parts ?? []) {
-    const found = findPart(child, mimeType);
-    if (found !== null) return found;
-  }
-  return null;
+  return readRepresentation(payload, DEFAULT_MAX_BODY_CHARACTERS).plainText && readBodyText(payload).length > 0;
 }
 
 /** Filename, media type, size and the Gmail reference. Never the bytes (10.3). */
 export function readAttachmentReferences(payload: MessagePart | undefined): GmailAttachmentReference[] {
   const found: GmailAttachmentReference[] = [];
-  const walk = (part: MessagePart): void => {
+  let visited = 0;
+  const walk = (part: MessagePart, depth = 0): void => {
+    if (++visited > 500 || depth > 20) return;
     const filename = part.filename;
     const attachmentId = part.body?.attachmentId;
     if (typeof filename === 'string' && filename.length > 0 && typeof attachmentId === 'string') {
@@ -235,7 +252,7 @@ export function readAttachmentReferences(payload: MessagePart | undefined): Gmai
         attachmentId,
       });
     }
-    for (const child of part.parts ?? []) walk(child);
+    for (const child of (part.parts ?? []).slice(0, 500)) walk(child, depth + 1);
   };
   if (payload !== undefined) walk(payload);
   return found.slice(0, 100);
@@ -662,16 +679,16 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       // The answer must be about the message that was asked for. A 200 carrying another
       // id is not a body this caller may use for anything (review of PR 296).
       const answeredId = asString(json['id']);
-      if (answeredId !== null && answeredId !== messageId) {
+      if (answeredId === null || answeredId !== messageId) {
         throw new GmailClientError('malformed_response', 'the Gmail body read answered another message');
       }
       const payload = json['payload'] as MessagePart | undefined;
-      const text = readBodyText(payload);
+      const representation = readRepresentation(payload, maxBody);
       return {
-        text: text.slice(0, maxBody),
-        truncated: text.length > maxBody,
-        messageId: answeredId ?? messageId,
-        plainText: hasPlainTextPart(payload),
+        ...representation,
+        messageId: answeredId,
+        ...(asString(json['threadId']) ? { threadId: asString(json['threadId'])! } : {}),
+        labelIds: Array.isArray(json['labelIds']) ? json['labelIds'].filter((label): label is string => typeof label === 'string') : [],
       };
     },
 

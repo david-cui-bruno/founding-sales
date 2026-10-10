@@ -19,7 +19,7 @@ const importPayload=z.strictObject({importId:z.string().uuid(),accountBinding:z.
 export interface CrmMailBackfillDeps {
  gmail:GmailClient;
  /** Already-proven token resolver; no Gmail data reads may be hidden here. */
- resolveAccess(input:{mailboxId:string;providerAccountId:string;generation:number}):Promise<{mailboxId:string;providerAccountId:string;generation:number;access:GmailAccessGrant}|null>;
+ resolveAccess(input:{workspaceId:string;mailboxId:string;providerAccountId:string;generation:number}):Promise<{mailboxId:string;providerAccountId:string;generation:number;access:GmailAccessGrant}|null>;
  proofVerifier:MailCaptureProofVerifier;allocationVerifier:BackfillAllocationVerifier;observer:BusinessMailMetadataObserver;
 }
 async function fenced(input:JobHandlerInput){return (await input.session.query("SELECT id FROM jobs WHERE workspace_id=$1 AND id=$2 AND state='running' AND lease_owner=$3 AND fencing_token=$4::bigint AND lease_expires_at>clock_timestamp() FOR UPDATE",[input.scope.workspaceId,input.job.id,input.job.leaseOwner,input.job.fencingToken])).rows.length===1;}
@@ -39,7 +39,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   let recoveryScope:HistoryRecovery|undefined;
   async function providerRead<T>(method:BackfillReadMethod,bound:BackfillAuthority,read:(access:GmailAccessGrant)=>Promise<T>,original?:RetainedCopyTraversal):Promise<T>{
    if(!await adapters.proofVerifier.verify(bound.proof))throw new BackfillFailure('acquisition_verification_required');
-   const proofInput={mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation};
+   const proofInput={workspaceId:input.scope.workspaceId,mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation};
    const access=await adapters.resolveAccess(proofInput);
    if(access===null||access.mailboxId!==proofInput.mailboxId||access.providerAccountId!==proofInput.providerAccountId||access.generation!==proofInput.generation)throw new BackfillFailure('acquisition_binding_changed');
    const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,...recoveryScope===undefined?{}:{expectedRecovery:{id:recoveryScope.id,revision:recoveryScope.revision,epoch:recoveryScope.epoch,configurationHash:recoveryScope.configuration_hash}},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
@@ -66,7 +66,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     return {metadata,originalUpdated:originalUpdated===true};
    }catch(error){
     if(transientReason!==undefined){
-     const latest=await adapters.resolveAccess({mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation});
+     const latest=await adapters.resolveAccess({workspaceId:input.scope.workspaceId,mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation});
      if(latest!==null&&latest.mailboxId===bound.proof.mailboxId&&latest.providerAccountId===bound.proof.providerAccountId&&latest.generation===bound.proof.generation)
       await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata:null,transientReason,...expected===undefined?{}:{expectedSource:expected.source,expectedContextIdentity:expected.contextIdentity},observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     }

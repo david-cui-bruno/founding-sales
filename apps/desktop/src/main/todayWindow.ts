@@ -1,3 +1,4 @@
+import type {SocialDeliveryStatus,SocialPreparationResult} from '../shared/socialDiagnostics.ts';
 import type {createSocialManualHandoffBridge} from './social/manualHandoffBridge.ts';
 import type {NotificationRuntimeStatus} from '@fss/contracts';
 import type {SocialAccountsBridge} from './social/accountsBridge.ts';
@@ -74,7 +75,7 @@ export interface RecordingImportWiring {
 export interface WindowBridgeDeps {
   readonly notifications?:{status():NotificationRuntimeStatus};
   readonly socialHandoff?:ReturnType<typeof createSocialManualHandoffBridge>;
-  readonly socialDelivery?:{status():{queue:'unread'|'available'|'unavailable';lastReadAt:string|null}};
+  readonly socialDelivery?:{status():SocialDeliveryStatus;checkPreparation?(accountId:string):Promise<SocialPreparationResult>};
   readonly socialAccounts?: SocialAccountsBridge;
   readonly socialImages?: SocialImageImport;
   readonly today: TodayBridgeDeps;

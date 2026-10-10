@@ -82,6 +82,7 @@ export type CapturedMailMessage = z.input<typeof providerMessageSchema>;
 export interface MailCaptureProvider {
   /** A read must report actual response account/message identity, never substitute the request ID. */
   read(input: {
+    workspaceId: string;
     mailboxId: string;
     providerMessageId: string;
     providerAccountId: string;
@@ -410,6 +411,7 @@ export function businessMailCaptureHandler(deps: {
       if (!(await deps.proofVerifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
       const providerInput={
+          workspaceId: input.scope.workspaceId,
           mailboxId: payload.mailboxId,
           providerMessageId: payload.providerMessageId,
           providerAccountId: payload.providerAccountId,

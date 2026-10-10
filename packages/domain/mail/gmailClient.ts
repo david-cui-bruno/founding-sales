@@ -109,6 +109,10 @@ export interface GmailAttachmentReference {
 }
 
 export interface GmailMessageBody {
+  readonly threadId?: string;
+  readonly labelIds?: readonly string[];
+  /** Retained MIME representation completeness; never authored-range proof. */
+  readonly completeness?: 'complete' | 'partial';
   readonly text: string;
   /** A body the fetch truncated cannot prove an opt-out: the sentence may continue. */
   readonly truncated: boolean;

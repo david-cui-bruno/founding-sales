@@ -1,3 +1,4 @@
+import type {SocialDiagnosticReporter} from '../../shared/socialDiagnostics.ts';
 import {createHash} from 'node:crypto';
 export type SocialPlatform='linkedin'|'facebook'|'x';
 export interface SocialScope {workspaceId:string;userId:string;accountId:string;platform:SocialPlatform}
@@ -29,8 +30,8 @@ export function createSocialRuntime(createWindow:(options:SocialWindowOptions)=>
  const clearing=new Set<string>();
  const securedSessions=new WeakSet<object>();
  const close=(window:SocialWindow)=>{if(!window.isDestroyed())window.destroy();};
- async function runAccount<T>(scope:SocialScope,run:(session:{window:SocialWindow;isCurrent:()=>boolean})=>Promise<T>,connect:boolean):Promise<T|{ok:false;reason:string}>{
-   const partition=socialPartition(scope);if(active.has(partition)||clearing.has(partition))return {ok:false,reason:'account_busy'};
+ async function runAccount<T>(scope:SocialScope,run:(session:{window:SocialWindow;isCurrent:()=>boolean})=>Promise<T>,connect:boolean,diagnostic?:SocialDiagnosticReporter):Promise<T|{ok:false;reason:string}>{
+   const partition=socialPartition(scope);if(active.has(partition)||clearing.has(partition)){diagnostic?.('browser_load','refused','account_busy');return {ok:false,reason:'account_busy'};}
    const generation=epoch;
    const window=createWindow(windowOptions(partition));
    active.set(partition,window);sessions.set(partition,window.webContents.session);
@@ -45,21 +46,22 @@ export function createSocialRuntime(createWindow:(options:SocialWindowOptions)=>
    for(const event of ['will-navigate','will-redirect'])window.webContents.on(event,(e,url)=>{if(!socialNavigationAllowed(scope.platform,url))e.preventDefault();});
    window.webContents.on('will-attach-webview',e=>e.preventDefault());
    window.on('show',()=>{if(!connect)window.hide();});
-   try{
+   let loaded=false;try{
+    diagnostic?.('browser_load','started');
     let timer:ReturnType<typeof setTimeout>|undefined;
     try{await Promise.race([window.loadURL(home[scope.platform]),new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error('load_timeout')),30_000);})]);}finally{if(timer)clearTimeout(timer);}
     if(!isCurrent())return {ok:false,reason:'session_changed'};
-    if(connect)window.show();
+    loaded=true;diagnostic?.('browser_load','succeeded');if(connect)window.show();
     let operationTimer:ReturnType<typeof setTimeout>|undefined;
     try{
       const result=await Promise.race([run({window,isCurrent}),new Promise<never>((_resolve,reject)=>{operationTimer=setTimeout(()=>reject(new Error('operation_timeout')),connect?600_000:120_000);})]);
       return isCurrent()?result:{ok:false,reason:'session_changed'};
     }finally{if(operationTimer)clearTimeout(operationTimer);}
-   }catch{return {ok:false,reason:isCurrent()?'browser_unavailable':'session_changed'};}
+   }catch(error){const reason=!isCurrent()?'session_changed':error instanceof Error&&['load_timeout','operation_timeout'].includes(error.message)?error.message:'browser_unavailable';diagnostic?.(loaded?'preparation':'browser_load','refused',reason);return {ok:false,reason:isCurrent()?'browser_unavailable':'session_changed'};}
    finally{if(active.get(partition)===window)active.delete(partition);close(window);}
   }
  return {
-  withAccount<T>(scope:SocialScope,run:(session:{window:SocialWindow;isCurrent:()=>boolean})=>Promise<T>){return runAccount(scope,run,false);},
+  withAccount<T>(scope:SocialScope,run:(session:{window:SocialWindow;isCurrent:()=>boolean})=>Promise<T>,diagnostic?:SocialDiagnosticReporter){return runAccount(scope,run,false,diagnostic);},
   /** Only a user-initiated Connect/Reconnect command may invoke this operation. */
   connectAccount<T>(scope:SocialScope,run:(session:{window:SocialWindow;isCurrent:()=>boolean})=>Promise<T>){return runAccount(scope,run,true);},
   async disconnect(scope:SocialScope){

@@ -1,3 +1,4 @@
+import {createSocialDeliveryRunner} from '../src/main/social/deliveryRunner.ts';
 import {createSocialManualHandoffBridge} from '../src/main/social/manualHandoffBridge.ts';
 import {createSocialAccountsBridge} from '../src/main/social/accountsBridge.ts';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -143,6 +144,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'social.removeAsset':{assetId:UUID,commandId:UUID},
   'social.connectAccount':{accountId:UUID,commandId:UUID},
   'social.disconnectAccount':{accountId:UUID,commandId:UUID},
+  'social.checkPreparation':{accountId:UUID},
   'social.workspace':{},
   'social.drafts':{},
   'social.weekly':{},
@@ -450,7 +452,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     replies: createReplyBridge({ api, session }) as unknown as Host,
     notifications:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['read','runtime'].map(method=>[method,async(input:unknown)=>await handlers[`notifications.${method}` as OperationName](input as never)])) as Host;})(),
     replyComposer:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['context','generate','preview','sendStatus','send'].map(method=>[method,async(input:unknown)=>await handlers[`replyComposer.${method}` as OperationName](input as never)])) as Host;})(),
-    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const socialHandoff=createSocialManualHandoffBridge({api,generation:()=>0,copy:async()=>{},open:async()=>{},chooseDestination:async()=>null,write:async()=>{}});const handlers=operationHandlers({api,socialAccounts,socialHandoff,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['manualHandoff','confirmHandoff','useHandoff','registerManualDestination','deliveryStatus','connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
+    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const socialHandoff=createSocialManualHandoffBridge({api,generation:()=>0,copy:async()=>{},open:async()=>{},chooseDestination:async()=>null,write:async()=>{}});const handlers=operationHandlers({api,socialAccounts,socialHandoff,socialDelivery:createSocialDeliveryRunner({api,root:'/unused',identity:async()=>({workspaceId:UUID,userId:UUID}),now:()=>0,adapters:{}}),recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['manualHandoff','confirmHandoff','useHandoff','registerManualDestination','deliveryStatus','checkPreparation','connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
       const directory=await mkdtemp(join(tmpdir(),'social-traffic-'));
       try{const image=join(directory,'source.png');await sharp({create:{width:4,height:4,channels:3,background:'red'}}).png().toFile(image);
         const host=createSocialImageImport({directory,api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,chooseFile:async()=>({canceled:false,filePaths:[image]})});

@@ -14,7 +14,7 @@
     "postinstall": "install-electron --no",
     "typecheck": "npm run typecheck:greenfield",
     "lint": "eslint --max-warnings 0 apps packages test/ops tools scripts eslint.config.mjs",
-    "test": "npm run test:greenfield && npm run test:ops",
+    "test": "npm run test:greenfield && npm run test:ops && npm run test:ask-evaluation",
     "typecheck:greenfield": "npm run typecheck --workspace packages/contracts && npm run typecheck --workspace packages/domain && npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/worker && npm run typecheck --workspace apps/desktop && tsc --noEmit -p test/ops/tsconfig.json && tsc --noEmit -p tools/upgrade/tsconfig.json && tsc --noEmit -p tools/ask-evaluation/tsconfig.json",
     "upgrade:test": "node --experimental-transform-types --disable-warning=ExperimentalWarning tools/upgrade/main.ts",
     "test:greenfield": "npm run test --workspace packages/contracts && npm run test --workspace packages/domain && npm run test --workspace apps/api && npm run test --workspace apps/worker && npm run test --workspace apps/desktop",
@@ -23,9 +23,10 @@
     "test:desktop:host": "FSS_HOST_TESTS=1 npm run test:host --workspace apps/desktop",
     "package:desktop": "npm run package --workspace apps/desktop --",
     "verify:desktop:package": "npm run verify:package --workspace apps/desktop --",
-    "gate:greenfield": "npm run typecheck:greenfield && npm run lint && npm run test:greenfield && npm run test:ops",
+    "gate:greenfield": "npm run typecheck:greenfield && npm run lint && npm run test:greenfield && npm run test:ops && npm run test:ask-evaluation",
     "verify:secrets": "node scripts/verifySecrets.mjs",
-    "evaluate:email-admission": "node scripts/evaluateEmailAdmission.mjs"
+    "evaluate:email-admission": "node scripts/evaluateEmailAdmission.mjs",
+    "test:ask-evaluation": "vitest run --root tools/ask-evaluation --config vitest.config.ts"
   },
   "keywords": [],
   "author": {

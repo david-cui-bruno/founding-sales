@@ -6,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {beforeAll,afterAll,it,expect} from 'vitest';
+import {beforeAll,afterAll,it,expect,vi} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
@@ -98,4 +98,26 @@ it('preserves uncertain submission for inspection when the browser fails after d
  expect((await h.runner.read()).items.find(row=>row.postId===item.postId)).toMatchObject({action:'inspect',submissionId:expect.any(String)});
  expect(await tx(()=>claimSocialDelivery(ctx(),{deviceId,postId:item.postId,expectedRevision:1}))).toEqual({ok:false,reason:'inspect_existing_submission'});
  expect(h.submissions()).toBe(1);
+});
+it('holds a browser failure after entry when preparation never acquired a marker',async()=>{
+ const item=await ready(),h=fixture(async()=>{});h.adapter.stage=async()=>{throw new Error('private page content must not escape');};
+ await h.runner.run(item,()=>true);expect(await readSocialPost(ctx(),item.postId)).toMatchObject({state:'failed',reason:'preparation_unavailable'});expect((await h.runner.read()).items.some(row=>row.postId===item.postId)).toBe(false);expect(h.submissions()).toBe(0);
+});
+it('fences an operation timeout after the marker and inspects after restart without another final action',async()=>{
+ const item=await ready(),h=fixture(async()=>{},async()=>{throw new Error('operation_timeout');});await h.runner.run(item,()=>true);
+ expect(await readSocialPost(ctx(),item.postId)).toMatchObject({state:'unknown'});
+ await db.session.query('UPDATE social_deliveries SET next_inspection_at=now() WHERE workspace_id=$1 AND post_id=$2',[seed.alpha.workspaceId,item.postId]);
+ const queued=(await h.runner.read()).items.find(row=>row.postId===item.postId)!;expect(queued.action).toBe('inspect');
+ const restarted=fixture(async()=>{});await restarted.runner.run(queued,()=>true);expect(restarted.submissions()).toBe(0);expect(h.submissions()).toBe(1);
+ expect(await tx(()=>holdSocialDelivery(ctx(),{deviceId,postId:item.postId,expectedRevision:1,reason:'preparation_unavailable'}))).toEqual({ok:false,reason:'inspect_existing_submission'});
+});
+it('persists a real runtime preparation timeout after a claim without entering submission',async()=>{
+ const item=await ready(),h=fixture(async()=>{});let entered:()=>void=()=>{};const started=new Promise<void>(resolve=>{entered=resolve;});h.adapter.stage=async()=>{entered();return new Promise(()=>{});};
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});try{const pending=h.runner.run(item,()=>true);await started;await vi.advanceTimersByTimeAsync(120_001);await pending;expect(await readSocialPost(ctx(),item.postId)).toMatchObject({state:'failed',reason:'preparation_unavailable'});expect(h.submissions()).toBe(0);}finally{vi.useRealTimers();}
+});
+it('retains the actual runtime timeout after a marker for restart inspection without another click',async()=>{
+ const item=await ready(),h=fixture(async()=>{});let entered:()=>void=()=>{};const started=new Promise<void>(resolve=>{entered=resolve;});h.adapter.inspect=async()=>{entered();return new Promise(()=>{});};
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});try{const pending=h.runner.run(item,()=>true);await started;await vi.advanceTimersByTimeAsync(120_001);await pending;}finally{vi.useRealTimers();}
+ const queued=(await h.runner.read()).items.find(row=>row.postId===item.postId)!;expect(queued).toMatchObject({action:'inspect',submissionId:expect.any(String)});expect(await readSocialPost(ctx(),item.postId)).toMatchObject({state:'submitting'});
+ const restarted=fixture(async()=>{});await restarted.runner.run(queued,()=>true);expect(restarted.submissions()).toBe(0);expect(h.submissions()).toBe(1);
 });
