@@ -801,6 +801,7 @@ it.each(["array", "wrong-prefix", "swapped", "missing", "extra"])(
     try {
       expect(fixture.invoke("apply").status).toBe(0);
       const outputPath = fixture.env["OUTPUTS"];
+      if (outputPath === undefined) throw new Error("Terraform adapter output path is missing");
       const outputs = JSON.parse(readFileSync(outputPath,"utf8"));
       const names = outputs.secret_names.value;
       if (variant === "array") outputs.secret_names.value = Object.keys(names);
