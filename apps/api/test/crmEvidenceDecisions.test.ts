@@ -107,7 +107,7 @@ it("preserves a dated human confirmation on equivalent reprocessing with a new p
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,
@@ -361,7 +361,7 @@ it("refuses replay of a human decision after its exact source is deleted", async
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,
@@ -641,7 +641,7 @@ it("requires fresh human review when reprocessing materially changes the interpr
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,
@@ -864,7 +864,7 @@ it("keeps original interpretation and dated decision history while refusing a st
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,
@@ -1064,7 +1064,7 @@ it("resolves an explicit conflicting group without erasing either dated source",
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

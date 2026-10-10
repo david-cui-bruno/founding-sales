@@ -1,3 +1,5 @@
+import {readCrmCapabilityStartup,createCrmCapabilityRuntime} from '@fss/domain/crm/capabilityStartup.ts';
+import {composeCrmCapabilities} from './crmCapabilities.ts';
 import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
 import {crmCommitmentIntentJobHandler} from '../handlers/crmCommitmentIntent.ts';
 import {crmCommitmentJobHandler} from '../handlers/crmCommitments.ts';
@@ -584,9 +586,11 @@ export function readMeetingTranscriptionComposition(environment: NodeJS.ProcessE
 
 export async function main(argv: readonly string[], environment: NodeJS.ProcessEnv): Promise<number> {
   let config: WorkerConfig;
+  let crmConfiguration:ReturnType<typeof readCrmCapabilityStartup>;
   const bootLog = createLogger({ component: 'worker', instanceKey: 'boot' });
   try {
     config = readWorkerConfig(environment);
+    crmConfiguration=readCrmCapabilityStartup(environment);
   } catch (error) {
     bootLog.log('error', 'worker_configuration_refused', {
       ...errorFields(error),
@@ -649,8 +653,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const mediaAbort = new AbortController();
   const meetingAnalysis = readMeetingAnalysisComposition(classifier, environment);
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
+  const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.gmail!==undefined});
+  const crm=await composeCrmCapabilities({configuration:crmConfiguration,runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-authority'});await client.connect();return {session:asSession(client),close:()=>client.end()};},...deployment.gmail?{gmail:{...deployment.gmail,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-oauth'});await client.connect();return {session:asSession(client),close:()=>client.end()};}}}:{}});
   const composition: HandlerComposition = {
     ...composed,
+    ...crm.handlers,
+    ...composed.mail&&crmConfiguration.capture?{mail:{...composed.mail,businessMailObserver:crm.observer}}:{},
     socialAssets:await socialDeletionPort(environment),
     ...(environment['FSS_TAVILY_API_KEY']?{discovery:tavilySearch(environment['FSS_TAVILY_API_KEY'])}:{}),
     ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),

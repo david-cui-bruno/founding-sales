@@ -18,7 +18,7 @@ it('upgrades real schema86 prices without changing controls, immutable Ask snaps
   await seedExtractionFinancialReceipt({session:db.session,seeded,crm});
   const snapshot=async()=>({purpose:(await db.session.query('SELECT to_jsonb(p) AS row FROM crm_extraction_purposes p ORDER BY workspace_id')).rows,receipts:(await db.session.query('SELECT to_jsonb(r) AS row FROM crm_ask_financial_receipts r ORDER BY id')).rows,extractionReceipts:(await db.session.query('SELECT to_jsonb(r) AS row FROM crm_extraction_financial_receipts r ORDER BY generation_id')).rows,reservations:(await db.session.query('SELECT to_jsonb(r) AS row FROM provider_reservations r ORDER BY id')).rows});
   const before=await snapshot();
-  await applyMigrations(db.session);
+  await applyMigrations(db.session,{throughVersion:87});
   expect(await readAppliedSchemaVersion(db.session)).toBe(87);
   expect(await snapshot()).toEqual(before);
   const runtime=await db.appRuntimeSession(),context=repositoryContext(workspaceScope(ws,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),runtime);

@@ -38,7 +38,7 @@ export function composeCrmGmail(deps: CrmMailBackfillDeps): Pick<HandlerComposit
     crmMailBackfill: deps,
     crmMailCapture: {
       proofVerifier: deps.proofVerifier,
-      provider: createGmailMailCaptureProvider(deps),
+      provider: createGmailMailCaptureProvider({...deps,authorizeRead:proof=>deps.proofVerifier.verify(proof)}),
       historicalProvider: createHistoricalGmailMailCaptureProvider(deps),
     },
   };

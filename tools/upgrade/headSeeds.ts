@@ -28,6 +28,22 @@ export interface HeadSeed {
 export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
   ...SOURCE_69_SEEDS,
   {
+    name: 'existing disabled CRM controls retain revisions and budgets without invented authority or OAuth observations (0088)',
+    fromVersions: [83, 87],
+    seed: async session => {
+      const member=(await session.query<{workspace_id:string;user_id:string}>("SELECT workspace_id,user_id FROM workspace_memberships WHERE role='admin' AND status='active' ORDER BY workspace_id,user_id LIMIT 1")).rows[0];
+      if(!member)throw new Error('Upgrade fixture requires its existing administrator');
+      await session.query(`INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,7,false,'upgrade-preserved-route','upgrade-preserved-model','upgrade-preserved-grant','upgrade-preserved-policy',13,113,1,5,$2) ON CONFLICT(workspace_id) DO UPDATE SET revision=7,enabled=false,endpoint_id='upgrade-preserved-route',model_version='upgrade-preserved-model',access_grant_version='upgrade-preserved-grant',data_handling_version='upgrade-preserved-policy',daily_ceiling_cents=13,monthly_ceiling_cents=113,input_token_price_micros=1,output_token_price_micros=5,approved_by=EXCLUDED.approved_by`,[member.workspace_id,member.user_id]);
+      return member.workspace_id;
+    },
+    verify: async(session,id) => {
+      const row=(await session.query<{revision:number;enabled:boolean;daily_ceiling_cents:number;monthly_ceiling_cents:number;authority_receipt_id:string|null;endpoint_id:string}>('SELECT revision,enabled,daily_ceiling_cents,monthly_ceiling_cents,authority_receipt_id,endpoint_id FROM crm_extraction_purposes WHERE workspace_id=$1',[id])).rows[0];
+      if(!row||row.revision!==7||row.enabled||row.daily_ceiling_cents!==13||row.monthly_ceiling_cents!==113||row.endpoint_id!=='upgrade-preserved-route'||row.authority_receipt_id!==null)return 'Upgrade changed disabled CRM settings or invented capability authority';
+      if((await session.query('SELECT id FROM crm_capability_authority_receipts')).rows.length||(await session.query('SELECT id FROM mailbox_oauth_grant_observations')).rows.length)return 'Upgrade invented authority or historical OAuth observations';
+      return null;
+    },
+  },
+  {
     name:'discovery approval versions preserve schedule, quotas and historical uncertainty (0051)',
     fromVersions:[50],
     seed:async session=>{

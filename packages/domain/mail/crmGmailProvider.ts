@@ -1,6 +1,6 @@
 import type { GmailClient, GmailAccessGrant } from './gmailClient.ts';
 import { headerValue } from './gmailClient.ts';
-import type { MailCaptureProvider } from './crmSources.ts';
+import type { MailCaptureProvider,MailCaptureProof } from './crmSources.ts';
 
 interface ProvenMailAccess {
   mailboxId: string;
@@ -12,12 +12,16 @@ interface ProvenMailAccess {
  * A requested account ID or the current mailbox email is not that proof. */
 export function createGmailMailCaptureProvider(deps: {
   gmail: GmailClient;
+  authorizeRead?(proof:MailCaptureProof):Promise<boolean>;
   resolveAccess(
     input: Parameters<MailCaptureProvider['read']>[0],
   ): Promise<ProvenMailAccess | null>;
 }): MailCaptureProvider {
   return {
     async read(input) {
+      const proof=input.expectedProof?structuredClone(input.expectedProof):null;
+      async function authorize(){if(deps.authorizeRead&&(!proof||proof.workspaceId!==input.workspaceId||proof.mailboxId!==input.mailboxId||proof.providerAccountId!==input.providerAccountId||proof.generation!==input.generation||!await deps.authorizeRead(structuredClone(proof))))throw new Error('CRM mail capture authority unavailable');}
+
       const proven = await deps.resolveAccess(input);
       if (
         !proven ||
@@ -26,6 +30,7 @@ export function createGmailMailCaptureProvider(deps: {
         proven.generation !== input.generation
       )
         throw new Error('CRM mail account proof unavailable');
+      await authorize();
       const metadata = await deps.gmail.getMetadata(
         proven.access,
         input.providerMessageId,
@@ -33,6 +38,7 @@ export function createGmailMailCaptureProvider(deps: {
       );
       if (!metadata || metadata.id !== input.providerMessageId)
         throw new Error('CRM mail metadata identity unavailable');
+      await authorize();
       const body = await deps.gmail.getBody(proven.access, metadata.id);
       if (body && body.messageId !== metadata.id)
         throw new Error('CRM mail body identity unavailable');

@@ -14,12 +14,18 @@ export function composeCrmBedrock(options: {
   readonly answer?: Omit<Parameters<typeof createBedrockAskAnswerAdapter>[0], 'surface'>;
   readonly verifyPurpose?: NonNullable<AskAnswerComposition['verifyPurpose']>;
   readonly allowControlledEvaluation?: boolean;
+  readonly verifyExtraction?: NonNullable<NonNullable<HandlerComposition['crmExtraction']>['verifyPurpose']>;
+  readonly revalidateExtraction?: NonNullable<NonNullable<HandlerComposition['crmExtraction']>['revalidatePurpose']>;
+  readonly revalidateAskPurpose?: NonNullable<AskAnswerComposition['revalidatePurpose']>;
   readonly providerTimeoutMs?: number;
 }): Pick<HandlerComposition, 'crmExtraction' | 'crmAskAnswers'> {
   if (options.answer !== undefined && options.verifyPurpose === undefined)
     throw new Error('crm_ask_purpose_verifier_required');
   return {
     ...(options.extraction === undefined ? {} : { crmExtraction: {
+      ...(options.verifyExtraction===undefined?{}:{verifyPurpose:options.verifyExtraction}),
+      ...(options.revalidateExtraction===undefined?{}:{revalidatePurpose:options.revalidateExtraction}),
+      ...(options.allowControlledEvaluation===undefined?{}:{allowControlledEvaluation:options.allowControlledEvaluation}),
       adapter: createBedrockCrmExtractionAdapter({ ...options.extraction, surface: options.surface }),
       ...(options.mailEvidence === undefined ? {} : { mailEvidence: options.mailEvidence }),
       ...(options.providerTimeoutMs === undefined ? {} : { providerTimeoutMs: options.providerTimeoutMs }),
@@ -27,6 +33,7 @@ export function composeCrmBedrock(options: {
     ...(options.answer === undefined ? {} : { crmAskAnswers: {
       answer: createBedrockAskAnswerAdapter({ ...options.answer, surface: options.surface }),
       verifyPurpose: options.verifyPurpose!,
+      ...(options.revalidateAskPurpose===undefined?{}:{revalidatePurpose:options.revalidateAskPurpose}),
       ...(options.allowControlledEvaluation === undefined ? {} : { allowControlledEvaluation: options.allowControlledEvaluation }),
       ...(options.providerTimeoutMs === undefined ? {} : { providerTimeoutMs: options.providerTimeoutMs }),
     } }),

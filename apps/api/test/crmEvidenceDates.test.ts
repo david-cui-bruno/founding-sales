@@ -120,7 +120,7 @@ it("preserves original acquisition dates through a source date correction and cl
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

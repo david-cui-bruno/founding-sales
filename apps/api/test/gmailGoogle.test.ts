@@ -242,6 +242,10 @@ describe("the Gmail grant against Google's real endpoints", () => {
     const status = gmailStatusSchema.parse((await call('GET', '/gmail/status', accessToken)).body);
     expect(status.connected).toBe(true);
     expect(status.mailbox).toMatchObject({ emailAddress: address, status: 'connected', syncState: 'baseline_pending' });
+    const observations=await fixture.db.query<{owner_user_id:string;generation:number;granted_scopes:string[]}>(`SELECT o.owner_user_id,o.generation,o.granted_scopes FROM mailbox_oauth_grant_observations o JOIN mailboxes m ON m.workspace_id=o.workspace_id AND m.id=o.mailbox_id AND m.owner_user_id=o.owner_user_id AND m.provider_account_id=o.provider_account_id AND m.generation=o.generation WHERE o.workspace_id=$1`,[fixture.alpha.workspaceId]);
+    expect(observations.rows).toEqual([{owner_user_id:fixture.alpha.salesperson.userId,generation:expect.any(Number),granted_scopes:[...GMAIL_SCOPES].sort()}]);
+    expect((await fixture.db.query('SELECT id FROM crm_capability_authority_receipts')).rows).toHaveLength(0);
+
     // A2: the new generation's baseline, not yet read, and no refusal after this connect.
     expect(status.mailbox?.baseline).toEqual({ pagesCompleted: 0, messagesSeen: 0, completedAt: null });
     expect(status.lastGrantRefusal).toBeNull();

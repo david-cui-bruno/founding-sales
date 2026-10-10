@@ -65,3 +65,40 @@ it('offers bounded import status and an explicit queued request in the existing 
  const user=userEvent.setup();let requested=false,saved=false;const ports:BusinessReviewPorts={policy:async()=>REVIEW_POLICY,savePolicy:async()=>{saved=true;return {revision:2};},imports:{health:async()=>null,request:async input=>{expect(input).toEqual({mailboxId:ID});requested=true;return {importId:ID,status:'queued'};}}};
  render(<BusinessReview enabled ports={ports} privacyKey="one"/>);await screen.findByRole('region',{name:'Mailbox import status'});await user.click(screen.getByRole('button',{name:'Request 90-day import'}));expect(await screen.findByText('Import request queued. Coverage is reported separately after work runs.')).toBeTruthy();expect(requested).toBe(true);expect(saved).toBe(false);expect(screen.getByText('Business conversation capture is off.')).toBeTruthy();expect(screen.queryByRole('button',{name:/enable capture|send email/i})).toBeNull();
 });
+it("refreshes mailbox policy and review after explicit prepared metadata activation",async ()=> {
+ const user=userEvent.setup();
+  let activated =false;
+  const ports:BusinessReviewPorts = {policy:async ()=> ({
+      ...REVIEW_POLICY,revision: activated? 4:3, enabled: activated,
+    }),savePolicy:async ()=> ({revision: 4 }),review:async ()=> ({
+      ...reviewPage(
+        activated? "Current reviewed metadata": "Old reviewed metadata",
+      ),policyRevision: activated? 4:3,
+    }),
+    capabilities: {
+      read:async ( input)=> ({
+        capability:input.capability,mailboxId:ID,
+        configured:input.capability=== "metadata_review",revision:input.capability=== "metadata_review"? (activated? 4:3):0, enabled:input.capability=== "metadata_review" && activated,ready:input.capability=== "metadata_review",reason: "ready",
+        authorityReceiptId:input.capability=== "metadata_review"?ID:null,
+        proposedRevision: activated? 5: 4,
+        proposedConfigurationFingerprint:null,
+        configuration:null,
+      }),
+      activate:async ( input)=> {expect(input).toEqual({
+          capability: "metadata_review",mailboxId:ID, expectedRevision:3,
+          authorityReceiptId:ID,
+        });
+        activated=true;
+        return {revision: 4, enabled:true, authorityReceiptId:ID };
+      },
+      disable:async ()=> {
+        throw new Error("unexpected disable");
+      },
+    },
+  };
+ render(<BusinessReview enabled ports={ports}/>);
+  await screen.findByText("Old reviewed metadata");
+  await user.click(
+    await screen.findByRole('button', {name: "Activate metadata review" }),
+  );expect(await screen.findByText("Current reviewed metadata")).toBeTruthy();expect(screen.queryByText("Old reviewed metadata")).toBeNull();
+});

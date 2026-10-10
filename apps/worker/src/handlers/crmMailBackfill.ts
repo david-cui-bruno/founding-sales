@@ -6,7 +6,7 @@ import {recordRetainedOriginalMetadata} from '@fss/domain/mail/crmMailOriginals.
 import {z} from 'zod';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {readBackfillAuthority,type BackfillAuthority} from '@fss/domain/mail/crmBackfillAuthority.ts';
-import {readBackfillAllocation,reserveBackfillRead,observeBackfillRead,type BackfillAllocationVerifier,type BackfillReadMethod} from '@fss/domain/mail/crmBackfillBudget.ts';
+import {revalidateBackfillPublication,readBackfillAllocation,reserveBackfillRead,observeBackfillRead,type BackfillAllocationVerifier,type BackfillReadMethod} from '@fss/domain/mail/crmBackfillBudget.ts';
 import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {GmailClientError,type GmailClient,type GmailAccessGrant} from '@fss/domain/mail/gmailClient.ts';
 import type {MailCaptureProofVerifier} from '@fss/domain/mail/crmSources.ts';
@@ -33,6 +33,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   async function block(reason:string){await withTransaction(input.session,async()=>{if(!await fenced(input))return;await input.session.query("UPDATE crm_mail_imports SET state='blocked',reason=$3 WHERE workspace_id=$1 AND id=$2 AND state<>'complete'",[input.scope.workspaceId,importId,reason]);});}
   if(deps===undefined){await block('backfill_configuration_required');return;}
   const adapters=deps;
+  const revalidateAuthority=(context:Parameters<typeof revalidateBackfillPublication>[0],authority:BackfillAuthority)=>revalidateBackfillPublication(context,authority,adapters.allocationVerifier);
   let authority=await readBackfillAuthority(context,importId);
   if(authority===null||authority.proof.accountBinding!==parsed.data.accountBinding||authority.proof.generation!==parsed.data.generation||authority.proof.controlsRevision!==parsed.data.controlsRevision||authority.proof.policyRevision!==parsed.data.policyRevision){await block('acquisition_binding_changed');return;}
   if(await readBackfillAllocation(context,authority.proof.mailboxId)===null){await block('quota_configuration_required');return;}
@@ -44,12 +45,13 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    if(access===null||access.mailboxId!==proofInput.mailboxId||access.providerAccountId!==proofInput.providerAccountId||access.generation!==proofInput.generation)throw new BackfillFailure('acquisition_binding_changed');
    const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,...recoveryScope===undefined?{}:{expectedRecovery:{id:recoveryScope.id,revision:recoveryScope.revision,epoch:recoveryScope.epoch,configurationHash:recoveryScope.configuration_hash}},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
    if(reservation===null)throw new BackfillFailure('quota_or_authority_unavailable');
-   if(original!==undefined&&(method!=='metadata'||!await revalidateRetainedCopyTraversal(context,{authority:bound,traversal:original,...recoveryScope===undefined?{}:{recovery:recoveryScope},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken})))throw new BackfillFailure('original_copy_authority_changed');
+   if(original!==undefined&&(method!=='metadata'||!await revalidateRetainedCopyTraversal(context,{revalidateAuthority,authority:bound,traversal:original,...recoveryScope===undefined?{}:{recovery:recoveryScope},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken})))throw new BackfillFailure('original_copy_authority_changed');
    let result:T;
    try{result=await read(access.access);}catch{throw new BackfillFailure('provider_read_unavailable');}
    await observeBackfillRead(context,reservation.reservationId);
    const latest=await adapters.resolveAccess(proofInput),current=await readBackfillAuthority(context,importId);
    if(latest===null||latest.mailboxId!==proofInput.mailboxId||latest.providerAccountId!==proofInput.providerAccountId||latest.generation!==proofInput.generation||current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof))throw new BackfillFailure('acquisition_binding_changed');
+   if(current&&!await withTransaction(input.session,()=>revalidateAuthority(context,current)))throw new BackfillFailure('quota_or_authority_unavailable');
    return result;
   }
   async function providerMetadata(bound:BackfillAuthority,messageId:string,expected?:{source:ExactMailSource;contextIdentity:string;traversal:RetainedCopyTraversal}){
@@ -62,20 +64,20 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      }
     },expected?.traversal);
     if(metadata!==null&&(metadata.id!==messageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)))throw new BackfillFailure('provider_evidence_invalid');
-    const originalUpdated=await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata,...expected===undefined?{}:{expectedSource:expected.source,expectedContextIdentity:expected.contextIdentity},observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    const originalUpdated=await recordRetainedOriginalMetadata(context,{revalidateAuthority,authority:bound,messageId,metadata,...expected===undefined?{}:{expectedSource:expected.source,expectedContextIdentity:expected.contextIdentity},observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     return {metadata,originalUpdated:originalUpdated===true};
    }catch(error){
     if(transientReason!==undefined){
      const latest=await adapters.resolveAccess({workspaceId:input.scope.workspaceId,mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation});
      if(latest!==null&&latest.mailboxId===bound.proof.mailboxId&&latest.providerAccountId===bound.proof.providerAccountId&&latest.generation===bound.proof.generation)
-      await recordRetainedOriginalMetadata(context,{authority:bound,messageId,metadata:null,transientReason,...expected===undefined?{}:{expectedSource:expected.source,expectedContextIdentity:expected.contextIdentity},observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+      await recordRetainedOriginalMetadata(context,{revalidateAuthority,authority:bound,messageId,metadata:null,transientReason,...expected===undefined?{}:{expectedSource:expected.source,expectedContextIdentity:expected.contextIdentity},observedAt:new Date(),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     }
     throw error;
    }
   }
   try{
    if(authority.historyAnchor!==null&&(await input.session.query("SELECT 1 FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' LIMIT 1",[input.scope.workspaceId,importId])).rows.length===0){
-    const traversal=await prepareRetainedCopyTraversal(context,{authority,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+    const traversal=await prepareRetainedCopyTraversal(context,{revalidateAuthority,authority,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     if(traversal!==undefined){
      let refreshed=false;
      if(traversal.snapshot!==null){
@@ -84,7 +86,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
        refreshed=observed.originalUpdated;
       }catch(error){if(!(error instanceof BackfillFailure&&error.message==='original_copy_authority_changed'))throw error;}
      }
-     await completeRetainedCopyTraversal(context,{authority,traversal,refreshed,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+     await completeRetainedCopyTraversal(context,{revalidateAuthority,authority,traversal,refreshed,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
      return;
     }
    }
@@ -95,20 +97,20 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      const allocation=await readBackfillAllocation(context,authority.proof.mailboxId);
      if(allocation===null)return;
      if(backfillConfigurationHash(authority,allocation)!==recovery.configuration_hash){
-      await replaceHistoryRecoveryConfiguration(context,{authority,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
+      await replaceHistoryRecoveryConfiguration(context,{revalidateAuthority,authority,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
       await block('recovery_configuration_changed');return;
      }
     }
     if(recovery.state==='pending_profile'){
      const profile=await providerRead('profile',authority,access=>adapters.gmail.getProfile(access));
-     await freezeHistoryRecovery(context,{authority,recovery,historyAnchor:profile.historyId,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+     await freezeHistoryRecovery(context,{revalidateAuthority,authority,recovery,historyAnchor:profile.historyId,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     }else if(recovery.state==='enumerating'||recovery.state==='draining'){
      if(!recovery.reconciliation_exhausted){
-      const traversal=await prepareRetainedCopyTraversal(context,{authority,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+      const traversal=await prepareRetainedCopyTraversal(context,{revalidateAuthority,authority,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
       if(traversal!==undefined){
        let refreshed=false;
        if(traversal.snapshot!==null){try{refreshed=(await providerMetadata(authority,traversal.messageId,{source:traversal.exact,contextIdentity:traversal.snapshot.contextIdentity,traversal})).originalUpdated;}catch(error){if(!(error instanceof BackfillFailure&&error.message==='original_copy_authority_changed'))throw error;}}
-       await completeRetainedCopyTraversal(context,{authority,recovery,traversal,refreshed,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
+       await completeRetainedCopyTraversal(context,{revalidateAuthority,authority,recovery,traversal,refreshed,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
        return;
       }
       const currentRecovery=await readHistoryRecovery(context,importId);
@@ -116,7 +118,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
       recovery=currentRecovery;recoveryScope=currentRecovery;
      }
      const bound=authority;
-     const outcome=await advanceHistoryRecovery(context,{authority:bound,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},{
+     const outcome=await advanceHistoryRecovery(context,{revalidateAuthority,authority:bound,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},{
       list:async request=>await providerRead('list',bound,access=>adapters.gmail.listMessageIds(access,request)),
       history:async request=>await providerRead('history',bound,access=>adapters.gmail.listHistory(access,request)),
       metadata:async messageId=>(await providerMetadata(bound,messageId)).metadata,observer:adapters.observer,
@@ -124,7 +126,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      if(outcome==='provider_unavailable')throw new BackfillFailure('provider_read_unavailable');
      if(outcome==='invalid_evidence')throw new BackfillFailure('provider_evidence_invalid');
      if(outcome==='authority_changed')throw new BackfillFailure('acquisition_binding_changed');
-     if(outcome==='history_expired'){await beginExpiredHistoryRecovery(context,{authority:bound,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);throw new BackfillFailure('history_coverage_expired');}
+     if(outcome==='history_expired'){await beginExpiredHistoryRecovery(context,{revalidateAuthority,authority:bound,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);throw new BackfillFailure('history_coverage_expired');}
     }
     return;
    }
@@ -135,8 +137,9 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     await withTransaction(input.session,async()=>{
      if(!await fenced(input))return;
      const current=await readBackfillAuthority(context,importId,true);
+     if(current&&!await revalidateAuthority(context,current))throw new BackfillFailure('quota_or_authority_unavailable');
      if(current===null||JSON.stringify(current.proof)!==JSON.stringify(original.proof)||current.historyAnchor!==null)return;
-     await input.session.query(`WITH instant AS(SELECT clock_timestamp() AS at) UPDATE crm_mail_imports SET to_at=instant.at,from_at=instant.at-interval '7776000 seconds',history_anchor=$3,history_cursor=$3,state='partial',reason=NULL FROM instant WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,importId,profile.historyId]);
+     await input.session.query(`WITH instant AS(SELECT clock_timestamp() AS at) UPDATE crm_mail_imports SET to_at=CASE WHEN $4 THEN to_at ELSE instant.at END,from_at=CASE WHEN $4 THEN from_at ELSE instant.at-interval '7776000 seconds' END,history_anchor=$3,history_cursor=$3,state='partial',reason=NULL FROM instant WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,importId,profile.historyId,adapters.allocationVerifier.revalidate!==undefined]);
      await input.session.query(`UPDATE crm_mail_import_slices x SET from_epoch_seconds=floor(extract(epoch FROM i.from_at))::bigint+x.ordinal*86400,to_epoch_seconds=floor(extract(epoch FROM i.from_at))::bigint+(x.ordinal+1)*86400 FROM crm_mail_imports i WHERE i.workspace_id=$1 AND i.id=$2 AND x.workspace_id=i.workspace_id AND x.import_id=i.id AND x.state='pending'`,[input.scope.workspaceId,importId]);
     });
     authority=await readBackfillAuthority(context,importId);if(authority===null||authority.historyAnchor===null)return;
@@ -147,7 +150,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     if(bound.historyCursor===null)return;
     const history=await providerRead('history',bound,access=>adapters.gmail.listHistory(access,{startHistoryId:bound.historyCursor!,maxResults:25,includeLifecycleChanges:true,...bound.historyPageToken===null?{}:{pageToken:bound.historyPageToken}}));
     if(!history.ok){
-     if(history.reason==='history_expired')await beginExpiredHistoryRecovery(context,{authority:bound,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
+     if(history.reason==='history_expired')await beginExpiredHistoryRecovery(context,{revalidateAuthority,authority:bound,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
      throw new BackfillFailure(history.reason==='history_expired'?'history_coverage_expired':'provider_read_unavailable');
     }
     if(!/^[0-9]{1,20}$/u.test(history.historyId)||BigInt(history.historyId)<BigInt(bound.historyCursor)||history.nextPageToken!==null&&history.nextPageToken.length>2000)throw new BackfillFailure('provider_evidence_invalid');
@@ -162,15 +165,17 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
       await withTransaction(input.session,async()=>{
        if(!await fenced(input))throw new BackfillFailure('acquisition_binding_changed');
        const current=await readBackfillAuthority(context,importId,true);
+     if(current&&!await revalidateAuthority(context,current))throw new BackfillFailure('quota_or_authority_unavailable');
        if(current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||current.historyCursor!==bound.historyCursor||current.historyPageToken!==bound.historyPageToken||current.fromEpochMicroseconds!==bound.fromEpochMicroseconds||current.toEpochMicroseconds!==bound.toEpochMicroseconds)throw new BackfillFailure('acquisition_binding_changed');
        const observationReceipt=metadata===null?undefined:await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
-       await recordBackfillMetadata(context,{authority:current,messageId,metadata,scope:'overlap',observationReceipt});
+       await recordBackfillMetadata(context,{revalidateAuthority,authority:current,messageId,metadata,scope:'overlap',observationReceipt});
       });
      }
     }
     await withTransaction(input.session,async()=>{
      if(!await fenced(input))return;
      const current=await readBackfillAuthority(context,importId,true);
+     if(current&&!await revalidateAuthority(context,current))throw new BackfillFailure('quota_or_authority_unavailable');
      if(current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||current.historyCursor!==bound.historyCursor||current.historyPageToken!==bound.historyPageToken||current.fromEpochMicroseconds!==bound.fromEpochMicroseconds||current.toEpochMicroseconds!==bound.toEpochMicroseconds)return;
      const count=(await input.session.query<{count:string}>("SELECT count(*)::text AS count FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='complete'",[input.scope.workspaceId,importId])).rows[0]!.count;
      if(count!=='90')return;
@@ -188,15 +193,17 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     await withTransaction(input.session,async()=>{
      if(!await fenced(input))throw new BackfillFailure('acquisition_binding_changed');
      const current=await readBackfillAuthority(context,importId,true);
+     if(current&&!await revalidateAuthority(context,current))throw new BackfillFailure('quota_or_authority_unavailable');
      if(current===null||JSON.stringify(current.proof)!==JSON.stringify(expected.proof)||current.fromEpochMicroseconds!==expected.fromEpochMicroseconds||current.toEpochMicroseconds!==expected.toEpochMicroseconds)throw new BackfillFailure('acquisition_binding_changed');
      const observationReceipt=metadata===null?undefined:await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
-     await recordBackfillMetadata(context,{authority:current,messageId,metadata,scope:'historical',observationReceipt});
+     await recordBackfillMetadata(context,{revalidateAuthority,authority:current,messageId,metadata,scope:'historical',observationReceipt});
     });
    }
    const bound=authority;
    await withTransaction(input.session,async()=>{
     if(!await fenced(input))return;
     const current=await readBackfillAuthority(context,importId,true);
+     if(current&&!await revalidateAuthority(context,current))throw new BackfillFailure('quota_or_authority_unavailable');
     if(current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||current.fromEpochMicroseconds!==bound.fromEpochMicroseconds||current.toEpochMicroseconds!==bound.toEpochMicroseconds)return;
     const locked=(await input.session.query<{from_epoch_seconds:string;to_epoch_seconds:string;next_page_token:string|null}>("SELECT from_epoch_seconds,to_epoch_seconds,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND ordinal=$3 AND state='pending' FOR UPDATE",[input.scope.workspaceId,importId,slice.ordinal])).rows[0];
     const start=Math.floor(Date.parse(current.fromAt)/1000)+slice.ordinal*86400;

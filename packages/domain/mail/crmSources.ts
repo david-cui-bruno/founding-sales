@@ -44,6 +44,8 @@ export interface MailCaptureProof {
 export interface MailCaptureProofVerifier {
   /** Receipt references must resolve to immutable, unrevoked proof for every exact binding. */
   verify(proof: MailCaptureProof): Promise<boolean>;
+  /** Local locked final publication check; no external provider wait. */
+  revalidate?(context: RepositoryContext, proof: MailCaptureProof): Promise<boolean>;
 }
 const providerMessageSchema = z
   .object({
@@ -87,10 +89,12 @@ export interface MailCaptureProvider {
     providerMessageId: string;
     providerAccountId: string;
     generation: number;
+    expectedProof?:MailCaptureProof;
   }): Promise<CapturedMailMessage>;
 }
 /** Separately composed historical provider; every actual metadata/body call is reserved. */
 export interface HistoricalMailCaptureProvider {
+  revalidate?(context:RepositoryContext,input:{importId:string;expectedProof:MailCaptureProof}):Promise<boolean>;
   read(input: Parameters<MailCaptureProvider['read']>[0] & {
     importId: string; conversationId: string; decisionRevision: number;
     expectedProof: MailCaptureProof; context: RepositoryContext;
@@ -411,6 +415,7 @@ export function businessMailCaptureHandler(deps: {
       if (!(await deps.proofVerifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
       const providerInput={
+          expectedProof:structuredClone(staged.authority.proof),
           workspaceId: input.scope.workspaceId,
           mailboxId: payload.mailboxId,
           providerMessageId: payload.providerMessageId,
@@ -454,6 +459,8 @@ export function businessMailCaptureHandler(deps: {
       if (!(await deps.proofVerifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
       return withTransaction(input.session, async () => {
+        if(payload.acquisitionOrigin&&deps.historicalProvider?.revalidate&&!await deps.historicalProvider.revalidate(repositoryContext(input.scope,input.session),{importId:payload.acquisitionOrigin.importId,expectedProof:staged.authority.proof}))return done('verification_unavailable');
+        if (deps.proofVerifier?.revalidate && !await deps.proofVerifier.revalidate(repositoryContext(input.scope,input.session),staged.authority.proof)) return done('verification_unavailable');
         const senderEndpoint = participants[0]!;
         const senderHash = createHash('sha256')
           .update(senderEndpoint)
@@ -2323,6 +2330,8 @@ export async function observeApprovedBusinessMail(
 /** Account provenance is passed by the sync run, never reconstructed from today's mailbox. */
 export function createApprovedBusinessMailObserver(
   options: {
+    /** Caller owns the metadata persistence transaction; authority locks survive publication. */
+    revalidateAuthority?:(context:RepositoryContext,input:{mailboxId:string;ownerUserId:string})=>Promise<boolean>;
     categorizeMetadata?: (
       metadata: GmailMessageMetadata,
     ) => Pick<
@@ -2333,6 +2342,7 @@ export function createApprovedBusinessMailObserver(
 ): BusinessMailMetadataObserver {
   return {
     async observe(context, input) {
+      if(options.revalidateAuthority&&!await options.revalidateAuthority(context,input))return {ok:false,reason:'metadata_observation_unavailable'};
       const policy = (
         await context.db.query<{ revision: number }>(
           'SELECT revision FROM crm_business_policies WHERE workspace_id=$1 AND mailbox_id=$2',

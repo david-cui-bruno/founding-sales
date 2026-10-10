@@ -123,7 +123,7 @@ it("preserves capture-time legacy ACL after current association changes without 
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

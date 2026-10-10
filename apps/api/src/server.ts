@@ -1,3 +1,4 @@
+import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingCapacityDeps} from './routes/bookingCapacity.ts';
@@ -88,6 +89,7 @@ import {
 export interface ApiOptions {
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
+  readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
   readonly bookingCapacity?:BookingCapacityDeps;
   readonly replyComposer?:HumanReplyDraftPort|null;
   /** One backend for this call and nobody else's: transactions and locks are opened on it. */
@@ -168,6 +170,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
   return {
     ...(options.crmMailEvidence===undefined?{}:{crmMailEvidence:options.crmMailEvidence}),
     ...(options.crmMailCaptureReadiness===undefined?{}:{crmMailCaptureReadiness:options.crmMailCaptureReadiness}),
+    ...(options.crmCapabilityRuntime===undefined?{}:{crmCapabilityRuntime:options.crmCapabilityRuntime}),
     ...(options.bookingCapacity===undefined?{}:{bookingCapacity:options.bookingCapacity}),
     ...(options.replyComposer===undefined?{}:{replyComposer:options.replyComposer}),
     session: options.session,

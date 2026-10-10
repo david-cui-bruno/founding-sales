@@ -103,7 +103,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

@@ -105,7 +105,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

@@ -121,7 +121,7 @@ it("deletes original A-bearing evidence after recontextualization while preservi
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

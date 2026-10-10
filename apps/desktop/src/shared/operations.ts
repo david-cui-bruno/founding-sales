@@ -1,3 +1,9 @@
+import {
+  crmCapabilityReadSchema,
+  crmCapabilityReadResponseSchema,
+  crmCapabilityActivateSchema,
+  crmCapabilityDisableSchema,
+} from '@fss/contracts';
 import {socialDiagnosticAttemptSchema,socialDiagnosticEventSchema,socialDiagnosticReasonSchema} from './socialDiagnostics.ts';
 import {socialManualHandoffInputSchema,socialManualHandoffViewSchema,socialManualHandoffConfirmSchema,socialManualHandoffUseSchema,socialConnectionSchema} from '@fss/contracts';
 import {experimentsReadSchema,experimentsViewSchema,experimentSaveSchema,experimentSaveResultSchema,experimentActivateSchema,experimentActivateResultSchema,experimentStopSchema,experimentStopResultSchema,experimentEraseSchema,experimentEraseResultSchema} from '@fss/contracts';
@@ -571,6 +577,18 @@ export interface Operation {
   readonly transform: string;
 }
 
+const capabilityChangedSchema = z.strictObject({revision:z.number().int().positive(),enabled: z.boolean(),
+  authorityReceiptId: z.uuid().nullable(),
+});
+
+/**
+ * Importing a CSV: its own channel, because the file is chosen in macOS's open dialog.
+ *
+ * It takes nothing and answers the Firms state. The dialog, the read and the preview all
+ * happen in the main process, so the file's text never crosses the bridge — a page that
+ * cannot name a path cannot ask for one, and a page that never holds the CSV cannot leak
+ * it. Cancelling the dialog is the state unchanged.
+ */
 export const OPERATIONS = {
   'today.actionsV2':{kind:'read',calls:[{method:'GET',path:'/today/actions/v2'}],input:nothing,output:todayActionsV2ResponseSchema.nullable(),transform:'explicit current V2 actions; unavailable or identity drift is null; never cached or V1-fallback'},
   'today.openActionV2':{kind:'read',calls:[{method:'POST',path:'/today/actions/open/v2'}],input:todayActionOpenV2RequestSchema,output:todayActionOpenV2ResponseSchema.nullable(),transform:'revalidate exact current V2 task and source-support target; no completion'},
@@ -1175,6 +1193,92 @@ export const OPERATIONS = {
   'crm.selectedImportRecapture': {kind:'command',calls:[{method:'POST',path:'/crm/imports/recapture'}],input:selectedImportCorrectPayloadSchema,output:selectedImportResultSchema,transform:'bounded selected import; main owns command envelope'},
   'crm.businessMailImportHealth':{kind:'read',calls:[{method:'POST',path:'/crm/business/mail/import/read'}],input:crmMailImportReadSchema,output:crmMailImportHealthSchema,transform:'separate measured metadata, copy, gap and allocation coverage'},
   'crm.businessMailImportRequest':{kind:'command',calls:[{method:'POST',path:'/crm/business/mail/import/request'}],input:crmMailImportReadSchema,output:crmMailImportAcknowledgmentSchema,transform:'queued bounded import identity without completion or provider grants'},
+  "crm.capabilityRead": {
+    kind: 'read',
+    calls: [{ method: 'POST', path: "/crm/capability/read" }],input: crmCapabilityReadSchema,
+    output: crmCapabilityReadResponseSchema,
+    transform: "current independent capability authority and prepared revision",
+  },
+  "crm.metadataReviewActivate": {
+    kind: 'command',
+    calls: [{ method: 'POST', path: "/crm/business/policy/activate" }],input: crmCapabilityActivateSchema
+      .omit({ commandId: true, clientVersion: true })
+      .extend({ capability:z.literal("metadata_review") })
+      .strict(),
+    output: capabilityChangedSchema,
+    transform:
+      "explicit activate of the current reviewed capability; no grants or sending",
+  },
+  "crm.metadataReviewDisable": {
+    kind: 'command',
+    calls: [{ method: 'POST', path: "/crm/business/policy/disable" }],input: crmCapabilityDisableSchema
+      .omit({ commandId: true, clientVersion: true })
+      .extend({ capability:z.literal("metadata_review") })
+      .strict(),
+    output: capabilityChangedSchema,
+    transform:
+      "explicit disable of the current reviewed capability; no grants or sending",
+  },
+  "crm.mailCaptureActivate": {
+    kind: 'command',
+    calls: [{ method: 'POST', path: "/crm/business/mail/controls/activate" }],input: crmCapabilityActivateSchema
+      .omit({ commandId: true, clientVersion: true })
+      .extend({ capability:z.literal("mail_capture") })
+      .strict(),
+    output: capabilityChangedSchema,
+    transform:
+      "explicit activate of the current reviewed capability; no grants or sending",
+  },
+  "crm.mailCaptureDisable": {
+    kind: 'command',
+    calls: [{ method: 'POST', path: "/crm/business/mail/controls/disable" }],input: crmCapabilityDisableSchema
+      .omit({ commandId: true, clientVersion: true })
+      .extend({ capability:z.literal("mail_capture") })
+      .strict(),
+    output: capabilityChangedSchema,
+    transform:
+      "explicit disable of the current reviewed capability; no grants or sending",
+  },
+  "crm.extractionActivate": {
+    kind: 'command',
+    calls: [{ method: 'POST', path: "/crm/processing/purpose/activate" }],input: crmCapabilityActivateSchema
+      .omit({ commandId: true, clientVersion: true })
+      .extend({ capability:z.literal("crm_extraction") })
+      .strict(),
+    output: capabilityChangedSchema,
+    transform:
+      "explicit activate of the current reviewed capability; no grants or sending",
+  },
+  "crm.extractionDisable": {
+    kind: 'command',
+    calls: [{ method: 'POST', path: "/crm/processing/purpose/disable" }],input: crmCapabilityDisableSchema
+      .omit({ commandId: true, clientVersion: true })
+      .extend({ capability:z.literal("crm_extraction") })
+      .strict(),
+    output: capabilityChangedSchema,
+    transform:
+      "explicit disable of the current reviewed capability; no grants or sending",
+  },
+  "crm.askAnswerActivate": {
+    kind: 'command',
+    calls: [{ method: 'POST', path: "/ask/purpose/activate" }],input: crmCapabilityActivateSchema
+      .omit({ commandId: true, clientVersion: true })
+      .extend({ capability:z.literal("ask_answer") })
+      .strict(),
+    output: capabilityChangedSchema,
+    transform:
+      "explicit activate of the current reviewed capability; no grants or sending",
+  },
+  "crm.askAnswerDisable": {
+    kind: 'command',
+    calls: [{ method: 'POST', path: "/ask/purpose/disable" }],input: crmCapabilityDisableSchema
+      .omit({ commandId: true, clientVersion: true })
+      .extend({ capability:z.literal("ask_answer") })
+      .strict(),
+    output: capabilityChangedSchema,
+    transform:
+      "explicit disable of the current reviewed capability; no grants or sending",
+  },
   'crm.businessPolicyRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/policy/read'}],input:businessPolicyReadSchema,output:businessPolicySchema,transform:'actual actor mailbox configuration; capture remains disabled'},
   'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
   'crm.businessReviewRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/review/read'}],input:businessReviewReadSchema,output:businessReviewSchema,transform:'bounded proven account metadata; no bodies'},

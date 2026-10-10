@@ -148,7 +148,7 @@ it("retains unrelated Today work after a moved copy loses its current firm autho
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

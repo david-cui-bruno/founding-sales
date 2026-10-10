@@ -1,3 +1,4 @@
+import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {CanonicalSourceReference,CrmTokenPriceMicros} from '@fss/contracts';
 
 export type AskPaidStage='answer'|'embedding_query'|'embedding_document'|'support';
@@ -52,6 +53,7 @@ export interface AskAnswerComposition {
  readonly retrieval?:AskRetrievalAdapter;
  readonly answer?:AskAnswerAdapter;
  readonly support?:AskSupportAdapter;
+ readonly revalidatePurpose?:(context:RepositoryContext,input:AskPurposeProofInput)=>Promise<boolean>;
  readonly verifyPurpose?:(input:AskPurposeProofInput)=>Promise<AskPurposeProof|null>;
  readonly allowControlledEvaluation?:boolean;
  readonly providerTimeoutMs?:number;

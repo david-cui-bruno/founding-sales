@@ -85,3 +85,5 @@ export * from './socialManualHandoff.ts';
 export * from './emailAdmissionActivation.ts';
 
 export * from './crmPricing.ts';
+
+export * from './crmActivation.ts';

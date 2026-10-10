@@ -206,7 +206,7 @@ it("keeps unrelated Today work when a mail person loses current legacy firm acce
       mail: undefined,
       send: undefined,
       research: undefined,
-      crmExtraction: {
+      crmExtraction: { allowControlledEvaluation:true,
         mailEvidence: port,
         adapter: {
           endpointId: "mail-coverage-evaluation",

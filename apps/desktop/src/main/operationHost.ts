@@ -472,6 +472,114 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'crm.selectedImportRecapture': async(input:OperationInput<'crm.selectedImportRecapture'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/imports/recapture',input,value=>OPERATIONS['crm.selectedImportRecapture'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessMailImportHealth':async(input:OperationInput<'crm.businessMailImportHealth'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/business/mail/import/read',value=>OPERATIONS['crm.businessMailImportHealth'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessMailImportRequest':async(input:OperationInput<'crm.businessMailImportRequest'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/business/mail/import/request',input,value=>OPERATIONS['crm.businessMailImportRequest'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+    "crm.capabilityRead": async (input: OperationInput<"crm.capabilityRead">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.read(
+        "/crm/capability/read",
+        (
+        value) => OPERATIONS["crm.capabilityRead"].output.parse(value),input,
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    "crm.metadataReviewActivate": async (input: OperationInput<"crm.metadataReviewActivate">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command(
+        "/crm/business/policy/activate",input,
+        (
+        value) => OPERATIONS["crm.metadataReviewActivate"].output.parse(value),
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    "crm.metadataReviewDisable": async (input: OperationInput<"crm.metadataReviewDisable">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command(
+        "/crm/business/policy/disable",input,
+        (
+        value) => OPERATIONS["crm.metadataReviewDisable"].output.parse(value),
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    "crm.mailCaptureActivate": async (input: OperationInput<"crm.mailCaptureActivate">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command(
+        "/crm/business/mail/controls/activate",input,
+        (
+        value) => OPERATIONS["crm.mailCaptureActivate"].output.parse(value),
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    "crm.mailCaptureDisable": async (input: OperationInput<"crm.mailCaptureDisable">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command(
+        "/crm/business/mail/controls/disable",input,
+        (
+        value) => OPERATIONS["crm.mailCaptureDisable"].output.parse(value),
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    "crm.extractionActivate": async (input: OperationInput<"crm.extractionActivate">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command(
+        "/crm/processing/purpose/activate",input,
+        (
+        value) => OPERATIONS["crm.extractionActivate"].output.parse(value),
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    "crm.extractionDisable": async (input: OperationInput<"crm.extractionDisable">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command(
+        "/crm/processing/purpose/disable",input,
+        (
+        value) => OPERATIONS["crm.extractionDisable"].output.parse(value),
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    "crm.askAnswerActivate": async (input: OperationInput<"crm.askAnswerActivate">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command(
+        "/ask/purpose/activate",input,
+        (
+        value) => OPERATIONS["crm.askAnswerActivate"].output.parse(value),
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
+    "crm.askAnswerDisable": async (input: OperationInput<"crm.askAnswerDisable">,
+    ) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.command(
+        "/ask/purpose/disable",input,
+        (
+        value) => OPERATIONS["crm.askAnswerDisable"].output.parse(value),
+      );
+      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
+      if (!answer.ok) throw new Error(answer.reason);
+      return answer.value;
+    },
     'crm.businessPolicyRead':async(input:OperationInput<'crm.businessPolicyRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/business/policy/read',value=>businessPolicySchema.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessPolicySave':async(input:OperationInput<'crm.businessPolicySave'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/business/policy/save',input,value=>OPERATIONS['crm.businessPolicySave'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessReviewRead':async(input:OperationInput<'crm.businessReviewRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/business/review/read',value=>businessReviewSchema.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},

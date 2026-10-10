@@ -112,7 +112,7 @@ it('binds purpose-specific extraction into the normal registry and publishes exa
     await selected.fixture.db.query(`INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'controlled-extraction','literal-v1','extraction-only-grant','fixture-no-retention',10,100,1,1,$2)`, [selected.fixture.alpha.workspaceId, selected.fixture.alpha.admin.userId]);
     expect((await selected.post('/crm/processing/request', { commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, source })).status).toBe(200);
     let calls = 0;
-    const composition = composeCrmBedrock({ surface: { async converse(input) {
+    const composition = composeCrmBedrock({allowControlledEvaluation:true, surface: { async converse(input) {
       calls++;
       expect(input.modelId).toBe('literal-v1');
       expect(input.messages[0]!.content[0]!.text).toBe(text);
@@ -130,7 +130,7 @@ it('transfers no original text to Bedrock when exact purpose verification fails'
   const selected = await selectedAnswer();
   try {
     let calls = 0;
-    const composition = composeCrmBedrock({ surface: { async converse() { calls++; throw new Error('Must not receive private evidence'); } }, answer: { endpointId: 'controlled-answer', modelVersion: 'literal-v1', providerKey: 'fixture.ask.answer' }, verifyPurpose: async () => null });
+    const composition = composeCrmBedrock({allowControlledEvaluation:true, surface: { async converse() { calls++; throw new Error('Must not receive private evidence'); } }, answer: { endpointId: 'controlled-answer', modelVersion: 'literal-v1', providerKey: 'fixture.ask.answer' }, verifyPurpose: async () => null });
     await selected.run(composition.crmAskAnswers!.answer!.run, composition.crmAskAnswers);
     expect(calls).toBe(0);
     expect((await selected.post('/ask/answers/read', { requestId: selected.requestId })).body).toMatchObject({ state: 'unavailable', reason: 'processing_authority_unavailable', answer: null });
@@ -192,7 +192,7 @@ it('extracts native transcript claims with original utterance locators and speak
     const source = { workspaceId, kind: 'meeting_transcript', sourceId: transcriptId, revision: 1, contentHash: createHash('sha256').update(JSON.stringify(utterances)).digest('hex'), locator: null };
     await selected.fixture.db.query(`INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'controlled-extraction','literal-v1','extraction-only-grant','fixture-no-retention',10,100,1,1,$2)`, [workspaceId, selected.fixture.alpha.admin.userId]);
     expect((await selected.post('/crm/processing/request', { commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, source })).status).toBe(200);
-    const composition = composeCrmBedrock({ surface: { async converse(input) {
+    const composition = composeCrmBedrock({allowControlledEvaluation:true, surface: { async converse(input) {
       expect(input.system[0]!.text).toContain('utterance:N:text:start:end');
       expect(input.system[0]!.text).toContain('not serialized JSON');
       expect(Buffer.byteLength(input.system[0]!.text)).toBeLessThanOrEqual(1024);

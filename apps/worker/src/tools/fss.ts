@@ -1,3 +1,4 @@
+import {crmAuthorityProvisionCommand,crmAuthorityRevokeCommand,crmReadAllocationPutCommand} from './fss/crmAuthority.ts';
 import {migrationAuthenticationCheck} from './fss/migrationAuthentication.ts';
 import {discoveryResumeCommand} from './fss/discoveryResume.ts';
 import {qualificationResolveIdentityCommand} from './fss/qualificationResolveIdentity.ts';
@@ -99,6 +100,9 @@ export const MIGRATION_IDENTITY_COMMANDS: readonly string[] = Object.freeze([
   // Lane RS-2: the two above, in one task, which is what the schema release runs.
   'release-prepare',
   'migration-auth-check',
+  'admin crm-authority provision',
+  'admin crm-authority revoke',
+  'admin crm-read-allocation put',
 ]);
 
 const write = (line: string): void => {
@@ -170,6 +174,9 @@ async function resolveJournalSource(config: ToolConfig): Promise<AdminInvocation
 type AdminRunner = (invocation: AdminInvocation) => Promise<AdminOutcome>;
 
 const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
+  'crm-read-allocation put': crmReadAllocationPutCommand,
+  'crm-authority provision': crmAuthorityProvisionCommand,
+  'crm-authority revoke': crmAuthorityRevokeCommand,
   'holds list': holdsListCommand,
   'holds release-restore': holdsReleaseRestoreCommand,
   'suppression-journal replay': suppressionJournalReplayCommand,
@@ -426,6 +433,13 @@ async function runCommand(
     return outcome.ok
       ? { ok: true, value: { ...outcome.value } }
       : { ok: false, reason: outcome.reason, detail: outcome.detail };
+  }
+  if (path === 'admin crm-authority provision' || path === 'admin crm-authority revoke' || path === 'admin crm-read-allocation put') {
+    if (migrationSession === null) return missingMigrationCredential();
+    const name = spec.path.slice(1).join(' ');
+    const resolved = await adminInvocation(name, parsed, migrationSession, config, environment);
+    if ('refusal' in resolved) return resolved.refusal;
+    return await ADMIN_COMMANDS[name]!(resolved);
   }
   // The three commands above are MIGRATION_IDENTITY_COMMANDS: they run on the migration
   // task definition, which injects no runtime connection. Everything below needs one.
