@@ -23,9 +23,10 @@ export const experimentEraseCommandSchema=experimentEraseSchema.extend({commandI
 const n=z.number().int().nonnegative();
 const cohort=z.strictObject({hypothesis:z.string(),policyVersion:z.string(),acquisition:z.string(),firms:n,contacted:n,reached:n,confirmedPain:n,booked:n,held:n,qualified:n,won:n,unreached:n,unknownQualification:n,email:z.strictObject({sent:n,genuineReplies:n,positiveReplies:n,bounces:n,deferrals:n}).optional(),interactions:z.strictObject({answeredCalls:n,confirmedPainCalls:n}),researchGrossCents:n,researchCashCents:n});
 export const experimentAggregateReportSchema=z.strictObject({from:z.iso.datetime(),to:z.iso.datetime(),asOf:z.iso.datetime(),cohorts:z.array(cohort),maturity:z.array(z.strictObject({ageBand:z.string(),firms:n})),coverage:z.strictObject({candidates:n,qualified:n,admitted:n,unavailable:n}),search:z.strictObject({attempts:n,creditsReserved:n}),discovery:z.strictObject({retainedHits:n,supportedProspects:n,admissions:n,manualStaged:n,unavailable:n}).nullable(),cutoffSemantics:z.literal('current_accepted_facts_through_cutoff'),rawProviderResults:z.null(),duplicates:z.null()});
+export const experimentRollbackDispositionSchema=z.enum(['restored','superseded','separate_approval_required']);
 const activationResult=z.discriminatedUnion('kind',[
- z.strictObject({kind:z.literal('discovery_query'),basePolicyVersion:z.string(),policyVersion:z.string(),queryId:z.string()}),
- z.strictObject({kind:z.literal('email_wording'),baseSequenceVersionId:uuid,sequenceVersionId:uuid,controlRevision:z.string().regex(/^\d+$/u)})
+ z.strictObject({kind:z.literal('discovery_query'),basePolicyVersion:z.string(),policyVersion:z.string(),queryId:z.string(),rollbackDisposition:experimentRollbackDispositionSchema.optional()}),
+ z.strictObject({kind:z.literal('email_wording'),baseSequenceVersionId:uuid,sequenceVersionId:uuid,controlRevision:z.string().regex(/^\d+$/u),rollbackDisposition:experimentRollbackDispositionSchema.optional()})
 ]);
 const outcomes=z.discriminatedUnion('semantics',[
  z.strictObject({semantics:z.literal('exact_policy_query_attempts_only'),attempts:n,retainedUniqueUrls:n,rawProviderResults:z.null(),duplicates:z.null(),supportedProspects:z.null(),conversionDenominator:z.null()}),
@@ -37,5 +38,5 @@ export const experimentsReadSchema=z.strictObject({});
 export const experimentsViewSchema=z.array(experimentViewSchema).max(30);
 export const experimentSaveResultSchema=z.strictObject({id:uuid,revision:n});
 export const experimentActivateResultSchema=z.strictObject({activationId:uuid});
-export const experimentStopResultSchema=z.strictObject({stopped:z.boolean()});
+export const experimentStopResultSchema=z.strictObject({stopped:z.boolean(),rollbackDisposition:experimentRollbackDispositionSchema});
 export const experimentEraseResultSchema=z.strictObject({erased:z.boolean()});

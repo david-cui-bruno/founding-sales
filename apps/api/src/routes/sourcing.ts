@@ -1,3 +1,5 @@
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {experimentsReadSchema,experimentSaveCommandSchema,experimentActivateCommandSchema,experimentStopCommandSchema,experimentEraseCommandSchema} from '@fss/contracts';
 import {readExperiments,saveExperiment,activateExperiment,stopExperiment,eraseExperiment} from '@fss/domain/sourcing/experiments.ts';
 import {candidateCorrectNameCommandSchema} from '@fss/contracts';
@@ -26,7 +28,7 @@ export async function routeSourcing(request:ApiRequest,options:RoutingOptions):P
     if(!experimentsReadSchema.safeParse(request.body).success)return {status:400,body:{error:'malformed_body'}};
     const scoped=contextForPrincipal(auth,authenticated.principal);if(!scoped.ok)return scoped.result;
     if(scoped.context.scope.actor.kind!=='user'||scoped.context.scope.actor.role!=='admin')return {status:403,body:{error:'admin_only'}};
-    return {status:200,body:await readExperiments(scoped.context)};
+    return {status:200,body:await withTransaction(auth.session,tx=>readExperiments(repositoryContext(scoped.context.scope,tx)))};
   }
   if(request.path==='/sourcing/experiments/save')return runRouteCommand(deps,experimentSaveCommandSchema,'sourcing.experiment_save',(c,body)=>{const {commandId:_id,clientVersion:_client,...input}=body;return saveExperiment(c,input);});
   if(request.path==='/sourcing/experiments/activate')return runRouteCommand(deps,experimentActivateCommandSchema,'sourcing.experiment_activate',(c,body)=>{const {commandId:_id,clientVersion:_client,...input}=body;return activateExperiment(c,input);});

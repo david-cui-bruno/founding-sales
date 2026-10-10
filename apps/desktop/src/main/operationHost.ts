@@ -1,3 +1,4 @@
+import {experimentsViewSchema,experimentSaveResultSchema,experimentActivateResultSchema,experimentStopResultSchema,experimentEraseResultSchema} from '@fss/contracts';
 import {todayActionsV2ResponseSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
 import {businessPolicySchema,businessReviewSchema} from '@fss/contracts';
 import {firmListResponseSchema} from '@fss/contracts';
@@ -312,6 +313,31 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'sourcing.saveCallNeed': async(input:OperationInput<'sourcing.saveCallNeed'>)=>{
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/sourcing/call-need/save',body,value=>z.object({revision:z.number().int().positive()}).parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.experiments':async(input:OperationInput<'sourcing.experiments'>)=>{
+      const generation=deps.recordings.identity.current(),answer=await deps.api.read('/sourcing/experiments',v=>experimentsViewSchema.parse(v),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.saveExperiment':async(input:OperationInput<'sourcing.saveExperiment'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/sourcing/experiments/save',body,v=>experimentSaveResultSchema.parse(v),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.activateExperiment':async(input:OperationInput<'sourcing.activateExperiment'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/sourcing/experiments/activate',body,v=>experimentActivateResultSchema.parse(v),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.stopExperiment':async(input:OperationInput<'sourcing.stopExperiment'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/sourcing/experiments/stop',body,v=>experimentStopResultSchema.parse(v),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.eraseExperiment':async(input:OperationInput<'sourcing.eraseExperiment'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/sourcing/experiments/erase',body,v=>experimentEraseResultSchema.parse(v),{commandId});
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
