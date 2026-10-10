@@ -278,3 +278,13 @@ output "availability_zones" {
   description = "The private database subnet zones selected by this environment."
   value       = module.network.availability_zones
 }
+
+output "crm_acquisition_diagnostic" {
+  description = "Non-secret immutable grant preparation bindings; null by default. This output grants no acquisition or production authority."
+  value       = local.diagnostic_enabled ? { environment_id = var.crm_acquisition_diagnostic.environment_id, database_name = module.database.database_name, database_instance_arn = module.database.instance_arn, database_secret_arn = module.secrets.app_runtime_database_secret_arn, database_endpoint = module.database.address, ecs_cluster_arn = module.cluster.cluster_arn, runtime = module.cluster.diagnostic_runtime_binding, witness_policies = module.cluster.diagnostic_witness_policies, tags = local.tags, database_tags = module.database.tags, database_secret_tags = module.secrets.app_runtime_database_tags } : null
+}
+
+output "crm_acquisition_diagnostic_witness_policies" {
+  description = "Additional policies remain empty unless explicit diagnostic mode is configured."
+  value       = module.cluster.diagnostic_witness_policies
+}

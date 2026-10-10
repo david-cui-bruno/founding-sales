@@ -279,3 +279,14 @@ variable "enable_social_assets" {
   type    = bool
   default = false
 }
+
+variable "enable_crm_acquisition_diagnostic" {
+  description = "Explicit stack mode enables only additional readonly isolation witness permissions."
+  type        = bool
+  default     = false
+}
+variable "diagnostic_database_instance_arn" {
+  description = "Exact managed RDS instance; no broad database inspection grant."
+  type        = string
+  default     = null
+}

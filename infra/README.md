@@ -38,6 +38,8 @@ infra/
     rollback.sh                         production back on a previous release's images (release.md 4.1a)
 ```
 
+The rehearsal root additionally supports explicit, default-null `crm_acquisition_diagnostic` configuration for a separately isolated schema89 acquisition acceptance environment. Production refuses it. See [the diagnostic runbook](../docs/greenfield/runbooks/crm-acquisition-diagnostic.md) for exact bindings, readonly witness IAM limitations and the separate approval prerequisites; configuration never authorizes mailbox acquisition or production activation.
+
 ## Running the gate
 
 ```bash

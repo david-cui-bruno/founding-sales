@@ -41,6 +41,8 @@ locals {
 module "stack" {
   source = "../../modules/stack"
 
+  crm_acquisition_diagnostic = var.crm_acquisition_diagnostic
+
   environment = "rehearsal"
   destroyable = true
 

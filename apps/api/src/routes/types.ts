@@ -1,3 +1,4 @@
+import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
@@ -58,6 +59,7 @@ export interface RoutingOptions {
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
+  readonly crmAcquisitionDiagnosticRuntime?: CrmAcquisitionDiagnosticRuntime;
   readonly bookingCapacity?:BookingCapacityDeps;
   readonly replyComposer?:HumanReplyDraftPort|null;
   readonly session: SessionQueryable;

@@ -54,3 +54,13 @@ output "parameter_group_name" {
   description = "Parameter group name."
   value       = aws_db_parameter_group.main.name
 }
+
+output "instance_arn" {
+  description = "Exact managed instance identity for the readonly diagnostic witness."
+  value       = aws_db_instance.main.arn
+}
+
+output "tags" {
+  description = "Actual managed database tags for independent diagnostic witness verification."
+  value       = aws_db_instance.main.tags
+}

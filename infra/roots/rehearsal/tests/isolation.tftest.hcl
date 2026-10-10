@@ -453,3 +453,23 @@ run "an_unapproved_rehearsal_pair_is_refused" {
 
   expect_failures = [var.availability_zones]
 }
+
+run "diagnostic_root_binds_isolated_database" {
+  command = plan
+  variables {
+    name_prefix                = "fss-rh-diagnostic"
+    crm_acquisition_diagnostic = { environment_id = "11111111-2222-4333-8444-555555555555", database_name = "fss_diagnostic_fixture" }
+  }
+  assert {
+    condition     = output.database_name == "fss_diagnostic_fixture" && output.crm_acquisition_diagnostic.environment_id == "11111111-2222-4333-8444-555555555555"
+    error_message = "The normal rehearsal root forwards explicit diagnostic configuration to its actual database and startup."
+  }
+}
+
+run "ordinary_rehearsal_has_no_diagnostic_mode" {
+  command = plan
+  assert {
+    condition     = output.database_name == "fss" && output.crm_acquisition_diagnostic == null
+    error_message = "Default rehearsal preserves fss and does not bind diagnostic configuration."
+  }
+}

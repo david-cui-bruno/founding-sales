@@ -140,3 +140,13 @@ variable "bootstrap" {
   type        = bool
   default     = false
 }
+
+variable "crm_acquisition_diagnostic" {
+  description = "Diagnostic acquisition is isolated rehearsal-only. Production explicitly refuses any non-null configuration."
+  type        = object({ environment_id = string, database_name = string })
+  default     = null
+  validation {
+    condition     = var.crm_acquisition_diagnostic == null
+    error_message = "Production refuses acquisition diagnostic configuration; use a separately approved isolated rehearsal."
+  }
+}

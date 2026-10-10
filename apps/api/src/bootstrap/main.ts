@@ -1,3 +1,4 @@
+import {createCrmAcquisitionDiagnosticStartup} from '@fss/domain/mail/crmAcquisitionDiagnosticStartup.ts';
 import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
 import {readCrmCapabilityStartup,createCrmCapabilityRuntime} from '@fss/domain/crm/capabilityStartup.ts';
 import {createCrmCapabilityVerifiers} from '@fss/domain/crm/capabilityVerifiers.ts';
@@ -259,12 +260,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const bookingCapacity:BookingCapacityDeps = calcom.ok && calcom.apiKey !== null
     ? {client:calcomCapacityClient({apiKey:calcom.apiKey})}
     : {client:null,missingKeyReason:((calcom.ok ? calcom.apiKeyProblem === 'absent' : calcom.problem === 'absent') ? 'api_key_missing' : 'api_key_invalid')};
-  const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'api',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.mail!==undefined});
-  const crmVerifiers=createCrmCapabilityVerifiers({runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-api-crm-authority'});await client.connect();return {session:client,close:()=>client.end()};}});
+  const diagnosticRuntime=createCrmAcquisitionDiagnosticStartup(environment,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'api',schemaVersion:REQUIRED_SCHEMA,connectionString:config.database.connectionString});
+  const crmRuntime=diagnosticRuntime===undefined?createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'api',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.mail!==undefined}):undefined;
+  const crmVerifiers=crmRuntime===undefined?undefined:createCrmCapabilityVerifiers({runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-api-crm-authority'});await client.connect();return {session:client,close:()=>client.end()};}});
   const server = createApiServer({
-    crmCapabilityRuntime:crmRuntime,
-    crmMailEvidence:createNativeCrmMailEvidence(crmVerifiers.captureVerifier),
-    crmMailCaptureReadiness:{adapterAvailable:()=>crmConfiguration.capture&&deployment.mail!==undefined,proofVerifier:crmVerifiers.captureVerifier},
+    ...(diagnosticRuntime===undefined?{}:{crmAcquisitionDiagnosticRuntime:diagnosticRuntime}),
+    ...(crmRuntime===undefined||crmVerifiers===undefined?{}:{crmCapabilityRuntime:crmRuntime,crmMailEvidence:createNativeCrmMailEvidence(crmVerifiers.captureVerifier),crmMailCaptureReadiness:{adapterAvailable:()=>crmConfiguration.capture&&deployment.mail!==undefined,proofVerifier:crmVerifiers.captureVerifier}}),
     bookingCapacity,
     replyComposer:await loadHumanReplyDraftPort(environment),
     connections: poolConnections(pool, log),
@@ -274,7 +275,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // rehearsal gate passed on these digests. It is ANDed with the admin's stored
     // attestation by `effectiveSendingEnabled`, and it is false unless the variable
     // says otherwise — so an unset deployment is a deployment that cannot send.
-    sendingEnabled: deployment.sendingEnabled,
+    sendingEnabled: diagnosticRuntime===undefined&&deployment.sendingEnabled,
     imageDigest: identity.digest,
     // And whether this is production, where only the CI gate's release records bind.
     production: isProductionEnvironmentName(deployment.environmentName),

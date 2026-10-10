@@ -141,3 +141,8 @@ output "availability_zones" {
   description = "The selected isolated rehearsal database subnet zones."
   value       = module.stack.availability_zones
 }
+
+output "crm_acquisition_diagnostic" {
+  description = "Exact isolated diagnostic bindings, null unless explicitly configured. No secret value or activation authority."
+  value       = module.stack.crm_acquisition_diagnostic
+}

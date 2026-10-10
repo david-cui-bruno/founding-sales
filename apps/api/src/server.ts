@@ -1,3 +1,4 @@
+import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
@@ -90,6 +91,7 @@ export interface ApiOptions {
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
+  readonly crmAcquisitionDiagnosticRuntime?: CrmAcquisitionDiagnosticRuntime;
   readonly bookingCapacity?:BookingCapacityDeps;
   readonly replyComposer?:HumanReplyDraftPort|null;
   /** One backend for this call and nobody else's: transactions and locks are opened on it. */
@@ -171,6 +173,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     ...(options.crmMailEvidence===undefined?{}:{crmMailEvidence:options.crmMailEvidence}),
     ...(options.crmMailCaptureReadiness===undefined?{}:{crmMailCaptureReadiness:options.crmMailCaptureReadiness}),
     ...(options.crmCapabilityRuntime===undefined?{}:{crmCapabilityRuntime:options.crmCapabilityRuntime}),
+    ...(options.crmAcquisitionDiagnosticRuntime===undefined?{}:{crmAcquisitionDiagnosticRuntime:options.crmAcquisitionDiagnosticRuntime}),
     ...(options.bookingCapacity===undefined?{}:{bookingCapacity:options.bookingCapacity}),
     ...(options.replyComposer===undefined?{}:{replyComposer:options.replyComposer}),
     session: options.session,
@@ -229,7 +232,16 @@ async function principalOf(routing: RoutingOptions, request: ApiRequest): Promis
   return outcome.authenticated ? outcome.principal : null;
 }
 
+const ACQUISITION_DIAGNOSTIC_API_PATHS=new Set([
+  '/health','/healthz','/readyz','/auth/client-version','/auth/google/callback',
+  '/auth/session/open','/auth/sign-in/claim','/auth/sign-in/start','/auth/sign-out',
+  '/gmail/connect','/gmail/disconnect','/gmail/status','/oauth/gmail/callback',
+  '/crm/business/mail/diagnostic/request','/crm/business/mail/diagnostic/read',
+  '/crm/business/mail/read','/crm/business/mail/read/v2',
+  '/crm/business/mail/delete','/crm/business/mail/state/read','/crm/business/mail/list',
+]);
 export async function dispatch(request: ApiRequest, options: ApiOptions): Promise<RouteResult> {
+  if(options.crmAcquisitionDiagnosticRuntime!==undefined&&!ACQUISITION_DIAGNOSTIC_API_PATHS.has(request.path))return {status:404,body:redactError('not_found')};
   const routing = routingOptions(options);
   const registry = registryFor(options);
   const principal = await principalOf(routing, request);

@@ -52,3 +52,8 @@ output "envelope_kms_key_id" {
   description = "Key id of the envelope key, for application configuration."
   value       = aws_kms_key.envelope.key_id
 }
+
+output "app_runtime_database_tags" {
+  description = "Actual application database secret tags; never its value."
+  value       = aws_secretsmanager_secret.this["app-runtime-database"].tags
+}

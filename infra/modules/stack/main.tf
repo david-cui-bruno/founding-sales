@@ -12,12 +12,15 @@ locals {
 
   is_production = var.environment == "production"
 
-  tags = {
+  diagnostic_enabled     = var.crm_acquisition_diagnostic != null
+  diagnostic_environment = local.diagnostic_enabled ? { FSS_CRM_ACQUISITION_DIAGNOSTIC = jsonencode({ environmentId = var.crm_acquisition_diagnostic.environment_id, region = local.aws_region, databaseSecretArn = module.secrets.app_runtime_database_secret_arn }) } : {}
+
+  tags = merge({
     Project     = "callie-fss"
     Environment = var.environment
     NamePrefix  = var.name_prefix
     ManagedBy   = "terraform"
-  }
+  }, local.diagnostic_enabled ? { CalliePurpose = "acquisition_acceptance", CallieDiagnosticEnvironment = var.crm_acquisition_diagnostic.environment_id } : {})
 
   # What both environments share. The region is the one FSS runs in (the account
   # stays a root input: offline-gate.sh refuses an account id in a module). The
@@ -71,6 +74,10 @@ resource "terraform_data" "environment_guard" {
   }
 
   lifecycle {
+    precondition {
+      condition     = !local.diagnostic_enabled || (!local.is_production && var.destroyable && !var.sending_enabled && var.active_database_host == null && var.crm_capability_adapters == null)
+      error_message = "Acquisition diagnostic mode requires a destroyable rehearsal, its own managed database, sending off and no ordinary CRM adapters; production refuses it."
+    }
     precondition {
       condition = (
         local.is_production
@@ -211,7 +218,8 @@ module "social_assets" {
 }
 
 module "database" {
-  source = "../database"
+  source        = "../database"
+  database_name = local.diagnostic_enabled ? var.crm_acquisition_diagnostic.database_name : "fss"
 
   name_prefix            = var.name_prefix
   subnet_ids             = module.network.private_subnet_ids
@@ -253,8 +261,10 @@ module "edge" {
 module "cluster" {
   source = "../cluster"
 
-  name_prefix = var.name_prefix
-  aws_region  = local.aws_region
+  name_prefix                       = var.name_prefix
+  aws_region                        = local.aws_region
+  enable_crm_acquisition_diagnostic = local.diagnostic_enabled
+  diagnostic_database_instance_arn  = module.database.instance_arn
 
   subnet_ids                = module.network.public_subnet_ids
   api_security_group_ids    = [module.network.security_group_ids["api_task"]]
@@ -350,7 +360,7 @@ module "cluster" {
     FSS_GMAIL_PUSH_SERVICE_ACCOUNT = var.gmail_push_service_account
     FSS_GMAIL_PUSH_TOPIC           = var.gmail_push_topic
     FSS_GOOGLE_HOSTED_DOMAIN       = local.google_hosted_domain
-  }, var.crm_capability_adapters == null ? {} : { FSS_CRM_CAPABILITY_ADAPTERS = var.crm_capability_adapters })
+  }, var.crm_capability_adapters == null ? {} : { FSS_CRM_CAPABILITY_ADAPTERS = var.crm_capability_adapters }, local.diagnostic_environment)
 
   tags = local.tags
 }

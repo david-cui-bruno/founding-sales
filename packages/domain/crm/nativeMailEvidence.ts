@@ -27,6 +27,7 @@ export function createNativeCrmMailEvidence(verifier?:MailCaptureProofVerifier):
  },async revalidatePrepared(context,authority){const native=authorities.get(authority);return native!==undefined&&(!verifier?.revalidate||await verifier.revalidate(context,native.proof))&&await revalidatePreparedMailProcessing(context,native);},async loadOriginalInput(context,authority){const native=authorities.get(authority);if(native===undefined||!verified.has(authority))return null;const read=await loadPreparedMailSourceInput(context,native.exact,native);return read.state==='available'?JSON.stringify({text:read.text,representation:read.representation,completeness:read.completeness,ranges:read.ranges}):null;},readState:readMailSourceState,async authorizeProcessing(context,source,purposeOwner){
   if(source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
   if(verifier===undefined)return null;
+  if((await context.db.query('SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 AND diagnostic_authorization_id IS NOT NULL',[context.scope.workspaceId,source.sourceId])).rows.length)return null;
   const exact={sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash};
   const before=await prepareMailProcessingAuthority(context,exact,purposeOwner);
   if(!before.ok||!await verifier.verify(before.authority.proof))return null;
@@ -35,11 +36,13 @@ export function createNativeCrmMailEvidence(verifier?:MailCaptureProofVerifier):
   const authority={source,authorizationFingerprint:checked.authority.authorizationFingerprint,nativeAuthority:checked.authority};authorities.set(authority,checked.authority);verified.add(authority);return authority;
  },async readContext(context,source){
   if(source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
+  if((await context.db.query('SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 AND diagnostic_authorization_id IS NOT NULL',[context.scope.workspaceId,source.sourceId])).rows.length)return null;
   const read=await readMailConversation(context,{sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash});
   if(read.state!=='available')return null;
   return processingContext([...read.source.originalContexts.map(cx=>({...cx,contextKind:'acquired'})),...read.source.reviewedContexts.map(cx=>({...cx,contextKind:'reviewed'}))]);
  },async resolveCommitmentProof(context,source){
   if(source.kind!=='mail'||source.workspaceId!==context.scope.workspaceId||source.contentHash===null||source.locator===null)return null;
+  if((await context.db.query('SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 AND diagnostic_authorization_id IS NOT NULL',[context.scope.workspaceId,source.sourceId])).rows.length)return null;
   const exact={sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash};
   const parsed=mailConversationSchema.safeParse(await readMailConversation(context,exact));if(!parsed.success)return null;
   const read=parsed.data;
@@ -51,6 +54,7 @@ export function createNativeCrmMailEvidence(verifier?:MailCaptureProofVerifier):
   return {ownerUserId:read.source.ownerUserId,sourceRevision:read.source.sourceRevision,sourceHash:read.source.contentHash,providerEventAt:read.source.occurredAt,observedAt:read.source.observedAt,authored:true,actualOutgoing:true,passage:cited.source.passage};
  },async resolve(context,source){
   if(source.workspaceId!==context.scope.workspaceId||source.kind!=='mail'||source.contentHash===null)return null;
+  if((await context.db.query('SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 AND diagnostic_authorization_id IS NOT NULL',[context.scope.workspaceId,source.sourceId])).rows.length)return null;
   const exact={sourceId:source.sourceId,sourceRevision:source.revision,contentHash:source.contentHash};
   const original=await readMailConversation(context,exact);
   if(original.state!=='available'||original.source.passage===null)return null;

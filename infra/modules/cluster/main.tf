@@ -993,3 +993,20 @@ resource "aws_iam_role_policy" "social_assets_worker" {
   role   = aws_iam_role.worker_task.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["s3:DeleteObject"], Resource = ["${var.social_assets_bucket_arn}/*"] }] })
 }
+
+# AWS DescribeTaskDefinition supports no resource ARN or action-specific keys;
+# only that read uses Resource=*, fenced to this endpoint region/caller account. The verifier
+# still checks the exact independently reviewed definition. See diagnostic runbook.
+# Independent diagnostic witness reads identity/tag metadata only. It cannot create,
+# modify, read secret values, or invoke a provider. Ordinary roles gain no policy.
+resource "aws_iam_role_policy" "crm_acquisition_diagnostic_witness" {
+  for_each = var.enable_crm_acquisition_diagnostic ? toset(["api", "worker"]) : toset([])
+  name     = "${var.name_prefix}-${each.key}-diagnostic-witness"
+  role     = each.key == "api" ? aws_iam_role.api_task.id : aws_iam_role.worker_task.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["ecs:DescribeTasks"], Resource = ["arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task/${aws_ecs_cluster.main.name}/*"], Condition = { StringEquals = { "ecs:cluster" = aws_ecs_cluster.main.arn, "aws:ResourceTag/CalliePurpose" = "acquisition_acceptance", "aws:ResourceTag/CallieDiagnosticEnvironment" = var.tags["CallieDiagnosticEnvironment"] } } },
+    { Effect = "Allow", Action = ["ecs:DescribeTaskDefinition"], Resource = ["*"], Condition = { StringEquals = { "aws:RequestedRegion" = var.aws_region, "aws:PrincipalAccount" = var.aws_account_id } } },
+    { Effect = "Allow", Action = ["rds:DescribeDBInstances", "rds:ListTagsForResource"], Resource = [var.diagnostic_database_instance_arn] },
+    { Effect = "Allow", Action = ["secretsmanager:DescribeSecret"], Resource = [var.app_runtime_database_secret_arn] }
+  ] })
+}
