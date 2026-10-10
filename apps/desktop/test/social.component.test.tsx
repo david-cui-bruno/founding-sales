@@ -39,3 +39,14 @@ it('opens a generated variant directly in the editor without hiding it below the
  expect(screen.queryByLabelText('Draft ideas')).toBeNull();expect(mutate).not.toHaveBeenCalled();
  }finally{vi.unstubAllGlobals();}
 });
+it('shows missed-time recovery independently while retaining a successful sibling and refusing unknown replacement',async()=>{
+ const base={postId:'22222222-2222-4222-8222-222222222222',revision:1,accountId:account.id,text:'Missed LinkedIn post',images:[],publishAt:'2026-10-08T12:00:00Z',zone:'America/New_York',state:'failed' as const,reason:'schedule_missed'};
+ const posts=[base,{...base,postId:'33333333-3333-4333-8333-333333333333',text:'Successful sibling',state:'scheduled' as const,reason:null},{...base,postId:'44444444-4444-4444-8444-444444444444',text:'Unknown sibling',state:'unknown' as const,reason:'inspection_incomplete'}];
+ const mutate=vi.fn();render(<DraftsProvider><SocialRoute ports={{read:async()=>({view:{accounts:[account],posts},reason:null}),mutate}}/></DraftsProvider>);
+ expect(await screen.findByText('This time was missed. Choose a new time and approve the revised post.')).toBeTruthy();
+ fireEvent.click(screen.getByText('Calendar'));
+ expect(screen.getByText('Scheduled on platform')).toBeTruthy();
+ expect(screen.getByText('Platform acceptance is uncertain. Check the original submission before replacing or posting manually.')).toBeTruthy();
+ expect(screen.getAllByRole('button',{name:'Edit'})).toHaveLength(1);
+ expect(mutate).not.toHaveBeenCalled();
+});

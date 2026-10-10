@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';import {beforeAll,afterAll,it,expect} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';import {withTransaction} from '../../db/queryable.ts';
 import {saveSocialPost,approveSocialPost,requestSocialCancellation,readSocialPost} from '../../social/posts.ts';
+import {holdSocialDelivery} from '../../social/deliveryRecovery.ts';
 import {claimSocialDelivery,beginSocialSubmission,recordSocialObservation} from '../../social/delivery.ts';
 let db:TestDatabase,seed:TwoWorkspaces,accountId:string,device:string,otherDevice:string;
 const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),db.session);const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
@@ -81,4 +82,42 @@ it('persists image identity for restart, rejects conflicting bindings, and prese
  expect(await tx(()=>recordSocialObservation(ctx(),{deviceId:device,submissionId:b.value.submissionId,observation:{...withoutBinding,state:'unknown',complete:false}}))).toMatchObject({ok:true});
  await db.session.query('UPDATE social_deliveries SET next_inspection_at=now() WHERE workspace_id=$1 AND post_id=$2',[seed.alpha.workspaceId,p.postId]);
  expect((await readSocialDeliveryQueue(ctx(),device)).items.find(x=>x.postId===p.postId)).toMatchObject({receiptId:mediaBinding.receiptId,mediaBinding});
+});
+
+it('makes a missed approved schedule durable and requires a new revision and approval before delivery',async()=>{
+ const p=await ready();
+ expect(await tx(()=>holdSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:1,reason:'schedule_missed'}))).toMatchObject({ok:true,value:{state:'failed',reason:'schedule_missed',revision:1}});
+ expect(await readSocialPost(ctx(),p.postId)).toMatchObject({state:'failed',reason:'schedule_missed',text:'Fixture post'});
+ expect(await tx(()=>claimSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:1}))).toEqual({ok:false,reason:'delivery_not_pending'});
+ const revised=await tx(()=>saveSocialPost(ctx(),{postId:p.postId,expectedRevision:1,accountId,text:'Fixture post',images:[],publishAt:new Date(Date.now()+7200_000).toISOString(),zone:'America/New_York'}));
+ expect(revised).toMatchObject({ok:true,value:{revision:2,state:'draft'}});
+ expect(await tx(()=>claimSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:2}))).toEqual({ok:false,reason:'approval_required'});
+});
+it('keeps successful sibling platforms and unknown submissions intact when another platform is held',async()=>{
+ const successful=await ready(),uncertain=await ready(),held=await ready();
+ for(const p of [successful,uncertain]){
+  const c=await tx(()=>claimSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:1}));if(!c.ok)throw new Error(c.reason);
+  const b=await tx(()=>beginSocialSubmission(ctx(),{deviceId:device,...c.value}));if(!b.ok)throw new Error(b.reason);
+  const complete=p===successful;
+  await tx(()=>recordSocialObservation(ctx(),{deviceId:device,submissionId:b.value.submissionId,observation:{state:complete?'scheduled':'unknown',receiptId:complete?'native-success':null,permalink:null,observedAt:new Date().toISOString(),accountExternalId:complete?'fixture':null,observedFingerprint:complete?p.fingerprint:null,complete}}));
+ }
+ expect(await tx(()=>holdSocialDelivery(ctx(),{deviceId:device,postId:held.postId,expectedRevision:1,reason:'account_identity_changed'}))).toMatchObject({ok:true,value:{state:'failed'}});
+ expect(await tx(()=>holdSocialDelivery(ctx(),{deviceId:device,postId:uncertain.postId,expectedRevision:1,reason:'preparation_unavailable'}))).toEqual({ok:false,reason:'inspect_existing_submission'});
+ expect(await readSocialPost(ctx(),successful.postId)).toMatchObject({state:'scheduled',reason:null});
+ expect(await readSocialPost(ctx(),uncertain.postId)).toMatchObject({state:'unknown',reason:'inspection_incomplete'});
+});
+it('rejects stale recovery and persists recovery across a fresh runtime session without changing its approval',async()=>{
+ const p=await ready();const input={deviceId:device,postId:p.postId,expectedRevision:1,reason:'adapter_unavailable' as const};
+ expect(await tx(()=>holdSocialDelivery(ctx(),{...input,expectedRevision:2}))).toEqual({ok:false,reason:'stale_revision'});
+ const first=await tx(()=>holdSocialDelivery(ctx(),input));expect(first).toMatchObject({ok:true,value:{state:'failed',text:'Fixture post'}});
+ expect(await tx(()=>holdSocialDelivery(ctx(),input))).toEqual(first);
+ const runtime=await db.appRuntimeSession(),restarted=repositoryContext(ctx().scope,runtime);
+ expect(await readSocialPost(restarted,p.postId)).toMatchObject({state:'failed',reason:'adapter_unavailable',revision:1});
+});
+it('serializes recovery against the submission marker so uncertainty can never become editable',async()=>{
+ const p=await ready(),c=await tx(()=>claimSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:1}));if(!c.ok)throw new Error(c.reason);
+ const session=await db.appRuntimeSession(),second=repositoryContext(ctx().scope,session);
+ const [held,began]=await Promise.all([tx(()=>holdSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:1,reason:'account_identity_changed'})),withTransaction(session,()=>beginSocialSubmission(second,{deviceId:device,...c.value}))]);
+ if(began.ok){expect(held).toEqual({ok:false,reason:'inspect_existing_submission'});expect(await readSocialPost(ctx(),p.postId)).toMatchObject({state:'submitting'});}
+ else{expect(began).toEqual({ok:false,reason:'claim_invalid'});expect(held).toMatchObject({ok:true,value:{state:'failed'}});}
 });
