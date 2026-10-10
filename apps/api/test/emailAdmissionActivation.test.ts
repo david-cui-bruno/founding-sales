@@ -13,6 +13,6 @@ it('exposes authenticated readiness and refuses unknown runtime without enabling
  const answer=await call('/outreach/email-admission/activate',command);expect(answer.status).toBe(409);
  expect((await call('/outreach/email-admission/activate',command)).body).toMatchObject({replayed:true});
  expect((await call('/outreach/email-admission/readiness',{runtime:{implementationCommit:'a'.repeat(40)}})).status).toBe(400);
- expect((await f.db.query('SELECT 1 FROM outreach_email_admission_settings WHERE enabled')).rows).toHaveLength(0);
+ expect((await call('/outreach/email-admission/readiness',{})).body).toMatchObject({enabled:false,ready:false});
  }finally{await f.stop();}
 });
