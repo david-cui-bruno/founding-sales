@@ -205,9 +205,16 @@ function provenance(validatedPath, pinPath) {
       throw new Error("image_mismatch");
   return pin;
 }
-function plan(configFile, directory, root) {
+export async function prepareDiagnosticPlan(configFile, directory, root, options = {}) {
   validate(configFile, directory);
   const input = read(resolve(directory, "validated.json"));
+  if (options.validatedConfigurationConsumer !== undefined) {
+    if (typeof options.validatedConfigurationConsumer !== "function")
+      throw new Error("invalid_configuration_consumer");
+    await options.validatedConfigurationConsumer({
+      configuration: structuredClone(input.configuration),
+    });
+  }
   const repository = fileURLToPath(new URL("../..", import.meta.url));
   root = realpathSync(root);
   // Only the exact checked-out root is supported; copied asset trees cannot attest source.
@@ -436,136 +443,150 @@ function plan(configFile, directory, root) {
   if (command("terraform", ["state", "list"], root).trim() !== "")
     throw new Error("nonempty_state");
   const planPath = resolve(directory, "plan.tfplan");
-  command(
-    "terraform",
-    ["plan", "-input=false", "-lock-timeout=5m", `-out=${planPath}`],
-    root,
-    900000,
-  );
-  const shown = JSON.parse(
-    command("terraform", ["show", "-json", planPath], root),
-  );
-  for (const [name, value] of Object.entries(input.configuration)) {
-    if (
-      JSON.stringify(canonical(shown.variables?.[name]?.value)) !==
-      JSON.stringify(canonical(value))
-    )
-      throw new Error("plan_configuration_changed");
-  }
-  function refuseSecretValues(module) {
-    for (const resource of module?.resources ?? [])
+  const publicPath = resolve(directory, "recipient.pem");
+  try {
+    command(
+      "terraform",
+      ["plan", "-input=false", "-lock-timeout=5m", `-out=${planPath}`],
+      root,
+      900000,
+    );
+    const shown = JSON.parse(
+      command("terraform", ["show", "-json", planPath], root),
+    );
+    for (const [name, value] of Object.entries(input.configuration)) {
+      if (
+        JSON.stringify(canonical(shown.variables?.[name]?.value)) !==
+        JSON.stringify(canonical(value))
+      )
+        throw new Error("plan_configuration_changed");
+    }
+    function refuseSecretValues(module) {
+      for (const resource of module?.resources ?? [])
+        if (
+          ["aws_secretsmanager_secret_version", "aws_ssm_parameter"].includes(
+            resource.type,
+          )
+        )
+          throw new Error("secret_value_plan_refused");
+      for (const child of module?.child_modules ?? []) refuseSecretValues(child);
+    }
+    refuseSecretValues(shown.planned_values?.root_module);
+    const actions = [];
+    for (const change of shown.resource_changes ?? []) {
       if (
         ["aws_secretsmanager_secret_version", "aws_ssm_parameter"].includes(
-          resource.type,
+          change.type,
         )
       )
         throw new Error("secret_value_plan_refused");
-    for (const child of module?.child_modules ?? []) refuseSecretValues(child);
-  }
-  refuseSecretValues(shown.planned_values?.root_module);
-  const actions = [];
-  for (const change of shown.resource_changes ?? []) {
-    if (
-      ["aws_secretsmanager_secret_version", "aws_ssm_parameter"].includes(
-        change.type,
+      if (
+        !/^[a-zA-Z0-9_.[\]"-]+$/u.test(change.address) ||
+        !Array.isArray(change.change?.actions)
       )
-    )
-      throw new Error("secret_value_plan_refused");
-    if (
-      !/^[a-zA-Z0-9_.[\]"-]+$/u.test(change.address) ||
-      !Array.isArray(change.change?.actions)
-    )
-      throw new Error("unsafe_summary");
-    if (
-      change.change.actions.some(
-        (action) => !["create", "read", "no-op"].includes(action),
+        throw new Error("unsafe_summary");
+      if (
+        change.change.actions.some(
+          (action) => !["create", "read", "no-op"].includes(action),
+        )
       )
+        throw new Error("not_creation_plan");
+      actions.push({ address: change.address, actions: change.change.actions });
+    }
+    if (!actions.some((item) => item.actions.includes("create")))
+      throw new Error("empty_plan");
+    if (command("terraform", ["state", "list"], root).trim() !== "")
+      throw new Error("state_changed");
+    if (
+      command("git", ["rev-parse", "HEAD"], repository).trim() !== input.commit ||
+      command(
+        "git",
+        [
+          "status",
+          "--porcelain",
+          "--untracked-files=all",
+          "--",
+          "infra",
+          ".github/workflows/greenfield-release.yml",
+          "packages/domain/db/schemaRange.ts",
+          ".node-version",
+        ],
+        repository,
+      ).trim() !== "" ||
+      sha(readFileSync(resolve(root, ".terraform.lock.hcl"))) !==
+        providerLockSha256
     )
-      throw new Error("not_creation_plan");
-    actions.push({ address: change.address, actions: change.change.actions });
+      throw new Error("source_changed");
+    const publicDir = resolve(directory, "public"),
+      encryptedDir = resolve(directory, "encrypted");
+    mkdirSync(publicDir, { recursive: true, mode: 0o700 });
+    mkdirSync(encryptedDir, { recursive: true, mode: 0o700 });
+    const manifest = {
+      version: "fss.diagnostic-plan.v1",
+      commit: input.commit,
+      sourceTree,
+      providerLockSha256,
+      imageBuildCommit: pin.imagesCommit,
+      imagesRunId: pin.imagesRunId,
+      gateRunId: pin.gateRunId,
+      workflowRunId: input.runId,
+      workflowRunAttempt: input.runAttempt,
+      stateKey: input.stateKey,
+      configurationSha256: input.configurationSha256,
+      diagnostic: {
+        environmentId:
+          input.configuration.crm_acquisition_diagnostic.environment_id,
+        databaseName:
+          input.configuration.crm_acquisition_diagnostic.database_name,
+        apiHostname: input.configuration.api_hostname,
+        prefix: input.prefix,
+        schema: 90,
+        sendingEnabled: false,
+        bootstrap: true,
+      },
+      recipientPublicKeySha256: input.recipientPublicKeySha256,
+      planSha256: sha(readFileSync(planPath)),
+      terraformVersion: version,
+      apiDigest: pin.images.api.digest,
+      workerDigest: pin.images.worker.digest,
+      activationAllowed: false,
+      applySupported: false,
+    };
+    const manifestPath = resolve(publicDir, "manifest.json");
+    write(manifestPath, manifest);
+    if (options.privatePlanConsumer !== undefined) {
+      if (typeof options.privatePlanConsumer !== "function") throw new Error("invalid_private_consumer");
+      const manifestSha256 = sha(readFileSync(manifestPath));
+      await options.privatePlanConsumer({
+        planPath, manifestPath, manifest: structuredClone(manifest),
+        configuration: structuredClone(input.configuration),
+      });
+      if (sha(readFileSync(planPath)) !== manifest.planSha256 ||
+          sha(readFileSync(manifestPath)) !== manifestSha256)
+        throw new Error("plan_changed");
+    }
+    writeFileSync(publicPath, input.recipientPublicKeyPem, { mode: 0o600 });
+    const encryptedPath = resolve(encryptedDir, "plan.encrypted.json");
+    seal(
+      planPath,
+      manifestPath,
+      publicPath,
+      input.recipientPublicKeySha256,
+      encryptedPath,
+    );
+    write(resolve(publicDir, "artifact-receipt.json"), {
+      version: "fss.diagnostic-plan-artifact.v1",
+      manifestSha256: sha(readFileSync(manifestPath)),
+      encryptedPlanSha256: sha(readFileSync(encryptedPath)),
+      retentionDays: 1,
+    });
+    const summary = `resource changes: ${actions.length}\n${actions.map((item) => `${item.actions.join("+")} ${item.address}`).join("\n")}\nplan only; no apply or acquisition acceptance\n`;
+    writeFileSync(resolve(publicDir, "summary.txt"), summary, { mode: 0o600 });
+    console.log(summary.trim());
+  } finally {
+    rmSync(planPath, { force: true });
+    rmSync(publicPath, { force: true });
   }
-  if (!actions.some((item) => item.actions.includes("create")))
-    throw new Error("empty_plan");
-  if (command("terraform", ["state", "list"], root).trim() !== "")
-    throw new Error("state_changed");
-  if (
-    command("git", ["rev-parse", "HEAD"], repository).trim() !== input.commit ||
-    command(
-      "git",
-      [
-        "status",
-        "--porcelain",
-        "--untracked-files=all",
-        "--",
-        "infra",
-        ".github/workflows/greenfield-release.yml",
-        "packages/domain/db/schemaRange.ts",
-        ".node-version",
-      ],
-      repository,
-    ).trim() !== "" ||
-    sha(readFileSync(resolve(root, ".terraform.lock.hcl"))) !==
-      providerLockSha256
-  )
-    throw new Error("source_changed");
-  const publicDir = resolve(directory, "public"),
-    encryptedDir = resolve(directory, "encrypted");
-  mkdirSync(publicDir, { recursive: true, mode: 0o700 });
-  mkdirSync(encryptedDir, { recursive: true, mode: 0o700 });
-  const manifest = {
-    version: "fss.diagnostic-plan.v1",
-    commit: input.commit,
-    sourceTree,
-    providerLockSha256,
-    imageBuildCommit: pin.imagesCommit,
-    imagesRunId: pin.imagesRunId,
-    gateRunId: pin.gateRunId,
-    workflowRunId: input.runId,
-    workflowRunAttempt: input.runAttempt,
-    stateKey: input.stateKey,
-    configurationSha256: input.configurationSha256,
-    diagnostic: {
-      environmentId:
-        input.configuration.crm_acquisition_diagnostic.environment_id,
-      databaseName:
-        input.configuration.crm_acquisition_diagnostic.database_name,
-      apiHostname: input.configuration.api_hostname,
-      prefix: input.prefix,
-      schema: 90,
-      sendingEnabled: false,
-      bootstrap: true,
-    },
-    recipientPublicKeySha256: input.recipientPublicKeySha256,
-    planSha256: sha(readFileSync(planPath)),
-    terraformVersion: version,
-    apiDigest: pin.images.api.digest,
-    workerDigest: pin.images.worker.digest,
-    activationAllowed: false,
-    applySupported: false,
-  };
-  const manifestPath = resolve(publicDir, "manifest.json");
-  write(manifestPath, manifest);
-  const publicPath = resolve(directory, "recipient.pem");
-  writeFileSync(publicPath, input.recipientPublicKeyPem, { mode: 0o600 });
-  const encryptedPath = resolve(encryptedDir, "plan.encrypted.json");
-  seal(
-    planPath,
-    manifestPath,
-    publicPath,
-    input.recipientPublicKeySha256,
-    encryptedPath,
-  );
-  write(resolve(publicDir, "artifact-receipt.json"), {
-    version: "fss.diagnostic-plan-artifact.v1",
-    manifestSha256: sha(readFileSync(manifestPath)),
-    encryptedPlanSha256: sha(readFileSync(encryptedPath)),
-    retentionDays: 1,
-  });
-  const summary = `resource changes: ${actions.length}\n${actions.map((item) => `${item.actions.join("+")} ${item.address}`).join("\n")}\nplan only; no apply or acquisition acceptance\n`;
-  writeFileSync(resolve(publicDir, "summary.txt"), summary, { mode: 0o600 });
-  console.log(summary.trim());
-  rmSync(planPath);
-  rmSync(publicPath);
 }
 function seal(planPath, manifestPath, publicPath, fingerprint, output) {
   const plan = readFileSync(planPath);
@@ -670,53 +691,59 @@ function decrypt(envelopePath, manifestPath, privatePath, output) {
   writeFileSync(output, plan, { mode: 0o600, flag: "wx" });
   key.fill(0);
 }
-try {
-  const [command, ...args] = process.argv.slice(2);
-  if (command === "validate" && args.length === 2) validate(...args);
-  else if (command === "provenance" && args.length === 2) provenance(...args);
-  else if (command === "plan" && args.length === 3) plan(...args);
-  else if (command === "seal" && args.length === 5) seal(...args);
-  else if (command === "decrypt" && args.length === 4) decrypt(...args);
-  else throw new Error("invalid_command");
-} catch (error) {
-  console.error(
-    `diagnostic plan refused: ${
-      [
-        "invalid_configuration",
-        "main_required",
-        "namespace_mismatch",
-        "public_key_required",
-        "recipient_mismatch",
-        "schema90_required",
-        "distinct_images_required",
-        "account_mismatch",
-        "invalid_zones",
-        "root_changed",
-        "source_changed",
-        "invalid_provenance",
-        "image_mismatch",
-        "wrong_role",
-        "certificate_mismatch",
-        "terraform_version_mismatch",
-        "nonempty_state",
-        "unsafe_summary",
-        "not_creation_plan",
-        "empty_plan",
-        "state_changed",
-        "plan_configuration_changed",
-        "plan_changed",
-        "envelope_changed",
-        "wrong_recipient",
-        "invalid_envelope",
-        "invalid_command",
-        "command_failed_bash",
-        "command_failed_aws",
-        "command_failed_terraform",
-        "command_failed_git",
-      ].includes(error.message)
-        ? error.message
-        : "operation_failed"
-    }`,
-  );
-  process.exitCode = 1;
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
+  try {
+    const [command, ...args] = process.argv.slice(2);
+    if (command === "validate" && args.length === 2) validate(...args);
+    else if (command === "provenance" && args.length === 2) provenance(...args);
+    else if (command === "plan" && args.length === 3) await prepareDiagnosticPlan(...args);
+    else if (command === "seal" && args.length === 5) seal(...args);
+    else if (command === "decrypt" && args.length === 4) decrypt(...args);
+    else throw new Error("invalid_command");
+  } catch (error) {
+    console.error(
+      `diagnostic plan refused: ${
+        [
+          "invalid_configuration",
+          "main_required",
+          "namespace_mismatch",
+          "public_key_required",
+          "recipient_mismatch",
+          "schema90_required",
+          "distinct_images_required",
+          "account_mismatch",
+          "invalid_zones",
+          "root_changed",
+          "source_changed",
+          "invalid_provenance",
+          "image_mismatch",
+          "wrong_role",
+          "certificate_mismatch",
+          "terraform_version_mismatch",
+          "nonempty_state",
+          "unsafe_summary",
+          "not_creation_plan",
+          "empty_plan",
+          "state_changed",
+          "plan_configuration_changed",
+          "plan_changed",
+          "envelope_changed",
+          "wrong_recipient",
+          "invalid_envelope",
+          "invalid_command",
+          "command_failed_bash",
+          "command_failed_aws",
+          "command_failed_terraform",
+          "command_failed_git",
+        ].includes(error.message)
+          ? error.message
+          : "operation_failed"
+      }`,
+    );
+    process.exitCode = 1;
+  }
+
 }

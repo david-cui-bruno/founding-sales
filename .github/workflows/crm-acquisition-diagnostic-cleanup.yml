@@ -1,0 +1,124 @@
+name: CRM acquisition diagnostic backup cleanup
+
+# No cron or manual arbitrary-prefix teardown. Only the named primary can trigger this.
+on:
+  workflow_run:
+    workflows: ["CRM acquisition diagnostic lifecycle"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: greenfield-rehearsal
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  cleanup:
+    if: github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: rehearsal
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Verify exact completed manual origin before cloud access
+        id: origin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGIN_RUN_ID: ${{ github.event.workflow_run.id }}
+          ORIGIN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          ORIGIN_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys
+          try:
+              run = os.environ['ORIGIN_RUN_ID']
+              attempt = os.environ['ORIGIN_ATTEMPT']
+              source = os.environ['ORIGIN_SOURCE_SHA']
+              repo = os.environ['GITHUB_REPOSITORY']
+              if repo != 'david-cui-bruno/founding-sales' or not re.fullmatch(r'[1-9][0-9]*', run) or not re.fullmatch(r'[1-9][0-9]*', attempt) or not re.fullmatch(r'[0-9a-f]{40}', source):
+                  raise ValueError()
+              def api(path):
+                  response = subprocess.run(['gh', 'api', path], capture_output=True, text=True, timeout=60, check=True)
+                  return json.loads(response.stdout)
+              origin = api(f'repos/{repo}/actions/runs/{run}/attempts/{attempt}')
+              if str(origin['id']) != run or str(origin['run_attempt']) != attempt or origin['event'] != 'workflow_dispatch' or origin['status'] != 'completed' or origin['head_branch'] != 'main' or origin['head_sha'] != source or origin['repository']['full_name'] != repo or origin['head_repository']['full_name'] != repo:
+                  raise ValueError()
+              workflow_id = origin['workflow_id']
+              if not isinstance(workflow_id, int) or isinstance(workflow_id, bool) or workflow_id <= 0:
+                  raise ValueError()
+              workflow = api(f'repos/{repo}/actions/workflows/{workflow_id}')
+              if workflow['id'] != workflow_id or workflow['path'] != '.github/workflows/crm-acquisition-diagnostic.yml':
+                  raise ValueError()
+              jobs = api(f'repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs?per_page=100')
+              if jobs['total_count'] != len(jobs['jobs']) or jobs['total_count'] != 1:
+                  raise ValueError()
+              job = jobs['jobs'][0]
+              if job['name'] != 'diagnostic' or job['status'] != 'completed':
+                  raise ValueError()
+              cleanup_required = False
+              if job['conclusion'] != 'skipped':
+                  def exact_step(name):
+                      matches = [step for step in job['steps'] if step['name'] == name]
+                      if len(matches) != 1 or matches[0]['status'] != 'completed' or matches[0]['conclusion'] not in ['success', 'failure', 'cancelled', 'skipped', 'timed_out']:
+                          raise ValueError()
+                      return matches[0]
+                  applied = exact_step('Apply only the exact approved saved plan')
+                  cleaned = exact_step('Clean exact owned lease after expiry failure or cancellation')
+                  cleanup_required = applied['conclusion'] != 'skipped' and cleaned['conclusion'] != 'success'
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                  output.write(f'source_commit={source}\ncleanup_required={str(cleanup_required).lower()}\n')
+          except Exception:
+              print('diagnostic origin refused or unavailable', file=sys.stderr)
+              sys.exit(1)
+          PY
+      - if: steps.origin.outputs.cleanup_required == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.origin.outputs.source_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+      - if: steps.origin.outputs.cleanup_required == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - if: steps.origin.outputs.cleanup_required == 'true'
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+      - name: Assume the refreshed normal rehearsal cleanup role
+        if: steps.origin.outputs.cleanup_required == 'true'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: diagnostic-backup-${{ github.run_id }}
+      - name: Clean only the independently registered original intent
+        if: steps.origin.outputs.cleanup_required == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGIN_RUN_ID: ${{ github.event.workflow_run.id }}
+          ORIGIN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          ORIGIN_SOURCE_SHA: ${{ steps.origin.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node infra/scripts/diagnostic-lifecycle.mjs backup-cleanup \
+            "$ORIGIN_RUN_ID" "$ORIGIN_ATTEMPT" "$ORIGIN_SOURCE_SHA" "$RUNNER_TEMP/diagnostic-backup"
+      - name: Remove private local backup files
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/diagnostic-backup"
