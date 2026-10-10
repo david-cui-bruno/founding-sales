@@ -154,6 +154,26 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       ["retained"],
       "Immutable exact-content approvals; retained to reconcile external schedules and prevent duplicate publication.",
     ),
+    social_manual_handoff_approvals: coverage(
+      ["retained"],
+      "Immutable owner-reviewed public content/account snapshots; no publication receipt or provider authority.",
+    ),
+    sourcing_experiments: coverage(
+      ["retained"],
+      "Opaque proposal identity and status survive explicit proposal-evidence erasure.",
+    ),
+    sourcing_experiment_revisions: coverage(
+      ["deletion_removes"],
+      "Explicit authenticated proposal erasure deletes private proposal text and aggregate report snapshots.",
+    ),
+    sourcing_experiment_activations: coverage(
+      ["retained", "deletion_redacts"],
+      "Opaque reviewed policy/sequence activation attribution remains; proposal erasure clears stop prose after stopping live work.",
+    ),
+    outreach_email_admission_activation_receipts: coverage(
+      ["retained"],
+      "Immutable admin-reviewed sender/evaluation/release documentary evidence retained for admission audit; not CRM source capture or Ask content.",
+    ),
     social_deliveries: coverage(
       ["retained"],
       "Native scheduling receipts and cancellation state; local deletion cannot recall an external schedule.",

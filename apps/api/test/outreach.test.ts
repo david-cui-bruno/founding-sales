@@ -73,7 +73,7 @@ it('binds an approved reusable five-email sequence without starting outreach',as
  expect((await call(command(base),'/outreach/email-admission/save')).body).toMatchObject({reason:'approved_email_sequence_required'});
  expect((await call(command({sequenceVersionId:emailSequenceId}),'/sequences/versions/publish')).status).toBe(200);
  expect((await call(command(base),'/outreach/email-admission/save')).body).toMatchObject({status:'accepted',result:{revision:2}});
- expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{revision:2,enabled:false,ownerUserId:f.alpha.admin.userId,mailboxId,sequenceVersionId:emailSequenceId,evaluation:null,ready:false,reasons:['evaluation_required','activation_not_available']},replies:[]});
+ expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{revision:2,enabled:false,ownerUserId:f.alpha.admin.userId,mailboxId,sequenceVersionId:emailSequenceId,evaluation:null,ready:false,reasons:['evaluation_required','runtime_identity_unknown','evaluation_mismatch','activation_receipt_required']},replies:[]});
  expect((await call({},'/enrollments')).body).toMatchObject({enrollments:[]});
 });
 
@@ -87,9 +87,9 @@ it('binds evaluation to this configuration and exact policy, prompt and running 
    expect((await call(command({...base,evaluation:{...evaluation,...changed}}),'/outreach/email-admission/save')).body).toMatchObject({reason:'evaluation_mismatch'});
   }
   expect((await call(command(base),'/outreach/email-admission/save')).body).toMatchObject({status:'accepted',result:{revision:3}});
-  expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{revision:3,enabled:false,evaluation,ready:false,reasons:['activation_not_available']}});
+  expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{revision:3,enabled:false,evaluation,ready:false,reasons:['runtime_identity_unknown','activation_receipt_required']}});
   vi.stubEnv('FSS_BUILD_COMMIT','d'.repeat(40));
-  expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{ready:false,reasons:['evaluation_mismatch','activation_not_available']}});
+  expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{ready:false,reasons:['evaluation_mismatch','runtime_identity_unknown','activation_receipt_required']}});
  }finally{vi.unstubAllEnvs();}
 });
 
@@ -97,7 +97,7 @@ it('invalidates stored readiness after sender reauthorization and sequence retir
  await call(command({mailboxId,expectedRevision:3,enabled:false,basis:'owner_reported_google_permission'}));
  expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{revision:3,ready:false,reasons:['mailbox_not_authorized']}});
  await call(command({mailboxId,expectedRevision:4,enabled:true,basis:'owner_reported_google_permission'}));
- expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{revision:3,ready:false,reasons:['mailbox_binding_changed','evaluation_mismatch','activation_not_available']}});
+ expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{revision:3,ready:false,reasons:['mailbox_binding_changed','evaluation_mismatch','runtime_identity_unknown','activation_receipt_required']}});
  expect((await call(command({sequenceVersionId:emailSequenceId}),'/sequences/versions/retire')).status).toBe(200);
  expect((await call({},'/outreach/control/v2')).body).toMatchObject({emailAdmission:{ready:false,reasons:['approved_email_sequence_required']}});
 });

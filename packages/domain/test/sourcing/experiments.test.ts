@@ -75,7 +75,7 @@ it('binds only separately approved exact email copy while keeping admission off 
  const copy=await tx(()=>createTemplateVersion(ctx(),{templateId:original.templateId,name:'Reviewed experiment',subject,body,footer:{signOff:original.footerSignOff},requiredVariables:original.requiredVariables,approve:true}));if(!copy.ok)throw new Error(copy.reason);
  const next=await tx(()=>publishedVersionOf(ctx(),plan.sequenceId,[emailStep(copy.value.id),...steps.slice(1)]));
  const a=await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:false,sequenceVersionId:next}));expect(a.ok).toBe(true);
- expect(await readEmailAdmissionControl(ctx())).toMatchObject({enabled:false,evaluation:null,sequenceVersionId:next,reasons:['evaluation_required','activation_not_available']});
+ expect(await readEmailAdmissionControl(ctx())).toMatchObject({enabled:false,evaluation:null,sequenceVersionId:next,reasons:['evaluation_required','runtime_identity_unknown','evaluation_mismatch','activation_receipt_required']});
  if(!a.ok)throw new Error(a.reason);
  expect(await tx(()=>stopExperiment(ctx(),{activationId:a.value.activationId,reason:'Stop without rewinding prior enrollments.'}))).toMatchObject({ok:true});
  expect(await readEmailAdmissionControl(ctx())).toMatchObject({enabled:false,evaluation:null,sequenceVersionId:next});
