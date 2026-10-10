@@ -124,7 +124,7 @@ it("flags dependent open meeting work after correction while preserving complete
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,
@@ -502,7 +502,7 @@ it("keeps equivalent reprocessing stable and flags open call work after a materi
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

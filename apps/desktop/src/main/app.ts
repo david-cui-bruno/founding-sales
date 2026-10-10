@@ -1,3 +1,4 @@
+import {inspectLinkedInPreparation} from './social/adapters/linkedinPreparation.ts';
 import {writeFile} from 'node:fs/promises';
 import {createSocialManualHandoffBridge} from './social/manualHandoffBridge.ts';
 import {createSocialDeliveryRunner} from './social/deliveryRunner.ts';
@@ -293,20 +294,24 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   const socialRuntime=createElectronSocialRuntime();
   const socialRoot=join(configuration.userDataDirectory,'social-delivery');
   const socialRunner=createSocialDeliveryRunner({api,root:socialRoot,identity:()=>manager.signedInIdentity(),now:Date.now,adapters:{
-    linkedin:{version:LINKEDIN_ADAPTER_VERSION,open:(scope,run,context)=>socialRuntime.withAccount(scope,async({window,isCurrent})=>{
+    linkedin:{version:LINKEDIN_ADAPTER_VERSION,check:(scope,expected,diagnostic)=>socialRuntime.withAccount(scope,async({window,isCurrent})=>{
+      const native=window as BrowserWindow;
+      const ports=createLinkedInBrowserPorts({current:isCurrent,now:Date.now,wait:()=>new Promise(resolve=>setTimeout(resolve,500)),contents:{getURL:()=>native.webContents.getURL(),insertText:text=>native.webContents.insertText(text),executeJavaScriptInIsolatedWorld:(world,scripts,gesture)=>native.webContents.executeJavaScriptInIsolatedWorld(world,scripts,gesture)},loadURL:url=>native.loadURL(url)});
+      return inspectLinkedInPreparation(expected,{...ports,diagnostic});
+    },diagnostic),open:(scope,run,context)=>socialRuntime.withAccount(scope,async({window,isCurrent})=>{
       const native=window as BrowserWindow;
       const ports=createLinkedInBrowserPorts({current:isCurrent,now:Date.now,wait:()=>new Promise(resolve=>setTimeout(resolve,500)),
         contents:{getURL:()=>native.webContents.getURL(),insertText:text=>native.webContents.insertText(text),executeJavaScriptInIsolatedWorld:(world,scripts,gesture)=>native.webContents.executeJavaScriptInIsolatedWorld(world,scripts,gesture)},
         loadURL:url=>native.loadURL(url)});
       const adapter=context.snapshot.images.length?createLinkedInImageAdapter(context,{...ports,root:socialRoot}):createLinkedInTextAdapter(context,ports);
       await run(adapter,isCurrent);
-    })}
+    },context.diagnostic)}
   }});
   const socialPump=createSocialDeliveryPump(socialRunner);
   socialPump.start();
   powerMonitor.on('resume',()=>socialPump.wake());
   app.once('before-quit',()=>{socialPump.stop();socialRuntime.signOut();});
-  const socialAccounts=createSocialAccountsBridge({api,identity:async()=>manager.signedInIdentity(),generation:()=>manager.sessionGeneration(),clear:scope=>socialRuntime.disconnect(scope),open:async scope=>{
+  const socialAccounts=createSocialAccountsBridge({api,identity:async()=>manager.signedInIdentity(),generation:()=>manager.sessionGeneration(),clear:async scope=>{socialRunner.clearAccount(scope.accountId);await socialRuntime.disconnect(scope);},open:async scope=>{
     const answer=await socialRuntime.connectAccount(scope,async ({window,isCurrent})=>{
       while(isCurrent()){
         const observed=await probeLinkedInIdentity(window.webContents,isCurrent);

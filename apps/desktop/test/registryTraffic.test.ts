@@ -1,3 +1,4 @@
+import {createSocialDeliveryRunner} from '../src/main/social/deliveryRunner.ts';
 import {createSocialManualHandoffBridge} from '../src/main/social/manualHandoffBridge.ts';
 import {createSocialAccountsBridge} from '../src/main/social/accountsBridge.ts';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -102,7 +103,8 @@ const session = {
 };
 
 /** One call of every operation, with an input its schema accepts. */
-const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
+  {
   'social.manualHandoff':{postId:UUID,expectedRevision:1},
   'social.confirmHandoff':{postId:UUID,expectedRevision:1,fingerprint:'a'.repeat(64),reviewedDestination:true,commandId:UUID},
   'social.useHandoff':{postId:UUID,expectedRevision:1,fingerprint:'a'.repeat(64),approvalId:UUID,action:'copy'},
@@ -143,6 +145,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'social.removeAsset':{assetId:UUID,commandId:UUID},
   'social.connectAccount':{accountId:UUID,commandId:UUID},
   'social.disconnectAccount':{accountId:UUID,commandId:UUID},
+  'social.checkPreparation':{accountId:UUID},
   'social.workspace':{},
   'social.drafts':{},
   'social.weekly':{},
@@ -237,6 +240,33 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'crm.selectedImportDelete': {sourceId:UUID,expectedSourceRevision:1,expectedMetadataRevision:1},
   'crm.selectedImportRestore': {sourceId:UUID,expectedSourceRevision:1,expectedMetadataRevision:1},
   'crm.selectedImportRecapture': {...{text:'Selected passage',subtype:'pasted_text',label:'Selected note',direction:'draft',participants:[],occurredAt:null,attachments:[]},sourceId:UUID,expectedSourceRevision:1,expectedMetadataRevision:1,previewHash:'a'.repeat(64),parserVersion:'selected-v1'},
+    "crm.capabilityRead": { capability: "crm_extraction" },
+    "crm.metadataReviewActivate": {
+      capability: "metadata_review",expectedRevision:1,mailboxId:UUID,
+      authorityReceiptId:UUID,
+    },
+    "crm.metadataReviewDisable": {
+      capability: "metadata_review",expectedRevision:1,mailboxId:UUID,
+    },
+    "crm.mailCaptureActivate": {
+      capability: "mail_capture",expectedRevision:1,mailboxId:UUID,
+      authorityReceiptId:UUID,
+    },
+    "crm.mailCaptureDisable": {
+      capability: "mail_capture",expectedRevision:1,mailboxId:UUID,
+    },
+    "crm.extractionActivate": {
+      capability: "crm_extraction",expectedRevision:1,
+      authorityReceiptId:UUID,
+    },
+    "crm.extractionDisable": {
+      capability: "crm_extraction",expectedRevision:1,
+    },
+    "crm.askAnswerActivate": {
+      capability: "ask_answer",expectedRevision:1,
+      authorityReceiptId:UUID,
+    },
+    "crm.askAnswerDisable": { capability: "ask_answer",expectedRevision:1 },
   'crm.businessPolicyRead':{},
   'crm.businessPolicySave':{mailboxId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedRevision:0,enabled:false,disclosure:null},
   'crm.businessReviewRead':{mailboxId:UUID,limit:50},
@@ -353,7 +383,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'recordings.retry': { itemId: 'a'.repeat(32) },
   'recordings.forFirm': { firmId: UUID },
   'diagnostics.resolveSend': { outboundMessageId: UUID, resolution: 'delivered' },
-});
+  },
+);
 
 /**
  * What has to have happened before an operation can reach the server at all.
@@ -409,7 +440,8 @@ const PRIME: Readonly<Partial<Record<OperationName, readonly [string, unknown][]
 
 type Host = Readonly<Record<string, ((input?: unknown) => Promise<unknown>) | undefined>>;
 
-function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<string, Host>> {
+function hostsFor(api: ReturnType<typeof createAuthedClient>,
+): Readonly<Record<string, Host>> {
   const today = createTodayBridge({
       api,
       session,
@@ -450,7 +482,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     replies: createReplyBridge({ api, session }) as unknown as Host,
     notifications:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['read','runtime'].map(method=>[method,async(input:unknown)=>await handlers[`notifications.${method}` as OperationName](input as never)])) as Host;})(),
     replyComposer:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['context','generate','preview','sendStatus','send'].map(method=>[method,async(input:unknown)=>await handlers[`replyComposer.${method}` as OperationName](input as never)])) as Host;})(),
-    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const socialHandoff=createSocialManualHandoffBridge({api,generation:()=>0,copy:async()=>{},open:async()=>{},chooseDestination:async()=>null,write:async()=>{}});const handlers=operationHandlers({api,socialAccounts,socialHandoff,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['manualHandoff','confirmHandoff','useHandoff','registerManualDestination','deliveryStatus','connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
+    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const socialHandoff=createSocialManualHandoffBridge({api,generation:()=>0,copy:async()=>{},open:async()=>{},chooseDestination:async()=>null,write:async()=>{}});const handlers=operationHandlers({api,socialAccounts,socialHandoff,socialDelivery:createSocialDeliveryRunner({api,root:'/unused',identity:async()=>({workspaceId:UUID,userId:UUID}),now:()=>0,adapters:{}}),recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['manualHandoff','confirmHandoff','useHandoff','registerManualDestination','deliveryStatus','checkPreparation','connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
       const directory=await mkdtemp(join(tmpdir(),'social-traffic-'));
       try{const image=join(directory,'source.png');await sharp({create:{width:4,height:4,channels:3,background:'red'}}).png().toFile(image);
         const host=createSocialImageImport({directory,api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,chooseFile:async()=>({canceled:false,filePaths:[image]})});
@@ -465,7 +497,25 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       return Object.fromEntries(['experiments','saveExperiment','activateExperiment','stopExperiment','eraseExperiment','list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
-    crm: (()=>{const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...bridge,...Object.fromEntries(['commitmentsReview','commitmentsReviewStatus','commitmentsRead','commitmentsHistory','commitmentsComplete','evidenceWorkBind','evidenceWorkRead','evidenceWorkList','evidenceConflictSave','evidenceConflictResolve','evidenceConflictRead','evidenceConflictList','evidenceHistoryRead','evidenceHistoryList','evidenceDecide','evidenceRead','progressRead','processingSource','processingRead','processingRequest','processingPurpose','processingPurposeSave','processingHealth','processingRecordHealth','businessMailList','businessMailRead','businessMailReadV2','businessMailImportHealth','businessMailImportRequest','businessMailState','businessMailControls','businessMailDelete','businessMailRestore','businessMailRecapture','businessMailAssociate','dealCreate','dealReopen','businessPolicyRead','businessPolicySave','businessReviewRead','businessReviewDecide','relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedAttachmentReselect','selectedAttachmentAnalyze','selectedAttachmentCommit','selectedAttachmentRead','selectedAttachmentPreview','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture'].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]))} as unknown as Host;})(),
+    crm: (() => {const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});
+      const handlers = operationHandlers({ api, recordings: { identity: { current: () => 0 } } } as unknown as OperationHostDeps);
+      return {...bridge,
+        ...
+        Object.fromEntries(
+          [
+            "capabilityRead",
+            "metadataReviewActivate",
+            "metadataReviewDisable",
+            "mailCaptureActivate",
+            "mailCaptureDisable",
+            "extractionActivate",
+            "extractionDisable",
+            "askAnswerActivate",
+            "askAnswerDisable",'commitmentsReview','commitmentsReviewStatus','commitmentsRead','commitmentsHistory','commitmentsComplete','evidenceWorkBind','evidenceWorkRead','evidenceWorkList','evidenceConflictSave','evidenceConflictResolve','evidenceConflictRead','evidenceConflictList','evidenceHistoryRead','evidenceHistoryList','evidenceDecide','evidenceRead','progressRead','processingSource','processingRead','processingRequest','processingPurpose','processingPurposeSave','processingHealth','processingRecordHealth','businessMailList','businessMailRead','businessMailReadV2','businessMailImportHealth','businessMailImportRequest','businessMailState','businessMailControls','businessMailDelete','businessMailRestore','businessMailRecapture','businessMailAssociate','dealCreate','dealReopen','businessPolicyRead','businessPolicySave','businessReviewRead','businessReviewDecide','relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedAttachmentReselect','selectedAttachmentAnalyze','selectedAttachmentCommit','selectedAttachmentRead','selectedAttachmentPreview','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture',
+          ].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]),
+        ),
+      } as unknown as Host;
+    })(),
     sequences: createSequenceBridge({ api, session }) as unknown as Host,
     settings: createAdminBridge({ api, session }) as unknown as Host,
     // Slice M1: answered by `operationHost.ts` against the client directly, like

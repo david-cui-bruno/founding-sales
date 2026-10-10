@@ -63,3 +63,7 @@ _Avoid_: Ask mode, separate Search section
 **Activation**:
 Making a capability operational after its required evidence, configuration and release checks pass.
 _Avoid_: source completion when referring to operational readiness
+
+**Capability authority receipt**:
+A dated independent review authorizing one precisely configured capability for a particular owner and scope, subject to expiry and revocation.
+_Avoid_: settings, diagnostic result, sending permission

@@ -43,7 +43,7 @@ it('reserves four cents but settles exact accepted fractional extraction usage a
   const firmId=await seedFirm(f,{name:'Public precision spend',assignedUserId:f.alpha.admin.userId});
   let entered!:()=>void,release!:()=>void;
   const ready=new Promise<void>(r=>{entered=r;}),wait=new Promise<void>(r=>{release=r;});
-  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter:{endpointId:'fractional-fixture',modelVersion:'fractional-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{entered();await wait;return {acceptance:'accepted',usage:{inputTokens:10000,outputTokens:1000},claims:[]};}}}));
+  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({allowControlledEvaluation:true,adapter:{endpointId:'fractional-fixture',modelVersion:'fractional-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{entered();await wait;return {acceptance:'accepted',usage:{inputTokens:10000,outputTokens:1000},claims:[]};}}}));
   const worker=await f.database.appRuntimeSession();
   const running=runOnce(worker,{registry,owner:'fractional-extraction',limit:20});
   try{
@@ -112,7 +112,7 @@ async function fractionalExtractionFixture(inputRate:number|string='1.1',outputR
 it('settles using immutable fractional prices after current purpose pricing changes',async()=>{
  const {f,post,source}=await fractionalExtractionFixture();
  try{
-  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{
+  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({allowControlledEvaluation:true,adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{
    await f.db.query('UPDATE crm_extraction_purposes SET revision=revision+1,input_token_price_micros=2,output_token_price_micros=6 WHERE workspace_id=$1',[f.alpha.workspaceId]);
    return {acceptance:'accepted',usage:{inputTokens:10000,outputTokens:1000},claims:[]};
   }}}));
@@ -125,7 +125,7 @@ it('conserves the full fractional reservation through unknown acceptance, deleti
  const {f,post,command,personId,source,readSource}=await fractionalExtractionFixture();
  try{
   let calls=0;
-  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{calls++;return {acceptance:'unknown',usage:{inputTokens:0,outputTokens:0},claims:[]};}}}));
+  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({allowControlledEvaluation:true,adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{calls++;return {acceptance:'unknown',usage:{inputTokens:0,outputTokens:0},claims:[]};}}}));
   await runOnce(f.db,{registry,owner:'fractional-unknown',limit:20});
   expect((await post('/crm/processing/read',{source})).body).toMatchObject({state:'unknown_acceptance',financial:{dispatchState:'unknown_acceptance',settlementState:'estimated',settledCents:4}});
   expect((await post('/crm/people/source/delete',command({personId,sourceId:source.sourceId,expectedRevision:1}))).status).toBe(200);
@@ -141,7 +141,7 @@ it('conserves the full fractional reservation through unknown acceptance, deleti
 it('keeps zero output price funded and bounded, and settles sub-micro input without binary rounding',async()=>{
  const {f,post,source}=await fractionalExtractionFixture('0.14',0,100);
  try{
-  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1000000,outputTokens:1000},claims:[]})}}));
+  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({allowControlledEvaluation:true,adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1000000,outputTokens:1000},claims:[]})}}));
   await runOnce(f.db,{registry,owner:'fractional-binary-boundary',limit:20});
   // 1,000,000 tokens at 0.14 microdollars = exactly 14 cents. The observed
   // usage exceeds the reserved token fence, so content must still be refused.
@@ -153,7 +153,7 @@ it('does not dispatch a zero-output purpose without adequate reservation headroo
  const {f,post,source}=await fractionalExtractionFixture('1.1',0,1);
  try{
   let calls=0;
-  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{calls++;return {acceptance:'accepted',usage:{inputTokens:0,outputTokens:0},claims:[]};}}}));
+  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({allowControlledEvaluation:true,adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>{calls++;return {acceptance:'accepted',usage:{inputTokens:0,outputTokens:0},claims:[]};}}}));
   await runOnce(f.db,{registry,owner:'zero-output-budget',limit:20});
   expect(calls).toBe(0);expect((await post('/crm/processing/read',{source})).body).toMatchObject({state:'unavailable',reason:'budget_held'});
  }finally{await f.stop();}
@@ -163,7 +163,7 @@ it('does not dispatch a zero-output purpose without current funding verification
  const {f,post,source}=await fractionalExtractionFixture('0.02',0);
  try{
   let calls=0;
-  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2000-01-01T00:00:00Z',run:async()=>{calls++;return {acceptance:'accepted',usage:{inputTokens:0,outputTokens:0},claims:[]};}}}));
+  const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({allowControlledEvaluation:true,adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2000-01-01T00:00:00Z',run:async()=>{calls++;return {acceptance:'accepted',usage:{inputTokens:0,outputTokens:0},claims:[]};}}}));
   await runOnce(f.db,{registry,owner:'zero-output-no-funding',limit:20});
   expect(calls).toBe(0);expect((await post('/crm/processing/read',{source})).body).toMatchObject({state:'unavailable',reason:'purpose_authority_unavailable'});
  }finally{await f.stop();}

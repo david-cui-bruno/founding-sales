@@ -1,6 +1,6 @@
 import type { GmailClient, GmailAccessGrant } from './gmailClient.ts';
 import { headerValue } from './gmailClient.ts';
-import type { MailCaptureProvider } from './crmSources.ts';
+import type { MailCaptureProvider,MailCaptureProof } from './crmSources.ts';
 
 interface ProvenMailAccess {
   mailboxId: string;
@@ -12,12 +12,16 @@ interface ProvenMailAccess {
  * A requested account ID or the current mailbox email is not that proof. */
 export function createGmailMailCaptureProvider(deps: {
   gmail: GmailClient;
+  authorizeRead?(proof:MailCaptureProof):Promise<boolean>;
   resolveAccess(
     input: Parameters<MailCaptureProvider['read']>[0],
   ): Promise<ProvenMailAccess | null>;
 }): MailCaptureProvider {
   return {
     async read(input) {
+      const proof=input.expectedProof?structuredClone(input.expectedProof):null;
+      async function authorize(){if(deps.authorizeRead&&(!proof||proof.workspaceId!==input.workspaceId||proof.mailboxId!==input.mailboxId||proof.providerAccountId!==input.providerAccountId||proof.generation!==input.generation||!await deps.authorizeRead(structuredClone(proof))))throw new Error('CRM mail capture authority unavailable');}
+
       const proven = await deps.resolveAccess(input);
       if (
         !proven ||
@@ -26,6 +30,7 @@ export function createGmailMailCaptureProvider(deps: {
         proven.generation !== input.generation
       )
         throw new Error('CRM mail account proof unavailable');
+      await authorize();
       const metadata = await deps.gmail.getMetadata(
         proven.access,
         input.providerMessageId,
@@ -33,9 +38,16 @@ export function createGmailMailCaptureProvider(deps: {
       );
       if (!metadata || metadata.id !== input.providerMessageId)
         throw new Error('CRM mail metadata identity unavailable');
+      await authorize();
       const body = await deps.gmail.getBody(proven.access, metadata.id);
       if (body && body.messageId !== metadata.id)
         throw new Error('CRM mail body identity unavailable');
+      if (body?.threadId !== undefined && body.threadId !== metadata.threadId)
+        throw new Error('CRM mail body thread identity unavailable');
+      if (body?.labelIds !== undefined && JSON.stringify([...body.labelIds].sort()) !== JSON.stringify([...metadata.labelIds].sort()))
+        throw new Error('CRM mail body labels changed');
+      const labels = body?.labelIds ?? metadata.labelIds;
+      const origin = body?.threadId === undefined || body.labelIds === undefined ? 'unknown' : labels.includes('DRAFT') ? 'unknown' : labels.includes('SENT') ? 'sent' : labels.includes('INBOX') ? 'received' : 'unknown';
       const latest = await deps.resolveAccess(input);
       if (
         !latest ||
@@ -55,14 +67,13 @@ export function createGmailMailCaptureProvider(deps: {
         /^\s*(?:"([^"]+)"|([^<>]+))\s*<[^<>]+>\s*$/u,
       );
       const text = body?.text ?? null;
-      // The existing client decodes a MIME part or flattens HTML. It does not
-      // prove complete MIME or authored/quoted segmentation; retain that limit.
+      // A complete retained representation still leaves every authored/quoted range unknown.
       return {
         providerAccountId: proven.providerAccountId,
         messageId: metadata.id,
         threadId: metadata.threadId,
-        labels: [...metadata.labelIds],
-        origin: 'unknown',
+        labels: [...labels],
+        origin,
         providerAt: new Date(
           metadata.internalDateEpochMilliseconds,
         ).toISOString(),
@@ -80,9 +91,9 @@ export function createGmailMailCaptureProvider(deps: {
         cc: addresses(headerValue(metadata.headers, 'Cc')),
         subject: (headerValue(metadata.headers, 'Subject') ?? '').slice(0, 998),
         body: text,
-        parserVersion: 'gmail-existing-decoded-part-v1',
+        parserVersion: body?.completeness ? 'gmail-bounded-mime-v2' : 'gmail-existing-decoded-part-v1',
         representation: body?.plainText ? 'plain_text' : 'html_flattened',
-        completeness: text === null ? 'unavailable' : 'partial',
+        completeness: text === null ? 'unavailable' : body?.completeness === 'complete' && !body.truncated && body.plainText ? 'complete' : 'partial',
         ranges: text ? [{ start: 0, end: text.length, kind: 'unknown' }] : [],
       };
     },

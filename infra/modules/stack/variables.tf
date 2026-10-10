@@ -379,3 +379,14 @@ variable "desktop_upgrade_url" {
   type        = string
   default     = null
 }
+
+variable "crm_capability_adapters" {
+  description = "Optional non-secret strict CRM adapter JSON for both processes. Presence constructs adapters only; independent consent, authority, evaluation, funding and release gates remain mandatory. Null preserves unavailable defaults."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.crm_capability_adapters == null ? true : length(var.crm_capability_adapters) <= 8192 && can(jsondecode(var.crm_capability_adapters))
+    error_message = "CRM adapter configuration must be bounded JSON. Both processes additionally validate the exact supported routes and fields before startup."
+  }
+}

@@ -77,3 +77,6 @@ it('bounds an abandoned connect operation and closes the login window',async()=>
  expect(await result).toEqual({ok:false,reason:'browser_unavailable'});expect(h.window.destroy).toHaveBeenCalledTimes(1);
  }finally{vi.useRealTimers();}
 });
+it('reports a bounded load timeout without retaining the thrown page message',async()=>{
+ vi.useFakeTimers();try{const h=harness();h.window.loadURL.mockImplementation(()=>new Promise(()=>{}));const report=vi.fn();const runtime=createSocialRuntime(h.create);const pending=runtime.withAccount(scope,async()=>true,report);await vi.advanceTimersByTimeAsync(30_001);expect(await pending).toEqual({ok:false,reason:'browser_unavailable'});expect(report).toHaveBeenLastCalledWith('browser_load','refused','load_timeout');}finally{vi.useRealTimers();}
+});

@@ -320,7 +320,7 @@ describe('the brief, shown', () => {
       await Promise.resolve();
     });
     expect(within(await rowOf(MEETING)).getByTestId('meeting-brief').textContent).toContain('Revoked content.');
-    const remount = async (): Promise<void> => {
+    const remount = async (expectedReads: number): Promise<void> => {
       view.rerender(<Session>{null}</Session>);
       view.rerender(
         <Session>
@@ -328,16 +328,19 @@ describe('the brief, shown', () => {
         </Session>,
       );
       await rowOf(MEETING);
+      // A visible row can precede its brief's passive effect. Deliver a response only
+      // after that read actually starts; optional resolution must not silently skip it.
+      await vi.waitFor(() => expect(reads.map(read => read.meetingId)).toEqual(Array.from({ length: expectedReads }, () => MEETING)));
     };
     // Offline: the last brief stays.
-    await remount();
+    await remount(2);
     await act(async () => {
       reads[1]?.answer.resolve({ brief: null, reason: 'offline' });
       await Promise.resolve();
     });
     expect(within(await rowOf(MEETING)).getByTestId('meeting-brief').textContent).toContain('Revoked content.');
     // Deleted, or no longer this person's: gone, now and after another remount.
-    await remount();
+    await remount(3);
     await act(async () => {
       reads[2]?.answer.resolve({ brief: null, reason: 'not_found' });
       await Promise.resolve();
@@ -346,7 +349,7 @@ describe('the brief, shown', () => {
     expect(within(after).queryByTestId('meeting-brief')).toBeNull();
     expect(within(after).getByTestId('meeting-brief-not-available').textContent).toBe('Not available.');
     expect(after.textContent).not.toContain('Revoked content.');
-    await remount();
+    await remount(4);
     expect((await rowOf(MEETING)).textContent).not.toContain('Revoked content.');
   });
 });

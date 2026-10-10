@@ -345,3 +345,15 @@ it('keeps Zoom meeting credentials on the worker alone', () => {
   expect(OPERATIONS).not.toContain('zoom-meetings');
   expect(DEFAULT_SECRET_NAMES).toContain('zoom-meetings');
 });
+
+it('keeps CRM adapter presence absent by default and uses one optional non-secret configuration on both processes',()=>{
+ const stack=readRepositoryFile('infra/modules/stack/main.tf');
+ const variables=readRepositoryFile('infra/modules/stack/variables.tf');
+ const production=readRepositoryFile('infra/roots/production/main.tf');
+ expect(variables).toContain('variable "crm_capability_adapters"');
+ expect(block(variables,'variable "crm_capability_adapters"')).toMatch(/default\s*=\s*null/u);
+ expect(stack).toContain('var.crm_capability_adapters == null ? {} : { FSS_CRM_CAPABILITY_ADAPTERS = var.crm_capability_adapters }');
+ expect(production).toMatch(/crm_capability_adapters\s*=\s*null/u);
+ expect(production).toMatch(/crm_capability_adapters\s*=\s*local\.crm_capability_adapters/u);
+ expect(readRepositoryFile('infra/roots/rehearsal/main.tf')).not.toContain('crm_capability_adapters');
+});

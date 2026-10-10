@@ -1,3 +1,4 @@
+import { readMailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import {readMailConversationV2} from '@fss/domain/mail/crmMailOriginals.ts';
 import {
   mailSourceStateReadSchema,
@@ -13,7 +14,6 @@ import {
   associateMailSource,
   listMailSources,
   changeMailSource,
-  readMailCaptureControls,
   readMailConversation,
   resolveMailSource,
 } from '@fss/domain/mail/crmSources.ts';
@@ -108,9 +108,7 @@ export async function routeBusinessMail(
     const parsed = mailControlsReadSchema.safeParse(request.body);
     if (!parsed.success)
       return { status: 400, body: redactError('malformed_body') };
-    const controls = await withTransaction(options.auth.db, () =>
-      readMailCaptureControls(scoped.context, parsed.data.mailboxId),
-    );
+    const controls = await readMailCaptureReadiness(scoped.context, parsed.data.mailboxId, options.crmMailCaptureReadiness);
     return controls === null
       ? { status: 404, body: redactError('not_found') }
       : { status: 200, body: controls };

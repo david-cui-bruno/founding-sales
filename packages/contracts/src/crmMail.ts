@@ -121,7 +121,7 @@ export type MailSourceList = z.infer<typeof mailSourceListSchema>;
 export const mailCaptureControlsSchema = z.strictObject({
   mailboxId: uuid,
   enabled: z.boolean(),
-  ready: z.literal(false),
+  ready: z.boolean(),
   reason: z.string().max(100),
   revision: z.number().int().nonnegative(),
 });

@@ -20,7 +20,7 @@ import {snapshotMailCopyAuthorityBatch,lockMailCopyAuthorityBatch} from './crmSo
 import {readBackfillAuthority,type BackfillAuthority} from './crmBackfillAuthority.ts';
 import type {GmailMessageMetadata} from './gmailClient.ts';
 /** A real, already metered metadata result is recorded separately from account-first import work. */
-export async function recordRetainedOriginalMetadata(context:RepositoryContext,input:{authority:BackfillAuthority;messageId:string;metadata:GmailMessageMetadata|null;transientReason?:'grant_unavailable'|'rate_limited'|'provider_unavailable';observedAt:Date;expectedSource?:ExactMailSource;expectedContextIdentity?:string;jobId:string;leaseOwner:string;fencingToken:string}){
+export async function recordRetainedOriginalMetadata(context:RepositoryContext,input:{revalidateAuthority?:(context:RepositoryContext,authority:BackfillAuthority)=>Promise<boolean>;authority:BackfillAuthority;messageId:string;metadata:GmailMessageMetadata|null;transientReason?:'grant_unavailable'|'rate_limited'|'provider_unavailable';observedAt:Date;expectedSource?:ExactMailSource;expectedContextIdentity?:string;jobId:string;leaseOwner:string;fencingToken:string}){
  if(context.scope.actor.kind!=='system'||context.scope.actor.component!=='worker' )return;
  if(input.transientReason!==undefined&&input.metadata!==null)return;
  const proof=input.authority.proof;
@@ -36,6 +36,7 @@ export async function recordRetainedOriginalMetadata(context:RepositoryContext,i
   const snapshot=await snapshotMailCopyAuthorityBatch(owner,[{sourceId:source.source_id,sourceRevision:source.source_revision,contentHash:source.content_hash}]);
   if(snapshot===null||input.expectedContextIdentity!==undefined&&snapshot.contextIdentity!==input.expectedContextIdentity||!await lockIdentityContext(owner,{firmIds:snapshot.firmIds,personIds:snapshot.personIds})||!await lockMailCopyAuthorityBatch(owner,snapshot,{firmIds:snapshot.firmIds,personIds:snapshot.personIds}))return;
   const current=await readBackfillAuthority(context,input.authority.importId);
+  if(current&&input.revalidateAuthority&&!await input.revalidateAuthority(context,current))return false;
   if(current===null||JSON.stringify(current.proof)!==JSON.stringify(proof))return;
   const trash=input.metadata?.labelIds.includes('TRASH')===true;
   const state=input.transientReason!==undefined?'transient_unavailable':input.metadata===null?'confirmed_missing':trash?'trashed':'available';

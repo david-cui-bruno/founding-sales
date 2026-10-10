@@ -56,3 +56,10 @@ it('shows unavailable delivery queue honestly with its last successful read, wit
  expect(screen.getByText(/Last successful delivery check:/u)).toBeTruthy();
  expect(mutate).not.toHaveBeenCalled();
 });
+it('runs an explicit read-only browser preparation check and explains it does not schedule',async()=>{
+ const checkPreparation=vi.fn(async()=>({ready:false,reason:'existing_draft',events:[]}));
+ render(<DraftsProvider><SocialRoute ports={{read:async()=>({view:{accounts:[account],posts:[]},reason:null}),mutate:vi.fn(),checkPreparation}}/></DraftsProvider>);
+ fireEvent.click(await screen.findByText('Check browser preparation'));
+ await screen.findByText('Browser check needs attention: existing draft.');
+ expect(checkPreparation).toHaveBeenCalledWith(account.id);expect(screen.getByText('This check does not type, schedule or publish a post.')).toBeTruthy();
+});

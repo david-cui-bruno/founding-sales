@@ -225,7 +225,7 @@ it("reviews conflicts across two actual copied mailboxes after disconnect withou
       mail: undefined,
       send: undefined,
       research: undefined,
-      crmExtraction: {
+      crmExtraction: { allowControlledEvaluation:true,
         mailEvidence: port,
         adapter: {
           endpointId: "mail-evaluation",

@@ -5,7 +5,7 @@ import {withTransaction} from '../db/queryable.ts';
 import {lockIdentityContext} from '../crm/identityAccess.ts';
 import {snapshotMailCopyAuthorityBatch,lockMailCopyAuthorityBatch,readMailCopyAvailabilityBatch,type ExactMailSource,type MailCopyAuthorityBatchSnapshot} from './crmSources.ts';
 import {readBackfillAuthority,type BackfillAuthority} from './crmBackfillAuthority.ts';
-interface Fence{recovery?:HistoryRecovery;authority:BackfillAuthority;jobId:string;leaseOwner:string;fencingToken:string}
+interface Fence{revalidateAuthority?:(context:RepositoryContext,authority:BackfillAuthority)=>Promise<boolean>;recovery?:HistoryRecovery;authority:BackfillAuthority;jobId:string;leaseOwner:string;fencingToken:string}
 interface Progress extends Record<string,unknown>{reconciliation_after_source_id:string|null;reconciliation_visited:string;reconciliation_exhausted:boolean}
 export interface RetainedCopyTraversal{exact:ExactMailSource;messageId:string;snapshot:MailCopyAuthorityBatchSnapshot|null;progress:Progress;hasMore:boolean}
 async function fence(context:RepositoryContext,input:Fence){
@@ -37,6 +37,7 @@ export async function prepareRetainedCopyTraversal(context:RepositoryContext,inp
   const row=rows[0];
   if(row===undefined){
    const current=await readBackfillAuthority(context,input.authority.importId,true);
+ if(current&&input.revalidateAuthority&&!await input.revalidateAuthority(context,current))return undefined;
    if(current!==null&&JSON.stringify(current.proof)===JSON.stringify(proof))await markExhausted(context,input,progress);
    return undefined;
   }
@@ -46,6 +47,7 @@ export async function prepareRetainedCopyTraversal(context:RepositoryContext,inp
   if(snapshot!==null&&(!await lockIdentityContext(owner,{firmIds:snapshot.firmIds,personIds:snapshot.personIds})||!await lockMailCopyAuthorityBatch(owner,snapshot,{firmIds:snapshot.firmIds,personIds:snapshot.personIds,lockMode:'read'})))snapshot=null;
   await context.db.query('SELECT id FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.authority.importId]);
   const current=await readBackfillAuthority(context,input.authority.importId);
+ if(current&&input.revalidateAuthority&&!await input.revalidateAuthority(context,current))return;
   if(current===null||JSON.stringify(current.proof)!==JSON.stringify(proof)||JSON.stringify(await checkpoint(context,input,true))!==JSON.stringify(progress))return undefined;
   return {exact,messageId:row.provider_message_id,snapshot,progress,hasMore:rows.length>1} satisfies RetainedCopyTraversal;
  });
@@ -60,6 +62,7 @@ export async function completeRetainedCopyTraversal(context:RepositoryContext,in
   if(snapshot!==null&&await lockIdentityContext(owner,{firmIds:snapshot.firmIds,personIds:snapshot.personIds}))unchanged=await lockMailCopyAuthorityBatch(owner,snapshot,{firmIds:snapshot.firmIds,personIds:snapshot.personIds,lockMode:'read'});
   await context.db.query('SELECT id FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.authority.importId]);
   const current=await readBackfillAuthority(context,input.authority.importId);
+ if(current&&input.revalidateAuthority&&!await input.revalidateAuthority(context,current))return;
   if(current===null||JSON.stringify(current.proof)!==JSON.stringify(input.authority.proof)||JSON.stringify(await checkpoint(context,input,true))!==JSON.stringify(input.traversal.progress))return;
   const refreshed=input.refreshed&&unchanged;
   await context.db.query(`UPDATE ${checkpointTable(input)} SET reconciliation_after_source_id=$3,reconciliation_visited=reconciliation_visited+1,reconciliation_refreshed=reconciliation_refreshed+$4,reconciliation_unresolved=reconciliation_unresolved+$5,reconciliation_exhausted=$6${input.recovery===undefined?'':',revision=revision+1,observed_at=clock_timestamp()'}
@@ -79,6 +82,7 @@ export async function revalidateRetainedCopyTraversal(context:RepositoryContext,
   const after=await snapshotMailCopyAuthorityBatch(owner,[input.traversal.exact]);
   if(JSON.stringify(after)!==JSON.stringify(input.traversal.snapshot))return false;
   const current=await readBackfillAuthority(context,input.authority.importId);
+ if(current&&input.revalidateAuthority&&!await input.revalidateAuthority(context,current))return;
   return await checkpoint(context,input)!==undefined&&current!==null&&JSON.stringify(current.proof)===JSON.stringify(input.authority.proof)&&current.fromEpochMicroseconds===input.authority.fromEpochMicroseconds&&current.toEpochMicroseconds===input.authority.toEpochMicroseconds&&current.historyAnchor===input.authority.historyAnchor;
  });
 }

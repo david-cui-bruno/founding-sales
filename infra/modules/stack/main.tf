@@ -322,7 +322,7 @@ module "cluster" {
     FSS_SOCIAL_ASSETS_BUCKET   = module.social_assets.bucket_name
   }
 
-  environment = {
+  environment = merge({
     FSS_ENVIRONMENT = var.environment
     # The deployment flags of 16.2. Each is refused, not defaulted, by the process
     # that reads it. `live` builds every real adapter, in both environments; no
@@ -350,7 +350,7 @@ module "cluster" {
     FSS_GMAIL_PUSH_SERVICE_ACCOUNT = var.gmail_push_service_account
     FSS_GMAIL_PUSH_TOPIC           = var.gmail_push_topic
     FSS_GOOGLE_HOSTED_DOMAIN       = local.google_hosted_domain
-  }
+  }, var.crm_capability_adapters == null ? {} : { FSS_CRM_CAPABILITY_ADAPTERS = var.crm_capability_adapters })
 
   tags = local.tags
 }

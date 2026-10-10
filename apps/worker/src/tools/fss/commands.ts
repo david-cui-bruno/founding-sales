@@ -68,6 +68,9 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // never reads the deployment, so it cannot reach Gmail, KMS or S3.
   'release-record put': 'database',
   'release-record show': 'database',
+  'crm-authority provision': 'database',
+  'crm-authority revoke': 'database',
+  'crm-read-allocation put': 'database',
   // Lane W3-F. Counts, in a READ ONLY transaction, and nothing else. (Lane W2-M's
   // `schema-preflight 0019` went with the schema it counted: it only ever applied to a
   // schema-18 database, and production is past it.)
@@ -158,6 +161,24 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: [],
     summary: 'schema version, configured parts, and one committed write and read. No business rows',
+  },
+  {
+    path: ['admin', 'crm-read-allocation', 'put'],
+    valueFlags: ['--json', '--json-base64', '--sha256', ...REPORTABLE],
+    booleanFlags: [], requiredFlags: ['--sha256'], oneOf: ['--json', '--json-base64'],
+    summary: 'record a separately reviewed bounded history read allowance with migration credentials; grants no acquisition and queues nothing',
+  },
+  {
+    path: ['admin', 'crm-authority', 'provision'],
+    valueFlags: ['--json', '--json-base64', '--sha256', ...REPORTABLE],
+    booleanFlags: [], requiredFlags: ['--sha256'], oneOf: ['--json', '--json-base64'],
+    summary: 'store an independently reviewed hashed CRM authority receipt with migration credentials; enables nothing',
+  },
+  {
+    path: ['admin', 'crm-authority', 'revoke'],
+    valueFlags: ['--workspace', '--receipt', '--reference', ...REPORTABLE],
+    booleanFlags: [], requiredFlags: ['--workspace', '--receipt', '--reference'],
+    summary: 'irreversibly revoke one CRM authority receipt with migration credentials; does not change sending controls',
   },
   {
     path: ['admin', 'database-users', 'ensure'],

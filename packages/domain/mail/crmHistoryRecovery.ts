@@ -13,22 +13,23 @@ export async function readHistoryRecoveryCoverage(context:RepositoryContext,impo
  const row=await readHistoryRecovery(context,importId);if(row===undefined)return null;
  return crmMailRecoveryCoverageSchema.parse({olderCopyReconciliation:{kind:'bounded_current_copy_traversal',coverage:'partial',visitedCopies:row.reconciliation_visited,refreshedCopies:row.reconciliation_refreshed,unresolvedCopies:row.reconciliation_unresolved,traversalExhausted:row.reconciliation_exhausted},kind:'surviving_message_enumeration_and_fresh_history',epoch:row.epoch,state:row.state,originalCursor:'unavailable',fromAt:row.from_at?.toISOString()??null,toAt:row.to_at?.toISOString()??null,windowFrozen:row.history_anchor!==null,totalDays:row.total_days,completedDays:row.next_day_ordinal,historyComplete:row.state==='complete',reason:row.reason});
 }
-interface RecoveryFence{authority:BackfillAuthority;jobId:string;leaseOwner:string;fencingToken:string}
+interface RecoveryFence{revalidateAuthority?:(context:RepositoryContext,authority:BackfillAuthority)=>Promise<boolean>;authority:BackfillAuthority;jobId:string;leaseOwner:string;fencingToken:string}
 async function lockedAuthority(context:RepositoryContext,input:RecoveryFence){
  if(context.scope.actor.kind!=='system'||context.scope.actor.component!=='worker')return null;
  if(!(await context.db.query("SELECT id FROM jobs WHERE workspace_id=$1 AND id=$2 AND state='running' AND lease_owner=$3 AND fencing_token=$4::bigint AND lease_expires_at>clock_timestamp() FOR UPDATE",[context.scope.workspaceId,input.jobId,input.leaseOwner,input.fencingToken])).rows.length)return null;
  const current=await readBackfillAuthority(context,input.authority.importId,true);
+ if(current&&input.revalidateAuthority&&!await input.revalidateAuthority(context,current))return null;
  return current!==null&&JSON.stringify(current.proof)===JSON.stringify(input.authority.proof)&&current.historyAnchor===input.authority.historyAnchor&&current.toEpochMicroseconds===input.authority.toEpochMicroseconds?current:null;
 }
 /** Only an actual expired history outcome enters this stage; verification remains outside SQL. */
 export async function beginExpiredHistoryRecovery(context:RepositoryContext,input:RecoveryFence,verifier:BackfillAllocationVerifier){
  const allocation=await readBackfillAllocation(context,input.authority.proof.mailboxId);
- if(allocation===null||!await verifier.verify(allocation))return;
+ if(allocation===null||!await verifier.verify(allocation,input.authority))return;
  const hash=backfillConfigurationHash(input.authority,allocation);
  await withTransaction(context.db,async()=>{
   const current=await lockedAuthority(context,input);if(current===null)return;
   await context.db.query('SELECT mailbox_id FROM crm_mail_import_allocations WHERE workspace_id=$1 AND mailbox_id=$2 FOR SHARE',[context.scope.workspaceId,current.proof.mailboxId]);
-  const live=await readBackfillAllocation(context,current.proof.mailboxId);if(live===null||backfillConfigurationHash(current,live)!==hash)return;
+  const live=await readBackfillAllocation(context,current.proof.mailboxId);if(live===null||backfillConfigurationHash(current,live)!==hash||verifier.revalidate&&!await verifier.revalidate(context,live,current))return;
   const last=await readHistoryRecovery(context,current.importId);
   if(last!==undefined&&last.state!=='complete'&&last.state!=='blocked')return;
   const epoch=(last?.epoch??0)+1;if(epoch>4)return;
@@ -39,13 +40,13 @@ export async function beginExpiredHistoryRecovery(context:RepositoryContext,inpu
 /** Verified replacement configuration creates a new bounded epoch; old scopes and charges are immutable. */
 export async function replaceHistoryRecoveryConfiguration(context:RepositoryContext,input:RecoveryFence&{recovery:HistoryRecovery},verifier:BackfillAllocationVerifier){
  const allocation=await readBackfillAllocation(context,input.authority.proof.mailboxId);
- if(allocation===null||!await verifier.verify(allocation))return;
+ if(allocation===null||!await verifier.verify(allocation,input.authority))return;
  const hash=backfillConfigurationHash(input.authority,allocation);
  if(hash===input.recovery.configuration_hash)return;
  await withTransaction(context.db,async()=>{
   const current=await lockedAuthority(context,input);if(current===null)return;
   await context.db.query('SELECT mailbox_id FROM crm_mail_import_allocations WHERE workspace_id=$1 AND mailbox_id=$2 FOR SHARE',[context.scope.workspaceId,current.proof.mailboxId]);
-  const live=await readBackfillAllocation(context,current.proof.mailboxId);if(live===null||backfillConfigurationHash(current,live)!==hash)return;
+  const live=await readBackfillAllocation(context,current.proof.mailboxId);if(live===null||backfillConfigurationHash(current,live)!==hash||verifier.revalidate&&!await verifier.revalidate(context,live,current))return;
   await context.db.query('SELECT id FROM crm_mail_history_recoveries WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.recovery.id]);
   const last=await readHistoryRecovery(context,current.importId);
   if(last===undefined||last.id!==input.recovery.id||last.revision!==input.recovery.revision||!['pending_profile','enumerating','draining'].includes(last.state))return;

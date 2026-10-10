@@ -143,7 +143,7 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

@@ -171,7 +171,7 @@ it("keeps Today usable with eleven independently captured permitted mail promise
       mail: undefined,
       send: undefined,
       research: undefined,
-      crmExtraction: {
+      crmExtraction: { allowControlledEvaluation:true,
         mailEvidence: port,
         adapter: {
           endpointId: "mail-coverage-evaluation",

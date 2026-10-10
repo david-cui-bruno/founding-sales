@@ -38,6 +38,10 @@ locals {
   alert_emails    = ["callie@usecallie.com"]
   sending_enabled = true
 
+  # Adapter construction is independently gated from capability activation.
+  # Changing this needs a reviewed source change and a saved deployment plan.
+  crm_capability_adapters = null
+
   # Lane g86: `FSS_DESKTOP_UPGRADE_URL` on the API task definition alone, the
   # `upgradeUrl` /auth/client-version publishes to a Mac below the minimum client
   # version. Machine-facing: the signed manifest on this stack's updates
@@ -103,7 +107,8 @@ module "stack" {
   worker_concurrency = 3
   bootstrap          = var.bootstrap
 
-  sending_enabled = local.sending_enabled
+  sending_enabled         = local.sending_enabled
+  crm_capability_adapters = local.crm_capability_adapters
 
   # Null in code: the managed instance. Set only while the restore runbook
   # (docs/greenfield/runbooks/restore.md) has production on a point-in-time copy.

@@ -1,14 +1,16 @@
+import type {SocialDiagnosticReporter} from '../../../shared/socialDiagnostics.ts';
 import {z} from 'zod';
 import type {ApprovedPost} from '../adapters.ts';
 import {linkedInDomScript,type LinkedInDomAction} from './linkedinDom.ts';
 const viewSchema=z.strictObject({zone:z.string().max(100),kind:z.enum(['composer','schedule','unknown']),postingName:z.string().max(200).nullable(),text:z.string().max(10000).nullable(),date:z.string().max(30).nullable(),time:z.string().max(30).nullable(),identities:z.array(z.strictObject({name:z.string().max(200),selected:z.boolean()})).max(30),scheduleLabel:z.string().max(150).nullable()});
 interface StagePorts {
- current():boolean;now():number;wait():Promise<void>;
+ current():boolean;now():number;wait():Promise<void>;diagnostic?:SocialDiagnosticReporter|undefined;
  contents:{getURL():string;insertText(text:string):Promise<void>;executeJavaScriptInIsolatedWorld(world:number,scripts:{code:string}[],gesture?:boolean):Promise<unknown>};
 }
 /** Text-only native staging. Images remain refused until upload/readback is verified. */
 export async function stageLinkedInText(post:ApprovedPost,port:StagePorts):Promise<{ready:boolean;reason?:string}>{
- const refuse=(reason:string)=>({ready:false,reason});
+ let phase:Parameters<SocialDiagnosticReporter>[0]='composer';const enter=(stage:typeof phase)=>{phase=stage;port.diagnostic?.(stage,'started');};
+ const refuse=(reason:string)=>{port.diagnostic?.(phase,'refused',reason);return {ready:false,reason};};
  const current=()=>port.current()&&port.contents.getURL()==='https://www.linkedin.com/sharing/compose';
  async function action(input:LinkedInDomAction){if(!current())throw new Error('session_changed');const answer=await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInDomScript(input)}],false);if(!current())throw new Error('session_changed');return answer;}
  async function read(){const a=z.object({ok:z.literal(true),view:viewSchema}).parse(await action({action:'read'}));return a.view;}
@@ -31,14 +33,14 @@ export async function stageLinkedInText(post:ApprovedPost,port:StagePorts):Promi
   if(post.account.platform!=='linkedin'||post.images.length)return refuse('format_not_verified');
   if(!Number.isFinite(Date.parse(post.publishAt))||Date.parse(post.publishAt)<=port.now())return refuse('schedule_missed');
   if(!post.text||[...post.text].length>3000)return refuse('content_needs_edit');
-  let view=await waitFor('composer');if(view.text?.trim())return refuse('existing_draft');if(view.postingName!==post.account.displayName)return refuse('account_identity_changed');
+  enter('composer');let view=await waitFor('composer');port.diagnostic?.('composer','succeeded');if(view.text?.trim())return refuse('existing_draft');if(view.postingName!==post.account.displayName)return refuse('account_identity_changed');
   await act({action:'openIdentity',name:post.account.displayName});view=await read();
   const matching=view.identities.filter(x=>x.name===post.account.displayName);
   if(matching.length!==1||!matching[0]!.selected)return refuse('account_identity_changed');
   await act({action:'openIdentity',name:post.account.displayName});
-  await act({action:'focusText'});if(!current())return refuse('session_changed');await port.contents.insertText(post.text);
+  enter('text');await act({action:'focusText'});if(!current())return refuse('session_changed');await port.contents.insertText(post.text);
   view=await read();if(view.text!==post.text||view.postingName!==post.account.displayName)return refuse('content_mismatch');
-  await act({action:'openSchedule'});view=await waitFor('schedule');
+  port.diagnostic?.('text','succeeded');enter('schedule');await act({action:'openSchedule'});view=await waitFor('schedule');
   const zone=view.zone,at=new Date(post.publishAt);
   const fields=(instant:Date)=>Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'numeric',minute:'2-digit',hour12:true}).formatToParts(instant).map(p=>[p.type,p.value]));
   const f=fields(at),date=`${f['month']}/${f['day']}/${f['year']}`,time=`${f['hour']}:${f['minute']} ${f['dayPeriod']}`;
@@ -53,6 +55,6 @@ export async function stageLinkedInText(post:ApprovedPost,port:StagePorts):Promi
   const labelParts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:zone,weekday:'short',month:'short',day:'numeric'}).formatToParts(at).map(p=>[p.type,p.value]));
   const expected=`Posting at ${labelParts['weekday']}, ${labelParts['month']} ${labelParts['day']}, ${time}`;
   if(view.text!==post.text||view.postingName!==post.account.displayName||view.scheduleLabel!==expected||view.zone!==zone)return refuse('staged_content_changed');
-  return current()&&at.getTime()>port.now()?{ready:true}:refuse('session_changed');
- }catch{return refuse('staging_unavailable');}
+  if(current()&&at.getTime()>port.now()){port.diagnostic?.('schedule','succeeded');return {ready:true};}return refuse('session_changed');
+ }catch(error){const reason=error instanceof Error&&['session_changed','layout_changed','time_menu_unavailable'].includes(error.message)?error.message:'staging_unavailable';port.diagnostic?.(phase,'refused',reason);return {ready:false,reason:'staging_unavailable'};}
 }

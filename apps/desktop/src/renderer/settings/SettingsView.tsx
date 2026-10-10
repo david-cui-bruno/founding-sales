@@ -1,3 +1,4 @@
+import { CrmCapabilitiesSection } from './CrmCapabilitiesSection.tsx';
 import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
 import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
 import {OutreachSection} from '../outreach/OutreachSection.tsx';
@@ -143,6 +144,7 @@ export function SettingsView({
                 available={hasMailboxBridge}
                 onSwitch={onSwitchMailbox}
               />
+              {isAdmin ? <CrmCapabilitiesSection key={`crm-capabilities:${identity}:${String(generation)}`} scope="ai" available={identity!==null && state?.mayMutate===true} privacyKey={`${identity}:${String(generation)}`} /> : null}
               {/* Lane M4: the demo recordings folder, a setting of this Mac. */}
               <RecordingsFolderSection />
               {state === null ? null : (

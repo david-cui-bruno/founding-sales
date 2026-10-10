@@ -1,3 +1,5 @@
+import type {CrmExtractionAuthorityInput} from '@fss/domain/crm/capabilityVerifiers.ts';
+import type {RepositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {crmTokenCostCents} from '@fss/domain/crm/pricing.ts';
 import {crmTokenPriceMicrosSchema} from '@fss/contracts';
 import {enqueueJob} from '@fss/domain/jobs/jobStore.ts';
@@ -8,7 +10,7 @@ import {readProcessingContext,parsedProcessingContext,sameProcessingContext,proc
 import { z } from 'zod';
 import type { JobHandler, JobHandlerInput } from '@fss/domain/jobs/handlerRegistry.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
-import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { resolveCrmSource, loadCrmExtractionText, type SourceLookup } from '@fss/domain/crm/sourceResolver.ts';
 import type { Generation } from '@fss/domain/crm/processing.ts';
 import { reserveAttempt, markCalling, settleAttempt } from '@fss/domain/research/reservations.ts';
@@ -22,7 +24,7 @@ export interface CrmExtractionAdapter {
  endpointId:string;modelVersion:string;accessGrantVersion:string;dataHandlingVersion:string;providerKey:string;fundingVerifiedUntil:string;
  run(input:{source:SourceLookup;text:string;maxOutputTokens:number;signal?:AbortSignal}):Promise<{acceptance:'accepted'|'unknown'|'not_accepted';usage:{inputTokens:number;outputTokens:number}|null;claims:unknown}>;
 }
-export interface CrmExtractOptions {mailEvidence?:CrmMailEvidencePort;adapter?:CrmExtractionAdapter;providerTimeoutMs?:number}
+export interface CrmExtractOptions {verifyPurpose?:(input:CrmExtractionAuthorityInput)=>Promise<boolean>;revalidatePurpose?:(context:RepositoryContext,input:CrmExtractionAuthorityInput)=>Promise<boolean>;allowControlledEvaluation?:boolean;mailEvidence?:CrmMailEvidencePort;adapter?:CrmExtractionAdapter;providerTimeoutMs?:number}
 interface Purpose { [key:string]:unknown;revision:number;enabled:boolean;endpoint_id:string;model_version:string;access_grant_version:string;data_handling_version:string;daily_ceiling_cents:number;monthly_ceiling_cents:number;input_token_price_micros:number|string;output_token_price_micros:number|string }
 interface Receipt { [key:string]:unknown;reservation_id:string;dispatch_state:string;job_id:string;fencing_token:string;endpoint_id:string;model_version:string;access_grant_version:string;data_handling_version:string;purpose_revision:number;input_price_micros:number|string;output_price_micros:number|string }
 async function locate(input:JobHandlerInput){
@@ -73,10 +75,16 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
  }
  return {kind:'crm.extract',protection:'outbound_fence',maxAttempts:3,leaseSeconds:120,async handle(input){
   if(await withTransaction(input.session,()=>recoverDispatched(input)))return;
+  const locatedAuthority=await locate(input);
+  function authorityOf(row:Generation):CrmExtractionAuthorityInput{return {workspaceId:input.scope.workspaceId,generationId:row.id,requestedBy:row.requested_by,sourceOwnerUserId:String(row['source_owner_user_id']??row.requested_by),purposeRevision:row.purpose_revision,processorVersion:row.processor_version,contextHash:row.context_hash,authorizationHash:row.authorization_hash};}
+  async function independent(row:Generation){try{return options.verifyPurpose?await options.verifyPurpose(authorityOf(row))===true:options.allowControlledEvaluation===true;}catch{return false;}}
+  if(locatedAuthority===null)return;
+  if(!await independent(locatedAuthority.row)){await withTransaction(input.session,()=>setState(locatedAuthority.context,locatedAuthority.row.id,'unavailable','purpose_authority_unavailable'));return;}
   const reserveAuthority=await verifyMail(input);
   const reserved=await withTransaction(input.session,async()=>{
    const located=await locate(input);if(located===null)return null;
    const {row,context,source}=located;
+   if(options.revalidatePurpose&&!await options.revalidatePurpose(context,authorityOf(row)))return null;
    const mailAuthority=source.kind==='mail'&&reserveAuthority!==null&&await mailEvidence.revalidatePrepared(context,reserveAuthority)?reserveAuthority:null;
    const authorizationHash=source.kind==='mail'?mailAuthority?.authorizationFingerprint:NATIVE_PROCESSING_AUTHORIZATION_HASH;
    const resolved=await resolveCrmSource(context,source,mailEvidence);if(resolved===null)return null;
@@ -102,9 +110,11 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    await setState(context,row.id,'pending',null);return {...located,reservationId:attempt.id};
   });
   if(reserved===null)return;
+  const dispatchIndependent=await independent(reserved.row);
   const dispatchAuthority=await verifyMail(input);
   const dispatch=await withTransaction(input.session,async()=>{
    const {context,source,row,reservationId}=reserved;
+   let currentDispatch=false;try{currentDispatch=options.revalidatePurpose?await options.revalidatePurpose(context,authorityOf(row))===true:options.allowControlledEvaluation===true;}catch{currentDispatch=false;}
    const mailAuthority=source.kind==='mail'&&dispatchAuthority!==null&&await mailEvidence.revalidatePrepared(context,dispatchAuthority)?dispatchAuthority:null;
    const authorizationHash=source.kind==='mail'?mailAuthority?.authorizationFingerprint:NATIVE_PROCESSING_AUTHORIZATION_HASH;
    const resolved=await resolveCrmSource(context,source,mailEvidence);
@@ -113,7 +123,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    const currentContext=resolved===null?null:await readProcessingContext(context,source,mailEvidence),capturedContext=parsedProcessingContext(row.context_snapshot);
    const at=await databaseNow(context),zone=await workspaceBusinessZone(context);
    const reservedShape=(await context.db.query<{business_date:string;business_time_zone:string;provider_key:string;model_name:string;max_input_tokens:number;max_output_tokens:number}>('SELECT business_date::text,business_time_zone,provider_key,model_name,max_input_tokens,max_output_tokens FROM provider_reservations WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,reservationId])).rows[0];
-   if(resolved===null||currentContext===null||row.authorization_hash!==authorizationHash||processingContextHash(currentContext)!==row.context_hash||capturedContext===null||!sameProcessingContext(capturedContext,currentContext)||!await fenced(input)||p===null||r?.dispatch_state!=='reserved'||reservedShape===undefined||reservedShape.business_date!==localDate(at,zone)||reservedShape.business_time_zone!==zone||reservedShape.provider_key!==options.adapter?.providerKey||reservedShape.model_name!==p.model_version||!samePurposeSnapshot(p,r)||!await centsWithin(context,p,at,zone,0,options.adapter?.providerKey??'unavailable')){
+   if(!dispatchIndependent||!currentDispatch||resolved===null||currentContext===null||row.authorization_hash!==authorizationHash||processingContextHash(currentContext)!==row.context_hash||capturedContext===null||!sameProcessingContext(capturedContext,currentContext)||!await fenced(input)||p===null||r?.dispatch_state!=='reserved'||reservedShape===undefined||reservedShape.business_date!==localDate(at,zone)||reservedShape.business_time_zone!==zone||reservedShape.provider_key!==options.adapter?.providerKey||reservedShape.model_name!==p.model_version||!samePurposeSnapshot(p,r)||!await centsWithin(context,p,at,zone,0,options.adapter?.providerKey??'unavailable')){
     await lockMonthlySpend(context);await settleAttempt(context,{reservationId,at,outcome:{kind:'released'}});await context.db.query("UPDATE crm_extraction_financial_receipts SET dispatch_state='released' WHERE workspace_id=$1 AND generation_id=$2 AND dispatch_state='reserved'",[context.scope.workspaceId,row.id]);await setState(context,row.id,'unavailable','reservation_authority_changed');return null;
    }
    const text=(source.kind==='mail'?(mailAuthority===null?null:await mailEvidence.loadOriginalInput(context,mailAuthority)):await loadCrmExtractionText(context,source));
@@ -129,6 +139,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
     timer=setTimeout(()=>{controller.abort();resolve({acceptance:'unknown',usage:null,claims:[]});},Math.max(1,Math.min(60000,options.providerTimeoutMs??60000)));
   });
   try{answer=await Promise.race([options.adapter.run({source:reserved.source,text:dispatch.text,maxOutputTokens:4096,signal:controller.signal}),timeout]);}catch{answer={acceptance:'unknown',usage:null,claims:[]};}finally{if(timer!==undefined)clearTimeout(timer);}
+  const publicationIndependent=await independent(reserved.row);
   const publicationAuthority=await verifyMail(input);
   await withTransaction(input.session,async()=>{
    const {context,source,row,reservationId}=reserved;
@@ -150,6 +161,8 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    const unknown=answer.acceptance==='unknown';
    await context.db.query('UPDATE crm_extraction_financial_receipts SET dispatch_state=$3 WHERE workspace_id=$1 AND generation_id=$2',[context.scope.workspaceId,row.id,unknown?'unknown_acceptance':'settled']);
    if(unknown){await setState(context,row.id,'unknown_acceptance','provider_acceptance_unknown');return;}
+   let currentIndependent=false;try{currentIndependent=options.revalidatePurpose?await options.revalidatePurpose(context,authorityOf(row))===true:options.allowControlledEvaluation===true;}catch{currentIndependent=false;}
+   if(!publicationIndependent||!currentIndependent){await setState(context,row.id,'stale','source_or_authority_changed');return;}
    if(resolved===null||currentContext===null||row.authorization_hash!==authorizationHash||processingContextHash(currentContext)!==row.context_hash||capturedContext===null||!sameProcessingContext(capturedContext,currentContext)||p===null||!samePurposeSnapshot(p,r)||!await fenced(input)){await setState(context,row.id,'stale','source_or_authority_changed');return;}
    if(!await centsWithin(context,p,await databaseNow(context),await workspaceBusinessZone(context),0,options.adapter?.providerKey??'unavailable')){await setState(context,row.id,'failed','budget_authority_changed');return;}
    if(validUsage&&answer.usage!==null&&(bounds===undefined||answer.usage.inputTokens>bounds.max_input_tokens||answer.usage.outputTokens>bounds.max_output_tokens)){await setState(context,row.id,'failed','provider_usage_exceeded');return;}

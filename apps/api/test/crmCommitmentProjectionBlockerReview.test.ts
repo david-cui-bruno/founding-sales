@@ -121,7 +121,7 @@ it("shows a persistent source-bound Today problem only after promise projection 
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

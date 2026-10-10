@@ -100,7 +100,7 @@ export async function saveCrmExtractionPurpose(context: RepositoryContext, input
   await context.db.query(`INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,
     access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by)
     VALUES($1,$2,false,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(workspace_id) DO UPDATE SET
-    revision=EXCLUDED.revision,enabled=false,endpoint_id=EXCLUDED.endpoint_id,model_version=EXCLUDED.model_version,
+    revision=EXCLUDED.revision,enabled=false,authority_receipt_id=NULL,endpoint_id=EXCLUDED.endpoint_id,model_version=EXCLUDED.model_version,
     access_grant_version=EXCLUDED.access_grant_version,data_handling_version=EXCLUDED.data_handling_version,
     daily_ceiling_cents=EXCLUDED.daily_ceiling_cents,monthly_ceiling_cents=EXCLUDED.monthly_ceiling_cents,
     input_token_price_micros=EXCLUDED.input_token_price_micros,output_token_price_micros=EXCLUDED.output_token_price_micros,

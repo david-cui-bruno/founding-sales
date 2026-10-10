@@ -56,6 +56,14 @@ const coverage = (
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   Object.freeze({
+  crm_capability_authority_receipts: coverage(
+    ['retained'],
+    'Immutable body-free reviewed capability configuration, evidence/release hashes and opaque review references, with one recorded revocation. Retained as authorization audit history after expiry, source deletion, disconnect and departure; never a copied body or token store. Active membership, exact owner/account/generation, current configuration, release, expiry and revocation are rechecked before use; retained history cannot restore authority.',
+  ),
+  mailbox_oauth_grant_observations: coverage(
+    ['retained'],
+    'Immutable normal OAuth scope observations and exact workspace owner/provider account/generation, without tokens, message bodies or prospect content. Retained as the dated consent audit basis referenced by capability receipts; disconnect, account generation changes and departure make old observations unusable through current binding checks. Source deletion does not erase consent history or create new consent.',
+  ),
   crm_mail_import_allocations: coverage(['operational'], 'Operator-configured proven account/project allocation, exact verification receipt, unit costs and reserved operational headroom; mutable revisions require separate external verification before use.'),
   crm_mail_import_read_reservations: coverage(['operational','retained'], 'Body-free read unit conservation across workers and allocation revisions; unknown and observed attempts both consume the rolling window, independent of source deletion.'),
   crm_mail_imports: coverage(['operational'], 'Body-free exact owner/account/generation import scope and enumeration coverage; completion does not establish copied-body coverage or sending authority.'),

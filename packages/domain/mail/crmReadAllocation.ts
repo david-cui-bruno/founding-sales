@@ -1,0 +1,38 @@
+import {createHash} from 'node:crypto';
+import {z} from 'zod';
+import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
+import {repositoryContext,workspaceScope} from '../db/workspaceScope.ts';
+import {businessAccountBinding} from '../business/acquisition.ts';
+import {recordCrmAuditEvent} from '../crm/audit.ts';
+const hash=z.string().regex(/^[a-f0-9]{64}$/u),units=z.number().int().min(1).max(2147483647),method=z.number().int().min(1).max(1000000);
+export const crmReadAllocationSchema=z.strictObject({workspaceId:z.uuid(),mailboxId:z.uuid(),ownerUserId:z.uuid(),providerAccountId:z.string().min(1).max(320),accountBinding:hash,generation:z.number().int().positive(),expectedRevision:z.number().int().min(0).max(2147483646),projectHash:hash,userHash:hash,userLimitUnits:units,projectLimitUnits:units,userHeadroomUnits:z.number().int().nonnegative(),projectHeadroomUnits:z.number().int().nonnegative(),profileUnits:method,listUnits:method,historyUnits:method,metadataUnits:method,bodyUnits:method,verificationSha256:hash,verifiedAt:z.iso.datetime(),verifiedUntil:z.iso.datetime(),reviewedBy:z.uuid(),reviewReference:z.string().trim().min(1).max(200)}).refine(v=>v.userHeadroomUnits<v.userLimitUnits&&v.projectHeadroomUnits<v.projectLimitUnits&&Date.parse(v.verifiedUntil)>Date.parse(v.verifiedAt),{message:'Verified headroom and expiry must be bounded'});
+export type CrmReadAllocation=z.infer<typeof crmReadAllocationSchema>;
+export function crmReadAllocationFingerprint(value:CrmReadAllocation){return createHash('sha256').update(JSON.stringify(crmReadAllocationSchema.parse(value))).digest('hex');}
+/** Existing migration identity records reviewed read headroom only. A separate scoped
+ * authority receipt and current capture proof are still required before every read. */
+export async function provisionCrmReadAllocation(session:SessionQueryable,input:CrmReadAllocation){
+ const trusted=(await session.query<{allowed:boolean}>("SELECT pg_has_role(current_user,'migration','MEMBER') AS allowed")).rows[0]?.allowed;
+ if(!trusted)return {ok:false as const,reason:'allocation_provision_denied'};
+ const parsed=crmReadAllocationSchema.safeParse(input);if(!parsed.success)return {ok:false as const,reason:'allocation_malformed'};
+ const value=parsed.data,allocationSha256=crmReadAllocationFingerprint(value);
+ return withTransaction(session,async()=>{
+  await session.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${value.workspaceId}:crm-read-allocation:${value.mailboxId}`]);
+  const mailbox=(await session.query<{[key:string]:unknown;id:string;owner_user_id:string;email_address:string;provider_account_id:string;generation:number;status:string}>('SELECT * FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR SHARE',[value.workspaceId,value.mailboxId])).rows[0];
+  if(!mailbox||mailbox.status!=='connected'||mailbox.owner_user_id!==value.ownerUserId||mailbox.provider_account_id!==value.providerAccountId||mailbox.generation!==value.generation||businessAccountBinding(value.workspaceId,mailbox)!==value.accountBinding)return {ok:false as const,reason:'allocation_mailbox_changed'};
+  const members=await session.query<{user_id:string;role:string;status:string}>('SELECT user_id,role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=ANY($2::uuid[]) FOR SHARE',[value.workspaceId,[value.ownerUserId,value.reviewedBy]]);
+  if(!members.rows.some(r=>r.user_id===value.ownerUserId&&r.status==='active')||!members.rows.some(r=>r.user_id===value.reviewedBy&&r.status==='active'&&r.role==='admin'))return {ok:false as const,reason:'allocation_review_unavailable'};
+  const now=(await session.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();if(Date.parse(value.verifiedAt)>now||Date.parse(value.verifiedUntil)<=now)return {ok:false as const,reason:'allocation_verification_expired'};
+  const current=(await session.query<{[key:string]:unknown;revision:number;verified_until:Date}>('SELECT * FROM crm_mail_import_allocations WHERE workspace_id=$1 AND mailbox_id=$2 FOR UPDATE',[value.workspaceId,value.mailboxId])).rows[0];
+  if(current?.revision===value.expectedRevision+1){
+   const expected={workspace_id:value.workspaceId,mailbox_id:value.mailboxId,revision:value.expectedRevision+1,owner_user_id:value.ownerUserId,account_binding:value.accountBinding,generation:value.generation,project_hash:value.projectHash,user_hash:value.userHash,user_limit_units:value.userLimitUnits,project_limit_units:value.projectLimitUnits,user_headroom_units:value.userHeadroomUnits,project_headroom_units:value.projectHeadroomUnits,profile_units:value.profileUnits,list_units:value.listUnits,history_units:value.historyUnits,metadata_units:value.metadataUnits,body_units:value.bodyUnits,verification_sha256:value.verificationSha256};
+   const unchanged=Object.entries(expected).every(([key,value])=>current[key]===value)&&current.verified_until.toISOString()===new Date(value.verifiedUntil).toISOString();
+   const same=await session.query("SELECT id FROM audit_events WHERE workspace_id=$1 AND action='crm.read_allocation_provisioned' AND subject_id=$2 AND detail->>'allocationSha256'=$3 AND detail->>'revision'=$4 LIMIT 1",[value.workspaceId,value.mailboxId,allocationSha256,String(current.revision)]);
+   if(unchanged&&same.rows.length)return {ok:true as const,value:{outcome:'existing',mailboxId:value.mailboxId,revision:current.revision,allocationSha256}};
+  }
+  if((current?.revision??0)!==value.expectedRevision)return {ok:false as const,reason:'allocation_revision_conflict'};
+  const revision=value.expectedRevision+1;
+  await session.query(`INSERT INTO crm_mail_import_allocations(workspace_id,mailbox_id,revision,owner_user_id,account_binding,generation,project_hash,user_hash,user_limit_units,project_limit_units,user_headroom_units,project_headroom_units,profile_units,list_units,history_units,metadata_units,body_units,verification_sha256,verified_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(workspace_id,mailbox_id) DO UPDATE SET revision=EXCLUDED.revision,owner_user_id=EXCLUDED.owner_user_id,account_binding=EXCLUDED.account_binding,generation=EXCLUDED.generation,project_hash=EXCLUDED.project_hash,user_hash=EXCLUDED.user_hash,user_limit_units=EXCLUDED.user_limit_units,project_limit_units=EXCLUDED.project_limit_units,user_headroom_units=EXCLUDED.user_headroom_units,project_headroom_units=EXCLUDED.project_headroom_units,profile_units=EXCLUDED.profile_units,list_units=EXCLUDED.list_units,history_units=EXCLUDED.history_units,metadata_units=EXCLUDED.metadata_units,body_units=EXCLUDED.body_units,verification_sha256=EXCLUDED.verification_sha256,verified_until=EXCLUDED.verified_until`,[value.workspaceId,value.mailboxId,revision,value.ownerUserId,value.accountBinding,value.generation,value.projectHash,value.userHash,value.userLimitUnits,value.projectLimitUnits,value.userHeadroomUnits,value.projectHeadroomUnits,value.profileUnits,value.listUnits,value.historyUnits,value.metadataUnits,value.bodyUnits,value.verificationSha256,value.verifiedUntil]);
+  await recordCrmAuditEvent(repositoryContext(workspaceScope(value.workspaceId,{kind:'system',component:'migration'}),session),{action:'crm.read_allocation_provisioned',subjectKind:'mailbox',subjectId:value.mailboxId,detail:{revision,allocationSha256,verificationSha256:value.verificationSha256,reviewedBy:value.reviewedBy,reviewReferenceSha256:createHash('sha256').update(value.reviewReference).digest('hex'),verifiedAt:value.verifiedAt,verifiedUntil:value.verifiedUntil}});
+  return {ok:true as const,value:{outcome:'created',mailboxId:value.mailboxId,revision,allocationSha256}};
+ });
+}

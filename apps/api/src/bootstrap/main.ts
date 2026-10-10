@@ -1,3 +1,7 @@
+import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
+import {readCrmCapabilityStartup,createCrmCapabilityRuntime} from '@fss/domain/crm/capabilityStartup.ts';
+import {createCrmCapabilityVerifiers} from '@fss/domain/crm/capabilityVerifiers.ts';
+import {createNativeCrmMailEvidence} from '@fss/domain/crm/nativeMailEvidence.ts';
 import {readCalcomSecret,CALCOM_SECRET_VARIABLE} from '@fss/domain/meetings/calcomSecret.ts';
 import {calcomCapacityClient} from '../integrations/calcomCapacityClient.ts';
 import type {BookingCapacityDeps} from '../routes/bookingCapacity.ts';
@@ -18,7 +22,7 @@ import {
   readApiDeployment,
   type ApiDeployment,
 } from './deployment.ts';
-import { discoverImageDigest } from '@fss/domain/release/identity.ts';
+import { buildCommit,discoverImageDigest } from '@fss/domain/release/identity.ts';
 import { isProductionEnvironmentName } from '@fss/domain/release/deployment.ts';
 import type { AuthDeps } from '../auth/config.ts';
 import { JournalConfigurationError } from '../journal/index.ts';
@@ -125,9 +129,11 @@ async function listen(server: Server, port: number): Promise<void> {
 
 export async function main(argv: readonly string[], environment: NodeJS.ProcessEnv): Promise<number> {
   let config: ApiConfig;
+  let crmConfiguration:ReturnType<typeof readCrmCapabilityStartup>;
   const bootLog = createLogger({ component: 'api', instanceKey: 'boot' });
   try {
     config = readApiConfig(environment);
+    crmConfiguration=readCrmCapabilityStartup(environment);
   } catch (error) {
     bootLog.log('error', 'api_configuration_refused', {
       ...errorFields(error),
@@ -253,7 +259,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const bookingCapacity:BookingCapacityDeps = calcom.ok && calcom.apiKey !== null
     ? {client:calcomCapacityClient({apiKey:calcom.apiKey})}
     : {client:null,missingKeyReason:((calcom.ok ? calcom.apiKeyProblem === 'absent' : calcom.problem === 'absent') ? 'api_key_missing' : 'api_key_invalid')};
+  const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'api',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.mail!==undefined});
+  const crmVerifiers=createCrmCapabilityVerifiers({runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-api-crm-authority'});await client.connect();return {session:client,close:()=>client.end()};}});
   const server = createApiServer({
+    crmCapabilityRuntime:crmRuntime,
+    crmMailEvidence:createNativeCrmMailEvidence(crmVerifiers.captureVerifier),
+    crmMailCaptureReadiness:{adapterAvailable:()=>crmConfiguration.capture&&deployment.mail!==undefined,proofVerifier:crmVerifiers.captureVerifier},
     bookingCapacity,
     replyComposer:await loadHumanReplyDraftPort(environment),
     connections: poolConnections(pool, log),

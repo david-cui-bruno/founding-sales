@@ -120,7 +120,7 @@ it("reviews native meeting evidence and retains redacted human history after its
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmExtraction: {
+        crmExtraction: { allowControlledEvaluation:true,
           adapter: {
             endpointId: "review-evaluation",
             modelVersion,

@@ -76,6 +76,8 @@ describe('the registry covers the retention table', () => {
       'opportunity_stage_events',
       'crm_domain_events',
       'funnel_facts',
+      'crm_capability_authority_receipts',
+      'mailbox_oauth_grant_observations',
     ];
     for (const target of RETENTION_TARGETS) {
       for (const table of target.tables) expect(forbidden, `${target.dataKind} names ${table}`).not.toContain(table);

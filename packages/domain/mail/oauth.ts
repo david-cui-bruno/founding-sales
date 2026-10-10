@@ -504,6 +504,9 @@ export async function completeGmailGrant(
       });
       // 6. The token.
       await storeRefreshToken(context, { mailboxId: mailbox.id, plaintext: refreshToken, cipher: deps.cipher });
+      // Body-free observation of actual callback scopes and final provider account/generation.
+      // Requested scopes, settings and operator manifests cannot mint this observation.
+      await context.db.query(`INSERT INTO mailbox_oauth_grant_observations(workspace_id,mailbox_id,owner_user_id,provider_account_id,generation,granted_scopes) VALUES($1,$2,$3,$4,$5,$6)`, [context.scope.workspaceId,mailbox.id,mailbox.ownerUserId,address,mailbox.generation,[...granted].sort()]);
       // 7. The account intervals.
       if (switching) {
         await recordAccountSwitch(context, {
