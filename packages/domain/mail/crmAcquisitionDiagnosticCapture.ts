@@ -1,3 +1,4 @@
+import { CRM_DIAGNOSTIC_QUOTA_SCHEDULE } from "@fss/contracts";
 import { repositoryContext, workspaceScope } from "../db/workspaceScope.ts";
 import { withTransaction, type SessionQueryable } from "../db/queryable.ts";
 import {
@@ -200,11 +201,13 @@ export function createCrmAcquisitionDiagnosticCapture(input: {
                 [a.workspaceId, a.id],
               )
             ).rows[0]!;
-            const units = operation.startsWith("profile") ? 1 : 5;
+            const units = operation.startsWith("profile")
+              ? CRM_DIAGNOSTIC_QUOTA_SCHEDULE.profile
+              : CRM_DIAGNOSTIC_QUOTA_SCHEDULE.metadata;
             if (usage.reads >= a.maxReads || usage.units + units > a.maxUnits)
               return false;
             const row = await session.query(
-              "INSERT INTO crm_acquisition_diagnostic_reads(workspace_id,authorization_id,message_id,operation,transport,state,units) VALUES($1,$2,$3,$4,$5,'calling',$6) ON CONFLICT DO NOTHING RETURNING message_id",
+              "INSERT INTO crm_acquisition_diagnostic_reads(workspace_id,authorization_id,message_id,operation,transport,state,units,quota_schedule_version) VALUES($1,$2,$3,$4,$5,'calling',$6,'gmail-2026-05-01') ON CONFLICT DO NOTHING RETURNING message_id",
               [
                 a.workspaceId,
                 a.id,

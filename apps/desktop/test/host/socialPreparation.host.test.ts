@@ -15,6 +15,6 @@ it.skipIf(!HOST_TESTS_ENABLED)('checks browser preparation without any text, sch
   const env:NodeJS.ProcessEnv={...process.env,FSS_SOCIAL_PROBE_DATA:join(root,'data')};delete env['ELECTRON_RUN_AS_NODE'];
   const {stdout}=await promisify(execFile)(createRequire(import.meta.url)('electron') as string,[script],{env,timeout:45_000,maxBuffer:1024*1024});
   const line=stdout.split('\n').find(x=>x.startsWith('SOCIAL_PREPARATION_PROBE:'));expect(line).toBeDefined();
-  expect(JSON.parse(line!.slice('SOCIAL_PREPARATION_PROBE:'.length))).toEqual({result:{check:{ready:true},unchanged:{clicks:0,text:'',schedule:''},visible:false,focused:false},shown:0,remaining:0});
+  expect(JSON.parse(line!.slice('SOCIAL_PREPARATION_PROBE:'.length))).toEqual({result:{check:{ready:true},waited:true,unchanged:{clicks:0,text:'',schedule:''},visible:false,focused:false},shown:0,remaining:0});
  }finally{await rm(root,{recursive:true,force:true});}
 },60_000);

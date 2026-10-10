@@ -84,6 +84,7 @@ async function byThread(
         AND m.mailbox_id = $2
         AND m.provider_thread_id = $3
         AND m.id <> $4
+        AND NOT ('DRAFT'=ANY(m.label_ids))
         AND (x.selected IS NULL OR x.selected)`,
     [context.scope.workspaceId, input.mailboxId, input.threadId, input.excludeMessageId],
   );
@@ -103,6 +104,7 @@ async function byMessageIdReference(
       WHERE sent.workspace_id = $1
         AND sent.mailbox_id = $2
         AND sent.direction = 'outgoing'
+        AND NOT ('DRAFT'=ANY(sent.label_ids))
         AND sent.rfc_message_id = ANY ($3::text[])`,
     [context.scope.workspaceId, input.mailboxId, [...input.references]],
   );
@@ -173,6 +175,7 @@ export async function findMatchCandidates(
     readonly metadata: NormalizedMetadata;
   },
 ): Promise<readonly MatchCandidate[]> {
+  if (input.metadata.labelIds.includes('DRAFT')) return [];
   const resolveAll = async (
     rows: readonly CandidateRow[],
     rule: MailMatchRule,

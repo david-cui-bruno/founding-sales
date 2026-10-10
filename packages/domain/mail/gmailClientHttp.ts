@@ -321,7 +321,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       access,
       '/gmail/v1/users/me/messages',
       {
-        q: `${prefix}after:${String(request.afterEpochSeconds)} before:${String(request.beforeEpochSeconds)}`,
+        q: `${prefix}${request.excludeDrafts ? "-in:drafts " : ""}after:${String(request.afterEpochSeconds)} before:${String(request.beforeEpochSeconds)}`,
         maxResults: String(request.maxResults),
         includeSpamTrash: 'true',
         ...(request.pageToken === undefined ? {} : { pageToken: request.pageToken }),

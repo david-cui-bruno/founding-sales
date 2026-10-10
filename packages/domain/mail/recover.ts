@@ -461,6 +461,7 @@ export async function runMailRecovery(
     try {outcome = await deps.gmail.listMessageIds(access.access, {
       afterEpochSeconds: query.after,
       beforeEpochSeconds: query.before,
+      excludeDrafts: true,
       maxResults: pageSize,
       ...(pageToken === undefined ? {} : { pageToken }),
     });}catch{outcome={ok:false,reason:'rate_limited',classification:'unknown',incidentReason:'unknown_provider_failure'};}
@@ -588,7 +589,8 @@ export async function runMailRecovery(
 
   // Coverage is proved only by one walk, in this run, that reached the end of the
   // listing with every listed id covered: it has a row (from an earlier run, or recorded
-  // now), or this run found it a proven duplicate, or this run found it gone. Every id
+  // now), or this run found it a proven duplicate, gone, or still a draft after listing.
+  // Drafts are not delivery/reply coverage. Every id
   // this run processed is one of those, so the walk must have ended and every unrecorded
   // id it collected must have been processed.
   const complete = listingEnded && processed === unrecorded.length;

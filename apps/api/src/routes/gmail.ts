@@ -1,6 +1,8 @@
 import type { GmailStatus } from '@fss/contracts';
+import { prepareCrmAcquisitionDiagnosticConsentIsolation } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
 import {
   beginGmailGrant,
+  cleanupAcquisitionMailbox,
   completeGmailGrant,
   disconnectMailbox,
   readGrantState,
@@ -36,6 +38,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  */
 
 export const GMAIL_PATHS: readonly string[] = [
+  '/gmail/acquisition/cleanup',
   '/gmail/connect',
   '/gmail/disconnect',
   '/gmail/status',
@@ -59,8 +62,12 @@ const html = (page: string, status: number): RouteResult => ({
 
 export async function routeGmail(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!GMAIL_PATHS.includes(request.path)) return null;
+  if (request.path === '/gmail/acquisition/cleanup' && options.crmAcquisitionDiagnosticRuntime === undefined) return null;
 
-  const mail = options.mail;
+  const mail = options.mail === undefined ? undefined : {
+    ...options.mail,
+    acquisitionEnvironmentId: options.crmAcquisitionDiagnosticRuntime?.environmentId,
+  };
   const auth = options.auth;
   if (mail === undefined || auth === undefined) {
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
@@ -97,10 +104,15 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
     const scoped = await membershipScope(auth, read.claims);
     if (scoped === null) return html(REFUSED_PAGE, 403);
 
+    if (options.crmAcquisitionDiagnosticRuntime !== undefined &&
+        !await prepareCrmAcquisitionDiagnosticConsentIsolation(scoped.context, options.crmAcquisitionDiagnosticRuntime)) {
+      await recordGrantRefusal(scoped.context, { reason: 'grant_refused', attemptId: read.claims.attemptId ?? null, detail: 'acquisition_isolation_unavailable' });
+      return html(REFUSED_PAGE, 409);
+    }
     const outcome = await completeGmailGrant(scoped.context, mail, { state, code });
     // An expired state is still a 400, as it was before the refusal was audited.
     if (!outcome.ok) return html(REFUSED_PAGE, outcome.reason === 'authorization_request_unknown' ? 400 : 409);
-    await registerConnectedDomain(auth.db, scoped.context, outcome.value, options.log);
+    if (options.crmAcquisitionDiagnosticRuntime === undefined) await registerConnectedDomain(auth.db, scoped.context, outcome.value, options.log);
     return html(CONNECTED_PAGE, 200);
   }
 
@@ -148,6 +160,16 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
     return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
   }
 
+  let consentIsolationReady = true;
+  if (options.crmAcquisitionDiagnosticRuntime !== undefined &&
+      (request.path === '/gmail/connect' || request.path === '/gmail/acquisition/cleanup')) {
+    const schema = request.path === '/gmail/connect' ? connectMailboxCommandSchema : disconnectMailboxCommandSchema;
+    if (!schema.safeParse(request.body).success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const scoped = contextForPrincipal(deps.auth, deps.principal);
+    if (!scoped.ok) return scoped.result;
+    // Actual AWS/DNS waits happen before runRouteCommand opens its transaction.
+    consentIsolationReady = await prepareCrmAcquisitionDiagnosticConsentIsolation(scoped.context, options.crmAcquisitionDiagnosticRuntime);
+  }
   switch (request.path) {
     case '/gmail/connect':
       return await runRouteCommand(
@@ -155,15 +177,24 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
         connectMailboxCommandSchema,
         'connect_mailbox',
         async (context, body) =>
-          await beginGmailGrant(context, mail, body.switchTo === undefined ? {} : { switchTo: body.switchTo }),
+          consentIsolationReady
+            ? await beginGmailGrant(context, mail, body.switchTo === undefined ? {} : { switchTo: body.switchTo })
+            : { ok: false, reason: 'grant_refused' },
       );
+    case '/gmail/acquisition/cleanup':
+      return await runRouteCommand(deps, disconnectMailboxCommandSchema, 'cleanup_acquisition_mailbox',
+        async (context, body) => consentIsolationReady
+          ? await cleanupAcquisitionMailbox(context, mail, { mailboxId: body.mailboxId, reason: body.reason })
+          : { ok: false, reason: 'grant_refused' });
     case '/gmail/disconnect':
       return await runRouteCommand(
         deps,
         disconnectMailboxCommandSchema,
         'disconnect_mailbox',
         async (context, body) =>
-          await disconnectMailbox(context, mail, { mailboxId: body.mailboxId, reason: body.reason }),
+          options.crmAcquisitionDiagnosticRuntime === undefined
+            ? await disconnectMailbox(context, mail, { mailboxId: body.mailboxId, reason: body.reason })
+            : { ok: false, reason: 'grant_refused' },
       );
     default:
       return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };

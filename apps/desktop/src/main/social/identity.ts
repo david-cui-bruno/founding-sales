@@ -15,7 +15,13 @@ export interface ObservedSocialIdentity {
  * No cookies, private application state, feed authors, or guessed account IDs.
  * A changed/ambiguous layout is unsupported rather than an identity guess.
  */
+export type LinkedInIdentityFailure='identity_page_unavailable'|'identity_probe_unavailable'|'identity_sidebar_unavailable'|'identity_sidebar_ambiguous'|'identity_profile_unavailable'|'identity_profile_ambiguous'|'identity_evidence_unavailable'|'identity_unavailable'|'session_changed';
+export type LinkedInIdentityProbe=ObservedSocialIdentity|{reason:LinkedInIdentityFailure};
 export function readLinkedInIdentity(doc:ProbeDocument,pageUrl:string):ObservedSocialIdentity|null {
+ const result=readLinkedInIdentityDetailed(doc,pageUrl);return 'reason' in result?null:result;
+}
+/** Self-contained for serialization into the isolated world. Only fixed failure categories leave the page. */
+export function readLinkedInIdentityDetailed(doc:ProbeDocument,pageUrl:string):LinkedInIdentityProbe {
  function linkedInUrl(value:string):URL|null{
   try{const u=new URL(value);return u.protocol==='https:'&&u.hostname==='www.linkedin.com'&&!u.username&&!u.password&&!u.port?u:null;}catch{return null;}
  }
@@ -25,9 +31,9 @@ export function readLinkedInIdentity(doc:ProbeDocument,pageUrl:string):ObservedS
    const style=doc.defaultView?.getComputedStyle(p);if(style?.display==='none'||style?.visibility==='hidden')return false;
   }return true;
  }
- const page=linkedInUrl(pageUrl);if(!page||!['/feed/','/sharing/compose'].includes(page.pathname))return null;
+ const page=linkedInUrl(pageUrl);if(!page||!['/feed/','/sharing/compose'].includes(page.pathname))return {reason:'identity_page_unavailable'};
  const sidebars=Array.from(doc.querySelectorAll('aside[aria-label="Sidebar"]')).filter(visible);
- if(sidebars.length!==1)return null;
+ if(sidebars.length!==1)return {reason:sidebars.length?'identity_sidebar_ambiguous':'identity_sidebar_unavailable'};
  const profiles=new Map<string,{names:Set<string>;images:Set<string>}>();
  for(const a of Array.from(sidebars[0]!.querySelectorAll('a[href]'))){
   if(!visible(a))continue;
@@ -40,10 +46,10 @@ export function readLinkedInIdentity(doc:ProbeDocument,pageUrl:string):ObservedS
   if(name&&label?.getAttribute('aria-label')?.startsWith(`${name},`))entry.names.add(name);
   for(const img of Array.from(a.querySelectorAll('img[alt]'))){const alt=img.getAttribute('alt')?.trim();if(alt&&visible(img))entry.images.add(alt);}
  }
- if(profiles.size!==1)return null;
+ if(profiles.size!==1)return {reason:profiles.size?'identity_profile_ambiguous':'identity_profile_unavailable'};
  const [externalAccountId,e]=Array.from(profiles.entries())[0]!;
- if(e.names.size!==1||e.images.size!==1)return null;
+ if(e.names.size!==1||e.images.size!==1)return {reason:'identity_evidence_unavailable'};
  const displayName=Array.from(e.names)[0]!;
- if(!e.images.has(displayName)||displayName.length>200||Array.from(displayName).some(c=>c.charCodeAt(0)<32||c.charCodeAt(0)===127))return null;
+ if(!e.images.has(displayName)||displayName.length>200||Array.from(displayName).some(c=>c.charCodeAt(0)<32||c.charCodeAt(0)===127))return {reason:'identity_evidence_unavailable'};
  return {platform:'linkedin',externalAccountId,displayName,accountKind:'profile'};
 }

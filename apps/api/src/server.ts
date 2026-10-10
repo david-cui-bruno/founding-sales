@@ -235,7 +235,7 @@ async function principalOf(routing: RoutingOptions, request: ApiRequest): Promis
 const ACQUISITION_DIAGNOSTIC_API_PATHS=new Set([
   '/health','/healthz','/readyz','/auth/client-version','/auth/google/callback',
   '/auth/session/open','/auth/sign-in/claim','/auth/sign-in/start','/auth/sign-out',
-  '/gmail/connect','/gmail/disconnect','/gmail/status','/oauth/gmail/callback',
+  '/gmail/connect','/gmail/disconnect','/gmail/acquisition/cleanup','/gmail/status','/oauth/gmail/callback',
   '/crm/business/mail/diagnostic/request','/crm/business/mail/diagnostic/read',
   '/crm/business/mail/read','/crm/business/mail/read/v2',
   '/crm/business/mail/delete','/crm/business/mail/state/read','/crm/business/mail/list',

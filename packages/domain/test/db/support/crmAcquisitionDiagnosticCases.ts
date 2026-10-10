@@ -43,6 +43,9 @@ function grant(f: Fixture): Row {
       workspaceId: workspace_id,
       ownerUserId: owner_user_id,
       mailboxId: mailbox_id,
+      schemaVersion: 90,
+      metadataUnits: 20,
+      bodyUnits: 20,
     }),
     verified_at: "2026-10-01",
     valid_until: "2026-11-01",
@@ -86,6 +89,7 @@ for (const [constraint, patch] of Object.entries({
   crm_diagnostic_transport: { transport: "invented" },
   crm_diagnostic_state: { state: "sent" },
   crm_diagnostic_units: { units: 0 },
+  crm_diagnostic_quota_schedule: { quota_schedule_version: "invented" },
   crm_diagnostic_operation_units: { units: 1 },
   crm_diagnostic_read_authorization_fk: { authorization_id: absent },
 }))
@@ -101,7 +105,7 @@ for (const [constraint, patch] of Object.entries({
         operation: "body",
         transport: "controlled",
         state: "calling",
-        units: 5,
+        units: 20,
         ...patch,
       });
     },
@@ -119,7 +123,7 @@ CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES.push(
         operation: "body",
         transport: "controlled",
         state: "calling",
-        units: 5,
+        units: 20,
       };
       await insert(f, "crm_acquisition_diagnostic_reads", row);
       return insert(f, "crm_acquisition_diagnostic_reads", row);

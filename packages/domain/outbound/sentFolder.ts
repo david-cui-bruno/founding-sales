@@ -174,6 +174,11 @@ export async function scanSentFolder(
       vanished += 1;
       continue;
     }
+    // A listing can race a label change. Current provider metadata must prove Sent
+    // and must not also identify an unsent draft before it can attribute delivery.
+    if (metadata.labelIds.includes('DRAFT') || !metadata.labelIds.includes('SENT')) {
+      return settle('malformed_response');
+    }
     const at = metadata.internalDateEpochMilliseconds;
     // No usable internal date is not "outside the window": it is a message nobody can
     // place, so the folder was not read. Nor is a date the listing could not have

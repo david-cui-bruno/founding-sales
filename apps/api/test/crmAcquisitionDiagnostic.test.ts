@@ -1,4 +1,5 @@
 import pg from "pg";
+import { localEnvelopeCipher } from "@fss/domain/mail/envelope.ts";
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from "@fss/domain/db/testing/testDatabase.ts";
 import { enqueueJob } from "@fss/domain/jobs/jobStore.ts";
 import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
@@ -74,7 +75,7 @@ describe("isolated acquisition diagnostic public commands", () => {
     expectedAuthorizationSha256: "a".repeat(64),
   });
   beforeAll(async () => {
-    fixture = await createAuthFixture();
+    fixture = await createAuthFixture({ purpose: "acquisition_diagnostic" });
     db = await fixture.database.appRuntimeSession();
     token = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin))
       .accessToken;
@@ -152,13 +153,20 @@ describe("isolated acquisition diagnostic public commands", () => {
       implementationCommit: FIXTURE_CI_COMMIT,
       imageDigest: FIXTURE_API_DIGEST,
       side: "api",
-      schemaVersion: 89,
+      schemaVersion: 90,
+      consentIsolationBinding: {
+        databaseInstanceArn: "controlled-db",
+        databaseSecretArn: "controlled-secret",
+        databaseEndpoint: "controlled.invalid",
+        ecsClusterArn: "controlled-cluster",
+      },
       verifyIsolation: async (input) => {
         isolationChecks++;
         return (
           input.environmentId === environmentId &&
           input.databaseName === fixture.database.name &&
-          input.deploymentIdentity === "controlled-disposable-fixture"
+          (input.purpose === "oauth_bootstrap" ||
+            input.deploymentIdentity === "controlled-disposable-fixture")
         );
       },
     };
@@ -225,7 +233,7 @@ describe("isolated acquisition diagnostic public commands", () => {
       implementationCommit: FIXTURE_CI_COMMIT,
       apiImageDigest: FIXTURE_API_DIGEST,
       workerImageDigest: FIXTURE_WORKER_DIGEST,
-      schemaVersion: 89,
+      schemaVersion: 90,
       releaseReference,
       disclosureVersion: CRM_MAIL_CAPTURE_DISCLOSURE.version,
       disclosureSha256: CRM_MAIL_CAPTURE_DISCLOSURE.sha256,
@@ -236,9 +244,9 @@ describe("isolated acquisition diagnostic public commands", () => {
       verifiedAt: new Date(Date.now() - 1000).toISOString(),
       validUntil: new Date(Date.now() + 3600000).toISOString(),
       maxReads: 8,
-      maxUnits: 24,
-      metadataUnits: 5,
-      bodyUnits: 5,
+      maxUnits: 84,
+      metadataUnits: 20,
+      bodyUnits: 20,
       messages: [
         {
           messageId: "received_fixture",
@@ -569,8 +577,17 @@ describe("isolated acquisition diagnostic public commands", () => {
       releaseReference,
       coverage: "explicit_scoped_partial",
       attemptedReads: 8,
-      observedUnits: 24,
+      observedUnits: 84,
       conservedUnits: 0,
+      accountingProvenance: "documented_current_schedule",
+      accountingBuckets: [
+        {
+          scheduleVersion: "gmail-2026-05-01",
+          attemptedReads: 8,
+          observedUnits: 84,
+          conservedUnits: 0,
+        },
+      ],
       productionActivationAllowed: false,
     });
     expect(copied.copies).toHaveLength(2);
@@ -749,7 +766,7 @@ describe("isolated acquisition diagnostic public commands", () => {
       ...authorization,
       id: randomUUID(),
       maxReads: 4,
-      maxUnits: 12,
+      maxUnits: 42,
       messages: [
         {
           messageId: "wait_fixture",
@@ -836,7 +853,7 @@ describe("isolated acquisition diagnostic public commands", () => {
     expect(afterDelete).toMatchObject({
       transport: "controlled",
       attemptedReads: 4,
-      observedUnits: 12,
+      observedUnits: 42,
       conservedUnits: 0,
       productionActivationAllowed: false,
       copies: [
@@ -879,13 +896,13 @@ describe("isolated acquisition diagnostic public commands", () => {
         ).body,
       ),
     ).toEqual(afterDelete);
-    async function scenarioAuthorization(messageId: string) {
+    async function scenarioAuthorization(messageId: string, maxUnits = 42) {
       originals[messageId] = "Controlled scoped fault original.";
       const grant = {
         ...authorization,
         id: randomUUID(),
         maxReads: 4,
-        maxUnits: 12,
+        maxUnits,
         messages: [
           {
             messageId,
@@ -933,7 +950,7 @@ describe("isolated acquisition diagnostic public commands", () => {
       expect(result).toMatchObject({
         transport: "controlled",
         attemptedReads: 2,
-        observedUnits: 6,
+        observedUnits: 21,
         conservedUnits: 0,
       });
       expect(
@@ -987,7 +1004,7 @@ describe("isolated acquisition diagnostic public commands", () => {
     expect(revokedProgress).toMatchObject({
       transport: "controlled",
       attemptedReads: 2,
-      observedUnits: 6,
+      observedUnits: 21,
       conservedUnits: 0,
     });
     expect(
@@ -1008,8 +1025,8 @@ describe("isolated acquisition diagnostic public commands", () => {
     ).toMatchObject({
       transport: "controlled",
       attemptedReads: 3,
-      observedUnits: 6,
-      conservedUnits: 5,
+      observedUnits: 21,
+      conservedUnits: 20,
     });
     expect(
       uncertain.copies.every((copy) => copy.availability !== "available"),
@@ -1030,8 +1047,8 @@ describe("isolated acquisition diagnostic public commands", () => {
     expect(providerCalls).toBe(uncertainCalls);
     expect(await scenarioProgress(ambiguous.grant.id)).toMatchObject({
       attemptedReads: 3,
-      observedUnits: 6,
-      conservedUnits: 5,
+      observedUnits: 21,
+      conservedUnits: 20,
     });
     faultMode = null;
     faultMessage = null;
@@ -1077,6 +1094,246 @@ describe("isolated acquisition diagnostic public commands", () => {
     expect(
       (await post("/crm/business/policy/read", { mailboxId: mailbox.id })).body,
     ).toMatchObject({ enabled: false, revision: 0 });
+    const budgetLimited = await scenarioAuthorization(
+      "budget_limited_body",
+      24,
+    );
+    const beforeLimited = providerCalls;
+    await runOnce(await fixture.database.appRuntimeSession(), {
+      registry,
+      owner: "controlled-limited-units",
+      limit: 10,
+    });
+    expect(providerCalls - beforeLimited).toBe(2);
+    expect(await scenarioProgress(budgetLimited.grant.id)).toMatchObject({
+      attemptedReads: 2,
+      observedUnits: 21,
+      conservedUnits: 0,
+    });
+    expect(
+      (await scenarioProgress(budgetLimited.grant.id)).copies.every(
+        (copy) => copy.availability !== "available",
+      ),
+    ).toBe(true);
+    expect(
+      (await diagnosticPost(paths[0]!, budgetLimited.command)).body,
+    ).toMatchObject({ status: "accepted", replayed: true });
+    await runOnce(await fixture.database.appRuntimeSession(), {
+      registry,
+      owner: "controlled-limited-replay",
+      limit: 10,
+    });
+    expect(providerCalls - beforeLimited).toBe(2);
+    const retainedScoped = await scenarioAuthorization(
+      "cleanup_retained_original",
+    );
+    await runOnce(await fixture.database.appRuntimeSession(), {
+      registry,
+      owner: "controlled-retained-before-cleanup",
+      limit: 10,
+    });
+    const retainedCopy = (await scenarioProgress(retainedScoped.grant.id))
+      .copies[0]!;
+    expect(retainedCopy.availability).toBe("available");
+    const cleanupScoped = await scenarioAuthorization("cleanup_body_wait");
+    const cleanupAmbiguous = await scenarioAuthorization(
+      "cleanup_ambiguous_wait",
+    );
+    const cleanupRequest = {
+      commandId: randomUUID(),
+      clientVersion: CURRENT_CLIENT_VERSION,
+      mailboxId: mailbox.id,
+      reason: "controlled_complete",
+    };
+    const cleanupPost = (body: unknown) =>
+      dispatch(
+        {
+          method: "POST",
+          path: "/gmail/acquisition/cleanup",
+          body,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+        },
+        {
+          session: db,
+          auth: { ...fixture.deps, db },
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+          crmAcquisitionDiagnosticRuntime: runtime,
+          mail: {
+            pushVerifier: { verify: async () => null },
+            gmail,
+            config: {
+              clientId: "controlled-isolated",
+              redirectUri: "https://controlled.invalid/oauth/gmail/callback",
+              authorizationEndpoint: "https://controlled.invalid/authorize",
+              tokenEndpoint: "https://controlled.invalid/token",
+              revocationEndpoint: "https://controlled.invalid/revoke",
+              apiBaseUrl: "https://controlled-gmail.invalid",
+              pushTopicName: "unused",
+              pushAudience: "unused",
+              pushServiceAccountEmail: "unused",
+              hostedDomain: fixture.hostedDomain,
+              baselineDays: 30,
+            },
+            secrets: {
+              names: () => ["gmail_oauth_client_secret"],
+              read: async () => "controlled-secret",
+            },
+            cipher: localEnvelopeCipher("controlled-cleanup"),
+            stateSigningKey: Buffer.alloc(48, 1),
+          },
+        },
+      );
+    const cleanupReached = new Promise<void>((resolve) => {
+      bodyStarted = resolve;
+    });
+    heldBody = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    pausedMessage = "cleanup_body_wait";
+    pauseFormat = "full";
+    const cleanupRunning = runOnce(await fixture.database.appRuntimeSession(), {
+      registry,
+      owner: "controlled-local-cleanup-during-body",
+      limit: 1,
+    });
+    let ambiguousCleanupRunning: ReturnType<typeof runOnce> | undefined;
+    try {
+      await Promise.race([
+        cleanupReached,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("cleanup body wait not reached")),
+            5000,
+          ),
+        ),
+      ]);
+      const ambiguousReached = new Promise<void>((resolve) => {
+        bodyStarted = resolve;
+      });
+      pausedMessage = "cleanup_ambiguous_wait";
+      faultMessage = "cleanup_ambiguous_wait";
+      faultMode = "ambiguous";
+      ambiguousCleanupRunning = runOnce(
+        await fixture.database.appRuntimeSession(),
+        {
+          registry,
+          owner: "controlled-local-cleanup-ambiguous-wait",
+          limit: 1,
+        },
+      );
+      await Promise.race([
+        ambiguousReached,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("ambiguous cleanup wait not reached")),
+            5000,
+          ),
+        ),
+      ]);
+      const beforeCleanup = providerCalls;
+      expect((await cleanupPost(cleanupRequest)).body).toMatchObject({
+        status: "accepted",
+        result: {
+          localDisconnected: true,
+          providerRevoked: false,
+          trustedRevocationPending: true,
+        },
+      });
+      expect(providerCalls).toBe(beforeCleanup);
+    } finally {
+      releaseBody();
+      await cleanupRunning;
+      await ambiguousCleanupRunning;
+    }
+    expect(await scenarioProgress(cleanupScoped.grant.id)).toMatchObject({
+      attemptedReads: 3,
+      observedUnits: 41,
+      conservedUnits: 0,
+      productionActivationAllowed: false,
+    });
+    expect(
+      (await scenarioProgress(cleanupScoped.grant.id)).copies.every(
+        (copy) => copy.availability !== "available",
+      ),
+    ).toBe(true);
+    expect(await scenarioProgress(ambiguous.grant.id)).toMatchObject({
+      attemptedReads: 3,
+      observedUnits: 21,
+      conservedUnits: 20,
+    });
+    expect(await scenarioProgress(cleanupAmbiguous.grant.id)).toMatchObject({
+      attemptedReads: 3,
+      observedUnits: 21,
+      conservedUnits: 20,
+    });
+    expect(
+      (await scenarioProgress(cleanupAmbiguous.grant.id)).copies.every(
+        (copy) => copy.availability !== "available",
+      ),
+    ).toBe(true);
+    const retainedRead = {
+      sourceId: retainedCopy.sourceId,
+      sourceRevision: retainedCopy.sourceRevision,
+      contentHash: createHash("sha256")
+        .update(originals["cleanup_retained_original"]!)
+        .digest("hex"),
+    };
+    const retainedAfterCleanup = mailConversationV2Schema.parse(
+      (await diagnosticPost("/crm/business/mail/read/v2", retainedRead)).body,
+    );
+    expect(retainedAfterCleanup.state).toBe("available");
+    if (retainedAfterCleanup.state === "available")
+      expect(retainedAfterCleanup.source.passage).toBe(
+        "Controlled scoped fault original.",
+      );
+    expect(
+      (
+        await diagnosticPost("/crm/business/mail/delete", {
+          commandId: randomUUID(),
+          clientVersion: CURRENT_CLIENT_VERSION,
+          sourceId: retainedCopy.sourceId,
+          expectedRevision: retainedCopy.sourceRevision,
+        })
+      ).body,
+    ).toMatchObject({ status: "accepted" });
+    expect(
+      mailConversationV2Schema.parse(
+        (await diagnosticPost("/crm/business/mail/read/v2", retainedRead)).body,
+      ).state,
+    ).toBe("unavailable");
+    const settledCalls = providerCalls;
+    expect(
+      (await cleanupPost({ ...cleanupRequest, commandId: randomUUID() })).body,
+    ).toMatchObject({
+      status: "accepted",
+      result: {
+        tokenDeleted: false,
+        providerRevoked: false,
+        trustedRevocationPending: true,
+      },
+    });
+    expect(
+      (await diagnosticPost(paths[0]!, cleanupScoped.command)).body,
+    ).toMatchObject({ status: "accepted", replayed: true });
+    expect(
+      (
+        await diagnosticPost(paths[0]!, {
+          ...cleanupScoped.command,
+          commandId: randomUUID(),
+        })
+      ).body,
+    ).toMatchObject({
+      status: "refused",
+      reason: "diagnostic_authority_unavailable",
+    });
+    await runOnce(await fixture.database.appRuntimeSession(), {
+      registry,
+      owner: "controlled-cleanup-no-restart",
+      limit: 10,
+    });
+    expect(providerCalls).toBe(settledCalls);
     expect(isolationChecks).toBeGreaterThan(0);
   });
 });

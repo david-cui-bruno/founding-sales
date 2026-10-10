@@ -10,9 +10,9 @@ import {
 } from './effects.ts';
 import type { EnvelopeCipher } from './envelope.ts';
 import { headerValue, type GmailAccessGrant, type GmailClient, type GmailOAuthConfig,type GmailIncidentMetadata } from './gmailClient.ts';
-import type { MailLog } from './log.ts';
+import { stdoutMailLog, type MailLog } from './log.ts';
 import { directSendTargetOf, findMatchCandidates, recordMatchesForImport } from './matching.ts';
-import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
+import { hasRecordedDraft, normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
 import { METADATA_HEADERS, type MailboxRow } from './types.ts';
 import { GmailClientError } from './gmailClient.ts';
@@ -217,6 +217,26 @@ export async function processMessageIds(
       continue;
     }
 
+    // A draft is an observed provider object, never an incoming reply or a sent action.
+    // Existing draft rows cannot be promoted by fresh Sent labels; their holds and body stay intact.
+    const draft = metadata.labelIds.includes('DRAFT');
+    const legacyDraft =
+      !draft && await hasRecordedDraft(context, input.mailbox.id, providerMessageId);
+    if (draft || legacyDraft) {
+      messagesSeen += 1;
+      const observedAt = new Date(metadata.internalDateEpochMilliseconds).toISOString();
+      if (newestInternalDate === null || observedAt > newestInternalDate) newestInternalDate = observedAt;
+      processedMessages = index + 1;
+      if (legacyDraft) {
+        (deps.log ?? stdoutMailLog)('warn', 'mail.legacy_draft_requires_review', {
+          mailboxId: input.mailbox.id,
+          providerMessageId,
+          currentlySent: metadata.labelIds.includes('SENT'),
+        });
+      }
+      continue;
+    }
+
     // The counters are the ones the report returns, so they are kept per message and
     // only added once the message is finished: a message undone by its savepoint was
     // not seen, recorded or matched as far as this run's report is concerned.
@@ -257,6 +277,9 @@ export async function processMessageIds(
               deps.gmail.getMetadata(input.access, existing.providerMessageId, METADATA_HEADERS),
             );
             if (!other.ok) throw new ProofReadFailed(other.detail,other.incident);
+            // A stored real row can now refer to a provider draft; Date alone cannot
+            // prove that the current incoming object is the same delivered message.
+            if (other.value?.labelIds.includes('DRAFT')) return false;
             const mine = headerValue(metadata.headers, 'Date')?.trim();
             const theirs = other.value === null ? undefined : headerValue(other.value.headers, 'Date')?.trim();
             return mine !== undefined && mine !== '' && mine === theirs;

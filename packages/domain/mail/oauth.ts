@@ -11,6 +11,7 @@ import {revalidateProviderIncidentConfiguration} from '../outbound/providerIncid
 import type { EnvelopeCipher, EnvelopeCiphertext } from './envelope.ts';
 import { GmailClientError, type GmailClient } from './gmailClient.ts';
 import {
+  advanceGeneration,
   insertOrReviveMailbox,
   markMailboxDisconnected,
   openMailboxHold,
@@ -67,6 +68,8 @@ import {
  * own one-use authorization code. See `docs/decisions/g7-oauth-state.md`.
  */
 export interface GrantStateClaims {
+  /** Only a trusted isolated capture-only deployment may consume this state. */
+  readonly acquisitionEnvironmentId?: string | undefined;
   readonly workspaceId: string;
   readonly userId: string;
   readonly expiresAtEpochSeconds: number;
@@ -88,14 +91,15 @@ export interface GrantStateClaims {
 /**
  * `g1` is the state before A2: workspace, user, expiry. `g2` adds the attempt id and the
  * switch intent. A `g1` state still verifies (one signed in the ten minutes before a
- * deploy) and carries neither — so it can never authorise a switch.
+ * deploy) and carries neither — so it can never authorise a switch. `g3` additionally
+ * binds capture-only state to its isolated environment; ordinary callbacks refuse it.
  */
 const STATE_VERSION_G1 = 'g1';
 const STATE_VERSION = 'g2';
 
 function stateBody(claims: GrantStateClaims): string {
   return [
-    STATE_VERSION,
+    claims.acquisitionEnvironmentId === undefined ? STATE_VERSION : 'g3',
     claims.workspaceId,
     claims.userId,
     String(claims.expiresAtEpochSeconds),
@@ -104,6 +108,7 @@ function stateBody(claims: GrantStateClaims): string {
     claims.switchTo === null || claims.switchTo === undefined
       ? ''
       : Buffer.from(claims.switchTo.trim().toLowerCase(), 'utf8').toString('base64url'),
+    ...(claims.acquisitionEnvironmentId === undefined ? [] : [claims.acquisitionEnvironmentId]),
   ].join('.');
 }
 
@@ -152,8 +157,8 @@ export function readGrantState(
   let switchTo: string | null = null;
   if (version === STATE_VERSION_G1) {
     if (fields.length !== 4) return null;
-  } else if (version === STATE_VERSION) {
-    if (fields.length !== 6 || attempt === undefined || switchEncoded === undefined) return null;
+  } else if (version === STATE_VERSION || version === 'g3') {
+    if (fields.length !== (version === 'g3' ? 7 : 6) || attempt === undefined || switchEncoded === undefined) return null;
     if (attempt !== '') {
       if (!UUID_SHAPE.test(attempt)) return null;
       attemptId = attempt;
@@ -162,6 +167,8 @@ export function readGrantState(
   } else {
     return null;
   }
+  const acquisitionEnvironmentId = version === 'g3' ? fields[6] : undefined;
+  if (version === 'g3' && (acquisitionEnvironmentId === undefined || !UUID_SHAPE.test(acquisitionEnvironmentId))) return null;
   const expiresAtEpochSeconds = Number(expiry);
   if (!Number.isInteger(expiresAtEpochSeconds)) return null;
   return {
@@ -171,6 +178,7 @@ export function readGrantState(
       workspaceId,
       userId,
       expiresAtEpochSeconds,
+      ...(acquisitionEnvironmentId === undefined ? {} : { acquisitionEnvironmentId }),
       ...(attemptId === null ? {} : { attemptId }),
       ...(switchTo === null ? {} : { switchTo }),
     },
@@ -193,7 +201,13 @@ export function grantCodeChallenge(verifier: string): string {
   return createHash('sha256').update(verifier, 'utf8').digest('base64url');
 }
 
+export const ACQUISITION_GMAIL_SCOPES: readonly string[] = Object.freeze([
+  'https://www.googleapis.com/auth/gmail.readonly',
+]);
+
 export interface MailGrantDeps {
+  /** Trusted isolated startup only; never selected by a command body. */
+  readonly acquisitionEnvironmentId?: string | undefined;
   readonly gmail: GmailClient;
   readonly config: MailPublicConfig;
   readonly secrets: SecretProvider;
@@ -266,6 +280,8 @@ export async function beginGmailGrant(
 ): Promise<MailResult<BeginGrantOutcome>> {
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuseMail('invalid_input');
+  if (deps.acquisitionEnvironmentId !== undefined &&
+      (input.switchTo !== undefined || await readMailboxForOwner(context, actor.userId) !== null)) return refuseMail('grant_refused');
 
   const requested = input.switchTo?.trim().toLowerCase();
   let switchTo: string | null = null;
@@ -290,12 +306,13 @@ export async function beginGmailGrant(
     expiresAtEpochSeconds,
     attemptId,
     switchTo,
+    ...(deps.acquisitionEnvironmentId === undefined ? {} : { acquisitionEnvironmentId: deps.acquisitionEnvironmentId }),
   });
   const oauth = await resolveGmailOAuthConfig(deps.config, deps.secrets);
   const url = deps.gmail.authorizationUrl(oauth, {
     state,
     codeChallenge: grantCodeChallenge(grantCodeVerifier(deps.stateSigningKey, state)),
-    scopes: GMAIL_SCOPES,
+    scopes: deps.acquisitionEnvironmentId === undefined ? GMAIL_SCOPES : ACQUISITION_GMAIL_SCOPES,
     // Google preselects the named account. A hint, never a check: the callback compares
     // the account Google actually returned with the intent in the state.
     ...(requested === undefined ? {} : { loginHint: requested }),
@@ -345,6 +362,26 @@ export async function recordGrantRefusal(
       ...(input.detail === undefined ? {} : { detail: input.detail }),
     },
   });
+}
+
+/** One signed diagnostic attempt may exchange once; uncertain observations never redispatch. */
+async function reserveAcquisitionOAuthAttempt(context: RepositoryContext, environmentId: string, attemptId: string): Promise<boolean> {
+  return await withTransaction(context.db, async () => {
+    await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+      [`acquisition-oauth:${context.scope.workspaceId}:${environmentId}:${attemptId}`]);
+    const existing = await context.db.query(`SELECT 1 FROM audit_events WHERE workspace_id=$1 AND subject_id=$2
+      AND action='mailbox.acquisition_oauth_attempt_reserved'`, [context.scope.workspaceId, attemptId]);
+    if (existing.rows.length > 0) return false;
+    await recordCrmAuditEvent(context, { action: 'mailbox.acquisition_oauth_attempt_reserved', subjectKind: 'gmail_grant_attempt', subjectId: attemptId,
+      detail: { environmentId, profileUnits: 0 } });
+    return true;
+  });
+}
+
+async function recordAcquisitionProfile(context: RepositoryContext, environmentId: string, attemptId: string,
+  outcome: 'reserved' | 'observed' | 'unknown'): Promise<void> {
+  await recordCrmAuditEvent(context, { action: `mailbox.acquisition_oauth_profile_${outcome}`, subjectKind: 'gmail_grant_attempt', subjectId: attemptId,
+    detail: { environmentId, operation: 'getProfile', units: 1, quotaScheduleVersion: 'gmail-2026-05-01' } });
 }
 
 /** Thrown inside the switch's transaction to roll it back with a refusal. */
@@ -408,12 +445,26 @@ export async function completeGmailGrant(
   // An expired state is this user's, provably, and still refused: audited, so the Mac
   // can say the consent took too long.
   if (read.expired) return await refuse('authorization_request_unknown');
+  if (claims.acquisitionEnvironmentId !== deps.acquisitionEnvironmentId) return await refuse('grant_refused');
+  if (deps.acquisitionEnvironmentId !== undefined &&
+      (claims.switchTo !== undefined || await readMailboxForOwner(context, actor.userId) !== null)) return await refuse('grant_refused');
 
+  const acquisitionEnvironmentId = deps.acquisitionEnvironmentId;
+  if (acquisitionEnvironmentId !== undefined &&
+      (attemptId === null || !await reserveAcquisitionOAuthAttempt(context, acquisitionEnvironmentId, attemptId))) return await refuse('grant_refused');
   const oauth = await resolveGmailOAuthConfig(deps.config, deps.secrets);
-  const exchanged = await deps.gmail.exchangeAuthorizationCode(oauth, {
-    code: input.code,
-    codeVerifier: grantCodeVerifier(deps.stateSigningKey, input.state),
-  });
+  let exchanged: Awaited<ReturnType<GmailClient['exchangeAuthorizationCode']>>;
+  try {
+    exchanged = await deps.gmail.exchangeAuthorizationCode(oauth, {
+      code: input.code,
+      codeVerifier: grantCodeVerifier(deps.stateSigningKey, input.state),
+    });
+  } catch (error) {
+    if (acquisitionEnvironmentId === undefined || attemptId === null) throw error;
+    await recordCrmAuditEvent(context, { action: 'mailbox.acquisition_oauth_exchange_uncertain', subjectKind: 'gmail_grant_attempt', subjectId: attemptId,
+      detail: { environmentId: acquisitionEnvironmentId, profileUnits: 0 } });
+    return await refuse('grant_refused');
+  }
   if (!exchanged.ok) return await refuse('grant_refused');
   const refreshToken = exchanged.grant.refreshToken;
   if (refreshToken === null) return await refuse('grant_refused');
@@ -421,13 +472,31 @@ export async function completeGmailGrant(
   // Every scope FSS asked for must have come back. A partial grant is a mailbox that
   // can read and not send, or send and not reconcile, and Appendix B needs both.
   const granted = new Set(exchanged.grant.grantedScopes);
-  if (!GMAIL_SCOPES.every(scope => granted.has(scope))) return await refuse('grant_refused');
+  const requiredScopes = deps.acquisitionEnvironmentId === undefined ? GMAIL_SCOPES : ACQUISITION_GMAIL_SCOPES;
+  if (!requiredScopes.every(scope => granted.has(scope))) return await refuse('grant_refused');
+  if (deps.acquisitionEnvironmentId !== undefined && granted.size !== requiredScopes.length) return await refuse('grant_refused');
 
   // The profile yields the address and the history id the baseline starts from, and it
   // is read before the interval's end is fixed (`toAt` below).
-  const profile = await deps.gmail.getProfile(exchanged.grant);
+  let profile: Awaited<ReturnType<GmailClient['getProfile']>>;
+  if (acquisitionEnvironmentId !== undefined && attemptId !== null) {
+    await recordAcquisitionProfile(context, acquisitionEnvironmentId, attemptId, 'reserved');
+    try {
+      profile = await deps.gmail.getProfile(exchanged.grant);
+    } catch {
+      await recordAcquisitionProfile(context, acquisitionEnvironmentId, attemptId, 'unknown');
+      return await refuse('grant_refused');
+    }
+    await recordAcquisitionProfile(context, acquisitionEnvironmentId, attemptId, 'observed');
+  } else {
+    profile = await deps.gmail.getProfile(exchanged.grant);
+  }
   const address = profile.emailAddress.trim().toLowerCase();
   if (domainOf(address) !== deps.config.hostedDomain.trim().toLowerCase()) return await refuse('grant_refused');
+  if (deps.acquisitionEnvironmentId !== undefined) {
+    const owner = await context.db.query<{ email: string }>('SELECT email FROM users WHERE id=$1', [actor.userId]);
+    if (owner.rows[0]?.email.trim().toLowerCase() !== address) return await refuse('grant_refused');
+  }
 
   // One mailbox per address per workspace, and this one may belong to somebody else.
   const addressOwner = async (): Promise<string | undefined> => {
@@ -464,6 +533,13 @@ export async function completeGmailGrant(
       // grant may have moved it since the read above. See `lockOwnMailbox` for the lock
       // strength and why it is taken the way it is.
       const locked = await lockOwnMailbox(context, actor.userId);
+      if (deps.acquisitionEnvironmentId !== undefined) {
+        if (locked !== null) throw new GrantRefusedInTransaction('grant_refused');
+        const owner = await context.db.query<{ email: string }>(`SELECT u.email FROM users u
+          JOIN workspace_memberships m ON m.user_id=u.id AND m.workspace_id=$2 AND m.status='active'
+          WHERE u.id=$1 FOR SHARE OF u,m`, [actor.userId, context.scope.workspaceId]);
+        if (owner.rows[0]?.email.trim().toLowerCase() !== address) throw new GrantRefusedInTransaction('grant_refused');
+      }
       // The switch's instant: the clock *now that the gate and the row are held*, never
       // `now()`, which is this transaction's start (review finding 3). A sync that
       // committed against the old account while this waited is before it, so its rows
@@ -517,30 +593,30 @@ export async function completeGmailGrant(
           at: switchedAt,
         });
       }
-      // 8. 12.3 and 4.2: nothing automated for this owner may run until coverage is proved.
-      await openMailboxHold(context, {
-        mailboxId: mailbox.id,
-        ownerUserId: mailbox.ownerUserId,
-        reasonCode: 'coverage_incomplete',
-      });
-      // 9. The baseline, from the profile's history id.
-      await startRecovery(context, {
-        mailbox,
-        reason: 'baseline',
-        fromAt: baselineFromAt,
-        toAt,
-        startHistoryId: profile.historyId,
-      });
-      await coalesceMailSync(context.db, {
-        workspaceId: context.scope.workspaceId,
-        mailboxId: mailbox.id,
-        generation: mailbox.generation,
-        historyId: profile.historyId,
-      });
-      // 10. A reconnect ends the disconnection: nothing released this hold before A2.
-      // `coverage_incomplete` stays until the baseline proves coverage.
-      await releaseMailboxHold(context, { mailboxId: mailbox.id, reasonCode: 'mailbox_disconnected' });
-      await revalidateProviderIncidentConfiguration(context,mailbox.id,'oauth_reconnected',now);
+      if (deps.acquisitionEnvironmentId === undefined) {
+        // Ordinary automation remains held until its baseline proves coverage.
+        await openMailboxHold(context, {
+          mailboxId: mailbox.id,
+          ownerUserId: mailbox.ownerUserId,
+          reasonCode: 'coverage_incomplete',
+        });
+        await startRecovery(context, {
+          mailbox,
+          reason: 'baseline',
+          fromAt: baselineFromAt,
+          toAt,
+          startHistoryId: profile.historyId,
+        });
+        await coalesceMailSync(context.db, {
+          workspaceId: context.scope.workspaceId,
+          mailboxId: mailbox.id,
+          generation: mailbox.generation,
+          historyId: profile.historyId,
+        });
+        // Reconnect releases only the disconnection hold; coverage stays held.
+        await releaseMailboxHold(context, { mailboxId: mailbox.id, reasonCode: 'mailbox_disconnected' });
+        await revalidateProviderIncidentConfiguration(context,mailbox.id,'oauth_reconnected',now);
+      }
       // 11. The audit row. The address is business data the owner and an admin may see
       // (Appendix F). The token is not here, not hashed here, and not anywhere but
       // `mailbox_tokens`.
@@ -582,7 +658,7 @@ export async function completeGmailGrant(
     return acceptMail({
       mailboxId: outcome.mailbox.id,
       emailAddress: address,
-      baselineStarted: true,
+      baselineStarted: deps.acquisitionEnvironmentId === undefined,
       switched: outcome.switching,
       oldWatchStopped: outcome.switching ? oldWatchStopped : null,
     });
@@ -829,6 +905,28 @@ export async function disconnectMailbox(
   });
 
   return acceptMail({ mailboxId: mailbox.id, tokenDeleted: deleted });
+}
+
+/** Isolated local teardown; never stops a provider watch or revokes a Google project grant. */
+export async function cleanupAcquisitionMailbox(
+  context: RepositoryContext,
+  deps: Pick<MailGrantDeps, 'acquisitionEnvironmentId'>,
+  input: { readonly mailboxId: string; readonly reason: string },
+): Promise<MailResult<{ readonly mailboxId: string; readonly tokenDeleted: boolean; readonly localDisconnected: true; readonly providerRevoked: false; readonly trustedRevocationPending: true }>> {
+  if (deps.acquisitionEnvironmentId === undefined) return refuseMail('grant_refused');
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return refuseMail('not_assigned');
+  await lockSendGateForStopFact(context);
+  const mailbox = await lockOwnMailbox(context, actor.userId);
+  if (mailbox === null || mailbox.id !== input.mailboxId) return refuseMail('mailbox_unknown');
+  const deleted = await deleteRefreshToken(context, mailbox.id) > 0;
+  if (mailbox.status === 'connected') {
+    await advanceGeneration(context, mailbox.id, { generation: mailbox.generation, emailAddress: mailbox.emailAddress });
+    await markMailboxDisconnected(context, { mailboxId: mailbox.id, status: 'disconnected', reason: input.reason });
+  }
+  await recordCrmAuditEvent(context, { action: 'mailbox.acquisition_disconnected', subjectKind: 'mailbox', subjectId: mailbox.id,
+    detail: { environmentId: deps.acquisitionEnvironmentId, tokenDeleted: deleted, providerRevoked: false, trustedRevocationPending: true } });
+  return acceptMail({ mailboxId: mailbox.id, tokenDeleted: deleted, localDisconnected: true, providerRevoked: false, trustedRevocationPending: true });
 }
 
 /** The mailbox one salesperson owns, for the connection status the Mac reads. */

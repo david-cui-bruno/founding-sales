@@ -5,6 +5,8 @@ const configuration = z.strictObject({
   environmentId: z.uuid(),
   region: z.string().regex(/^[a-z]{2}-[a-z]+-\d$/u),
   databaseSecretArn: z.string().regex(/^arn:aws:secretsmanager:/u),
+  databaseInstanceArn: z.string().regex(/^arn:aws:rds:/u),
+  ecsClusterArn: z.string().regex(/^arn:aws:ecs:/u),
 });
 /** Explicit independent environment mode. Configuration does not provision consent or authorize reads. */
 export function createCrmAcquisitionDiagnosticStartup(
@@ -28,7 +30,7 @@ export function createCrmAcquisitionDiagnosticStartup(
   if (
     !identity.implementationCommit ||
     !identity.imageDigest ||
-    identity.schemaVersion !== 89 ||
+    identity.schemaVersion !== 90 ||
     !environment["ECS_CONTAINER_METADATA_URI_V4"]
   )
     throw new Error("diagnostic_environment_unavailable");
@@ -44,7 +46,13 @@ export function createCrmAcquisitionDiagnosticStartup(
     implementationCommit: identity.implementationCommit,
     imageDigest: identity.imageDigest,
     side: identity.side,
-    schemaVersion: 89,
+    schemaVersion: 90,
+    consentIsolationBinding: {
+      databaseInstanceArn: value.databaseInstanceArn,
+      databaseSecretArn: value.databaseSecretArn,
+      databaseEndpoint: database.hostname,
+      ecsClusterArn: value.ecsClusterArn,
+    },
     verifyIsolation: createCrmAcquisitionDiagnosticIsolation({
       region: value.region,
       taskMetadataEndpoint: environment["ECS_CONTAINER_METADATA_URI_V4"],
