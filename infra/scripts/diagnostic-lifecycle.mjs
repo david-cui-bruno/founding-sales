@@ -111,6 +111,26 @@ function sourceBinding(lease) {
   )
     throw new Error("source_binding_changed");
 }
+function requireEmptyState(nonemptyCode = "nonempty_state") {
+  // A fresh backend has no state file: state list exits1, while show succeeds.
+  // Only a successful structured read establishes that no resources exist.
+  const state = JSON.parse(command("terraform", ["show", "-json"]));
+  const object = (value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!object(state) || state.format_version !== "1.0" ||
+      (state.values !== undefined && !object(state.values)))
+    throw new Error("invalid_state_read");
+  function inspect(module) {
+    if (!object(module) ||
+        (module.resources !== undefined && !Array.isArray(module.resources)) ||
+        (module.child_modules !== undefined && !Array.isArray(module.child_modules)))
+      throw new Error("invalid_state_read");
+    if (module.resources?.length) throw new Error(nonemptyCode);
+    for (const child of module.child_modules ?? []) inspect(child);
+  }
+  if (state.values?.root_module !== undefined) inspect(state.values.root_module);
+}
+
 function applyReviewedPlan(leasePath, expectedHash, directory, lease) {
   sourceBinding(lease);
   const reviewed = loadReviewedPlan({
@@ -146,18 +166,15 @@ function applyReviewedPlan(leasePath, expectedHash, directory, lease) {
       root,
       300000,
     );
-    if (command("terraform", ["state", "list"]).trim() !== "")
-      throw new Error("nonempty_state");
+    requireEmptyState();
     registerLifecycleLease({
       leasePath,
       expectedLeaseSha256: expectedHash,
       outDirectory: resolve(directory, "registration"),
     });
-    if (
-      Date.now() >= Date.parse(lease.startDeadline) ||
-      command("terraform", ["state", "list"]).trim() !== ""
-    )
+    if (Date.now() >= Date.parse(lease.startDeadline))
       throw new Error("application_preflight_changed");
+    requireEmptyState("application_preflight_changed");
     uncertainStage = "application";
     mutationDeadline = Date.parse(lease.cleanupAt);
     command(

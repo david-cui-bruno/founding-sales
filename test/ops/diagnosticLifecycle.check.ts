@@ -246,7 +246,7 @@ else:print(os.environ['GITHUB_SHA'])
 import os,sys,json
 a=sys.argv[1:];open(os.environ['CALLS'],'a').write(json.dumps({'program':'terraform','args':a})+'\\n')
 if a[0]=='version':print(json.dumps({'terraform_version':'1.15.8'}))
-elif a[:2]==['state','list']:print('')\nelif a[0]=='output':print(open(os.environ['OUTPUTS']).read())
+elif a[:2]==['state','list']:print('No state file was found!',file=sys.stderr);sys.exit(1)\nelif a[:2]==['show','-json']:\n if os.environ.get('FAIL_STATE_READ')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n count=os.environ['STORE']+'/state-read-count';n=int(open(count).read())+1 if os.path.exists(count) else 1;open(count,'w').write(str(n))\n print(os.environ.get('STATE_AFTER_REGISTRATION') if n>1 and os.environ.get('STATE_AFTER_REGISTRATION') else os.environ.get('STATE_JSON',json.dumps({'format_version':'1.0'})))\nelif a[0]=='output':print(open(os.environ['OUTPUTS']).read())
 elif a[0]=='apply':\n if os.environ.get('FAIL_APPLY')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n open(os.environ['APPLIED'],'wb').write(open(a[-1],'rb').read())
 elif a[0]!='init':sys.exit(1)
 `,
@@ -367,6 +367,41 @@ it("applies only reviewed saved bytes after durable owned registration and never
     ).toHaveLength(1);
   } finally {
     rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  ["unreadable", undefined, true],
+  ["malformed", "private malformed state", false],
+  ["null", "null", false],
+  ["unsupported format", '{"format_version":"2.0"}', false],
+  ["invalid values", '{"format_version":"1.0","values":[]}', false],
+  ["invalid resources", '{"format_version":"1.0","values":{"root_module":{"resources":{}}}}', false],
+  ["nested resources", '{"format_version":"1.0","values":{"root_module":{"child_modules":[{"resources":[{"address":"owned-resource"}]}]}}}', false],
+] as const)("refuses %s state before exact application without treating errors as absence", (_name, state, failed) => {
+  const fixture = applicationFixture();
+  try {
+    if (failed) fixture.env["FAIL_STATE_READ"] = "1";
+    if (state !== undefined) fixture.env["STATE_JSON"] = state;
+    const result = fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(existsSync(join(fixture.directory, "applied"))).toBe(false);
+    expect(result.stdout + result.stderr).not.toMatch(/PRIVATE_PROVIDER_ERROR|private malformed state/);
+  } finally {
+    rmSync(fixture.directory, {recursive: true, force: true});
+  }
+});
+it("refuses resources appearing after registration and never applies the saved plan", () => {
+  const fixture = applicationFixture();
+  try {
+    fixture.env["STATE_AFTER_REGISTRATION"] = '{"format_version":"1.0","values":{"root_module":{"resources":[{"address":"new-resource"}]}}}';
+    const result = fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({ok:false,reason:"application_preflight_changed"});
+    expect(existsSync(join(fixture.directory, "applied"))).toBe(false);
+    expect(existsSync(join(fixture.directory, "private/plan/reviewed.tfplan"))).toBe(false);
+  } finally {
+    rmSync(fixture.directory, {recursive: true, force: true});
   }
 });
 
