@@ -431,21 +431,22 @@ describe('fss admin mailbox reconcile-sent', () => {
       return { ...world.clientWith(world.alpha, {}), listSentMessageIds: client.listSentMessageIds, getSentMetadata: client.getSentMetadata };
     };
     for (const metadata of [
-      { id: 'm-7', threadId: 't-7', internalDate: at },
-      { id: 'm-7', threadId: 't-7', internalDate: at, payload: {} },
-      { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: { 'Message-ID': '<x@example.test>' } } },
-      { id: 'm-8', threadId: 't-7', internalDate: at, payload: { headers: [] } },
+      { id: 'm-7', threadId: 't-7', labelIds: ['SENT'], internalDate: at },
+      { id: 'm-7', threadId: 't-7', labelIds: ['SENT'], internalDate: at, payload: {} },
+      { id: 'm-7', threadId: 't-7', labelIds: ['SENT'], internalDate: at, payload: { headers: { 'Message-ID': '<x@example.test>' } } },
+      { id: 'm-8', threadId: 't-7', labelIds: ['SENT'], internalDate: at, payload: { headers: [] } },
       // Lane W3-S8 fourth review: well-formed answers that still say nothing about the send.
-      { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: [] } },
-      { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: [{ name: 'Subject', value: 'Lunch' }] } },
-      { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: [{ name: 'Message-ID', value: '  ' }] } },
+      { id: 'm-7', threadId: 't-7', labelIds: ['SENT'], internalDate: at, payload: { headers: [] } },
+      { id: 'm-7', threadId: 't-7', labelIds: ['SENT'], internalDate: at, payload: { headers: [{ name: 'Subject', value: 'Lunch' }] } },
+      { id: 'm-7', threadId: 't-7', labelIds: ['SENT'], internalDate: at, payload: { headers: [{ name: 'Message-ID', value: '  ' }] } },
       {
         id: 'm-7',
         threadId: 't-7',
+        labelIds: ['SENT'],
         internalDate: at,
         payload: { headers: [{ name: 'Message-ID', value: '<a@mail.example.test>' }, { name: 'Message-Id', value: '<b@mail.example.test>' }] },
       },
-      { id: 'm-7', threadId: 't-7', internalDate: '1', payload: { headers: [{ name: 'Message-ID', value: '<a@mail.example.test>' }] } },
+      { id: 'm-7', threadId: 't-7', labelIds: ['SENT'], internalDate: '1', payload: { headers: [{ name: 'Message-ID', value: '<a@mail.example.test>' }] } },
     ]) {
       const outcome = await mailboxReconcileSentCommand(invocation(through(metadata), '2026-09-24T00:00:00Z'));
       expect(outcome, JSON.stringify(metadata)).toMatchObject({ ok: false, reason: 'reconcile_unresolved' });
@@ -462,6 +463,7 @@ describe('fss admin mailbox reconcile-sent', () => {
         through({
           id: 'm-7',
           threadId: 't-7',
+          labelIds: ['SENT'],
           internalDate: at,
           payload: { headers: [{ name: 'Message-ID', value: '<lunch.1@mail.example.test>' }, { name: 'Subject', value: 'Lunch' }] },
         }),
