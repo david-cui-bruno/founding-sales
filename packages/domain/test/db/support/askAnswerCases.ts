@@ -24,11 +24,13 @@ function bad(constraint:string,table:string,patch:Row):Case{return {constraint,r
  return insert(f,table,row);
 }};}
 const cases:Case[]=[];
+for(const [table,columns] of [['crm_ask_purposes',['input_token_price_micros','output_token_price_micros']],['crm_ask_financial_receipts',['input_price_micros','output_price_micros']]] as const)for(const column of columns)cases.push(bad(`${table}_${column}_check`,table,{[column]:'0.0000001'}));
+for(const rate of [1.1,'1.1000000','0.0000001','1000000.000001'])cases.push(bad('crm_ask_financial_purpose_shape','crm_ask_financial_receipts',{purpose_snapshot:JSON.stringify({...purposeSnapshot,inputTokenPriceMicros:rate})}));
 for(const [table,fields]of Object.entries({
  crm_ask_requests:{version:0,epoch:0,state:'bad',reason:'bad',purpose_revision:0,evaluation_fingerprint:'bad'},
- crm_ask_purposes:{purpose:'bad',revision:0,endpoint_id:'',model_version:'',access_grant_version:'',data_handling_version:'',evaluation_fingerprint:'bad',processor_version:'',retrieval_version:'',answer_version:'',support_version:'',chunker_version:'',daily_ceiling_cents:0,monthly_ceiling_cents:0,input_token_price_micros:0,output_token_price_micros:0},
+ crm_ask_purposes:{purpose:'bad',revision:0,endpoint_id:'',model_version:'',access_grant_version:'',data_handling_version:'',evaluation_fingerprint:'bad',processor_version:'',retrieval_version:'',answer_version:'',support_version:'',chunker_version:'',daily_ceiling_cents:0,monthly_ceiling_cents:0,input_token_price_micros:0,output_token_price_micros:-1},
  crm_ask_request_windows:{request_version:0,request_epoch:0,ordinal:0,source_kind:'bad',source_revision:0,source_hash:'bad',locator:'',parser_version:'',chunker_version:'',context_hash:'bad',text_hash:'bad',group_hash:'bad',context_snapshot:'[]',original_access_closure:'[]'},
- crm_ask_financial_receipts:{request_version:0,request_epoch:0,stage:'bad',attempt:0,fencing_token:0,purpose_revision:0,config_fingerprint:'bad',evaluation_fingerprint:'bad',authorization_fingerprint:'bad',input_hash:'bad',input_price_micros:0,output_price_micros:0,max_input_tokens:0,max_output_tokens:0,dispatch_state:'bad'},
+ crm_ask_financial_receipts:{request_version:0,request_epoch:0,stage:'bad',attempt:0,fencing_token:0,purpose_revision:0,config_fingerprint:'bad',evaluation_fingerprint:'bad',authorization_fingerprint:'bad',input_hash:'bad',input_price_micros:0,output_price_micros:-1,max_input_tokens:0,max_output_tokens:0,dispatch_state:'bad'},
 }))for(const [column,value]of Object.entries(fields))cases.push(bad(`${table}_${column}_check`,table,{[column]:value}));
 for(const [table,column,constraint]of [
  ['crm_ask_requests','workspace_id','crm_ask_requests_workspace_id_fkey'],['crm_ask_requests','owner_user_id','crm_ask_requests_workspace_id_owner_user_id_fkey'],

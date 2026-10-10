@@ -1,3 +1,4 @@
+import {crmInputTokenPriceMicrosSchema,crmTokenPriceMicrosSchema} from '@fss/contracts';
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -7,7 +8,7 @@ export function askFingerprint(value:unknown){return createHash('sha256').update
 export async function readAskPurpose(context:RepositoryContext,purpose:'answer'|'embedding'|'support'):Promise<AskPurposeSnapshot|null>{
  const row=(await context.db.query<Record<string,unknown>>('SELECT * FROM crm_ask_purposes WHERE workspace_id=$1 AND purpose=$2 AND enabled FOR SHARE',[context.scope.workspaceId,purpose])).rows[0];
  if(row===undefined)return null;
- const snapshot:AskPurposeSnapshot={purpose,revision:Number(row['revision']),endpointId:String(row['endpoint_id']),modelVersion:String(row['model_version']),accessGrantVersion:String(row['access_grant_version']),dataHandlingVersion:String(row['data_handling_version']),evaluationFingerprint:String(row['evaluation_fingerprint']),processorVersion:String(row['processor_version']),retrievalVersion:String(row['retrieval_version']),answerVersion:String(row['answer_version']),supportVersion:String(row['support_version']),chunkerVersion:String(row['chunker_version']),inputTokenPriceMicros:Number(row['input_token_price_micros']),outputTokenPriceMicros:Number(row['output_token_price_micros']),dailyCeilingCents:Number(row['daily_ceiling_cents']),monthlyCeilingCents:Number(row['monthly_ceiling_cents'])};
+ const snapshot:AskPurposeSnapshot={purpose,revision:Number(row['revision']),endpointId:String(row['endpoint_id']),modelVersion:String(row['model_version']),accessGrantVersion:String(row['access_grant_version']),dataHandlingVersion:String(row['data_handling_version']),evaluationFingerprint:String(row['evaluation_fingerprint']),processorVersion:String(row['processor_version']),retrievalVersion:String(row['retrieval_version']),answerVersion:String(row['answer_version']),supportVersion:String(row['support_version']),chunkerVersion:String(row['chunker_version']),inputTokenPriceMicros:crmInputTokenPriceMicrosSchema.parse(row['input_token_price_micros']),outputTokenPriceMicros:crmTokenPriceMicrosSchema.parse(row['output_token_price_micros']),dailyCeilingCents:Number(row['daily_ceiling_cents']),monthlyCeilingCents:Number(row['monthly_ceiling_cents'])};
  return snapshot;
 }
 const proofSchema=z.strictObject({configFingerprint:z.string().regex(/^[a-f0-9]{64}$/u),authorizationFingerprint:z.string().regex(/^[a-f0-9]{64}$/u),validUntil:z.iso.datetime(),evaluationKind:z.enum(['actual','controlled_fixture'])});

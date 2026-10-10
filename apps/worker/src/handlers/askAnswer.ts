@@ -1,3 +1,4 @@
+import {crmTokenCostCents} from '@fss/domain/crm/pricing.ts';
 import {z} from 'zod';
 import {lockAskLifecycle} from '@fss/domain/crm/askAnswerLifecycle.ts';
 import {askGroundedAnswerSchema} from '@fss/contracts';
@@ -79,8 +80,8 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
    const previous=(await context.db.query<{dispatch_state:string}>('SELECT dispatch_state FROM crm_ask_financial_receipts WHERE workspace_id=$1 AND request_id=$2 AND stage=\'answer\'',[context.scope.workspaceId,requestId])).rows[0];if(previous!==undefined)return null;
    const purpose=current.proofInput.purpose;
    const inputTokens=Buffer.byteLength(JSON.stringify({question:current.question,windows:current.windows,groups:current.groups}))+1024,maxOutputTokens=4096;
-   const cents=Math.ceil((inputTokens*purpose.inputTokenPriceMicros+maxOutputTokens*purpose.outputTokenPriceMicros)/10000);
-   if(inputTokens>1000000||!Number.isSafeInteger(cents)||cents>2147483647||!await withinBudget(context,purpose,adapter.providerKey,cents)){await setState(context,requestId,version,epoch,'unavailable','budget_held');return null;}
+   const cents=crmTokenCostCents(inputTokens,maxOutputTokens,purpose.inputTokenPriceMicros,purpose.outputTokenPriceMicros);
+   if(inputTokens>1000000||cents===null||!Number.isSafeInteger(cents)||cents>2147483647||!await withinBudget(context,purpose,adapter.providerKey,cents)){await setState(context,requestId,version,epoch,'unavailable','budget_held');return null;}
    const at=await now(context),zone=await workspaceBusinessZone(context);
    const reservation=await reserveAttempt(context,{providerKey:adapter.providerKey,subjectKind:'crm_ask_answer',subjectId:requestId,attempt:1,at,businessTimeZone:zone,cents,modelName:purpose.modelVersion,maxInputTokens:inputTokens,maxOutputTokens});
    const receipt=(await context.db.query<{id:string}>(`INSERT INTO crm_ask_financial_receipts(workspace_id,request_id,request_version,request_epoch,stage,attempt,reservation_id,job_id,fencing_token,purpose_revision,purpose_snapshot,config_fingerprint,evaluation_fingerprint,authorization_fingerprint,input_hash,input_price_micros,output_price_micros,max_input_tokens,max_output_tokens,dispatch_state) VALUES($1,$2,$3,$4,'answer',1,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,'reserved') RETURNING id`,[context.scope.workspaceId,requestId,version,epoch,reservation.id,input.job.id,input.job.fencingToken,purpose.revision,JSON.stringify(purpose),current.proofInput.configFingerprint,purpose.evaluationFingerprint,current.proofInput.authorizationFingerprint,current.inputHash,purpose.inputTokenPriceMicros,purpose.outputTokenPriceMicros,inputTokens,maxOutputTokens])).rows[0]!;
@@ -106,7 +107,7 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
    // Money remains recoverable even when private history is deleted or the actor is revoked.
    await lockMonthlySpend(context);
    const usage=z.strictObject({inputTokens:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),outputTokens:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)}).safeParse(outcome.usage);
-   const cents=usage.success?Math.ceil((usage.data.inputTokens*reserved.purpose.inputTokenPriceMicros+usage.data.outputTokens*reserved.purpose.outputTokenPriceMicros)/10000):null;
+   const cents=usage.success?crmTokenCostCents(usage.data.inputTokens,usage.data.outputTokens,reserved.purpose.inputTokenPriceMicros,reserved.purpose.outputTokenPriceMicros):null;
    const unknown=outcome.acceptance==='unknown'||!usage.success||cents===null||!Number.isSafeInteger(cents)||cents>2147483647;
    await settleAttempt(context,{reservationId:reserved.reservationId,at:await now(context),outcome:unknown?{kind:'estimated'}:{kind:'settled',cents:outcome.acceptance==='not_accepted'?0:cents!}});
    await context.db.query('UPDATE crm_ask_financial_receipts SET dispatch_state=$3 WHERE workspace_id=$1 AND id=$2 AND dispatch_state=\'calling\'',[context.scope.workspaceId,reserved.receiptId,unknown?'unknown_acceptance':'settled']);

@@ -1,4 +1,4 @@
-import type {CanonicalSourceReference} from '@fss/contracts';
+import type {CanonicalSourceReference,CrmTokenPriceMicros} from '@fss/contracts';
 
 export type AskPaidStage='answer'|'embedding_query'|'embedding_document'|'support';
 export interface AskPurposeSnapshot {
@@ -14,8 +14,8 @@ export interface AskPurposeSnapshot {
  readonly answerVersion:string;
  readonly supportVersion:string;
  readonly chunkerVersion:string;
- readonly inputTokenPriceMicros:number;
- readonly outputTokenPriceMicros:number;
+ readonly inputTokenPriceMicros:CrmTokenPriceMicros;
+ readonly outputTokenPriceMicros:CrmTokenPriceMicros;
  readonly dailyCeilingCents:number;
  readonly monthlyCeilingCents:number;
 }
