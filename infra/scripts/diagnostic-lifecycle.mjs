@@ -5,6 +5,8 @@ import {
   writeFileSync,
   realpathSync,
   readdirSync,
+  mkdirSync,
+  lstatSync,
   rmSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
@@ -130,6 +132,30 @@ function requireEmptyState(nonemptyCode = "nonempty_state") {
   }
   if (state.values?.root_module !== undefined) inspect(state.values.root_module);
 }
+function restoreReviewedArtifact(reviewed, lease) {
+  if (!Buffer.isBuffer(reviewed.alarmDigestArchive)) throw new Error("local_artifact_missing");
+  const plan = JSON.parse(command("terraform", ["show", "-json", reviewed.privatePlanPath]));
+  const lambdas = Array.isArray(plan.resource_changes) ? plan.resource_changes.filter((change) => change.mode === "managed" && change.type === "aws_lambda_function") : [];
+  const filename = `./.terraform/alarm-digest/${lease.prefix}.zip`;
+  if (!Array.isArray(lambdas) || lambdas.length !== 1 ||
+      lambdas[0].address !== "module.stack.module.alerts.aws_lambda_function.digest" ||
+      lambdas[0].change?.after?.filename !== filename ||
+      lambdas[0].change?.after?.source_code_hash !== createHash("sha256").update(reviewed.alarmDigestArchive).digest("base64"))
+    throw new Error("local_artifact_binding_changed");
+  const directory = resolve(root, ".terraform/alarm-digest");
+  mkdirSync(directory, {recursive:true, mode:0o700});
+  if (!lstatSync(directory).isDirectory() || realpathSync(directory) !== directory)
+    throw new Error("local_artifact_binding_changed");
+  const path = resolve(directory, `${lease.prefix}.zip`);
+  writeFileSync(path, reviewed.alarmDigestArchive, {mode:0o600, flag:"wx"});
+  return path;
+}
+function requireUnchangedArtifact(path, expected) {
+  try {
+    if (!lstatSync(path).isFile() || realpathSync(path) !== path || !readFileSync(path).equals(expected))
+      throw new Error("changed");
+  } catch {throw new Error("local_artifact_binding_changed");}
+}
 
 function applyReviewedPlan(leasePath, expectedHash, directory, lease) {
   sourceBinding(lease);
@@ -166,6 +192,7 @@ function applyReviewedPlan(leasePath, expectedHash, directory, lease) {
       root,
       300000,
     );
+    const artifactPath = restoreReviewedArtifact(reviewed, lease);
     requireEmptyState();
     registerLifecycleLease({
       leasePath,
@@ -175,6 +202,7 @@ function applyReviewedPlan(leasePath, expectedHash, directory, lease) {
     if (Date.now() >= Date.parse(lease.startDeadline))
       throw new Error("application_preflight_changed");
     requireEmptyState("application_preflight_changed");
+    requireUnchangedArtifact(artifactPath, reviewed.alarmDigestArchive);
     uncertainStage = "application";
     mutationDeadline = Date.parse(lease.cleanupAt);
     command(
@@ -764,6 +792,9 @@ try {
     "external_operation_refused_or_uncertain",
     "nonempty_state",
     "application_preflight_changed",
+    "local_artifact_missing",
+    "local_artifact_invalid",
+    "local_artifact_binding_changed",
   ];
   console.log(
     JSON.stringify({

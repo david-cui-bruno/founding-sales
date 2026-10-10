@@ -407,6 +407,7 @@ export async function preparePrivateProposal({
           manifestPath,
           configurationPath,
           outDirectory: resolve(outDirectory, 'escrow'),
+          root,
         });
       } finally {
         rmSync(configurationPath, { force: true });
@@ -423,6 +424,7 @@ export function escrowPlan({
   manifestPath,
   configurationPath,
   outDirectory,
+  root,
 }) {
   const approval = parseStorageApproval(
     approvedFile(approvalPath, expectedApprovalSha256),
@@ -446,6 +448,15 @@ export function escrowPlan({
     manifestSha256: sha(manifestBytes),
   };
   validatePayload(meta, manifest, configuration, plan, manifestBytes);
+  let alarmDigestArchive;
+  if (root !== undefined) {
+    const path = resolve(realpathSync(root), '.terraform/alarm-digest', `${approval.prefix}.zip`);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1048576 || realpathSync(path) !== path)
+      refuse('local_artifact_invalid');
+    alarmDigestArchive = readFileSync(path).toString('base64');
+    decodeAlarmDigestArchive(alarmDigestArchive);
+  }
   if (
     manifest.workflowRunId !== execution.runId ||
     manifest.workflowRunAttempt !== execution.attempt
@@ -535,6 +546,7 @@ export function escrowPlan({
     plan: plan.toString('base64'),
     manifestBytes: manifestBytes.toString('base64'),
     configuration,
+    ...(alarmDigestArchive === undefined ? {} : {alarmDigestArchive}),
   });
   let encrypted;
   try {
@@ -543,7 +555,7 @@ export function escrowPlan({
     dataKey.fill(0);
   }
   const packet = {
-    version: 'fss.private-plan.v1',
+    version: alarmDigestArchive === undefined ? 'fss.private-plan.v1' : 'fss.private-plan.v2',
     metadata: meta,
     encryptedDataKey: generated.CiphertextBlob,
     nonce: nonce.toString('base64'),
@@ -643,7 +655,7 @@ function loadPacket(
     'tag',
     'ciphertext',
   ]);
-  if (packet.version !== 'fss.private-plan.v1') refuse();
+  if (!['fss.private-plan.v1', 'fss.private-plan.v2'].includes(packet.version)) refuse();
   const meta = packet.metadata;
   parseStorageApprovalForRead(meta);
   for (const key of [
@@ -664,7 +676,7 @@ function loadPacket(
     meta.retention.approvalRef !== lease.retention.approvalRef
   )
     refuse('envelope_binding_changed');
-  const { plan, manifest, configuration } = decryptPayload(
+  const { plan, manifest, configuration, alarmDigestArchive } = decryptPayload(
     packet,
     meta,
     outDirectory,
@@ -697,6 +709,7 @@ function loadPacket(
     configuration,
     lease,
     planSha256: lease.planSha256,
+    alarmDigestArchive,
   };
 }
 function observeExecution(sourceCommit) {
@@ -1029,7 +1042,7 @@ function decryptPayload(packet, meta, outDirectory) {
     'tag',
     'ciphertext',
   ]);
-  if (packet.version !== 'fss.private-plan.v1') refuse();
+  if (!['fss.private-plan.v1', 'fss.private-plan.v2'].includes(packet.version)) refuse();
   const blobPath = resolve(outDirectory, 'key.private.bin');
   write(blobPath, Buffer.from(packet.encryptedDataKey, 'base64'));
   let dataKey;
@@ -1080,15 +1093,24 @@ function decryptPayload(packet, meta, outDirectory) {
     } finally {
       dataKey.fill(0);
     }
-    fields(payload, ['plan', 'manifestBytes', 'configuration']);
+    fields(payload, ['plan', 'manifestBytes', 'configuration', ...(packet.version === 'fss.private-plan.v2' ? ['alarmDigestArchive'] : [])]);
+    const alarmDigestArchive = packet.version === 'fss.private-plan.v2' ? decodeAlarmDigestArchive(payload.alarmDigestArchive) : undefined;
     const manifestBytes = Buffer.from(payload.manifestBytes, 'base64'),
       manifest = JSON.parse(manifestBytes);
     const plan = Buffer.from(payload.plan, 'base64');
     validatePayload(meta, manifest, payload.configuration, plan, manifestBytes);
-    return { plan, manifest, configuration: payload.configuration };
+    return { plan, manifest, configuration: payload.configuration, alarmDigestArchive };
   } finally {
     dataKey?.fill(0);
   }
+}
+function decodeAlarmDigestArchive(encoded) {
+  if (typeof encoded !== 'string' || encoded.length > 1398104 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded))
+    refuse('local_artifact_invalid');
+  const archive = Buffer.from(encoded, 'base64');
+  if (archive.length < 22 || archive.length > 1048576 || archive.toString('base64') !== encoded || !archive.subarray(0,4).equals(Buffer.from([0x50,0x4b,0x03,0x04])))
+    refuse('local_artifact_invalid');
+  return archive;
 }
 function parseStorageApprovalForRead(meta) {
   fields(meta, [
@@ -1158,7 +1180,7 @@ if (
         outDirectory: args[3],
         root: args[4],
       });
-    else if (action === 'escrow' && args.length === 6)
+    else if (action === 'escrow' && [6,7].includes(args.length))
       escrowPlan({
         approvalPath: args[0],
         expectedApprovalSha256: args[1],
@@ -1166,6 +1188,7 @@ if (
         manifestPath: args[3],
         configurationPath: args[4],
         outDirectory: args[5],
+        root: args[6],
       });
     else if (action === 'register' && args.length === 3)
       registerLifecycleLease({
@@ -1231,6 +1254,7 @@ if (
         resolve(args[2], 'load-receipt.json'),
         bytes({
           planSha256: result.planSha256,
+          ...(result.alarmDigestArchive === undefined ? {} : {archiveSha256: sha(result.alarmDigestArchive)}),
           applyPerformed: false,
           activationAllowed: false,
         }),

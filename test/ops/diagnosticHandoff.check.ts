@@ -219,6 +219,10 @@ else process.exit(1);
     };
     writeFileSync(files.approval, JSON.stringify(approval));
     writeFileSync(files.plan, plan);
+    const archive = Buffer.from('UEsDBBQAAAAIAAAAIQBX4GbXJQAAACMAAAAJAAAAaW5kZXgubWpzS87PK87PSdXLyU/XUErOzyspys/JSU1RSCxKzsgsS1XStOYCAFBLAwQUAAAACAAAACEA8R9pmB4AAAAgAAAACgAAAGRpZ2VzdC5tanNLrSjILypRSM7PKwaTJUX5OTmpKQq2CiVFpanWXABQSwECFAMUAAAACAAAACEAV+Bm1yUAAAAjAAAACQAAAAAAAAAAAAAApIEAAAAAaW5kZXgubWpzUEsBAhQDFAAAAAgAAAAhAPEfaZgeAAAAIAAAAAoAAAAAAAAAAAAAAKSBTAAAAGRpZ2VzdC5tanNQSwUGAAAAAAIAAgBvAAAAkgAAAAAA', 'base64');
+    const proposalRoot = join(directory, 'proposal-root');
+    mkdirSync(join(proposalRoot, '.terraform/alarm-digest'), {recursive:true});
+    writeFileSync(join(proposalRoot, '.terraform/alarm-digest', `${lease.prefix}.zip`), archive);
     writeFileSync(files.manifest, `${JSON.stringify(manifest, null, 2)}\n`);
     writeFileSync(files.config, JSON.stringify(config));
     const run = (
@@ -289,6 +293,7 @@ else process.exit(1);
       files.manifest,
       files.config,
       join(directory, 'escrow'),
+      proposalRoot,
     ]);
     expect(escrow.status, escrow.stdout + escrow.stderr).toBe(0);
     const receipt = JSON.parse(
@@ -313,6 +318,7 @@ else process.exit(1);
     expect(
       readFileSync(join(directory, 'load', 'reviewed.tfplan'), 'utf8'),
     ).toBe(plan);
+    expect(JSON.parse(readFileSync(join(directory,'load','load-receipt.json'),'utf8')).archiveSha256).toBe('260da8ae23280e7273b8434c2a124e8508e01d79cd7d00a28f0770ae2eb57052');
     const retried = run([
       'escrow',
       files.approval,

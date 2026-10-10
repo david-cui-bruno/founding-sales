@@ -9,12 +9,15 @@ import {
   chmodSync,
   existsSync,
   cpSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 
 const script = resolve("infra/scripts/diagnostic-lifecycle.mjs");
+// A fixed synthetic ZIP containing index.mjs and digest.mjs, independent of the handoff.
+const archiveBase64 = "UEsDBBQAAAAIAAAAIQBX4GbXJQAAACMAAAAJAAAAaW5kZXgubWpzS87PK87PSdXLyU/XUErOzyspys/JSU1RSCxKzsgsS1XStOYCAFBLAwQUAAAACAAAACEA8R9pmB4AAAAgAAAACgAAAGRpZ2VzdC5tanNLrSjILypRSM7PKwaTJUX5OTmpKQq2CiVFpanWXABQSwECFAMUAAAACAAAACEAV+Bm1yUAAAAjAAAACQAAAAAAAAAAAAAApIEAAAAAaW5kZXgubWpzUEsBAhQDFAAAAAgAAAAhAPEfaZgeAAAAIAAAAAoAAAAAAAAAAAAAAKSBTAAAAGRpZ2VzdC5tanNQSwUGAAAAAAIAAgBvAAAAkgAAAAAA";
 
 function leaseFixture() {
   const now = Date.now();
@@ -71,7 +74,7 @@ function leaseFixture() {
   };
 }
 
-function applicationFixture() {
+function applicationFixture(options: {archive?:string;legacy?:boolean} = {}) {
   const directory = mkdtempSync(join(tmpdir(), "fss-diagnostic-apply-"));
   const checkout = join(directory, "checkout");
   mkdirSync(checkout);
@@ -162,12 +165,13 @@ function applicationFixture() {
         plan: plan.toString("base64"),
         manifestBytes: manifestBytes.toString("base64"),
         configuration,
+        ...(options.legacy ? {} : {alarmDigestArchive: options.archive ?? archiveBase64}),
       }),
     ),
     cipher.final(),
   ]);
   const packet = JSON.stringify({
-    version: "fss.private-plan.v1",
+    version: options.legacy ? "fss.private-plan.v1" : "fss.private-plan.v2",
     metadata,
     encryptedDataKey: Buffer.from("CONTROLLED_WRAPPED_KEY").toString("base64"),
     nonce: nonce.toString("base64"),
@@ -233,7 +237,9 @@ elif a[:2]==['s3api','get-object']:
 elif a[:2]==['s3api','put-object']:
  p=os.environ['STORE']+'/'+hashlib.sha256(a[a.index('--key')+1].encode()).hexdigest()
  if os.path.exists(p):sys.exit(1)
- shutil.copyfile(a[a.index('--body')+1],p);print(json.dumps({'ETag':'"controlled"'}))
+ shutil.copyfile(a[a.index('--body')+1],p)
+ if os.environ.get('CHANGE_ARCHIVE_AFTER_REGISTRATION')=='1' and a[a.index('--key')+1].endswith('/lease.json'):open(os.environ['ARCHIVE_PATH'],'wb').write(b'CHANGED_CONTROLLED_FILE')
+ print(json.dumps({'ETag':'"controlled"'}))
 else:sys.exit(1)
 `,
     git: `#!/usr/bin/env python3
@@ -246,8 +252,8 @@ else:print(os.environ['GITHUB_SHA'])
 import os,sys,json
 a=sys.argv[1:];open(os.environ['CALLS'],'a').write(json.dumps({'program':'terraform','args':a})+'\\n')
 if a[0]=='version':print(json.dumps({'terraform_version':'1.15.8'}))
-elif a[:2]==['state','list']:print('No state file was found!',file=sys.stderr);sys.exit(1)\nelif a[:2]==['show','-json']:\n if os.environ.get('FAIL_STATE_READ')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n count=os.environ['STORE']+'/state-read-count';n=int(open(count).read())+1 if os.path.exists(count) else 1;open(count,'w').write(str(n))\n print(os.environ.get('STATE_AFTER_REGISTRATION') if n>1 and os.environ.get('STATE_AFTER_REGISTRATION') else os.environ.get('STATE_JSON',json.dumps({'format_version':'1.0'})))\nelif a[0]=='output':print(open(os.environ['OUTPUTS']).read())
-elif a[0]=='apply':\n if os.environ.get('FAIL_APPLY')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n open(os.environ['APPLIED'],'wb').write(open(a[-1],'rb').read())
+elif a[:2]==['state','list']:print('No state file was found!',file=sys.stderr);sys.exit(1)\nelif a[:2]==['show','-json'] and len(a)==3:print(json.dumps({'format_version':'1.2','resource_changes':[{'mode':'managed','type':'aws_lambda_function','address':'module.stack.module.alerts.aws_lambda_function.digest','change':{'after':{'filename':os.environ.get('ARCHIVE_FILENAME','./.terraform/alarm-digest/fss-rh-cap90-o10a.zip'),'source_code_hash':os.environ['ARCHIVE_HASH']}}}]}))\nelif a[:2]==['show','-json']:\n if os.environ.get('FAIL_STATE_READ')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n count=os.environ['STORE']+'/state-read-count';n=int(open(count).read())+1 if os.path.exists(count) else 1;open(count,'w').write(str(n))\n print(os.environ.get('STATE_AFTER_REGISTRATION') if n>1 and os.environ.get('STATE_AFTER_REGISTRATION') else os.environ.get('STATE_JSON',json.dumps({'format_version':'1.0'})))\nelif a[0]=='output':print(open(os.environ['OUTPUTS']).read())
+elif a[0]=='apply':\n if os.environ.get('FAIL_APPLY')=='1':print('PRIVATE_PROVIDER_ERROR',file=sys.stderr);sys.exit(1)\n archive='.terraform/alarm-digest/fss-rh-cap90-o10a.zip'\n if not os.path.isfile(archive):print('PRIVATE_PROVIDER_ARCHIVE_MISSING',file=sys.stderr);sys.exit(1)\n import base64\n if open(archive,'rb').read()!=base64.b64decode(os.environ['ARCHIVE_BASE64']):sys.exit(1)\n open(os.environ['APPLIED_ARCHIVE'],'wb').write(open(archive,'rb').read())\n open(os.environ['APPLIED'],'wb').write(open(a[-1],'rb').read())
 elif a[0]!='init':sys.exit(1)
 `,
   };
@@ -285,6 +291,10 @@ elif a[0]!='init':sys.exit(1)
     KMS_KEY: lease.state.kmsKeyArn,
     STORE: join(directory, "store"),
     APPLIED: join(directory, "applied"),
+    ARCHIVE_BASE64: archiveBase64,
+    ARCHIVE_PATH: join(checkout,"infra/roots/rehearsal/.terraform/alarm-digest/fss-rh-cap90-o10a.zip"),
+    ARCHIVE_HASH: createHash("sha256").update(Buffer.from(archiveBase64,"base64")).digest("base64"),
+    APPLIED_ARCHIVE: join(directory, "applied-archive.zip"),
     OUTPUTS: join(directory, "outputs.json"),
     SECRET_CAPTURE: join(directory, "secret-capture"),
   };
@@ -312,7 +322,7 @@ elif a[0]!='init':sys.exit(1)
   };
 }
 
-it("applies only reviewed saved bytes after durable owned registration and never replans", () => {
+it("applies a reviewed plan in a fresh checkout with its exact file artifact and never replans", () => {
   const fixture = applicationFixture();
   try {
     const result = fixture.invoke("apply");
@@ -331,6 +341,7 @@ it("applies only reviewed saved bytes after durable owned registration and never
     expect(readFileSync(join(fixture.directory, "applied"), "utf8")).toBe(
       "EXACT_REVIEWED_PRIVATE_PLAN",
     );
+    expect(readFileSync(join(fixture.directory, "applied-archive.zip")).toString("base64")).toBe(archiveBase64);
     const calls = readFileSync(fixture.calls, "utf8")
       .trim()
       .split("\n")
@@ -368,6 +379,98 @@ it("applies only reviewed saved bytes after durable owned registration and never
   } finally {
     rmSync(fixture.directory, { recursive: true, force: true });
   }
+});
+
+it("refuses a retained archive whose hash differs from the reviewed plan before registering application", () => {
+  const fixture = applicationFixture();
+  try {
+    fixture.env["ARCHIVE_HASH"] = Buffer.alloc(32,0).toString("base64");
+    const result = fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    const calls = readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.some(call=>call.program === "aws" && call.args[1] === "put-object")).toBe(false);
+    expect(calls.some(call=>call.program === "terraform" && call.args[0] === "apply")).toBe(false);
+    expect(result.stdout+result.stderr).not.toContain("PRIVATE_PROVIDER");
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("refuses application of a legacy handoff without its required local artifact", () => {
+  const fixture = applicationFixture({legacy:true});
+  try {
+    const result = fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({ok:false,reason:"local_artifact_missing"});
+    const calls = readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.some(call=>call.program === "aws" && call.args[1] === "put-object")).toBe(false);
+    expect(calls.some(call=>call.program === "terraform" && call.args[0] === "apply")).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it.each(["./.terraform/alarm-digest/fss-rh-other.zip", "../outside.zip"])("refuses an artifact path outside the reviewed diagnostic prefix", (filename) => {
+  const fixture=applicationFixture();
+  try {
+    fixture.env["ARCHIVE_FILENAME"]=filename;
+    const result=fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({ok:false,reason:"local_artifact_binding_changed"});
+    const calls=readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.some(call=>call.program==="aws" && call.args[1]==="put-object")).toBe(false);
+    expect(calls.some(call=>call.program==="terraform" && call.args[0]==="apply")).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("refuses a symlinked artifact directory without writing outside the application checkout", () => {
+  const fixture=applicationFixture();
+  try {
+    const terraformRoot=join(fixture.checkout,"infra/roots/rehearsal/.terraform");
+    const outside=join(fixture.directory,"outside");
+    mkdirSync(terraformRoot);mkdirSync(outside);
+    symlinkSync(outside,join(terraformRoot,"alarm-digest"),'dir');
+    const result=fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(existsSync(join(outside,"fss-rh-cap90-o10a.zip"))).toBe(false);
+    const calls=readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.some(call=>call.program==="aws" && call.args[1]==="put-object")).toBe(false);
+    expect(calls.some(call=>call.program==="terraform" && call.args[0]==="apply")).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("stops before Terraform apply if the restored artifact changes during durable registration", () => {
+  const fixture = applicationFixture();
+  try {
+    fixture.env["CHANGE_ARCHIVE_AFTER_REGISTRATION"]="1";
+    const result=fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    const calls=readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.some(call=>call.program==="aws" && call.args[1]==="put-object")).toBe(true);
+    expect(calls.some(call=>call.program==="terraform" && call.args[0]==="apply")).toBe(false);
+    expect(result.stdout+result.stderr).not.toMatch(/PRIVATE_PROVIDER|CHANGED_CONTROLLED_FILE/);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it.each(["PRIVATE_ARCHIVE_SENTINEL", Buffer.alloc(1048577).toString("base64")])("refuses malformed or oversized retained artifacts before application", (archive) => {
+  const fixture = applicationFixture({archive});
+  try {
+    const result = fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({ok:false,reason:"local_artifact_invalid"});
+    expect(result.stdout+result.stderr).not.toContain("PRIVATE_ARCHIVE_SENTINEL");
+    const calls = readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.some(call=>call.program === "aws" && call.args[1] === "put-object")).toBe(false);
+    expect(calls.some(call=>call.program === "terraform" && call.args[0] === "apply")).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("still cleans an independently registered legacy handoff without restoring its missing artifact", () => {
+  const fixture = applicationFixture({legacy:true});
+  try {
+    const registered = spawnSync(process.execPath,[join(fixture.checkout,"infra/scripts/diagnostic-handoff.mjs"),"register",fixture.leasePath,fixture.expectedHash,join(fixture.directory,"legacy-registration")],{encoding:"utf8",env:fixture.env});
+    expect(registered.status,registered.stdout+registered.stderr).toBe(0);
+    const result = fixture.invoke("cleanup");
+    expect(result.status,result.stdout+result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ok:true,stage:"cleaned",absenceVerified:true,activationAllowed:false});
+    expect(existsSync(join(fixture.checkout,"infra/roots/rehearsal/.terraform/alarm-digest/fss-rh-cap90-o10a.zip"))).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
 });
 
 it.each([

@@ -307,7 +307,11 @@ elif a[0]=='show' and len(a)==2:
  elif os.environ.get('EXISTING_STATE'):print(json.dumps({'format_version':'1.0','values':{'root_module':{'resources':[{'address':os.environ['EXISTING_STATE']}]}}}))
  else:print(json.dumps({'format_version':'1.0'}))
 elif a[0]=='plan' and os.environ.get('PLAN_FAIL')=='1':sys.exit(1)
-elif a[0]=='plan':open(next(x.split('=',1)[1] for x in a if x.startswith('-out=')),'wb').write(b'private-plan-fixture')
+elif a[0]=='plan':
+ open(next(x.split('=',1)[1] for x in a if x.startswith('-out=')),'wb').write(b'private-plan-fixture')
+ v=json.load(open('run.auto.tfvars.json'));archive='.terraform/alarm-digest/'+v['name_prefix']+'.zip'
+ os.makedirs(os.path.dirname(archive),exist_ok=True)
+ open(archive,'wb').write(base64.b64decode(os.environ['FIXTURE_ARCHIVE_BASE64']))
 elif a[0]=='show':
  v=json.load(open('run.auto.tfvars.json'))
  if os.environ.get('DRIFT_PLAN')=='1':v['api_hostname']='wrong.rehearsal.usecallie.com'
@@ -345,6 +349,7 @@ elif a[0]!='init':sys.exit(1)
       FIXTURE_GIT_CHECKOUT: resolve("."),
       REAL_GIT: spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim(),
       CALLS: log,
+      FIXTURE_ARCHIVE_BASE64: "UEsDBBQAAAAIAAAAIQBX4GbXJQAAACMAAAAJAAAAaW5kZXgubWpzS87PK87PSdXLyU/XUErOzyspys/JSU1RSCxKzsgsS1XStOYCAFBLAwQUAAAACAAAACEA8R9pmB4AAAAgAAAACgAAAGRpZ2VzdC5tanNLrSjILypRSM7PKwaTJUX5OTmpKQq2CiVFpanWXABQSwECFAMUAAAACAAAACEAV+Bm1yUAAAAjAAAACQAAAAAAAAAAAAAApIEAAAAAaW5kZXgubWpzUEsBAhQDFAAAAAgAAAAhAPEfaZgeAAAAIAAAAAoAAAAAAAAAAAAAAKSBTAAAAGRpZ2VzdC5tanNQSwUGAAAAAAIAAgBvAAAAkgAAAAAA",
     };
     const run = spawnSync(
       process.execPath,
@@ -413,6 +418,7 @@ elif a[0]!='init':sys.exit(1)
     expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
     const storedReceipt = JSON.parse(readFileSync(join(preparedOut, "escrow", "escrow-receipt.json"), "utf8"));
     expect(storedReceipt).toMatchObject({ applyPerformed: false, planSha256: "747b2af5bcdd6819c68611119dc67922ee873424fc2dadd944b2e92d4b7b0934", retentionErasureSupported: false });
+    expect(JSON.parse(readFileSync(store,"utf8")).version).toBe("fss.private-plan.v2");
     expect(readFileSync(store, "utf8")).not.toContain("private-plan-fixture");
     expect(prepared.stdout + prepared.stderr).not.toContain("opaque-key");
     expect(() => readFileSync(join(preparedOut, "plan.tfplan"))).toThrow();
