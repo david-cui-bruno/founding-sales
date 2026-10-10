@@ -32,3 +32,12 @@ it('requires exact image previews before handoff review',async()=>{
  expect((screen.getByRole('button',{name:'Approve manual handoff'}) as HTMLButtonElement).disabled).toBe(true);
  fireEvent.load(screen.getByAltText('Dashboard'));expect((screen.getByRole('button',{name:'Approve manual handoff'}) as HTMLButtonElement).disabled).toBe(false);
 });
+
+it('lets the operator refresh an unavailable handoff without leaving the post',async()=>{
+ let available=false;
+ const ports:ManualHandoffPorts={read:async()=>available?{ok:true,value:view}:{ok:false,reason:'unavailable'},confirm:async()=>({ok:false,reason:'unused'}),use:async()=>{}};
+ render(<SocialManualHandoff postId='post' revision={1} ports={ports}/>);
+ await screen.findByText('Manual handoff is unavailable.');available=true;
+ fireEvent.click(screen.getByRole('button',{name:'Refresh handoff'}));
+ expect(await screen.findByRole('button',{name:'Approve manual handoff'})).toBeTruthy();
+});
