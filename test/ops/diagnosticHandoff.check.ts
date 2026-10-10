@@ -104,6 +104,12 @@ it('accepts one concretely reviewed bounded lease without application authority'
     retentionErasureSupported: false,
   });
 });
+it('accepts a sole named human cleanup owner with the independent workflow backup', () => {
+  const run = validate({...lease, fallbackOwner: lease.owner});
+  expect(run.status, run.output).toBe(0);
+  expect(run.receipt).toMatchObject({applyPerformed:false, activationAllowed:false});
+  expect(validate({...lease, fallbackOwner:''}).status).toBe(1);
+});
 it('refuses missing retention approval, changed redirects and unbounded lifecycle', () => {
   for (const value of [
     { ...lease, retention: { ...lease.retention, acknowledged: false } },
