@@ -60,3 +60,23 @@ it('stops explicitly before erasure, shows versioned results, and clears erased 
  expect(screen.getByLabelText('Reason for experiment')).toHaveProperty('value','');
  expect(screen.queryByText('Reviewed version 1: Explore maintenance work.')).toBeNull();
 });
+it('freezes exact proposal review while save is pending and while its result remains unknown',async()=>{
+ let resolve:(value:{id:string;revision:number})=>void=()=>{};let attempts=0;
+ const save=async()=>{if(attempts++===0)throw new Error('unknown');return new Promise<{id:string;revision:number}>(r=>{resolve=r;});};
+ render(<Experiments proposal={suggestion} save={save} activate={async()=>{}}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Accept proposal'}));
+ await screen.findByRole('button',{name:'Retry same experiment action'});
+ expect(screen.getByLabelText('Reason for experiment').hasAttribute('disabled')).toBe(true);
+ expect(screen.getByLabelText('Proposed query').hasAttribute('disabled')).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'Retry same experiment action'}));
+ expect(screen.getByLabelText('Proposed query').hasAttribute('disabled')).toBe(true);
+ resolve({id:'saved',revision:1});await screen.findByText('Proposal saved; no live changes.');
+ expect(screen.getByLabelText('Proposed query').hasAttribute('disabled')).toBe(false);
+});
+it('freezes approval and copy controls during an uncertain activation',async()=>{
+ render(<Experiments proposal={{...suggestion,change:{kind:'email_wording',baseTemplateVersionId:'base',subject:'Original subject',body:'Original body'}}} approvedSequences={[{id:'sequence',label:'Approved copy'}]} save={async()=>({id:'saved',revision:1})} activate={async()=>{throw new Error('unknown');}}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Accept proposal'}));await screen.findByText('Proposal saved; no live changes.');
+ fireEvent.change(screen.getByLabelText('Separately approved sequence'),{target:{value:'sequence'}});
+ fireEvent.click(screen.getByRole('button',{name:'Activate reviewed email experiment'}));await screen.findByRole('button',{name:'Retry same experiment action'});
+ for(const label of ['Proposed subject','Proposed email','Separately approved sequence','Reason to stop'])expect(screen.getByLabelText(label).hasAttribute('disabled')).toBe(true);
+});

@@ -9,7 +9,9 @@ export const experimentContentSchema=z.strictObject({
  z.strictObject({kind:z.literal('discovery_query'),basePolicyVersion:z.string().min(1).max(80),queryId:z.string().min(1).max(100),query:z.string().trim().min(5).max(400)}),
  z.strictObject({kind:z.literal('email_wording'),baseTemplateVersionId:uuid,subject:z.string().min(1).max(998),body:z.string().min(1).max(10000)})]),
  interval:learningInputSchema, rationale:text,counterexamples:z.array(text).max(10),uncertainty:text,successMeasures:z.array(text).min(1).max(10)
-});
+}).refine(value=>new TextEncoder().encode(JSON.stringify(value)).byteLength<=15*1024,{message:'Experiment content exceeds the UTF-8 storage limit'});
+// Reserve 1 KiB below the 16 KiB JSONB limit for PostgreSQL object/array spacing.
+// The strict bounded shape has at most 20 list entries and a fixed set of keys.
 export type ExperimentContent=z.infer<typeof experimentContentSchema>;
 export const experimentSaveSchema=z.strictObject({id:uuid.optional(),expectedRevision:z.number().int().nonnegative(),status:z.enum(['accepted','dismissed']),content:experimentContentSchema});
 export const experimentSaveCommandSchema=experimentSaveSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
