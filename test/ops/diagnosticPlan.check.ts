@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 
 const script = resolve("infra/scripts/diagnostic-plan.mjs");
@@ -257,13 +258,21 @@ else:
  print(json.dumps({'workflow_runs':[] if os.environ.get('PROVENANCE_FAIL')=='1' else [{'id':111 if path=='greenfield-images.yml' else 222,'path':'.github/workflows/'+path,'head_sha':os.environ['GITHUB_SHA'],'head_branch':'main','event':'push','status':'completed','conclusion':'success'}]}))
 `,
       aws: String.raw`#!/usr/bin/env python3
-import sys,json,os
+import sys,json,os,base64,shutil,hashlib
+def objectfile(key):
+ return os.environ['OBJECT_STORE'] if '/diagnostic/plans/' in key else os.environ['OBJECT_STORE']+'.'+hashlib.sha256(key.encode()).hexdigest()
 a=sys.argv[1:];open(os.environ['CALLS'],'a').write('aws '+ ' '.join(a)+'\n')
-if a[:2]==['sts','get-caller-identity']:print(json.dumps({'Account':'123456789012','Arn':os.environ.get('IDENTITY_ARN','arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/test')}))
+if a[:2]==['sts','get-caller-identity']:print(json.dumps({'Account':'326255650484','Arn':os.environ.get('IDENTITY_ARN','arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/test')}))
 elif a[:2]==['acm','describe-certificate']:print(json.dumps({'Certificate':{'Status':os.environ.get('CERTIFICATE_STATUS','ISSUED'),'SubjectAlternativeNames':['*.rehearsal.usecallie.com']}}))
 elif a[:2]==['ecr','describe-repositories']:print(json.dumps({'repositories':[{'imageTagMutability':'IMMUTABLE'}]}))
 elif a[:2]==['ecr','describe-images']:print(json.dumps({'imageDetails':[{'imageDigest':('sha256:'+'3'*64) if os.environ.get('ECR_TAG_DRIFT')=='1' else ('sha256:'+('1' if 'fss-rh-api' in a else '2')*64)}]}))
 elif a[:2]==['ecr','get-login-password']:print('fixture-ephemeral-auth')
+elif a[:2]==['kms','generate-data-key'] or a[:2]==['kms','decrypt']:print(json.dumps({'KeyId':a[a.index('--key-id')+1],'Plaintext':base64.b64encode(bytes([7])*32).decode(),'CiphertextBlob':base64.b64encode(b'opaque-key').decode()}))
+elif a[:2]==['s3api','list-objects-v2']:print(json.dumps({'Contents':[{'Key':a[a.index('--prefix')+1]}] if os.path.exists(objectfile(a[a.index('--prefix')+1])) else []}))
+elif a[:2]==['s3api','put-object']:
+ if os.path.exists(objectfile(a[a.index('--key')+1])):sys.exit(1)
+ shutil.copyfile(a[a.index('--body')+1],objectfile(a[a.index('--key')+1]));print('{}')
+elif a[:2]==['s3api','get-object']:shutil.copyfile(objectfile(a[a.index('--key')+1]),a[a.index('--key')+2]);print('{}')
 else:sys.exit(1)
 `,
       docker: String.raw`#!/usr/bin/env python3
@@ -283,7 +292,9 @@ if args and args[0]=='status':
 else:os.execv(os.environ['REAL_GIT'],['git','-C',os.environ['FIXTURE_GIT_CHECKOUT']]+args)
 `,
       terraform: String.raw`#!/usr/bin/env python3
-import sys,json,os
+import sys,json,os,base64,shutil,hashlib
+def objectfile(key):
+ return os.environ['OBJECT_STORE'] if '/diagnostic/plans/' in key else os.environ['OBJECT_STORE']+'.'+hashlib.sha256(key.encode()).hexdigest()
 a=sys.argv[1:];open(os.environ['CALLS'],'a').write('terraform '+ ' '.join(a)+'\n')
 if a[0]=='state' and os.environ.get('STATE_UNREADABLE')=='1':
  print('private-provider-sentinel',file=sys.stderr);sys.exit(1)
@@ -311,17 +322,18 @@ elif a[0]!='init':sys.exit(1)
       GITHUB_REF: "refs/heads/main",
       GITHUB_SHA: commit,
       GITHUB_REPOSITORY: "david-cui-bruno/founding-sales",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
       GITHUB_RUN_ID: "333",
       GITHUB_RUN_ATTEMPT: "1",
       FSS_DIAGNOSTIC_RUN_SUFFIX: "cap90-o10a",
       FSS_DIAGNOSTIC_API_DIGEST: `sha256:${"1".repeat(64)}`,
       FSS_DIAGNOSTIC_WORKER_DIGEST: `sha256:${"2".repeat(64)}`,
       FSS_DIAGNOSTIC_CERTIFICATE_ARN:
-        "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555",
+        "arn:aws:acm:us-east-1:326255650484:certificate/11111111-2222-4333-8444-555555555555",
       FSS_DIAGNOSTIC_API_REPOSITORY:
-        "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api",
+        "326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api",
       FSS_DIAGNOSTIC_WORKER_REPOSITORY:
-        "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker",
+        "326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker",
       FIXTURE_IMAGES: fixture,
       FIXTURE_GIT_CHECKOUT: resolve("."),
       REAL_GIT: spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim(),
@@ -346,7 +358,65 @@ elif a[0]!='init':sys.exit(1)
     expect(
       readFileSync(join(out, "encrypted", "plan.encrypted.json"), "utf8"),
     ).not.toContain("private-plan-fixture");
-    const successCalls = readFileSync(log, "utf8");
+    const ordinaryPlanCalls = readFileSync(log, "utf8");
+    const consumerScript = join(dir, "private-consumer.mjs");
+    writeFileSync(consumerScript, `
+      import { prepareDiagnosticPlan } from ${JSON.stringify(pathToFileURL(fixtureScript).href)};
+      import { readFileSync, writeFileSync } from "node:fs";
+      const [config, output, root, receipt] = process.argv.slice(2);
+      await prepareDiagnosticPlan(config, output, root, { validatedConfigurationConsumer: async ({configuration}) => { if (process.env.CONFIGURATION_REFUSE === "1") throw new Error("configuration_approval_changed"); if (configuration.crm_acquisition_diagnostic.database_name !== "fss_diagnostic_cap90_o10a") throw new Error("wrong configuration"); }, privatePlanConsumer: async (proposal) => {
+        if (readFileSync(proposal.planPath, "utf8") !== "private-plan-fixture") throw new Error("wrong bytes");
+        writeFileSync(receipt, JSON.stringify({ planSha256: proposal.manifest.planSha256, configurationSha256: proposal.manifest.configurationSha256, databaseName: proposal.configuration.crm_acquisition_diagnostic.database_name }));
+        if (process.env.CONSUMER_FAIL === "1") throw new Error("private-consumer-failure");
+        if (process.env.CONSUMER_TAMPER === "plan") writeFileSync(proposal.planPath, "different private plan");
+        if (process.env.CONSUMER_TAMPER === "manifest") writeFileSync(proposal.manifestPath, "{}");
+      }});
+    `);
+    const privateOut = join(dir, "private-out"), receipt = join(dir, "private-receipt.json");
+    const consumed = spawnSync(process.execPath, ["--experimental-transform-types", consumerScript, cfg, privateOut, root, receipt], { encoding: "utf8", env });
+    expect(consumed.status, consumed.stdout + consumed.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({ databaseName: "fss_diagnostic_cap90_o10a", planSha256: "747b2af5bcdd6819c68611119dc67922ee873424fc2dadd944b2e92d4b7b0934" });
+    expect(() => readFileSync(join(privateOut, "plan.tfplan"))).toThrow();
+    const failedOut = join(dir, "private-failed-out");
+    const failedConsumer = spawnSync(process.execPath, ["--experimental-transform-types", consumerScript, cfg, failedOut, root, receipt], { encoding: "utf8", env: { ...env, CONSUMER_FAIL: "1" } });
+    expect(failedConsumer.status).toBe(1);
+    expect(() => readFileSync(join(failedOut, "plan.tfplan"))).toThrow();
+    for (const tamper of ["plan", "manifest"]) {
+      const changedOut = join(dir, `changed-${tamper}`);
+      const changed = spawnSync(process.execPath, ["--experimental-transform-types", consumerScript, cfg, changedOut, root, receipt], { encoding: "utf8", env: { ...env, CONSUMER_TAMPER: tamper } });
+      expect(changed.status).toBe(1);
+      expect(changed.stderr).toContain("plan_changed");
+      expect(() => readFileSync(join(changedOut, "plan.tfplan"))).toThrow();
+    }
+    const storage = {
+      schemaVersion: 1, purpose: "diagnostic_plan_storage", approvalId: "11111111-2222-4333-8444-555555555555",
+      approvedAt: new Date(Date.now() - 60000).toISOString(), expiresAt: new Date(Date.now() + 1800000).toISOString(),
+      environmentId: config.environmentId, prefix: "fss-rh-cap90-o10a", databaseName: config.databaseName, apiHostname: config.apiHostname,
+      state: { bucket: "callie-sourcing-tfstate-326255650484", key: "fss/greenfield/rehearsal/fss-rh-cap90-o10a/terraform.tfstate", kmsKeyArn: "arn:aws:kms:us-east-1:326255650484:key/a321a083-4058-4130-b060-b950e4aa1404" },
+      sourceCommit: commit, imageBuildCommit: commit,
+      images: { api: `sha256:${"1".repeat(64)}`, worker: `sha256:${"2".repeat(64)}` },
+      configurationSha256: manifest.configurationSha256,
+      retention: { acknowledged: true, approvalRef: "reviewed-operational-retention" },
+    };
+    const storagePath = join(dir, "storage-approval.json"), store = join(dir, "private-store.json"), preparedOut = join(dir, "prepared-out");
+    const storageBytes = JSON.stringify(storage);
+    writeFileSync(storagePath, storageBytes);
+    const handoffScript = join(checkout, "infra/scripts/diagnostic-handoff.mjs");
+    const prepared = spawnSync(process.execPath, ["--experimental-transform-types", handoffScript, "prepare", storagePath, createHash("sha256").update(storageBytes).digest("hex"), cfg, preparedOut, root], { encoding: "utf8", env: { ...env, OBJECT_STORE: store } });
+    expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
+    const storedReceipt = JSON.parse(readFileSync(join(preparedOut, "escrow", "escrow-receipt.json"), "utf8"));
+    expect(storedReceipt).toMatchObject({ applyPerformed: false, planSha256: "747b2af5bcdd6819c68611119dc67922ee873424fc2dadd944b2e92d4b7b0934", retentionErasureSupported: false });
+    expect(readFileSync(store, "utf8")).not.toContain("private-plan-fixture");
+    expect(prepared.stdout + prepared.stderr).not.toContain("opaque-key");
+    expect(() => readFileSync(join(preparedOut, "plan.tfplan"))).toThrow();
+    expect(() => readFileSync(join(preparedOut, "configuration.private.json"))).toThrow();
+    const successCalls = ordinaryPlanCalls;
+    writeFileSync(log, "");
+    const refusedConfiguration = spawnSync(process.execPath, ["--experimental-transform-types", consumerScript, cfg, join(dir, "config-refused"), root, receipt], { encoding: "utf8", env: { ...env, CONFIGURATION_REFUSE: "1" } });
+    expect(refusedConfiguration.status).toBe(1);
+    expect(refusedConfiguration.stderr).toContain("configuration_approval_changed");
+    expect(readFileSync(log, "utf8")).toBe("");
+
     writeFileSync(log, "");
     const copiedRoot = join(dir, "copied-root");
     mkdirSync(copiedRoot);
@@ -371,7 +441,7 @@ elif a[0]!='init':sys.exit(1)
     expect(calls).not.toMatch(/apply|destroy|secret-value|send|gmail/);
     for (const failure of [
       { EXISTING_STATE: "module.stack.aws_db_instance.existing" },
-      { IDENTITY_ARN: "arn:aws:iam::123456789012:user/admin" },
+      { IDENTITY_ARN: "arn:aws:iam::326255650484:user/admin" },
       { CERTIFICATE_STATUS: "PENDING_VALIDATION" },
       { PLAN_FAIL: "1" },
       { DRIFT_PLAN: "1" },
@@ -441,4 +511,13 @@ it("keeps the diagnostic dispatch separate from every mutation and raw artifact 
   expect(job).toContain("/encrypted/plan.encrypted.json");
   expect(job).toContain("retention-days: 1");
   expect(job).not.toMatch(/path:.*(?:tfplan|validated|tfvars|plan.json)/);
+});
+
+it("exposes private proposal preparation without executing commands on import", () => {
+  const run = spawnSync(process.execPath, ["--experimental-transform-types", "--input-type=module", "-e",
+    `const module = await import(${JSON.stringify(pathToFileURL(script).href)}); if (typeof module.prepareDiagnosticPlan !== "function") throw new Error("missing public preparation API"); console.log("ready");`
+  ], { encoding: "utf8" });
+  expect(run.status, run.stdout + run.stderr).toBe(0);
+  expect(run.stdout.trim()).toBe("ready");
+  expect(run.stderr).not.toContain("diagnostic plan refused");
 });
