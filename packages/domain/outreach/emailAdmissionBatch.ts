@@ -1,3 +1,4 @@
+import type {EmailAdmissionRuntime} from './emailActivation.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import {admitAutomaticEmailCandidate} from './automaticEmail.ts';
@@ -13,10 +14,10 @@ import type {CandidateInput} from '@fss/contracts';
 export interface AdmissionBatch {checked:number;deferred:{candidateId:string;reason:string;retryAt:string|null}[];admitted:{candidateId:string;enrollmentId:string}[];reason:string|null}
 /** One bounded, database-only worker unit. Overflow refuses the entire pool so a
  * database page cannot put a weaker lead ahead of an unseen stronger lead. */
-export async function runAutomaticEmailBatch(ctx:RepositoryContext,controlRevision:number):Promise<AdmissionBatch>{
+export async function runAutomaticEmailBatch(ctx:RepositoryContext,controlRevision:number,runtime?:EmailAdmissionRuntime):Promise<AdmissionBatch>{
  return withTransaction(ctx.db,async()=>{
   await lockSendGateForStopFact(ctx);
-  const config=await automaticEmailConfiguration(ctx,controlRevision);
+  const config=await automaticEmailConfiguration(ctx,controlRevision,runtime);
   const report:AdmissionBatch={checked:0,deferred:[],admitted:[],reason:null};
   if(!config.ok)return await finish({...report,reason:config.reason});
   const binding=config.value;
@@ -35,7 +36,7 @@ export async function runAutomaticEmailBatch(ctx:RepositoryContext,controlRevisi
   }
   ranked.sort((a,b)=>rankQualifiedLeads(a.lead,b.lead));
   for(const {row,lead} of ranked.slice(0,25)){
-   const result=await admitAutomaticEmailCandidate(ctx,{candidateId:row.candidate_id,qualificationRunId:row.id,expectedRevision:row.candidate_revision,expectedControlRevision:controlRevision});
+   const result=await admitAutomaticEmailCandidate(ctx,{candidateId:row.candidate_id,qualificationRunId:row.id,expectedRevision:row.candidate_revision,expectedControlRevision:controlRevision},runtime);
    if(result.ok){report.admitted.push({candidateId:row.candidate_id,enrollmentId:result.value.enrollmentId});await recordDisposition(row,'enrolled',false,lead.rank);}
    else {const temporary=['mailbox_capacity_exhausted','sender_unhealthy','prospect_held'].includes(result.reason);await recordDisposition(row,result.reason,temporary,lead.rank);
     if(['mailbox_capacity_exhausted','sender_unhealthy'].includes(result.reason)){report.reason=result.reason;break;}

@@ -1,3 +1,4 @@
+import {ExperimentsPanel} from './ExperimentsPanel.tsx';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import type {LearningReport} from '@fss/contracts';
 import {operations} from '../app/bridges.ts';
@@ -37,6 +38,7 @@ export function Learning({read=defaultRead,enabled=true}:{read?:Read;enabled?:bo
    <Button variant="quiet" aria-expanded={sources} onClick={()=>setSources(!sources)}>Source evidence and feedback</Button>
    {sources?<ul className="space-y-4">{view.firms.map(f=><li key={f.firmId} className="rounded-lg border border-border p-4"><Button variant="quiet" onClick={()=>navigate({name:'firm',firmId:f.firmId})}>{f.firmName}</Button><p className="text-sm">{label(f.acquisition)} · first contacted {f.firstContactedAt.slice(0,10)}</p>{f.candidateId&&f.candidateRevision!==null?<QualificationPanel candidateId={f.candidateId} revision={f.candidateRevision} enabled={enabled}/>:<p className="text-sm text-muted-foreground">No current source evidence is linked.</p>}</li>)}</ul>:null}
    <Targeting enabled={enabled}/>
+   {enabled?<ExperimentsPanel report={view}/>:null}
   </>:null}
  </section>;
 }

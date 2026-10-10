@@ -116,7 +116,7 @@ async function emailControlFixture(f:Fixture){
 }
 const emailControl=(f:Fixture,change:Record<string,unknown>={})=>insert(f,'outreach_email_admission_settings',{workspace_id:f.seeded.alpha.workspaceId,revision:1,owner_user_id:f.seeded.alpha.salesperson.userId,mailbox_id:f.mail.alpha.mailboxId,sequence_version_id:emailControlVersion,mailbox_binding:'a'.repeat(64),sequence_binding:'b'.repeat(64),...change});
 bad('outreach_email_admission_settings',[
- ['revision_check',{revision:0}],['enabled_check',{enabled:true}],['evaluation_check',{evaluation:JSON.stringify({report:'x'.repeat(4097)})}],['mailbox_binding_check',{mailbox_binding:'bad'}],['sequence_binding_check',{sequence_binding:'bad'}],['check',{owner_user_id:null}],['workspace_id_mailbox_id_fkey',{mailbox_id:missing}],
+ ['revision_check',{revision:0}],['evaluation_check',{evaluation:JSON.stringify({report:'x'.repeat(4097)})}],['mailbox_binding_check',{mailbox_binding:'bad'}],['sequence_binding_check',{sequence_binding:'bad'}],['check',{owner_user_id:null}],['workspace_id_mailbox_id_fkey',{mailbox_id:missing}],
 ],emailControl,emailControlFixture);
 OUTREACH_CONSTRAINT_CASES.push(
  {constraint:'outreach_email_admission_settin_workspace_id_owner_user_id_fkey',run:async f=>{await emailControlFixture(f);return emailControl(f,{owner_user_id:missing});}},
@@ -124,3 +124,11 @@ OUTREACH_CONSTRAINT_CASES.push(
  {constraint:'outreach_email_admission_settings_workspace_id_fkey',run:f=>insert(f,'outreach_email_admission_settings',{workspace_id:missing,revision:1})},
  {constraint:'outreach_email_admission_settings_pkey',run:async f=>{await emailControlFixture(f);await emailControl(f);return emailControl(f);}},
 );
+
+OUTREACH_CONSTRAINT_CASES.push({constraint:'outreach_admission_enabled_receipt',run:async f=>{
+ await emailControlFixture(f);
+ const receipt=(await f.session.query<{id:string}>("INSERT INTO outreach_email_admission_activation_receipts(workspace_id,owner_user_id,control_revision,configuration_sha256,proof,proof_sha256) VALUES($1,$2,1,$3,'{}',$4) RETURNING id",[f.seeded.alpha.workspaceId,f.seeded.alpha.admin.userId,'a'.repeat(64),'b'.repeat(64)])).rows[0]!.id;
+ // A normal enabled row with a receipt now passes; dropping its receipt must fail.
+ await emailControl(f,{enabled:true,activation_receipt_id:receipt});
+ return f.session.query('UPDATE outreach_email_admission_settings SET activation_receipt_id=NULL WHERE workspace_id=$1',[f.seeded.alpha.workspaceId]);
+}});

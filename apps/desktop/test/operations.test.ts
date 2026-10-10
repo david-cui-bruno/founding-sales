@@ -626,3 +626,17 @@ it('reads private manual work and changes a task through separate closed action 
  expect(await answerOperation(operationHandlers(deps),'read','ask.actionRead',{scope:{kind:'today'},limit:20})).toEqual({items:[],nextAfterId:null});
  expect(await answerOperation(operationHandlers(deps),'command','ask.actionChange',{actionId:ITEM_ID,expectedVersion:2,action:'complete_task'})).toMatchObject({status:'done',version:3});
 });
+
+it('delivery transport status stays local and never implies a successful platform submission',async()=>{
+ const deps=hosts();
+ expect(await answerOperation(operationHandlers(deps),'read','social.deliveryStatus',{})).toEqual({queue:'unread',lastReadAt:null});
+ const configured={...deps,socialDelivery:{status:()=>({queue:'unavailable' as const,lastReadAt:'2026-10-09T20:00:00.000Z'})}};
+ expect(await answerOperation(operationHandlers(configured),'read','social.deliveryStatus',{})).toEqual({queue:'unavailable',lastReadAt:'2026-10-09T20:00:00.000Z'});
+ expect(deps.api.read).not.toHaveBeenCalled();
+});
+
+it('preserves the reviewed experiment command identity across a transport retry',async()=>{
+ const deps=hosts();const input={id:ITEM_ID,expectedRevision:3,targetingDecision:true,commandId:FIRM_ID};
+ deps.api.command=async(path,body,parse,options)=>{expect(path).toBe('/sourcing/experiments/activate');expect(body).toEqual({id:ITEM_ID,expectedRevision:3,targetingDecision:true});expect(options).toMatchObject({commandId:FIRM_ID});return {ok:true,value:parse({activationId:ITEM_ID})};};
+ expect(await answerOperation(operationHandlers(deps),'command','sourcing.activateExperiment',input)).toEqual({result:{activationId:ITEM_ID},reason:null});
+});

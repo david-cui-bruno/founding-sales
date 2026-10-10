@@ -8,12 +8,16 @@ it('replays a post edit once, isolates the owner, and derives the delivery devic
  const action={postId:p.postId,expectedRevision:1,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};expect((await call('/social/posts/approve',action)).status).toBe(200);
  expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{postId:p.postId,action:'submit'}]});
  expect((await call('/social/delivery/queue',{deviceId:randomUUID()})).status).toBe(400);
+ expect((await call('/social/delivery/hold',{...action,reason:'adapter_unavailable',deviceId:randomUUID()})).status).toBe(400);
+ expect((await call('/social/delivery/hold',{...action,reason:'invented'})).status).toBe(400);
  expect((await call('/social/delivery/claim',{...action,deviceId:randomUUID()})).status).toBe(400);
  const claimed=await call('/social/delivery/claim',{...action,commandId:randomUUID()});expect(claimed.status).toBe(200);
  const claim=(claimed.body as {result:{claimId:string;approvalId:string;fingerprint:string}}).result;
  const begin={claimId:claim.claimId,approvalId:claim.approvalId,fingerprint:claim.fingerprint,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
  expect((await call('/social/delivery/begin',begin)).status).toBe(200);
  expect((await call('/social/delivery/begin',begin)).status).toBe(409);
+ expect((await call('/social/delivery/hold',{...action,commandId:randomUUID(),reason:'adapter_unavailable'})).status).toBe(409);
+ expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{postId:p.postId,action:'inspect'}]});
  expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{postId:p.postId,action:'inspect'}]});
  token=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;expect((await call('/social/delivery/queue',{})).body).toEqual({items:[]});expect((await call('/social',{})).body).toEqual({accounts:[],posts:[]});expect((await call('/social/posts/cancel',{...action,commandId:randomUUID()})).status).toBe(409);
  }finally{await f.stop();}

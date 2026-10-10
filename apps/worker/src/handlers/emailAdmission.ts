@@ -1,10 +1,11 @@
+import type {EmailAdmissionRuntime} from '@fss/domain/outreach/emailActivation.ts';
 import {repositoryContext,type RepositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {admitAutomaticEmailCandidate,type AutomaticEmailInput} from '@fss/domain/outreach/automaticEmail.ts';
 export type {AutomaticEmailInput};
 /** Single-prospect entry; scheduling and activation are separate releases. */
-export async function admitAutomaticEmailProspect(ctx:RepositoryContext,input:AutomaticEmailInput){
- return withTransaction(ctx.db,()=>admitAutomaticEmailCandidate(ctx,input));
+export async function admitAutomaticEmailProspect(ctx:RepositoryContext,input:AutomaticEmailInput,runtime?:EmailAdmissionRuntime){
+ return withTransaction(ctx.db,()=>admitAutomaticEmailCandidate(ctx,input,runtime));
 }
 
 import {findAutomaticEmailWorkspaces,runAutomaticEmailBatch} from '@fss/domain/outreach/emailAdmissionBatch.ts';
@@ -13,11 +14,11 @@ export {runAutomaticEmailBatch};
 import type {JobHandler} from '@fss/domain/jobs/handlerRegistry.ts';
 import {jobIdempotencyKey} from '@fss/domain/jobs/jobKinds.ts';
 import type {DueWorkSource} from '../scheduler/schedulerPass.ts';
-export function automaticEmailHandler():JobHandler{
+export function automaticEmailHandler(runtime?:EmailAdmissionRuntime):JobHandler{
  return {kind:'outreach.email_admit',protection:'outbound_fence',maxAttempts:3,leaseSeconds:180,handle:async input=>{
   const revision=input.job.payload['controlRevision'];
   if(typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<1)return;
-  await runAutomaticEmailBatch(repositoryContext(input.scope,input.session),revision);
+  await runAutomaticEmailBatch(repositoryContext(input.scope,input.session),revision,runtime);
  }};
 }
 /** One live workspace job, at most hourly. No provider or research reservation. */

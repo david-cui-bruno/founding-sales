@@ -1,3 +1,8 @@
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {buildCommit} from '@fss/domain/release/identity.ts';
+import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
+import {prepareEmailAdmissionActivation,activateEmailAdmission,readEmailAdmissionReadiness,type EmailAdmissionRuntime} from '@fss/domain/outreach/emailActivation.ts';
+import {emailAdmissionActivationPrepareCommandSchema,emailAdmissionActivationCommandSchema,emailAdmissionReadinessInputSchema,emailAdmissionReadinessSchema} from '@fss/contracts';
 import {saveEmailAdmissionControl} from '@fss/domain/outreach/emailControl.ts';
 import {z} from 'zod';
 import {emailAdmissionCommandSchema,routineSettingsCommandSchema,outreachCohortInputSchema,outreachCohortCommandSchema,routineManualCommandSchema} from '@fss/contracts';
@@ -8,7 +13,7 @@ import {prospectingAuthorizationReadSchema,prospectingAuthorizationSaveSchema,sa
 import {authorizationForMailbox,setProspectingAuthorization} from '@fss/domain/outreach/authorization.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const OUTREACH_PATHS=['/outreach/senders/standing/v2','/outreach/senders/standing','/outreach/email-admission/save','/outreach/control','/outreach/control/v2','/outreach/settings/save','/outreach/cohort/preview','/outreach/cohort/enable','/outreach/reply/manual','/outreach/authorization','/outreach/authorization/save','/outreach/answer-blocks','/outreach/answer-blocks/save','/outreach/answer-blocks/approve','/outreach/answer-blocks/retire'];
+export const OUTREACH_PATHS=['/outreach/email-admission/activation/prepare','/outreach/email-admission/readiness','/outreach/email-admission/activate','/outreach/senders/standing/v2','/outreach/senders/standing','/outreach/email-admission/save','/outreach/control','/outreach/control/v2','/outreach/settings/save','/outreach/cohort/preview','/outreach/cohort/enable','/outreach/reply/manual','/outreach/authorization','/outreach/authorization/save','/outreach/answer-blocks','/outreach/answer-blocks/save','/outreach/answer-blocks/approve','/outreach/answer-blocks/retire'];
 export async function routeOutreach(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!OUTREACH_PATHS.includes(request.path))return null;
  if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
@@ -17,13 +22,20 @@ export async function routeOutreach(request:ApiRequest,options:RoutingOptions):P
  const scoped=contextForPrincipal(auth,principal.principal);if(!scoped.ok)return scoped.result;
  const actor=scoped.context.scope.actor;
  if(actor.kind!=='user'||actor.role!=='admin')return {status:403,body:{error:'admin_required'}};
+ const runtime:EmailAdmissionRuntime={implementationCommit:buildCommit(process.env),imageDigest:options.imageDigest??null,side:'api',deploymentSendingEnabled:options.sendingEnabled,production:options.production??true,schemaVersion:REQUIRED_SCHEMA};
+ if(request.path==='/outreach/email-admission/readiness'){
+  if(!emailAdmissionReadinessInputSchema.safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};
+  return {status:200,body:emailAdmissionReadinessSchema.parse(await withTransaction(auth.db,()=>readEmailAdmissionReadiness(scoped.context,runtime)))};
+ }
+ if(request.path==='/outreach/email-admission/activation/prepare')return runRouteCommand({auth,request,principal:principal.principal},emailAdmissionActivationPrepareCommandSchema,'outreach_email_activation_prepare',async(ctx,input)=>{const {commandId:_id,clientVersion:_version,...value}=input;return prepareEmailAdmissionActivation(ctx,value,runtime);});
+ if(request.path==='/outreach/email-admission/activate')return runRouteCommand({auth,request,principal:principal.principal},emailAdmissionActivationCommandSchema,'outreach_email_activate',async(ctx,input)=>{const {commandId:_id,clientVersion:_version,...value}=input;return activateEmailAdmission(ctx,value,runtime);});
  if(request.path==='/outreach/senders/standing'||request.path==='/outreach/senders/standing/v2'){
   if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};
   return {status:200,body:request.path.endsWith('/v2')?await readOutreachSenderStandingV2(scoped.context):await readOutreachSenderStanding(scoped.context)};
  }
  if(request.path==='/outreach/control'||request.path==='/outreach/control/v2'){
   if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};
-  const view=await readOutreachControl(scoped.context);
+  const view=await readOutreachControl(scoped.context,runtime);
   if(request.path==='/outreach/control'){const {emailAdmission:_email,...legacy}=view;return {status:200,body:legacy};}
   return {status:200,body:view};
  }

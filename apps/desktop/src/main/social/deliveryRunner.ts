@@ -1,4 +1,4 @@
-import {socialDeliveryQueueSchema,socialWorkspaceSchema,type SocialDeliveryQueue} from '@fss/contracts';
+import {socialDeliveryQueueSchema,socialWorkspaceSchema,socialPostRevisionSchema,type SocialDeliveryQueue} from '@fss/contracts';
 import type {AuthedClient} from '../authedClient.ts';
 import type {SocialAdapter} from './adapters.ts';
 import type {SocialPlatform,SocialScope} from './runtime.ts';
@@ -13,25 +13,36 @@ export interface VerifiedSocialAdapter {
 }
 interface Deps {api:AuthedClient;root:string;identity():Promise<{workspaceId:string;userId:string}|null>;now():number;adapters:Partial<Record<SocialPlatform,VerifiedSocialAdapter>>;send?:typeof fetch}
 export function createSocialDeliveryRunner(deps:Deps){
+ let queue:'unread'|'available'|'unavailable'='unread',lastReadAt:string|null=null,statusEpoch=0;
  return {
- async read():Promise<SocialDeliveryQueue>{const result=await deps.api.read('/social/delivery/queue',v=>socialDeliveryQueueSchema.parse(v),{});if(!result.ok)throw new Error('queue_unavailable');return result.value;},
+ status(){return {queue,lastReadAt};},
+ resetStatus(){statusEpoch++;queue='unread';lastReadAt=null;},
+ async read():Promise<SocialDeliveryQueue>{const epoch=statusEpoch;try{const result=await deps.api.read('/social/delivery/queue',v=>socialDeliveryQueueSchema.parse(v),{});if(!result.ok)throw new Error('queue_unavailable');if(epoch===statusEpoch){queue='available';lastReadAt=new Date(deps.now()).toISOString();}return result.value;}catch{if(epoch===statusEpoch)queue='unavailable';throw new Error('queue_unavailable');}},
  async run(input:SocialDeliveryQueue['items'][number],current:()=>boolean):Promise<void>{
   if(!current())return;
   const item=socialDeliveryQueueSchema.parse({items:[input]}).items[0]!;
   const approved=item.snapshot.account,registration=deps.adapters[approved.platform];
-  if(!registration||registration.version!==approved.adapterVersion)return;
   const identity=await deps.identity();if(!identity||!current())return;
+  const hold=async(reason:string)=>{if(!current()||item.submissionId!==null||item.receiptId!==null)return;await deps.api.command('/social/delivery/hold',{postId:item.postId,expectedRevision:item.revision,reason},v=>socialPostRevisionSchema.parse(v));};
+  if(!registration||registration.version!==approved.adapterVersion){await hold('adapter_unavailable');return;}
   const scope={...identity,platform:approved.platform,accountId:approved.id};
   if(item.action==='submit'){
    // Queue rows with a durable marker can never return to a submission path.
    if(item.submissionId!==null||item.receiptId!==null)return;
-   await withQueuedSocialPost(item,{api:deps.api,root:deps.root,current,adapterVersion:registration.version,...(deps.send?{send:deps.send}:{})},async post=>{
+   try{await withQueuedSocialPost(item,{api:deps.api,root:deps.root,current,adapterVersion:registration.version,...(deps.send?{send:deps.send}:{})},async post=>{
     if(!current())return;
     await registration.open(scope,async(adapter,browserCurrent)=>{
      const active=()=>current()&&browserCurrent();if(!active())return;
-     await submitApprovedSocialPost(post,adapter,createSocialDeliveryPorts({api:deps.api,current:active,now:deps.now}));
+     const result=await submitApprovedSocialPost(post,adapter,createSocialDeliveryPorts({api:deps.api,current:active,now:deps.now}));
+     if(result.state==='not_submitted'&&active()){
+      const reason=['schedule_missed','account_identity_changed','staging_failed','claim_expired'].includes(result.reason)?result.reason:'preparation_unavailable';
+      await hold(reason);
+     }
     },{snapshot:structuredClone(item.snapshot),fingerprint:item.fingerprint,displayName:post.account.displayName});
-   });return;
+   });}catch(error){
+    const reason=error instanceof Error&&['account_not_verified','approved_image_changed'].includes(error.message)?error.message:'preparation_unavailable';
+    await hold(reason);
+   }return;
   }
   if(!item.submissionId)return;
   // Recovery depends on receipt identity, never on retained/downloadable image files.

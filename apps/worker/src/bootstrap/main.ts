@@ -1,3 +1,4 @@
+import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
 import {crmCommitmentIntentJobHandler} from '../handlers/crmCommitmentIntent.ts';
 import {crmCommitmentJobHandler} from '../handlers/crmCommitments.ts';
 import {crmMailProgressSource} from '../scheduler/crmMailProgressSource.ts';
@@ -276,7 +277,7 @@ export function registerHandlers(
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
-  registry.register(automaticEmailHandler());
+  registry.register(automaticEmailHandler({implementationCommit:buildCommit(process.env),imageDigest:composition.send?.workerImageDigest??null,side:'worker',deploymentSendingEnabled:composition.send?.deploymentSendingEnabled??false,production:composition.send?.production??true,schemaVersion:REQUIRED_SCHEMA}));
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));

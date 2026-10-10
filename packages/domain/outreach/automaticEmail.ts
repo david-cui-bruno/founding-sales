@@ -1,3 +1,4 @@
+import type {EmailAdmissionRuntime} from './emailActivation.ts';
 import {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
 import {readRampStanding,readSendDayHealth,rampHealthFailure} from '../outbound/ramp.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -21,14 +22,14 @@ export function matchesAutomaticEmailAuthority(ctx:RepositoryContext,token:Autom
 }
 type Result={ok:true;value:{firmId:string;contactId:string;routeId:string;planId:string;enrollmentId:string}}|{ok:false;reason:string};
 /** Caller transaction. One admission, including its normal enrollment, is atomic. */
-export async function admitAutomaticEmailCandidate(ctx:RepositoryContext,input:AutomaticEmailInput):Promise<Result>{
- const result=await admit(ctx,input);
+export async function admitAutomaticEmailCandidate(ctx:RepositoryContext,input:AutomaticEmailInput,runtime?:EmailAdmissionRuntime):Promise<Result>{
+ const result=await admit(ctx,input,runtime);
  if(!result.ok&&ctx.scope.actor.kind==='system'&&ctx.scope.actor.component==='worker')await recordCrmAuditEvent(ctx,{action:'outreach.email_automatic_refused',subjectKind:'workspace',subjectId:ctx.scope.workspaceId,detail:{candidateId:input.candidateId,runId:input.qualificationRunId,candidateRevision:input.expectedRevision,controlRevision:input.expectedControlRevision,reason:result.reason,authority:'automatic_email'}});
  return result;
 }
-async function admit(ctx:RepositoryContext,input:AutomaticEmailInput):Promise<Result>{
+async function admit(ctx:RepositoryContext,input:AutomaticEmailInput,runtime?:EmailAdmissionRuntime):Promise<Result>{
  await lockSendGateForStopFact(ctx);
- const config=await automaticEmailConfiguration(ctx,input.expectedControlRevision);if(!config.ok)return config;
+ const config=await automaticEmailConfiguration(ctx,input.expectedControlRevision,runtime);if(!config.ok)return config;
  const health=await readSendDayHealth(ctx,config.value.mailboxId);
  if(!health?.authenticationPasses||!health.coverageHealthy||health.providerWarning)return {ok:false,reason:'sender_unhealthy'};
  const ramp=await readRampStanding(ctx,config.value.mailboxId);

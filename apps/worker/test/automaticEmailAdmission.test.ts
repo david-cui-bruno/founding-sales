@@ -1,3 +1,5 @@
+import {controlledActivationProof} from '@fss/domain/test/outreach/support/emailActivationFixture.ts';
+import {prepareEmailAdmissionActivation,activateEmailAdmission,type EmailAdmissionRuntime} from '@fss/domain/outreach/emailActivation.ts';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -8,7 +10,7 @@ import {createTestDatabase,type TestDatabase} from '@fss/domain/db/testing/testD
 import {seedTwoWorkspaces,type TwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {listFirmsForActor} from '@fss/domain/crm/dto.ts';
-import {admitAutomaticEmailProspect,runAutomaticEmailBatch} from '../src/handlers/emailAdmission.ts';
+import {admitAutomaticEmailProspect as publicAdmit,runAutomaticEmailBatch as publicBatch} from '../src/handlers/emailAdmission.ts';
 import {withTransaction,type QueryResultRowLike} from '@fss/domain/db/queryable.ts';
 import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
 import {requestQualification,finishQualification} from '@fss/domain/sourcing/qualificationStore.ts';
@@ -20,6 +22,9 @@ import {readOutreachPlan} from '@fss/domain/outreach/plans.ts';
 import {readEnrollment,listEnrollments,listStepExecutions} from '@fss/domain/sequences/rows.ts';
 import {listContacts} from '@fss/domain/crm/contacts.ts';
 import {listRoutes} from '@fss/domain/crm/routes.ts';
+let activationRuntime:EmailAdmissionRuntime;let evaluationSha256:string;
+const admitAutomaticEmailProspect=(ctx:Parameters<typeof publicAdmit>[0],input:Parameters<typeof publicAdmit>[1])=>publicAdmit(ctx,input,activationRuntime);
+const runAutomaticEmailBatch=(ctx:Parameters<typeof publicBatch>[0],revision:number)=>publicBatch(ctx,revision,activationRuntime);
 let db:TestDatabase;let seeded:TwoWorkspaces;let mailboxId:string;let sequenceId:string;
 const admin=()=>repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),db.session);
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
@@ -32,17 +37,16 @@ async function configureFutureActivation(){
  await tx(()=>setProspectingAuthorization(admin(),{mailboxId,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));
  const seq=(await db.session.query<{id:string}>('INSERT INTO sequences(workspace_id,name,created_by_user_id) VALUES($1,$2,$3) RETURNING id',[seeded.alpha.workspaceId,'Reusable email',seeded.alpha.admin.userId])).rows[0]!.id;
  sequenceId=(await db.session.query<{id:string}>('INSERT INTO sequence_versions(workspace_id,sequence_id,version) VALUES($1,$2,1) RETURNING id',[seeded.alpha.workspaceId,seq])).rows[0]!.id;
- for(let i=0;i<5;i++)await db.session.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,$3,'email','elapsed',0,$4)",[seeded.alpha.workspaceId,sequenceId,i+1,sequences.alpha.template.templateVersionId]);
+ for(let i=0;i<5;i++)await db.session.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,$3,'email','elapsed',$5,$4)",[seeded.alpha.workspaceId,sequenceId,i+1,sequences.alpha.template.templateVersionId,[0,72,96,144,168][i]]);
  await db.session.query("UPDATE sequence_versions SET state='published',published_at=now(),published_by_user_id=$2 WHERE id=$1",[sequenceId,seeded.alpha.admin.userId]);
  const config={enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null};
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{...config,expectedRevision:0}))).toMatchObject({ok:true});
  const control=await readEmailAdmissionControl(admin());
- const evaluation={policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',implementationCommit:process.env['FSS_BUILD_COMMIT'],configurationSha256:control.configurationSha256,reportSha256:'b'.repeat(64),reviewedEligible:20,falseEligible:0};
+ const fixture=await controlledActivationProof(admin(),mailboxId,sequenceId,process.env['FSS_BUILD_COMMIT']!);evaluationSha256=fixture.reportSha256;activationRuntime={...fixture.runtime,side:'worker',imageDigest:fixture.proof.release.workerDigest};
+ const evaluation={policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',implementationCommit:process.env['FSS_BUILD_COMMIT'],configurationSha256:control.configurationSha256,reportSha256:fixture.reportSha256,reviewedEligible:fixture.reviewedEligible,falseEligible:0};
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{...config,evaluation,expectedRevision:1}))).toMatchObject({ok:true});
- // Simulate a later, explicitly gated activation ONLY in this disposable database.
- // The shipped migration and all application activation controls remain disabled.
- await db.session.query('ALTER TABLE outreach_email_admission_settings DROP CONSTRAINT outreach_email_admission_settings_enabled_check');
- await db.session.query('UPDATE outreach_email_admission_settings SET enabled=true WHERE workspace_id=$1',[seeded.alpha.workspaceId]);
+ const prepared=await tx(()=>prepareEmailAdmissionActivation(admin(),{expectedControlRevision:2,proof:fixture.proof},fixture.runtime));if(!prepared.ok)throw new Error(prepared.reason);
+ expect(await tx(()=>activateEmailAdmission(admin(),{expectedControlRevision:2,receiptId:prepared.value.receiptId,expectedReadinessSha256:prepared.value.readinessSha256},fixture.runtime))).toEqual({ok:true,value:{revision:3}});
 }
 async function qualified(name:string,options:{need?:string;needKind?:string;publishedAt?:string|null;retrievedAt?:string;truncated?:boolean;phone?:boolean;named?:boolean}={}){
  const website=`https://${name.toLowerCase().replaceAll(' ','')}.example.test/`;
@@ -56,7 +60,7 @@ async function qualified(name:string,options:{need?:string;needKind?:string;publ
  if(options.need)facts.push({kind:options.needKind??'operational_burden',blockId:'need',observationId:id,value:options.need});
  const finished=await tx(()=>finishQualification(admin(),{runId:request.value.runId,reason:null,observations:[{id,url:website,contentHash:'c'.repeat(64),relevantTextHash:'d'.repeat(64),retrievedAt:options.retrievedAt??new Date().toISOString(),publishedAt:options.publishedAt??null,publishedAtBlockId:options.publishedAt?'need':null,firstParty:true,truncated:options.truncated??false,blocks}],facts}));if(!finished.ok)throw new Error(finished.reason);
  await tx(()=>evaluateQualification(admin(),{runId:request.value.runId}));
- return {candidateId:candidate.value.id,qualificationRunId:request.value.runId,expectedRevision:1,expectedControlRevision:2};
+ return {candidateId:candidate.value.id,qualificationRunId:request.value.runId,expectedRevision:1,expectedControlRevision:3};
 }
 const worker=()=>repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'system',component:'worker'}),db.session);
 beforeEach(async()=>{db=await createTestDatabase();seeded=await seedTwoWorkspaces(db.session);});
@@ -116,7 +120,7 @@ it('disables new admissions without cancelling an already scheduled enrollment',
  await configureFutureActivation();const first=await qualified('Before Disable PM');
  const admitted=await admitAutomaticEmailProspect(worker(),first);if(!admitted.ok)throw new Error(admitted.reason);
  const enrollment=await readEnrollment(worker(),{enrollmentId:admitted.value.enrollmentId});
- expect(await tx(()=>saveEmailAdmissionControl(admin(),{enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null,expectedRevision:2}))).toMatchObject({ok:true});
+ expect(await tx(()=>saveEmailAdmissionControl(admin(),{enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null,expectedRevision:3}))).toMatchObject({ok:true});
  expect(await admitAutomaticEmailProspect(worker(),await qualified('After Disable PM'))).toEqual({ok:false,reason:'automatic_email_disabled'});
  expect(await readEnrollment(worker(),{enrollmentId:admitted.value.enrollmentId})).toEqual(enrollment);
 });
@@ -307,15 +311,15 @@ it('checks at most twenty-five ranked prospects and leaves the rest for the next
  const {createFirm}=await import('@fss/domain/crm/firms.ts');const {openHold}=await import('@fss/domain/policy/holds.ts');
  const firm=await tx(()=>createFirm(admin(),{name:'Bounded Held Office',website:'https://boundedheldoffice.example.test/',locality:'Dallas',regionCode:'TX',assignedUserId:seeded.alpha.admin.userId}));if(!firm.ok)throw new Error(firm.reason);
  await tx(()=>openHold(admin(),{scopeKind:'firm',scopeKey:firm.value.id,reasonCode:'uncertain_reply',blockedActionKinds:['email_send'],sourceEventKind:'fixture'}));
- const first=await runAutomaticEmailBatch(worker(),2);
+ const first=await runAutomaticEmailBatch(worker(),3);
  expect(first.checked).toBe(25);expect(first.deferred).toHaveLength(25);expect(first.admitted).toEqual([]);
- expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:1,admitted:[]});
+ expect(await runAutomaticEmailBatch(worker(),3)).toMatchObject({checked:1,admitted:[]});
  expect(await listEnrollments(worker())).toEqual([]);
 });
 it('refuses an overflowing candidate pool without admitting any visible prospect',async()=>{
  await configureFutureActivation();const original=await qualified('Overflow Office');
  await copyRetainedCandidates(original,500);
- expect(await runAutomaticEmailBatch(worker(),2)).toEqual({checked:0,deferred:[],admitted:[],reason:'candidate_pool_limit'});
+ expect(await runAutomaticEmailBatch(worker(),3)).toEqual({checked:0,deferred:[],admitted:[],reason:'candidate_pool_limit'});
  expect(await listEnrollments(worker())).toEqual([]);
 });
 it('ranks email fit before spending the last slot, including call-review prospects',async()=>{
@@ -323,32 +327,32 @@ it('ranks email fit before spending the last slot, including call-review prospec
  await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=1,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
  await qualified('A Fit Office');
  const burden=await qualified('Z Burden Office',{need:'Our maintenance team is overwhelmed by work orders and vendor follow-up.'});
- const batch=await runAutomaticEmailBatch(worker(),2);
+ const batch=await runAutomaticEmailBatch(worker(),3);
  expect(batch.admitted).toMatchObject([{candidateId:burden.candidateId}]);
  expect(batch.reason).toBe('mailbox_capacity_exhausted');
  expect(await listEnrollments(worker())).toHaveLength(1);
 });
 it('does not keep retrying permanent uncertainty on unchanged evidence',async()=>{
  await configureFutureActivation();await qualified('Contrary Batch',{need:'We do not need maintenance help.'});
- const first=await runAutomaticEmailBatch(worker(),2);
+ const first=await runAutomaticEmailBatch(worker(),3);
  expect(first).toMatchObject({checked:1,deferred:[{reason:'need_evidence_conflicts'}],admitted:[]});
- expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
+ expect(await runAutomaticEmailBatch(worker(),3)).toMatchObject({checked:0,admitted:[]});
 });
 it('schedules one workspace batch on repeated passes and runs it without a research provider',async()=>{
  await configureFutureActivation();const prospect=await qualified('Scheduled Review Fit');
  const {runSchedulerPass}=await import('../src/scheduler/schedulerPass.ts');
  const {automaticEmailSource}=await import('../src/handlers/emailAdmission.ts');
  const {HandlerRegistry}=await import('@fss/domain/jobs/handlerRegistry.ts');
- const {registerHandlers}=await import('../src/bootstrap/main.ts');
+ const {automaticEmailHandler}=await import('../src/handlers/emailAdmission.ts');
  const {runOnce}=await import('../src/runner/jobRunner.ts');
  const now=new Date().toISOString();
  const options={sources:[automaticEmailSource()],now};
  expect(await runSchedulerPass(db.session,options)).toMatchObject({inserted:1,externalActions:0});
  expect(await runSchedulerPass(db.session,options)).toMatchObject({inserted:0,externalActions:0});
- const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
+ const registry=new HandlerRegistry();registry.register(automaticEmailHandler(activationRuntime));
  expect(await runOnce(db.session,{registry,owner:'email-test',classes:['bulk'],limit:1})).toMatchObject({completed:1});
  expect(await listEnrollments(worker())).toHaveLength(1);
- expect((await runAutomaticEmailBatch(worker(),2)).admitted).toEqual([]);
+ expect((await runAutomaticEmailBatch(worker(),3)).admitted).toEqual([]);
  expect(prospect.candidateId).toBeTruthy();
 });
 it('does not build a second batch behind a queued or retryable worker job',async()=>{
@@ -365,17 +369,17 @@ it.each([null,new Date(Date.now()-100*86400000).toISOString()])('downgrades unkn
  await qualified('A Undated Help',{need:'We need help with maintenance coordination.',needKind:'help_request',phone:true,publishedAt});
  const burden=await qualified('Z Current Burden',{need:'Our maintenance team is overwhelmed by work orders.'});
  await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=1,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
- expect((await runAutomaticEmailBatch(worker(),2)).admitted).toMatchObject([{candidateId:burden.candidateId}]);
+ expect((await runAutomaticEmailBatch(worker(),3)).admitted).toMatchObject([{candidateId:burden.candidateId}]);
 });
 it('bounds temporary refusal checks and permits recovery when the hold is released',async()=>{
  await configureFutureActivation();const prospect=await qualified('Held Batch Office');
  const {openHold,releaseHold}=await import('@fss/domain/policy/holds.ts');
  const hold=await tx(()=>openHold(worker(),{scopeKind:'workspace',reasonCode:'scoped_pause',blockedActionKinds:['email_send'],sourceEventKind:'administrative_pause'}));
- expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:1,reason:'sender_unhealthy',admitted:[]});
- expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
+ expect(await runAutomaticEmailBatch(worker(),3)).toMatchObject({checked:1,reason:'sender_unhealthy',admitted:[]});
+ expect(await runAutomaticEmailBatch(worker(),3)).toMatchObject({checked:0,admitted:[]});
  await tx(()=>releaseHold(worker(),hold));
  await db.session.query("UPDATE sourcing_qualification_runs SET email_admission_next_at=now()-interval '1 minute' WHERE id=$1",[prospect.qualificationRunId]);
- expect((await runAutomaticEmailBatch(worker(),2)).admitted).toMatchObject([{candidateId:prospect.candidateId}]);
+ expect((await runAutomaticEmailBatch(worker(),3)).admitted).toMatchObject([{candidateId:prospect.candidateId}]);
 });
 
 async function preparedAutomaticSender(){
@@ -455,11 +459,11 @@ it('exhausts seven hourly capacity checks without buying research or accumulatin
  await configureFutureActivation();const prospect=await qualified('Bounded Capacity');
  await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=0,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
  for(let i=0;i<7;i++){
-  const report=await runAutomaticEmailBatch(worker(),2);
+  const report=await runAutomaticEmailBatch(worker(),3);
   expect(report).toMatchObject({checked:1,admitted:[],deferred:[{reason:i===6?'rechecks_exhausted':'mailbox_capacity_exhausted'}]});
   await db.session.query("UPDATE sourcing_qualification_runs SET email_admission_next_at=CASE WHEN email_admission_next_at IS NOT NULL THEN now()-interval '1 minute' ELSE NULL END WHERE id=$1",[prospect.qualificationRunId]);
  }
- expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
+ expect(await runAutomaticEmailBatch(worker(),3)).toMatchObject({checked:0,admitted:[]});
  expect(await listEnrollments(worker())).toHaveLength(0);
 });
 it('prefers a supported named contact after equal rank, corroboration, and recency',async()=>{
@@ -467,7 +471,7 @@ it('prefers a supported named contact after equal rank, corroboration, and recen
  await qualified('A Office Tie',{retrievedAt});
  const named=await qualified('Z Named Tie',{retrievedAt,named:true});
  await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=1,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
- const batch=await runAutomaticEmailBatch(worker(),2);
+ const batch=await runAutomaticEmailBatch(worker(),3);
  expect(batch.admitted).toMatchObject([{candidateId:named.candidateId}]);
  const [enrollment]=await listEnrollments(worker());if(!enrollment)throw new Error('missing enrollment');
  expect(await listContacts(worker(),enrollment.firmId)).toMatchObject([{full_name:'Jane Smith'}]);
@@ -476,14 +480,14 @@ it('selects only the newest qualification for the current candidate revision',as
  await configureFutureActivation();const old=await qualified('Changed Batch Evidence');
  await db.session.query(`INSERT INTO sourcing_qualification_runs(workspace_id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,requested_at)
  SELECT workspace_id,candidate_id,candidate_revision,$2,prompt_version,policy_version,model_name,requested_at+interval '1 second' FROM sourcing_qualification_runs WHERE id=$1`,[old.qualificationRunId,'e'.repeat(64)]);
- expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
+ expect(await runAutomaticEmailBatch(worker(),3)).toMatchObject({checked:0,admitted:[]});
 });
 it('waits for the next business-day allowance instead of exhausting capacity checks overnight',async()=>{
  await configureFutureActivation();await qualified('Reset Capacity Fit');
  await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=0,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
  const day=new Intl.DateTimeFormat('sv-SE',{timeZone:'America/New_York'});
  const tomorrow=new Date(`${day.format(new Date())}T12:00:00Z`);tomorrow.setUTCDate(tomorrow.getUTCDate()+1);
- const report=await runAutomaticEmailBatch(worker(),2),wake=report.deferred[0]?.retryAt;
+ const report=await runAutomaticEmailBatch(worker(),3),wake=report.deferred[0]?.retryAt;
  expect(report).toMatchObject({deferred:[{reason:'mailbox_capacity_exhausted'}]});
  if(!wake)throw new Error('missing capacity wake');
  expect(day.format(new Date(wake))).toBe(tomorrow.toISOString().slice(0,10));
@@ -497,10 +501,10 @@ it('shows an automatic unsent enrollment in learning without manufacturing conta
  const result=await admitAutomaticEmailProspect(worker(),input);if(!result.ok)throw new Error(result.reason);
  const view=await tx(()=>readSourcingLearning(admin(),learningInterval()));
  expect(view).toMatchObject({cohorts:[],coverage:{admitted:1},automation:{outcomes:{admissions:1,attempts:0,sent:0,replies:0,booked:0,heldQualified:0},decisions:[{candidateId:input.candidateId,runId:input.qualificationRunId,reason:'enrolled',firmId:result.value.firmId,enrollmentId:result.value.enrollmentId}]}});
- expect(await tx(()=>saveEmailAdmissionControl(admin(),{enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null,expectedRevision:2}))).toMatchObject({ok:true});
+ expect(await tx(()=>saveEmailAdmissionControl(admin(),{enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null,expectedRevision:3}))).toMatchObject({ok:true});
  const {learningReportSchema}=await import('@fss/contracts');
  const changed=learningReportSchema.parse(await tx(()=>readSourcingLearning(admin(),learningInterval())));
- expect(changed.automation).toMatchObject({control:{enabled:false,revision:3},decisions:[{controlRevision:2,evaluationSha256:'b'.repeat(64),implementationCommit:process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40),sequenceVersionId:sequenceId}]});
+ expect(changed.automation).toMatchObject({control:{enabled:false,revision:4},decisions:[{controlRevision:3,evaluationSha256,implementationCommit:process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40),sequenceVersionId:sequenceId}]});
 });
 it('counts one actual send and automatic email attribution after sender replay',async()=>{
  const f=await preparedAutomaticSender();const {dispatchOutboundMessage}=await import('@fss/domain/outbound/send.ts');
@@ -515,11 +519,11 @@ it('shows permanent deferral and exhausted capacity checks with historical evide
  await configureFutureActivation();const fit=await qualified('Visible Capacity PM');
  const contrary=await qualified('Visible Contrary PM',{need:'We do not need maintenance help.'});
  await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=0,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
- for(let i=0;i<7;i++){await runAutomaticEmailBatch(worker(),2);await db.session.query("UPDATE sourcing_qualification_runs SET email_admission_next_at=now()-interval '1 minute' WHERE id=$1 AND email_admission_next_at IS NOT NULL",[fit.qualificationRunId]);}
+ for(let i=0;i<7;i++){await runAutomaticEmailBatch(worker(),3);await db.session.query("UPDATE sourcing_qualification_runs SET email_admission_next_at=now()-interval '1 minute' WHERE id=$1 AND email_admission_next_at IS NOT NULL",[fit.qualificationRunId]);}
  const view=await tx(()=>readSourcingLearning(admin(),learningInterval()));
  expect(view.automation?.decisions).toHaveLength(2);
  expect(view.automation?.decisions).toEqual(expect.arrayContaining([
- expect.objectContaining({candidateId:fit.candidateId,reason:'mailbox_capacity_exhausted',status:'exhausted',checks:7,retryAt:null,rank:'fit_only',policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',controlRevision:2,sequenceVersionId:sequenceId,evaluationSha256:'b'.repeat(64),implementationCommit:process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40),firmId:null,enrollmentId:null}),
+ expect.objectContaining({candidateId:fit.candidateId,reason:'mailbox_capacity_exhausted',status:'exhausted',checks:7,retryAt:null,rank:'fit_only',policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',controlRevision:3,sequenceVersionId:sequenceId,evaluationSha256,implementationCommit:process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40),firmId:null,enrollmentId:null}),
  expect.objectContaining({candidateId:contrary.candidateId,status:'deferred',checks:1,retryAt:null,evidence:expect.arrayContaining([expect.objectContaining({url:'https://visiblecontrarypm.example.test/'})])})]));
 });
 it('distinguishes retained discovery hits and supported email prospects from manual staging without double counting',async()=>{
@@ -553,8 +557,8 @@ it('restricts automatic decisions, evidence and outcome totals to the workspace 
 });
 it('makes a whole-batch binding refusal visible without fabricating a prospect decision',async()=>{
  await configureFutureActivation();await qualified('Batch Binding PM');vi.stubEnv('FSS_BUILD_COMMIT','f'.repeat(40));
- expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({reason:'evaluation_mismatch',checked:0});
- expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation).toMatchObject({control:{enabled:true,revision:2,lastBatchReason:'evaluation_mismatch'},decisions:[],outcomes:{admissions:0}});
+ expect(await runAutomaticEmailBatch(worker(),3)).toMatchObject({reason:'evaluation_mismatch',checked:0});
+ expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation).toMatchObject({control:{enabled:true,revision:3,lastBatchReason:'evaluation_mismatch'},decisions:[],outcomes:{admissions:0}});
 });
 it('joins confirmed feedback and qualification spend through automatic email attribution',async()=>{
  const f=await preparedAutomaticSender();
@@ -595,7 +599,7 @@ it.each(emailEvaluationCases)('evaluates labeled email admission: $id',async c=>
  expect(finished.ok,JSON.stringify(finished)).toBe(c.expectedEvidenceAccepted);
  if(finished.ok)expect(await tx(()=>evaluateQualification(sourceAdmin,{runId:request.value.runId}))).toMatchObject({ok:true});
  const timed=clocked(repositoryContext(worker().scope,await db.appRuntimeSession()));
- const result=await admitAutomaticEmailProspect(timed,{candidateId:candidate.value.id,qualificationRunId:request.value.runId,expectedRevision:1,expectedControlRevision:2});
+ const result=await admitAutomaticEmailProspect(timed,{candidateId:candidate.value.id,qualificationRunId:request.value.runId,expectedRevision:1,expectedControlRevision:3});
  const {readFirmSourcing}=await import('@fss/domain/sourcing/attribution.ts');
  const attribution=result.ok?await readFirmSourcing(worker(),result.value.firmId):null;
  evaluationResults.push({id:c.id,expectedAdmission:c.expectedAdmission,actualAdmission:result.ok,admissionReason:result.ok?'enrolled':result.reason,evidenceAccepted:finished.ok,actualRank:attribution?.sources[0]?.hypothesis??null});
@@ -614,10 +618,10 @@ it('accepts a bound diagnostic report through normal disabled controls and still
  const report=path?JSON.parse(readFileSync(path,'utf8')):{implementationCommit:process.env['FSS_BUILD_COMMIT'],policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',reviewedEligible:2,falseEligible:0};
  const reportSha256=createHash('sha256').update(path?readFileSync(path):JSON.stringify(report)).digest('hex');
  const control=await readEmailAdmissionControl(admin());
- const input={expectedRevision:2,enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:{policyVersion:report.policyVersion,promptVersion:report.promptVersion,implementationCommit:report.implementationCommit,configurationSha256:control.configurationSha256,reportSha256,reviewedEligible:report.reviewedEligible,falseEligible:report.falseEligible}};
- expect(await tx(()=>saveEmailAdmissionControl(admin(),input))).toEqual({ok:true,value:{revision:3}});
+ const input={expectedRevision:3,enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:{policyVersion:report.policyVersion,promptVersion:report.promptVersion,implementationCommit:report.implementationCommit,configurationSha256:control.configurationSha256,reportSha256,reviewedEligible:report.reviewedEligible,falseEligible:report.falseEligible}};
+ expect(await tx(()=>saveEmailAdmissionControl(admin(),input))).toEqual({ok:true,value:{revision:4}});
  const saved=await readEmailAdmissionControl(admin());
- expect(saved).toMatchObject({enabled:false,ready:false,evaluation:input.evaluation,reasons:['activation_not_available']});
- expect(await tx(()=>saveEmailAdmissionControl(admin(),{...input,expectedRevision:3,enabled:true}))).toEqual({ok:false,reason:'activation_not_available'});
+ expect(saved).toMatchObject({enabled:false,ready:false,evaluation:input.evaluation,reasons:expect.arrayContaining(['runtime_identity_unknown','activation_receipt_required'])});
+ expect(await tx(()=>saveEmailAdmissionControl(admin(),{...input,expectedRevision:4,enabled:true}))).toEqual({ok:false,reason:'activation_not_available'});
  if(path)writeFileSync(join(process.env['FSS_EMAIL_CONTROL_RECEIPT_DIRECTORY']!,'disabled-control-receipt.json'),JSON.stringify({scope:'disposable_database_only',input,saved,activationAccepted:false},null,2)+'\n',{flag:'wx'});
 });

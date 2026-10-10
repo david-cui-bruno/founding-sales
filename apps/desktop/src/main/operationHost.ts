@@ -1,3 +1,5 @@
+import type {createSocialManualHandoffBridge} from './social/manualHandoffBridge.ts';
+import {experimentsViewSchema,experimentSaveResultSchema,experimentActivateResultSchema,experimentStopResultSchema,experimentEraseResultSchema} from '@fss/contracts';
 import {todayActionsV2ResponseSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
 import {businessPolicySchema,businessReviewSchema} from '@fss/contracts';
 import {firmListResponseSchema} from '@fss/contracts';
@@ -89,6 +91,8 @@ import type { TodayBridgeHost } from './todayBridge.ts';
 
 export interface OperationHostDeps {
   readonly notifications?:{status():NotificationRuntimeStatus};
+  readonly socialHandoff?:ReturnType<typeof createSocialManualHandoffBridge>;
+  readonly socialDelivery?:{status():{queue:'unread'|'available'|'unavailable';lastReadAt:string|null}};
   readonly socialAccounts?: SocialAccountsBridge;
   readonly socialImages?: SocialImageImport;
   readonly api: AuthedClient;
@@ -204,6 +208,15 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'social.manualHandoff':async(input:OperationInput<'social.manualHandoff'>)=>deps.socialHandoff?deps.socialHandoff.read(input):{view:null,reason:'unavailable'},
+    'social.confirmHandoff':async(input:OperationInput<'social.confirmHandoff'>)=>deps.socialHandoff?deps.socialHandoff.confirm(input):{accepted:false,approvalId:null,reason:'unavailable'},
+    'social.useHandoff':async(input:OperationInput<'social.useHandoff'>)=>deps.socialHandoff?deps.socialHandoff.use(input):{accepted:false,reason:'unavailable'},
+    'social.registerManualDestination':async(input:OperationInput<'social.registerManualDestination'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/social/accounts/manual',body,v=>z.strictObject({accountId:z.string().uuid(),state:z.literal('unsupported')}).parse(v),{commandId});
+      if(generation!==deps.recordings.identity.current())return {accepted:false,reason:'session_changed'};
+      return answer.ok?{accepted:true,reason:null}:{accepted:false,reason:answer.reason.slice(0,80)};
+    },
+    'social.deliveryStatus':async()=>deps.socialDelivery?.status()??{queue:'unread',lastReadAt:null},
     'social.imageStage':async()=>deps.socialImages?deps.socialImages.state():{stage:null,reason:null,savedAssetId:null},
     'social.chooseImage':async(input:OperationInput<'social.chooseImage'>)=>deps.socialImages?deps.socialImages.choose(input):{stage:null,reason:'unavailable',savedAssetId:null},
     'social.pasteImage':async(input:OperationInput<'social.pasteImage'>)=>deps.socialImages?deps.socialImages.paste(input):{stage:null,reason:'unavailable',savedAssetId:null},
@@ -310,6 +323,31 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'sourcing.saveCallNeed': async(input:OperationInput<'sourcing.saveCallNeed'>)=>{
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/sourcing/call-need/save',body,value=>z.object({revision:z.number().int().positive()}).parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.experiments':async(input:OperationInput<'sourcing.experiments'>)=>{
+      const generation=deps.recordings.identity.current(),answer=await deps.api.read('/sourcing/experiments',v=>experimentsViewSchema.parse(v),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.saveExperiment':async(input:OperationInput<'sourcing.saveExperiment'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/sourcing/experiments/save',body,v=>experimentSaveResultSchema.parse(v),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.activateExperiment':async(input:OperationInput<'sourcing.activateExperiment'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/sourcing/experiments/activate',body,v=>experimentActivateResultSchema.parse(v),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.stopExperiment':async(input:OperationInput<'sourcing.stopExperiment'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/sourcing/experiments/stop',body,v=>experimentStopResultSchema.parse(v),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.eraseExperiment':async(input:OperationInput<'sourcing.eraseExperiment'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input,answer=await deps.api.command('/sourcing/experiments/erase',body,v=>experimentEraseResultSchema.parse(v),{commandId});
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },

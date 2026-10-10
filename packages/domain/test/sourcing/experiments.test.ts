@@ -1,0 +1,111 @@
+import {afterAll,beforeAll,expect,it} from 'vitest';
+import {experimentsViewSchema} from '@fss/contracts';
+import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {withTransaction} from '../../db/queryable.ts';
+import {readTargetingPolicy} from '../../sourcing/targetingProposals.ts';
+import {saveExperiment,readExperiments,activateExperiment,stopExperiment,eraseExperiment} from '../../sourcing/experiments.ts';
+let db:TestDatabase;let seeded:TwoWorkspaces;
+const ctx=()=>repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),db.session);
+const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
+const content=()=>({change:{kind:'discovery_query' as const,basePolicyVersion:'targeting-v1',queryId:'dfw-simple-v3',query:'Dallas Fort Worth residential maintenance coordinator'},interval:{from:'2026-10-01T00:00:00Z',to:'2026-10-10T00:00:00Z',asOf:'2026-10-10T00:00:00Z'},rationale:'Explore operational burden without broadening geography.',counterexamples:['Small sample with no contacted cohort.'],uncertainty:'Raw provider result count and duplicate denominator unavailable.',successMeasures:['Supported prospects per retained unique URL.']});
+beforeAll(async()=>{db=await createTestDatabase();seeded=await seedTwoWorkspaces(db.session);});afterAll(async()=>db.drop());
+it('accepts an evidence-backed proposal without changing live targeting and preserves reviewed revisions',async()=>{
+ const before=await tx(()=>readTargetingPolicy(ctx()));
+ const saved=await tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:content()}));if(!saved.ok)throw new Error(saved.reason);
+ const view=experimentsViewSchema.parse(await readExperiments(ctx()));
+ expect(view[0]).toMatchObject({id:saved.value.id,revision:1,status:'accepted',report:{cutoffSemantics:'current_accepted_facts_through_cutoff',rawProviderResults:null,duplicates:null}});
+ expect(await tx(()=>readTargetingPolicy(ctx()))).toEqual(before);
+ const edited=await tx(()=>saveExperiment(ctx(),{id:saved.value.id,expectedRevision:1,status:'dismissed',content:{...content(),rationale:'Dismiss after reviewing uncertain denominator.'}}));expect(edited.ok).toBe(true);
+ expect((await readExperiments(ctx()))[0]?.versions.map(v=>v.content.rationale)).toEqual(['Dismiss after reviewing uncertain denominator.',content().rationale]);
+ expect(await tx(()=>activateExperiment(ctx(),{id:saved.value.id,expectedRevision:1,targetingDecision:true}))).toMatchObject({ok:false,reason:'proposal_changed'});
+});
+it('requires a separate exact targeting decision, attributes the new policy and rolls back without rewriting history',async()=>{
+ const baseline=await tx(()=>readTargetingPolicy(ctx()));
+ const p=await tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:{...content(),change:{...content().change,basePolicyVersion:baseline.version}}}));if(!p.ok)throw new Error(p.reason);
+ expect(await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:false}))).toMatchObject({ok:false,reason:'targeting_decision_required'});
+ const activated=await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:true}));if(!activated.ok)throw new Error(activated.reason);
+ const policy=await tx(()=>readTargetingPolicy(ctx()));expect(policy.queries[0]).toEqual({...baseline.queries[0],query:content().change.query});
+ const view=experimentsViewSchema.parse(await readExperiments(ctx()));expect(view.find(v=>v.id===p.value.id)?.activations[0]).toMatchObject({revision:1,result:{basePolicyVersion:baseline.version,policyVersion:policy.version},stoppedAt:null});
+ expect(await tx(()=>stopExperiment(ctx(),{activationId:activated.value.activationId,reason:'Insufficient sample; stop bounded experiment.'}))).toMatchObject({ok:true});
+ expect(await tx(()=>readTargetingPolicy(ctx()))).toEqual(baseline);
+ expect((await readExperiments(ctx())).find(v=>v.id===p.value.id)?.activations[0]?.stopReason).toBe('Insufficient sample; stop bounded experiment.');
+});
+it('keeps activation scoped and exposes exact-version outcome counts',async()=>{
+ const base=await tx(()=>readTargetingPolicy(ctx()));
+ const p=await tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:{...content(),change:{...content().change,basePolicyVersion:base.version}}}));if(!p.ok)throw new Error(p.reason);
+ const other=repositoryContext(workspaceScope(seeded.beta.workspaceId,{kind:'user',userId:seeded.beta.admin.userId,role:'admin'}),db.session);
+ expect(await tx(()=>activateExperiment(other,{id:p.value.id,expectedRevision:1,targetingDecision:true}))).toMatchObject({ok:false,reason:'not_found'});
+ const a=await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:true}));if(!a.ok)throw new Error(a.reason);
+ const active=(await readExperiments(ctx())).find(v=>v.id===p.value.id)!.activations[0]!;if(active.result.kind!=='discovery_query')throw new Error('wrong experiment kind');
+ await db.session.query("INSERT INTO sourcing_discovery_attempts(workspace_id,day,query_id,query,state,policy_version) VALUES($1,'2026-10-09','dfw-simple-v3','Test query','complete',$2)",[seeded.alpha.workspaceId,active.result['policyVersion']]);
+ expect((await readExperiments(ctx())).find(v=>v.id===p.value.id)?.activations[0]?.outcomes).toMatchObject({attempts:1,retainedUniqueUrls:0,rawProviderResults:null,duplicates:null});
+ await tx(()=>stopExperiment(ctx(),{activationId:a.value.activationId,reason:'End fixture experiment.'}));
+});
+
+it('erases retained proposal text without removing opaque attribution or restoring a live policy',async()=>{
+ const baseline=await tx(()=>readTargetingPolicy(ctx()));
+ const p=await tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:{...content(),change:{...content().change,basePolicyVersion:baseline.version}}}));if(!p.ok)throw new Error(p.reason);
+ const a=await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:true}));if(!a.ok)throw new Error(a.reason);
+ expect(await tx(()=>eraseExperiment(ctx(),{id:p.value.id,expectedRevision:1}))).toMatchObject({ok:false,reason:'experiment_active'});
+ await tx(()=>stopExperiment(ctx(),{activationId:a.value.activationId,reason:'Stop before erasing evidence.'}));
+ expect(await tx(()=>eraseExperiment(ctx(),{id:p.value.id,expectedRevision:1}))).toMatchObject({ok:true});
+ expect((await readExperiments(ctx())).find(v=>v.id===p.value.id)).toMatchObject({status:'erased',versions:[],report:null,activations:[{revision:1}]});
+ expect(await tx(()=>saveExperiment(ctx(),{id:p.value.id,expectedRevision:1,status:'accepted',content:content()}))).toMatchObject({ok:false,reason:'proposal_erased'});
+});
+
+it('binds only separately approved exact email copy while keeping admission off and original cadence intact',async()=>{
+ const {approvedTemplate,emailStep,publishedPlan,publishedVersionOf}=await import('../sequences/support/versionFixtures.ts');
+ const {createTemplateVersion,readTemplateVersion}=await import('../../templates/templates.ts');
+ const {fixtureBody}=await import('../sequences/support/sequenceFixtures.ts');
+ const {setProspectingAuthorization}=await import('../../outreach/authorization.ts');
+ const {saveEmailAdmissionControl,readEmailAdmissionControl}=await import('../../outreach/emailControl.ts');
+ const base=await tx(()=>approvedTemplate(ctx(),'Original experiment opening.')),other=await tx(()=>approvedTemplate(ctx(),'Retained follow-up.'));
+ const steps=[emailStep(base),...Array.from({length:4},(_,i)=>emailStep(other,i+2,(i+1)*48))];
+ const plan=await tx(()=>publishedPlan(ctx(),steps));
+ const mailbox=(await db.session.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'experiment@example.test','fixture-account','connected') RETURNING id",[seeded.alpha.workspaceId,seeded.alpha.admin.userId])).rows[0]!.id;
+ await tx(()=>setProspectingAuthorization(ctx(),{mailboxId:mailbox,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));
+ const old=await readEmailAdmissionControl(ctx());
+ expect(await tx(()=>saveEmailAdmissionControl(ctx(),{expectedRevision:old.revision,enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId:mailbox,sequenceVersionId:plan.versionId,evaluation:null}))).toMatchObject({ok:true});
+ const body=fixtureBody('Reviewed new opening.'),subject='Specific maintenance question';
+ const p=await tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:{...content(),change:{kind:'email_wording',baseTemplateVersionId:base,subject,body}}}));if(!p.ok)throw new Error(p.reason);
+ expect(await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:false}))).toMatchObject({ok:false,reason:'approved_copy_binding_required'});
+ const original=await readTemplateVersion(ctx(),base);if(!original)throw new Error('missing fixture');
+ const copy=await tx(()=>createTemplateVersion(ctx(),{templateId:original.templateId,name:'Reviewed experiment',subject,body,footer:{signOff:original.footerSignOff},requiredVariables:original.requiredVariables,approve:true}));if(!copy.ok)throw new Error(copy.reason);
+ const next=await tx(()=>publishedVersionOf(ctx(),plan.sequenceId,[emailStep(copy.value.id),...steps.slice(1)]));
+ const a=await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:false,sequenceVersionId:next}));expect(a.ok).toBe(true);
+ expect(await readEmailAdmissionControl(ctx())).toMatchObject({enabled:false,evaluation:null,sequenceVersionId:next,reasons:['evaluation_required','runtime_identity_unknown','evaluation_mismatch','activation_receipt_required']});
+ if(!a.ok)throw new Error(a.reason);
+ expect(await tx(()=>stopExperiment(ctx(),{activationId:a.value.activationId,reason:'Stop without rewinding prior enrollments.'}))).toMatchObject({ok:true});
+ expect(await readEmailAdmissionControl(ctx())).toMatchObject({enabled:false,evaluation:null,sequenceVersionId:next});
+});
+it('keeps one activation under concurrent decisions and safely stops without rolling back a newer policy',async()=>{
+ const baseline=await tx(()=>readTargetingPolicy(ctx()));
+ const proposed=async()=>tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:{...content(),change:{...content().change,basePolicyVersion:baseline.version}}}));
+ const p=await proposed(),q=await proposed();if(!p.ok||!q.ok)throw new Error('proposal fixture');
+ const sessions=await Promise.all([db.appRuntimeSession(),db.appRuntimeSession()]);
+ const run=(i:number,id:string)=>withTransaction(sessions[i]!,()=>activateExperiment(repositoryContext(ctx().scope,sessions[i]!),{id,expectedRevision:1,targetingDecision:true}));
+ const results=await Promise.all([run(0,p.value.id),run(1,q.value.id)]);
+ expect(results.filter(r=>r.ok)).toHaveLength(1);expect(results.find(r=>!r.ok)).toMatchObject({ok:false,reason:'experiment_active'});
+ const current=await tx(()=>readTargetingPolicy(ctx()));
+ const {saveTargetingProposal,applyTargetingProposal}=await import('../../sourcing/targetingProposals.ts');
+ const newer=await tx(()=>saveTargetingProposal(ctx(),{basePolicyVersion:current.version,queryChanges:[{...current.queries[1]!,query:'Providence residential property management operators'}],rankOrder:['help_request','operational_burden','investigation','fit_only'],evidenceIds:[],rationale:'Separate newer human targeting decision.'}));if(!newer.ok)throw new Error(newer.reason);
+ await tx(()=>applyTargetingProposal(ctx(),{id:newer.value.id,expectedRevision:1}));
+ const winner=results.find(r=>r.ok);if(!winner?.ok)throw new Error('no activation');
+ expect(await tx(()=>stopExperiment(ctx(),{activationId:winner.value.activationId,reason:'Would overwrite unrelated newer work.'}))).toMatchObject({ok:true,value:{rollbackDisposition:'superseded'}});
+ expect((await tx(()=>readTargetingPolicy(ctx()))).queries[1]?.query).toBe('Providence residential property management operators');
+});
+it('holds a public report snapshot through concurrent erasure and exposes no erased text after completion',async()=>{
+ const p=await tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:content()}));if(!p.ok)throw new Error(p.reason);
+ const sessions=await Promise.all([db.appRuntimeSession(),db.appRuntimeSession()]);
+ const reader=repositoryContext(ctx().scope,sessions[0]!),eraser=repositoryContext(ctx().scope,sessions[1]!);
+ let entered:()=>void=()=>{},release:()=>void=()=>{};
+ const ready=new Promise<void>(r=>{entered=r;}),gate=new Promise<void>(r=>{release=r;});
+ const reading=withTransaction(sessions[0]!,async()=>{const view=await readExperiments(reader);entered();await gate;return view;});
+ await ready;
+ try{await expect(withTransaction(sessions[1]!,async()=>{await sessions[1]!.query("SET LOCAL statement_timeout='100ms'");return eraseExperiment(eraser,{id:p.value.id,expectedRevision:1});})).rejects.toThrow('statement timeout');}finally{release();}
+ expect((await reading).find(v=>v.id===p.value.id)?.versions[0]?.content.rationale).toBe(content().rationale);
+ expect(await withTransaction(sessions[1]!,()=>eraseExperiment(eraser,{id:p.value.id,expectedRevision:1}))).toMatchObject({ok:true});
+ expect((await tx(()=>readExperiments(ctx()))).find(v=>v.id===p.value.id)).toMatchObject({status:'erased',versions:[],report:null});
+});

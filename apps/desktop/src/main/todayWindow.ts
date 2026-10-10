@@ -1,3 +1,4 @@
+import type {createSocialManualHandoffBridge} from './social/manualHandoffBridge.ts';
 import type {NotificationRuntimeStatus} from '@fss/contracts';
 import type {SocialAccountsBridge} from './social/accountsBridge.ts';
 import type {SocialImageImport} from './social/imageImport.ts';
@@ -72,6 +73,8 @@ export interface RecordingImportWiring {
 
 export interface WindowBridgeDeps {
   readonly notifications?:{status():NotificationRuntimeStatus};
+  readonly socialHandoff?:ReturnType<typeof createSocialManualHandoffBridge>;
+  readonly socialDelivery?:{status():{queue:'unread'|'available'|'unavailable';lastReadAt:string|null}};
   readonly socialAccounts?: SocialAccountsBridge;
   readonly socialImages?: SocialImageImport;
   readonly today: TodayBridgeDeps;
@@ -140,7 +143,7 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
       openFolderDialog: wiring?.openFolderDialog ?? (async () => await Promise.resolve({ canceled: true, filePaths: [] })),
     }),
   );
-  registerOperations({ ...(deps.notifications?{notifications:deps.notifications}:{}), ...(deps.socialAccounts?{socialAccounts:deps.socialAccounts}:{}), ...(deps.socialImages?{socialImages:deps.socialImages}:{}), api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox, briefImport, recordings }, handleOnce);
+  registerOperations({ ...(deps.socialHandoff?{socialHandoff:deps.socialHandoff}:{}), ...(deps.socialDelivery?{socialDelivery:deps.socialDelivery}:{}), ...(deps.notifications?{notifications:deps.notifications}:{}), ...(deps.socialAccounts?{socialAccounts:deps.socialAccounts}:{}), ...(deps.socialImages?{socialImages:deps.socialImages}:{}), api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox, briefImport, recordings }, handleOnce);
 
   handleOnce(DIAL_IPC_CHANNELS.call, async argument => {
     // The renderer's word is never taken for a shape: a malformed request is the current
