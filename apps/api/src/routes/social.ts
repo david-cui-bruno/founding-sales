@@ -1,3 +1,7 @@
+import {registerSocialManualDestination} from '@fss/domain/social/manualDestination.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {socialManualHandoffInputSchema,socialManualHandoffViewSchema,socialManualHandoffConfirmCommandSchema} from '@fss/contracts';
+import {readSocialManualHandoff,confirmSocialManualHandoff} from '@fss/domain/social/manualHandoff.ts';
 import {holdSocialDelivery} from '@fss/domain/social/deliveryRecovery.ts';
 import {socialDeliveryHoldCommandSchema} from '@fss/contracts';
 import {readSocialDeliveryQueue} from '@fss/domain/social/deliveryQueue.ts';
@@ -16,12 +20,17 @@ import {uuid,socialAssetRegisterCommandSchema,socialAssetCompleteCommandSchema,s
 import {readSocialAsset,registerSocialAsset,completeSocialAsset,deleteSocialAsset,listSocialAssets,socialAssetObject} from '@fss/domain/social/assets.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOCIAL_PATHS=['/social/delivery/hold','/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
+export const SOCIAL_PATHS=['/social/accounts/manual','/social/manual-handoff/read','/social/manual-handoff/confirm','/social/delivery/hold','/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
 export async function routeSocial(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOCIAL_PATHS.includes(request.path))return null;if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
  const principal=await requirePrincipal(auth,request);if(!principal.ok)return principal.result;const scoped=contextForPrincipal(auth,principal.principal);if(!scoped.ok)return scoped.result;
  const ctx=scoped.context,deps={auth,request,principal:principal.principal};
+ if(request.path==='/social/manual-handoff/read'){
+  const parsed=socialManualHandoffInputSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
+  const answer=await withTransaction(auth.session,()=>readSocialManualHandoff(ctx,parsed.data));return answer.ok?{status:200,body:{view:socialManualHandoffViewSchema.parse(answer.value)}}:{status:409,body:{error:answer.reason}};
+ }
+ if(request.path==='/social/manual-handoff/confirm')return runRouteCommand(deps,socialManualHandoffConfirmCommandSchema,'social_manual_handoff_confirm',(c,input)=>confirmSocialManualHandoff(c,input));
  if(request.path==='/social/weekly'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialWeekly(ctx)};}
  if(request.path==='/social/weekly/save')return runRouteCommand(deps,socialWeeklyCommandSchema,'social_weekly_save',(c,input)=>saveSocialWeekly(c,{enabled:input.enabled,expectedRevision:input.expectedRevision}));
  if(request.path==='/social/drafts'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialDraftWorkspace(ctx)};}
@@ -31,6 +40,7 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
   const row=await readSocialDraftRequest(ctx,parsed.data.requestId);if(!row)return {status:404,body:{error:'not_found'}};
   return {status:200,body:{request:socialDraftView(row)}};
  }
+ if(request.path==='/social/accounts/manual')return runRouteCommand(deps,socialConnectionCommandSchema,'social_manual_destination',(c,body)=>{const {commandId:_id,clientVersion:_client,...input}=body;return registerSocialManualDestination(c,input);});
  if(request.path==='/social/accounts/connect')return runRouteCommand(deps,socialConnectionCommandSchema,'social_account_connect',(c,input)=>{const {commandId:_id,clientVersion:_client,...connection}=input;return saveSocialConnection(c,connection);});
  if(request.path==='/social/accounts/disconnect')return runRouteCommand(deps,socialDisconnectCommandSchema,'social_account_disconnect',disconnectSocialAccount);
  if(request.path==='/social'){const parsed=z.strictObject({afterId:uuid.optional()}).safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialWorkspace(ctx,parsed.data.afterId)};}

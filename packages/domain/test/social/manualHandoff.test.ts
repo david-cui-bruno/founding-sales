@@ -1,5 +1,4 @@
 import {randomUUID} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
 import {beforeAll,afterAll,it,expect} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
@@ -13,7 +12,7 @@ import {previewSocialManualHandoff,confirmSocialManualHandoff,readSocialManualHa
 let db:TestDatabase,seed:TwoWorkspaces;
 const ctx=(beta=false)=>{const s=beta?seed.beta:seed.alpha;return repositoryContext(workspaceScope(s.workspaceId,{kind:'user',userId:s.admin.userId,role:'admin'}),db.session);};
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
-beforeAll(async()=>{db=await createTestDatabase();await db.session.query(await readFile(new URL('./support/manualHandoff.sql',import.meta.url),'utf8'));seed=await seedTwoWorkspaces(db.session);});
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);});
 afterAll(async()=>db.drop());
 async function draft(platform:'facebook'|'x'='x',text='Useful maintenance observation.'){
  const accountId=randomUUID();await tx(()=>saveSocialConnection(ctx(),{accountId,platform,externalId:`fixture-${accountId}`,displayName:'Founder',accountKind:platform==='facebook'?'page':'profile'}));

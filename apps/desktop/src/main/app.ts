@@ -1,3 +1,5 @@
+import {writeFile} from 'node:fs/promises';
+import {createSocialManualHandoffBridge} from './social/manualHandoffBridge.ts';
 import {createSocialDeliveryRunner} from './social/deliveryRunner.ts';
 import {createSocialDeliveryPump} from './social/deliveryPump.ts';
 import {createLinkedInBrowserPorts} from './social/adapters/linkedinBrowserPorts.ts';
@@ -318,6 +320,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   const bridges = registerWindowBridges({
     notifications,
     socialDelivery:socialRunner,
+    socialHandoff:createSocialManualHandoffBridge({api,generation:()=>manager.sessionGeneration(),copy:async text=>{clipboard.writeText(text);},open:openExternally,chooseDestination:async suggestedName=>{const answer=await dialog.showSaveDialog({title:'Save reviewed social image',defaultPath:suggestedName});return answer.canceled?null:answer.filePath??null;},write:async(path,bytes)=>{await writeFile(path,bytes,{mode:0o600});}}),
     socialAccounts,
     socialImages: createSocialImageImport({
       directory: configuration.userDataDirectory, api,

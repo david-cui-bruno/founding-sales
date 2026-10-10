@@ -1,3 +1,4 @@
+import {socialManualHandoffInputSchema,socialManualHandoffViewSchema,socialManualHandoffConfirmSchema,socialManualHandoffUseSchema,socialConnectionSchema} from '@fss/contracts';
 import {experimentsReadSchema,experimentsViewSchema,experimentSaveSchema,experimentSaveResultSchema,experimentActivateSchema,experimentActivateResultSchema,experimentStopSchema,experimentStopResultSchema,experimentEraseSchema,experimentEraseResultSchema} from '@fss/contracts';
 import {askActionCreatePayloadSchema,askActionAcknowledgmentSchema,askActionReadSchema,askActionPageSchema,askActionChangePayloadSchema,askActionChangedSchema} from '@fss/contracts';
 import {askHistoryListSchema,askHistoryPageSchema,askHistoryChangePayloadSchema,askHistoryChangedSchema} from '@fss/contracts';
@@ -875,6 +876,10 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'social.manualHandoff':{kind:'read',calls:[{method:'POST',path:'/social/manual-handoff/read'}],input:socialManualHandoffInputSchema,output:z.strictObject({view:socialManualHandoffViewSchema.nullable(),reason:z.string().nullable()}),transform:'Current exact manual review; never provider scheduling'},
+  'social.confirmHandoff':{kind:'command',calls:[{method:'POST',path:'/social/manual-handoff/confirm'}],input:socialManualHandoffConfirmSchema.extend({commandId:uuid}),output:z.strictObject({accepted:z.boolean(),approvalId:uuid.nullable(),reason:z.string().nullable()}),transform:'Explicit immutable manual review'},
+  'social.useHandoff':{kind:'command',calls:[{method:'POST',path:'/social/manual-handoff/read'},{method:'POST',path:'/social/assets/read'},{method:'POST',path:'/social/assets/download-url'}],input:socialManualHandoffUseSchema,output:z.strictObject({accepted:z.boolean(),reason:z.string().nullable()}),transform:'Main rereads exact approval before clipboard, composer or selected image export'},
+  'social.registerManualDestination':{kind:'command',calls:[{method:'POST',path:'/social/accounts/manual'}],input:socialConnectionSchema.extend({commandId:uuid}),output:z.strictObject({accepted:z.boolean(),reason:z.string().nullable()}),transform:'Human-supplied manual destination, never a verified provider connection'},
   'social.deliveryStatus': {kind:'read',calls:[],input:z.strictObject({}),output:z.strictObject({queue:z.enum(['unread','available','unavailable']),lastReadAt:z.string().datetime().nullable()}),transform:'Local authenticated queue transport status, never platform acceptance'},
   'social.imageStage': {kind:'read',calls:[],input:z.strictObject({}),output:socialImageImportViewSchema,transform:'Owner-private local image preparation'},
   'social.chooseImage': {kind:'command',calls:[],input:socialImageChooseSchema,output:socialImageImportViewSchema,transform:'Explicit native file picker; no renderer paths'},
