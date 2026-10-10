@@ -181,7 +181,10 @@ function command(program, args, cwd, timeout = 60000) {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
-    throw new Error(`command_failed_${program.replaceAll(/[^a-z]/gu, "")}`);
+    const operation = program === "terraform" && ["version", "init", "state", "plan", "show"].includes(args[0])
+      ? `_${args[0]}`
+      : "";
+    throw new Error(`command_failed_${program.replaceAll(/[^a-z]/gu, "")}${operation}`);
   }
 }
 function provenance(validatedPath, pinPath) {
@@ -737,6 +740,11 @@ if (
           "command_failed_bash",
           "command_failed_aws",
           "command_failed_terraform",
+          "command_failed_terraform_version",
+          "command_failed_terraform_init",
+          "command_failed_terraform_state",
+          "command_failed_terraform_plan",
+          "command_failed_terraform_show",
           "command_failed_git",
         ].includes(error.message)
           ? error.message
