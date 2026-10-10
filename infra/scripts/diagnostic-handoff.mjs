@@ -1330,3 +1330,14 @@ if (
     process.exitCode = 1;
   }
 }
+
+/** Documentary ownership only. This read does not authorize an operation. */
+export function readRegisteredDiagnosticOperationEvidence(input) {
+  const owned = loadRegisteredLifecycleLeaseForCleanup(input);
+  return {lease:owned.lease,leasePath:owned.leasePath,leaseSha256:owned.leaseSha256,execution:owned.execution,operationAuthority:false};
+}
+/** Authenticate existing retained configuration; independent action review is still required. */
+export function readDiagnosticOperationConfigurationEvidence(input) {
+  const reviewed = loadReviewedConfigurationForCleanup(input);
+  return {configuration:reviewed.configuration,manifest:reviewed.manifest,lease:reviewed.lease,execution:reviewed.execution,operationAuthority:false};
+}

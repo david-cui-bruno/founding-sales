@@ -68,6 +68,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // never reads the deployment, so it cannot reach Gmail, KMS or S3.
   'release-record put': 'database',
   'release-record show': 'database',
+  'crm-acquisition-diagnostic bindings':'database',
   'crm-acquisition-diagnostic provision':'database',
   'crm-acquisition-diagnostic revoke':'database',
   'crm-authority provision': 'database',
@@ -164,6 +165,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: [],
     summary: 'schema version, configured parts, and one committed write and read. No business rows',
   },
+  {path:['admin','crm-acquisition-diagnostic','bindings'],valueFlags:['--workspace','--mailbox','--owner',...REPORTABLE],booleanFlags:[],requiredFlags:['--workspace','--mailbox','--owner'],summary:'read exact isolated diagnostic mailbox and OAuth bindings with migration credentials; grants no authority'},
   {path:['admin','crm-acquisition-diagnostic','provision'],valueFlags:['--json','--json-base64','--sha256',...REPORTABLE],booleanFlags:[],requiredFlags:['--sha256'],oneOf:['--json','--json-base64'],summary:'store independently reviewed exact isolated acquisition diagnostic grant; activates nothing'},
   {path:['admin','crm-acquisition-diagnostic','revoke'],valueFlags:['--workspace','--authorization','--reference',...REPORTABLE],booleanFlags:[],requiredFlags:['--workspace','--authorization','--reference'],summary:'revoke exact diagnostic grant; enables nothing'},
   {

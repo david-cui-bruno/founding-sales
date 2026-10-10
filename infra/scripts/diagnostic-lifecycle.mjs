@@ -8,6 +8,7 @@ import {
   mkdirSync,
   lstatSync,
   rmSync,
+  chmodSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -42,7 +43,8 @@ function command(
         args[0] === "secretsmanager" &&
         args[1] === "put-secret-value") ||
       (program === "bash" && args[1] === "release") ||
-      (program === "bash" && args[1] === "bootstrap"))
+      (program === "bash" && args[1] === "bootstrap") ||
+      (program === "bash" && args[0]?.endsWith("/record.sh")))
   )
     sourceBinding(activeLease);
   if (mutationDeadline !== null) {
@@ -388,6 +390,50 @@ function assertApplied(directory, expectedHash, lease) {
   )
     throw new Error("application_receipt_changed");
 }
+function prepareReleaseRecord(directory, lease, environment) {
+  const selectRun = (workflow) => {
+    const listed = JSON.parse(command("gh", ["api", `repos/david-cui-bruno/founding-sales/actions/workflows/${workflow}/runs?head_sha=${lease.imageBuildCommit}&event=push&branch=main&per_page=100`]));
+    if (!Array.isArray(listed.workflow_runs)) throw new Error("release_provenance_unavailable");
+    const candidates = listed.workflow_runs.filter(run =>
+      run.head_sha === lease.imageBuildCommit && run.event === "push" && run.head_branch === "main" &&
+      run.path === `.github/workflows/${workflow}` && run.head_repository?.full_name === "david-cui-bruno/founding-sales" &&
+      run.status === "completed" && run.conclusion === "success" && /^[1-9][0-9]*$/u.test(String(run.id)));
+    candidates.sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)) || (BigInt(b.id)>BigInt(a.id)?1:-1));
+    if (!candidates.length) throw new Error("release_provenance_unavailable");
+    return String(candidates[0].id);
+  };
+  const gateRunId=selectRun("greenfield.yml"), imagesRunId=selectRun("greenfield-images.yml");
+  const recordPath=resolve(directory,"preparation","release-record.private.json");
+  if (lstatExists(recordPath)) throw new Error("release_record_destination_exists");
+  command("bash",[resolve(repository,"infra/scripts/record.sh"),"from-ci",gateRunId,lease.imageBuildCommit,lease.images.api,lease.images.worker,"--images-run",imagesRunId,"--out",recordPath],root,180000,undefined,environment);
+  const recordStat=lstatSync(recordPath);
+  if (!recordStat.isFile() || recordStat.isSymbolicLink()) throw new Error("release_record_binding_changed");
+  chmodSync(recordPath,0o600);
+  const raw=readFileSync(recordPath), record=JSON.parse(raw);
+  if (record.schema!=="fss.release-record.v1" || record.source!=="ci-gate" || record.suite!=="pass" || record.commit!==lease.imageBuildCommit || record.gateRunId!==gateRunId || record.imagesRunId!==imagesRunId || record.enablesSending!==false || record.artifacts?.api!==lease.images.api || record.artifacts?.worker!==lease.images.worker || record.artifacts?.desktopCommitStamp!==lease.imageBuildCommit || record.releaseGateReference!==`ci-gate-${gateRunId}-${lease.imageBuildCommit.slice(0,12)}`)
+    throw new Error("release_record_binding_changed");
+  return {path:recordPath,sha256:sha(raw),reference:record.releaseGateReference,gateRunId,imagesRunId,enablesSending:false};
+}
+function lstatExists(path) {try {lstatSync(path);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}}
+function verifyPreparedReleaseRecord(directory, receipt, lease) {
+  const record=receipt.releaseRecord;
+  if (!record || record.readBackVerified!==true || record.enablesSending!==false || record.path!==resolve(directory,"preparation","release-record.private.json") || sha(readFileSync(record.path))!==record.sha256)
+    throw new Error("release_record_binding_changed");
+  const current=JSON.parse(readFileSync(record.path));
+  if(current.commit!==lease.imageBuildCommit || current.enablesSending!==false || current.artifacts?.api!==lease.images.api || current.artifacts?.worker!==lease.images.worker || current.releaseGateReference!==record.reference)
+    throw new Error("release_record_binding_changed");
+}
+function readBootstrapBindings(directory, lease) {
+  const path=resolve(directory,"reports","bootstrap-workspace.json"), stat=lstatSync(path);
+  if(!stat.isFile() || stat.isSymbolicLink() || stat.size>16384) throw new Error("bootstrap_bindings_unavailable");
+  const raw=readFileSync(path), report=JSON.parse(raw);
+  const keys=(value,names)=>value!==null && typeof value==='object' && !Array.isArray(value) && Object.keys(value).sort().join()===names.sort().join();
+  const uuid=value=>typeof value==='string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value);
+  if(!keys(report,['workspace','admin','membership','sendingDomain']) || !keys(report.workspace,['id','slug','displayName','businessTimeZone','outcome']) || !keys(report.admin,['userId','email','outcome']) || !keys(report.membership,['role','outcome']) ||
+    !uuid(report.workspace.id) || !uuid(report.admin.userId) || report.workspace.slug!==`diagnostic-${lease.prefix.slice(7)}` || report.workspace.displayName!==`Acquisition diagnostic ${lease.prefix}` || typeof report.workspace.businessTimeZone!=='string' || !['created','existing'].includes(report.workspace.outcome) || report.admin.email!==lease.bootstrapAdminEmail.toLowerCase() || !['provisional_created','provisional_existing','adopted_user'].includes(report.admin.outcome) || report.membership.role!=='admin' || !['created','existing','reactivated'].includes(report.membership.outcome) || report.sendingDomain!==null)
+    throw new Error("bootstrap_bindings_unavailable");
+  return {workspaceId:report.workspace.id,ownerUserId:report.admin.userId,bootstrapReportSha256:sha(raw)};
+}
 function prepare(leasePath, expectedHash, directory, lease, inputs) {
   assertApplied(directory, expectedHash, lease);
   uncertainStage = "preparation";
@@ -500,6 +546,8 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     new Set(tagList.map((tag) => tag.Key)).size !== tagList.length
   )
     throw new Error("applied_outputs_changed");
+  const environment = { FSS_REHEARSAL_REPORTS: resolve(directory, "reports") };
+  const releaseRecord = prepareReleaseRecord(directory, lease, environment);
   const master = JSON.parse(
     JSON.parse(
       command("aws", [
@@ -568,7 +616,6 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
       rmSync(file, { force: true });
     }
   }
-  const environment = { FSS_REHEARSAL_REPORTS: resolve(directory, "reports") };
   command(
     "bash",
     [
@@ -608,12 +655,22 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     undefined,
     environment,
   );
+  const bootstrapBindings=readBootstrapBindings(directory,lease);
+  // A fresh isolated database has no release table before migration. Store the authentic
+  // CI record after its first migration/rollout, then require normal existing readback.
+  for (const stage of ["put", "read-back"]) {
+    if (sha(readFileSync(releaseRecord.path)) !== releaseRecord.sha256) throw new Error("release_record_binding_changed");
+    command("bash",[resolve(repository,"infra/scripts/record.sh"),stage,root,lease.prefix,"--api-digest",lease.images.api,"--worker-digest",lease.images.worker,"--release-record",releaseRecord.path],root,600000,undefined,environment);
+  }
+  if (Date.now() >= Date.parse(lease.cleanupAt)) throw new Error("cleanup_due");
   writeFileSync(
     resolve(directory, "prepared-receipt.json"),
     JSON.stringify({
       leaseSha256: expectedHash,
       sourceCommit: lease.sourceCommit,
       imageBuildCommit: lease.imageBuildCommit,
+      releaseRecord: {...releaseRecord,readBackVerified:true},
+      bootstrapBindings,
       runId: process.env.GITHUB_RUN_ID,
       attempt: process.env.GITHUB_RUN_ATTEMPT,
     }),
@@ -625,6 +682,12 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     activationAllowed: false,
     consentRequired: true,
     dnsVerified: false,
+    workspaceId: bootstrapBindings.workspaceId,
+    ownerUserId: bootstrapBindings.ownerUserId,
+    releaseRecordReference: releaseRecord.reference,
+    releaseRecordSha256: releaseRecord.sha256,
+    gateRunId: releaseRecord.gateRunId,
+    imagesRunId: releaseRecord.imagesRunId,
   };
 }
 async function hold(directory, expectedHash, lease) {
@@ -645,6 +708,8 @@ async function hold(directory, expectedHash, lease) {
     process.env.GITHUB_SHA !== lease.sourceCommit
   )
     throw new Error("lifecycle_run_changed");
+  verifyPreparedReleaseRecord(directory, receipt, lease);
+  if(JSON.stringify(readBootstrapBindings(directory,lease))!==JSON.stringify(receipt.bootstrapBindings)) throw new Error("bootstrap_bindings_unavailable");
   await new Promise((resolveWait) => {
     let timer;
     const interrupted = () => {
