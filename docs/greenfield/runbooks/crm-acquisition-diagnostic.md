@@ -89,6 +89,16 @@ Verify actual originals/hashes/directions and unavailable-after-delete through o
 
 Prepare a body-free `CrmAcquisitionDiagnosticAuthorization` document with the approved exact mailbox/account/owner/generation/OAuth observation, deployment/database bindings from the output, implementation commit/digests/schema90/release record, current disclosure hash, independently reviewed consent/policy/expiry references and exact message scope. Obtain its canonical digest using `crmAcquisitionDiagnosticFingerprint` on the schema-parsed document; arbitrary file hashes or raw JSON field order are not the authorization fingerprint. Do not include originals, credentials or tokens.
 
+Read the exact current mailbox bindings through the trusted migration operations command after fresh isolated Gmail consent:
+
+```bash
+fss admin crm-acquisition-diagnostic bindings --workspace <UUID> --mailbox <UUID> --owner <UUID>
+```
+
+This read requires rehearsal configuration, the actual isolated diagnostic database at schema90, an active admin owner, a connected exact mailbox and one matching readonly-only OAuth observation for its current generation/account. It returns only the named mailbox/account/generation, OAuth observation ID, canonical account-binding digest, actual database/schema and current disclosure digest. It reads a consistent read-only snapshot; it reads no tokens or message content, creates no observation or authority and enables nothing. Missing or ambiguous evidence refuses. Refresh it after any relevant owner/account/generation change. These database bindings do not replace the independent running-task/database/secret/image/DNS witnesses or the exact release record readback.
+
+A normal fresh browser handoff must complete before capture. Authentication URLs and their signed state are transient private handoff data; keep them out of public logs, evidence artifacts and chat. If the available automation cannot hand them to the browser privately, use an explicitly guided human handoff before starting another paid runtime window rather than borrowing desktop credentials or bypassing tool restrictions.
+
 With the trusted migration operations identity (normal `FSS_MIGRATION_DATABASE_URL` or migration-secret injection), provision only the reviewed immutable authority:
 
 ```bash
