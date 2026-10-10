@@ -565,7 +565,9 @@ async function run(options: Options, report: Report): Promise<void> {
       workflows.map(workflow => [workflow.name, workflow.ok ? 'yes' : 'NO', workflow.ms.toFixed(0), workflow.detail]),
     );
     report.line(
-      '  domain calls as the runtime role. The API’s sign-in, its command receipts and its HTTP routes are not exercised, and neither is the worker’s job runner around a real handler.',
+      workflows.some(workflow=>workflow.ok&&workflow.name==='crm.exactPricing (registered fake worker)')
+        ? '  runtime domain calls plus the registered Ask pricing handler through the worker runner with a fake provider. The API’s sign-in, command receipts and HTTP routes are not exercised; no real provider or sending action.'
+        : '  domain calls as the runtime role. The API’s sign-in, its command receipts and its HTTP routes are not exercised, and neither is the worker’s job runner around a real handler.',
     );
     if (replacedRoutines.length > 0) {
       report.line();

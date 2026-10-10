@@ -1,3 +1,4 @@
+import {runCrmPricingUpgradeWorkflow} from './crmPricingWorkflow.ts';
 import {ASK_UPGRADE_WORKFLOW,runAskUpgradeWorkflow} from './askWorkflows.ts';
 import {createPerson} from '@fss/domain/crm/people.ts';
 import {previewSelectedAttachment,commitSelectedAttachment,readSelectedAttachment} from '@fss/domain/crm/selectedAttachments.ts';
@@ -37,8 +38,8 @@ import type { FixtureHandles } from './fixture.ts';
  *
  * These are domain calls as the runtime role. They construct the actor context
  * directly, so the API's sign-in, its command receipts and its HTTP routes are **not**
- * exercised, and neither is the worker's job runner around a real handler (GPT-6
- * review, P1-3). `docs/greenfield/migrations.md` says so in the same words. What the
+ * exercised. The exact-pricing workflow additionally runs the registered Ask handler
+ * through the real worker runner with a fake provider; other workflows are domain calls. What the
  * three tables `sessions`, `oidc_authorization_requests` and `command_receipts` hold
  * is therefore outside this test, which is also why the fixture is excused for leaving
  * them empty.
@@ -284,6 +285,7 @@ export async function runWorkflows(
 
   const steps: readonly Step[] = [
     { name: ASK_UPGRADE_WORKFLOW, run: async () => await runAskUpgradeWorkflow(admin,handles) },
+    { name:'crm.exactPricing (registered fake worker)',run:async()=>await runCrmPricingUpgradeWorkflow(admin) },
     {
       name: 'crm.selectedFile (explicit import)',
       run: async () => {
