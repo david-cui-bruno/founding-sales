@@ -42,15 +42,34 @@ Create a reviewed, non-secret tfvars JSON with the usual rehearsal inputs (prefi
 
 The database suffix is lowercase letters/digits/underscores, at most40 characters. Sending remains false; ordinary CRM adapter configuration and restored/external database overrides are refused in diagnostic mode. The shared stack creates the managed diagnostic database and tags RDS, the application database secret, task definitions and ECS services with the exact purpose/environment. Service tags propagate to running tasks. Only the API/worker task roles gain additional DescribeTasks/DescribeTaskDefinition, DescribeDBInstances/ListTagsForResource and DescribeSecret permissions scoped as documented below; there is no witness secret-value, mutation or provider permission.
 
-After explicit cloud-operation approval, run the usual isolated root preparation, using an approved state key rather than the default shared rehearsal key:
+The rehearsal deployment role is trusted only for the protected GitHub OIDC workflow. A local operator cannot assume it through the normal path. Do not disable role checks, expand IAM or substitute an administrative session. The ordinary `plan/create/deploy/full` workflow overrides the host and always tears down; it must not be used for an interactive diagnostic. #532 adds a separate plan-only preparation path; its source checks and exact dispatch support must be verified before use.
+
+The following Terraform calls describe the required operations inside that verified normal-role path, after explicit cloud-operation approval, using the approved unique state key rather than the shared default. They are not a local credential workaround:
 
 ```bash
 terraform -chdir=infra/roots/rehearsal init -backend-config=backend.hcl -backend-config="key=<approved unique rehearsal state key>"
 terraform -chdir=infra/roots/rehearsal plan -var-file=<reviewed tfvars.json> -out=<reviewed plan file>
-terraform -chdir=infra/roots/rehearsal show <reviewed plan file>
+# Inspect locally or emit only a values-free summary; never log/upload raw plan values.
 ```
 
-Review replacement/create actions, names/tags and both additional IAM policies before the separately approved apply. Follow the existing rehearsal release sequence in `infra/scripts/deploy.sh` and the secret-entry preparation from `.github/workflows/greenfield-release.yml`: derive both database entries from `database_endpoint` and **`database_name` outputs**, fill secret values privately from stdin/file descriptors, migrate with the migration identity, and ensure the app-runtime login before scaling either service. Use actual approved OAuth/session secrets for this diagnostic; ordinary rehearsal fixture secrets cannot establish real consent. Terraform never reads/writes secret values. Do not feed this candidate into production release automation.
+This repository is public. A protected workflow environment does not make its uploaded artifacts private. Retain only a values-free review manifest and an encrypted saved plan addressed to the reviewed local operator public key; keep the private key outside CI and the repository. Raw plan files, `terraform show` JSON/logs and secret-bearing configuration must not be uploaded. An encrypted plan supports local review; it does not by itself provide a later GitHub OIDC saved-plan apply path. Existing role source permissions do not include S3 version reads or arbitrary object deletion, and private escrow/retention must not be inferred.
+
+Review replacement/create actions, names/tags and both additional IAM policies before the separately approved apply. Exact saved-plan application, bounded interactive lifetime with independent cleanup, real isolated secret injection and unique public DNS remain operational prerequisites. DNS requires a separately authorized existing DNS owner; do not add Route53 permission to the rehearsal role. A $5/four-hour proposal is neither a hard cloud cost cap nor guaranteed instantaneous deletion. Follow the existing rehearsal release sequence in `infra/scripts/deploy.sh` and the secret-entry preparation from `.github/workflows/greenfield-release.yml`: derive both database entries from `database_endpoint` and **`database_name` outputs**, fill secret values privately from stdin/file descriptors, migrate with the migration identity, and ensure the app-runtime login before scaling either service. Use actual approved OAuth/session secrets for this diagnostic; ordinary rehearsal fixture secrets cannot establish real consent. Terraform never reads/writes secret values. Do not feed this candidate into production release automation.
+
+## Retained plan-only preparation (#532)
+
+The separately gated `diagnostic_plan` stage in `greenfield-release.yml` is the supported preparation seam after its reviewed source is on main. It excludes the ordinary rehearsal job and has no apply, deployment, secret-value injection or teardown step. Strict inputs bind the selected environment UUID, `fss_diagnostic_<suffix>` database, `<suffix>.rehearsal.usecallie.com` hostname, two distinct immutable image digests and the recipient public SPKI fingerprint. The `diagnostic_config` JSON has only `environmentId`, `databaseName`, `apiHostname`, `recipientPublicKeyPem` and `recipientPublicKeySha256`; never put a private key or OAuth secret in that input. Existing certificate/repository values come from the protected rehearsal environment.
+
+The helper runs on Node24 through `infra/scripts/diagnostic-plan.mjs`. Its public commands are `validate`, `provenance`, `plan`, `seal` and `decrypt`. The workflow checks immutable image-build provenance separately from its own infra-only commit, verifies the exact normal role and certificate, and plans only against `fss/greenfield/rehearsal/fss-rh-<suffix>/terraform.tfstate`. Nonempty state or an unreadable state check refuses; no cleanup of an existing environment is implied. Terraform backend initialization and locking are AWS operations even though no stack resource is applied.
+
+Review artifacts are retained for one day: a values-free manifest/summary and an RSA-OAEP-SHA256/AES-256-GCM encrypted saved plan. The exact manifest bytes are authenticated as encryption associated data; retain and independently check their receipt/hash/source/configuration bindings. Decrypt only locally with the intended private key and a fresh nonexisting destination:
+
+```bash
+node --experimental-transform-types --disable-warning=ExperimentalWarning infra/scripts/diagnostic-plan.mjs decrypt \
+  <plan.encrypted.json> <manifest.json> <local-private-key.pem> <new-private-plan-path>
+```
+
+A successful plan declares `applySupported=false` and `activationAllowed=false`. It supplies a concrete proposal for review, not an environment, an approved plan-application mechanism, real consent, Gmail headroom or provider/deletion acceptance. Do not dispatch ordinary `create/full` to consume it: those paths replan and tear down. Exact-plan handoff/application and independent bounded cleanup must be verified before any approved creation.
 
 ## Inspect exact bindings and execute the bounded lifecycle
 

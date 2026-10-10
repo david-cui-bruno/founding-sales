@@ -47,6 +47,7 @@ on:
           - deploy
           - full
           - teardown
+          - diagnostic_plan
       api_image_digest:
         description: 'API image digest, sha256:... (from David''s push)'
         required: true
@@ -72,6 +73,11 @@ on:
         options:
           - 'us-east-1a,us-east-1b'
           - 'us-east-1a,us-east-1d'
+      diagnostic_config:
+        description: 'Plan-only strict JSON: environmentId, databaseName, apiHostname, recipientPublicKeyPem, recipientPublicKeySha256. Public key only; never credentials.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -102,7 +108,7 @@ jobs:
   rehearsal:
     name: Create, deploy and destroy a rehearsal environment
     # A dispatch only. Never a push or a pull request.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.stage != 'diagnostic_plan'
     runs-on: ubuntu-24.04
     # A run is about 45 minutes (lane g97): the create about 17, the deploy about 12, the
     # bootstrap, the ranges and the smoke about 5, and the teardown. The long steps carry
@@ -802,3 +808,77 @@ jobs:
           # told not to, and run 35679472666 uploaded nothing for that reason.
           include-hidden-files: true
           retention-days: 90
+
+  # A public repository's artifacts are not confidential. Only an authenticated
+  # encrypted plan is uploaded; the recipient private key never enters CI.
+  # This job has no teardown path and cannot create an interactive environment.
+  diagnostic_plan:
+    name: Retain an exact encrypted acquisition diagnostic plan
+    if: github.event_name == 'workflow_dispatch' && inputs.stage == 'diagnostic_plan'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: rehearsal
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FSS_DIAGNOSTIC_RUN_SUFFIX: ${{ inputs.run_suffix }}
+      FSS_DIAGNOSTIC_API_DIGEST: ${{ inputs.api_image_digest }}
+      FSS_DIAGNOSTIC_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
+      FSS_DIAGNOSTIC_ZONES: ${{ inputs.availability_zones }}
+      FSS_DIAGNOSTIC_CERTIFICATE_ARN: ${{ secrets.FSS_REHEARSAL_CERTIFICATE_ARN }}
+      FSS_DIAGNOSTIC_API_REPOSITORY: ${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}
+      FSS_DIAGNOSTIC_WORKER_REPOSITORY: ${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Validate the exact diagnostic proposal before cloud access
+        env:
+          DIAGNOSTIC_CONFIG: ${{ inputs.diagnostic_config }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$DIAGNOSTIC_CONFIG" > "$RUNNER_TEMP/diagnostic-config.json"
+          node --experimental-transform-types --disable-warning=ExperimentalWarning infra/scripts/diagnostic-plan.mjs validate             "$RUNNER_TEMP/diagnostic-config.json" "$RUNNER_TEMP/diagnostic-plan"
+          infra/scripts/images.sh pin "$GITHUB_SHA" "$RUNNER_TEMP/diagnostic-image-pin.json"
+          node --experimental-transform-types --disable-warning=ExperimentalWarning infra/scripts/diagnostic-plan.mjs provenance \
+            "$RUNNER_TEMP/diagnostic-plan/validated.json" "$RUNNER_TEMP/diagnostic-image-pin.json"
+      - name: Assume only the protected rehearsal role for diagnostic planning
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: diagnostic-plan-${{ github.run_id }}
+      - name: Save the exact encrypted diagnostic plan without deployment
+        run: |
+          set -euo pipefail
+          node --experimental-transform-types --disable-warning=ExperimentalWarning infra/scripts/diagnostic-plan.mjs plan             "$RUNNER_TEMP/diagnostic-config.json" "$RUNNER_TEMP/diagnostic-plan" infra/roots/rehearsal
+          cat "$RUNNER_TEMP/diagnostic-plan/public/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the values-free diagnostic plan receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diagnostic-plan-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/diagnostic-plan/public/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Keep only the encrypted saved plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diagnostic-plan-encrypted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/diagnostic-plan/encrypted/plan.encrypted.json
+          if-no-files-found: error
+          retention-days: 1
