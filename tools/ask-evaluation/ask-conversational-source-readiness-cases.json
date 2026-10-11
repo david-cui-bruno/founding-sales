@@ -1,0 +1,292 @@
+{
+  "version": "ask-conversational-source-readiness-cases-v2",
+  "issues": [
+    548,
+    554,
+    555,
+    556,
+    557,
+    558,
+    559,
+    560,
+    561,
+    551,
+    552
+  ],
+  "state": "source_regression_and_evaluation_preparation_only",
+  "implementationCommit": "fd6c63cbda305717f8f7a9f1bf97ac9625d9e66b",
+  "schemaVersionRequired": 98,
+  "activationAllowed": false,
+  "canonicalSourceBinding": {
+    "sourcePullRequest": "https://github.com/david-cui-bruno/founding-sales/pull/570",
+    "runtimeImplementationCommit": "fd6c63cbda305717f8f7a9f1bf97ac9625d9e66b",
+    "schemaVersionRequired": 98,
+    "bindingKind": "controlled_source_candidate_only",
+    "activationAllowed": false,
+    "realRunFreeze": "Rebind exact merged source/image, dataset, independent labels, configuration and authority before authorized real evaluation."
+  },
+  "independentLabelsFrozenAt": null,
+  "componentComparisons": [
+    "exact SQL state correctness",
+    "ranked PostgreSQL keyword retrieval",
+    "authorized real Titan query/document retrieval",
+    "same-window agent cited synthesis"
+  ],
+  "architectureDecision": "Approved existing stack and bounded model tools; component evaluation is not a new architecture tournament.",
+  "implementationVersions": {
+    "sdk": "ai@6.0.303",
+    "bedrockProvider": "@ai-sdk/amazon-bedrock@4.0.194",
+    "processor": "ask-agent-v2",
+    "retrieval": "ask-hybrid-v2",
+    "answer": "ask-agent-v2",
+    "support": "cited-evidence-v1",
+    "chunker": "lexical-original-v1"
+  },
+  "providerConfiguration": {
+    "answerModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "embeddingModel": "amazon.titan-embed-text-v2:0",
+    "region": "us-east-1",
+    "embeddingDimensions": null,
+    "answerAuthorityReceipt": null,
+    "embeddingAuthorityReceipt": null,
+    "purposeRevisions": null,
+    "pricesVerifiedAt": null,
+    "inputOutputRates": null,
+    "agentLimits": null,
+    "dailyMonthlyCeilings": null
+  },
+  "evaluationAllocation": "Preserve #548 twenty development/ten unseen allocations; this supplement is development material and cannot replace held-out or representative business evidence.",
+  "metrics": {
+    "realProviderCalls": null,
+    "realModelQuality": null,
+    "realVectorRecall": null,
+    "representativeBusinessCoverage": null,
+    "latencyP50P95": null,
+    "tokensAndSettledCost": null,
+    "loadThroughput": null
+  },
+  "loadProtocol": {
+    "entryPoint": "Authenticated session turn commands/reads and the normally registered worker; isolated disposable PostgreSQL and fake external adapters for source checks.",
+    "realRunAdmission": "Freeze exact source, dataset/splits/labels, actor/scope, rates, purpose/receipt bindings and configured limits before separately authorized paid execution.",
+    "measurements": [
+      "Queue wait and total response latency separately",
+      "Per-step provider latency, reported tokens and settled/estimated charges",
+      "Source read, projection and SQL ranking latency",
+      "Cancellation/deletion/revocation during queue and in-flight waits",
+      "Same-label component recall/precision and unsupported inference counts"
+    ],
+    "successThresholds": "Use the separately approved #548/#551 evaluation manifest; no new unmeasured performance target is asserted here.",
+    "automaticRetry": "Disabled for unknown accepted calls; conserve all uncertain reservations."
+  },
+  "operationalGaps": [
+    {
+      "owner": "integration owner and David",
+      "gap": "Exact source review/check/upgrade receipts",
+      "next": "Root binds final candidate after independent review and actually executed deployed88/source90 upgrade."
+    },
+    {
+      "owner": "David and operations acceptance",
+      "gap": "Actual model/embedding grant and account availability; current rates/limits",
+      "next": "Verify separate purpose-specific configuration and receipts under #551/#552; no grant is created by this file."
+    },
+    {
+      "owner": "evaluation reviewer",
+      "gap": "Independent human labels and representative business corpus",
+      "next": "Preserve development/holdout separation and source-kind labels; do not count Shirley isolated diagnostic copies as ordinary business model quality."
+    },
+    {
+      "owner": "evaluation runner",
+      "gap": "Real quality, latency, costs and load measurements",
+      "next": "Run reviewed exact frozen protocol only after paid authorization; retain raw outputs and durable conservation receipts."
+    }
+  ],
+  "cases": [
+    {
+      "caseId": "ask_exact_no_corpus",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Server-scoped exact firm state without manufactured source citations",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askAgentExecution.test.ts",
+      "forbiddenOutcome": "Source-free exact results represented as quotation proof",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_selected_paraphrase",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Selected-source paraphrase, inference labels and original canonical citation navigation",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askAgentExecution.test.ts",
+      "forbiddenOutcome": "Citation validity treated as semantic support",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_native_sdk_tools",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Actual pinned AI SDK argument/result conversion through registered worker with a fake external model",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askAgentExecution.test.ts",
+      "forbiddenOutcome": "Hidden automatic SDK generation or transport retries",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_hybrid_synonym",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Independent query/document embeddings, exact PostgreSQL-array cosine and RRF retrieve non-keyword evidence",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askAgentExecution.test.ts",
+      "forbiddenOutcome": "Controlled vectors counted as measured real semantic quality",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_unknown_financial",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Unknown accepted model or embedding attempts are conserved and never automatically replaced",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askAgentExecution.test.ts",
+      "forbiddenOutcome": "Estimated usage dropped or repeated dispatch",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_tool_scope_escape",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Invalid tools and out-of-scope exact record arguments refuse without a further provider call",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askAgentExecution.test.ts",
+      "forbiddenOutcome": "Arbitrary SQL, broader record access or write tools",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_erasure_during_wait",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Original-source deletion during provider wait vetoes publication and erases source-derived history/projections",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askAgentExecution.test.ts",
+      "forbiddenOutcome": "Deleted text reappears from provider output",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_session_continuity",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Private dated turns revalidate all earlier original inputs and narrow scopes cannot retain wider content",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askSessions.test.ts",
+      "forbiddenOutcome": "History reopen dispatches inference or prior scope becomes authority",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_cancel_deeper",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Explicit cancellation and deeper-work preview preserve immutable financial attempts and current authority",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askInvestigationControls.test.ts",
+      "forbiddenOutcome": "Generic approval grants purpose/spend authority or uncertain work replays",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_human_action",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Exact preview and human confirmation use independent leaf actions under current source closure",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askHistoryPrivacy.test.ts",
+      "forbiddenOutcome": "Automatic write, opportunity transition, enrollment or sending",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_whole_history_identifier",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Question-directed history discovery beyond fifty copies before ten-source admission",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askHistoryInvestigation.test.ts",
+      "forbiddenOutcome": "Ordinal first-page evidence mistaken for the complete allowed corpus",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_identity_clarification",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Canonical name resolution preserves ambiguity and historical visible relationships",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askCanonicalDiscovery.test.ts",
+      "forbiddenOutcome": "Implicit entity merge or silently selecting an ambiguous contact",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_reusable_index",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Independent canonical backfill reuses current document vectors and conserves unknown accepted work",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askCanonicalIndex.test.ts",
+      "forbiddenOutcome": "Manufactured Ask questions or repeat document spend when a vector is current",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_actual_authority_seams",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Actual registry verifier reconstructs current admitted evidence and permits configured request/index targets with synthetic receipts",
+      "publicWorkerOrDesktopFixture": "apps/api/test/crmAuthorityCaptureConsumption.test.ts",
+      "forbiddenOutcome": "Fake verifier success masking an unusable configured transport path",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_unknown_conversation_attribution",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Retained envelope, quotation ranges and uncertainty survive expansion; metadata changes veto late output",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askUnknownBusiness.test.ts",
+      "forbiddenOutcome": "Participant order or quotes interpreted as verified sender identity",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_open_task_families",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Exact reads include operational work, human Ask tasks and CRM internal commitments with partial/date disclosure",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askOpenTasks.test.ts",
+      "forbiddenOutcome": "Counting only legacy operational tasks or overstating a bounded scan",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    },
+    {
+      "caseId": "ask_transitive_history_erasure",
+      "split": "development_supplement",
+      "material": "synthetic",
+      "scenario": "Deleting original history clears dependent turns including stale descendants during a paid wait",
+      "publicWorkerOrDesktopFixture": "apps/api/test/askHistoryDependencies.test.ts",
+      "forbiddenOutcome": "Private inherited prose survives erasure or accepted usage is lost",
+      "canonicalSourceBinding": null,
+      "realProviderMeasurement": null,
+      "independentHumanReview": "pending"
+    }
+  ]
+}

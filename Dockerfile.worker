@@ -70,9 +70,11 @@ WORKDIR /app
 COPY certs/rds-global-bundle.pem certs/rds-global-bundle.pem
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
-COPY apps/worker/package.json apps/worker/
-COPY packages/domain/package.json packages/domain/
-COPY packages/contracts/package.json packages/contracts/
+# npm may place version-conflicting production packages inside each workspace.
+# Preserve that lockfile-resolved layout as well as the hoisted root dependencies.
+COPY --from=dependencies /app/apps/worker ./apps/worker
+COPY --from=dependencies /app/packages/domain ./packages/domain
+COPY --from=dependencies /app/packages/contracts ./packages/contracts
 COPY apps/worker/src apps/worker/src
 COPY packages/domain/db packages/domain/db
 COPY packages/domain/crm packages/domain/crm
@@ -107,8 +109,14 @@ COPY packages/domain/calls packages/domain/calls
 COPY packages/domain/meetings packages/domain/meetings
 COPY packages/contracts/src packages/contracts/src
 
-# The test harness is never in the image: it starts a PostgreSQL cluster.
-RUN rm -rf packages/domain/db/testing
+# Exclude the repository harness and optional SDK test-helper entry points.
+# npm's production packages can include their own src/test and dist/test trees.
+RUN rm -rf packages/domain/db/testing \
+ && for task_modules in apps/worker/node_modules packages/domain/node_modules packages/contracts/node_modules; do \
+      if [ -d "$task_modules" ]; then \
+        find "$task_modules" -type d \( -name test -o -name tests -o -name testing \) -prune -exec rm -rf {} +; \
+      fi; \
+    done
 
 # The liveness file the ECS health check stats lives here. When the task
 # definition sets `readonlyRootFilesystem`, /tmp must be a tmpfs volume;

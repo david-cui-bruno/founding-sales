@@ -1,3 +1,4 @@
+import {REQUIRED_SCHEMA} from '../../packages/domain/db/schemaRange.ts';
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import {
@@ -78,6 +79,7 @@ function runConfig(change: Record<string, unknown> = {}) {
 }
 it("prepares an exact identifier-only diagnostic proposal without a cloud command", () => {
   const run = runConfig();
+  if(Number(REQUIRED_SCHEMA)!==90){expect(run.status).toBe(1);expect(run.output).toContain('schema90_required');return;}
   expect(run.status, run.output).toBe(0);
   expect(run.validated).toMatchObject({
     prefix: "fss-rh-cap90-o10a",
@@ -218,6 +220,9 @@ it("saves only an encrypted exact fresh-state plan under verified normal role an
         resolve("packages/domain/db", file),
         join(checkout, "packages/domain/db", file),
       );
+    // This positive plan fixture remains the authorized schema90 diagnostic.
+    // Current newer source must refuse it, as the separate configuration test proves.
+    writeFileSync(join(checkout, 'packages/domain/db/schemaRange.ts'), readFileSync(join(checkout, 'packages/domain/db/schemaRange.ts'),'utf8').replace(/export const REQUIRED_SCHEMA = \d+;/u,'export const REQUIRED_SCHEMA = 90;'));
     const fixtureScript = join(checkout, "infra/scripts/diagnostic-plan.mjs");
     const root = join(checkout, "infra/roots/rehearsal");
     const bin = join(dir, "bin");

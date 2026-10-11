@@ -20,6 +20,7 @@ export type IdempotencyProtection = (typeof IDEMPOTENCY_PROTECTIONS)[number];
 
 export const JOB_KINDS = [
   'crm.ask_answer',
+  'crm.ask_index',
   'crm.commitments_project',
   'crm.commitments_intent',
   'crm.mail_progress',
@@ -30,6 +31,7 @@ export const JOB_KINDS = [
   'mail.sync',
   'crm.mail_capture',
   'crm.mail_backfill',
+  'crm.business_selection',
   'mail.reconcile',
   'mail.recover',
   'mail.watch_renew',
@@ -73,6 +75,7 @@ export function isJobKind(value: string): value is JobKind {
 /** Appendix C, third column: the protection each kind's handler must carry. */
 export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection>> = Object.freeze({
   'crm.ask_answer': 'outbound_fence',
+  'crm.ask_index': 'outbound_fence',
   'crm.commitments_project': 'outbound_fence',
   'crm.commitments_intent': 'outbound_fence',
   'crm.mail_progress': 'outbound_fence',
@@ -91,6 +94,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'mail.sync': 'business_uniqueness',
   'crm.mail_capture': 'outbound_fence',
   'crm.mail_backfill': 'outbound_fence',
+  'crm.business_selection': 'outbound_fence',
   // The fence state machine decides; a second reconcile observes, it does not send.
   'mail.reconcile': 'outbound_fence',
   // Message uniqueness and the coverage watermark.
@@ -330,6 +334,7 @@ export type JobClass = (typeof JOB_CLASSES)[number];
  */
 export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze({
   'crm.ask_answer': 'bulk',
+  'crm.ask_index': 'bulk',
   'crm.commitments_project': 'bulk',
   'crm.commitments_intent': 'bulk',
   'crm.mail_progress': 'bulk',
@@ -339,6 +344,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'mail.sync': 'urgent',
   'crm.mail_capture': 'bulk',
   'crm.mail_backfill': 'bulk',
+  'crm.business_selection': 'bulk',
   'mail.reconcile': 'urgent',
   'mail.recover': 'urgent',
   'mail.watch_renew': 'urgent',

@@ -1,3 +1,4 @@
+import type {BusinessPolicy} from '@fss/contracts';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { observeBusinessMetadata, redactBusinessMetadata } from '@fss/domain/business/acquisition.ts';
@@ -219,3 +220,17 @@ async function waitForBlock(observer: SessionQueryable, pid: number | undefined)
     return;
   await delay(5);
 } throw new Error('Public operation did not reach the mailbox barrier'); }
+
+it('edits and removes account-scoped correspondent rules without granting capture',async()=>{
+ const fixture=await createAuthFixture();try{
+ const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+ const mailboxId=(await fixture.db.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'business@example.test','google-business','connected') RETURNING id",[fixture.alpha.workspaceId,fixture.alpha.admin.userId])).rows[0]!.id;
+ const post=(path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+ const policy=(await post('/crm/business/policy/read',{mailboxId})).body as BusinessPolicy;
+ const input={commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,mailboxId,expectedGeneration:policy.generation,expectedAccountBinding:policy.accountBinding,endpoint:'person@example.test',expectedRevision:0,decision:'include',active:true};
+ expect((await post('/crm/business/rules/save',input)).body).toMatchObject({status:'accepted',result:{revision:1,captureAllowed:false}});
+ expect((await post('/crm/business/rules/read',{mailboxId})).body).toMatchObject({rules:[{endpoint:'person@example.test',decision:'include',active:true,revision:1}]});
+ expect((await post('/crm/business/rules/save',{...input,commandId:randomUUID(),active:false})).body).toMatchObject({status:'refused',reason:'stale_rule'});
+ expect((await post('/crm/business/rules/save',{...input,commandId:randomUUID(),expectedRevision:1,active:false})).body).toMatchObject({status:'accepted',result:{revision:2}});
+ }finally{await fixture.stop();}
+});

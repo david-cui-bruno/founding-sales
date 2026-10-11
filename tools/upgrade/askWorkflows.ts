@@ -1,3 +1,5 @@
+import {createAskSession,requestAskSessionTurn,readAskSession,changeAskSession} from '@fss/domain/crm/askSessions.ts';
+import {previewAskInvestigation} from '@fss/domain/crm/askInvestigationControls.ts';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
@@ -80,6 +82,17 @@ export async function runAskUpgradeWorkflow(
   assert.equal(completed.value.status, 'done');
   assert.equal(completed.value.version, 2);
 
+  const session=await transact(()=>createAskSession(context,{commandId:randomUUID(),clientVersion:'1.0.13',scope:{kind:'selected',sources:scope.sources}}));
+  assert(session.ok);
+  const turn=await transact(()=>requestAskSessionTurn(context,{commandId:randomUUID(),clientVersion:'1.0.13',...session.value,question:'What is the scheduling evidence?'}));
+  assert(turn.ok&&turn.value.state==='unavailable','new agent request cannot acquire authority from upgrade');
+  const conversation=await transact(()=>readAskSession(context,session.value.sessionId));
+  assert.equal(conversation?.turns[0]?.execution,'agent_v1');
+  assert.equal(conversation?.turns[0]?.answer,null);
+  const preview=await transact(()=>previewAskInvestigation(context,{requestId:turn.value.requestId,expectedVersion:turn.value.requestVersion,mode:'retry'}));
+  assert.equal(preview.available,false,'explicit retry cannot create absent processing authority');
+  const renamed=await transact(()=>changeAskSession(context,{commandId:randomUUID(),clientVersion:'1.0.13',sessionId:turn.value.sessionId,version:turn.value.version,action:{kind:'rename',title:'Private upgrade conversation'}}));
+  assert(renamed.ok);
   const deleted = await transact(() => changeAskHistory(context, { commandId: randomUUID(), clientVersion: '1.0.13', requestId, expectedRevision: investigation.historyRevision, action: { kind: 'delete' } }));
   assert(deleted.ok && deleted.value.state === 'deleted');
   const deletedRead = await transact(() => readAskAnswer(context, requestId));
@@ -103,6 +116,9 @@ export async function runAskUpgradeWorkflow(
   const completedFact = redacted?.items.find(item => item.actionId === task.value.actionId);
   assert.equal(completedFact?.status, 'done');
   assert.equal(completedFact?.completedAt, completed.value.completedAt, 'source-free completed history must preserve its actual recorded date');
+  const erasedSession=await transact(()=>readAskSession(context,session.value.sessionId));
+  assert.equal(erasedSession?.title,null,'source invalidation removes the private session title');
+  assert(!erasedSession?.turns.some(value=>value.question!==null),'source invalidation removes forbidden conversation text');
   const opportunitiesAfter = await transact(() => readAsk(context, { operation: 'opportunities', scope: { firmId: handles.primaryFirmId }, status: 'all', limit: 50 }));
   assert.deepEqual(opportunitiesAfter, opportunitiesBefore, 'human Ask work must not create or advance commercial initiatives');
   return 'surviving legacy firm/person; exact and keyword reads; metadata-only disabled request; same-request private history; explicit human note/task; recorded completion survives history and source erasure; no provider or sending operation';

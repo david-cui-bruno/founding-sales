@@ -109,6 +109,8 @@ export interface GmailAttachmentReference {
 }
 
 export interface GmailMessageBody {
+  readonly attachments?: readonly GmailAttachmentReference[];
+  readonly representationDiagnostics?: readonly string[];
   readonly threadId?: string;
   readonly labelIds?: readonly string[];
   /** Retained MIME representation completeness; never authored-range proof. */
@@ -209,7 +211,10 @@ export interface GmailListRequest {
   readonly maxResults: number;
 }
 
+export interface GmailThreadMessageIds {readonly threadId:string;readonly messageIds:readonly string[];readonly complete:boolean}
 export interface GmailClient {
+  /** Body-free minimal thread enumeration; bounded at 500 IDs, separately metered. */
+  getThreadMessageIds?(access:GmailAccessGrant,threadId:string):Promise<GmailThreadMessageIds|null>;
   /** The consent URL the salesperson's browser opens. Pure; reaches nothing. */
   authorizationUrl(
     config: GmailOAuthConfig,

@@ -16,7 +16,7 @@ export function createServerCrmGmailAccessResolver(options: AccessDeps & { openS
     try {
     const context = repositoryContext(workspaceScope(input.workspaceId, { kind: 'system', component: 'worker' }), opened.session);
     async function current() {
-      const row = (await context.db.query<{ owner_user_id: string; provider_account_id: string; generation: number; status: string; member_status: string }>(`SELECT m.owner_user_id,m.provider_account_id,m.generation,m.status,w.status AS member_status FROM mailboxes m JOIN workspace_memberships w ON w.workspace_id=m.workspace_id AND w.user_id=m.owner_user_id WHERE m.workspace_id=$1 AND m.id=$2`, [input.workspaceId, input.mailboxId])).rows[0];
+      const row = (await context.db.query<{ owner_user_id: string; provider_account_id: string; generation: number; status: string; email_address:string; member_status: string }>(`SELECT m.email_address,m.owner_user_id,m.provider_account_id,m.generation,m.status,w.status AS member_status FROM mailboxes m JOIN workspace_memberships w ON w.workspace_id=m.workspace_id AND w.user_id=m.owner_user_id WHERE m.workspace_id=$1 AND m.id=$2`, [input.workspaceId, input.mailboxId])).rows[0];
       return row !== undefined && row.status === 'connected' && row.member_status === 'active' && row.provider_account_id === input.providerAccountId && row.generation === input.generation ? row : null;
     }
     const before = await current();
@@ -25,7 +25,7 @@ export function createServerCrmGmailAccessResolver(options: AccessDeps & { openS
     if (!access.ok || access.access.expiresAtEpochSeconds <= (options.now?.() ?? new Date()).getTime() / 1000) return null;
     const after = await current();
     if (after === null || after.owner_user_id !== before.owner_user_id) return null;
-    return { mailboxId: input.mailboxId, providerAccountId: input.providerAccountId, generation: input.generation, access: access.access };
+    return { mailboxId: input.mailboxId, providerAccountId: input.providerAccountId, generation: input.generation, mailboxEmail:after.email_address, access: access.access };
     } finally { await opened.close(); }
   };
 }

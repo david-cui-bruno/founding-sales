@@ -1,3 +1,8 @@
+import {askAnswerCancelPayloadSchema,askAnswerCancelledSchema,askAnswerInvestigationPreviewSchema,askAnswerInvestigationPreviewResultSchema,askAnswerInvestigationCommitSchema} from '@fss/contracts';
+import {businessSelectionReadSchema,businessSelectionStatusSchema} from '@fss/contracts';
+import {businessSelectionPayloadSchema} from '@fss/contracts';
+import {askSessionCreatePayloadSchema,askSessionIdentitySchema,askSessionTurnPayloadSchema,askSessionTurnAcknowledgmentSchema,askSessionChangePayloadSchema,askSessionReadSchema,askSessionViewSchema,askSessionListSchema,askSessionPageSchema} from '@fss/contracts';
+import {businessRuleReadSchema,businessRulePayloadSchema,businessRulesSchema} from '@fss/contracts';
 import {
   crmCapabilityReadSchema,
   crmCapabilityReadResponseSchema,
@@ -1281,6 +1286,10 @@ export const OPERATIONS = {
   },
   'crm.businessPolicyRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/policy/read'}],input:businessPolicyReadSchema,output:businessPolicySchema,transform:'actual actor mailbox configuration; capture remains disabled'},
   'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
+  'crm.businessSelectionRead':{kind:'read',calls:[{method:'POST',path:'/crm/business/selection/read'}],input:businessSelectionReadSchema,output:businessSelectionStatusSchema,transform:'current account selection status without provider reads'},
+  'crm.businessSelectionRequest':{kind:'command',calls:[{method:'POST',path:'/crm/business/selection/request'}],input:businessSelectionPayloadSchema,output:z.strictObject({status:z.literal('queued'),previewJobId:z.uuid(),captureAllowed:z.literal(false)}),transform:'one selected Gmail message metadata preview; no body acquisition'},
+  'crm.businessRulesRead':{kind:'read',calls:[{method:'POST',path:'/crm/business/rules/read'}],input:businessRuleReadSchema,output:businessRulesSchema,transform:'account-scoped correspondent rules'},
+  'crm.businessRuleSave':{kind:'command',calls:[{method:'POST',path:'/crm/business/rules/save'}],input:businessRulePayloadSchema,output:z.strictObject({revision:z.number().int().positive(),captureAllowed:z.literal(false)}),transform:'versioned rule edit or removal; no capture authority'},
   'crm.businessReviewRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/review/read'}],input:businessReviewReadSchema,output:businessReviewSchema,transform:'bounded proven account metadata; no bodies'},
   'crm.businessReviewDecide': {kind:'command',calls:[{method:'POST',path:'/crm/business/review/decide'}],input:businessReviewDecidePayloadSchema,output:z.strictObject({decisionRevision:z.number().int().positive(),captureAllowed:z.literal(false)}),transform:'versioned human inclusion/exclusion; no capture authority'},
   'crm.evidenceWorkBind':{kind:'command',calls:[{method:'POST',path:'/crm/evidence/work/bind'}],input:crmEvidenceWorkBindPayloadSchema,output:crmEvidenceWorkBoundSchema,transform:'exact current claim and actual task version dependency'},
@@ -1301,12 +1310,20 @@ export const OPERATIONS = {
   'crm.evidenceRead':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/read'}],input:crmEvidenceReadSchema,output:crmEvidencePageSchema,transform:'bounded current and human-reviewed source evidence'},
   'crm.processingSource':{kind:'read',calls:[{method:'POST',path:'/crm/processing/source/read'}],input:crmSourceLookupSchema,output:crmResolvedSourceSchema,transform:'exact current source authority and bounded quote'},
   'crm.progressRead':{kind:'read',calls:[{method:'POST',path:'/crm/progress/read'}],input:crmProgressReadSchema,output:crmProgressResponseSchema,transform:'current verified evidence; imports do not send or change sales stages'},
+  'ask.sessionCreate':{kind:'command',calls:[{method:'POST',path:'/ask/sessions/create'}],input:askSessionCreatePayloadSchema,output:askSessionIdentitySchema,transform:'owner-private current conversational scope; no sending authority'},
+  'ask.sessionTurn':{kind:'command',calls:[{method:'POST',path:'/ask/sessions/turn'}],input:askSessionTurnPayloadSchema,output:askSessionTurnAcknowledgmentSchema,transform:'owner-private current conversational scope; no sending authority'},
+  'ask.sessionChange':{kind:'command',calls:[{method:'POST',path:'/ask/sessions/change'}],input:askSessionChangePayloadSchema,output:askSessionIdentitySchema,transform:'owner-private current conversational scope; no sending authority'},
+  'ask.sessionRead':{kind:'read',calls:[{method:'POST',path:'/ask/sessions/read'}],input:askSessionReadSchema,output:askSessionViewSchema,transform:'owner-private current conversational scope; no sending authority'},
+  'ask.sessionList':{kind:'read',calls:[{method:'POST',path:'/ask/sessions/list'}],input:askSessionListSchema,output:askSessionPageSchema,transform:'owner-private current conversational scope; no sending authority'},
   'ask.read':{kind:'read',calls:[{method:'POST',path:'/ask/read'}],input:askReadSchema,output:askResponseSchema,transform:'exact current state and authorized lexical retrieval; no execution authority'},
   'ask.actionRead':{kind:'read',calls:[{method:'POST',path:'/ask/actions/read'}],input:askActionReadSchema,output:askActionPageSchema,transform:'owner-private current human work; unavailable support is source-free'},
   'ask.actionChange':{kind:'command',calls:[{method:'POST',path:'/ask/actions/change'}],input:askActionChangePayloadSchema,output:askActionChangedSchema,transform:'explicit current manual task or proposal revision; no operational task effects'},
   'ask.actionCreate':{kind:'command',calls:[{method:'POST',path:'/ask/actions/create'}],input:askActionCreatePayloadSchema,output:askActionAcknowledgmentSchema,transform:'explicit human leaf action bound to current supported finding; no policy or send effects'},
   'ask.historyChange':{kind:'command',calls:[{method:'POST',path:'/ask/history/change'}],input:askHistoryChangePayloadSchema,output:askHistoryChangedSchema,transform:'explicit owner-private metadata CAS; body-free receipt'},
   'ask.historyList':{kind:'read',calls:[{method:'POST',path:'/ask/history/list'}],input:askHistoryListSchema,output:askHistoryPageSchema,transform:'owner-private dated history with current source authority; no inference'},
+  'ask.answerCancel':{kind:'command',calls:[{method:'POST',path:'/ask/answers/cancel'}],input:askAnswerCancelPayloadSchema,output:askAnswerCancelledSchema,transform:'cancel future dispatch; retain financial settlement'},
+  'ask.investigationPreview':{kind:'read',calls:[{method:'POST',path:'/ask/answers/investigation/preview'}],input:askAnswerInvestigationPreviewSchema,output:askAnswerInvestigationPreviewResultSchema,transform:'dated allowance preview; no dispatch'},
+  'ask.investigationCommit':{kind:'command',calls:[{method:'POST',path:'/ask/answers/investigation/commit'}],input:askAnswerInvestigationCommitSchema.omit({commandId:true,clientVersion:true}),output:askAnswerAcknowledgmentSchema,transform:'explicit new bounded investigation; no grant'},
   'ask.answerRequest':{kind:'command',calls:[{method:'POST',path:'/ask/answers/request'}],input:askAnswerRequestPayloadSchema,output:askAnswerAcknowledgmentSchema,transform:'explicit bounded question and selected versions; metadata acknowledgment only'},
   'ask.answerRead':{kind:'read',calls:[{method:'POST',path:'/ask/answers/read'}],input:askAnswerReadSchema,output:askAnswerReadResultSchema,transform:'fresh permission-checked answer and same-input keyword fallback'},
   'ask.answerSourceRead':{kind:'read',calls:[{method:'POST',path:'/ask/answers/source/read'}],input:askAnswerSourceReadSchema,output:askAnswerSourceResultSchema,transform:'current server-resolved request version and citation window; no navigation authority'},

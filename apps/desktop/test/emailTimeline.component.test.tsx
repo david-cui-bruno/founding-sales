@@ -102,6 +102,7 @@ function conversation(): MailConversation {
       ],
       reviewedContexts: [],
       participants: ["Alex Example <alex@example.test>"],
+      providerOrigin:"unknown",attachments: [],representationDiagnostics: [],
       parserVersion: "gmail-mime-v1",
       representation: "html_flattened",
       completeness: "partial",
@@ -946,4 +947,12 @@ it("refuses V1 fallback and removes copied text when V2 is denied or malformed",
  await userEvent.setup().click(await screen.findByRole('button',{name:'Open email 1'}));
  expect(await screen.findByText('This copied email is unavailable. Refresh the history.')).toBeTruthy();
  expect(screen.queryByText('Retained email text.')).toBeNull();expect(screen.queryByLabelText('Provider original observation')).toBeNull();expect(fallback).toBe(0);
+});
+it('opens canonical attachment metadata without initiating content analysis',async()=>{
+ const user=userEvent.setup();const source=conversation();if(source.state==='available')source.source.attachments=[{filename:'Repair plan.pdf',mimeType:'application/pdf',sizeBytes:2048,attachmentId:'pdf-ref'}];
+ render(<EmailTimeline enabled privacyKey="attachments" ports={{list:async()=>list(),read:async()=>source}}/>);
+ await user.click(await screen.findByRole('button',{name:'Open email 1'}));
+ await user.click(await screen.findByText('Repair plan.pdf'));
+ expect(await screen.findByText('application/pdf; 2048 bytes')).toBeTruthy();
+ expect(screen.getByText('Metadata only. Attachment contents have not been fetched or analyzed.')).toBeTruthy();
 });

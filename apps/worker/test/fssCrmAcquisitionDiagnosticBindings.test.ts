@@ -1,3 +1,4 @@
+import {CURRENT_SCHEMA_VERSION} from '@fss/domain/db/schemaRange.ts';
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import {
   seedTwoWorkspaces,
   type TwoWorkspaces,
 } from "@fss/domain/test/db/support/fixtures.ts";
+import {applyMigrations} from "@fss/domain/db/migrationRunner.ts";
 import { main } from "../src/tools/fss.ts";
 let admin: pg.Client,
   client: pg.Client,
@@ -25,13 +27,14 @@ beforeAll(async () => {
   });
   await admin.connect();
   await admin.query(
-    `CREATE DATABASE "${name}" TEMPLATE "${process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE]!}"`,
+    `CREATE DATABASE "${name}"`,
   );
   const value = new URL(process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE]!);
   value.pathname = `/${name}`;
   url = value.toString();
   client = new pg.Client({ connectionString: url });
   await client.connect();
+  await applyMigrations(asSession({query:(text,values)=>client.query(text,values),connect:async()=>{},end:async()=>{}}),{throughVersion:90});
   seeded = await seedTwoWorkspaces(
     asSession({
       query: (text, values) => client.query(text, values),
@@ -252,4 +255,18 @@ it("requires inherited migration authority rather than mere role membership", as
   } finally {
     await admin.query(`DROP ROLE "${role}"`);
   }
+});
+
+it("refuses the current schema rather than silently widening the historical schema90 diagnostic",async()=>{
+ const currentName=`${name}_current`;
+ await admin.query(`CREATE DATABASE "${currentName}" TEMPLATE "${process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE]!}"`);
+ try{
+  const current=new URL(url);current.pathname=`/${currentName}`;
+  const currentClient=new pg.Client({connectionString:current.toString()});await currentClient.connect();
+  try{expect((await currentClient.query<{version:number}>('SELECT max(version) AS version FROM schema_versions')).rows[0]?.version).toBe(CURRENT_SCHEMA_VERSION);}finally{await currentClient.end();}
+  const result=await run({FSS_MIGRATION_DATABASE_URL:current.toString()});
+  expect(result.code).toBe(20);
+  expect(JSON.parse(result.stderr.trim()).reason).toBe('diagnostic_bindings_environment_mismatch');
+  expect(result.stdout).toBe('');
+ }finally{await admin.query(`DROP DATABASE IF EXISTS "${currentName}" WITH (FORCE)`);}
 });

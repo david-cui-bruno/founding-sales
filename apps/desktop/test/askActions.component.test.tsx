@@ -91,3 +91,20 @@ it('allows a separately confirmed human action on current keyword evidence while
  expect(actionCreate).toHaveBeenCalledWith({requestId,expectedVersion:4,finding:{kind:'keyword_passage',index:0},action:{kind:'preference',text:'Prefer explicit scheduling questions.'}});
  expect(answerRequest).not.toHaveBeenCalled();
 });
+
+it('binds a human annotation to an explicitly selected opportunity of the selected firm',async()=>{
+ const initiativeId='33333333-3333-4333-8333-333333333333';
+ const lookup:AskPorts['read']=async input=>input.operation==='opportunities'?{operation:'opportunities',scope:{firmId:actionId},dateBasis:'opportunity_opened_at',count:'1',records:[{opportunityId:initiativeId,firmId:actionId,name:'Coordinator evaluation',status:'open',stageKey:'lead',openedAt:'2026-10-09T11:00:00.000Z'}],truncated:false,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}:{operation:'records',selection:'single',records:[{recordId:actionId,kind:'firm',name:'Orion',firmId:actionId}],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}};
+ const actionCreate=vi.fn(async()=>({actionId,version:1,kind:'note' as const}));
+ render(<Ask ports={{read:lookup,historyList,answerRead,actionCreate}} privacyKey='owner:1' enabled/>);
+ await openFinding();fireEvent.change(screen.getByLabelText('Follow-on action'),{target:{value:'note'}});
+ fireEvent.change(screen.getByLabelText('Action record kind'),{target:{value:'firms'}});
+ fireEvent.change(screen.getByLabelText('Action record name'),{target:{value:'Orion'}});
+ fireEvent.click(screen.getByRole('button',{name:'Find action record'}));fireEvent.click(await screen.findByRole('button',{name:'Use firm Orion'}));
+ fireEvent.click(screen.getByRole('button',{name:'Read optional opportunities'}));
+ fireEvent.change(await screen.findByLabelText('Action opportunity (optional)'),{target:{value:initiativeId}});
+ fireEvent.change(screen.getByLabelText('Your record annotation'),{target:{value:'Discuss coordinator evaluation.'}});
+ fireEvent.click(screen.getByLabelText('Confirm this human annotation'));fireEvent.click(screen.getByRole('button',{name:'Save annotation'}));
+ expect(await screen.findByText('Human annotation saved.')).toBeTruthy();
+ expect(actionCreate).toHaveBeenCalledWith({requestId,expectedVersion:4,finding:{kind:'answer_claim',index:0},action:{kind:'note',text:'Discuss coordinator evaluation.',target:{kind:'firm',firmId:actionId,opportunityId:initiativeId}}});
+});

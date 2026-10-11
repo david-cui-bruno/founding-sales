@@ -11,7 +11,7 @@ export async function composeCrmCapabilities(input:CrmAuthoritySessions & {confi
  const verifiers=createCrmCapabilityVerifiers(input);const mailEvidence=createNativeCrmMailEvidence(verifiers.captureVerifier);
  const observer=createApprovedBusinessMailObserver({revalidateAuthority:verifiers.revalidateMetadata});
  const gmail=input.configuration.capture&&input.gmail?composeCrmGmail({gmail:input.gmail.gmail,resolveAccess:createServerCrmGmailAccessResolver({...input.gmail,openSession:input.openSession}),proofVerifier:verifiers.captureVerifier,allocationVerifier:verifiers.allocationVerifier,observer}):{};
- const region=input.configuration.extraction?.region??input.configuration.answer?.region;
- const bedrock=region?composeCrmBedrock({surface:await(input.loadSurface?.(region)??loadCrmBedrockSurface({region})),...input.configuration.extraction?{extraction:input.configuration.extraction}:{},...input.configuration.answer?{answer:input.configuration.answer}:{},mailEvidence,verifyExtraction:verifiers.verifyExtraction,revalidateExtraction:verifiers.revalidateExtraction,verifyPurpose:verifiers.verifyAskPurpose,revalidateAskPurpose:verifiers.revalidateAskPurpose}):{};
+ const region=input.configuration.extraction?.region??input.configuration.answer?.region??input.configuration.embedding?.region;
+ const bedrock=region?composeCrmBedrock({surface:await(input.loadSurface?.(region)??loadCrmBedrockSurface({region})),...input.configuration.extraction?{extraction:input.configuration.extraction}:{},...input.configuration.answer?{answer:input.configuration.answer}:{},...input.configuration.embedding?{embedding:input.configuration.embedding}:{},mailEvidence,verifyExtraction:verifiers.verifyExtraction,revalidateExtraction:verifiers.revalidateExtraction,verifyPurpose:verifiers.verifyAskPurpose,revalidateAskPurpose:verifiers.revalidateAskPurpose}):{};
  return {handlers:{...gmail,...bedrock},observer,mailEvidence,verifiers};
 }

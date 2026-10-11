@@ -961,3 +961,18 @@ it('reports the actual saved Ask question erasure before a public mail copy dele
     await fixture.stop();
   }
 });
+it('binds correspondent rule revisions into scoped deletion and removes matching rule metadata',async()=>{
+ const fixture=await createAuthFixture();try{
+ const copied=await copyWithOriginalAndReviewedFirms(fixture);
+ const mailbox=(await fixture.db.query<{id:string;account_binding:string;owner_user_id:string}>('SELECT mailbox_id AS id,account_binding,owner_user_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2',[fixture.alpha.workspaceId,copied.sourceId])).rows[0]!;
+ await fixture.db.query("INSERT INTO email_addresses(workspace_id,firm_id,address,source,technical_validation,association_confidence,retrieved_at) VALUES($1,$2,'shared@business.test','salesperson','passed',1,now())",[fixture.alpha.workspaceId,copied.reviewedFirmId]);
+ await fixture.db.query("INSERT INTO crm_business_correspondent_rules(workspace_id,mailbox_id,owner_user_id,account_binding,endpoint,decision,revision) VALUES($1,$2,$3,$4,'shared@business.test','include',1)",[fixture.alpha.workspaceId,mailbox.id,mailbox.owner_user_id,mailbox.account_binding]);
+ const preview=await copied.post('/retention/deletions/preview',copied.command({targetKind:'firm',firmId:copied.reviewedFirmId}));
+ const shown=preview.body as {result:{requestId:string;previewHash:string;redacts:Record<string,number>}};expect(shown.result.redacts['crm_business_correspondent_rules']).toBe(1);
+ await fixture.db.query("UPDATE crm_business_correspondent_rules SET revision=2,decision='exclude' WHERE workspace_id=$1 AND mailbox_id=$2",[fixture.alpha.workspaceId,mailbox.id]);
+ expect((await copied.post('/retention/deletions/commit',copied.command({requestId:shown.result.requestId,previewHash:shown.result.previewHash}))).body).toMatchObject({status:'refused'});
+ const fresh=(await copied.post('/retention/deletions/preview',copied.command({targetKind:'firm',firmId:copied.reviewedFirmId}))).body as typeof shown;
+ expect((await copied.post('/retention/deletions/commit',copied.command({requestId:fresh.result.requestId,previewHash:fresh.result.previewHash}))).body).toMatchObject({status:'accepted',result:{redacted:{crm_business_correspondent_rules:1}}});
+ expect((await copied.post('/crm/business/rules/read',{mailboxId:mailbox.id})).body).toMatchObject({rules:[]});
+ }finally{await fixture.stop();}
+});

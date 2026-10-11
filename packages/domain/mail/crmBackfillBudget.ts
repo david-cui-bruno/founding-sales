@@ -5,11 +5,12 @@ import type {MailCaptureProof} from './crmSources.ts';
 import {createHash} from 'node:crypto';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {withTransaction} from '../db/queryable.ts';
-export type BackfillReadMethod='profile'|'list'|'history'|'metadata'|'body';
+export interface BackfillExpansionReadScope {id:string;revision:number;conversationId:string;decisionRevision:number}
+export type BackfillReadMethod='profile'|'list'|'history'|'metadata'|'body'|'thread';
 export interface BackfillAllocation extends Record<string,unknown>{
  workspace_id:string;mailbox_id:string;revision:number;owner_user_id:string;account_binding:string;generation:number;
  project_hash:string;user_hash:string;user_limit_units:number;project_limit_units:number;user_headroom_units:number;project_headroom_units:number;
- profile_units:number;list_units:number;history_units:number;metadata_units:number;body_units:number;verification_sha256:string;verified_until:Date;
+ profile_units:number;list_units:number;history_units:number;metadata_units:number;body_units:number;thread_units:number;verification_sha256:string;verified_until:Date;
 }
 export interface BackfillAllocationVerifier{verify(allocation:BackfillAllocation,authority?:BackfillAuthority):Promise<boolean>;revalidate?(context:RepositoryContext,allocation:BackfillAllocation,authority:BackfillAuthority):Promise<boolean>}
 export async function readBackfillAllocation(context:RepositoryContext,mailboxId:string){
@@ -17,7 +18,7 @@ export async function readBackfillAllocation(context:RepositoryContext,mailboxId
 }
 function fingerprint(row:BackfillAllocation){return createHash('sha256').update(JSON.stringify(row)).digest('hex');}
 /** Call only outside a caller-owned transaction: arbitrary receipt verification precedes short reservation locks. */
-export async function reserveBackfillRead(context:RepositoryContext,input:{importId:string;mailboxId:string;ownerUserId:string;accountBinding:string;generation:number;method:BackfillReadMethod;expectedProof:MailCaptureProof;expectedRecovery?:{id:string;revision:number;epoch:number;configurationHash:string};expectedCausal?:{messageId:string;conversationId:string;decisionRevision:number};jobId:string;leaseOwner:string;fencingToken:string},verifier:BackfillAllocationVerifier){
+export async function reserveBackfillRead(context:RepositoryContext,input:{importId:string;mailboxId:string;ownerUserId:string;accountBinding:string;generation:number;method:BackfillReadMethod;expectedProof:MailCaptureProof;expectedRecovery?:{id:string;revision:number;epoch:number;configurationHash:string};expectedExpansion?:BackfillExpansionReadScope;expectedCausal?:{messageId:string;conversationId:string;decisionRevision:number};jobId:string;leaseOwner:string;fencingToken:string},verifier:BackfillAllocationVerifier){
  const scope=await readBackfillAuthority(context,input.importId);if(scope===null)return null;
  const before=await readBackfillAllocation(context,input.mailboxId);
  if(before===null||before.owner_user_id!==input.ownerUserId||before.account_binding!==input.accountBinding||before.generation!==input.generation||!await verifier.verify(before,scope))return null;
@@ -31,6 +32,14 @@ export async function reserveBackfillRead(context:RepositoryContext,input:{impor
   if(current===undefined||fingerprint(current)!==fingerprint(before)||verifier.revalidate&&!await verifier.revalidate(context,current,authority))return null;
   const imported=await context.db.query('SELECT id FROM crm_mail_imports WHERE workspace_id=$1 AND id=$2 AND mailbox_id=$3 AND owner_user_id=$4 AND account_binding=$5 AND generation=$6',[context.scope.workspaceId,input.importId,input.mailboxId,input.ownerUserId,input.accountBinding,input.generation]);
   if(!imported.rows.length)return null;
+  if(input.expectedExpansion){
+   const e=input.expectedExpansion;
+   const allowed=await context.db.query(`SELECT e.id FROM crm_mail_thread_expansions e JOIN crm_business_conversations c ON c.workspace_id=e.workspace_id AND c.id=e.conversation_id
+    WHERE e.workspace_id=$1 AND e.id=$2 AND e.import_id=$3 AND e.revision=$4 AND e.conversation_id=$5 AND e.decision_revision=$6 AND e.state IN ('pending','enumerating')
+    AND c.mailbox_id=$7 AND c.owner_user_id=$8 AND c.account_binding=$9 AND c.decision_revision=e.decision_revision AND c.metadata_availability='available'
+    AND (c.human_decision='include' OR (c.human_decision IS NULL AND c.category='business')) FOR SHARE OF e,c`,[context.scope.workspaceId,e.id,input.importId,e.revision,e.conversationId,e.decisionRevision,input.mailboxId,input.ownerUserId,input.accountBinding]);
+   if(allowed.rows.length!==1)return null;
+  }
   if(input.expectedCausal){
    const causal=input.expectedCausal;
    const messageHash=createHash('sha256').update(JSON.stringify({accountBinding:input.accountBinding,providerMessageId:causal.messageId})).digest('hex');
@@ -43,10 +52,10 @@ export async function reserveBackfillRead(context:RepositoryContext,input:{impor
   if(leased.rows[0]?.['kind']==='crm.mail_backfill'){
    await context.db.query('SELECT id FROM crm_mail_history_recoveries WHERE workspace_id=$1 AND import_id=$2 ORDER BY epoch FOR SHARE',[context.scope.workspaceId,input.importId]);
    const recovery=await readHistoryRecovery(context,input.importId);
-   if(input.expectedRecovery===undefined&&recovery!==undefined)return null;
+   if(input.expectedRecovery===undefined&&recovery!==undefined&&(!input.expectedExpansion||!['complete','deleted','blocked'].includes(recovery.state)))return null;
    if(input.expectedRecovery!==undefined&&(recovery===undefined||recovery.id!==input.expectedRecovery.id||recovery.revision!==input.expectedRecovery.revision||recovery.epoch!==input.expectedRecovery.epoch||recovery.configuration_hash!==input.expectedRecovery.configurationHash||!['pending_profile','enumerating','draining'].includes(recovery.state)||recovery.configuration_hash!==backfillConfigurationHash(authority,current)))return null;
    const slice=(await context.db.query<{ordinal:number;next_page_token:string|null}>("SELECT ordinal,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' ORDER BY ordinal LIMIT 1",[context.scope.workspaceId,input.importId])).rows[0];
-   await context.db.query('UPDATE jobs SET payload=payload||$3::jsonb WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.jobId,JSON.stringify(backfillAttemptHashes(authority,current,slice,recovery))]);
+   await context.db.query('UPDATE jobs SET payload=payload||$3::jsonb WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.jobId,JSON.stringify(backfillAttemptHashes(authority,current,slice,recovery,(await context.db.query<{id:string;revision:number}>("SELECT id,revision FROM crm_mail_thread_expansions WHERE workspace_id=$1 AND import_id=$2 AND state IN ('pending','enumerating') ORDER BY id LIMIT 1",[context.scope.workspaceId,input.importId])).rows[0]))]);
   }
   const units=current[`${input.method}_units`];
   if(typeof units!=='number'||BigInt(sums.project)+BigInt(units)>BigInt(current.project_limit_units-current.project_headroom_units)||BigInt(sums.user)+BigInt(units)>BigInt(current.user_limit_units-current.user_headroom_units))return null;

@@ -11,11 +11,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "4.0.194",
     "@aws-sdk/client-bedrock-runtime": "^3.1145.0",
     "@aws-sdk/client-s3": "^3.1141.0",
     "@aws-sdk/client-transcribe": "^3.1144.0",
     "@fss/contracts": "*",
     "@fss/domain": "*",
+    "ai": "6.0.303",
     "pg": "^8.13.1"
   },
   "devDependencies": {

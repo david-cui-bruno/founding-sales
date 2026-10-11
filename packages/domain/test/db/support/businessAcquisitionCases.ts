@@ -9,6 +9,14 @@ async function seed(f:Fixture){
  if(row===undefined)throw new Error('Business constraint fixture unavailable');
  await f.session.query("INSERT INTO crm_business_decision_revisions(workspace_id,conversation_id,revision,metadata_revision,policy_revision,actor_user_id,decision) VALUES($1,$2,1,1,1,$3,'exclude')",[w,row.id,owner]);
 }
+async function seedRule(f:Fixture){await f.session.query("INSERT INTO crm_business_correspondent_rules(workspace_id,mailbox_id,owner_user_id,account_binding,endpoint,decision,revision) VALUES($1,$2,$3,repeat('a',64),'alex@example.test','include',1)",[f.seeded.alpha.workspaceId,f.mail.alpha.mailboxId,f.seeded.alpha.salesperson.userId]);}
+const ruleMutations=[
+ ['crm_business_correspondent_rules_account_binding_check',"account_binding='invalid'"],
+ ['crm_business_correspondent_rules_decision_check',"decision='approve'"],
+ ['crm_business_correspondent_rules_revision_check','revision=0'],
+ ['crm_business_correspondent_rules_workspace_id_mailbox_id_fkey',"mailbox_id='00000000-0000-4000-8000-000000000000'"],
+ ['crm_business_correspondent_rule_workspace_id_owner_user_id_fkey',"owner_user_id='00000000-0000-4000-8000-000000000000'"],
+] as const;
 const mutations=[
  ['crm_business_policies_provider_account_id_check','crm_business_policies',"provider_account_id=''"],
  ['crm_business_policies_account_binding_check','crm_business_policies',"account_binding='invalid'"],
@@ -41,6 +49,9 @@ const mutations=[
  ['crm_business_decision_revisions_workspace_id_actor_user_id_fkey','crm_business_decision_revisions',"actor_user_id='00000000-0000-4000-8000-000000000000'"],
 ] as const;
 export const BUSINESS_ACQUISITION_CONSTRAINT_CASES=[
+ ...ruleMutations.map(([constraint,assignment])=>({constraint,run:async(f:Fixture)=>{await seedRule(f);return f.session.query(`UPDATE crm_business_correspondent_rules SET ${assignment} WHERE workspace_id=$1`,[f.seeded.alpha.workspaceId]);}})),
+ {constraint:'crm_business_correspondent_rules_pkey',run:async(f:Fixture)=>{await seedRule(f);return f.session.query('INSERT INTO crm_business_correspondent_rules SELECT * FROM crm_business_correspondent_rules WHERE workspace_id=$1',[f.seeded.alpha.workspaceId]);}},
+ {constraint:'crm_business_policies_qualification_version_check',run:async(f:Fixture)=>{await seed(f);return f.session.query("UPDATE crm_business_policies SET qualification_version='anything' WHERE workspace_id=$1",[f.seeded.alpha.workspaceId]);}},
  ...mutations.map(([constraint,table,assignment])=>({constraint,run:async(f:Fixture)=>{await seed(f);return f.session.query(`UPDATE ${table} SET ${assignment} WHERE workspace_id=$1`,[f.seeded.alpha.workspaceId]);}})),
  ...['crm_business_policies','crm_business_conversations','crm_business_decision_revisions'].map(table=>({constraint:table+'_pkey',run:async(f:Fixture)=>{await seed(f);return f.session.query(`INSERT INTO ${table} SELECT * FROM ${table} WHERE workspace_id=$1`,[f.seeded.alpha.workspaceId]);}})),
  {constraint:'crm_business_conversations_workspace_id_mailbox_id_account__key',run:async(f:Fixture)=>{await seed(f);return f.session.query('INSERT INTO crm_business_conversations(workspace_id,mailbox_id,owner_user_id,account_binding,provider_thread_id,subject,participants,latest_provider_at,category,reason,classifier_version,metadata_hash) SELECT workspace_id,mailbox_id,owner_user_id,account_binding,provider_thread_id,subject,participants,latest_provider_at,category,reason,classifier_version,metadata_hash FROM crm_business_conversations WHERE workspace_id=$1',[f.seeded.alpha.workspaceId]);}},

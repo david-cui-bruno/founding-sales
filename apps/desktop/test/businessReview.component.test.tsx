@@ -102,3 +102,21 @@ it("refreshes mailbox policy and review after explicit prepared metadata activat
     await screen.findByRole('button', {name: "Activate metadata review" }),
   );expect(await screen.findByText("Current reviewed metadata")).toBeTruthy();expect(screen.queryByText("Old reviewed metadata")).toBeNull();
 });
+it('shows correspondent rule scope and permits versioned removal without sending controls',async()=>{
+ const user=userEvent.setup();let active=true;
+ const ports:BusinessReviewPorts={policy:async()=>REVIEW_POLICY,savePolicy:async()=>({revision:1}),rules:async()=>({mailboxId:ID,accountBinding:'a'.repeat(64),generation:2,rules:[{endpoint:'alex@example.test',decision:'include',revision:1,active}]}),saveRule:async input=>{expect(input).toMatchObject({endpoint:'alex@example.test',expectedRevision:1,active:false});active=false;return {revision:2,captureAllowed:false};}};
+ render(<BusinessReview enabled ports={ports}/>);
+ await screen.findByText('alex@example.test — Include future conversations');
+ await user.click(screen.getByRole('button',{name:'Remove rule for alex@example.test'}));
+ expect(await screen.findByText('alex@example.test — Removed rule')).toBeTruthy();
+});
+it('requests one older-message metadata preview and waits for an explicit conversation decision',async()=>{
+ const user=userEvent.setup();let requested=false;
+ const ports:BusinessReviewPorts={policy:async()=>REVIEW_POLICY,savePolicy:async()=>({revision:1}),selectMessage:async input=>{expect(input).toEqual({mailboxId:ID,expectedGeneration:2,expectedAccountBinding:'a'.repeat(64),expectedPolicyRevision:1,providerMessageId:'older-message'});requested=true;return {status:'queued',previewJobId:ID,captureAllowed:false};}};
+ render(<BusinessReview enabled ports={ports}/>);
+ await user.type(await screen.findByRole('textbox',{name:'Gmail message ID or link'}),'https://mail.google.com/mail/u/0/#all/older-message');
+ await user.click(screen.getByRole('button',{name:'Preview selected conversation'}));
+ expect(requested).toBe(true);
+ expect(await screen.findByText(/Metadata preview queued/)).toBeTruthy();
+ expect(screen.queryByRole('button',{name:'Include conversation'})).toBeNull();
+});

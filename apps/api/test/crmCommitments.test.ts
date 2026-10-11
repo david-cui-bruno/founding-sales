@@ -155,6 +155,8 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const visible=await read();expect(visible.status).toBe(200);
     expect(visible.body).toMatchObject({items:[{commitmentId:receipt.result.commitmentId,task:{status:"open"},actionLabel:"Prepare the repair summary",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago",expression:"by October 12"},quote:"I will prepare the repair summary by October 12.",source:{occurredAt:"2026-10-01T14:00:00.000Z"}}]});
     const originalTask=(visible.body as {items:{task:{taskId:string}}[]}).items[0]!.task.taskId;
+    expect((await post('/ask/read',{operation:'tasks',scope:{business:true},limit:20})).body).toMatchObject({count:'1',countBasis:'exact',records:[{key:`internal_task:${originalTask}`,kind:'internal_task',label:'Prepare the repair summary',dueAt:'2026-10-12T05:00:00.000Z'}]});
+    expect((await post('/ask/read',{operation:'tasks',scope:{personId},limit:20})).body).toMatchObject({count:'1',records:[{key:`internal_task:${originalTask}`,personId}]});
     const actionsV1=await get("/today/actions");expect(actionsV1.status).toBe(200);expect(actionsV1.body).toMatchObject({version:1,actions:[]});
     const actionsV2=await get("/today/actions/v2");expect(actionsV2.status).toBe(200);
     expect(actionsV2.body).toMatchObject({version:2,actions:[{kind:"promise",reason:"dated_promise",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago"},target:{kind:"internal_task",taskId:originalTask,expectedVersion:1,review:{commitmentId:receipt.result.commitmentId,revision:1,projectionVersion:1}}}]});
@@ -176,6 +178,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const complete=command({taskId:originalTask,expectedVersion:1});
     const done=await post("/crm/commitments/complete",complete);expect(done.status).toBe(200);
     expect(done.body).toMatchObject({result:{taskId:originalTask,version:2}});
+    expect((await post('/ask/read',{operation:'tasks',scope:{business:true},limit:20})).body).toMatchObject({count:'0',records:[]});
     const completedAt=(done.body as {result:{completedAt:string}}).result.completedAt;
     expect((await read()).body).toMatchObject({items:[{task:{taskId:originalTask,status:"done",version:2,completedAt}}]});
     expect((await post("/crm/commitments/complete",complete)).body).toMatchObject({result:(done.body as {result:unknown}).result});
@@ -194,6 +197,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
     expect(corrected.body).toMatchObject({items:[{state:"review_required",actionLabel:null,due:null,quote:null,source:null,task:{taskId:changedTask,status:"open",version:2,completedAt:null}}]});
     // Cycle4: whole-copy deletion scrubs private promise proof, not completion.
     expect((await post("/crm/people/source/delete",command({personId,sourceId:source.sourceId,expectedRevision:source.revision}))).status).toBe(200);
+    expect((await post('/ask/read',{operation:'tasks',scope:{business:true},limit:20})).body).toMatchObject({count:'0',records:[]});
     const redacted=await post("/crm/commitments/read",{scope:{kind:"history"},limit:50});expect(redacted.status).toBe(200);
     expect(redacted.body).toMatchObject({items:[{taskId:originalTask,status:"done",version:3,completedAt}],nextAfterId:null});
     expect(JSON.stringify(redacted.body)).not.toContain("repair summary");
@@ -241,6 +245,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
     await runOnce(fixture.db,{registry,owner:"historical-commitment-projector",limit:20});
     expect((await read()).body).toMatchObject({items:[{actionLabel:"Historical summary promise",todayEligibility:"historical",task:{status:"open"}}]});
     expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toEqual({items:[],nextAfterId:null});
+    expect((await post('/ask/read',{operation:'tasks',scope:{business:true},limit:20})).body).toMatchObject({count:'1',records:[{kind:'internal_task',label:'Historical summary promise'}]});
 
 
 

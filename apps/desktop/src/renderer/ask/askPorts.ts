@@ -3,6 +3,12 @@ import { operations } from "../app/bridges.ts";
 import type { AskPorts } from "./Ask.tsx";
 export const askPorts: AskPorts = {
   ...manualWorkPorts,
+  sessionCreate:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.sessionCreate',input);},
+  sessionTurn:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.sessionTurn',input);},
+  sessionChange:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.sessionChange',input);},
+  sessionRead:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.read('ask.sessionRead',input);},
+  sessionList:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.read('ask.sessionList',input);},
+
   actionCreate:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.actionCreate',input);},
   historyChange:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.historyChange',input);},
   historyList: async input => {
@@ -10,6 +16,9 @@ export const askPorts: AskPorts = {
     if(bridge===undefined)throw new Error('unavailable');
     return await bridge.read('ask.historyList',input);
   },
+  answerCancel:async input=>{const bridge=operations();if(!bridge)throw new Error('unavailable');return await bridge.command('ask.answerCancel',input);},
+  investigationPreview:async input=>{const bridge=operations();if(!bridge)throw new Error('unavailable');return await bridge.read('ask.investigationPreview',input);},
+  investigationCommit:async input=>{const bridge=operations();if(!bridge)throw new Error('unavailable');return await bridge.command('ask.investigationCommit',input);},
   answerRequest: async input => {
     const bridge = operations();
     if (bridge === undefined) throw new Error('unavailable');

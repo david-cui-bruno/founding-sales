@@ -9,7 +9,7 @@ export function crmMailBackfillSource(enabled=false):DueWorkSource{return {name:
  if(!enabled)return [];
  const rows=(await session.query<{workspace_id:string;id:string}>(`SELECT i.workspace_id,i.id FROM crm_mail_imports i
  JOIN crm_mail_import_allocations a ON a.workspace_id=i.workspace_id AND a.mailbox_id=i.mailbox_id AND a.owner_user_id=i.owner_user_id AND a.account_binding=i.account_binding AND a.generation=i.generation
- WHERE i.state<>'complete' AND a.verified_until>clock_timestamp()
+ WHERE (i.state<>'complete' OR EXISTS(SELECT 1 FROM crm_mail_thread_expansions e WHERE e.workspace_id=i.workspace_id AND e.import_id=i.id AND e.state IN ('pending','enumerating'))) AND a.verified_until>clock_timestamp()
  AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.workspace_id=i.workspace_id AND j.kind='crm.mail_backfill' AND j.payload->>'importId'=i.id::text AND j.state IN ('queued','retryable','running'))
  ORDER BY i.last_scheduled_scan_at NULLS FIRST,i.workspace_id,i.id LIMIT 100`)).rows;
  const due=[];
@@ -20,8 +20,9 @@ export function crmMailBackfillSource(enabled=false):DueWorkSource{return {name:
   const slice=(await session.query<{ordinal:number;next_page_token:string|null}>("SELECT ordinal,next_page_token FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' ORDER BY ordinal LIMIT 1",[row.workspace_id,row.id])).rows[0];
   const allocation=await readBackfillAllocation(context,hint.proof.mailboxId);if(allocation===null)continue;
   const recovery=await readHistoryRecovery(context,row.id);
-  if(recovery?.state==='complete'||recovery?.state==='deleted'||recovery?.state==='blocked')continue;
-  const hashes=backfillAttemptHashes(hint,allocation,slice,recovery);
+  const expansion=(await session.query<{id:string;revision:number}>("SELECT e.id,e.revision FROM crm_mail_thread_expansions e JOIN crm_mail_imports i ON i.workspace_id=e.workspace_id AND i.id=e.import_id WHERE e.workspace_id=$1 AND e.import_id=$2 AND e.state IN ('pending','enumerating') AND i.history_complete=true AND NOT EXISTS(SELECT 1 FROM crm_mail_history_recoveries r WHERE r.workspace_id=i.workspace_id AND r.import_id=i.id AND r.state IN ('pending_profile','enumerating','draining')) ORDER BY e.id LIMIT 1",[row.workspace_id,row.id])).rows[0];
+  if(!expansion&&(recovery?.state==='complete'||recovery?.state==='deleted'||recovery?.state==='blocked'))continue;
+  const hashes=backfillAttemptHashes(hint,allocation,slice,recovery,expansion);
   const payload={importId:row.id,accountBinding:hint.proof.accountBinding,generation:hint.proof.generation,controlsRevision:hint.proof.controlsRevision,policyRevision:hint.proof.policyRevision};
   const key=backfillWorkKey(hashes);
   if((await session.query("SELECT 1 FROM jobs WHERE workspace_id=$1 AND kind='crm.mail_backfill' AND state='dead' AND payload->>'importId'=$2 AND payload->>'attemptConfigurationHash'=$3 AND payload->>'attemptProgressHash'=$4",[row.workspace_id,row.id,hashes.attemptConfigurationHash,hashes.attemptProgressHash])).rows.length)continue;
