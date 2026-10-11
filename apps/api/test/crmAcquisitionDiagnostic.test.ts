@@ -1,3 +1,4 @@
+import { REQUIRED_SCHEMA } from "@fss/domain/db/schemaRange.ts";
 import pg from "pg";
 import { localEnvelopeCipher } from "@fss/domain/mail/envelope.ts";
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from "@fss/domain/db/testing/testDatabase.ts";
@@ -153,7 +154,7 @@ describe("isolated acquisition diagnostic public commands", () => {
       implementationCommit: FIXTURE_CI_COMMIT,
       imageDigest: FIXTURE_API_DIGEST,
       side: "api",
-      schemaVersion: 90,
+      schemaVersion: REQUIRED_SCHEMA,
       consentIsolationBinding: {
         databaseInstanceArn: "controlled-db",
         databaseSecretArn: "controlled-secret",
@@ -233,7 +234,7 @@ describe("isolated acquisition diagnostic public commands", () => {
       implementationCommit: FIXTURE_CI_COMMIT,
       apiImageDigest: FIXTURE_API_DIGEST,
       workerImageDigest: FIXTURE_WORKER_DIGEST,
-      schemaVersion: 90,
+      schemaVersion: REQUIRED_SCHEMA,
       releaseReference,
       disclosureVersion: CRM_MAIL_CAPTURE_DISCLOSURE.version,
       disclosureSha256: CRM_MAIL_CAPTURE_DISCLOSURE.sha256,
@@ -266,6 +267,14 @@ describe("isolated acquisition diagnostic public commands", () => {
     };
     await fixture.db.query("SET ROLE migration");
     try {
+      for (const schemaVersion of [90, REQUIRED_SCHEMA + 1])
+        expect(
+          await provisionCrmAcquisitionDiagnostic(fixture.db, {
+            ...authorization,
+            id: randomUUID(),
+            schemaVersion,
+          }),
+        ).toEqual({ ok: false, reason: "diagnostic_environment_mismatch" });
       expect(
         await provisionCrmAcquisitionDiagnostic(fixture.db, authorization),
       ).toMatchObject({ ok: true });
@@ -278,6 +287,31 @@ describe("isolated acquisition diagnostic public commands", () => {
       expectedAuthorizationSha256:
         crmAcquisitionDiagnosticFingerprint(authorization),
     };
+    await fixture.db.query(
+      "UPDATE schema_versions SET version=$1 WHERE version=$2",
+      [REQUIRED_SCHEMA + 1, REQUIRED_SCHEMA],
+    );
+    try {
+      expect(
+        (
+          await post(
+            paths[0]!,
+            { ...input, commandId: randomUUID() },
+            token,
+            "POST",
+            runtime,
+          )
+        ).body,
+      ).toMatchObject({
+        status: "refused",
+        reason: "diagnostic_authority_unavailable",
+      });
+    } finally {
+      await fixture.db.query(
+        "UPDATE schema_versions SET version=$1 WHERE version=$2",
+        [REQUIRED_SCHEMA, REQUIRED_SCHEMA + 1],
+      );
+    }
     expect(
       (
         await post(paths[0]!, input, token, "POST", {

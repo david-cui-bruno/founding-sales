@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { randomUUID, createHash } from "node:crypto";
+import { REQUIRED_SCHEMA } from "../db/schemaRange.ts";
+import { readAppliedSchemaVersion } from "../db/migrationRunner.ts";
 import {
   crmAcquisitionDiagnosticAuthorizationSchema,
   type CrmAcquisitionDiagnosticAuthorization,
@@ -42,9 +44,7 @@ const diagnosticDocumentSchema = z.union([
 ]);
 type DiagnosticDocument = z.infer<typeof diagnosticDocumentSchema>;
 type IsolationPurpose =
-  | "acquisition_dispatch"
-  | "progress_read"
-  | "oauth_bootstrap";
+  "acquisition_dispatch" | "progress_read" | "oauth_bootstrap";
 function documentFingerprint(input: DiagnosticDocument) {
   return createHash("sha256")
     .update(JSON.stringify(diagnosticDocumentSchema.parse(input)))
@@ -55,7 +55,7 @@ export interface CrmAcquisitionDiagnosticRuntime {
   implementationCommit: string;
   imageDigest: string;
   side: "api" | "worker";
-  schemaVersion: 90;
+  schemaVersion: number;
   consentIsolationBinding?: {
     databaseInstanceArn: string;
     databaseSecretArn: string;
@@ -112,7 +112,12 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
   runtime?: CrmAcquisitionDiagnosticRuntime,
   purpose: IsolationPurpose = "acquisition_dispatch",
 ): Promise<DiagnosticIsolationProof | null> {
-  if (!runtime) return null;
+  if (
+    !runtime ||
+    runtime.schemaVersion !== REQUIRED_SCHEMA ||
+    (await readAppliedSchemaVersion(context.db)) !== REQUIRED_SCHEMA
+  )
+    return null;
   const row = (
     await context.db.query<{
       authorization: unknown;
@@ -125,7 +130,8 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
   const parsed = diagnosticDocumentSchema.safeParse(row?.authorization);
   if (!parsed.success) return null;
   const a = parsed.data;
-  const legacyAudit = purpose === "progress_read" && a.schemaVersion === 89;
+  const legacyAudit =
+    purpose === "progress_read" && a.schemaVersion < REQUIRED_SCHEMA;
   const actor = context.scope.actor;
   if (
     (actor.kind === "user" && actor.userId !== a.ownerUserId) ||
@@ -169,6 +175,11 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
   } catch {
     return null;
   }
+  if (
+    runtime.schemaVersion !== REQUIRED_SCHEMA ||
+    (await readAppliedSchemaVersion(context.db)) !== REQUIRED_SCHEMA
+  )
+    return null;
   const proof = Object.freeze({
     authorizationId: a.id,
     authorizationSha256: documentFingerprint(a),
@@ -204,8 +215,18 @@ export async function verifyCrmAcquisitionDiagnostic(
   checkIsolation = true,
   isolationProof?: DiagnosticIsolationProof,
 ) {
-  if (!runtime) return null;
+  if (
+    !runtime ||
+    runtime.schemaVersion !== REQUIRED_SCHEMA ||
+    (await readAppliedSchemaVersion(context.db)) !== REQUIRED_SCHEMA
+  )
+    return null;
   await lock(context, id);
+  if (
+    runtime.schemaVersion !== REQUIRED_SCHEMA ||
+    (await readAppliedSchemaVersion(context.db)) !== REQUIRED_SCHEMA
+  )
+    return null;
   const row = (
     await context.db.query<{
       authorization: unknown;
@@ -300,7 +321,12 @@ export async function verifyCrmAcquisitionDiagnostic(
       ],
     )
   ).rows[0];
-  if (release?.record["source"] !== "ci-gate") return null;
+  if (
+    release?.record["source"] !== "ci-gate" ||
+    runtime.schemaVersion !== REQUIRED_SCHEMA ||
+    (await readAppliedSchemaVersion(context.db)) !== REQUIRED_SCHEMA
+  )
+    return null;
   return a;
 }
 export async function requestCrmAcquisitionDiagnostic(
@@ -394,7 +420,13 @@ export async function readCrmAcquisitionDiagnostic(
   runtime?: CrmAcquisitionDiagnosticRuntime,
   isolationProof?: DiagnosticIsolationProof,
 ) {
-  if (!runtime || context.scope.actor.kind !== "user") return null;
+  if (
+    !runtime ||
+    runtime.schemaVersion !== REQUIRED_SCHEMA ||
+    (await readAppliedSchemaVersion(context.db)) !== REQUIRED_SCHEMA ||
+    context.scope.actor.kind !== "user"
+  )
+    return null;
   const row = (
     await context.db.query<{ authorization: unknown }>(
       "SELECT authorization_document AS authorization FROM crm_acquisition_diagnostic_authorizations WHERE workspace_id=$1 AND id=$2",
@@ -413,7 +445,7 @@ export async function readCrmAcquisitionDiagnostic(
   if (
     a.environmentId !== runtime.environmentId ||
     a.databaseName !== dbrow?.name ||
-    (a.schemaVersion !== 89 &&
+    (a.schemaVersion >= REQUIRED_SCHEMA &&
       (a.implementationCommit !== runtime.implementationCommit ||
         a.schemaVersion !== runtime.schemaVersion ||
         (runtime.side === "api" ? a.apiImageDigest : a.workerImageDigest) !==
@@ -530,7 +562,11 @@ export async function provisionCrmAcquisitionDiagnostic(
         "SELECT current_database() AS name,inet_server_addr()::text AS address",
       )
     ).rows[0]?.name;
-    if (database !== a.databaseName)
+    if (
+      database !== a.databaseName ||
+      a.schemaVersion !== REQUIRED_SCHEMA ||
+      (await readAppliedSchemaVersion(session)) !== REQUIRED_SCHEMA
+    )
       return { ok: false as const, reason: "diagnostic_environment_mismatch" };
     const reviewer = await session.query(
       "SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' AND role='admin'",
@@ -604,7 +640,11 @@ export async function prepareCrmAcquisitionDiagnosticConsentIsolation(
   context: RepositoryContext,
   runtime?: CrmAcquisitionDiagnosticRuntime,
 ): Promise<boolean> {
-  if (!runtime?.consentIsolationBinding) return false;
+  if (
+    !runtime?.consentIsolationBinding ||
+    runtime.schemaVersion !== REQUIRED_SCHEMA
+  )
+    return false;
   const readConnection = async () =>
     (
       await context.db.query<{ name: string; address: string | null }>(
@@ -613,7 +653,12 @@ export async function prepareCrmAcquisitionDiagnosticConsentIsolation(
     ).rows[0];
   try {
     const before = await readConnection();
-    if (!before || !/^fss[_-]diagnostic[_-]/u.test(before.name)) return false;
+    if (
+      !before ||
+      !/^fss[_-]diagnostic[_-]/u.test(before.name) ||
+      (await readAppliedSchemaVersion(context.db)) !== REQUIRED_SCHEMA
+    )
+      return false;
     if (
       !(await runtime.verifyIsolation({
         ...runtime.consentIsolationBinding,
@@ -626,7 +671,12 @@ export async function prepareCrmAcquisitionDiagnosticConsentIsolation(
     )
       return false;
     const after = await readConnection();
-    return after?.name === before.name && after.address === before.address;
+    return (
+      runtime.schemaVersion === REQUIRED_SCHEMA &&
+      (await readAppliedSchemaVersion(context.db)) === REQUIRED_SCHEMA &&
+      after?.name === before.name &&
+      after.address === before.address
+    );
   } catch {
     return false;
   }

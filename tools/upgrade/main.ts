@@ -365,6 +365,7 @@ async function run(options: Options, report: Report): Promise<void> {
     target = await prepareCheckout(options.tree, REPOSITORY_ROOT);
     const head = await runChecksIn(target.directory, target.checks, {
       databaseUrl: cluster.runtimeUrl,
+      fixtureDatabaseUrl: (() => { const url=new URL(cluster.adminUrl); url.pathname=`/${cluster.databaseName}`; return url.toString(); })(),
       mode: 'startup+workflows',
       handles: fixture.handles,
     });
@@ -566,7 +567,7 @@ async function run(options: Options, report: Report): Promise<void> {
     );
     report.line(
       workflows.some(workflow=>workflow.ok&&workflow.name==='crm.exactPricing (registered fake worker)')
-        ? '  runtime domain calls plus the registered Ask pricing handler through the worker runner with a fake provider. The API’s sign-in, command receipts and HTTP routes are not exercised; no real provider or sending action.'
+        ? `  runtime domain calls plus the registered Ask pricing${workflows.some(workflow=>workflow.ok&&workflow.name==='crm.acquisition diagnostic (registered controlled worker)')?' and acquisition-diagnostic handlers':' handler'} through the worker runner with fake providers. The API’s sign-in, command receipts and HTTP routes are not exercised; no real provider or sending action.`
         : '  domain calls as the runtime role. The API’s sign-in, its command receipts and its HTTP routes are not exercised, and neither is the worker’s job runner around a real handler.',
     );
     if (replacedRoutines.length > 0) {

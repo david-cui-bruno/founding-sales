@@ -1,3 +1,4 @@
+import { REQUIRED_SCHEMA } from "../../packages/domain/db/schemaRange.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createCipheriv } from "node:crypto";
 import {
@@ -85,6 +86,8 @@ function applicationFixture(
       !path.split("/").includes(".terraform") &&
       !path.endsWith("/run.auto.tfvars.json"),
   });
+  mkdirSync(join(checkout, "packages/domain/db"), { recursive: true });
+  cpSync(resolve("packages/domain/db/schemaRange.ts"), join(checkout, "packages/domain/db/schemaRange.ts"));
   mkdirSync(join(checkout, "packages/contracts"), { recursive: true });
   cpSync(
     resolve("packages/contracts/src"),
@@ -103,8 +106,8 @@ function applicationFixture(
     certificate_arn:
       "arn:aws:acm:us-east-1:326255650484:certificate/11111111-1111-4111-8111-111111111111",
     api_hostname: lease.apiHostname,
-    api_schema_range: { min: 90, max: 90 },
-    worker_schema_range: { min: 90, max: 90 },
+    api_schema_range: { min: REQUIRED_SCHEMA, max: REQUIRED_SCHEMA },
+    worker_schema_range: { min: REQUIRED_SCHEMA, max: REQUIRED_SCHEMA },
     crm_acquisition_diagnostic: {
       environment_id: lease.environmentId,
       database_name: lease.databaseName,
@@ -135,7 +138,7 @@ function applicationFixture(
       prefix: lease.prefix,
       databaseName: lease.databaseName,
       apiHostname: lease.apiHostname,
-      schema: 90,
+      schema: REQUIRED_SCHEMA,
       sendingEnabled: false,
     },
     activationAllowed: false,
@@ -278,6 +281,7 @@ else:sys.exit(1)
     git: `#!/usr/bin/env python3
 import os,sys
 if sys.argv[1]=='status':
+ if os.environ.get('DIRTY_SCHEMA')=='1' and 'packages/domain/db/schemaRange.ts' in sys.argv[1:]:print(' M packages/domain/db/schemaRange.ts');sys.exit(0)
  p=os.environ['STORE']+'/git-count';n=int(open(p).read())+1 if os.path.exists(p) else 1;open(p,'w').write(str(n));print(' M infra/roots/rehearsal/backend.hcl' if os.environ.get('DIRTY_AFTER_WAIT')=='1' and n>1 else (' M infra/roots/rehearsal/backend.hcl' if n>int(os.environ.get('DIRTY_THRESHOLD','999999')) else ''))
 else:print(os.environ['GITHUB_SHA'])
 `,
@@ -292,7 +296,7 @@ elif a[0]!='init':sys.exit(1)
   };
   programs["bash"] += `
 if os.environ.get('FSS_RELEASE_CAPTURE'):
- json.dump({'workspaceId':'44444444-4444-4444-8444-444444444444','mailboxId':'55555555-5555-4555-8555-555555555555','ownerUserId':'66666666-6666-4666-8666-666666666666','providerAccountId':'david@usecallie.com','generation':1,'accountBinding':'a'*64,'oauthGrantObservationId':'77777777-7777-4777-8777-777777777777','databaseName':'fss_diagnostic_cap90_o10a','schemaVersion':90,'disclosureVersion':'crm-mail-body-acquisition-v1','disclosureSha256':'b'*64,'readOnly':True,'productionActivationAllowed':False,**({'body':'CONTROLLED_PRIVATE_ORIGINAL'} if os.environ.get('PRIVATE_RESULT')=='1' else {})},open(os.environ['FSS_RELEASE_CAPTURE'],'w'))
+ json.dump({'workspaceId':'44444444-4444-4444-8444-444444444444','mailboxId':'55555555-5555-4555-8555-555555555555','ownerUserId':'66666666-6666-4666-8666-666666666666','providerAccountId':'david@usecallie.com','generation':1,'accountBinding':'a'*64,'oauthGrantObservationId':'77777777-7777-4777-8777-777777777777','databaseName':'fss_diagnostic_cap90_o10a','schemaVersion':int(os.environ['CURRENT_DIAGNOSTIC_SCHEMA']),'disclosureVersion':'crm-mail-body-acquisition-v1','disclosureSha256':'b'*64,'readOnly':True,'productionActivationAllowed':False,**({'body':'CONTROLLED_PRIVATE_ORIGINAL'} if os.environ.get('PRIVATE_RESULT')=='1' else {})},open(os.environ['FSS_RELEASE_CAPTURE'],'w'))
 `;
   programs["bash"] += `
 if os.environ.get('FSS_RELEASE_CAPTURE') and 'revoke' in a:json.dump({'authorizationId':a[a.index('--authorization')+1]},open(os.environ['FSS_RELEASE_CAPTURE'],'w'))
@@ -332,6 +336,7 @@ else:print(json.dumps({'id':123,'run_attempt':1,'status':os.environ.get('ORIGIN_
     PATH: `${bin}:${process.env["PATH"]}`,
     GITHUB_REF: "refs/heads/main",
     GITHUB_SHA: lease.sourceCommit,
+    CURRENT_DIAGNOSTIC_SCHEMA: String(REQUIRED_SCHEMA),
     GITHUB_RUN_ID: "123",
     GITHUB_RUN_ATTEMPT: "1",
     GITHUB_EVENT_NAME: "workflow_dispatch",
@@ -585,7 +590,7 @@ it("provisions only the two frozen originals using the reviewed image and actual
       implementationCommit: f.lease.imageBuildCommit,
       apiImageDigest: f.lease.images.api,
       workerImageDigest: f.lease.images.worker,
-      schemaVersion: 90,
+      schemaVersion: REQUIRED_SCHEMA,
       releaseReference: "controlled-ci-gate",
       disclosureVersion: "crm-mail-body-acquisition-v1",
       disclosureSha256: "b".repeat(64),
@@ -647,4 +652,18 @@ it("provisions only the two frozen originals using the reviewed image and actual
   } finally {
     rmSync(f.directory, { recursive: true, force: true });
   }
+});
+
+it("refuses a dirty checked schema declaration before consuming a protected operation", () => {
+ const f=operationFixture();
+ try {
+  const before=readFileSync(f.calls,"utf8");
+  f.env["DIRTY_SCHEMA"]="1";
+  const result=f.execute();
+  expect(result.status).toBe(1);
+  expect(JSON.parse(result.stdout)).toMatchObject({ok:false,intentConsumed:false,activationAllowed:false});
+  const later=readFileSync(f.calls,"utf8").slice(before.length);
+  expect(later).not.toContain('"put-object"');
+  expect(later).not.toContain('"run-task"');
+ } finally {rmSync(f.directory,{recursive:true,force:true});}
 });

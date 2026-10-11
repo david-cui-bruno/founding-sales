@@ -109,6 +109,7 @@ function sourceBinding(lease) {
         "--",
         "infra",
         ".github/workflows",
+        "packages/domain/db/schemaRange.ts",
       ],
       repository,
     ).trim() !== ""

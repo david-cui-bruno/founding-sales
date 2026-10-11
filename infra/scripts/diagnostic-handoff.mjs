@@ -17,6 +17,7 @@ import {
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { REQUIRED_SCHEMA } from './diagnostic-schema.mjs';
 
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
@@ -286,6 +287,7 @@ function validatePayload(
   configuration,
   plan,
   manifestBytes = bytes(manifest),
+  allowReviewedSchema = false,
 ) {
   fields(configuration, [
     'assume_deployment_role',
@@ -300,12 +302,17 @@ function validatePayload(
     'worker_schema_range',
     'crm_acquisition_diagnostic',
   ]);
+  // Teardown of an already-owned historical deployment must retain its exact reviewed
+  // schema; current-source execution and operation evidence still require current schema.
+  const schema = allowReviewedSchema ? manifest.diagnostic?.schema : REQUIRED_SCHEMA;
+  if (!Number.isInteger(schema) || schema < 90 || schema > REQUIRED_SCHEMA)
+    refuse('payload_binding_changed');
   if (
     configuration.assume_deployment_role !== false ||
-    configuration.api_schema_range?.min !== 90 ||
-    configuration.api_schema_range?.max !== 90 ||
-    configuration.worker_schema_range?.min !== 90 ||
-    configuration.worker_schema_range?.max !== 90 ||
+    configuration.api_schema_range?.min !== schema ||
+    configuration.api_schema_range?.max !== schema ||
+    configuration.worker_schema_range?.min !== schema ||
+    configuration.worker_schema_range?.max !== schema ||
     !configuration.api_image.endsWith(`@${meta.images.api}`) ||
     !configuration.worker_image.endsWith(`@${meta.images.worker}`)
   )
@@ -341,7 +348,7 @@ function validatePayload(
     manifest.diagnostic?.prefix !== meta.prefix ||
     manifest.diagnostic?.databaseName !== meta.databaseName ||
     manifest.diagnostic?.apiHostname !== meta.apiHostname ||
-    manifest.diagnostic?.schema !== 90 ||
+    manifest.diagnostic?.schema !== schema ||
     manifest.diagnostic?.sendingEnabled !== false ||
     manifest.activationAllowed !== false
   )
@@ -614,6 +621,8 @@ export function escrowPlan({
 function loadPacket(
   { leasePath, expectedLeaseSha256, outDirectory },
   cleanup = false,
+  allowReviewedSchema = false,
+  validateOnly = false,
 ) {
   const lease = parseLease(approvedFile(leasePath, expectedLeaseSha256));
   if (
@@ -680,14 +689,15 @@ function loadPacket(
     packet,
     meta,
     outDirectory,
+    allowReviewedSchema,
   );
-  if (cleanup)
+  if (cleanup || validateOnly)
     return {
       configuration,
       manifest,
       lease,
       execution: ownedExecution,
-      cleanupOnly: true,
+      cleanupOnly: cleanup,
     };
   const privatePlanPath = resolve(outDirectory, 'reviewed.tfplan');
   const configurationPath = resolve(outDirectory, 'configuration.private.json');
@@ -860,6 +870,14 @@ export function registerLifecycleLease({
     refuse('lease_start_expired');
   const execution = observeExecution(lease.sourceCommit);
   privateDirectory(outDirectory);
+  // Standalone registration must validate the same current authenticated payload as
+  // normal load/apply before creating an irreversible application intent.
+  const validationDirectory = resolve(outDirectory, 'payload-validation');
+  try {
+    loadPacket({leasePath, expectedLeaseSha256, outDirectory:validationDirectory}, false, false, true);
+  } finally {
+    rmSync(validationDirectory, {recursive:true, force:true});
+  }
   identity();
   const record = {
     version: 'fss.diagnostic-execution.v1',
@@ -1031,9 +1049,9 @@ export function loadReviewedPlan(input) {
   return loadPacket(input);
 }
 export function loadReviewedConfigurationForCleanup(input) {
-  return loadPacket(input, true);
+  return loadPacket(input, true, true);
 }
-function decryptPayload(packet, meta, outDirectory) {
+function decryptPayload(packet, meta, outDirectory, allowReviewedSchema = false) {
   fields(packet, [
     'version',
     'metadata',
@@ -1098,7 +1116,7 @@ function decryptPayload(packet, meta, outDirectory) {
     const manifestBytes = Buffer.from(payload.manifestBytes, 'base64'),
       manifest = JSON.parse(manifestBytes);
     const plan = Buffer.from(payload.plan, 'base64');
-    validatePayload(meta, manifest, payload.configuration, plan, manifestBytes);
+    validatePayload(meta, manifest, payload.configuration, plan, manifestBytes, allowReviewedSchema);
     return { plan, manifest, configuration: payload.configuration, alarmDigestArchive };
   } finally {
     dataKey?.fill(0);
@@ -1338,6 +1356,6 @@ export function readRegisteredDiagnosticOperationEvidence(input) {
 }
 /** Authenticate existing retained configuration; independent action review is still required. */
 export function readDiagnosticOperationConfigurationEvidence(input) {
-  const reviewed = loadReviewedConfigurationForCleanup(input);
+  const reviewed = loadPacket(input, true);
   return {configuration:reviewed.configuration,manifest:reviewed.manifest,lease:reviewed.lease,execution:reviewed.execution,operationAuthority:false};
 }

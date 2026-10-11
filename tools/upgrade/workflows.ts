@@ -1,3 +1,4 @@
+import {DIAGNOSTIC_UPGRADE_WORKFLOW,runDiagnosticUpgradeWorkflow} from './diagnosticWorkflow.ts';
 import {BUSINESS_GMAIL_UPGRADE_WORKFLOW,runBusinessGmailUpgradeWorkflow} from './businessGmailWorkflow.ts';
 import {runCrmPricingUpgradeWorkflow} from './crmPricingWorkflow.ts';
 import {ASK_UPGRADE_WORKFLOW,runAskUpgradeWorkflow} from './askWorkflows.ts';
@@ -39,8 +40,11 @@ import type { FixtureHandles } from './fixture.ts';
  *
  * These are domain calls as the runtime role. They construct the actor context
  * directly, so the API's sign-in, its command receipts and its HTTP routes are **not**
- * exercised. The exact-pricing workflow additionally runs the registered Ask handler
- * through the real worker runner with a fake provider; other workflows are domain calls. What the
+ * exercised. Exact-pricing and acquisition-diagnostic workflows additionally run their
+ * registered handlers through the real worker runner with fake providers. Synthetic
+ * diagnostic authority is prepared separately as migration in this disposable database;
+ * all actual workflow dispatch and reservations use app_runtime. Other workflows are
+ * domain calls. What the
  * three tables `sessions`, `oidc_authorization_requests` and `command_receipts` hold
  * is therefore outside this test, which is also why the fixture is excused for leaving
  * them empty.
@@ -285,6 +289,7 @@ export async function runWorkflows(
   const businessDate = await businessDateOf(admin, now);
 
   const steps: readonly Step[] = [
+    {name:DIAGNOSTIC_UPGRADE_WORKFLOW,run:async()=>await runDiagnosticUpgradeWorkflow(admin)},
     { name: ASK_UPGRADE_WORKFLOW, run: async () => await runAskUpgradeWorkflow(admin,handles) },
     { name: BUSINESS_GMAIL_UPGRADE_WORKFLOW, run: async () => await runBusinessGmailUpgradeWorkflow(admin,handles) },
     { name:'crm.exactPricing (registered fake worker)',run:async()=>await runCrmPricingUpgradeWorkflow(admin) },

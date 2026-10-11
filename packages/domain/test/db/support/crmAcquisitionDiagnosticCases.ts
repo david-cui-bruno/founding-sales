@@ -1,3 +1,4 @@
+import { REQUIRED_SCHEMA } from "../../../db/schemaRange.ts";
 import { randomUUID } from "node:crypto";
 import type { SessionQueryable } from "../../../db/queryable.ts";
 import type { TwoWorkspaces } from "./fixtures.ts";
@@ -43,7 +44,7 @@ function grant(f: Fixture): Row {
       workspaceId: workspace_id,
       ownerUserId: owner_user_id,
       mailboxId: mailbox_id,
-      schemaVersion: 90,
+      schemaVersion: REQUIRED_SCHEMA,
       metadataUnits: 20,
       bodyUnits: 20,
     }),

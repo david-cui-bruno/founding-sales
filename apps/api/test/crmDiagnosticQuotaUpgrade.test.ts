@@ -1,3 +1,4 @@
+import { REQUIRED_SCHEMA } from "@fss/domain/db/schemaRange.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { z } from "zod";
@@ -29,7 +30,10 @@ import {
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 it("retains schema89 recorded and ambiguous units through upgrade while current deployment permits only owned body-free reports", async () => {
-  const fixture = await createAuthFixture({ throughVersion: 89, purpose: "acquisition_diagnostic" });
+  const fixture = await createAuthFixture({
+    throughVersion: 89,
+    purpose: "acquisition_diagnostic",
+  });
   try {
     const ws = fixture.alpha.workspaceId,
       owner = fixture.alpha.admin.userId,
@@ -129,6 +133,35 @@ it("retains schema89 recorded and ambiguous units through upgrade while current 
       )
     ).rows;
     await applyMigrations(fixture.db, { throughVersion: 90 });
+    const historical90 = crmAcquisitionDiagnosticAuthorizationSchema.parse({
+      ...legacy,
+      id: randomUUID(),
+      schemaVersion: 90,
+      metadataUnits: 20,
+      bodyUnits: 20,
+      maxUnits: 42,
+    });
+    const historical90Hash = createHash("sha256")
+      .update(JSON.stringify(historical90))
+      .digest("hex");
+    await fixture.db.query(
+      "INSERT INTO crm_acquisition_diagnostic_authorizations(workspace_id,id,owner_user_id,mailbox_id,authorization_sha256,authorization_document,verified_at,valid_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+      [
+        ws,
+        historical90.id,
+        owner,
+        mailbox,
+        historical90Hash,
+        JSON.stringify(historical90),
+        historical90.verifiedAt,
+        historical90.validUntil,
+      ],
+    );
+    await fixture.db.query(
+      "INSERT INTO crm_acquisition_diagnostic_reads(workspace_id,authorization_id,message_id,operation,transport,state,units) VALUES($1,$2,'historical90','body','controlled','unknown',20)",
+      [ws, historical90.id],
+    );
+    await applyMigrations(fixture.db, { throughVersion: REQUIRED_SCHEMA });
     expect(
       (
         await fixture.db.query(
@@ -142,7 +175,7 @@ it("retains schema89 recorded and ambiguous units through upgrade while current 
       implementationCommit: "c".repeat(40),
       imageDigest: "sha256:" + "d".repeat(64),
       side: "api",
-      schemaVersion: 90,
+      schemaVersion: REQUIRED_SCHEMA,
       verifyIsolation: async (binding) =>
         binding.environmentId === environmentId &&
         binding.databaseName === fixture.database.name &&
@@ -172,6 +205,43 @@ it("retains schema89 recorded and ambiguous units through upgrade while current 
     const response = await post("/crm/business/mail/diagnostic/read", {
       authorizationId: id,
     });
+    const historical90Response = await post(
+      "/crm/business/mail/diagnostic/read",
+      { authorizationId: historical90.id },
+    );
+    expect(historical90Response.status).toBe(200);
+    const historical90Report = crmAcquisitionDiagnosticReadResultSchema.parse(
+      historical90Response.body,
+    );
+    expect(historical90Report).toMatchObject({
+      authorizationSha256: historical90Hash,
+      attemptedReads: 1,
+      observedUnits: 0,
+      conservedUnits: 20,
+      productionActivationAllowed: false,
+    });
+    expect(JSON.stringify(historical90Report)).not.toContain(
+      "legacy@example.test",
+    );
+    expect(
+      (
+        await post("/crm/business/mail/diagnostic/request", {
+          commandId: randomUUID(),
+          clientVersion: CURRENT_CLIENT_VERSION,
+          authorizationId: historical90.id,
+          expectedAuthorizationSha256: historical90Hash,
+        })
+      ).body,
+    ).toMatchObject({
+      status: "refused",
+      reason: "diagnostic_authority_unavailable",
+    });
+    await expect(
+      session.query(
+        "INSERT INTO crm_acquisition_diagnostic_reads(workspace_id,authorization_id,message_id,operation,transport,state,units) VALUES($1,$2,'new90','body','controlled','calling',20)",
+        [ws, historical90.id],
+      ),
+    ).rejects.toMatchObject({ constraint: "crm_diagnostic_current_dispatch" });
     expect(response.status).toBe(200);
     const report = crmAcquisitionDiagnosticReadResultSchema.parse(
       response.body,
@@ -295,7 +365,7 @@ it("retains schema89 recorded and ambiguous units through upgrade while current 
     const current = crmAcquisitionDiagnosticAuthorizationSchema.parse({
       ...legacy,
       id: randomUUID(),
-      schemaVersion: 90,
+      schemaVersion: REQUIRED_SCHEMA,
       metadataUnits: 20,
       bodyUnits: 20,
       maxUnits: 42,
@@ -327,6 +397,30 @@ it("retains schema89 recorded and ambiguous units through upgrade while current 
       imageDigest: FIXTURE_API_DIGEST,
       verifyIsolation: async () => true,
     };
+    const driftingRuntime: CrmAcquisitionDiagnosticRuntime = {
+      ...currentRuntime,
+      verifyIsolation: async () => {
+        await fixture.db.query(
+          "UPDATE schema_versions SET version=$1 WHERE version=$2",
+          [REQUIRED_SCHEMA + 1, REQUIRED_SCHEMA],
+        );
+        return true;
+      },
+    };
+    try {
+      expect(
+        await prepareCrmAcquisitionDiagnosticIsolation(
+          context,
+          { authorizationId: current.id },
+          driftingRuntime,
+        ),
+      ).toBeNull();
+    } finally {
+      await fixture.db.query(
+        "UPDATE schema_versions SET version=$1 WHERE version=$2",
+        [REQUIRED_SCHEMA, REQUIRED_SCHEMA + 1],
+      );
+    }
     const dispatchProof = await prepareCrmAcquisitionDiagnosticIsolation(
       context,
       { authorizationId: current.id },

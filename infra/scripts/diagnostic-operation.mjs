@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { REQUIRED_SCHEMA } from "./diagnostic-schema.mjs";
 import {
   readRegisteredDiagnosticOperationEvidence,
   readDiagnosticOperationConfigurationEvidence,
@@ -96,6 +97,7 @@ function source(lease) {
       "--",
       "infra",
       ".github/workflows",
+      "packages/domain/db/schemaRange.ts",
     ]).trim() ||
     Object.keys(process.env).some(
       (k) =>
@@ -536,7 +538,7 @@ function validateResult(a, r, lease) {
       r.ownerUserId !== a.input.ownerUserId ||
       r.readOnly !== true ||
       r.productionActivationAllowed !== false ||
-      r.schemaVersion !== 90 ||
+      r.schemaVersion !== REQUIRED_SCHEMA ||
       r.databaseName !== lease.databaseName ||
       r.disclosureVersion !== "crm-mail-body-acquisition-v1" ||
       r.providerAccountId !== lease.bootstrapAdminEmail ||

@@ -1,3 +1,4 @@
+import { REQUIRED_SCHEMA } from "@fss/domain/db/schemaRange.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { gmailConnectResultSchema, gmailStatusSchema } from "@fss/contracts";
@@ -38,7 +39,7 @@ describe("capture-only consent through authenticated Gmail commands", () => {
     implementationCommit: "a".repeat(40),
     imageDigest: "sha256:" + "b".repeat(64),
     side: "api",
-    schemaVersion: 90,
+    schemaVersion: REQUIRED_SCHEMA,
     consentIsolationBinding: {
       databaseInstanceArn: "arn:aws:rds:us-east-1:000000000000:db:controlled",
       databaseSecretArn:

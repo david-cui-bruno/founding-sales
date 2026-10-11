@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { REQUIRED_SCHEMA } from "../db/schemaRange.ts";
 import { createCrmAcquisitionDiagnosticIsolation } from "./crmAcquisitionDiagnosticIsolation.ts";
 import type { CrmAcquisitionDiagnosticRuntime } from "./crmAcquisitionDiagnostic.ts";
 const configuration = z.strictObject({
@@ -30,7 +31,7 @@ export function createCrmAcquisitionDiagnosticStartup(
   if (
     !identity.implementationCommit ||
     !identity.imageDigest ||
-    identity.schemaVersion !== 90 ||
+    identity.schemaVersion !== REQUIRED_SCHEMA ||
     !environment["ECS_CONTAINER_METADATA_URI_V4"]
   )
     throw new Error("diagnostic_environment_unavailable");
@@ -46,7 +47,7 @@ export function createCrmAcquisitionDiagnosticStartup(
     implementationCommit: identity.implementationCommit,
     imageDigest: identity.imageDigest,
     side: identity.side,
-    schemaVersion: 90,
+    schemaVersion: REQUIRED_SCHEMA,
     consentIsolationBinding: {
       databaseInstanceArn: value.databaseInstanceArn,
       databaseSecretArn: value.databaseSecretArn,

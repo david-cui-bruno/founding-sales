@@ -1,3 +1,4 @@
+import { REQUIRED_SCHEMA } from "@fss/domain/db/schemaRange.ts";
 import { z } from "zod";
 import { readAppliedSchemaVersion } from "@fss/domain/db/migrationRunner.ts";
 import { businessAccountBinding } from "@fss/domain/business/acquisition.ts";
@@ -49,7 +50,7 @@ export async function crmAcquisitionDiagnosticBindingsCommand(
     if (
       !database ||
       !/^fss[_-]diagnostic[_-]/u.test(database) ||
-      version !== 90
+      version !== REQUIRED_SCHEMA
     )
       return refused("diagnostic_bindings_environment_mismatch");
     const membership = (

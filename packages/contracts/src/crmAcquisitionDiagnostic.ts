@@ -31,7 +31,7 @@ export const crmAcquisitionDiagnosticAuthorizationSchema = z
     implementationCommit: z.string().regex(/^[a-f0-9]{40}$/u),
     apiImageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
     workerImageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
-    schemaVersion: z.literal(90),
+    schemaVersion: z.number().int().min(90),
     releaseReference: reference,
     disclosureVersion: reference,
     disclosureSha256: hash,
