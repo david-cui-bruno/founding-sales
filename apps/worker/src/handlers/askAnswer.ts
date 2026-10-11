@@ -144,8 +144,8 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
  const {context,requestId,version,epoch}=located,agent=runtime.agent,limits=runtime.agentLimits;
  const update=async(state:string,reason:string|null)=>withTransaction(input.session,async()=>{await lockAskLifecycle(context);if(await fenced(input))await setState(context,requestId,version,epoch,state,reason);});
  if(!agent||!limits||!Number.isInteger(limits.maxSteps)||limits.maxSteps<1||limits.maxSteps>32||!Number.isInteger(limits.maxInputBytes)||limits.maxInputBytes<1||limits.maxInputBytes>1000000||!Number.isInteger(limits.maxOutputTokens)||limits.maxOutputTokens<1||limits.maxOutputTokens>4096||!Number.isInteger(limits.deadlineMs)||limits.deadlineMs<1||limits.deadlineMs>60000){await update('unavailable','processing_authority_unavailable');return;}
- const originalRun=agent.runStep;const route={endpointId:agent.endpointId,modelVersion:agent.modelVersion,providerKey:agent.providerKey},run=originalRun.bind(Object.freeze({...agent})),started=Date.now();
- const unchanged=()=>runtime.agent===agent&&agent.endpointId===route.endpointId&&agent.modelVersion===route.modelVersion&&agent.providerKey===route.providerKey&&agent.runStep===originalRun;
+ const originalRun=agent.runStep;const route={endpointId:agent.endpointId,modelVersion:agent.modelVersion,providerKey:agent.providerKey},run=originalRun.bind(Object.freeze({...agent})),originalInputBound=agent.inputBound,started=Date.now();
+ const unchanged=()=>runtime.agent===agent&&agent.endpointId===route.endpointId&&agent.modelVersion===route.modelVersion&&agent.providerKey===route.providerKey&&agent.runStep===originalRun&&agent.inputBound===originalInputBound;
  const current=async()=>withTransaction(input.session,async()=>{await lockAskLifecycle(context);if(!await fenced(input))return null;const row=(await context.db.query<{cancelled_at:Date|null}>('SELECT cancelled_at FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,requestId])).rows[0];if(row?.cancelled_at)return null;return readCurrentAskInput(context,requestId,version,epoch,route);});
  const initial=await current();if(!initial)return;if(initial.identityAmbiguous){await update('unavailable','identity_clarification_required');return;}
  const transcript:unknown[]=[...initial.history,{windows:initial.windows.map(window=>({id:window.id,ordinal:window.ordinal,source:window.source,text:window.text})),coverage:initial.coverage,scope:initial.scopeDescriptor}];
@@ -157,8 +157,17 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
   const snapshot=await current();if(!snapshot||snapshot.inputHash!==expectedInputHash||snapshot.baseInputHash!==initial.baseInputHash){await update('stale','source_changed');return;}
   if(snapshot.identityAmbiguous){await update('unavailable','identity_clarification_required');return;}
   const proof=await verifyAskPurpose(runtime,snapshot.proofInput);if(!proof||!unchanged()||proof.evaluationKind==='actual'&&(askFingerprint(snapshot.proofInput.purpose.agentLimits??null)!==askFingerprint(limits)||Object.entries(CRM_SUPPORTED_AGENT_ASK_VERSIONS).some(([key,value])=>snapshot.proofInput.purpose[key as keyof typeof CRM_SUPPORTED_AGENT_ASK_VERSIONS]!==value))){await update('unavailable','processing_authority_unavailable');return;}
-  const inputTokens=Buffer.byteLength(JSON.stringify({question:snapshot.question,transcript}))+2048;
-  if(inputTokens>limits.maxInputBytes||Date.now()-started>=limits.deadlineMs){await update('unavailable','input_bound_reached');return;}
+  let bound:{inputBytes:number;maxInputTokens:number}|null=null;
+  try{
+   // Legacy/custom adapters may omit this optional method. Ordinary SDK adapters
+   // always count their full actual system/tools/messages via the shared composer.
+   const legacyBytes=Buffer.byteLength(JSON.stringify({question:snapshot.question,transcript}))+2048;
+   bound=originalInputBound?originalInputBound.call(agent,{question:snapshot.question,transcript:structuredClone(transcript),maxOutputTokens:limits.maxOutputTokens}):{inputBytes:legacyBytes,maxInputTokens:legacyBytes};
+  }catch{/* Invalid composition refuses before any financial reservation or call. */}
+  if(bound===null||!Number.isSafeInteger(bound.inputBytes)||bound.inputBytes<0||!Number.isSafeInteger(bound.maxInputTokens)||bound.maxInputTokens<0||bound.maxInputTokens>1000000){await update('unavailable','processing_failed');return;}
+  if(!unchanged()){await update('stale','source_changed');return;}
+  const inputTokens=bound.maxInputTokens;
+  if(bound.inputBytes>limits.maxInputBytes||Date.now()-started>=limits.deadlineMs){await update('unavailable','input_bound_reached');return;}
   const reserved=await withTransaction(input.session,async()=>{await lockAskLifecycle(context);
    const live=await readCurrentAskInput(context,requestId,version,epoch,route);if(!live||live.inputHash!==snapshot.inputHash||!await fenced(input))return null;
    const cancellation=(await context.db.query<{cancelled_at:Date|null}>('SELECT cancelled_at FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,requestId])).rows[0];if(cancellation?.cancelled_at)return null;
@@ -241,7 +250,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
    const result=askGroundedAnswerSchema.parse({resultVersion:'agent_v1',...retrievalSummary?{retrieval:retrievalSummary}:{},exactResults,answeredAt:await now(context),claims:candidate.data.claims.map(claim=>({...claim,verification:'cited_unverified'})),conflicts:final.conflicts,missingEvidence:[...final.identityUnresolved?['identity_unresolved']:[],...final.conflicts.length?['conflict_unresolved']:[],...candidate.data.claims.some(claim=>claim.kind==='inference')?['inference_unverified']:[],...final.retrievalPartial?['input_partial']:[]],abstained:candidate.data.abstained,coverage:{acquisition:'unverified',semantic:'unverified',input:final.retrievalPartial?'partial':'complete',sourceCeiling:10,windowCeiling:1000,groupCeiling:10,evaluationFingerprint:reserved.purpose.evaluationFingerprint}});
    await context.db.query("UPDATE crm_ask_requests SET state='complete',reason=NULL,result=$5::jsonb,result_at=clock_timestamp(),progress_stage='complete',updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND version=$3 AND epoch=$4 AND state='pending'",[context.scope.workspaceId,requestId,version,epoch,JSON.stringify(result)]);
   });return;
- }await update('unavailable','input_bound_reached');
+ }await update('unavailable','step_bound_reached');
 }
 
 /** Small exact-array cosine prototype, versioned per immutable canonical window. No extension prerequisite. */

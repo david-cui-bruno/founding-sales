@@ -5,7 +5,7 @@ import {askExplicitCorpusScopeSchema,askPassagesResponseSchema,askRecordMatchSch
 import {askAgentScopeSchema} from './askAgentScope.ts';
 import {crmResolvedSourceSchema} from './crmProcessing.ts';
 export const askAnswerStateSchema=z.enum(['pending','unavailable','unknown_acceptance','stale','complete','deleted']);
-export const askAnswerReasonSchema=z.enum(['purpose_unavailable','evaluation_unavailable','processing_authority_unavailable','budget_held','input_bound_reached','source_unavailable','source_changed','purpose_changed','provider_acceptance_unknown','processing_failed','unsupported_answer','identity_clarification_required','deleted','processing_cancelled']);
+export const askAnswerReasonSchema=z.enum(['purpose_unavailable','evaluation_unavailable','processing_authority_unavailable','budget_held','input_bound_reached','step_bound_reached','source_unavailable','source_changed','purpose_changed','provider_acceptance_unknown','processing_failed','unsupported_answer','identity_clarification_required','deleted','processing_cancelled']);
 export const askAnswerRequestPayloadSchema=z.strictObject({question:z.string().trim().min(1).max(300),scope:askExplicitCorpusScopeSchema.extend({sources:askExplicitCorpusScopeSchema.shape.sources.element.array().max(10)}),execution:z.enum(['legacy_v1','agent_v1']).optional(),agentScope:askAgentScopeSchema.optional()}).refine(value=>value.execution==='agent_v1'||value.scope.sources.length>0);
 export const askAnswerRequestSchema=askAnswerRequestPayloadSchema.safeExtend({commandId:commandIdSchema,clientVersion:semanticVersionSchema}).strict();
 export const askAnswerAcknowledgmentSchema=z.strictObject({requestId:z.uuid(),version:z.number().int().positive(),state:z.enum(['pending','unavailable'])});
