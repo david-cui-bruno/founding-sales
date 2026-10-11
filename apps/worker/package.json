@@ -12,18 +12,18 @@
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "4.0.194",
-    "@aws-sdk/client-bedrock-runtime": "^3.1145.0",
-    "@aws-sdk/client-s3": "^3.1141.0",
-    "@aws-sdk/client-transcribe": "^3.1144.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1148.0",
+    "@aws-sdk/client-s3": "^3.1148.0",
+    "@aws-sdk/client-transcribe": "^3.1148.0",
     "@aws-sdk/credential-provider-node": "3.972.84",
     "@fss/contracts": "*",
     "@fss/domain": "*",
     "ai": "6.0.303",
-    "pg": "^8.13.1"
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.3"
   }
 }
