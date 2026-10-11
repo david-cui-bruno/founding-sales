@@ -106,6 +106,14 @@ jobs:
               print('diagnostic private inputs refused', file=sys.stderr)
               sys.exit(1)
           PY
+      - name: Register the arm64 interpreter for proposal selftests
+        if: inputs.stage == 'proposal'
+        run: |
+          set -euo pipefail
+          # Ubuntu runners are x86_64; proposal binary selftests use arm64 images.
+          # Match the normal image workflow's distribution interpreter setup.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-user-static binfmt-support >/dev/null
       - name: Verify lifecycle prerequisites without a cloud call
         id: validate
         if: inputs.stage == 'lifecycle'
