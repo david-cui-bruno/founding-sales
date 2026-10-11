@@ -21,10 +21,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import {
-  API_SCHEMA_RANGE,
-  WORKER_SCHEMA_RANGE,
-} from "../../packages/domain/db/schemaRange.ts";
+import { REQUIRED_SCHEMA } from "./diagnostic-schema.mjs";
 
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const read = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -104,9 +101,6 @@ function validate(file, directory) {
       requireValue(config.recipientPublicKeySha256, /^[0-9a-f]{64}$/u)
   )
     throw new Error("recipient_mismatch");
-  for (const range of [API_SCHEMA_RANGE, WORKER_SCHEMA_RANGE])
-    if (range.minimum !== 90 || range.maximum !== 90)
-      throw new Error("schema90_required");
   const apiDigest = requireValue(
     env.FSS_DIAGNOSTIC_API_DIGEST,
     /^sha256:[0-9a-f]{64}$/u,
@@ -146,8 +140,8 @@ function validate(file, directory) {
     worker_image: `${workerRepository}@${workerDigest}`,
     certificate_arn: certificate,
     api_hostname: config.apiHostname,
-    api_schema_range: { min: 90, max: 90 },
-    worker_schema_range: { min: 90, max: 90 },
+    api_schema_range: { min: REQUIRED_SCHEMA, max: REQUIRED_SCHEMA },
+    worker_schema_range: { min: REQUIRED_SCHEMA, max: REQUIRED_SCHEMA },
     crm_acquisition_diagnostic: {
       environment_id: config.environmentId,
       database_name: config.databaseName,
@@ -161,7 +155,7 @@ function validate(file, directory) {
     runAttempt,
     prefix,
     stateKey: `fss/greenfield/rehearsal/${prefix}/terraform.tfstate`,
-    schema: 90,
+    schema: REQUIRED_SCHEMA,
     account,
     configuration,
     configurationSha256: sha(JSON.stringify(configuration)),
@@ -412,6 +406,22 @@ export async function prepareDiagnosticPlan(configFile, directory, root, options
         )
       )
         throw new Error("registry_provenance_changed");
+      const selftest = (schema) => [
+        "run", "--rm", "--platform", "linux/arm64",
+        "-e", `FSS_SCHEMA_MIN=${schema}`,
+        "-e", `FSS_SCHEMA_MAX=${schema}`,
+        "-e", "DATABASE_URL=postgresql://ci.invalid/fss",
+        reference, "--selftest",
+      ];
+      command("docker", selftest(REQUIRED_SCHEMA), repository);
+      let acceptsStale = false;
+      try {
+        command("docker", selftest(REQUIRED_SCHEMA - 1), repository);
+        acceptsStale = true;
+      } catch {
+        // The checked binary must refuse the adjacent obsolete schema.
+      }
+      if (acceptsStale) throw new Error("image_schema_mismatch");
     }
   } finally {
     rmSync(dockerConfig, { recursive: true, force: true });
@@ -559,7 +569,7 @@ export async function prepareDiagnosticPlan(configFile, directory, root, options
           input.configuration.crm_acquisition_diagnostic.database_name,
         apiHostname: input.configuration.api_hostname,
         prefix: input.prefix,
-        schema: 90,
+        schema: REQUIRED_SCHEMA,
         sendingEnabled: false,
         bootstrap: true,
       },
@@ -731,7 +741,7 @@ if (
           "namespace_mismatch",
           "public_key_required",
           "recipient_mismatch",
-          "schema90_required",
+          "diagnostic_schema_mismatch",
           "distinct_images_required",
           "account_mismatch",
           "invalid_zones",

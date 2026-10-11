@@ -27,6 +27,8 @@ export async function runChecksIn(
   entry: string,
   input: {
     readonly databaseUrl: string;
+    /** Disposable fixture preparation only; never supplied to runtime source. */
+    readonly fixtureDatabaseUrl?: string;
     readonly mode: ChecksMode;
     readonly handles?: FixtureHandles | undefined;
   },
@@ -36,6 +38,8 @@ export async function runChecksIn(
     FSS_UPGRADE_DATABASE_URL: input.databaseUrl,
     FSS_UPGRADE_CHECKS_MODE: input.mode,
   };
+  if (input.fixtureDatabaseUrl !== undefined) environment['FSS_UPGRADE_FIXTURE_DATABASE_URL']=input.fixtureDatabaseUrl;
+  else delete environment['FSS_UPGRADE_FIXTURE_DATABASE_URL'];
   if (input.handles !== undefined) {
     const directory = mkdtempSync(join(tmpdir(), 'fss-upgrade-handles-'));
     const file = join(directory, 'handles.json');

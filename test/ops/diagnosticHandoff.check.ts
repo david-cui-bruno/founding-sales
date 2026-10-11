@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
+import { REQUIRED_SCHEMA } from '../../packages/domain/db/schemaRange.ts';
 
 const script = resolve('infra/scripts/diagnostic-handoff.mjs');
 const digest = (value: string) =>
@@ -164,8 +165,8 @@ else process.exit(1);
       certificate_arn:
         'arn:aws:acm:us-east-1:326255650484:certificate/11111111-2222-4333-8444-555555555555',
       api_hostname: lease.apiHostname,
-      api_schema_range: { min: 90, max: 90 },
-      worker_schema_range: { min: 90, max: 90 },
+      api_schema_range: { min: REQUIRED_SCHEMA, max: REQUIRED_SCHEMA },
+      worker_schema_range: { min: REQUIRED_SCHEMA, max: REQUIRED_SCHEMA },
       crm_acquisition_diagnostic: {
         environment_id: lease.environmentId,
         database_name: lease.databaseName,
@@ -187,7 +188,7 @@ else process.exit(1);
         prefix: lease.prefix,
         databaseName: lease.databaseName,
         apiHostname: lease.apiHostname,
-        schema: 90,
+        schema: REQUIRED_SCHEMA,
         sendingEnabled: false,
       },
       planSha256: digest(plan),
@@ -285,6 +286,21 @@ else process.exit(1);
     expect(readFileSync(join(directory, 'commands.log'), 'utf8')).toBe(
       beforeContradictory,
     );
+    // A stale proposal can be internally consistent and still be wrong for this source.
+    const staleConfig = {...config, api_schema_range:{min:90,max:90}, worker_schema_range:{min:90,max:90}};
+    const staleConfigHash = digest(JSON.stringify(staleConfig));
+    const staleManifest = {...manifest, configurationSha256:staleConfigHash, diagnostic:{...manifest.diagnostic,schema:90}};
+    const staleApproval = {...approval, configurationSha256:staleConfigHash};
+    const staleConfigPath=join(directory,'stale-config.json'), staleManifestPath=join(directory,'stale-manifest.json'), staleApprovalPath=join(directory,'stale-approval.json');
+    writeFileSync(staleConfigPath,JSON.stringify(staleConfig));
+    writeFileSync(staleManifestPath,JSON.stringify(staleManifest));
+    writeFileSync(staleApprovalPath,JSON.stringify(staleApproval));
+    const beforeStale = readFileSync(join(directory,'commands.log'),'utf8');
+    const stale = run(['escrow',staleApprovalPath,digest(readFileSync(staleApprovalPath,'utf8')),files.plan,staleManifestPath,staleConfigPath,join(directory,'stale-escrow'),proposalRoot]);
+    expect(stale.status).toBe(1);
+    expect(stale.stderr).toContain('payload_binding_changed');
+    expect(readFileSync(join(directory,'commands.log'),'utf8')).toBe(beforeStale);
+    expect(existsSync(join(directory,'stale-escrow','escrow-receipt.json'))).toBe(false);
     const escrow = run([
       'escrow',
       files.approval,

@@ -1,3 +1,4 @@
+import { REQUIRED_SCHEMA } from "@fss/domain/db/schemaRange.ts";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
@@ -55,7 +56,7 @@ function grant(): CrmAcquisitionDiagnosticAuthorization {
     implementationCommit: "c".repeat(40),
     apiImageDigest: "sha256:" + "a".repeat(64),
     workerImageDigest: "sha256:" + "b".repeat(64),
-    schemaVersion: 90,
+    schemaVersion: REQUIRED_SCHEMA,
     releaseReference: "controlled release",
     disclosureVersion: CRM_MAIL_CAPTURE_DISCLOSURE.version,
     disclosureSha256: CRM_MAIL_CAPTURE_DISCLOSURE.sha256,

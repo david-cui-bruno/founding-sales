@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createCrmAcquisitionDiagnosticIsolation } from "../mail/crmAcquisitionDiagnosticIsolation.ts";
+import { REQUIRED_SCHEMA } from "../db/schemaRange.ts";
 import { createCrmAcquisitionDiagnosticStartup } from "../mail/crmAcquisitionDiagnosticStartup.ts";
 const sdk = vi.hoisted(() => ({
   ecsSend: vi.fn<() => Promise<unknown>>(),
@@ -132,7 +133,7 @@ it("default startup is unavailable and explicit production connection is rejecte
     implementationCommit: "a".repeat(40),
     imageDigest: "sha256:" + "a".repeat(64),
     side: "worker" as const,
-    schemaVersion: 90,
+    schemaVersion: REQUIRED_SCHEMA,
     connectionString: "postgres://user:secret@db.example.test/fss",
   };
   expect(createCrmAcquisitionDiagnosticStartup({}, identity)).toBeUndefined();
@@ -244,4 +245,38 @@ it("consent bootstrap witnesses the actual running task without a fabricated acq
       connectedServerAddress: "10.9.9.9",
     }),
   ).toBe(false);
+});
+
+it("starts only the checked schema and refuses historical or forged future runtime bindings", () => {
+  const environment = {
+    FSS_CRM_ACQUISITION_DIAGNOSTIC: JSON.stringify({
+      environmentId: binding.environmentId,
+      region: "us-east-1",
+      databaseSecretArn: binding.databaseSecretArn,
+      databaseInstanceArn: binding.databaseInstanceArn,
+      ecsClusterArn: binding.ecsClusterArn,
+    }),
+    ECS_CONTAINER_METADATA_URI_V4: "http://169.254.170.2/v4/current",
+  };
+  const identity = {
+    implementationCommit: "a".repeat(40),
+    imageDigest: "sha256:" + "a".repeat(64),
+    side: "worker" as const,
+    schemaVersion: REQUIRED_SCHEMA,
+    connectionString:
+      "postgres://user:secret@db.example.test/fss_diagnostic_acceptance",
+  };
+  expect(
+    createCrmAcquisitionDiagnosticStartup(environment, identity),
+  ).toMatchObject({
+    environmentId: binding.environmentId,
+    schemaVersion: REQUIRED_SCHEMA,
+  });
+  for (const schemaVersion of [90, REQUIRED_SCHEMA + 1, 0])
+    expect(() =>
+      createCrmAcquisitionDiagnosticStartup(environment, {
+        ...identity,
+        schemaVersion,
+      }),
+    ).toThrow("diagnostic_environment_unavailable");
 });

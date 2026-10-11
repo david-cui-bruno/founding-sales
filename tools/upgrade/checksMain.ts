@@ -63,6 +63,15 @@ async function main(): Promise<number> {
         return 2;
       }
       const handles = JSON.parse(readFileSync(handlesFile, 'utf8')) as FixtureHandles;
+      const fixtureUrl=process.env['FSS_UPGRADE_FIXTURE_DATABASE_URL'];
+      if(fixtureUrl===undefined)throw new Error('Disposable upgrade fixture connection is required');
+      const fixtureClient=new pg.Client({connectionString:fixtureUrl});
+      await fixtureClient.connect();
+      try {
+        await fixtureClient.query('SET ROLE migration');
+        const {prepareDiagnosticUpgradeFixture}=await import('./diagnosticWorkflow.ts');
+        await prepareDiagnosticUpgradeFixture({query:async<Row extends QueryResultRowLike=QueryResultRowLike>(text:string,values?:readonly unknown[])=>{const result=await fixtureClient.query(text,values===undefined?undefined:[...values]);return {rows:result.rows as Row[],rowCount:result.rowCount};}},handles);
+      }finally{await fixtureClient.end();}
       // Imported here, not at the top: the base checkout runs this file in `startup`
       // mode, and `workflows.ts` names modules that do not exist at schema N — reading
       // a funnel fact is not a thing the previous release could do. A static import

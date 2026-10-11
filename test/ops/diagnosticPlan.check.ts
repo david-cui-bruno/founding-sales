@@ -79,12 +79,11 @@ function runConfig(change: Record<string, unknown> = {}) {
 }
 it("prepares an exact identifier-only diagnostic proposal without a cloud command", () => {
   const run = runConfig();
-  if(Number(REQUIRED_SCHEMA)!==90){expect(run.status).toBe(1);expect(run.output).toContain('schema90_required');return;}
   expect(run.status, run.output).toBe(0);
   expect(run.validated).toMatchObject({
     prefix: "fss-rh-cap90-o10a",
     stateKey: "fss/greenfield/rehearsal/fss-rh-cap90-o10a/terraform.tfstate",
-    schema: 90,
+    schema: REQUIRED_SCHEMA,
     configuration: {
       crm_acquisition_diagnostic: {
         environment_id: config.environmentId,
@@ -220,9 +219,6 @@ it("saves only an encrypted exact fresh-state plan under verified normal role an
         resolve("packages/domain/db", file),
         join(checkout, "packages/domain/db", file),
       );
-    // This positive plan fixture remains the authorized schema90 diagnostic.
-    // Current newer source must refuse it, as the separate configuration test proves.
-    writeFileSync(join(checkout, 'packages/domain/db/schemaRange.ts'), readFileSync(join(checkout, 'packages/domain/db/schemaRange.ts'),'utf8').replace(/export const REQUIRED_SCHEMA = \d+;/u,'export const REQUIRED_SCHEMA = 90;'));
     const fixtureScript = join(checkout, "infra/scripts/diagnostic-plan.mjs");
     const root = join(checkout, "infra/roots/rehearsal");
     const bin = join(dir, "bin");
@@ -239,13 +235,13 @@ it("saves only an encrypted exact fresh-state plan under verified normal role an
           repository: "fss-rh-api",
           tag: `ci-${commit}`,
           digest: `sha256:${"1".repeat(64)}`,
-          schemaRange: { minimum: 90, maximum: 90 },
+          schemaRange: { minimum: REQUIRED_SCHEMA, maximum: REQUIRED_SCHEMA },
         },
         worker: {
           repository: "fss-rh-worker",
           tag: `ci-${commit}`,
           digest: `sha256:${"2".repeat(64)}`,
-          schemaRange: { minimum: 90, maximum: 90 },
+          schemaRange: { minimum: REQUIRED_SCHEMA, maximum: REQUIRED_SCHEMA },
         },
       },
     };
@@ -287,6 +283,10 @@ if args[0]=='login':sys.stdin.read()
 elif args[:2]==['image','inspect']:
  reference=args[2];commit=os.environ['GITHUB_SHA'] if os.environ.get('IMAGE_SOURCE_DRIFT')!='1' else '0'*40
  print(json.dumps([{'Architecture':'arm64','RepoDigests':[reference],'Config':{'Labels':{'org.opencontainers.image.revision':commit},'Env':['FSS_BUILD_COMMIT='+commit]}}]))
+elif args[0]=='run':
+ schema=int(next(x.split('=',1)[1] for x in args if x.startswith('FSS_SCHEMA_MIN=')))
+ expected=int(os.environ['CURRENT_DIAGNOSTIC_SCHEMA'])
+ sys.exit(0 if (schema==expected and os.environ.get('IMAGE_SCHEMA_DRIFT')!='1') or (schema!=expected and os.environ.get('IMAGE_ACCEPTS_STALE')=='1') else 1)
 elif args[0]!='pull':sys.exit(1)
 `,
       git: String.raw`#!/usr/bin/env python3
@@ -351,6 +351,7 @@ elif a[0]!='init':sys.exit(1)
       FSS_DIAGNOSTIC_WORKER_REPOSITORY:
         "326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker",
       FIXTURE_IMAGES: fixture,
+      CURRENT_DIAGNOSTIC_SCHEMA: String(REQUIRED_SCHEMA),
       FIXTURE_GIT_CHECKOUT: resolve("."),
       REAL_GIT: spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim(),
       CALLS: log,
@@ -469,6 +470,8 @@ elif a[0]!='init':sys.exit(1)
       { DRIFT_PLAN: "1" },
       { ECR_TAG_DRIFT: "1" },
       { IMAGE_SOURCE_DRIFT: "1" },
+      { IMAGE_SCHEMA_DRIFT: "1" },
+      { IMAGE_ACCEPTS_STALE: "1" },
       { SOURCE_DIRTY: "1" },
       { STATE_UNREADABLE: "1" },
       { STATE_MALFORMED: "1" },

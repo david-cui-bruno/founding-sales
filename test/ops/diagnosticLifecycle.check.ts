@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
+import { REQUIRED_SCHEMA } from "../../packages/domain/db/schemaRange.ts";
 
 const script = resolve("infra/scripts/diagnostic-lifecycle.mjs");
 // A fixed synthetic ZIP containing index.mjs and digest.mjs, independent of the handoff.
@@ -74,7 +75,7 @@ function leaseFixture() {
   };
 }
 
-function applicationFixture(options: {archive?:string;legacy?:boolean} = {}) {
+function applicationFixture(options: {archive?:string;legacy?:boolean;schema?:number} = {}) {
   const directory = mkdtempSync(join(tmpdir(), "fss-diagnostic-apply-"));
   const checkout = join(directory, "checkout");
   mkdirSync(checkout);
@@ -84,7 +85,12 @@ function applicationFixture(options: {archive?:string;legacy?:boolean} = {}) {
       !path.split("/").includes(".terraform") &&
       !path.endsWith("/run.auto.tfvars.json"),
   });
+  // Copy the real schema contract and its imports into the independently executed checkout.
+  mkdirSync(join(checkout,"packages/domain/db"),{recursive:true});
+  for (const name of ["schemaRange.ts","migrationRunner.ts","queryable.ts"])
+    cpSync(resolve("packages/domain/db",name),join(checkout,"packages/domain/db",name));
   const lease = leaseFixture();
+  const schema = options.schema ?? REQUIRED_SCHEMA;
   const configuration = {
     assume_deployment_role: false,
     bootstrap: true,
@@ -95,8 +101,8 @@ function applicationFixture(options: {archive?:string;legacy?:boolean} = {}) {
     certificate_arn:
       "arn:aws:acm:us-east-1:326255650484:certificate/11111111-1111-4111-8111-111111111111",
     api_hostname: lease.apiHostname,
-    api_schema_range: { min: 90, max: 90 },
-    worker_schema_range: { min: 90, max: 90 },
+    api_schema_range: { min: schema, max: schema },
+    worker_schema_range: { min: schema, max: schema },
     crm_acquisition_diagnostic: {
       environment_id: lease.environmentId,
       database_name: lease.databaseName,
@@ -127,7 +133,7 @@ function applicationFixture(options: {archive?:string;legacy?:boolean} = {}) {
       prefix: lease.prefix,
       databaseName: lease.databaseName,
       apiHostname: lease.apiHostname,
-      schema: 90,
+      schema,
       sendingEnabled: false,
     },
     activationAllowed: false,
@@ -276,6 +282,7 @@ else:sys.exit(1)
     git: `#!/usr/bin/env python3
 import os,sys
 if sys.argv[1]=='status':
+ if os.environ.get('DIRTY_SCHEMA')=='1' and 'packages/domain/db/schemaRange.ts' in sys.argv[1:]:print(' M packages/domain/db/schemaRange.ts');sys.exit(0)
  p=os.environ['STORE']+'/git-count';n=int(open(p).read())+1 if os.path.exists(p) else 1;open(p,'w').write(str(n));print(' M infra/roots/rehearsal/backend.hcl' if os.environ.get('DIRTY_AFTER_WAIT')=='1' and n>1 else '')
 else:print(os.environ['GITHUB_SHA'])
 `,
@@ -352,6 +359,41 @@ elif a[0]!='init':sys.exit(1)
     expectedHash,
   };
 }
+
+it("refuses a drifted source schema-range contract before any external operator command", () => {
+  const fixture=applicationFixture();
+  try {
+    const path=join(fixture.checkout,"packages/domain/db/schemaRange.ts");
+    writeFileSync(path,readFileSync(path,"utf8").replace("export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: REQUIRED_SCHEMA, maximum: REQUIRED_SCHEMA };","export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: REQUIRED_SCHEMA, maximum: REQUIRED_SCHEMA - 1 };"));
+    const result=fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    expect(result.stdout+result.stderr).toContain("diagnostic_schema_contract_invalid");
+    expect(existsSync(fixture.calls)).toBe(false);
+    expect(existsSync(join(fixture.directory,"applied"))).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("refuses an internally consistent stale schema90 envelope before registration or apply", () => {
+  const fixture = applicationFixture({schema:90});
+  try {
+    const result = fixture.invoke("apply");
+    expect(result.status).toBe(1);
+    const calls=existsSync(fixture.calls)?readFileSync(fixture.calls,"utf8"):"";
+    // Reach the real authenticated envelope check, rather than passing on a CLI/import failure.
+    expect(calls).toContain('"decrypt"');
+    expect(JSON.parse(result.stdout)).toEqual({ok:false,reason:"operation_refused_or_uncertain"});
+    expect(calls).not.toContain('"put-object"');
+    expect(calls).not.toContain('"apply"');
+    expect(existsSync(join(fixture.directory,"applied"))).toBe(false);
+    expect(existsSync(join(fixture.directory,"private/applied-receipt.json"))).toBe(false);
+    expect(result.stdout+result.stderr).not.toContain("CONTROLLED_PRIVATE");
+    const registered=spawnSync(process.execPath,[join(fixture.checkout,"infra/scripts/diagnostic-handoff.mjs"),"register",fixture.leasePath,fixture.expectedHash,join(fixture.directory,"stale-registration")],{encoding:"utf8",env:fixture.env});
+    expect(registered.status).toBe(1);
+    expect(registered.stderr).toContain("payload_binding_changed");
+    expect(readFileSync(fixture.calls,"utf8")).not.toContain('"put-object"');
+    expect(existsSync(join(fixture.directory,"stale-registration/payload-validation"))).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
 
 it("applies a reviewed plan in a fresh checkout with its exact file artifact and never replans", () => {
   const fixture = applicationFixture();
@@ -536,6 +578,27 @@ it.each(["PRIVATE_ARCHIVE_SENTINEL", Buffer.alloc(1048577).toString("base64")])(
     const calls = readFileSync(fixture.calls,"utf8").trim().split("\n").map(line=>JSON.parse(line));
     expect(calls.some(call=>call.program === "aws" && call.args[1] === "put-object")).toBe(false);
     expect(calls.some(call=>call.program === "terraform" && call.args[0] === "apply")).toBe(false);
+  } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+it("cleans an exactly owned historical schema90 envelope after controller upgrade without authorizing a new apply", () => {
+  const fixture = applicationFixture({schema:90,legacy:true});
+  try {
+    const schemaPath=join(fixture.checkout,"packages/domain/db/schemaRange.ts");
+    const currentContract=readFileSync(schemaPath,"utf8");
+    writeFileSync(schemaPath,currentContract.replace(/export const REQUIRED_SCHEMA = \d+;/u,"export const REQUIRED_SCHEMA = 90;"));
+    const registered=spawnSync(process.execPath,[join(fixture.checkout,"infra/scripts/diagnostic-handoff.mjs"),"register",fixture.leasePath,fixture.expectedHash,join(fixture.directory,"historical-registration")],{encoding:"utf8",env:fixture.env});
+    expect(registered.status,registered.stdout+registered.stderr).toBe(0);
+    writeFileSync(schemaPath,currentContract);
+    const result=fixture.invoke("cleanup");
+    expect(result.status,result.stdout+result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ok:true,stage:"cleaned",absenceVerified:true,activationAllowed:false});
+    const calls=readFileSync(fixture.calls,"utf8");
+    expect(calls).toContain('"teardown"');
+    expect(calls).toContain('"guard"');
+    expect(calls).not.toContain('"apply"');
+    expect(existsSync(join(fixture.directory,"private/plan/reviewed.tfplan"))).toBe(false);
+    expect(fixture.invoke("apply","forbidden-replacement").status).toBe(1);
   } finally {rmSync(fixture.directory,{recursive:true,force:true});}
 });
 
@@ -1132,4 +1195,18 @@ it("rechecks changed source after private external waits and refuses creation wi
   } finally {
     rmSync(fixture.directory, { recursive: true, force: true });
   }
+});
+
+it("refuses a dirty but valid schema declaration before retaining or applying a lifecycle intent", () => {
+ const f=applicationFixture();
+ try {
+  f.env["DIRTY_SCHEMA"]="1";
+  const result=f.invoke("apply");
+  expect(result.status).toBe(1);
+  expect(JSON.parse(result.stdout)).toEqual({ok:false,reason:"source_binding_changed"});
+  const calls=existsSync(f.calls)?readFileSync(f.calls,"utf8"):"";
+  expect(calls).not.toContain('"put-object"');
+  expect(calls).not.toContain('"apply"');
+  expect(existsSync(join(f.directory,"applied"))).toBe(false);
+ } finally {rmSync(f.directory,{recursive:true,force:true});}
 });
