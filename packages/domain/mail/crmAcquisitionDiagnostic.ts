@@ -167,7 +167,7 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
       port: number;
       role: string;
     }>(
-      "SELECT current_database() AS name,inet_server_addr()::text AS address,inet_server_port() AS port,current_user AS role",
+      "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
     )
   ).rows[0];
   if (db?.name !== a.databaseName) return null;
@@ -284,7 +284,7 @@ export async function verifyCrmAcquisitionDiagnostic(
       port: number;
       role: string;
     }>(
-      "SELECT current_database() AS name,inet_server_addr()::text AS address,inet_server_port() AS port,current_user AS role",
+      "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
     )
   ).rows[0];
   if (databaseRow?.name !== a.databaseName) return null;
@@ -482,7 +482,7 @@ export async function readCrmAcquisitionDiagnostic(
       port: number;
       role: string;
     }>(
-      "SELECT current_database() AS name,inet_server_addr()::text AS address,inet_server_port() AS port,current_user AS role",
+      "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
     )
   ).rows[0];
   if (
@@ -607,7 +607,7 @@ export async function provisionCrmAcquisitionDiagnostic(
         port: number;
         role: string;
       }>(
-        "SELECT current_database() AS name,inet_server_addr()::text AS address,inet_server_port() AS port,current_user AS role",
+        "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
       )
     ).rows[0]?.name;
     if (
@@ -701,7 +701,7 @@ export async function prepareCrmAcquisitionDiagnosticConsentIsolation(
         port: number;
         role: string;
       }>(
-        "SELECT current_database() AS name,inet_server_addr()::text AS address,inet_server_port() AS port,current_user AS role",
+        "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
       )
     ).rows[0];
   try {

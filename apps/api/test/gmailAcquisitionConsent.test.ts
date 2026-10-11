@@ -26,6 +26,7 @@ describe("capture-only consent through authenticated Gmail commands", () => {
   let acceptedState: string;
   const requests: string[] = [];
   let witnessEnabled = true;
+  let requiredServerAddress: string | undefined;
   const witnessTransactions: (string | null)[] = [];
   let scopes = READONLY;
   let address: string;
@@ -54,6 +55,8 @@ describe("capture-only consent through authenticated Gmail commands", () => {
       witnessTransactions.push(state.rows[0]!.txid);
       return (
         witnessEnabled &&
+        (requiredServerAddress === undefined ||
+          input.connectedServerAddress === requiredServerAddress) &&
         input.databaseName === fixture.database.name &&
         input.purpose === "oauth_bootstrap"
       );
@@ -172,6 +175,26 @@ describe("capture-only consent through authenticated Gmail commands", () => {
     };
   });
   afterAll(async () => fixture.stop());
+  it("permits readonly consent only for the witnessed real PostgreSQL loopback host", async () => {
+    requiredServerAddress = "127.0.0.1";
+    try {
+      const url = await begin();
+      expect(url.searchParams.get("scope")).toBe(READONLY);
+      expect(requests).toEqual([]);
+      requiredServerAddress = "192.0.2.1";
+      const rejected = await call("/gmail/connect", {
+        commandId: randomUUID(),
+        clientVersion: CURRENT_CLIENT_VERSION,
+      });
+      expect(rejected.body).toMatchObject({
+        status: "refused",
+        reason: "grant_refused",
+      });
+      expect(requests).toEqual([]);
+    } finally {
+      requiredServerAddress = undefined;
+    }
+  });
   it("refuses absent or failed physical isolation before any OAuth action", async () => {
     const { consentIsolationBinding, ...missing } = runtime;
     void consentIsolationBinding;
