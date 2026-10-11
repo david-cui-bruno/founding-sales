@@ -1,5 +1,6 @@
 import { REQUIRED_SCHEMA } from "@fss/domain/db/schemaRange.ts";
 import { randomBytes, randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { gmailConnectResultSchema, gmailStatusSchema } from "@fss/contracts";
 import {
@@ -56,7 +57,9 @@ describe("capture-only consent through authenticated Gmail commands", () => {
       return (
         witnessEnabled &&
         (requiredServerAddress === undefined ||
-          input.connectedServerAddress === requiredServerAddress) &&
+          (input.connectedServerAddress !== null &&
+            isIP(input.connectedServerAddress) > 0 &&
+            input.connectedServerAddress === requiredServerAddress)) &&
         input.databaseName === fixture.database.name &&
         input.purpose === "oauth_bootstrap"
       );
@@ -175,13 +178,20 @@ describe("capture-only consent through authenticated Gmail commands", () => {
     };
   });
   afterAll(async () => fixture.stop());
-  it("permits readonly consent only for the witnessed real PostgreSQL loopback host", async () => {
-    requiredServerAddress = "127.0.0.1";
+  it("permits readonly consent only for the bare witnessed real PostgreSQL server host", async () => {
+    // Docker service PostgreSQL sees its container IP even when the client URL
+    // uses loopback. Derive its identity independently from the raw inet value.
+    const observed = await fixture.db.query<{ address: string }>(
+      "SELECT inet_server_addr()::text AS address",
+    );
+    requiredServerAddress = observed.rows[0]!.address.split("/")[0]!;
+    expect(isIP(requiredServerAddress)).toBeGreaterThan(0);
     try {
       const url = await begin();
       expect(url.searchParams.get("scope")).toBe(READONLY);
       expect(requests).toEqual([]);
-      requiredServerAddress = "192.0.2.1";
+      requiredServerAddress =
+        requiredServerAddress === "192.0.2.1" ? "192.0.2.2" : "192.0.2.1";
       const rejected = await call("/gmail/connect", {
         commandId: randomUUID(),
         clientVersion: CURRENT_CLIENT_VERSION,
