@@ -42,6 +42,8 @@ export function createCrmAcquisitionDiagnosticCapture(input: {
     }
   }
   function id(proof: MailCaptureProof) {
+    if (!proof.grantReceipt)
+      throw new Error("diagnostic_authority_unavailable");
     return proof.grantReceipt;
   }
   const isolation = new Map<string, DiagnosticIsolationProof>();

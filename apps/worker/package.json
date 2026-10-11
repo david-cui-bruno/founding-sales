@@ -15,6 +15,7 @@
     "@aws-sdk/client-bedrock-runtime": "^3.1145.0",
     "@aws-sdk/client-s3": "^3.1141.0",
     "@aws-sdk/client-transcribe": "^3.1144.0",
+    "@aws-sdk/credential-provider-node": "3.972.84",
     "@fss/contracts": "*",
     "@fss/domain": "*",
     "ai": "6.0.303",

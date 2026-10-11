@@ -47,6 +47,189 @@ describe("selected conversation imports", () => {
     ).accessToken;
   });
   afterAll(async () => fixture.stop());
+  it("discovers a person-selected copy under its explicitly bound opportunity firm and removes that association on deletion", async () => {
+    const firmId = await seedFirm(fixture, {
+      name: "Explicit opportunity discovery",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const contactId = await seedContact(fixture, { firmId, fullName: "Selected correspondent" });
+    expect((await post("/crm/people/bridge", command({ contactIds: [contactId] }))).status).toBe(200);
+    const opened = await post("/opportunities/v2/open", command({ firmId, name: "Repair coordination" }));
+    const opportunityId = (opened.body as { result: { opportunityId: string } }).result.opportunityId;
+    const selected = { text: "Selected repair coordination notes", subtype: "pasted_text", label: "Repair notes", direction: "unknown" };
+    const preview = await post("/crm/imports/preview", selected);
+    const committed = await post("/crm/imports/commit", command({ ...selected, personId: contactId, opportunityId, importKey: randomUUID(), parserVersion: "selected-v1", previewHash: (preview.body as { previewHash: string }).previewHash }));
+    expect(committed.status).toBe(200);
+    const sourceId = (committed.body as { result: { sourceId: string } }).result.sourceId;
+    expect.soft((await post("/crm/imports/read", { firmId })).body).toMatchObject({ imports: [{ source: { sourceId }, metadata: { opportunityId } }] });
+    expect.soft((await post("/ask/read", { operation: "sources", scope: { firmId } })).body).toMatchObject({ sources: [{ sourceId }] });
+    await fixture.db.query("INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES($1,$2,'salesperson')", [fixture.alpha.workspaceId, fixture.alpha.outsider.userId]);
+    const otherToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.outsider)).accessToken;
+    expect((await post("/crm/imports/read", { firmId }, otherToken)).status).toBe(404);
+    expect((await post("/ask/read", { operation: "sources", scope: { firmId } }, otherToken)).status).toBe(404);
+    expect((await post("/crm/imports/delete", command({ sourceId, expectedSourceRevision: 1, expectedMetadataRevision: 1 }))).status).toBe(200);
+    expect((await post("/crm/imports/read", { firmId })).body).toMatchObject({ imports: [] });
+    expect((await post("/ask/read", { operation: "sources", scope: { firmId } })).body).toMatchObject({ sources: [] });
+  });
+  it("preserves explicit opportunity identity through correction and clears it during erasure", async () => {
+    const firmId = await seedFirm(fixture, {
+      name: "Selected deal journey",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const otherFirm = await seedFirm(fixture, {
+      name: "Other deal journey",
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const open = async (firm: string, name: string) => {
+      const response = await post(
+        "/opportunities/v2/open",
+        command({ firmId: firm, name }),
+      );
+      expect(response.status).toBe(200);
+      return (response.body as { result: { opportunityId: string } }).result
+        .opportunityId;
+    };
+    const opportunityId = await open(firmId, "Maintenance"),
+      otherOpportunity = await open(firmId, "Leasing"),
+      foreign = await open(otherFirm, "Unrelated");
+    const input = {
+      text: "Phone notes: maintenance handoff is slow.",
+      subtype: "transcript",
+      label: "Selected Phone notes",
+      direction: "unknown",
+      participants: [],
+      occurredAt: null,
+      attachments: [],
+    };
+    const preview = await post("/crm/imports/preview", input),
+      previewHash = (preview.body as { previewHash: string }).previewHash,
+      importKey = randomUUID();
+    const commit = (opportunity: string, key = importKey) =>
+      post(
+        "/crm/imports/commit",
+        command({
+          ...input,
+          firmId,
+          opportunityId: opportunity,
+          importKey: key,
+          previewHash,
+          parserVersion: "selected-v1",
+        }),
+      );
+    expect((await commit(foreign, randomUUID())).status).toBe(409);
+    const captured = await commit(opportunityId);
+    expect(captured.status).toBe(200);
+    const sourceId = (captured.body as { result: { sourceId: string } }).result
+      .sourceId;
+    expect((await commit(otherOpportunity)).status).toBe(409);
+    expect((await post("/crm/imports/read", { firmId })).body).toMatchObject({
+      imports: [
+        { source: { sourceId, revision: 1 }, metadata: { opportunityId } },
+      ],
+    });
+    const corrected = {
+        ...input,
+        participants: [
+          { label: "Owner", endpoint: null, provenance: "user_supplied" },
+        ],
+        occurredAt: "2026-10-01T14:00:00Z",
+      },
+      correctionPreview = await post("/crm/imports/preview", {
+        ...input,
+        participants: [
+          { label: "Owner", endpoint: null, provenance: "user_supplied" },
+        ],
+        occurredAt: "2026-10-01T14:00:00Z",
+      });
+    const correction = {
+      ...corrected,
+      sourceId,
+      expectedSourceRevision: 1,
+      expectedMetadataRevision: 1,
+      previewHash: (correctionPreview.body as { previewHash: string })
+        .previewHash,
+      parserVersion: "selected-v1",
+    };
+    expect(
+      (
+        await post(
+          "/crm/imports/correct",
+          command({ ...correction, opportunityId: otherOpportunity }),
+        )
+      ).status,
+    ).toBe(409);
+    expect(
+      (await post("/crm/imports/correct", command(correction))).status,
+    ).toBe(200);
+    expect((await post("/crm/imports/read", { firmId })).body).toMatchObject({
+      imports: [
+        {
+          source: {
+            occurredAt: new Date(corrected.occurredAt).toISOString(),
+            revision: 2,
+          },
+          metadata: { opportunityId, participants: corrected.participants },
+        },
+      ],
+    });
+    expect(
+      (
+        await post(
+          "/crm/imports/delete",
+          command({
+            sourceId,
+            expectedSourceRevision: 2,
+            expectedMetadataRevision: 2,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await post("/crm/imports/read", { firmId })).body).toMatchObject({
+      imports: [
+        {
+          source: { excerpt: null, availability: "deleted" },
+          metadata: { opportunityId: null },
+        },
+      ],
+    });
+    expect((await commit(opportunityId)).status).toBe(409);
+    expect(
+      (
+        await post(
+          "/crm/imports/restore",
+          command({
+            sourceId,
+            expectedSourceRevision: 3,
+            expectedMetadataRevision: 3,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await post("/crm/imports/read", { firmId })).body).toMatchObject({
+      imports: [
+        {
+          source: { availability: "awaiting_recapture" },
+          metadata: { opportunityId: null },
+        },
+      ],
+    });
+    expect(
+      (
+        await post(
+          "/crm/imports/recapture",
+          command({
+            ...correction,
+            expectedSourceRevision: 4,
+            expectedMetadataRevision: 3,
+            opportunityId,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await post("/crm/imports/read", { firmId })).body).toMatchObject({
+      imports: [{ source: { revision: 5 }, metadata: { opportunityId } }],
+    });
+  });
   it("refuses concurrent cross-person replay without deadlocking or changing either imported copy", async () => {
     const firstFirm = await seedFirm(fixture, {
       name: "First replay firm",
@@ -57,36 +240,56 @@ describe("selected conversation imports", () => {
       assignedUserId: fixture.alpha.salesperson.userId,
     });
     const firstPerson = await seedContact(fixture, {
-      firmId: firstFirm, fullName: "First replay person",
+      firmId: firstFirm,
+      fullName: "First replay person",
     });
     const secondPerson = await seedContact(fixture, {
-      firmId: secondFirm, fullName: "Second replay person",
+      firmId: secondFirm,
+      fullName: "Second replay person",
     });
-    const bridged = await post("/crm/people/bridge", command({
-      contactIds: [firstPerson, secondPerson],
-    }));
+    const bridged = await post(
+      "/crm/people/bridge",
+      command({
+        contactIds: [firstPerson, secondPerson],
+      }),
+    );
     expect(bridged.status).toBe(200);
     const selection = {
       text: "Original selected passage remains with its person.",
-      subtype: "pasted_text", label: "Replay source", direction: "unknown",
-      participants: [], occurredAt: null, attachments: [],
+      subtype: "pasted_text",
+      label: "Replay source",
+      direction: "unknown",
+      participants: [],
+      occurredAt: null,
+      attachments: [],
     };
     const preview = await post("/crm/imports/preview", selection);
-    const firstKey = randomUUID(), secondKey = randomUUID();
-    const input = (personId: string, importKey: string) => command({
-      ...selection, personId, firmId: null, importKey,
-      previewHash: (preview.body as { previewHash: string }).previewHash,
-      parserVersion: "selected-v1",
-    });
-    const first = await post("/crm/imports/commit", input(firstPerson, firstKey));
-    const second = await post("/crm/imports/commit", input(secondPerson, secondKey));
+    const firstKey = randomUUID(),
+      secondKey = randomUUID();
+    const input = (personId: string, importKey: string) =>
+      command({
+        ...selection,
+        personId,
+        firmId: null,
+        importKey,
+        previewHash: (preview.body as { previewHash: string }).previewHash,
+        parserVersion: "selected-v1",
+      });
+    const first = await post(
+      "/crm/imports/commit",
+      input(firstPerson, firstKey),
+    );
+    const second = await post(
+      "/crm/imports/commit",
+      input(secondPerson, secondKey),
+    );
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     const holder = await fixture.database.appRuntimeSession();
     const observer = await fixture.database.appRuntimeSession();
-    const pid = (await holder.query<{ pid: number }>(
-      "SELECT pg_backend_pid() AS pid",
-    )).rows[0]?.pid;
+    const pid = (
+      await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0]?.pid;
     await holder.query("BEGIN");
     // A real database barrier releases both replay requests together. Outcomes are
     // verified only through authenticated commands and reads, never table assertions.
@@ -94,19 +297,29 @@ describe("selected conversation imports", () => {
       const keyHash = createHash("sha256").update(key).digest("hex");
       await holder.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
-        [`${fixture.alpha.workspaceId}:${fixture.alpha.salesperson.userId}:import:${keyHash}`],
+        [
+          `${fixture.alpha.workspaceId}:${fixture.alpha.salesperson.userId}:import:${keyHash}`,
+        ],
       );
     }
     const firstSession = await fixture.database.appRuntimeSession();
     const secondSession = await fixture.database.appRuntimeSession();
-    const replayOn = (session: typeof firstSession, body: object) => dispatch({
-      method: "POST", path: "/crm/imports/commit", query: new URLSearchParams(),
-      headers: { authorization: `Bearer ${token}` }, body,
-    }, {
-      session, auth: { ...fixture.deps, db: session },
-      supportedClientVersions: fixture.deps.config.supportedClientVersions,
-      sendingEnabled: false,
-    });
+    const replayOn = (session: typeof firstSession, body: object) =>
+      dispatch(
+        {
+          method: "POST",
+          path: "/crm/imports/commit",
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}` },
+          body,
+        },
+        {
+          session,
+          auth: { ...fixture.deps, db: session },
+          supportedClientVersions: fixture.deps.config.supportedClientVersions,
+          sendingEnabled: false,
+        },
+      );
     const pending = Promise.allSettled([
       replayOn(firstSession, input(secondPerson, firstKey)),
       replayOn(secondSession, input(firstPerson, secondKey)),
@@ -114,29 +327,49 @@ describe("selected conversation imports", () => {
     try {
       let reached = false;
       for (let attempt = 0; attempt < 200; attempt++) {
-        const rows = (await observer.query<{ waiting: number }>(
-          "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
-          [pid],
-        )).rows;
-        if ((rows[0]?.waiting ?? 0) >= 2) { reached = true; break; }
+        const rows = (
+          await observer.query<{ waiting: number }>(
+            "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
+            [pid],
+          )
+        ).rows;
+        if ((rows[0]?.waiting ?? 0) >= 2) {
+          reached = true;
+          break;
+        }
         await delay(5);
       }
-      if (!reached) throw new Error("Both replay commands did not reach the database barrier");
+      if (!reached)
+        throw new Error(
+          "Both replay commands did not reach the database barrier",
+        );
     } finally {
       await holder.query("COMMIT");
     }
     for (const result of await pending) {
-      expect(result.status, result.status === "rejected"
-        ? String(result.reason) : "Both commands return a clean refusal").toBe("fulfilled");
+      expect(
+        result.status,
+        result.status === "rejected"
+          ? String(result.reason)
+          : "Both commands return a clean refusal",
+      ).toBe("fulfilled");
       if (result.status !== "fulfilled") throw result.reason;
       expect(result.value.status).toBe(409);
-      expect(result.value.body).toMatchObject({ reason: "import_identity_conflict" });
+      expect(result.value.body).toMatchObject({
+        reason: "import_identity_conflict",
+      });
     }
-    for (const [personId, committed] of [[firstPerson, first], [secondPerson, second]] as const) {
-      const sourceId = (committed.body as { result: { sourceId: string } }).result.sourceId;
+    for (const [personId, committed] of [
+      [firstPerson, first],
+      [secondPerson, second],
+    ] as const) {
+      const sourceId = (committed.body as { result: { sourceId: string } })
+        .result.sourceId;
       const read = await post("/crm/imports/read", { personId });
       expect(read.body).toMatchObject({
-        imports: [{ source: { sourceId, excerpt: selection.text, revision: 1 } }],
+        imports: [
+          { source: { sourceId, excerpt: selection.text, revision: 1 } },
+        ],
       });
     }
   });
@@ -461,64 +694,126 @@ describe("selected conversation imports", () => {
     }
   });
   it("refuses administrator private-evidence candidates when their audit cannot be recorded", async () => {
-    const adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
-    const created = await post("/crm/people/create", command({ fullName: "Audited private identity" }));
-    const personId = (created.body as { result: { personId: string } }).result.personId;
-    expect((await post("/crm/people/source/add", command({
-      personId, sourceKey: randomUUID(), excerpt: "Owner's selected identity proof",
-      occurredAt: "2026-09-15T14:00:00.000Z",
-    }))).status).toBe(200);
+    const adminToken = (
+      await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
+    ).accessToken;
+    const created = await post(
+      "/crm/people/create",
+      command({ fullName: "Audited private identity" }),
+    );
+    const personId = (created.body as { result: { personId: string } }).result
+      .personId;
+    expect(
+      (
+        await post(
+          "/crm/people/source/add",
+          command({
+            personId,
+            sourceKey: randomUUID(),
+            excerpt: "Owner's selected identity proof",
+            occurredAt: "2026-09-15T14:00:00.000Z",
+          }),
+        )
+      ).status,
+    ).toBe(200);
     const page = (await post("/crm/people/read", { personId })).body as {
       sources: { sourceId: string; revision: number; contentHash: string }[];
     };
     const source = page.sources[0]!;
     const endpoint = "audit-required@preview.example.test";
-    expect((await post("/crm/endpoints/claim", command({
-      personId, firmId: null, shared: false, kind: "email", value: endpoint,
-      status: "current", startDate: "2026-01-01", endDate: null,
-      evidence: { sourceId: source.sourceId, sourceRevision: source.revision, contentHash: source.contentHash },
-    }))).status).toBe(200);
+    expect(
+      (
+        await post(
+          "/crm/endpoints/claim",
+          command({
+            personId,
+            firmId: null,
+            shared: false,
+            kind: "email",
+            value: endpoint,
+            status: "current",
+            startDate: "2026-01-01",
+            endDate: null,
+            evidence: {
+              sourceId: source.sourceId,
+              sourceRevision: source.revision,
+              contentHash: source.contentHash,
+            },
+          }),
+        )
+      ).status,
+    ).toBe(200);
     const input = {
-      text: "Selected passage", subtype: "pasted_text", label: "Audited preview",
-      direction: "unknown", occurredAt: null, attachments: [],
-      participants: [{ label: "Participant", endpoint, provenance: "user_supplied" }],
+      text: "Selected passage",
+      subtype: "pasted_text",
+      label: "Audited preview",
+      direction: "unknown",
+      occurredAt: null,
+      attachments: [],
+      participants: [
+        { label: "Participant", endpoint, provenance: "user_supplied" },
+      ],
     };
-    const availableAdminPreview = await post("/crm/imports/preview", input, adminToken);
+    const availableAdminPreview = await post(
+      "/crm/imports/preview",
+      input,
+      adminToken,
+    );
     expect(availableAdminPreview.status).toBe(200);
-    expect(availableAdminPreview.body).toMatchObject({ candidates: [{ outcome: "person_match", personId }] });
+    expect(availableAdminPreview.body).toMatchObject({
+      candidates: [{ outcome: "person_match", personId }],
+    });
     // Failure injection controls the audit sink; all outcomes use authenticated reads.
-    await fixture.database.session.query(`CREATE FUNCTION refuse_private_endpoint_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+    await fixture.database.session
+      .query(`CREATE FUNCTION refuse_private_endpoint_audit() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN IF NEW.action = 'crm.endpoint_private_evidence_read' THEN
         RAISE EXCEPTION 'fixture_private_audit_unavailable'; END IF; RETURN NEW; END $$`);
-    await fixture.database.session.query(`CREATE TRIGGER refuse_private_endpoint_audit BEFORE INSERT ON audit_events
+    await fixture.database.session
+      .query(`CREATE TRIGGER refuse_private_endpoint_audit BEFORE INSERT ON audit_events
       FOR EACH ROW EXECUTE FUNCTION refuse_private_endpoint_audit()`);
     try {
-      await expect(post("/crm/imports/preview", input, adminToken)).rejects.toThrow("fixture_private_audit_unavailable");
+      await expect(
+        post("/crm/imports/preview", input, adminToken),
+      ).rejects.toThrow("fixture_private_audit_unavailable");
       const ownerPreview = await post("/crm/imports/preview", input);
       expect(ownerPreview.status).toBe(200);
-      expect(ownerPreview.body).toMatchObject({ candidates: [{ outcome: "person_match", personId }] });
-      expect((await post("/crm/people/read", { personId })).body).toMatchObject({
-        sources: [{ sourceId: source.sourceId, availability: "available" }],
+      expect(ownerPreview.body).toMatchObject({
+        candidates: [{ outcome: "person_match", personId }],
       });
+      expect((await post("/crm/people/read", { personId })).body).toMatchObject(
+        {
+          sources: [{ sourceId: source.sourceId, availability: "available" }],
+        },
+      );
       // Model an older retained claim whose evidence version is no longer current.
       await fixture.database.session.query(
         "UPDATE crm_selected_sources SET revision=revision+1 WHERE workspace_id=$1 AND id=$2",
         [fixture.alpha.workspaceId, source.sourceId],
       );
-      await expect(post("/crm/endpoints/list", { personId }, adminToken)).rejects.toThrow("fixture_private_audit_unavailable");
+      await expect(
+        post("/crm/endpoints/list", { personId }, adminToken),
+      ).rejects.toThrow("fixture_private_audit_unavailable");
       const ownerEndpoints = await post("/crm/endpoints/list", { personId });
       expect(ownerEndpoints.status).toBe(200);
       expect(ownerEndpoints.body).toMatchObject({
         claims: [{ personId, value: endpoint, sourceState: "unavailable" }],
       });
     } finally {
-      await fixture.database.session.query("DROP TRIGGER refuse_private_endpoint_audit ON audit_events");
-      await fixture.database.session.query("DROP FUNCTION refuse_private_endpoint_audit()");
+      await fixture.database.session.query(
+        "DROP TRIGGER refuse_private_endpoint_audit ON audit_events",
+      );
+      await fixture.database.session.query(
+        "DROP FUNCTION refuse_private_endpoint_audit()",
+      );
     }
     const adminPreview = await post("/crm/imports/preview", input, adminToken);
     expect(adminPreview.status).toBe(200);
-    expect(adminPreview.body).toMatchObject({ candidates: [{ outcome: "needs_review", personId: null }] });
-    expect((await post("/crm/endpoints/list", { personId }, adminToken)).body).toMatchObject({
+    expect(adminPreview.body).toMatchObject({
+      candidates: [{ outcome: "needs_review", personId: null }],
+    });
+    expect(
+      (await post("/crm/endpoints/list", { personId }, adminToken)).body,
+    ).toMatchObject({
       claims: [{ personId, value: endpoint, sourceState: "unavailable" }],
     });
   });
@@ -1114,7 +1409,10 @@ describe("selected conversation imports", () => {
       command({ personId, relationshipId, relationshipRevision: 1, evidence }),
     );
     // Source captured under B; its current legacy pointer later moves to A.
-    await fixture.db.query("UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2", [fixture.alpha.workspaceId, personId, firmA]);
+    await fixture.db.query(
+      "UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2",
+      [fixture.alpha.workspaceId, personId, firmA],
+    );
     await withTransaction(fixture.db, () =>
       reassignFirm(
         repositoryContext(

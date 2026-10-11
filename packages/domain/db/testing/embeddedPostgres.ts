@@ -18,6 +18,8 @@ export interface PostgresCluster {
   readonly adminUrl: string;
   /** How the cluster was obtained, for diagnostics only. */
   readonly source: 'service-container' | 'embedded';
+  /** Owned temporary storage, for explicit local lifecycle absence checks. */
+  readonly storagePath?: string;
   stop(): Promise<void>;
 }
 
@@ -164,5 +166,5 @@ export async function startPostgresCluster(): Promise<PostgresCluster> {
     void stop().catch(() => undefined);
   });
 
-  return { adminUrl, source: 'embedded', stop };
+  return { adminUrl, source: 'embedded', storagePath:databaseDir, stop };
 }

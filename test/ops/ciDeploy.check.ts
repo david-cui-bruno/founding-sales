@@ -1555,7 +1555,7 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     expect(readBackBody).toContain('printf \'%s\' "$RELEASE_RECORD" | base64 -d > "$RUNNER_TEMP/release-record.json"');
     expect(readBackBody).toContain('infra/scripts/deploy.sh ci record --after-rollout --release-record "$RUNNER_TEMP/release-record.json"');
     expect(job(DEPLOY_WORKFLOW, 'smoke')).toContain('needs: [gates, deploy]\n');
-    expect(job(DEPLOY_WORKFLOW, 'summary')).toContain('needs: [gates, deploy, smoke, read-back]');
+    expect(job(DEPLOY_WORKFLOW, 'summary')).toContain('needs: [gates, deploy, maintenance, review-prepare, reviewed, smoke, read-back]');
   });
 });
 
@@ -2032,26 +2032,18 @@ describe('deploy.sh current prints what an operator plan must be given, and refu
   });
 });
 
-describe('the deploy workflow, P6: five jobs, one gates job, the read-back after the smoke, 465 lines at most', () => {
+describe('the deploy workflow: one gates job, reviewed maintenance identity, read-back after the smoke', () => {
   const workflow = DEPLOY_WORKFLOW;
 
-  it('is 465 lines or fewer, has five jobs, and only the deploy and read-back jobs can assume a role', () => {
-    // The budget moved from 400 to 465 for lane RS, once, and the five-job list did not
-    // move. It buys one step: `read-back` asks ECR, after the rollout and the smoke,
-    // which commit production's images were really built from. That is the value
-    // `FSS_PROD_COMMIT` must be set to, and the upgrade test migrates *from* whatever
-    // it says (GPT-6 review of PR 314, P0-2c). Only a job holding the production role
-    // can ask, which is why it is here and not in `summary`.
-    //
-    // Nothing in this workflow *writes* the variable. A workflow token cannot: GitHub
-    // documents no `variables` scope for `permissions:` at all, so a `gh variable set`
-    // under `github.token` would warn on every deploy and change nothing. The release
-    // helper sets it by hand and the `upgrade` job fails closed when it is stale.
-    expect(workflow.split('\n').length).toBeLessThanOrEqual(465);
+  it('keeps a bounded workflow and credentials only in its scoped writer/planner jobs', () => {
+    // One bounded workflow owns application, routine maintenance and reviewed saved
+    // plans. Credential scope remains confined to the writer/readback/planner jobs.
+    // Future upgrades resolve the observed live source directly; no variable copy.
+    expect(workflow.split('\n').length).toBeLessThanOrEqual(680);
     const jobs = [...workflow.slice(workflow.indexOf('\njobs:\n')).matchAll(/^ {2}([a-z-]+):\n/gmu)].map(match => match[1]);
-    expect(jobs).toEqual(['gates', 'deploy', 'smoke', 'read-back', 'summary']);
+    expect(jobs).toEqual(['gates', 'deploy', 'maintenance', 'review-prepare', 'reviewed', 'smoke', 'read-back', 'summary']);
     for (const name of ['gates', 'smoke', 'summary']) expect(job(workflow, name), name).not.toContain('id-token: write');
-    for (const name of ['deploy', 'read-back']) expect(job(workflow, name), name).toContain('id-token: write');
+    for (const name of ['deploy', 'read-back', 'maintenance', 'review-prepare', 'reviewed']) expect(job(workflow, name), name).toContain('id-token: write');
     // The push-time window and the old entry points are gone; the ranges come from the artifact.
     for (const gone of ['run_started', 'run-started', 'imagePushedAt', 'ci-deploy-app.sh', 'release-promote.sh', "import('./packages/domain/db/schemaRange.ts')", 'ranges:']) {
       expect(workflow, gone).not.toContain(gone);

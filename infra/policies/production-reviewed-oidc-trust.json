@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReviewedProductionWorkflowOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::326255650484:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-release-review"
+        }
+      }
+    }
+  ]
+}

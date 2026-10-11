@@ -62,6 +62,7 @@ describe('what the API mounts', () => {
       '/ask/actions/create',
       '/ask/actions/read',
       '/ask/answers/cancel',
+      '/ask/answers/diagnostics',
       '/ask/answers/investigation/commit',
       '/ask/answers/investigation/preview',
       '/ask/answers/read',

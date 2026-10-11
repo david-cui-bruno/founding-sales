@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { z } from "zod";
 import {
-  crmAcquisitionDiagnosticAuthorizationSchema,
+  crmAcquisitionDiagnosticAwsAuthorizationSchema,
   crmAcquisitionDiagnosticReadResultSchema,
 } from "@fss/contracts";
 import { applyMigrations } from "@fss/domain/db/migrationRunner.ts";
@@ -47,7 +47,7 @@ it("retains schema89 recorded and ambiguous units through upgrade while current 
     ).rows[0]!.id;
     const legacy = z
       .strictObject({
-        ...crmAcquisitionDiagnosticAuthorizationSchema.shape,
+        ...crmAcquisitionDiagnosticAwsAuthorizationSchema.shape,
         schemaVersion: z.literal(89),
         metadataUnits: z.literal(5),
         bodyUnits: z.literal(5),
@@ -133,7 +133,7 @@ it("retains schema89 recorded and ambiguous units through upgrade while current 
       )
     ).rows;
     await applyMigrations(fixture.db, { throughVersion: 90 });
-    const historical90 = crmAcquisitionDiagnosticAuthorizationSchema.parse({
+    const historical90 = crmAcquisitionDiagnosticAwsAuthorizationSchema.parse({
       ...legacy,
       id: randomUUID(),
       schemaVersion: 90,
@@ -362,7 +362,7 @@ it("retains schema89 recorded and ambiguous units through upgrade while current 
       )
     ).rows[0]!;
     const release = await storeFixtureCiGateRecord(fixture.db, "105270");
-    const current = crmAcquisitionDiagnosticAuthorizationSchema.parse({
+    const current = crmAcquisitionDiagnosticAwsAuthorizationSchema.parse({
       ...legacy,
       id: randomUUID(),
       schemaVersion: REQUIRED_SCHEMA,

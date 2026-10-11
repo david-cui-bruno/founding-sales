@@ -47,7 +47,13 @@ async function invoke(route: Route, text: string, system: string, maxTokens: num
   if (response.data.stopReason !== 'end_turn' || !response.data.output)
     return { acceptance: 'accepted' as const, usage, value: null };
   let value: unknown = null;
-  try { value = JSON.parse(response.data.output.message.content.map(block => block.text).join('')) as unknown; } catch { /* Preserve billed usage; caller rejects malformed evidence. */ }
+  try {
+    const text=response.data.output.message.content.map(block=>block.text).join('').trim();
+    // Normalize only a complete single JSON fence; surrounding prose and invalid
+    // JSON remain billed failures. Claim schema and original-quote checks stay strict.
+    const fence=/^```(?:json)?\s*\n([\s\S]*?)\n```$/u.exec(text);
+    value=JSON.parse(fence?.[1]??text) as unknown;
+  } catch { /* Preserve billed usage; caller rejects malformed evidence. */ }
   return { acceptance: 'accepted' as const, usage, value };
 }
 

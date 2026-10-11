@@ -73,3 +73,65 @@ it("supports a versioned diagnostic document without weakening the read and quot
     }).schemaVersion,
   ).toBe(90);
 });
+
+it("accepts exact local Shirley scope without fabricated AWS identities and refuses scope expansion", () => {
+  const {
+    databaseInstanceArn,
+    databaseSecretArn,
+    databaseEndpoint,
+    ecsClusterArn,
+    ...common
+  } = authorization;
+  void databaseInstanceArn;
+  void databaseSecretArn;
+  void databaseEndpoint;
+  void ecsClusterArn;
+  const local = {
+    ...common,
+    deploymentIdentity: "local-process:101",
+    workerDeploymentIdentity: "local-process:102",
+    releaseReference: "local-artifact:" + "c".repeat(64),
+    localIsolation: {
+      kind: "local",
+      runId: id,
+      databaseHost: "127.0.0.1",
+      databasePort: 54321,
+      databaseRole: "app_runtime",
+      receiptSha256: "c".repeat(64),
+    },
+    messages: [
+      {
+        messageId: "1a11cef279246619",
+        threadId: "1a11c079cb7273b8",
+        origin: "received",
+        fromAt: "2026-10-08T00:00:00Z",
+        toAt: "2026-10-09T00:00:00Z",
+      },
+      {
+        messageId: "1a11ddf7ccdb1bac",
+        threadId: "1a11c079cb7273b8",
+        origin: "sent",
+        fromAt: "2026-10-08T00:00:00Z",
+        toAt: "2026-10-09T00:00:00Z",
+      },
+    ],
+  };
+  expect(
+    crmAcquisitionDiagnosticAuthorizationSchema.safeParse(local).success,
+  ).toBe(true);
+  expect(
+    crmAcquisitionDiagnosticAuthorizationSchema.safeParse({
+      ...local,
+      databaseInstanceArn: "fake",
+    }).success,
+  ).toBe(false);
+  expect(
+    crmAcquisitionDiagnosticAuthorizationSchema.safeParse({
+      ...local,
+      messages: [
+        ...local.messages,
+        { ...local.messages[0], messageId: "other" },
+      ],
+    }).success,
+  ).toBe(false);
+});

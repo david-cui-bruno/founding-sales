@@ -444,6 +444,14 @@ export const RESEARCH_CONSTRAINT_CASES: readonly Case[] = [
     run: async f => await reservation(f, { model_name: 'Claude Haiku 4.5' }),
   },
   {
+    constraint: 'provider_reservations_model_name_shape',
+    run: async f => await reservation(f, { model_name: 'us.anthropic.claude-haiku-4-5-20251001-v1:evil' }),
+  },
+  {
+    constraint: 'provider_reservations_model_name_shape',
+    run: async f => await reservation(f, { model_name: 'us.anthropic.claude-haiku-4-5-20251001-v1:0:1' }),
+  },
+  {
     constraint: 'provider_reservations_max_input_tokens_positive',
     run: async f => await reservation(f, { max_input_tokens: 0 }),
   },

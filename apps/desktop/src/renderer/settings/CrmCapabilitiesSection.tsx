@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {CRM_MAIL_CAPTURE_CONSENT,type crmMailCaptureControlsSaveSchema} from "@fss/contracts";
 import { operations } from "../app/bridges.ts";
 import type { z } from "zod";
-import type { crmCapabilityReadResponseSchema } from "@fss/contracts";
+import type { crmCapabilityReadResponseSchema,CrmOwnerApproval } from "@fss/contracts";
 export type Capability =
   "metadata_review" | "mail_capture" | "crm_extraction" | "ask_answer";
 export interface CapabilityTarget {
   capability: Capability;
   mailboxId?: string;
+  purpose?: "answer"|"embedding";
 }
 export interface CapabilityChange {
   revision: number;
@@ -14,13 +16,14 @@ export interface CapabilityChange {
   authorityReceiptId: string | null;
 }
 export interface CrmCapabilityPorts {
+  prepareCapture?(input:Omit<z.infer<typeof crmMailCaptureControlsSaveSchema>,"commandId"|"clientVersion">):Promise<{revision:number;enabled:false}>;
   read(
     input: CapabilityTarget,
   ): Promise<z.infer<typeof crmCapabilityReadResponseSchema>>;
   activate(
     input: CapabilityTarget & {
       expectedRevision: number;
-      authorityReceiptId: string;
+      approval: CrmOwnerApproval;
     },
   ): Promise<CapabilityChange>;
   disable(
@@ -56,6 +59,7 @@ function api() {
   return value;
 }
 export const crmCapabilityPorts: CrmCapabilityPorts = {
+  prepareCapture:input=>api().command("crm.mailCapturePrepare",input),
   read: (input) => api().read("crm.capabilityRead", input),
   activate: (input) => {
     switch (input.capability) {
@@ -125,22 +129,24 @@ export function CrmCapabilitiesSection({
   refreshVersion?: number;
   onChange?: () => void;
 }) {
+  const [askPurpose,setAskPurpose]=useState<"answer"|"embedding">("answer");
   const targets = useMemo<CapabilityTarget[]>(
     () =>
       scope === "ai"
-        ? [{ capability: "crm_extraction" }, { capability: "ask_answer" }]
+        ? [{ capability: "crm_extraction" }, { capability: "ask_answer",purpose:askPurpose }]
         : mailboxId
           ? [
               { capability: "metadata_review", mailboxId },
               { capability: "mail_capture", mailboxId },
             ]
           : [],
-    [scope, mailboxId],
+    [scope, mailboxId,askPurpose],
   );
-  const key = `${privacyKey}:${scope}:${mailboxId ?? ""}`;
+  const key = `${privacyKey}:${scope}:${mailboxId ?? ""}:${askPurpose}`;
   const latest = useRef({ key, available });
   latest.current = { key, available };
   const issuance = useRef(0);
+  const [reviews,setReviews]=useState<Partial<Record<Capability,{reference:string;critical:boolean;integration:boolean}>>>({});
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null),
     [busy, setBusy] = useState<Capability | null>(null),
     [error, setError] = useState<string | null>(null),
@@ -173,6 +179,7 @@ export function CrmCapabilitiesSection({
     const sequence = issuance;
     const ticket = ++sequence.current;
     setSnapshot(null);
+    setReviews({});
     setBusy(null);
     setError(null);
     void refresh;
@@ -193,8 +200,11 @@ export function CrmCapabilitiesSection({
   }, [available, key, current, readTargets, targets, refresh, refreshVersion]);
   async function perform(target: CapabilityTarget, view: View) {
     if (!available || busy !== null || snapshot?.key !== key) return;
-    if (!view.enabled && (!view.ready || view.authorityReceiptId === null))
+    if (!view.enabled && !view.ready)
       return;
+    if(!view.enabled&&(target.capability==='crm_extraction'||target.capability==='ask_answer')){
+      const review=reviews[target.capability];if(!review?.critical||!review.integration||!review.reference.trim())return;
+    }
     const ticket = ++issuance.current;
     setBusy(target.capability);
     setError(null);
@@ -205,7 +215,10 @@ export function CrmCapabilitiesSection({
         await ports.activate({
           ...target,
           expectedRevision: view.revision,
-          authorityReceiptId: view.authorityReceiptId!,
+          approval: target.capability==='crm_extraction'||target.capability==='ask_answer'?{
+            consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,
+            reviewedEvaluationReference:reviews[target.capability]?.reference??'',limitations:['representative_quality_unverified'],
+          }:{consentAcknowledged:true,qualityTier:'acquisition',limitations:[]},
         });
       if (!current(ticket)) return;
       const rows = await readTargets();
@@ -227,6 +240,16 @@ export function CrmCapabilitiesSection({
       if (current(ticket)) setBusy(null);
     }
   }
+  async function prepareCapture(){
+    const metadata=snapshot?.key===key?snapshot.rows.metadata_review:undefined;
+    const capture=snapshot?.key===key?snapshot.rows.mail_capture:undefined;
+    const c=metadata?.configuration;
+    if(!ports.prepareCapture||!c||c.capability!=='metadata_review'||busy||!available)return;
+    const ticket=++issuance.current;setBusy('mail_capture');setError(null);
+    try{await ports.prepareCapture({mailboxId:c.mailboxId,expectedRevision:capture?.revision??0,expectedGeneration:c.generation,expectedAccountBinding:c.accountBinding,policyRevision:c.revision,disclosureVersion:CRM_MAIL_CAPTURE_CONSENT.version,disclosureSha256:CRM_MAIL_CAPTURE_CONSENT.sha256});
+      if(!current(ticket))return;const rows=await readTargets();if(current(ticket)){setSnapshot({key,rows});onChange?.();}
+    }catch{if(current(ticket))setError('Capture preparation could not be confirmed. Refresh before another action.');}finally{if(current(ticket))setBusy(null);}
+  }
   const rows = snapshot?.key === key ? snapshot.rows : {};
   if (!available) return null;
   return (
@@ -244,10 +267,15 @@ export function CrmCapabilitiesSection({
       {scope === "mail" && !mailboxId ? (
         <p>Connect your own mailbox to prepare conversation capture.</p>
       ) : null}
+      {scope==='ai'?<label>Ask purpose<select value={askPurpose} disabled={busy!==null} onChange={event=>setAskPurpose(event.target.value==='embedding'?'embedding':'answer')}><option value="answer">Answers</option><option value="embedding">Embeddings (separate provider and budget)</option></select></label>:null}
+      {scope==='mail'&&ports.prepareCapture&&rows.metadata_review?.configuration?<><p>{CRM_MAIL_CAPTURE_CONSENT.text}</p><button type="button" disabled={busy!==null} onClick={()=>void prepareCapture()}>Prepare original email capture (stays off)</button></>:null}
       {targets.map((target) => {
-        const description = descriptions[target.capability],
+        const description = target.capability==='ask_answer'&&askPurpose==='embedding'?{name:'Ask embeddings',detail:'Use separately approved hosted embeddings to index and retrieve your authorized originals. Answering has a different approval and budget.'}:descriptions[target.capability],
           view = rows[target.capability];
         const active = view?.enabled === true;
+        const ai=target.capability==='crm_extraction'||target.capability==='ask_answer';
+        const review=reviews[target.capability]??{reference:'',critical:false,integration:false};
+        const updateReview=(patch:Partial<typeof review>)=>setReviews(old=>({...old,[target.capability]:{...review,...patch}}));
         return (
           <article key={target.capability}>
             <h4>
@@ -262,17 +290,32 @@ export function CrmCapabilitiesSection({
                     ? "On."
                     : "On, but processing is blocked until current verification passes."
                   : !view.configured
-                    ? "Not prepared. Independent review is required before activation."
+                    ? "Not prepared. Save your account, provider and budget settings first."
                     : view.ready
-                      ? "Ready to activate."
+                      ? "Ready for your explicit scope approval."
                       : "Off. Current verification is still required."}
             </p>
+            {view?.configuration?<p>Owner: {view.configuration.ownerUserId}. {"mailboxId" in view.configuration?`Mailbox: ${view.configuration.providerAccountId}.`:`Provider: ${view.configuration.endpointId}; model: ${view.configuration.modelVersion}; daily budget: ${view.configuration.dailyCeilingCents} cents; monthly budget: ${view.configuration.monthlyCeilingCents} cents.`}</p>:null}
+            {view?.configuration&&'endpointId' in view.configuration?<>
+              <p>Purpose: {view.configuration.capability==='crm_extraction'?'conversation evidence extraction':view.configuration.purpose==='embedding'?'semantic indexing and retrieval':'grounded Ask answering'}.</p>
+              <p>Access approval version: {view.configuration.accessGrantVersion}.</p>
+              <p>Data handling version: {view.configuration.dataHandlingVersion}. This is the configured policy for data sent to the displayed provider; review its retention and permitted use before approving.</p>
+            </>:null}
+            {view?.configuration&&'disclosureVersion' in view.configuration?<p>Capture disclosure version: {view.configuration.disclosureVersion}. The current scope is bound to this disclosure and mailbox generation.</p>:null}
+            {view?.limitations.length?<ul aria-label="Evaluation limitations">{view.limitations.map(limit=><li key={limit}>{limit==='limited_business_examples'?'Limited business examples; broader business quality remains unmeasured.':limit==='vector_quality_unverified'?'Vector quality remains unverified.':'Representative business quality remains unverified.'}</li>)}</ul>:null}
+            {view?.qualityTier==='provisional_owner'?<p>Provisional owner-only quality. Representative business quality remains unverified; review outputs and corrections during use.</p>:null}
+            {ai&&!active&&view?.configured?<fieldset><legend>Review before enabling {description.name}</legend>
+              <label>Reviewed evaluation reference<input value={review.reference} maxLength={200} onChange={event=>updateReview({reference:event.target.value})}/></label>
+              <label><input type="checkbox" checked={review.critical} onChange={event=>updateReview({critical:event.target.checked})}/>Critical access, deletion and safety checks passed</label>
+              <label><input type="checkbox" checked={review.integration} onChange={event=>updateReview({integration:event.target.checked})}/>Actual configured model integration was verified</label>
+              <p>Approval covers your configured source access, provider/data handling, purpose/model and spending limits. Quality is provisional; this does not authorize other users or outreach.</p>
+            </fieldset>:null}
             <button
               type="button"
               disabled={
                 busy !== null ||
                 !view ||
-                (!active && (!view.ready || view.authorityReceiptId === null))
+                (!active && (!view.ready||ai&&(!review.critical||!review.integration||!review.reference.trim())))
               }
               onClick={() => {
                 if (view) void perform(target, view);

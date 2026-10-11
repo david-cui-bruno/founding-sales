@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
@@ -86,8 +87,22 @@ jobs:
           fi
           ffmpeg -version
           ffprobe -version
+      - name: Select affected suites and dependent consumers
+        env:
+          EVENT_KIND: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_KIND" = push ]; then
+            printf '' | node tools/ci/select.mjs --main > "$RUNNER_TEMP/ci-selection.json"
+          elif git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git diff --name-only --no-renames "$(git merge-base "$BASE_SHA" HEAD)" HEAD | node tools/ci/select.mjs > "$RUNNER_TEMP/ci-selection.json"
+          else
+            printf '' | node tools/ci/select.mjs > "$RUNNER_TEMP/ci-selection.json"
+          fi
+          cat "$RUNNER_TEMP/ci-selection.json" >> "$GITHUB_STEP_SUMMARY"
       - name: Greenfield gate
-        run: npm run gate:greenfield
+        run: node tools/ci/run-selected.mjs "$RUNNER_TEMP/ci-selection.json"
 
   upgrade:
     # The automated upgrade test that replaced the schema rehearsal (lane RS, 29
@@ -158,8 +173,15 @@ jobs:
         # on a variable being current, or on a deploy that landed while it ran. Only a
         # branch that changes the schema or a migration goes on to ask production.
         id: change
+        env:
+          EVENT_KIND: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          if [ "${EVENT_KIND:-}" = push ]; then
+            echo 'main: compare the full deployed delta before any schema skip'
+            echo 'changed=yes' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           range_file=packages/domain/db/schemaRange.ts
           fail() { echo "FAIL: $1" >&2; exit 1; }
           git rev-parse --verify --quiet origin/main >/dev/null \
@@ -313,6 +335,13 @@ jobs:
             --from "$FROM_SCHEMA" --to "$TO_SCHEMA" \
             --base "$RUNNER_TEMP/upgrade-base" \
             --evidence "$RUNNER_TEMP/upgrade-evidence-$HEAD_SHA.txt"
+      - name: Bind the upgrade evidence to observed source builds
+        if: steps.range.outputs.run == 'yes'
+        env:
+          UPGRADE_FROM: ${{ steps.range.outputs.base_commit }}
+          UPGRADE_TO: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node --input-type=module -e 'import {writeFileSync} from "node:fs"; writeFileSync(process.env.RUNNER_TEMP + "/upgrade-binding.json", JSON.stringify({from:process.env.UPGRADE_FROM,to:process.env.UPGRADE_TO}));'
       - name: Upload the evidence
         # `always()`: a failed upgrade is the run whose evidence somebody actually needs,
         # and the tool writes a stub report before its first step so that even a run that
@@ -324,7 +353,9 @@ jobs:
           name: upgrade-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           # Outside both checkouts: the tool refuses an evidence path inside one,
           # because a run that can overwrite its own tracked files is not evidence.
-          path: ${{ runner.temp }}/upgrade-evidence-*.txt
+          path: |
+            ${{ runner.temp }}/upgrade-evidence-*.txt
+            ${{ runner.temp }}/upgrade-binding.json
           if-no-files-found: error
 
   workflows:

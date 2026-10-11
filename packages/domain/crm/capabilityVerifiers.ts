@@ -17,7 +17,6 @@ import {
 } from "../db/workspaceScope.ts";
 import {
   verifyCurrentCrmCapability,
-  verifyCrmCapabilityAuthority,
   crmCapabilityConfigurationFingerprint,
   type CrmCapabilityRuntime,
 } from "./capabilityAuthority.ts";
@@ -123,10 +122,7 @@ async function capture(
     c.policyRevision === proof.policyRevision &&
     c.disclosureVersion === proof.disclosureVersion &&
     c.disclosureSha256 === proof.disclosureSha256 &&
-    c.grantReceipt === proof.grantReceipt &&
-    c.providerPolicyReceipt === proof.providerPolicyReceipt &&
-    c.evaluationReceipt === proof.evaluationReceipt &&
-    c.releaseReceipt === proof.releaseReceipt &&
+    receipt.ownerApprovalId === proof.ownerApprovalId &&
     c.captureVersion === proof.captureVersion
   );
 }
@@ -356,27 +352,10 @@ export function createCrmCapabilityVerifiers(deps: CrmAuthoritySessions) {
       scopeFingerprint: crmBackfillScopeFingerprint(authority),
       allocationFingerprint: crmBackfillAllocationFingerprint(allocation),
     };
-    const rows = (
-      await context.db.query<{ id: string }>(
-        "SELECT id FROM crm_capability_authority_receipts WHERE workspace_id=$1 AND capability='mail_backfill' AND configuration_sha256=$2 AND revoked_at IS NULL AND valid_until>clock_timestamp() ORDER BY verified_at DESC",
-        [
-          authority.proof.workspaceId,
-          crmCapabilityConfigurationFingerprint(configuration),
-        ],
-      )
-    ).rows;
-    for (const row of rows)
-      if (
-        await verifyCrmCapabilityAuthority(
-          owned,
-          configuration,
-          row.id,
-          deps.runtime,
-        )
-      )
-        return true;
-    return false;
+    const rows = (await context.db.query<{id:string}>(`SELECT a.id FROM crm_mail_imports i JOIN crm_capability_owner_approvals a ON a.workspace_id=i.workspace_id AND a.id=i.owner_approval_id WHERE i.workspace_id=$1 AND i.id=$2 AND a.owner_user_id=$3 AND a.capability='mail_backfill' AND a.configuration_sha256=$4`,[authority.proof.workspaceId,authority.importId,authority.proof.ownerUserId,crmCapabilityConfigurationFingerprint(configuration)])).rows;
+    return rows.length===1;
   }
+
   const allocationVerifier: BackfillAllocationVerifier = {
     verify: (allocation, authority) =>
       authority

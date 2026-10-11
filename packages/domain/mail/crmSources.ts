@@ -36,10 +36,11 @@ export interface MailCaptureProof {
   policyRevision: number;
   disclosureVersion: string;
   disclosureSha256: string;
-  grantReceipt: string;
-  providerPolicyReceipt: string;
-  evaluationReceipt: string;
-  releaseReceipt: string;
+  grantReceipt: string | null;
+  providerPolicyReceipt: string | null;
+  evaluationReceipt: string | null;
+  releaseReceipt: string | null;
+  ownerApprovalId?: string;
   captureVersion: typeof MAIL_CAPTURE_VERSION;
 }
 export interface MailCaptureProofVerifier {
@@ -136,10 +137,11 @@ interface Control extends Record<string, unknown> {
   policy_revision: number;
   disclosure_version: string;
   disclosure_sha256: string;
-  grant_receipt: string;
-  provider_policy_receipt: string;
-  evaluation_receipt: string;
-  release_receipt: string;
+  owner_approval_id: string | null;
+  grant_receipt: string | null;
+  provider_policy_receipt: string | null;
+  evaluation_receipt: string | null;
+  release_receipt: string | null;
 }
 interface Mailbox extends Record<string, unknown> {
   id: string;
@@ -268,6 +270,7 @@ async function lockCaptureAuthority(
       policyRevision: control.policy_revision,
       disclosureVersion: control.disclosure_version,
       disclosureSha256: control.disclosure_sha256,
+      ...control.owner_approval_id?{ownerApprovalId:control.owner_approval_id}:{},
       grantReceipt: control.grant_receipt,
       providerPolicyReceipt: control.provider_policy_receipt,
       evaluationReceipt: control.evaluation_receipt,
@@ -747,7 +750,7 @@ export function businessMailCaptureHandler(deps: {
             payload.decisionRevision,
             p.disclosureVersion,
             p.disclosureSha256,
-            JSON.stringify({
+            JSON.stringify(p.ownerApprovalId?{authorizationKind:"owner_consent",ownerApprovalId:p.ownerApprovalId}:{
               grant: p.grantReceipt,
               providerPolicy: p.providerPolicyReceipt,
               evaluation: p.evaluationReceipt,
@@ -2025,7 +2028,8 @@ async function prepareMailProcessingSnapshot(
     policyRevision: control.policy_revision,
     disclosureVersion: control.disclosure_version,
     disclosureSha256: control.disclosure_sha256,
-    grantReceipt: control.grant_receipt,
+    ...control.owner_approval_id?{ownerApprovalId:control.owner_approval_id}:{},
+      grantReceipt: control.grant_receipt,
     providerPolicyReceipt: control.provider_policy_receipt,
     evaluationReceipt: control.evaluation_receipt,
     releaseReceipt: control.release_receipt,

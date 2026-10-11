@@ -6,7 +6,7 @@ import {expect,it} from 'vitest';
 import {repositoryPath} from './support/repository.ts';
 
 const workflow=readFileSync(repositoryPath('.github/workflows/greenfield.yml'),'utf8');
-const setup=workflow.split('      - name: Meeting media test tools\n')[1]?.split('      - name: Greenfield gate')[0];
+const setup=workflow.split('      - name: Meeting media test tools\n')[1]?.split(/\n {6}- /u)[0];
 if(!setup)throw new Error('Missing media setup step');
 const body=setup.split('        run: |\n')[1]?.split('\n').map(line=>line.startsWith('          ')?line.slice(10):line).join('\n');
 if(!body)throw new Error('Missing media setup script');

@@ -89,6 +89,7 @@ const binding = {
 export const selectedImportCommitPayloadSchema = selectedImportInputSchema
   .extend({
     ...binding,
+    opportunityId: uuid.nullable().optional(),
     importKey: z.string().min(1).max(160),
     previewHash: z.string().regex(/^[a-f0-9]{64}$/u),
     parserVersion: z.literal("selected-v1"),
@@ -107,6 +108,7 @@ export const selectedImportReadSchema = z
 export const selectedImportMetadataSchema = z
   .object({
     revision: z.number().int().positive(),
+    opportunityId: uuid.nullable().optional(),
     subtype: z.enum(["pasted_text", "transcript", "selected_file"]),
     label: z.string().nullable(),
     participants: z.array(selectedParticipantSchema).nullable(),
@@ -141,6 +143,7 @@ export const selectedImportChangeSchema =
   selectedImportChangePayloadSchema.extend(envelope);
 export const selectedImportCorrectPayloadSchema =
   selectedImportInputSchema.extend({
+    opportunityId: uuid.nullable().optional(),
     sourceId: uuid,
     expectedSourceRevision: z.number().int().positive(),
     expectedMetadataRevision: z.number().int().positive(),

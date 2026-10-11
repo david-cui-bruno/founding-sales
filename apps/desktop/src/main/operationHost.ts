@@ -508,6 +508,12 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if (!answer.ok) throw new Error(answer.reason);
       return answer.value;
     },
+    "crm.mailCapturePrepare": async(input:OperationInput<"crm.mailCapturePrepare">)=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.command('/crm/business/mail/controls/save',input,value=>OPERATIONS['crm.mailCapturePrepare'].output.parse(value));
+      if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');
+      if(!answer.ok)throw new Error(answer.reason);return answer.value;
+    },
     "crm.mailCaptureActivate": async (input: OperationInput<"crm.mailCaptureActivate">,
     ) => {
       const generation = deps.recordings.identity.current();

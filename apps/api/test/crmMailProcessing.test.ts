@@ -140,7 +140,7 @@ it('conserves unknown native mail spend across disconnect, reconnect and explici
  try {
   const {workspaceId,mailbox,binding,job}=await approveCaptureFixture(fixture);
   const passage='Could we discuss maintenance next week?';
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -175,7 +175,7 @@ it('releases native CRM locks during model wait and discards deleted-source outp
  try {
   const {workspaceId,binding,job}=await approveCaptureFixture(fixture);
   const passage='Could we discuss maintenance next week?';
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -207,7 +207,7 @@ it('holds no copy locks during native proof verification and refuses paid reserv
  try {
   const {workspaceId,binding,job}=await approveCaptureFixture(fixture);
   const passage='Could we discuss maintenance next week?';
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -245,7 +245,7 @@ it('discards native model output after explicit business exclusion during the pr
   const {workspaceId,mailbox,binding,conversationId,job}=await approveCaptureFixture(fixture);
   await fixture.db.query('UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id,METADATA_REVIEW_DISCLOSURE.version,METADATA_REVIEW_DISCLOSURE.sha256]);
   const passage='Could we discuss maintenance next week?';
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -280,7 +280,7 @@ it('rechecks proof outside the publication transaction and settles accepted nati
  try {
   const {workspaceId,binding,job}=await approveCaptureFixture(fixture);
   const passage='Could we discuss maintenance next week?';
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -319,7 +319,7 @@ it('materializes configured native mail intents through registered fenced work w
   const {workspaceId,binding,job}=await approveCaptureFixture(fixture);
   const passage='Could we discuss maintenance next week?';
   let proofChecks=0;
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>{proofChecks++;return proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding;}};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>{proofChecks++;return proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding;}};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -353,7 +353,7 @@ it('refuses an old scheduler intent after the public purpose revision changes',a
   const {workspaceId,binding,job}=await approveCaptureFixture(fixture);
   const passage='Could we discuss maintenance next week?';
   let proofChecks=0;
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>{proofChecks++;return proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding;}};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>{proofChecks++;return proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding;}};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -384,7 +384,7 @@ it('discards a scheduled intent when source deletion completes during its extern
   const passage='Could we discuss maintenance next week?';
   let proofChecks=0,pauseProof=false;let releaseProof!:()=>void,enteredProof!:()=>void;
   const proofEntered=new Promise<void>(resolve=>{enteredProof=resolve;}),proofRelease=new Promise<void>(resolve=>{releaseProof=resolve;});
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>{proofChecks++;if(pauseProof){enteredProof();await proofRelease;}return proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding;}};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>{proofChecks++;if(pauseProof){enteredProof();await proofRelease;}return proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding;}};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -419,7 +419,7 @@ it('fairly reaches a fresh eligible source after more than one bounded page of r
   const {workspaceId,binding,job}=await approveCaptureFixture(fixture);
   const passage='Could we discuss maintenance next week?';
   let proofChecks=0;
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>{proofChecks++;return proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding;}};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>{proofChecks++;return proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding;}};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
@@ -456,7 +456,7 @@ it('retains the conservative charge and replay blocker when unknown acceptance r
  try {
   const {workspaceId,mailbox,binding,job}=await approveCaptureFixture(fixture);
   const passage='Could we discuss maintenance next week?';
-  const verifier={verify:async (proof:{grantReceipt:string;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
+  const verifier={verify:async (proof:{grantReceipt:string|null;accountBinding:string})=>proof.grantReceipt==='fixture-grant'&&proof.accountBinding===binding};
   const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:verifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'Unknown@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'partial',ranges:[{start:0,end:passage.length,kind:'unknown'}]})}}}).get('crm.mail_capture');
   if(!capture)throw new Error('capture unavailable');
   const captured=await capture.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});

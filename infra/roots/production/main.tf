@@ -137,7 +137,8 @@ module "stack" {
   # reading: `s3:GetObject*` stays denied to this role by the bucket policy and
   # by `infra/policies/deployment-role-policy.json.tftpl` both.
   # `docs/archive/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
-  journal_listing_principal_arns = [local.deployment_role_arn]
+  # Saved-plan refresh needs HeadBucket too; no object read or lock exemption.
+  journal_listing_principal_arns = [local.deployment_role_arn, "arn:aws:iam::${local.aws_account_id}:role/${local.name_prefix}-ci-plan"]
 
   alert_emails       = local.alert_emails
   log_retention_days = 90
