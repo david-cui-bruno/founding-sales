@@ -333,3 +333,64 @@ it("missing cleanup evidence is an unavailable proof, never absence or a success
   expect(result.code).toBe(1);
   expect(result.receipt).toBe("");
 });
+
+function registerDiagnosticArm64(failInstall = false) {
+  const directory = mkdtempSync(join(tmpdir(), "fss-diagnostic-arm64-"));
+  try {
+    const bin = join(directory, "bin");
+    mkdirSync(bin);
+    const calls = join(directory, "calls");
+    const sudo = join(bin, "sudo");
+    writeFileSync(
+      sudo,
+      `#!/usr/bin/env python3\nimport os,sys\nopen(os.environ['CALLS'],'a').write(' '.join(sys.argv[1:])+'\\n')\nif os.environ.get('FAIL_INSTALL')=='1' and 'install' in sys.argv:sys.exit(1)\n`,
+    );
+    chmodSync(sudo, 0o755);
+    const run = spawnSync(
+      "bash",
+      ["-c", runBody(
+        ".github/workflows/crm-acquisition-diagnostic.yml",
+        "Register the arm64 interpreter for proposal selftests",
+      )],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env["PATH"]}`,
+          CALLS: calls,
+          FAIL_INSTALL: failInstall ? "1" : "0",
+        },
+      },
+    );
+    return {
+      code: run.status,
+      output: run.stdout + run.stderr,
+      calls: readFileSync(calls, "utf8"),
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+it("proposal installs the distribution ARM64 interpreter before cloud/image selftests without burdening owned cleanup", () => {
+  const primary = readFileSync(
+    resolve(".github/workflows/crm-acquisition-diagnostic.yml"), "utf8",
+  );
+  const name = "Register the arm64 interpreter for proposal selftests";
+  const step = primary.slice(
+    primary.indexOf(`- name: ${name}`),
+    primary.indexOf("- name: Verify lifecycle prerequisites without a cloud call"),
+  );
+  expect(step).toContain("if: inputs.stage == 'proposal'");
+  expect(primary.indexOf(name)).toBeGreaterThan(primary.indexOf("Freeze reviewed private inputs before cloud access"));
+  expect(primary.indexOf(name)).toBeLessThan(primary.indexOf("Assume only the protected normal rehearsal role"));
+  expect(primary.indexOf(name)).toBeLessThan(primary.indexOf("Retain a fresh private exact proposal without creation"));
+  const result = registerDiagnosticArm64();
+  expect(result.code, result.output).toBe(0);
+  expect(result.calls).toBe("apt-get update -qq\napt-get install -y --no-install-recommends qemu-user-static binfmt-support\n");
+  expect(runBody(".github/workflows/crm-acquisition-diagnostic.yml", name)).not.toMatch(/--privileged|tonistiigi|docker run/u);
+});
+it("proposal refuses interpreter-install failure before acquiring cloud authority", () => {
+  const result = registerDiagnosticArm64(true);
+  expect(result.code).toBe(1);
+  expect(result.calls).toBe("apt-get update -qq\napt-get install -y --no-install-recommends qemu-user-static binfmt-support\n");
+});
