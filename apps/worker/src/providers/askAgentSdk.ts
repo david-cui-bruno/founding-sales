@@ -30,7 +30,12 @@ export function createAskSdkStepAdapter(input:{region:'us-east-1';endpointId:str
     messages});
    const usage={inputTokens:result.usage.inputTokens??0,outputTokens:result.usage.outputTokens??0};
    if(result.usage.inputTokens===undefined||result.usage.outputTokens===undefined)return {acceptance:'unknown',usage:null,answer:null,toolCalls:[]};
-   let answer:unknown=null;try{answer=JSON.parse(result.text);}catch{/* Durable billed malformed output is refused by execution. */}
+   let answer:unknown=null;try{
+    const text=result.text.trim();
+    // Only one complete JSON fence is encoding, never surrounding prose.
+    const fence=/^```(?:json)?\s*\n([\s\S]*?)\n```$/u.exec(text);
+    answer=JSON.parse(fence?.[1]??text);
+   }catch{/* Durable billed malformed output is refused by execution. */}
    return {acceptance:'accepted',usage,answer,toolCalls:result.toolCalls.map(call=>({id:call.toolCallId,name:call.toolName,input:call.input}))};
   }catch{return {acceptance:'unknown',usage:null,answer:null,toolCalls:[]};}
  }});

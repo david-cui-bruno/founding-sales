@@ -168,7 +168,21 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    if(validUsage&&answer.usage!==null&&(bounds===undefined||answer.usage.inputTokens>bounds.max_input_tokens||answer.usage.outputTokens>bounds.max_output_tokens)){await setState(context,row.id,'failed','provider_usage_exceeded');return;}
    const claims=claimsSchema.safeParse(answer.claims);
    if(!claims.success||answer.acceptance!=='accepted'){await setState(context,row.id,'failed','invalid_extraction');return;}
-   for(const claim of claims.data){const citation=await resolveCrmSource(context,{...source,locator:claim.locator},mailEvidence);if(citation?.passage?.text!==claim.quote){await setState(context,row.id,'failed','invalid_quote');return;}}
+   for(const claim of claims.data){
+    let citation=await resolveCrmSource(context,{...source,locator:claim.locator},mailEvidence);
+    // Selected files are retained as selected_note originals. Repair only the
+    // locator, never the quote/interpretation, using exact dispatched UTF-16 text.
+    // A valid existing locator wins even when the same quote occurs elsewhere.
+    if(citation?.passage?.text!==claim.quote&&source.kind==='selected_note'){
+     const start=dispatch.text.indexOf(claim.quote);
+     if(start>=0&&dispatch.text.indexOf(claim.quote,start+1)===-1){
+      claim.locator=`text:${start}:${start+claim.quote.length}`;
+      // Keep the current original source resolver's access/hash/surrogate guards.
+      citation=await resolveCrmSource(context,{...source,locator:claim.locator},mailEvidence);
+     }
+    }
+    if(citation?.passage?.text!==claim.quote){await setState(context,row.id,'failed','invalid_quote');return;}
+   }
    const published=[];
    for(const claim of claims.data){const inserted=await context.db.query<{id:string}>('INSERT INTO crm_extraction_claims(workspace_id,generation_id,kind,interpretation,status,locator,quote,claim_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',[context.scope.workspaceId,row.id,claim.kind,claim.interpretation,claim.status,claim.locator,claim.quote,createHash('sha256').update(JSON.stringify({source,context:capturedContext,...claim})).digest('hex')]);if(claim.kind==='commitment')published.push(inserted.rows[0]!.id);}
    await flagPublishedCrmEvidence(context,source,row.context_hash,claims.data);
