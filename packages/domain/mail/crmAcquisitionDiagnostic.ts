@@ -4,6 +4,8 @@ import { REQUIRED_SCHEMA } from "../db/schemaRange.ts";
 import { readAppliedSchemaVersion } from "../db/migrationRunner.ts";
 import {
   crmAcquisitionDiagnosticAuthorizationSchema,
+  crmAcquisitionDiagnosticAwsAuthorizationSchema,
+  type crmAcquisitionDiagnosticLocalIsolationSchema,
   type CrmAcquisitionDiagnosticAuthorization,
 } from "@fss/contracts";
 import { withTransaction, type SessionQueryable } from "../db/queryable.ts";
@@ -17,7 +19,7 @@ import { CRM_MAIL_CAPTURE_DISCLOSURE } from "../crm/capabilityAuthority.ts";
 import { enqueueJob } from "../jobs/jobStore.ts";
 const legacyAuthorizationSchema = z
   .strictObject({
-    ...crmAcquisitionDiagnosticAuthorizationSchema.shape,
+    ...crmAcquisitionDiagnosticAwsAuthorizationSchema.shape,
     schemaVersion: z.literal(89),
     metadataUnits: z.literal(5),
     bodyUnits: z.literal(5),
@@ -43,6 +45,9 @@ const diagnosticDocumentSchema = z.union([
   legacyAuthorizationSchema,
 ]);
 type DiagnosticDocument = z.infer<typeof diagnosticDocumentSchema>;
+type LocalIsolation = z.infer<
+  typeof crmAcquisitionDiagnosticLocalIsolationSchema
+>;
 type IsolationPurpose =
   "acquisition_dispatch" | "progress_read" | "oauth_bootstrap";
 function documentFingerprint(input: DiagnosticDocument) {
@@ -56,21 +61,26 @@ export interface CrmAcquisitionDiagnosticRuntime {
   imageDigest: string;
   side: "api" | "worker";
   schemaVersion: number;
+  localIsolation?: LocalIsolation;
   consentIsolationBinding?: {
-    databaseInstanceArn: string;
-    databaseSecretArn: string;
-    databaseEndpoint: string;
-    ecsClusterArn: string;
+    localIsolation?: LocalIsolation;
+    databaseInstanceArn?: string;
+    databaseSecretArn?: string;
+    databaseEndpoint?: string;
+    ecsClusterArn?: string;
   };
   verifyIsolation(input: {
+    localIsolation?: LocalIsolation;
     environmentId: string;
     databaseName: string;
     deploymentIdentity: string;
-    databaseInstanceArn: string;
-    databaseSecretArn: string;
-    databaseEndpoint: string;
-    ecsClusterArn: string;
+    databaseInstanceArn?: string;
+    databaseSecretArn?: string;
+    databaseEndpoint?: string;
+    ecsClusterArn?: string;
     connectedServerAddress: string | null;
+    connectedServerPort?: number;
+    connectedRole?: string;
     purpose?: IsolationPurpose;
   }): Promise<boolean>;
 }
@@ -130,6 +140,8 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
   const parsed = diagnosticDocumentSchema.safeParse(row?.authorization);
   if (!parsed.success) return null;
   const a = parsed.data;
+  if ("localIsolation" in a !== (runtime.localIsolation !== undefined))
+    return null;
   const legacyAudit =
     purpose === "progress_read" && a.schemaVersion < REQUIRED_SCHEMA;
   const actor = context.scope.actor;
@@ -149,8 +161,13 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
   )
     return null;
   const db = (
-    await context.db.query<{ name: string; address: string | null }>(
-      "SELECT current_database() AS name,inet_server_addr()::text AS address",
+    await context.db.query<{
+      name: string;
+      address: string | null;
+      port: number;
+      role: string;
+    }>(
+      "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
     )
   ).rows[0];
   if (db?.name !== a.databaseName) return null;
@@ -163,11 +180,17 @@ export async function prepareCrmAcquisitionDiagnosticIsolation(
           runtime.side === "api"
             ? a.deploymentIdentity
             : a.workerDeploymentIdentity,
-        databaseInstanceArn: a.databaseInstanceArn,
-        databaseSecretArn: a.databaseSecretArn,
-        databaseEndpoint: a.databaseEndpoint,
-        ecsClusterArn: a.ecsClusterArn,
+        ...("localIsolation" in a
+          ? { localIsolation: a.localIsolation }
+          : {
+              databaseInstanceArn: a.databaseInstanceArn,
+              databaseSecretArn: a.databaseSecretArn,
+              databaseEndpoint: a.databaseEndpoint,
+              ecsClusterArn: a.ecsClusterArn,
+            }),
         connectedServerAddress: db.address,
+        connectedServerPort: db.port,
+        connectedRole: db.role,
         purpose,
       }))
     )
@@ -241,6 +264,8 @@ export async function verifyCrmAcquisitionDiagnostic(
   );
   if (!parsed.success) return null;
   const a = parsed.data;
+  if ("localIsolation" in a !== (runtime.localIsolation !== undefined))
+    return null;
   if (
     row?.authorization_sha256 !== crmAcquisitionDiagnosticFingerprint(a) ||
     a.environmentId !== runtime.environmentId ||
@@ -253,8 +278,13 @@ export async function verifyCrmAcquisitionDiagnostic(
   )
     return null;
   const databaseRow = (
-    await context.db.query<{ name: string; address: string | null }>(
-      "SELECT current_database() AS name,inet_server_addr()::text AS address",
+    await context.db.query<{
+      name: string;
+      address: string | null;
+      port: number;
+      role: string;
+    }>(
+      "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
     )
   ).rows[0];
   if (databaseRow?.name !== a.databaseName) return null;
@@ -310,6 +340,14 @@ export async function verifyCrmAcquisitionDiagnostic(
     )
   )
     return null;
+  if ("localIsolation" in a) {
+    if (
+      JSON.stringify(a.localIsolation) !==
+      JSON.stringify(runtime.localIsolation)
+    )
+      return null;
+    return a;
+  }
   const release = (
     await context.db.query<{ record: Record<string, unknown> }>(
       "SELECT record FROM release_records WHERE reference=$1 AND api_digest=$2 AND worker_digest=$3 AND desktop_commit_stamp=$4",
@@ -438,8 +476,13 @@ export async function readCrmAcquisitionDiagnostic(
     return null;
   const a = parsed.data;
   const dbrow = (
-    await context.db.query<{ name: string; address: string | null }>(
-      "SELECT current_database() AS name,inet_server_addr()::text AS address",
+    await context.db.query<{
+      name: string;
+      address: string | null;
+      port: number;
+      role: string;
+    }>(
+      "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
     )
   ).rows[0];
   if (
@@ -558,8 +601,13 @@ export async function provisionCrmAcquisitionDiagnostic(
     );
     await lock(context, a.id, true);
     const database = (
-      await session.query<{ name: string; address: string | null }>(
-        "SELECT current_database() AS name,inet_server_addr()::text AS address",
+      await session.query<{
+        name: string;
+        address: string | null;
+        port: number;
+        role: string;
+      }>(
+        "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
       )
     ).rows[0]?.name;
     if (
@@ -647,8 +695,13 @@ export async function prepareCrmAcquisitionDiagnosticConsentIsolation(
     return false;
   const readConnection = async () =>
     (
-      await context.db.query<{ name: string; address: string | null }>(
-        "SELECT current_database() AS name,inet_server_addr()::text AS address",
+      await context.db.query<{
+        name: string;
+        address: string | null;
+        port: number;
+        role: string;
+      }>(
+        "SELECT current_database() AS name,host(inet_server_addr()) AS address,inet_server_port() AS port,current_user AS role",
       )
     ).rows[0];
   try {
@@ -665,6 +718,8 @@ export async function prepareCrmAcquisitionDiagnosticConsentIsolation(
         environmentId: runtime.environmentId,
         databaseName: before.name,
         connectedServerAddress: before.address,
+        connectedServerPort: before.port,
+        connectedRole: before.role,
         deploymentIdentity: "",
         purpose: "oauth_bootstrap",
       }))

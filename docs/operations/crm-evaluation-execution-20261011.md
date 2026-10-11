@@ -74,3 +74,18 @@ Full conversational/progress measurements use the normal configured worker/produ
 | #551 | Applicable #548/#549 readiness; configured real answering/embedding and representative supported conversational outputs, component metrics, timing/cost; independent capability receipts. | Integrated source98 control/index/session proof, bounded existing diagnostic tooling and full end-to-end protocol. |
 
 Do not close these tickets by renaming preparation as acceptance. When applicable requirements actually pass, structured/lexical, hosted answering, semantic retrieval and extraction receive separate readiness decisions. None enables itself or lifts #552's deliberate release/activation gate. Capture can proceed independently of unrelated AI quality; ordinary quality can improve during authorized operation, while critical failures stop the affected capability.
+
+
+## Approved owner-first amendment — October11
+
+The historical representative-quality execution plan above remains appropriate for representative claims. ADR0009 now separately permits monitored David-only provisional quality after critical synthetic/control tests, actual configured model integration, a reviewed labeled set and approved owner/data/purpose/spend, with visible limitations and ongoing actual-output review. Current source still requires actual_representative; #581 implements the new quality tier. No paid funding, real evaluation result or activation is established by this policy change. Thirty slots are a coverage plan, not thirty mandatory acquired private threads. Keep sealed expectations, explicit data classes, actual denominators and critical failure vetoes. Deterministic progress and capture do not wait on unrelated hosted Ask quality.
+
+## Final approved lean operating model — October11
+
+The grilling decisions are settled: normal breakage/short maintenance/hours of forward repair are acceptable; preserve data/history, source/member access and unintended-send controls. Merge normally auto-deploys app and explicitly eligible routine migrations after focused CI. Destructive/privilege/unknown changes require one review; the current88→99 backlog remains specifically held.
+
+#580 is now automatic delivery using existing stop/migrate/start and proportional CI, not a new release platform. #581 is ordinary authenticated owner consent/configuration plus audit and persistent Enable/Disable, replacing independent privileged per-release capability receipt provisioning. Changed data/provider/model/purpose/budget scopes require real owner approval; unchanged releases preserve valid settings. The provisional David-only quality policy remains, with Codex technical checks, actual model integration, a useful reviewed labeled set and a few owner usefulness judgments.
+
+ADR0009 latest amendment and ADR0011 record this final design. This supersedes the earlier trusted-assembler/technical-rebinding proposal. #547 remains disposable local real-Google acceptance. Current source still implements the old mechanism until #581 replaces it; no bypass or fixture mode is allowed. No provider read, paid call, role change, current held rollout or activation occurred in this reconciliation. Sending/calling/admission controls remain unchanged.
+
+Parallel implementation frontier is #547/#580/#581, with one integration owner for shared schema/contracts. #548 preparation can proceed independently; #549 follows actual capture and final #550/#551 depend on implemented owner setup and applicable source/evaluation evidence. No additional simplification tickets were added.

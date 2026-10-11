@@ -20,6 +20,17 @@ describe('explicit selected attachment analysis',()=>{
  const command=(body:object)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...body});
  beforeAll(async()=>{fixture=await createAuthFixture();token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.salesperson)).accessToken;});
  afterAll(async()=>fixture.stop());
+ it('retains an explicit opportunity for a selected original file without requesting model work',async()=>{
+  const firmId=await seedFirm(fixture,{name:'Selected file deal',assignedUserId:fixture.alpha.salesperson.userId});
+  const opened=await post('/opportunities/v2/open',command({firmId,name:'File review'}));expect(opened.status).toBe(200);
+  const opportunityId=(opened.body as {result:{opportunityId:string}}).result.opportunityId;
+  const text='Selected business notes',file={fileName:'deal.txt',declaredByteLength:Buffer.byteLength(text),bytesBase64:Buffer.from(text).toString('base64'),completeness:'complete'};
+  const preview=await post('/crm/attachments/preview',file);
+  const captured=await post('/crm/attachments/commit',command({file,personId:null,firmId,opportunityId,participants:[],occurredAt:null,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash}));expect(captured.status).toBe(200);
+  expect((await post('/crm/imports/read',{firmId})).body).toMatchObject({imports:[{metadata:{opportunityId}}]});
+  const sourceId=(captured.body as {result:{sourceId:string}}).result.sourceId;
+  expect((await post('/crm/attachments/read',{sourceId})).body).toMatchObject({file:{state:'selected'},processing:{state:'not_requested'}});
+ });
  it('previews exactly selected UTF-8 file coverage before any analysis is requested',async()=>{
   const result=await post('/crm/attachments/preview',{fileName:'repairs.txt',declaredByteLength:28,bytesBase64:'V2UgbmVlZCByZXBhaXIgY29vcmRpbmF0aW9uLg==',completeness:'complete'});
   expect(result.status).toBe(200);

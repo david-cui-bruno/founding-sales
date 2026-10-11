@@ -251,28 +251,29 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
     "crm.capabilityRead": { capability: "crm_extraction" },
     "crm.metadataReviewActivate": {
       capability: "metadata_review",expectedRevision:1,mailboxId:UUID,
-      authorityReceiptId:UUID,
+      approval:{consentAcknowledged:true,qualityTier:"acquisition",limitations:[]},
     },
     "crm.metadataReviewDisable": {
       capability: "metadata_review",expectedRevision:1,mailboxId:UUID,
     },
+    "crm.mailCapturePrepare": {mailboxId:UUID,expectedRevision:0,expectedGeneration:1,expectedAccountBinding:"a".repeat(64),policyRevision:1,disclosureVersion:"capture-v1",disclosureSha256:"b".repeat(64)},
     "crm.mailCaptureActivate": {
       capability: "mail_capture",expectedRevision:1,mailboxId:UUID,
-      authorityReceiptId:UUID,
+      approval:{consentAcknowledged:true,qualityTier:"acquisition",limitations:[]},
     },
     "crm.mailCaptureDisable": {
       capability: "mail_capture",expectedRevision:1,mailboxId:UUID,
     },
     "crm.extractionActivate": {
       capability: "crm_extraction",expectedRevision:1,
-      authorityReceiptId:UUID,
+      approval:{consentAcknowledged:true,qualityTier:"acquisition",limitations:[]},
     },
     "crm.extractionDisable": {
       capability: "crm_extraction",expectedRevision:1,
     },
     "crm.askAnswerActivate": {
       capability: "ask_answer",expectedRevision:1,
-      authorityReceiptId:UUID,
+      approval:{consentAcknowledged:true,qualityTier:"acquisition",limitations:[]},
     },
     "crm.askAnswerDisable": { capability: "ask_answer",expectedRevision:1 },
   'crm.businessPolicyRead':{},
@@ -518,6 +519,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
             "capabilityRead",
             "metadataReviewActivate",
             "metadataReviewDisable",
+            "mailCapturePrepare",
             "mailCaptureActivate",
             "mailCaptureDisable",
             "extractionActivate",

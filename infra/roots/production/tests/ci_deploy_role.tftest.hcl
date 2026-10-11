@@ -338,3 +338,60 @@ run "the_release_record_put_runs_the_operations_task_in_the_production_cluster_a
     error_message = "The put reads its task back on the production cluster's tasks and its answer from the worker log group's streams, and the cluster and operations family are root outputs for FSS_PRODUCTION_CLUSTER_NAME and FSS_PRODUCTION_OPERATIONS_TASK_FAMILY."
   }
 }
+
+run "routine_maintenance_is_separate_and_has_no_state_or_secret_values" {
+  command = plan
+  assert {
+    condition = (
+      aws_iam_role.ci_maintenance.name == "fss-prod-ci-maintenance"
+      && jsondecode(aws_iam_role.ci_maintenance.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-maintenance"
+      && !can(regex("StringLike", aws_iam_role.ci_maintenance.assume_role_policy))
+    )
+    error_message = "Routine maintenance must use its separately reviewed protected main-only environment, never widening the app-only identity."
+  }
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.ci_maintenance.policy).Statement :
+      alltrue([for action in statement.Action : !contains(["secretsmanager:GetSecretValue", "s3:PutObject", "s3:GetObject", "iam:PutRolePolicy", "iam:CreateRole", "rds:RestoreDBInstanceToPointInTime", "rds:ModifyDBInstance"], action)])
+    ])
+    error_message = "Maintenance cannot hold Terraform state, plaintext secrets, IAM administration or unreviewed restore privileges."
+  }
+  assert {
+    condition = (
+      [for statement in jsondecode(aws_iam_role_policy.ci_maintenance.policy).Statement : statement.Resource if statement.Sid == "PassExistingMigrationIdentityOnlyToEcs"] == [[
+        "arn:aws:iam::326255650484:role/fss-prod-migration-task",
+        "arn:aws:iam::326255650484:role/fss-prod-migration-exec"
+      ]]
+      && [for statement in jsondecode(aws_iam_role_policy.ci_maintenance.policy).Statement : statement.Resource if statement.Sid == "ReadExistingBackupReadiness"] == [["arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg"]]
+    )
+    error_message = "Extra maintenance authority is confined to existing migration roles and actual production PITR metadata."
+  }
+}
+
+run "saved_plan_preparation_is_read_only_except_existing_backend_locks" {
+  command = plan
+  assert {
+    condition = (
+      aws_iam_role.ci_plan.name == "fss-prod-ci-plan"
+      && jsondecode(aws_iam_role.ci_plan.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-plan"
+      && length(local.ci_plan_metadata) == 1
+      && alltrue([for statement in local.ci_plan_policy.Statement : alltrue([for action in statement.Action : !contains(["secretsmanager:GetSecretValue", "iam:PutRolePolicy", "iam:CreateRole", "ecs:RunTask", "ecs:UpdateService", "rds:ModifyDBInstance"], action)])])
+      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "OnlyExistingBackendLockObject"] == [["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate.tflock"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "ReadOnlyProductionState"] == [["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate"]]
+    )
+    error_message = "The planner can refresh metadata and read the single existing state; only its existing backend lock writes are authorized."
+  }
+}
+
+run "planner_refreshes_scoped_role_and_secret_metadata_without_values" {
+  command = plan
+  assert {
+    condition = (
+      [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "ReadProductionRoleMetadata"] == [["arn:aws:iam::326255650484:role/fss-prod-*"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "ReadProductionRoleMetadata"] == [["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListRoleTags"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "ReadProductionSecretMetadata"] == [["arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/*"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "ReadProductionSecretMetadata"] == [["secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy"]]
+    )
+    error_message = "Production saved-plan refresh must read actual scoped IAM roles and secret metadata without plaintext secret reads or IAM writes."
+  }
+}

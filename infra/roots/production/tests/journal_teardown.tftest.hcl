@@ -30,7 +30,8 @@
 # The listing deny is the exception in the first run and it is deliberate (G37):
 # production passes its own deployment role there unconditionally, because
 # `HeadBucket` is `s3:ListBucket` and a deployer refused it concludes the bucket
-# it created is gone. That exemption is asserted to be exactly one role, on the
+# it created is gone. The saved-plan planner needs the same HeadBucket metadata read. The exemption
+# is asserted to be exactly these two roles, on the
 # bucket ARN, on that statement and no other.
 
 mock_provider "aws" {
@@ -133,14 +134,29 @@ run "production_exempts_nobody_from_the_journal_denies" {
   assert {
     condition = alltrue([
       for statement in jsondecode(module.stack.journal_policy_json).Statement :
-      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::326255650484:role/fss-prod-deploy"]
+      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == [
+        "arn:aws:iam::326255650484:role/fss-prod-deploy",
+        "arn:aws:iam::326255650484:role/fss-prod-ci-plan"
+      ]
+      && statement.Action == ["s3:ListBucket"]
       && statement.Resource == ["arn:aws:s3:::mock-bucket"]
       if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
     ])
-    error_message = "The production deployer may list the journal bucket, and only the bucket. A deployer that cannot see its own bucket recreates it."
+    error_message = "Only the production deployer and saved-plan planner bypass the bucket-only listing deny, solely for ListBucket/HeadBucket. Neither acquires object bodies or lock weakening."
   }
 
-  # Listing is not reading. Naming the deployer on the listing deny must move no
+  assert {
+    condition = length([
+      for statement in jsondecode(module.stack.journal_policy_json).Statement : statement
+      if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+      ]) == 1 && length([
+      for statement in jsondecode(module.stack.journal_policy_json).Statement : statement
+      if statement.Sid == "DenyObjectReadsFromAnyoneButTheTaskRoles"
+    ]) == 1
+    error_message = "Listing and object-read denies must each exist exactly once; missing denies cannot pass filtered assertions."
+  }
+
+  # Listing is not reading. Naming the planner on the listing deny must move no
   # object and no version list within its reach.
   assert {
     condition = alltrue([

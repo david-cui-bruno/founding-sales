@@ -152,6 +152,12 @@ while [ "$#" -gt 0 ]; do
     *) rollback_fail "rollback.sh does not take '$1'" ;;
   esac
 done
+# Standalone production apply is retired. This script remains a read-only image
+# recovery planner and a controlled local rehearsal; real repair uses the reviewed
+# production workflow's saved plan and shared queue.
+if [ "$APPLY" = 1 ] && { [ "${GITHUB_ACTIONS:-}" = true ] || { [ -z "${FSS_REHEARSAL_AWS_COMMAND:-}" ] && [ "${FSS_REHEARSAL_DRY_RUN:-0}" != 1 ]; }; }; then
+  rollback_fail "standalone production rollback apply is retired; prepare and review a repair through greenfield-deploy.yml"
+fi
 if [ -z "$ROOT_DIRECTORY" ] || [ -z "$PREFIX" ]; then usage; fi
 
 ENVIRONMENT="$(release_environment_for_prefix "$PREFIX")" || exit 1

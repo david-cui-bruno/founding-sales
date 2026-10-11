@@ -1,0 +1,7 @@
+-- changes: crm_acquisition_diagnostic_authorizations
+-- Historical AWS audits remain immutable. Local authorization adds no production capability.
+CREATE OR REPLACE FUNCTION crm_acquisition_diagnostic_document_body_free(doc jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+ SELECT jsonb_typeof(doc)='object' AND doc-ARRAY['id','purpose','workspaceId','mailboxId','ownerUserId','providerAccountId','accountBinding','generation','oauthGrantObservationId','databaseInstanceArn','databaseSecretArn','databaseEndpoint','ecsClusterArn','deploymentIdentity','workerDeploymentIdentity','environmentId','databaseName','implementationCommit','apiImageDigest','workerImageDigest','schemaVersion','releaseReference','disclosureVersion','disclosureSha256','consentReference','providerPolicyReference','reviewedBy','reviewReference','verifiedAt','validUntil','maxReads','maxUnits','metadataUnits','bodyUnits','messages','localIsolation']='{}'::jsonb
+ AND (NOT doc ? 'localIsolation' OR (jsonb_typeof(doc->'localIsolation')='object' AND (doc->'localIsolation')-ARRAY['kind','runId','databaseHost','databasePort','databaseRole','receiptSha256']='{}'::jsonb AND doc->'localIsolation'->>'kind'='local' AND NOT doc ?| ARRAY['databaseInstanceArn','databaseSecretArn','databaseEndpoint','ecsClusterArn']))
+ AND (NOT doc ? 'messages' OR (jsonb_typeof(doc->'messages')='array' AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(doc->'messages') m WHERE jsonb_typeof(m)<>'object' OR m-ARRAY['messageId','threadId','origin','fromAt','toAt']<>'{}'::jsonb)));
+$$;

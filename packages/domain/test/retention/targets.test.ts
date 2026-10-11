@@ -79,6 +79,7 @@ describe('the registry covers the retention table', () => {
       'crm_acquisition_diagnostic_authorizations',
       'crm_acquisition_diagnostic_reads',
       'crm_capability_authority_receipts',
+      'crm_capability_owner_approvals',
       'mailbox_oauth_grant_observations',
     ];
     for (const target of RETENTION_TARGETS) {

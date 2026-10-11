@@ -30,8 +30,11 @@ export async function previewSelectedImport(
   return buildSelectedImportPreview(context, input, true);
 }
 /** Prepare exact selected content without acquiring endpoint candidate authority. */
-export async function prepareSelectedImport(context:RepositoryContext,input:Input){
- return buildSelectedImportPreview(context,input,false);
+export async function prepareSelectedImport(
+  context: RepositoryContext,
+  input: Input,
+) {
+  return buildSelectedImportPreview(context, input, false);
 }
 async function buildSelectedImportPreview(
   context: RepositoryContext,
@@ -123,9 +126,48 @@ async function buildSelectedImportPreview(
     ],
   });
 }
+/** Resolve only an explicitly selected deal under the same sorted identity closure. */
+async function selectedOpportunity(
+  context: RepositoryContext,
+  opportunityId: string | null,
+  personId: string | null,
+  firmId: string | null,
+) {
+  if (opportunityId === null) return { ok: true as const, firmId: null };
+  const opportunity = (
+    await context.db.query<{ firm_id: string }>(
+      "SELECT firm_id FROM opportunities WHERE workspace_id=$1 AND id=$2",
+      [context.scope.workspaceId, opportunityId],
+    )
+  ).rows[0];
+  if (opportunity === undefined) return { ok: false as const };
+  const current = (
+    await context.db.query<{ firm_id: string }>(
+      "SELECT firm_id FROM opportunities WHERE workspace_id=$1 AND id=$2",
+      [context.scope.workspaceId, opportunityId],
+    )
+  ).rows[0];
+  if (
+    current?.firm_id !== opportunity.firm_id ||
+    (firmId !== null && firmId !== current.firm_id)
+  )
+    return { ok: false as const };
+  if (personId !== null) {
+    const supported = (
+      await context.db.query(
+        `SELECT 1 FROM crm_legacy_contact_people b JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id WHERE b.workspace_id=$1 AND b.person_id=$2 AND c.firm_id=$3 AND c.status='active' UNION SELECT 1 FROM crm_relationships WHERE workspace_id=$1 AND person_id=$2 AND firm_id=$3 AND NOT source_invalidated AND context_review='current' LIMIT 1`,
+        [context.scope.workspaceId, personId, current.firm_id],
+      )
+    ).rows[0];
+    if (supported === undefined) return { ok: false as const };
+  }
+  return { ok: true as const, firmId: current.firm_id };
+}
 export async function commitSelectedImport(
   context: RepositoryContext,
-  input: z.infer<typeof selectedImportCommitSchema>,
+  input: Omit<z.infer<typeof selectedImportCommitSchema>, "opportunityId"> & {
+    opportunityId?: string | null | undefined;
+  },
 ) {
   const actor = context.scope.actor;
   if (actor.kind !== "user")
@@ -156,29 +198,46 @@ export async function commitSelectedImport(
       input_hash: string;
       person_id: string | null;
       firm_id: string | null;
+      opportunity_id: string | null;
       availability: string;
       source_revision: number;
       revision: number;
     }>(
-      "SELECT m.source_id,m.input_hash,m.revision,s.revision AS source_revision,s.person_id,s.firm_id,s.availability FROM crm_selected_imports m JOIN crm_selected_sources s ON s.workspace_id=m.workspace_id AND s.id=m.source_id WHERE m.workspace_id=$1 AND m.owner_user_id=$2 AND m.import_key_hash=$3",
+      "SELECT m.source_id,m.input_hash,m.revision,s.revision AS source_revision,s.person_id,s.firm_id,s.opportunity_id,s.availability FROM crm_selected_imports m JOIN crm_selected_sources s ON s.workspace_id=m.workspace_id AND s.id=m.source_id WHERE m.workspace_id=$1 AND m.owner_user_id=$2 AND m.import_key_hash=$3",
       [context.scope.workspaceId, actor.userId, keyHash],
     )
   ).rows[0];
+  const selected = await selectedOpportunity(
+    context,
+    input.opportunityId ?? null,
+    input.personId,
+    input.firmId,
+  );
+  if (!selected.ok)
+    return {
+      ok: false as const,
+      reason: "import_opportunity_context_required",
+    };
   // One complete sorted firm→person→source closure covers the submitted binding
   // and an existing copy. A conflicting replay must not lock a new person first
   // and then acquire an earlier original-context firm.
   if (
     !(await lockIdentityContext(context, {
       personIds: input.personId === null ? [] : [input.personId],
-      firmIds: input.firmId === null ? [] : [input.firmId],
+      firmIds: [
+        ...(input.firmId === null ? [] : [input.firmId]),
+        ...(selected.firmId === null ? [] : [selected.firmId]),
+      ],
       sourceIds: old === undefined ? [] : [old.source_id],
     }))
   )
     return { ok: false as const, reason: "import_access_denied" };
+  const currentSelected = await selectedOpportunity(context,input.opportunityId??null,input.personId,input.firmId);
+  if(!currentSelected.ok||currentSelected.firmId!==selected.firmId)return {ok:false as const,reason:'import_opportunity_context_required'};
   if (old !== undefined) {
     old = (
       await context.db.query<typeof old>(
-        "SELECT m.source_id,m.input_hash,m.revision,s.revision AS source_revision,s.person_id,s.firm_id,s.availability FROM crm_selected_imports m JOIN crm_selected_sources s ON s.workspace_id=m.workspace_id AND s.id=m.source_id WHERE m.workspace_id=$1 AND m.source_id=$2",
+        "SELECT m.source_id,m.input_hash,m.revision,s.revision AS source_revision,s.person_id,s.firm_id,s.opportunity_id,s.availability FROM crm_selected_imports m JOIN crm_selected_sources s ON s.workspace_id=m.workspace_id AND s.id=m.source_id WHERE m.workspace_id=$1 AND m.source_id=$2",
         [context.scope.workspaceId, old.source_id],
       )
     ).rows[0];
@@ -191,7 +250,8 @@ export async function commitSelectedImport(
       };
     return old.input_hash === preview.previewHash &&
       old.person_id === input.personId &&
-      old.firm_id === input.firmId
+      old.firm_id === input.firmId &&
+      old.opportunity_id === (input.opportunityId ?? null)
       ? {
           ok: true as const,
           value: {
@@ -212,7 +272,7 @@ export async function commitSelectedImport(
     return { ok: false as const, reason: "import_context_required" };
   const source = (
     await context.db.query<{ id: string }>(
-      "INSERT INTO crm_selected_sources(workspace_id,person_id,firm_id,owner_user_id,source_key_hash,excerpt,content_hash,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+      "INSERT INTO crm_selected_sources(workspace_id,person_id,firm_id,owner_user_id,source_key_hash,excerpt,content_hash,occurred_at,opportunity_id,opportunity_firm_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id",
       [
         context.scope.workspaceId,
         input.personId,
@@ -222,6 +282,8 @@ export async function commitSelectedImport(
         input.text,
         hash(input.text),
         preview.occurredAt,
+        input.opportunityId ?? null,
+        selected.firmId,
       ],
     )
   ).rows[0];
@@ -259,6 +321,7 @@ export async function readSelectedImports(
     context.db.query<{
       source_id: string;
       source_revision: number;
+      opportunity_id: string | null;
       content_hash: string | null;
       excerpt: string | null;
       occurred_at: Date | null;
@@ -273,7 +336,7 @@ export async function readSelectedImports(
       attribution: "unknown" | "asserted" | null;
       date_provenance: "parsed" | "user_supplied" | "unknown" | null;
     }>(
-      `SELECT m.*,s.revision AS source_revision,s.content_hash,s.excerpt,s.occurred_at,s.observed_at,s.availability FROM crm_selected_imports m JOIN crm_selected_sources s ON s.workspace_id=m.workspace_id AND s.id=m.source_id WHERE m.workspace_id=$1 AND ($2::uuid IS NULL OR s.person_id=$2) AND ($3::uuid IS NULL OR s.firm_id=$3) AND ${sourceAccessPredicate("$4", "$5")} AND ($6::uuid IS NULL OR s.id>$6) ORDER BY s.id LIMIT $7`,
+      `SELECT m.*,s.opportunity_id,s.revision AS source_revision,s.content_hash,s.excerpt,s.occurred_at,s.observed_at,s.availability FROM crm_selected_imports m JOIN crm_selected_sources s ON s.workspace_id=m.workspace_id AND s.id=m.source_id WHERE m.workspace_id=$1 AND ($2::uuid IS NULL OR s.person_id=$2) AND ($3::uuid IS NULL OR s.firm_id=$3 OR s.opportunity_firm_id=$3) AND ${sourceAccessPredicate("$4", "$5")} AND ($6::uuid IS NULL OR s.id>$6) ORDER BY s.id LIMIT $7`,
       [
         context.scope.workspaceId,
         input.personId,
@@ -310,38 +373,37 @@ export async function readSelectedImports(
       subjectId: input.personId ?? input.firmId!,
     });
   return {
-    imports: rows
-      .slice(0, input.limit)
-      .map((row) => ({
-        source: {
-          workspaceId: context.scope.workspaceId,
-          sourceId: row.source_id,
-          kind: "selected_note" as const,
-          revision: row.source_revision,
-          contentHash: row.content_hash,
-          locator: row.availability === "available" ? "selected_excerpt" : null,
-          speaker: null,
-          occurredAt: row.occurred_at?.toISOString() ?? null,
-          observedAt: row.observed_at.toISOString(),
-          completeness:
-            row.availability === "available"
-              ? ("selected_excerpt" as const)
-              : ("unavailable" as const),
-          availability: row.availability,
-          excerpt: row.excerpt,
-        },
-        metadata: {
-          revision: row.revision,
-          subtype: row.subtype,
-          label: row.label,
-          participants: row.participants,
-          attachments: row.attachments,
-          direction: row.direction,
-          directionVerified: false as const,
-          attribution: row.attribution,
-          dateProvenance: row.date_provenance,
-        },
-      })),
+    imports: rows.slice(0, input.limit).map((row) => ({
+      source: {
+        workspaceId: context.scope.workspaceId,
+        sourceId: row.source_id,
+        kind: "selected_note" as const,
+        revision: row.source_revision,
+        contentHash: row.content_hash,
+        locator: row.availability === "available" ? "selected_excerpt" : null,
+        speaker: null,
+        occurredAt: row.occurred_at?.toISOString() ?? null,
+        observedAt: row.observed_at.toISOString(),
+        completeness:
+          row.availability === "available"
+            ? ("selected_excerpt" as const)
+            : ("unavailable" as const),
+        availability: row.availability,
+        excerpt: row.excerpt,
+      },
+      metadata: {
+        revision: row.revision,
+        opportunityId: row.opportunity_id,
+        subtype: row.subtype,
+        label: row.label,
+        participants: row.participants,
+        attachments: row.attachments,
+        direction: row.direction,
+        directionVerified: false as const,
+        attribution: row.attribution,
+        dateProvenance: row.date_provenance,
+      },
+    })),
     nextAfterId:
       rows.length > input.limit
         ? (rows[input.limit - 1]?.source_id ?? null)
@@ -356,7 +418,10 @@ export async function changeSelectedImport(
     expectedMetadataRevision: number;
   },
   action: "delete" | "restore" | "correct" | "recapture",
-  selection?: Input & { previewHash: string },
+  selection?: Input & {
+    previewHash: string;
+    opportunityId?: string | null | undefined;
+  },
 ) {
   const initial = (
     await context.db.query<{
@@ -367,9 +432,26 @@ export async function changeSelectedImport(
       [context.scope.workspaceId, input.sourceId],
     )
   ).rows[0];
+  const requested =
+    initial === undefined
+      ? { ok: false as const }
+      : await selectedOpportunity(
+          context,
+          selection?.opportunityId ?? null,
+          initial.person_id,
+          initial.firm_id,
+        );
+  if (!requested.ok)
+    return {
+      ok: false as const,
+      reason: "import_opportunity_context_required",
+    };
   if (
     initial === undefined ||
-    !(await lockIdentityContext(context, { sourceIds: [input.sourceId] }))
+    !(await lockIdentityContext(context, {
+      sourceIds: [input.sourceId],
+      firmIds: requested.firmId === null ? [] : [requested.firmId],
+    }))
   )
     return { ok: false as const, reason: "import_access_denied" };
   const row = (
@@ -377,8 +459,10 @@ export async function changeSelectedImport(
       source_revision: number;
       revision: number;
       availability: string;
+      opportunity_id: string | null;
+      opportunity_firm_id: string | null;
     }>(
-      "SELECT s.revision AS source_revision,m.revision,s.availability FROM crm_selected_sources s JOIN crm_selected_imports m ON m.workspace_id=s.workspace_id AND m.source_id=s.id WHERE s.workspace_id=$1 AND s.id=$2 FOR UPDATE OF m",
+      "SELECT s.revision AS source_revision,m.revision,s.availability,s.opportunity_id,s.opportunity_firm_id FROM crm_selected_sources s JOIN crm_selected_imports m ON m.workspace_id=s.workspace_id AND m.source_id=s.id WHERE s.workspace_id=$1 AND s.id=$2 FOR UPDATE OF m",
       [context.scope.workspaceId, input.sourceId],
     )
   ).rows[0];
@@ -410,19 +494,45 @@ export async function changeSelectedImport(
     const preview = await buildSelectedImportPreview(context, plain, false);
     if (preview === null || preview.previewHash !== selection.previewHash)
       return { ok: false as const, reason: "import_preview_changed" };
+    if (
+      action === "correct" &&
+      selection.opportunityId !== undefined &&
+      selection.opportunityId !== row.opportunity_id
+    )
+      return { ok: false as const, reason: "import_identity_conflict" };
+    const opportunityId =
+      action === "correct"
+        ? row.opportunity_id
+        : (selection.opportunityId ?? null);
+    const selected =
+      action === "correct"
+        ? { ok: true as const, firmId: row.opportunity_firm_id }
+        : await selectedOpportunity(
+            context,
+            opportunityId,
+            initial.person_id,
+            initial.firm_id,
+          );
+    if (!selected.ok)
+      return {
+        ok: false as const,
+        reason: "import_opportunity_context_required",
+      };
     const contexts = await prepareRecaptureContexts(context, input.sourceId);
     if (contexts === null)
       return { ok: false as const, reason: "source_context_limit" };
     await invalidateSelectedIdentitySources(context, [input.sourceId]);
     const contentHash = hash(selection.text);
     await context.db.query(
-      "UPDATE crm_selected_sources SET excerpt=$3,content_hash=$4,occurred_at=$5,observed_at=now(),availability='available',revision=revision+1 WHERE workspace_id=$1 AND id=$2",
+      "UPDATE crm_selected_sources SET excerpt=$3,content_hash=$4,occurred_at=$5,observed_at=now(),availability='available',opportunity_id=$6,opportunity_firm_id=$7,revision=revision+1 WHERE workspace_id=$1 AND id=$2",
       [
         context.scope.workspaceId,
         input.sourceId,
         selection.text,
         contentHash,
         preview.occurredAt,
+        opportunityId,
+        selected.firmId,
       ],
     );
     await recordRecaptureContexts(

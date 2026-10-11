@@ -65,9 +65,25 @@ Making a capability operational after its required evidence, configuration and r
 _Avoid_: source completion when referring to operational readiness
 
 **Capability authority receipt**:
-A dated independent review authorizing one precisely configured capability for a particular owner and scope, subject to expiry and revocation.
-_Avoid_: settings, diagnostic result, sending permission
+A historical record of independent review for a precisely configured capability, owner and scope.
+_Avoid_: current owner consent, diagnostic result, sending permission
+
+**Owner consent**:
+The owner's explicit approval of a capability's data scope, purpose, provider, model and spending allowance. A change to that scope requires renewed approval.
+_Avoid_: provider verification, measured quality, sending permission
+
+**Owner approval audit**:
+The retained record of what the owner approved and which limitations were acknowledged.
+_Avoid_: technical acceptance result, proof of model usefulness
 
 **Acquisition diagnostic authorization**:
 A dated approval to test acquisition of explicitly selected business messages within an isolated environment and a conserved read allowance. It does not authorize production capture, hosted processing or outreach.
 _Avoid_: capability authority receipt, capture activation
+
+**Provisional quality**:
+A declared level of usefulness supported by limited evaluated evidence, with remaining uncertainty and gaps made visible.
+_Avoid_: representative reliability when evidence is limited
+
+**Representative quality**:
+Usefulness evaluated against varied business evidence appropriate to the claimed scope, with the categories and limitations disclosed.
+_Avoid_: synthetic pass when referring to observed real business performance

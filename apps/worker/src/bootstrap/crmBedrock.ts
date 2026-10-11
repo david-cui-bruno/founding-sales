@@ -11,6 +11,7 @@ import type { HandlerComposition } from './main.ts';
  */
 export function composeCrmBedrock(options: {
   readonly surface: CrmBedrockSurface;
+  readonly answerModel?:Parameters<typeof createAskSdkStepAdapter>[0]['model'];
   readonly embedding?:Parameters<typeof createAskTitanAdapter>[0];
   readonly extraction?: Omit<Parameters<typeof createBedrockCrmExtractionAdapter>[0], 'surface'>;
   readonly mailEvidence?: CrmMailEvidencePort;
@@ -37,7 +38,7 @@ export function composeCrmBedrock(options: {
     } }),
     ...(options.answer === undefined ? {} : { crmAskAnswers: {
       ...(options.embedding?{embedding:createAskTitanAdapter(options.embedding)}:{}),
-      ...(options.answer.agentLimits?{agent:createAskSdkStepAdapter({...options.answer,region:options.answer.region??'us-east-1'}),agentLimits:options.answer.agentLimits}:{answer:createBedrockAskAnswerAdapter({ ...options.answer, surface: options.surface })}),
+      ...(options.answer.agentLimits?{agent:createAskSdkStepAdapter({...options.answer,...options.answerModel===undefined?{}:{model:options.answerModel},region:options.answer.region??'us-east-1'}),agentLimits:options.answer.agentLimits}:{answer:createBedrockAskAnswerAdapter({ ...options.answer, surface: options.surface })}),
       verifyPurpose: options.verifyPurpose!,
       ...(options.revalidateAskPurpose===undefined?{}:{revalidatePurpose:options.revalidateAskPurpose}),
       ...(options.allowControlledEvaluation === undefined ? {} : { allowControlledEvaluation: options.allowControlledEvaluation }),

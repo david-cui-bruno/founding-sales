@@ -4,6 +4,7 @@ import {businessSelectionPayloadSchema} from '@fss/contracts';
 import {askSessionCreatePayloadSchema,askSessionIdentitySchema,askSessionTurnPayloadSchema,askSessionTurnAcknowledgmentSchema,askSessionChangePayloadSchema,askSessionReadSchema,askSessionViewSchema,askSessionListSchema,askSessionPageSchema} from '@fss/contracts';
 import {businessRuleReadSchema,businessRulePayloadSchema,businessRulesSchema} from '@fss/contracts';
 import {
+  crmMailCaptureControlsSaveSchema,
   crmCapabilityReadSchema,
   crmCapabilityReadResponseSchema,
   crmCapabilityActivateSchema,
@@ -583,7 +584,7 @@ export interface Operation {
 }
 
 const capabilityChangedSchema = z.strictObject({revision:z.number().int().positive(),enabled: z.boolean(),
-  authorityReceiptId: z.uuid().nullable(),
+  authorityReceiptId: z.uuid().nullable(),ownerApprovalId:z.uuid().nullable(),
 });
 
 /**
@@ -1202,7 +1203,7 @@ export const OPERATIONS = {
     kind: 'read',
     calls: [{ method: 'POST', path: "/crm/capability/read" }],input: crmCapabilityReadSchema,
     output: crmCapabilityReadResponseSchema,
-    transform: "current independent capability authority and prepared revision",
+    transform: "current owner scope, adapter readiness and settings revision",
   },
   "crm.metadataReviewActivate": {
     kind: 'command',
@@ -1224,6 +1225,7 @@ export const OPERATIONS = {
     transform:
       "explicit disable of the current reviewed capability; no grants or sending",
   },
+  "crm.mailCapturePrepare": {kind:'command',calls:[{method:'POST',path:'/crm/business/mail/controls/save'}],input:crmMailCaptureControlsSaveSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({revision:z.number().int().positive(),enabled:z.literal(false)}),transform:'prepare current-account capture settings while off; separate owner Enable required'},
   "crm.mailCaptureActivate": {
     kind: 'command',
     calls: [{ method: 'POST', path: "/crm/business/mail/controls/activate" }],input: crmCapabilityActivateSchema

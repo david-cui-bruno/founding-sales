@@ -56,6 +56,9 @@ export function createCrmAcquisitionDiagnosticIsolation(options: {
   return async (binding: Binding) => {
     try {
       if (
+        binding.localIsolation !== undefined ||
+        !binding.databaseInstanceArn ||
+        !binding.ecsClusterArn ||
         !binding.connectedServerAddress ||
         binding.databaseSecretArn !== options.databaseSecretArn ||
         binding.databaseEndpoint !== options.databaseHost ||

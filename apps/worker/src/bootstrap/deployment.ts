@@ -1,3 +1,4 @@
+import { readLocalDiagnosticMailPublicConfig, createLocalDiagnosticCipher } from '@fss/domain/mail/crmAcquisitionDiagnosticLocal.ts';
 import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
 import { envelopeCipher, localDataKeyWrapper, type EnvelopeCipher } from '@fss/domain/mail/envelope.ts';
 import { kmsDataKeyWrapper, loadKmsTransport, recordedSeamDataKeyWrapper } from '@fss/domain/mail/envelopeKms.ts';
@@ -67,7 +68,7 @@ export interface GmailDeployment {
   readonly envelopeSource: 'kms' | 'kms_recorded_seam' | 'local';
   readonly gmailSource: 'https' | 'recorded';
   /** `environment` once the stack module carries it; `secret` is the old shape. */
-  readonly pushTopicSource: PublicIdentifierSource;
+  readonly pushTopicSource: PublicIdentifierSource | 'absent';
   readonly hostedDomainSource: PublicIdentifierSource;
 }
 
@@ -98,7 +99,7 @@ export async function readGmailDeployment(
     requiredVariable(environment, VARIABLES.gmailOAuthClient),
     VARIABLES.gmailOAuthClient,
   );
-  const { config, pushTopicSource, hostedDomainSource } = readMailPublicConfig(bundle, environment);
+  const { config, pushTopicSource, hostedDomainSource } = environment['FSS_CRM_LOCAL_RUN_ID']!==undefined ? readLocalDiagnosticMailPublicConfig(bundle,environment) : readMailPublicConfig(bundle, environment);
   const secrets = staticSecretProvider({ gmail_oauth_client_secret: bundle.clientSecret });
   const oauth: GmailOAuthConfig = {
     clientId: config.clientId,
@@ -145,16 +146,15 @@ export async function readGmailDeployment(
     };
   }
 
-  const region = requiredVariable(environment, VARIABLES.region);
-  const keyId = requiredVariable(environment, VARIABLES.envelopeKeyId);
-  const transport = await (options.loadKms ?? loadKmsTransport)(region);
+  const localDiagnostic = environment['FSS_CRM_LOCAL_RUN_ID'] !== undefined;
+  const cipher = localDiagnostic ? await createLocalDiagnosticCipher(environment) : envelopeCipher(kmsDataKeyWrapper({keyId:requiredVariable(environment, VARIABLES.envelopeKeyId),transport:await (options.loadKms ?? loadKmsTransport)(requiredVariable(environment, VARIABLES.region))}));
   return {
     config,
     gmail: createGmailHttpClient({ fetch: httpFetch, apiBaseUrl: config.apiBaseUrl }),
     oauth,
-    cipher: envelopeCipher(kmsDataKeyWrapper({ keyId, transport })),
+    cipher,
     secrets,
-    envelopeSource: 'kms',
+    envelopeSource: localDiagnostic ? 'local' : 'kms',
     gmailSource: 'https',
     pushTopicSource,
     hostedDomainSource,
@@ -180,7 +180,7 @@ export async function readWorkerDeployment(
     };
   }
 
-  if (dependencies === 'live' && journalBucket.length === 0) {
+  if (dependencies === 'live' && journalBucket.length === 0 && environment['FSS_CRM_LOCAL_RUN_ID'] === undefined) {
     // 10.2: "Each event and supersession ... is written to the object-locked S3 journal
     // before acknowledgement." The worker records prospect opt-outs during mail sync,
     // so a live worker without a bucket would acknowledge a suppression it cannot

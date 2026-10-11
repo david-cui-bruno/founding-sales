@@ -1,3 +1,4 @@
+import {readAskAnswerDiagnostics} from '@fss/domain/crm/askDiagnostics.ts';
 import {cancelAskAnswer,previewAskInvestigation,commitAskInvestigation} from '@fss/domain/crm/askInvestigationControls.ts';
 import {askAnswerRequestSchema,askAnswerReadSchema,askAnswerSourceReadSchema,askAnswerCancelSchema,askAnswerInvestigationPreviewSchema,askAnswerInvestigationCommitSchema} from '@fss/contracts';
 import {requestAskAnswer,readAskAnswer,readAskAnswerSource} from '@fss/domain/crm/askAnswers.ts';
@@ -6,7 +7,7 @@ import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {redactError} from '../limits.ts';
 import type {ApiRequest,RoutingOptions,RouteResult} from './types.ts';
 
-export const ASK_ANSWER_PATHS=['/ask/answers/request','/ask/answers/read','/ask/answers/source/read','/ask/answers/cancel','/ask/answers/investigation/preview','/ask/answers/investigation/commit'] as const;
+export const ASK_ANSWER_PATHS=['/ask/answers/request','/ask/answers/read','/ask/answers/diagnostics','/ask/answers/source/read','/ask/answers/cancel','/ask/answers/investigation/preview','/ask/answers/investigation/commit'] as const;
 export async function routeAskAnswers(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!(ASK_ANSWER_PATHS as readonly string[]).includes(request.path))return null;
  if(options.auth===undefined)return {status:401,body:redactError('unauthenticated')};
@@ -25,10 +26,10 @@ export async function routeAskAnswers(request:ApiRequest,options:RoutingOptions)
   const result=await withTransaction(options.auth.db,()=>readAskAnswerSource(scoped.context,parsed.data));
   return result===null?{status:404,body:redactError('not_found')}:{status:200,body:result};
  }
- if(request.path==='/ask/answers/read'){
+ if(request.path==='/ask/answers/read'||request.path==='/ask/answers/diagnostics'){
   const scoped=contextForPrincipal(options.auth,verified.principal);if(!scoped.ok)return scoped.result;
   const parsed=askAnswerReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
-  const result=await withTransaction(options.auth.db,()=>readAskAnswer(scoped.context,parsed.data.requestId));
+  const result=await withTransaction(options.auth.db,async()=>request.path==='/ask/answers/diagnostics'?await readAskAnswerDiagnostics(scoped.context,parsed.data.requestId):await readAskAnswer(scoped.context,parsed.data.requestId));
   return result===null?{status:404,body:redactError('not_found')}:{status:200,body:result};
  }
  return runRouteCommand({auth:options.auth,request,principal:verified.principal},askAnswerRequestSchema,'crm.ask_answer_requested',requestAskAnswer);

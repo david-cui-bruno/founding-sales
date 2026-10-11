@@ -144,10 +144,20 @@ export interface AskAnswerComposition {
 
 /** Exactly one externally billed generation; execution owns all subsequent steps. */
 export interface AskAgentStepAdapter extends AskAdapterRoute {
+  /** Complete conservative text-only SDK input before dispatch, including system,
+   * tool schemas and message encoding. Ordinary SDK composition always supplies
+   * this; omission preserves only legacy/custom adapter compatibility. */
+  inputBound?(input: {
+    readonly question: string;
+    readonly transcript: readonly unknown[];
+    readonly maxOutputTokens: number;
+    readonly remainingSteps?: number;
+  }): { readonly inputBytes: number; readonly maxInputTokens: number } | null;
   runStep(input: {
     readonly question: string;
     readonly transcript: readonly unknown[];
     readonly maxOutputTokens: number;
+    readonly remainingSteps?: number;
     readonly signal: AbortSignal;
   }): Promise<{
     readonly acceptance: "accepted" | "unknown" | "not_accepted";

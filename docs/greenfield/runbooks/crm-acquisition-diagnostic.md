@@ -1,4 +1,75 @@
-# Scoped acquisition acceptance environment (#524)
+# Scoped local acquisition acceptance (#547)
+
+The current path is disposable local acceptance under ADR0010. The retained AWS procedure below is historical and does not govern a new run. Preserve the release hold and sending safeguards; source verification does not establish real Google acceptance.
+
+## Current local acceptance runner (#547)
+
+The local amendment of ADR0010 supersedes another AWS application. Historical AWS
+receipts below remain historical evidence. The new source runner is
+`tools/upgrade/localDiagnostic.ts`; it starts actual API and registered diagnostic
+worker processes and a fresh embedded PostgreSQL cluster. It is not a recorded
+provider composition, an ECS deployment or a production release.
+
+Use Node 24 with `--experimental-transform-types`. Its public operations are:
+
+- `start <new-private-run-directory> <private-configuration.json>`: start the resident
+  lifecycle owner. Configuration must be a regular owner-owned mode0600 file; the
+  new directory is mode0700. It includes `origin` (reviewed `http://127.0.0.1:<port>`),
+  actual `implementationCommit` (matching HEAD), and `environment` with the separate
+  diagnostic Google OIDC/read-only client bundles, hosted domain
+  and an independently generated session-signing key. No push configuration is required. Do not put credentials in
+  shell arguments, chat, version control or the body-free status output.
+- `status <directory>` / `verify <directory>`: read body-free lifecycle metadata;
+  verify additionally checks actual API readiness and process liveness. This is not
+  Gmail acceptance. The status identifies local source manifests, applied schema,
+  run/database identity and artifact hashes. It never labels them as Docker images
+  or an ECS release.
+- `provision <directory> <private-authorization-document.json>`: ask the already
+  running trusted lifecycle owner to provision exact local authorization. The
+  strictly local document contains `localIsolation` with the actual run, loopback
+  database port, app role and receipt hash; no AWS resource fields. References are
+  `local-process:<actual-pid>` and `local-artifact:<manifest-sha256>`. Real mailbox,
+  generation, membership, observed readonly scope, consent/disclosure and authority
+  checks still run at the authenticated product command and registered worker.
+- `revoke <directory> <private-revocation-document.json>`: revoke local diagnostic
+  authority. This does not revoke Google tokens or delete provider originals.
+- `cleanup <directory>`: request owned process shutdown and removal of local
+  database storage, private launch files, copies/tokens, journal and master key.
+  Shutdown waits for actual process exit; force-stop and absence checks retain
+  uncertainty. `runFailure` survives cleanup. `cleanup_unknown` is not success and
+  must be inspected without blindly launching a replacement.
+
+The API and worker reopen one run-owned mode0600 encryption key, with a run-specific
+key ID. Local startup rejects production/ECS, ordinary CRM capability settings and
+non-loopback/non-app-runtime database composition. Each actual isolation witness
+checks private receipt ownership, its hash, both live process identities, actual
+connected database role/address/port, current source-file hashes and private key
+identity. Changing the tree or key invalidates capture; it cannot silently rebind.
+The API listener binds127.0.0.1 only. The private filesystem journal is explicitly
+reported as `local_diagnostic`, not S3 Object Lock.
+
+Only thread1a11c079cb7273b8 / received1a11cef279246619 /
+Sent1a11ddf7ccdb1bac, October8–9 frozen bounds, maximum8reads/160units are accepted
+by the local contract. Existing diagnostic provider/parser, registered capture,
+private read/delete and conserved unknown accounting are reused. No model calls,
+sending, ordinary ingestion or production admission are enabled.
+
+Actual acceptance still requires David's fresh normal Google sign-in, separate
+readonly consent on the isolated clients, the exact product capture and canonical
+private read/delete/unavailable reread, local authority revocation, normal Gmail
+disconnect/provider token revocation and sign-out. Cleanup reports
+`googleRevocation: not_attested`; local file/database removal never substitutes for
+an observed Google revocation. Record that genuine outcome separately before
+calling #547 runtime-accepted. Local acceptance never proves production networking,
+Google callbacks, secret storage, watch delivery or90-day ordinary recovery.
+
+Controlled source checks now include a real fresh PostgreSQL/API/worker lifecycle,
+actual external-interface refusal, process/key/storage cleanup, cross-process token
+encryption/decryption and ordinary worker restart. Generated test client values
+remain unused controlled configuration; these checks make no Google request and
+cannot count as actual Google success.
+
+## Historical managed-AWS procedure (superseded)
 
 This procedure prepares the separately isolated schema90 candidate. It does not approve a live run, production release, capture activation, AI use or sending. This source90 work remains unreleased; preserve the independently reviewed release state and all sending safeguards. The ordinary rehearsal root defaults to database `fss`, no diagnostic environment variable, no diagnostic tags and no additional witness policies. Production rejects diagnostic mode.
 

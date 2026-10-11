@@ -1,8 +1,8 @@
 name: Greenfield deploy
 
-# Deploys an app-only change to production by itself (lane g91; P6, 27 September 2026),
-# unless a commit since production's is a schema, infrastructure, release-script or
-# workflow change, which keeps the manual path (docs/greenfield/release.md 4).
+# One production concurrency group: application-only, classified routine maintenance,
+# and exact reviewed saved-plan application. All application stays behind FSS_RELEASE_HOLD.
+# Infrastructure/protected deltas require the reviewed preparation and apply modes.
 #   gates      no credential: a green images publish of a push to main; `deploy.sh ci gates`
 #              (the gate green on that push, the commit on main; else `manual`).
 #   deploy     id-token: this file's guard, then only infra/scripts: download, check, record
@@ -25,6 +25,19 @@ on:
         description: 'The Greenfield images run (a green publish of a push to main) whose fss-image-digests to deploy'
         required: true
         type: string
+      release_mode:
+        description: 'Automatic app/routine delivery, read-only reviewed-plan preparation, or one approved exact-plan application'
+        type: choice
+        default: automatic
+        options: [automatic, review_prepare, reviewed]
+      reviewed_plan_run_id:
+        description: 'Successful review_prepare run containing the exact encrypted production plan'
+        type: string
+        default: ''
+      reviewed_manifest_sha256:
+        description: 'The reviewed values-free manifest SHA-256, bound to its encrypted saved plan'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -35,6 +48,7 @@ defaults:
   run:
     shell: bash
 env:
+  FSS_RELEASE_HOLD: ${{ vars.FSS_RELEASE_HOLD || 'true' }}
   AWS_REGION: ${{ vars.FSS_AWS_REGION || 'us-east-1' }}
   FSS_PRODUCTION_ORIGIN: ${{ vars.FSS_PRODUCTION_ORIGIN || 'https://api.usecallie.com' }}
   CLUSTER_NAME: ${{ vars.FSS_PRODUCTION_CLUSTER_NAME }}
@@ -102,7 +116,7 @@ jobs:
   deploy:
     name: Deploy an app-only change to production
     needs: gates
-    if: needs.gates.outputs.decision == 'pass'
+    if: needs.gates.outputs.decision == 'pass' && vars.FSS_RELEASE_HOLD == 'false' && (!inputs.release_mode || inputs.release_mode == 'automatic')
     runs-on: ubuntu-24.04
     timeout-minutes: 110  # a put of up to 20 minutes, two rollouts of up to 3 ten-minute waits
     environment: production-deploy
@@ -111,8 +125,8 @@ jobs:
       actions: read
       id-token: write
     outputs:
-      decision: ${{ steps.guard.outputs.decision == 'manual' && 'manual' || steps.check.outputs.decision }}
-      reason: ${{ steps.guard.outputs.decision == 'manual' && steps.guard.outputs.reason || steps.check.outputs.reason }}
+      decision: ${{ steps.guard.outputs.decision != 'pass' && steps.guard.outputs.decision || steps.check.outputs.decision }}
+      reason: ${{ steps.guard.outputs.decision != 'pass' && steps.guard.outputs.reason || steps.check.outputs.reason }}
       worker: ${{ steps.deploy.outputs.worker_task_definition }}
       api: ${{ steps.deploy.outputs.api_task_definition }}
       previous: ${{ steps.deploy.outputs.previous_worker_task_definition }} ${{ steps.deploy.outputs.previous_api_task_definition }}
@@ -143,6 +157,10 @@ jobs:
           ref: ${{ needs.gates.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
 
       - name: Assume the production CI deploy role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
@@ -206,6 +224,7 @@ jobs:
           done
           : > "$work/paths"
           for built in $(sort -u "$work/production-commits"); do
+            git -c core.quotePath=false log --no-merges --no-renames --format= --name-only "$built..$COMMIT" >> "$work/paths"
             git -c core.quotePath=false log --first-parent --no-renames --no-ext-diff --no-textconv --format= --name-only \
               --diff-merges=first-parent "$built..$COMMIT" >> "$work/paths"
           done
@@ -232,6 +251,16 @@ jobs:
             esac
             [ -z "$why" ] || printf '%s (%s)\n' "$path" "$why" >> "$work/protected"
           done < "$work/touched"
+          if [ -s "$work/protected" ] && [ -f tools/ci/release-plan.ts ] && ! grep -Ev '^(packages/domain/db/migrations/[^ ]+|packages/domain/db/schemaRange.ts) ' "$work/protected" >/dev/null; then
+            built="$(sort -u "$work/production-commits")"
+            [[ "$built" =~ ^[0-9a-f]{40}$ ]] || manual 'API and worker have different observed build baselines; reconcile before a maintenance release'
+            node --experimental-transform-types --disable-warning=ExperimentalWarning tools/ci/release-plan.ts \
+              --repository "$PWD" --from "$built" --to "$COMMIT" > "$RUNNER_TEMP/routine-release-plan.json"
+            if [ "$(jq -r .decision "$RUNNER_TEMP/routine-release-plan.json")" = maintenance ]; then
+              printf 'decision=maintenance\nreason=explicitly eligible routine migration over the actual deployed delta\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
           if [ -s "$work/protected" ]; then
             { echo '### Paths that keep this release on the manual path'; echo ''; sed 's/^/- /' "$work/protected"; } >> "$GITHUB_STEP_SUMMARY"
             first="$(head -3 "$work/protected" | paste -sd ';' - | sed 's/;/; /g')"
@@ -268,6 +297,205 @@ jobs:
           infra/scripts/deploy.sh ci deploy --digests "$RUNNER_TEMP/image-digests.json" \
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID"
           infra/scripts/deploy.sh ci canary
+
+  maintenance:
+    name: Routine migration with brief maintenance
+    needs: [gates, deploy]
+    if: needs.deploy.result == 'success' && needs.deploy.outputs.decision == 'maintenance' && vars.FSS_RELEASE_HOLD == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    environment: production-maintenance
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      COMMIT: ${{ needs.gates.outputs.commit }}
+      RUN_ID: ${{ needs.gates.outputs.run_id }}
+      RUN_ATTEMPT: ${{ needs.gates.outputs.run_attempt }}
+      GATE_RUN_ID: ${{ needs.gates.outputs.gate_run_id }}
+      GH_TOKEN: ${{ github.token }}
+      FSS_RELEASE_HOLD: ${{ vars.FSS_RELEASE_HOLD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.gates.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - name: Resolve and classify the whole deployed delta again
+        run: |
+          set -euo pipefail
+          bash tools/ci/resolve-prod-base.sh > "$RUNNER_TEMP/baseline.txt"
+          built="$(sed -n 's/^production runs schema [0-9]* at \([0-9a-f]*\) (attested by \/health)$/\1/p' "$RUNNER_TEMP/baseline.txt")"
+          node --experimental-transform-types --disable-warning=ExperimentalWarning tools/ci/release-plan.ts \
+            --repository "$PWD" --from "$built" --to "$COMMIT" > "$RUNNER_TEMP/routine-release-plan.json"
+          [ "$(jq -r .decision "$RUNNER_TEMP/routine-release-plan.json")" = maintenance ]
+          infra/scripts/deploy.sh ci download --run-id "$RUN_ID" --commit "$COMMIT" --out "$RUNNER_TEMP/image-digests.json"
+          gh run download "$GATE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "upgrade-evidence-$COMMIT" --dir "$RUNNER_TEMP/upgrade-evidence"
+          jq -e --arg from "$built" --arg to "$COMMIT" '.from == $from and .to == $to' "$RUNNER_TEMP/upgrade-evidence/upgrade-binding.json"
+      - name: Assume the separately reviewed migration identity
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.FSS_PRODUCTION_MAINTENANCE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: fss-prod-maintenance-${{ github.run_id }}
+          role-duration-seconds: 7200
+      - name: Stop, migrate, restart and verify using existing release scripts
+        run: |
+          set -euo pipefail
+          umask 077
+          node infra/scripts/maintenance-release.mjs --plan "$RUNNER_TEMP/routine-release-plan.json" \
+            --digests "$RUNNER_TEMP/image-digests.json" --evidence "$RUNNER_TEMP/upgrade-evidence/upgrade-evidence-$COMMIT.txt" \
+            --status "$RUNNER_TEMP/maintenance/status.json"
+      - name: Actual maintenance result and recovery state
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/maintenance/status.json" ]; then
+            jq '{phase,outcome,writesStarted,schema,reason,registered,backup,recovery}' "$RUNNER_TEMP/maintenance/status.json" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Maintenance did not reach execution; inspect prerequisite failure. No maintenance writes claimed.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  review-prepare:
+    name: Prepare an encrypted production plan without applying
+    needs: gates
+    if: github.event_name == 'workflow_dispatch' && inputs.release_mode == 'review_prepare' && needs.gates.outputs.decision == 'pass'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: production-plan
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      COMMIT: ${{ needs.gates.outputs.commit }}
+      RUN_ID: ${{ needs.gates.outputs.run_id }}
+      RUN_ATTEMPT: ${{ needs.gates.outputs.run_attempt }}
+      GATE_RUN_ID: ${{ needs.gates.outputs.gate_run_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.gates.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: '1.15.8'
+          terraform_wrapper: false
+      - name: Materialize only the public encryption recipient
+        env:
+          PUBLIC_KEY: ${{ vars.FSS_PRODUCTION_PLAN_PUBLIC_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [ -n "$PUBLIC_KEY" ]
+          printf '%s' "$PUBLIC_KEY" > "$RUNNER_TEMP/plan-recipient.pem"
+      - name: Assume the separately reviewed read-only plan identity
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.FSS_PRODUCTION_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: fss-prod-plan-${{ github.run_id }}
+      - name: Download exact images and actual deployed upgrade evidence
+        run: |
+          set -euo pipefail
+          infra/scripts/deploy.sh ci download --run-id "$RUN_ID" --commit "$COMMIT" --out "$RUNNER_TEMP/image-digests.json"
+          # A same-schema release has no upgrade artifact. The planner still requires
+          # exact deployed-bound evidence whenever its live schema comparison changes.
+          mkdir -p "$RUNNER_TEMP/upgrade-evidence"
+          gh run download "$GATE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "upgrade-evidence-$COMMIT" --dir "$RUNNER_TEMP/upgrade-evidence" || \
+            echo 'No upgrade artifact downloaded; schema-changing preparation will refuse.'
+      - name: Save the exact plan and encrypt it for the protected application job
+        run: |
+          set -euo pipefail
+          node infra/scripts/reviewed-release.mjs prepare "$RUNNER_TEMP/image-digests.json" "$RUNNER_TEMP/plan-recipient.pem" \
+            "$RUNNER_TEMP/upgrade-evidence/upgrade-evidence-$COMMIT.txt" "$RUNNER_TEMP/upgrade-evidence/upgrade-binding.json" "$RUNNER_TEMP/production-plan"
+          cat "$RUNNER_TEMP/production-plan/public/manifest.json" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/production-plan/public/manifest.sha256" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep only public bindings and encrypted saved plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: reviewed-production-plan
+          path: ${{ runner.temp }}/production-plan/public/
+          if-no-files-found: error
+          retention-days: 1
+
+  reviewed:
+    name: Apply the one reviewed production plan
+    needs: gates
+    if: github.event_name == 'workflow_dispatch' && inputs.release_mode == 'reviewed' && needs.gates.outputs.decision == 'pass' && vars.FSS_RELEASE_HOLD == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    environment: production-release-review
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      COMMIT: ${{ needs.gates.outputs.commit }}
+      RUN_ID: ${{ needs.gates.outputs.run_id }}
+      RUN_ATTEMPT: ${{ needs.gates.outputs.run_attempt }}
+      GATE_RUN_ID: ${{ needs.gates.outputs.gate_run_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.gates.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: '1.15.8'
+          terraform_wrapper: false
+      - name: Verify the prepared run, exact manifest and encrypted artifact before credentials
+        env:
+          PLAN_RUN: ${{ inputs.reviewed_plan_run_id }}
+          MANIFEST_HASH: ${{ inputs.reviewed_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$PLAN_RUN" =~ ^[1-9][0-9]{0,19}$ && "$MANIFEST_HASH" =~ ^[0-9a-f]{64}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN" \
+            --jq '{path,event,conclusion,head_sha,repository:.head_repository.full_name}' > "$RUNNER_TEMP/prepared-run.json"
+          jq -e --arg commit "$COMMIT" --arg repository "$GITHUB_REPOSITORY" \
+            '.path == ".github/workflows/greenfield-deploy.yml" and .event == "workflow_dispatch" and .conclusion == "success" and .head_sha == $commit and .repository == $repository' "$RUNNER_TEMP/prepared-run.json"
+          gh run download "$PLAN_RUN" --repo "$GITHUB_REPOSITORY" --name reviewed-production-plan --dir "$RUNNER_TEMP/reviewed-packet"
+          node infra/scripts/reviewed-release.mjs validate "$RUNNER_TEMP/reviewed-packet/manifest.json" "$MANIFEST_HASH"
+          infra/scripts/deploy.sh ci download --run-id "$RUN_ID" --commit "$COMMIT" --out "$RUNNER_TEMP/image-digests.json"
+      - name: Assume the existing deployment role under its explicitly reviewed OIDC trust
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.FSS_PRODUCTION_REVIEWED_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: fss-prod-reviewed-${{ github.run_id }}
+          role-duration-seconds: 7200
+      - name: Decrypt, stop if needed, apply exact saved bytes, migrate, restart and verify
+        env:
+          MANIFEST_HASH: ${{ inputs.reviewed_manifest_sha256 }}
+          PRIVATE_KEY: ${{ secrets.FSS_PRODUCTION_PLAN_PRIVATE_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          umask 077
+          trap 'rm -f "$RUNNER_TEMP/plan-private.pem" "$RUNNER_TEMP/reviewed-apply/release.tfplan"' EXIT
+          printf '%s' "$PRIVATE_KEY" > "$RUNNER_TEMP/plan-private.pem"
+          node infra/scripts/reviewed-release.mjs execute "$RUNNER_TEMP/reviewed-packet/manifest.json" "$MANIFEST_HASH" \
+            "$RUNNER_TEMP/reviewed-packet/plan.encrypted.json" "$RUNNER_TEMP/plan-private.pem" "$RUNNER_TEMP/image-digests.json" "$RUNNER_TEMP/reviewed-apply"
+      - name: Actual reviewed release result and repair state
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/reviewed-apply/status.json" ]; then
+            jq '{phase,outcome,writesStarted,schema,reason,recovery}' "$RUNNER_TEMP/reviewed-apply/status.json" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Reviewed release stopped at prerequisites; no application outcome claimed.' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   smoke:
     name: Production smoke, with no credential
@@ -351,73 +579,19 @@ jobs:
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID" --cluster-name "$CLUSTER_NAME" \
             --operations-family "$OPERATIONS_FAMILY" --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
 
-      - name: What ECR says production runs, after the rollout
-        # `FSS_PROD_COMMIT` — the upgrade test's FROM — has to name the commit
-        # production's images were really built from, not the commit this run believes
-        # it deployed (GPT-6 review of PR 314, P0-2c). This is the same ECS -> ECR -> tag
-        # walk the gates job's guard makes, run after the rollout and the smoke instead
-        # of before it, so it attests the new state rather than the old one.
-        #
-        # It writes nothing: a workflow token cannot write a repository variable (GitHub
-        # documents no `variables` scope for `permissions:`), so the release helper sets
-        # `FSS_PROD_COMMIT` by hand and the notice below says what to set it to.
-        #
-        # **One case is fatal, the rest are warnings.** Not being able to ask — a
-        # refused call, an image with no commit tag — would turn a good release red for
-        # a reporting problem. ECR answering with a *different* commit would not: after
-        # a green smoke and read-back it means production is not running what this run
-        # deployed, and nothing else here would notice, because the record names digests
-        # and the smoke names an origin.
-        id: attest
+      - name: Attest the baseline automatically for future upgrades
+        env:
+          EXPECTED_BUILD: ${{ needs.gates.outputs.commit }}
         run: |
           set -euo pipefail
-          identity="$(aws sts get-caller-identity --query Arn --output text 2>/dev/null)" || identity=''
-          account="${identity#arn:aws:sts::}"
-          account="${account%%:*}"
-          if [[ ! "$account" =~ ^[0-9]{12}$ ]]; then
-            echo "::warning title=Set FSS_PROD_COMMIT::the session names no account, so ECR was not asked; set FSS_PROD_COMMIT by hand (release.md 4)"
-            exit 0
-          fi
-          cluster="arn:aws:ecs:${AWS_REGION}:${account}:cluster/fss-prod-cluster"
-          attested=0
-          for service in worker api; do
-            definition="$(aws ecs describe-services --cluster "$cluster" --services "fss-prod-$service" --output json 2>/dev/null \
-              | jq -r '.services | if length == 1 then .[0].taskDefinition // "" else "" end')" || definition=''
-            if [ -z "$definition" ]; then
-              echo "::warning::ECS does not describe fss-prod-$service; its image was not attested"
-              continue
-            fi
-            image="$(aws ecs describe-task-definition --task-definition "$definition" --output json 2>/dev/null \
-              | jq -r --arg name "$service" '[.taskDefinition.containerDefinitions[]? | select(.name == $name) | .image][0] // ""')" || image=''
-            if [[ ! "$image" =~ @(sha256:[0-9a-f]{64})$ ]]; then
-              echo "::warning::fss-prod-$service runs no image by digest; it was not attested"
-              continue
-            fi
-            commits="$(aws ecr describe-images --repository-name "fss-prod-$service" --image-ids "imageDigest=${BASH_REMATCH[1]}" --output json 2>/dev/null \
-              | jq -r '[.imageDetails[0].imageTags[]? | capture("^(ci-)?(?<c>[0-9a-f]{40})(-image)?$").c] | unique | join(" ")')" || commits=''
-            if [ -z "$commits" ]; then
-              echo "::warning::fss-prod-$service's running image carries no commit tag; it was not attested"
-              continue
-            fi
-            # The one fatal case.
-            [ "$commits" = "$COMMIT" ] \
-              || { echo "::error::after a green smoke and read-back, ECR says fss-prod-$service runs an image built from '$commits', not $COMMIT: production is not running what this deploy released"; exit 1; }
-            attested=$((attested + 1))
-          done
-          # 2 of 2, or it is not an attestation. One image agreeing says nothing about
-          # the other, and `FSS_PROD_COMMIT` names the commit *production* runs, not the
-          # commit one of its two services runs.
-          if [ "$attested" -eq 2 ]; then
-            echo "::notice title=Set FSS_PROD_COMMIT::ECR attests both production images were built from $COMMIT; production now runs it, so set FSS_PROD_COMMIT to $COMMIT (release.md 4)"
-          elif [ "$attested" -eq 1 ]; then
-            echo "::warning title=Verify before setting FSS_PROD_COMMIT::only one of the two production images could be attested (the warning above says which was not); check what production runs before setting FSS_PROD_COMMIT to $COMMIT (release.md 4)"
-          else
-            echo "::warning title=Verify before setting FSS_PROD_COMMIT::neither production image could be attested; check what production runs before setting FSS_PROD_COMMIT to $COMMIT (release.md 4)"
-          fi
+          bash tools/ci/resolve-prod-base.sh
+          observed="$(curl --fail --silent --show-error --max-time 10 "$FSS_PRODUCTION_ORIGIN/health" | jq -r '.build.commit')"
+          [ "$observed" = "$EXPECTED_BUILD" ] || { echo '::error::deployed public build differs from the released images; reconcile the deployment'; exit 1; }
+          echo "Observed baseline $observed; future upgrade jobs resolve it directly from production. No repository variable copying." >> "$GITHUB_STEP_SUMMARY"
 
   summary:
     name: One line
-    needs: [gates, deploy, smoke, read-back]
+    needs: [gates, deploy, maintenance, review-prepare, reviewed, smoke, read-back]
     if: always() && needs.gates.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -430,6 +604,11 @@ jobs:
           GATES_DECISION: ${{ needs.gates.outputs.decision }}
           GATES_REASON: ${{ needs.gates.outputs.reason }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
+          MAINTENANCE_RESULT: ${{ needs.maintenance.result }}
+          PLAN_RESULT: ${{ needs.review-prepare.result }}
+          REVIEWED_RESULT: ${{ needs.reviewed.result }}
+          RELEASE_MODE: ${{ inputs.release_mode }}
+          RELEASE_HOLD: ${{ vars.FSS_RELEASE_HOLD || 'true' }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
           READ_BACK_RESULT: ${{ needs.read-back.result }}
           DECISION: ${{ needs.deploy.outputs.decision }}
@@ -444,7 +623,22 @@ jobs:
           set -euo pipefail
           short="${COMMIT:0:8}"
           level=notice
-          if [ "$GATES_RESULT" = success ] && [ "$GATES_DECISION" = manual ]; then
+          if [ "$RELEASE_MODE" = review_prepare ]; then
+            line="Read-only reviewed plan preparation $PLAN_RESULT. Nothing applied; review the exact public manifest and encrypted saved plan."
+            [ "$PLAN_RESULT" = success ] || level=error
+          elif [ "$RELEASE_HOLD" = true ]; then
+            line="Release held: source checks may finish, but production was not authorized to deploy."
+          elif [ "$RELEASE_MODE" = reviewed ]; then
+            line="Reviewed production release $REVIEWED_RESULT; its job reports actual phase, schema and repair status."
+            [ "$REVIEWED_RESULT" = success ] || level=error
+          elif [ "$DECISION" = maintenance ]; then
+            if [ "$MAINTENANCE_RESULT" = success ]; then
+              line="Routine maintenance release $short verified: migration, retained settings, release-record readback and smoke passed."
+            else
+              level=error
+              line="Routine maintenance release $short FAILED ($MAINTENANCE_RESULT); inspect its actual phase/schema and repair status. No schema rollback or blind retry is authorized."
+            fi
+          elif [ "$GATES_RESULT" = success ] && [ "$GATES_DECISION" = manual ]; then
             line="Not deployed: $GATES_REASON. The manual path applies (docs/greenfield/release.md 4)."
           elif [ "$DEPLOY_RESULT" != success ] || { [ "$DECISION" = deploy ] && [ "$SMOKE_RESULT $READ_BACK_RESULT" != 'success success' ]; }; then
             level=error

@@ -9,7 +9,7 @@ export const CRM_DIAGNOSTIC_QUOTA_SCHEDULE = Object.freeze({
 });
 const hash = z.string().regex(/^[a-f0-9]{64}$/u),
   reference = z.string().min(1).max(200);
-export const crmAcquisitionDiagnosticAuthorizationSchema = z
+export const crmAcquisitionDiagnosticAwsAuthorizationSchema = z
   .strictObject({
     id: z.uuid(),
     purpose: z.literal("acquisition_acceptance"),
@@ -69,6 +69,60 @@ export const crmAcquisitionDiagnosticAuthorizationSchema = z
     if (value.messages.some((m) => Date.parse(m.fromAt) > Date.parse(m.toAt)))
       context.addIssue({ code: "custom", message: "invalid scope" });
   });
+export const crmAcquisitionDiagnosticLocalIsolationSchema = z.strictObject({
+  kind: z.literal("local"),
+  runId: z.uuid(),
+  databaseHost: z.literal("127.0.0.1"),
+  databasePort: z.number().int().min(1024).max(65535),
+  databaseRole: z.literal("app_runtime"),
+  receiptSha256: hash,
+});
+const {
+  databaseInstanceArn: _instance,
+  databaseSecretArn: _secret,
+  databaseEndpoint: _endpoint,
+  ecsClusterArn: _cluster,
+  ...localShape
+} = crmAcquisitionDiagnosticAwsAuthorizationSchema.shape;
+void _instance;
+void _secret;
+void _endpoint;
+void _cluster;
+export const crmAcquisitionDiagnosticLocalAuthorizationSchema = z
+  .strictObject({
+    ...localShape,
+    localIsolation: crmAcquisitionDiagnosticLocalIsolationSchema,
+  })
+  .superRefine((value, context) => {
+    if (Date.parse(value.validUntil) <= Date.parse(value.verifiedAt))
+      context.addIssue({ code: "custom", message: "invalid expiry" });
+    const expected = [
+      { messageId: "1a11cef279246619", origin: "received" },
+      { messageId: "1a11ddf7ccdb1bac", origin: "sent" },
+    ];
+    if (
+      value.messages.length !== 2 ||
+      expected.some(
+        (e) =>
+          !value.messages.some(
+            (m) =>
+              m.messageId === e.messageId &&
+              m.origin === e.origin &&
+              m.threadId === "1a11c079cb7273b8" &&
+              m.fromAt === "2026-10-08T00:00:00Z" &&
+              m.toAt === "2026-10-09T00:00:00Z",
+          ),
+      )
+    )
+      context.addIssue({
+        code: "custom",
+        message: "local diagnostic scope expansion",
+      });
+  });
+export const crmAcquisitionDiagnosticAuthorizationSchema = z.union([
+  crmAcquisitionDiagnosticAwsAuthorizationSchema,
+  crmAcquisitionDiagnosticLocalAuthorizationSchema,
+]);
 export type CrmAcquisitionDiagnosticAuthorization = z.infer<
   typeof crmAcquisitionDiagnosticAuthorizationSchema
 >;

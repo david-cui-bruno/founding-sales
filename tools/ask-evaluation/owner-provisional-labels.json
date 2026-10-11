@@ -1,0 +1,188 @@
+{
+  "version": "crm-owner-provisional-labels-v1",
+  "issue": 548,
+  "state": "independent_development_labels_frozen_before_new_candidate_outputs_human_review_pending",
+  "evidenceClass": "synthetic_development",
+  "labelAuthor": "Codex; inherited independently authored synthetic labels",
+  "frozenAt": "2026-10-11T18:53:06.172640+00:00",
+  "inheritedPlanningManifestSha256": "560c954d2f0dcbe5634d363f6c5e9ec4e13dfa5d9db4a1319d0ea3733b90b183",
+  "cases": [
+    {
+      "caseId": "dev_01",
+      "scenario": "clear_promise",
+      "relationship": "sales",
+      "workloads": [
+        "A",
+        "B"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "Mira at Example Sales says: \"I will send the proposal Friday, October 16.\"",
+      "expectedOutcome": "Attribute Mira to the observed firm relationship; record the explicit promise to send the proposal due October 16 in the source timezone. Do not create an opportunity or change a deal stage.",
+      "forbiddenOutcome": "Confirmed booking; automatic deal-stage change; promise assigned to David."
+    },
+    {
+      "caseId": "dev_02",
+      "scenario": "offer_not_promise",
+      "relationship": "sales",
+      "workloads": [
+        "B"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "Mira says: \"I can send you a proposal if that helps. We should talk sometime.\"",
+      "expectedOutcome": "Treat this as an offer and tentative interest; no definite commitment, due date or meeting booking.",
+      "forbiddenOutcome": "Promise to send; scheduled meeting; invented deadline."
+    },
+    {
+      "caseId": "dev_03",
+      "scenario": "manual_reply",
+      "relationship": "customer",
+      "workloads": [
+        "A",
+        "C"
+      ],
+      "eventAt": "2026-10-12T16:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "10:00 incoming: \"Can you clarify the pricing?\" 11:00 provider-verified manual Sent in the same conversation: \"Here are the pricing details.\"",
+      "expectedOutcome": "Clear only the matching unanswered request and reminder; preserve a factual replied milestone and manual Sent provenance.",
+      "forbiddenOutcome": "Clear other conversations; enroll recipient; change sending permission."
+    },
+    {
+      "caseId": "dev_04",
+      "scenario": "draft_and_old_reply",
+      "relationship": "sales",
+      "workloads": [
+        "A",
+        "C"
+      ],
+      "eventAt": "2026-10-12T16:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "09:00 verified outgoing reply. 10:00 new incoming question. 11:00 unsent draft answering that question.",
+      "expectedOutcome": "The new question remains unanswered. The earlier reply and later draft do not resolve it; the draft is not a sent event.",
+      "forbiddenOutcome": "Sent milestone from draft; clearing the new unanswered request."
+    },
+    {
+      "caseId": "dev_05",
+      "scenario": "shared_endpoint",
+      "relationship": "partner",
+      "workloads": [
+        "C"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "From team@example.test: \"Our team is considering a partnership.\" No signature or individual speaker evidence.",
+      "expectedOutcome": "Associate the shared endpoint with the firm when supported; speaker remains unknown. Ask describes team correspondence without creating a fictional person.",
+      "forbiddenOutcome": "Inventing an individual speaker; merging all team members into one person."
+    },
+    {
+      "caseId": "dev_06",
+      "scenario": "multiple_opportunities",
+      "relationship": "sales",
+      "workloads": [
+        "A",
+        "C"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "Example Sales has explicit North and South pilot opportunities. An email says: \"The pilot needs a revised proposal.\" No pilot is named.",
+      "expectedOutcome": "Keep the conversation opportunity-unresolved or plural; ask for one targeted decision when action needs assignment. Preserve both opportunity stages.",
+      "forbiddenOutcome": "Choose first opportunity; create a new opportunity; update both stages."
+    },
+    {
+      "caseId": "dev_07",
+      "scenario": "unknown_firm",
+      "relationship": "partner",
+      "workloads": [
+        "C"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "A known unambiguous person at a personal endpoint writes an approved business discussion. Their firm is not established.",
+      "expectedOutcome": "Attach to the person under current access; firm remains unknown. Do not invent an Unknown firm or broaden source visibility.",
+      "forbiddenOutcome": "Fabricated employer; broad firm access to sensitive unknown-firm content."
+    },
+    {
+      "caseId": "dev_08",
+      "scenario": "quoted_commitment",
+      "relationship": "vendor_selected",
+      "workloads": [
+        "B",
+        "C"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "New authored text: \"That old plan is no longer valid.\" Quoted 2025 message: \"I will send the contract Friday.\"",
+      "expectedOutcome": "Treat the dated quote as historical evidence, not a new promise. Preserve the current rejection of the old plan.",
+      "forbiddenOutcome": "New commitment generated from quoted text; treating the old plan as current."
+    },
+    {
+      "caseId": "dev_09",
+      "scenario": "reschedule_conflict",
+      "relationship": "customer",
+      "workloads": [
+        "A",
+        "C"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "Earlier: \"Tuesday works.\" Later: \"I need to reschedule; no replacement time yet.\"",
+      "expectedOutcome": "Report no currently agreed replacement time and preserve dated conflicting evidence. Do not claim booked from email agreement alone.",
+      "forbiddenOutcome": "Definitive Tuesday booking; invented replacement date; silent deletion of earlier evidence."
+    },
+    {
+      "caseId": "dev_10",
+      "scenario": "maintenance_paraphrase",
+      "relationship": "sales",
+      "workloads": [
+        "D"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "Source 1: \"Coordinating repair contractors across our rentals is taking too much time.\" Source 2: \"We like the website colors.\"",
+      "expectedOutcome": "Topic retrieval identifies Source 1 as relevant to maintenance coordination and excludes Source 2; a cited answer ties the problem to the actual person/firm and source.",
+      "forbiddenOutcome": "Unsupported business need from Source 2; claim about scale or urgency not present."
+    },
+    {
+      "caseId": "dev_11",
+      "scenario": "coverage_gap",
+      "relationship": "customer",
+      "workloads": [
+        "A",
+        "C"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "Captured email ends Friday. Phone/Messages are not imported. No later email reply is captured.",
+      "expectedOutcome": "Answer \"No reply found in captured email through Friday\" and disclose uncaptured channels and stale coverage. Useful partial result remains available.",
+      "forbiddenOutcome": "Definitive \"they did not reply\"; implied complete cross-channel coverage."
+    },
+    {
+      "caseId": "dev_12",
+      "scenario": "correction_deletion",
+      "relationship": "partner",
+      "workloads": [
+        "B",
+        "C"
+      ],
+      "eventAt": "2026-10-12T14:00:00Z",
+      "eventTimeZone": "America/New_York",
+      "syntheticText": "Human correction moves a source to opportunity South; a user-edited pending task depends on its old assignment. The source is then explicitly deleted while Ask is pending.",
+      "expectedOutcome": "Preserve the human correction and completed real actions. Flag the edited-task conflict instead of silently rewriting. Immediately veto source reads, pending answer publication and copied answer content after deletion; preserve source-free financial/action barriers.",
+      "forbiddenOutcome": "Resurrected deleted quote; stale answer; rewriting completed actions; permission bypass from an old association."
+    }
+  ],
+  "independentHoldout": {
+    "state": "unbound_not_sealed",
+    "allocatedSlots": 10,
+    "completed": 0
+  },
+  "unavailableRealDevelopmentSlots": 8,
+  "realProviderObserved": false,
+  "representativeQualityMeasured": false,
+  "humanReviewCompleted": false,
+  "candidateBinding": null,
+  "modelConfiguration": null,
+  "paidExecutionApproved": false,
+  "activationAllowed": false
+}

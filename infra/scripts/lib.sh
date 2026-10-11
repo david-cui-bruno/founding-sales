@@ -143,6 +143,20 @@ release_aws() {
     rehearsal_plan "aws $*"
     return 0
   fi
+  # The supported production writer is the one serialized workflow. Local CLI is
+  # preparation/read-only. Controlled offline AWS adapters retain their existing seam;
+  # this is not a security claim against a human calling AWS outside these scripts.
+  if [ "$environment" = production ] && [ -z "${FSS_REHEARSAL_AWS_COMMAND:-}" ]; then
+    case "${2:-}" in
+      describe-*|get-*|list-*|batch-get-*|wait) ;;
+      *)
+        [ "${GITHUB_ACTIONS:-}" = true ] \
+          && [ "${GITHUB_WORKFLOW_REF:-}" = 'david-cui-bruno/founding-sales/.github/workflows/greenfield-deploy.yml@refs/heads/main' ] \
+          && [ "${FSS_RELEASE_HOLD:-true}" = false ] \
+          || { echo 'FAIL: production writes require the shared Greenfield deploy concurrency with release hold explicitly lifted; local CLI is preparation/read-only.' >&2; return 1; }
+        ;;
+    esac
+  fi
   command "$(rehearsal_aws_command)" "$@"
 }
 

@@ -121,10 +121,10 @@ function asSession(client: pg.Client): SessionQueryable {
   };
 }
 
-async function listen(server: Server, port: number): Promise<void> {
+async function listen(server: Server, port: number, host: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '0.0.0.0', resolve);
+    server.listen(port, host, resolve);
   });
 }
 
@@ -300,7 +300,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   });
 
   try {
-    await listen(server, config.port);
+    await listen(server, config.port, diagnosticRuntime?.localIsolation?.kind==='local'?'127.0.0.1':'0.0.0.0');
   } catch (error) {
     log.log('error', 'api_listen_failed', { port: config.port, ...errorFields(error) });
     await heartbeat.stop();

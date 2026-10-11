@@ -1,3 +1,8 @@
+import {repositoryContext,workspaceScope} from '../db/workspaceScope.ts';
+import {readBackfillAuthority} from './crmBackfillAuthority.ts';
+import {readBackfillAllocation} from './crmBackfillBudget.ts';
+import {crmCapabilityConfigurationFingerprint} from '../crm/capabilityAuthority.ts';
+import {crmBackfillScopeFingerprint,crmBackfillAllocationFingerprint} from '../crm/capabilityVerifiers.ts';
 import {readHistoryRecoveryCoverage} from './crmHistoryRecovery.ts';
 import {readBackfillCopyCoverage} from './crmBackfillCoverage.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
@@ -66,6 +71,8 @@ export async function requestCrmMailImport(context: RepositoryContext, input: { 
   [context.scope.workspaceId,mailbox.id,actor.userId,mailbox.provider_account_id,binding,mailbox.generation,controls.policy_revision]);
   if (!policy.rows.length || !await activeBusinessActor(context))
     return { ok: false as const, reason: 'capture_authority_unavailable' };
+  const allocation=await readBackfillAllocation(context,mailbox.id);
+  const allocationCurrent=allocation&&allocation.owner_user_id===actor.userId&&allocation.account_binding===binding&&allocation.generation===mailbox.generation&&allocation.verified_until.getTime()>Date.now();
   const imported = (await context.db.query<{id:string}>(`
     WITH instant AS (SELECT date_trunc('second',clock_timestamp()) AS at)
     INSERT INTO crm_mail_imports(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,
@@ -74,6 +81,15 @@ export async function requestCrmMailImport(context: RepositoryContext, input: { 
     ON CONFLICT(workspace_id,mailbox_id,account_binding,generation,controls_revision,policy_revision)
     DO UPDATE SET observed_at=crm_mail_imports.observed_at RETURNING id`,
   [context.scope.workspaceId,mailbox.id,actor.userId,mailbox.provider_account_id,binding,mailbox.generation,controls.revision,controls.policy_revision])).rows[0]!;
+  // This explicit authenticated history request approves only the frozen window and current allocation.
+  const worker=repositoryContext(workspaceScope(context.scope.workspaceId,{kind:'system',component:'worker'}),context.db);
+  const authority=await readBackfillAuthority(worker,imported.id);
+  if(authority&&allocation&&allocationCurrent){
+  const configuration={capability:'mail_backfill' as const,workspaceId:context.scope.workspaceId,ownerUserId:actor.userId,revision:allocation.revision,mailboxId:mailbox.id,providerAccountId:mailbox.provider_account_id,generation:mailbox.generation,accountBinding:binding,scopeFingerprint:crmBackfillScopeFingerprint(authority),allocationFingerprint:crmBackfillAllocationFingerprint(allocation)};
+  const approved=(await context.db.query<{id:string}>(`INSERT INTO crm_capability_owner_approvals(workspace_id,owner_user_id,capability,configuration_sha256,quality_tier) VALUES($1,$2,'mail_backfill',$3,'acquisition') RETURNING id`,[context.scope.workspaceId,actor.userId,crmCapabilityConfigurationFingerprint(configuration)])).rows[0];
+  if(!approved)throw new Error('backfill approval insert failed');
+  await context.db.query('UPDATE crm_mail_imports SET owner_approval_id=$3 WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,imported.id,approved.id]);
+  }
   await context.db.query(`INSERT INTO crm_mail_import_slices(workspace_id,import_id,ordinal,from_epoch_seconds,to_epoch_seconds)
     SELECT i.workspace_id,i.id,n,extract(epoch FROM i.from_at)::bigint+n*86400,
       extract(epoch FROM i.from_at)::bigint+(n+1)*86400 FROM crm_mail_imports i CROSS JOIN generate_series(0,89) n

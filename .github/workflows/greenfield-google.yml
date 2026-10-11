@@ -44,7 +44,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: greenfield-google
+  group: fss-production-deploy
   cancel-in-progress: false
 defaults:
   run:
@@ -63,6 +63,7 @@ jobs:
       actions: read
       id-token: write
     env:
+      FSS_RELEASE_HOLD: ${{ vars.FSS_RELEASE_HOLD || 'true' }}
       STAGE: ${{ inputs.stage }}
       PLAN_RUN_ID: ${{ inputs.plan_run_id }}
       PLAN_SHA256: ${{ inputs.plan_sha256 }}
@@ -95,6 +96,8 @@ jobs:
             || { echo "::error::stage=apply needs plan_run_id: the run id of the stage=plan dispatch a person has read."; exit 1; }
           [ "$STAGE" != apply ] || [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] \
             || { echo "::error::stage=apply needs plan_sha256: the digest on the first line of that run's plan.txt."; exit 1; }
+          [ "$STAGE" != apply ] || [ "${FSS_RELEASE_HOLD:-true}" = false ] \
+            || { echo "::error::production release is held; read-only planning remains available."; exit 1; }
 
       - name: Assume the narrow AWS state role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
@@ -219,7 +222,7 @@ jobs:
           # until the next renewal names a new one (release.md 8.0n). CI never takes one
           # away; a plan that would is read and applied by a person.
           if grep -nE '^[[:space:]]*# module\.pubsub\.[^[:space:]]+ (will be destroyed|must be replaced|will be replaced|is tainted)' "$work/plan.txt"; then
-            echo "::error::this plan destroys or replaces a Gmail push object. Refused: apply it by hand after reading it."
+            echo "::error::this plan destroys or replaces a Gmail push object. Refused: prepare a separately reviewed recovery; do not bypass the production queue."
             exit 1
           fi
           cp "$work/google.tfplan" "$GITHUB_WORKSPACE/infra/roots/production-google/google.tfplan"
@@ -230,6 +233,8 @@ jobs:
         working-directory: infra/roots/production-google
         run: |
           set -euo pipefail
+          [ "${FSS_RELEASE_HOLD:-true}" = false ] \
+            || { echo "::error::production release is held; nothing applied."; exit 1; }
           terraform init -input=false -no-color -lockfile=readonly \
             -backend-config=backend.hcl -backend-config="kms_key_id=$STATE_KMS_KEY_ARN"
           terraform apply -input=false -no-color google.tfplan

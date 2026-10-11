@@ -110,6 +110,7 @@ function shell(script: string, env: Readonly<Record<string, string>> = {}, bin?:
       GITHUB_STEP_SUMMARY: summary,
       RUNNER_TEMP: temp,
       STAGE: 'plan',
+      FSS_RELEASE_HOLD: 'false',
       PLAN_RUN_ID: '',
       PLAN_SHA256: '',
       ROLE_ARN,
@@ -131,8 +132,8 @@ function stub(name: string, script: string): string {
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 describe('greenfield-google.yml is dispatch-only, in the production-deploy environment, and pinned', () => {
-  it('is 240 lines or fewer, has one job, and can be started only by a dispatch from this repository', () => {
-    expect(workflow.split('\n').length).toBeLessThanOrEqual(241);
+  it('is 250 lines or fewer, has one job, and can be started only by a dispatch from this repository', () => {
+    expect(workflow.split('\n').length).toBeLessThanOrEqual(251);
     const jobs = [...workflow.slice(workflow.indexOf('\njobs:\n')).matchAll(/^ {2}([a-z-]+):\n/gmu)].map(match => match[1]);
     expect(jobs).toEqual(['google-root']);
     const triggers = workflow.slice(workflow.indexOf('\non:\n'), workflow.indexOf('\npermissions:'));
@@ -161,7 +162,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
         .map(line => line.trim())
         .filter(line => line !== '' && !line.startsWith('#')),
     ).toEqual(['contents: read', 'actions: read', 'id-token: write']);
-    expect(workflow).toContain('  group: greenfield-google\n  cancel-in-progress: false');
+    expect(workflow).toContain('  group: fss-production-deploy\n  cancel-in-progress: false');
     expect(workflow).toContain('    timeout-minutes: 30');
   });
 
@@ -278,6 +279,20 @@ describe('the guard refuses an ambient credential, another ref, and an apply wit
       expect(run.output, digest).toContain('stage=apply needs plan_sha256');
     }
     expect(shell(guard, { STAGE: 'apply', PLAN_RUN_ID, PLAN_SHA256: DIGEST }).code).toBe(0);
+  });
+});
+
+describe('production Google writes respect the shared release hold', () => {
+  it('allows read-only planning while held but refuses applying before credentials and again before Terraform', () => {
+    expect(shell(body('Refuse any ambient'), { FSS_RELEASE_HOLD: 'true' }).code).toBe(0);
+    for (const hold of ['true', '', 'FALSE']) {
+      const run = shell(body('Refuse any ambient'), { STAGE: 'apply', PLAN_RUN_ID, PLAN_SHA256: 'b'.repeat(64), FSS_RELEASE_HOLD: hold });
+      expect(run.code).not.toBe(0);
+      expect(run.output).toContain('production release is held');
+      const apply = shell(body('Apply that exact saved plan'), { FSS_RELEASE_HOLD: hold }, stub('terraform', 'echo TERRAFORM_WAS_CALLED'));
+      expect(apply.code).not.toBe(0);
+      expect(apply.output).not.toContain('TERRAFORM_WAS_CALLED');
+    }
   });
 });
 

@@ -21,7 +21,7 @@ function metadata(enabled = false): View {
     enabled,
     ready: true,
     reason: "ready",
-    authorityReceiptId: RECEIPT,
+    authorityReceiptId: null,ownerApprovalId:enabled?RECEIPT:null,qualityTier:enabled?"acquisition":null,limitations:[],
     proposedRevision: enabled ? 5 : 4,
     proposedConfigurationFingerprint: "a".repeat(64),
     configuration: {
@@ -48,13 +48,13 @@ function unavailable(capability: View["capability"]): View {
     enabled: false,
     ready: false,
     reason: "configuration_unavailable",
-    authorityReceiptId: null,
+    authorityReceiptId: null,ownerApprovalId:null,qualityTier:null,limitations:[],
     proposedRevision: 1,
     proposedConfigurationFingerprint: null,
     configuration: null,
   };
 }
-it("activates only the prepared metadata capability with its exact receipt and refreshes current state", async () => {
+it("owner enables only the prepared metadata scope and refreshes current state", async () => {
   const user = userEvent.setup();
   let activated = false;
   const ports: CrmCapabilityPorts = {
@@ -67,7 +67,7 @@ it("activates only the prepared metadata capability with its exact receipt and r
         capability: "metadata_review",
         mailboxId: ID,
         expectedRevision: 3,
-        authorityReceiptId: RECEIPT,
+        approval: {consentAcknowledged:true,qualityTier:"acquisition",limitations:[]},
       });
       activated = true;
       return { revision: 4, enabled: true, authorityReceiptId: RECEIPT };
@@ -263,7 +263,7 @@ it("clears pending readiness from an old mailbox before its read finishes", asyn
     />,
   );
   await screen.findAllByText(
-    "Not prepared. Independent review is required before activation.",
+    "Not prepared. Save your account, provider and budget settings first.",
   );
   await act(async () => pending.resolve(metadata()));
   expect(screen.queryByText("Ready to activate.")).toBeNull();
@@ -300,4 +300,27 @@ it("fails closed with a plain message when the desktop read bridge is unavailabl
       name: "Activate evidence extraction",
     }).disabled,
   ).toBe(true);
+});
+it('prepares current-mailbox body capture while off and requires a separate enable action',async()=>{
+ const user=userEvent.setup();let prepared=false,enabled=false;
+ const ports:CrmCapabilityPorts={read:async input=>input.capability==='metadata_review'?metadata():{...unavailable(input.capability),mailboxId:ID,configured:prepared,revision:prepared?1:0},prepareCapture:async input=>{
+  expect(input).toMatchObject({mailboxId:ID,expectedRevision:0,expectedGeneration:2,expectedAccountBinding:'a'.repeat(64),policyRevision:3,disclosureVersion:'crm-mail-body-acquisition-v1'});
+  expect(input.grantReceipt).toBeUndefined();expect(input.releaseReceipt).toBeUndefined();prepared=true;return {revision:1,enabled:false};
+ },activate:async()=>{enabled=true;return {revision:2,enabled:true,authorityReceiptId:null};},disable:async()=>({revision:2,enabled:false,authorityReceiptId:null})};
+ render(<CrmCapabilitiesSection scope="mail" available privacyKey="owner:1" mailboxId={ID} ports={ports}/>);
+ await user.click(await screen.findByRole('button',{name:'Prepare original email capture (stays off)'}));
+ expect(prepared).toBe(true);expect(enabled).toBe(false);
+ expect(screen.getByRole<HTMLButtonElement>('button',{name:'Activate original email capture'}).disabled).toBe(true);
+});
+
+it('shows the exact purpose, handling/access versions and supplied limitations before an AI approval',async()=>{
+ const view:View={...unavailable('crm_extraction'),configured:true,ready:true,revision:1,limitations:['limited_business_examples','vector_quality_unverified'],configuration:{capability:'crm_extraction',workspaceId:ID,ownerUserId:ID,revision:1,endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'haiku-configured-v1',accessGrantVersion:'owner-approved-access-v3',dataHandlingVersion:'no-retention-policy-v2',processorVersion:'crm-extract-v1',dailyCeilingCents:25,monthlyCeilingCents:100,inputTokenPriceMicros:1,outputTokenPriceMicros:5}};
+ const ports:CrmCapabilityPorts={read:async input=>input.capability==='crm_extraction'?view:unavailable(input.capability),activate:async()=>{throw new Error('No approval during scope display test');},disable:async()=>{throw new Error('No disable');}};
+ render(<CrmCapabilitiesSection scope="ai" available privacyKey="owner-ai-1" ports={ports}/>);
+ expect(await screen.findByText(/Purpose: conversation evidence extraction/)).toBeTruthy();
+ expect(screen.getByText(/Access approval version: owner-approved-access-v3/)).toBeTruthy();
+ expect(screen.getByText(/Data handling version: no-retention-policy-v2/)).toBeTruthy();
+ expect(screen.getByText(/Limited business examples/)).toBeTruthy();
+ expect(screen.getByText(/Vector quality remains unverified/)).toBeTruthy();
+ expect(screen.getByRole<HTMLButtonElement>('button',{name:'Activate evidence extraction'}).disabled).toBe(true);
 });

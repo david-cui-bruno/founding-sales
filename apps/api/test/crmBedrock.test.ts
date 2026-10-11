@@ -117,7 +117,7 @@ it('binds purpose-specific extraction into the normal registry and publishes exa
       expect(input.modelId).toBe('literal-v1');
       expect(input.messages[0]!.content[0]!.text).toBe(text);
       expect(input.inferenceConfig.maxTokens).toBe(4096);
-      return { stopReason: 'end_turn', usage: { inputTokens: 20, outputTokens: 30 }, output: { message: { role: 'assistant', content: [{ text: JSON.stringify([{ kind: 'need', interpretation: 'Faster repairs', status: 'stated', locator: 'text:0:23', quote: text }]) }] } } };
+      return { stopReason: 'tool_use', usage: { inputTokens: 20, outputTokens: 30 }, output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId: 'controlled-extraction', name: 'emit_crm_extraction', input: { claims: [{ kind: 'need', interpretation: 'Faster repairs', status: 'stated', locator: 'text:0:23', quote: text }] } } }] } } };
     } }, extraction: { endpointId: 'controlled-extraction', modelVersion: 'literal-v1', accessGrantVersion: 'extraction-only-grant', dataHandlingVersion: 'fixture-no-retention', providerKey: 'fixture.crm_extraction', fundingVerifiedUntil: '2099-01-01T00:00:00Z' } });
     const registry = registerHandlers(new HandlerRegistry(), { classifier: undefined, mail: undefined, send: undefined, research: undefined, ...composition });
     await runOnce(selected.fixture.db, { registry, owner: 'controlled-bedrock-extraction', limit: 20 });
@@ -197,7 +197,7 @@ it('extracts native transcript claims with original utterance locators and speak
       expect(input.system[0]!.text).toContain('not serialized JSON');
       expect(Buffer.byteLength(input.system[0]!.text)).toBeLessThanOrEqual(1024);
       expect(JSON.parse(input.messages[0]!.content[0]!.text)).toMatchObject([{ utterance: 0, speaker: 'Fixture speaker', text: quote, locator: 'utterance:0:text:0:29' }]);
-      return { stopReason: 'end_turn', usage: { inputTokens: 50, outputTokens: 30 }, output: { message: { role: 'assistant', content: [{ text: JSON.stringify([{ kind: 'need', interpretation: 'Repair coordinator', status: 'stated', locator: 'utterance:0:text:0:29', quote }]) }] } } };
+      return { stopReason: 'tool_use', usage: { inputTokens: 50, outputTokens: 30 }, output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId: 'controlled-transcript', name: 'emit_crm_extraction', input: { claims: [{ kind: 'need', interpretation: 'Repair coordinator', status: 'stated', locator: 'utterance:0:text:0:29', quote }] } } }] } } };
     } }, extraction: { endpointId: 'controlled-extraction', modelVersion: 'literal-v1', accessGrantVersion: 'extraction-only-grant', dataHandlingVersion: 'fixture-no-retention', providerKey: 'fixture.crm_extraction', fundingVerifiedUntil: '2099-01-01T00:00:00Z' } });
     const registry = registerHandlers(new HandlerRegistry(), { classifier: undefined, mail: undefined, send: undefined, research: undefined, ...composition });
     await runOnce(selected.fixture.db, { registry, owner: 'controlled-bedrock-native-extraction', limit: 20 });

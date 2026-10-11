@@ -1,4 +1,5 @@
 import {MockLanguageModelV3} from 'ai/test';
+export {MockLanguageModelV3};
 /** External model fake; actual AI SDK argument/result conversion is exercised. */
 export function controlledAskSdkModel(){
  let calls=0;

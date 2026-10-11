@@ -50,6 +50,7 @@ const reasons = {
   processing_authority_unavailable: "Processing permission is unavailable.",
   budget_held: "Processing budget is held.",
   input_bound_reached: "The selected input exceeds the processing limit.",
+  step_bound_reached: "The investigation reached its model-step limit before producing an answer.",
   source_unavailable:
     "Selected sources are unavailable. Select current source versions again.",
   source_changed:

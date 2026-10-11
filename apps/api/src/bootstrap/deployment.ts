@@ -1,3 +1,4 @@
+import { readLocalDiagnosticMailPublicConfig, createLocalDiagnosticCipher,createLocalDiagnosticJournal } from '@fss/domain/mail/crmAcquisitionDiagnosticLocal.ts';
 import { createPublicKey, type KeyObject } from 'node:crypto';
 import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
 import { envelopeCipher, localDataKeyWrapper } from '@fss/domain/mail/envelope.ts';
@@ -244,7 +245,7 @@ export interface ApiDeployment {
   /** Absent only when `dependencies` is `none`, which production refuses. */
   readonly auth: ApiSignIn | undefined;
   readonly suppressionJournal: SuppressionJournal;
-  readonly journalDescription: 's3' | 'local_noop';
+  readonly journalDescription: 's3' | 'local_noop' | 'local_diagnostic';
   /** 16.2's deployment half. False unless the variable says true. */
   readonly sendingEnabled: boolean;
   readonly envelopeSource: 'kms' | 'local' | 'absent';
@@ -346,7 +347,8 @@ export async function readApiDeployment(
   });
   // 10.2 and g4-journal-port: a live deployment refuses rather than discarding an
   // audit trail. `requireDurableJournal` throws; the caller exits.
-  const suppressionJournal = dependencies === 'live' ? requireDurableJournal(resolved) : resolved.journal;
+  const localDiagnostic = environment['FSS_CRM_LOCAL_RUN_ID'] !== undefined;
+  const suppressionJournal = localDiagnostic ? await createLocalDiagnosticJournal(environment) : dependencies === 'live' ? requireDurableJournal(resolved) : resolved.journal;
 
   if (dependencies === 'none') {
     return {
@@ -358,7 +360,7 @@ export async function readApiDeployment(
       mailConfig: undefined,
       auth: undefined,
       suppressionJournal,
-      journalDescription: resolved.description,
+      journalDescription: localDiagnostic ? 'local_diagnostic' : resolved.description,
       sendingEnabled,
       envelopeSource: 'absent',
       gmailSource: 'absent',
@@ -374,7 +376,7 @@ export async function readApiDeployment(
     requiredVariable(environment, VARIABLES.gmailOAuthClient),
     VARIABLES.gmailOAuthClient,
   );
-  const { config, pushTopicSource, hostedDomainSource } = readMailPublicConfig(bundle, environment);
+  const { config, pushTopicSource, hostedDomainSource } = environment['FSS_CRM_LOCAL_RUN_ID']!==undefined ? readLocalDiagnosticMailPublicConfig(bundle,environment) : readMailPublicConfig(bundle, environment);
   const origin = requiredVariable(environment, VARIABLES.publicOrigin).replace(/\/+$/u, '');
   const stateSigningKey = readSigningKey(
     requiredVariable(environment, VARIABLES.sessionSigningKey),
@@ -427,7 +429,7 @@ export async function readApiDeployment(
       mailConfig: config,
       auth: { oidc, sessions: DEPLOYED_SESSION_POLICY, stateSigningKey, google: signInClient },
       suppressionJournal,
-      journalDescription: resolved.description,
+      journalDescription: localDiagnostic ? 'local_diagnostic' : resolved.description,
       sendingEnabled,
       envelopeSource: 'local',
       gmailSource: 'recorded',
@@ -439,9 +441,7 @@ export async function readApiDeployment(
     };
   }
 
-  const region = requiredVariable(environment, VARIABLES.region);
-  const keyId = requiredVariable(environment, VARIABLES.envelopeKeyId);
-  const transport = await (options.loadKms ?? loadKmsTransport)(region);
+  const cipher = localDiagnostic ? await createLocalDiagnosticCipher(environment) : envelopeCipher(kmsDataKeyWrapper({keyId:requiredVariable(environment, VARIABLES.envelopeKeyId),transport:await (options.loadKms ?? loadKmsTransport)(requiredVariable(environment, VARIABLES.region))}));
   return {
     environmentName,
     dependencies,
@@ -451,9 +451,9 @@ export async function readApiDeployment(
       gmail: createGmailHttpClient({ fetch: options.fetch ?? httpFetch, apiBaseUrl: config.apiBaseUrl }),
       config,
       secrets,
-      cipher: envelopeCipher(kmsDataKeyWrapper({ keyId, transport })),
+      cipher,
       stateSigningKey,
-      pushVerifier: googleOidcPushTokenVerifier({ fetch: options.fetch ?? httpFetch }),
+      pushVerifier: localDiagnostic ? {verify:async()=>null} : googleOidcPushTokenVerifier({ fetch: options.fetch ?? httpFetch }),
     },
     mailConfig: config,
     auth: {
@@ -466,11 +466,11 @@ export async function readApiDeployment(
       }),
     },
     suppressionJournal,
-    journalDescription: resolved.description,
+    journalDescription: localDiagnostic ? 'local_diagnostic' : resolved.description,
     sendingEnabled,
-    envelopeSource: 'kms',
+    envelopeSource: localDiagnostic ? 'local' : 'kms',
     gmailSource: 'https',
-    pushVerifierSource: 'google_jwks',
+    pushVerifierSource: localDiagnostic ? 'absent' : 'google_jwks',
     signInSource: 'google',
     pushTopicSource,
     hostedDomainSource,

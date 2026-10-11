@@ -79,14 +79,14 @@ it("refreshes mailbox policy and review after explicit prepared metadata activat
       read:async ( input)=> ({
         capability:input.capability,mailboxId:ID,
         configured:input.capability=== "metadata_review",revision:input.capability=== "metadata_review"? (activated? 4:3):0, enabled:input.capability=== "metadata_review" && activated,ready:input.capability=== "metadata_review",reason: "ready",
-        authorityReceiptId:input.capability=== "metadata_review"?ID:null,
+        authorityReceiptId:null,ownerApprovalId:null,qualityTier:null,limitations:[],
         proposedRevision: activated? 5: 4,
         proposedConfigurationFingerprint:null,
         configuration:null,
       }),
       activate:async ( input)=> {expect(input).toEqual({
           capability: "metadata_review",mailboxId:ID, expectedRevision:3,
-          authorityReceiptId:ID,
+          approval:{consentAcknowledged:true,qualityTier:"acquisition",limitations:[]},
         });
         activated=true;
         return {revision: 4, enabled:true, authorityReceiptId:ID };

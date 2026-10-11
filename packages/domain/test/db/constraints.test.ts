@@ -1,64 +1,77 @@
-import {ASK_CANONICAL_INDEX_CONSTRAINT_CASES,seedCurrentCanonicalWindow} from './support/askCanonicalIndexCases.ts';
-import {ASK_EXECUTION_EVIDENCE_CONSTRAINT_CASES} from './support/askExecutionEvidenceCases.ts';
-import {ASK_SESSION_CONSTRAINT_CASES} from './support/askSessionCases.ts';
-import {CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES} from './support/crmAcquisitionDiagnosticCases.ts';
-import {CRM_CAPABILITY_CONSTRAINT_CASES} from './support/crmCapabilityCases.ts';
-import {ROADMAP_ACTIVATION_CONSTRAINT_CASES} from './support/roadmapActivationCases.ts';
-import {ASK_ACTION_CONSTRAINT_CASES} from './support/askActionCases.ts';
-import { ASK_ANSWER_CONSTRAINT_CASES } from './support/askAnswerCases.ts';
+import {
+  ASK_CANONICAL_INDEX_CONSTRAINT_CASES,
+  seedCurrentCanonicalWindow,
+} from "./support/askCanonicalIndexCases.ts";
+import { ASK_EXECUTION_EVIDENCE_CONSTRAINT_CASES } from "./support/askExecutionEvidenceCases.ts";
+import { ASK_SESSION_CONSTRAINT_CASES } from "./support/askSessionCases.ts";
+import { CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES } from "./support/crmAcquisitionDiagnosticCases.ts";
+import { CRM_CAPABILITY_CONSTRAINT_CASES } from "./support/crmCapabilityCases.ts";
+import { ROADMAP_ACTIVATION_CONSTRAINT_CASES } from "./support/roadmapActivationCases.ts";
+import { ASK_ACTION_CONSTRAINT_CASES } from "./support/askActionCases.ts";
+import { ASK_ANSWER_CONSTRAINT_CASES } from "./support/askAnswerCases.ts";
 import { CRM_COMMITMENT_CONSTRAINT_CASES } from "./support/crmCommitmentCases.ts";
-import { CRM_BACKFILL_CONSTRAINT_CASES } from './support/crmBackfillCases.ts';
+import { CRM_BACKFILL_CONSTRAINT_CASES } from "./support/crmBackfillCases.ts";
 import { CRM_EVIDENCE_CONSTRAINT_CASES } from "./support/crmEvidenceCases.ts";
-import {SELECTED_FILE_CONSTRAINT_CASES} from './support/selectedFileCases.ts';
-import {CRM_PROGRESS_CONSTRAINT_CASES} from './support/crmProgressCases.ts';
-import { MAIL_CAPTURE_CONSTRAINT_CASES } from './support/mailCaptureCases.ts';
-import {BUSINESS_ACQUISITION_CONSTRAINT_CASES} from './support/businessAcquisitionCases.ts';
-import {CRM_EXTRACTION_CONSTRAINT_CASES} from './support/crmExtractionCases.ts';
-import { SOCIAL_CONSTRAINT_CASES } from './support/socialCases.ts';
-import { OUTREACH_CONSTRAINT_CASES } from './support/outreachCases.ts';
-import { SOURCING_CONSTRAINT_CASES } from './support/sourcingCases.ts';
-import { MEETING_AUTO_RECORDING_CONSTRAINT_CASES } from './support/meetingAutoRecordingCases.ts';
-import { MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES } from './support/meetingFollowThroughCases.ts';
-import { MEETING_OUTCOMES_CONSTRAINT_CASES } from './support/meetingOutcomesCases.ts';
-import { MEETING_TRANSCRIPTION_CONSTRAINT_CASES } from './support/meetingTranscriptionCases.ts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
-import type { SessionQueryable } from '../../db/queryable.ts';
-import { payloadHash, seedTwoWorkspaces, type TwoWorkspaces } from './support/fixtures.ts';
-import { IDENTITY_CONSTRAINT_CASES } from './support/identityCases.ts';
-import { CRM_CONSTRAINT_CASES } from './support/crmCases.ts';
-import { POLICY_CONSTRAINT_CASES } from './support/policyCases.ts';
-import { MAIL_CONSTRAINT_CASES } from './support/mailCases.ts';
-import { TODAY_CONSTRAINT_CASES } from './support/todayCases.ts';
-import { SEQUENCE_CONSTRAINT_CASES } from './support/sequenceCases.ts';
-import { CLASSIFICATION_CONSTRAINT_CASES } from './support/classificationCases.ts';
-import { SETTINGS_CONSTRAINT_CASES } from './support/settingsCases.ts';
-import { RETENTION_CONSTRAINT_CASES } from './support/retentionCases.ts';
-import { RELEASE_CONSTRAINT_CASES } from './support/releaseCases.ts';
-import { FUNNEL_CONSTRAINT_CASES } from './support/funnelCases.ts';
-import { RESEARCH_CONSTRAINT_CASES } from './support/researchCases.ts';
-import { FOLLOW_UP_CONSTRAINT_CASES } from './support/followUpCases.ts';
-import { SEND_PATH_V2_CONSTRAINT_CASES } from './support/sendPathV2Cases.ts';
-import { MAILBOX_ACCOUNTS_CONSTRAINT_CASES } from './support/mailboxAccountsCases.ts';
-import { CALL_TO_BOOKING_CONSTRAINT_CASES } from './support/callToBookingCases.ts';
-import { MEETING_BOOKING_UIDS_CONSTRAINT_CASES } from './support/meetingBookingUidsCases.ts';
-import { CALL_TRANSCRIPTS_CONSTRAINT_CASES } from './support/callTranscriptsCases.ts';
-import { CALL_SUMMARIES_CONSTRAINT_CASES } from './support/callSummariesCases.ts';
-import { CALL_ANALYSES_CONSTRAINT_CASES } from './support/callAnalysesCases.ts';
-import { CALL_PROPOSALS_CONSTRAINT_CASES } from './support/callProposalsCases.ts';
-import { TRANSCRIPTION_PROVIDER_JOBS_CONSTRAINT_CASES } from './support/transcriptionProviderJobsCases.ts';
-import { PREPARED_BRIEFS_CONSTRAINT_CASES } from './support/preparedBriefsCases.ts';
-import { MEETING_ATTENDANCE_CONSTRAINT_CASES } from './support/meetingAttendanceCases.ts';
-import { MEETING_BOOKING_DETAILS_CONSTRAINT_CASES } from './support/meetingBookingDetailsCases.ts';
-import { MEETING_RECORDINGS_CONSTRAINT_CASES } from './support/meetingRecordingsCases.ts';
-import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
-import { seedMail, type SeededMail } from './support/mailFixtures.ts';
-import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
-import { SENDER_RECOVERY_CONSTRAINT_CASES } from './support/senderRecoveryCases.ts';
-import { PROVIDER_INCIDENT_CONSTRAINT_CASES } from './support/providerIncidentCases.ts';
-import { NOTIFICATION_CONSTRAINT_CASES } from './support/notificationCases.ts';
-import { HUMAN_REPLY_CONSTRAINT_CASES } from './support/humanReplyCases.ts';
-import { seedOutbound, type SeededOutbound } from './support/outboundFixtures.ts';
+import { SELECTED_FILE_CONSTRAINT_CASES } from "./support/selectedFileCases.ts";
+import { CRM_PROGRESS_CONSTRAINT_CASES } from "./support/crmProgressCases.ts";
+import { MAIL_CAPTURE_CONSTRAINT_CASES } from "./support/mailCaptureCases.ts";
+import { BUSINESS_ACQUISITION_CONSTRAINT_CASES } from "./support/businessAcquisitionCases.ts";
+import { CRM_EXTRACTION_CONSTRAINT_CASES } from "./support/crmExtractionCases.ts";
+import { SOCIAL_CONSTRAINT_CASES } from "./support/socialCases.ts";
+import { OUTREACH_CONSTRAINT_CASES } from "./support/outreachCases.ts";
+import { SOURCING_CONSTRAINT_CASES } from "./support/sourcingCases.ts";
+import { MEETING_AUTO_RECORDING_CONSTRAINT_CASES } from "./support/meetingAutoRecordingCases.ts";
+import { MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES } from "./support/meetingFollowThroughCases.ts";
+import { MEETING_OUTCOMES_CONSTRAINT_CASES } from "./support/meetingOutcomesCases.ts";
+import { MEETING_TRANSCRIPTION_CONSTRAINT_CASES } from "./support/meetingTranscriptionCases.ts";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  createTestDatabase,
+  type TestDatabase,
+} from "../../db/testing/testDatabase.ts";
+import type { SessionQueryable } from "../../db/queryable.ts";
+import {
+  payloadHash,
+  seedTwoWorkspaces,
+  type TwoWorkspaces,
+} from "./support/fixtures.ts";
+import { IDENTITY_CONSTRAINT_CASES } from "./support/identityCases.ts";
+import { CRM_CONSTRAINT_CASES } from "./support/crmCases.ts";
+import { POLICY_CONSTRAINT_CASES } from "./support/policyCases.ts";
+import { MAIL_CONSTRAINT_CASES } from "./support/mailCases.ts";
+import { TODAY_CONSTRAINT_CASES } from "./support/todayCases.ts";
+import { SEQUENCE_CONSTRAINT_CASES } from "./support/sequenceCases.ts";
+import { CLASSIFICATION_CONSTRAINT_CASES } from "./support/classificationCases.ts";
+import { SETTINGS_CONSTRAINT_CASES } from "./support/settingsCases.ts";
+import { RETENTION_CONSTRAINT_CASES } from "./support/retentionCases.ts";
+import { RELEASE_CONSTRAINT_CASES } from "./support/releaseCases.ts";
+import { FUNNEL_CONSTRAINT_CASES } from "./support/funnelCases.ts";
+import { RESEARCH_CONSTRAINT_CASES } from "./support/researchCases.ts";
+import { FOLLOW_UP_CONSTRAINT_CASES } from "./support/followUpCases.ts";
+import { SEND_PATH_V2_CONSTRAINT_CASES } from "./support/sendPathV2Cases.ts";
+import { MAILBOX_ACCOUNTS_CONSTRAINT_CASES } from "./support/mailboxAccountsCases.ts";
+import { CALL_TO_BOOKING_CONSTRAINT_CASES } from "./support/callToBookingCases.ts";
+import { MEETING_BOOKING_UIDS_CONSTRAINT_CASES } from "./support/meetingBookingUidsCases.ts";
+import { CALL_TRANSCRIPTS_CONSTRAINT_CASES } from "./support/callTranscriptsCases.ts";
+import { CALL_SUMMARIES_CONSTRAINT_CASES } from "./support/callSummariesCases.ts";
+import { CALL_ANALYSES_CONSTRAINT_CASES } from "./support/callAnalysesCases.ts";
+import { CALL_PROPOSALS_CONSTRAINT_CASES } from "./support/callProposalsCases.ts";
+import { TRANSCRIPTION_PROVIDER_JOBS_CONSTRAINT_CASES } from "./support/transcriptionProviderJobsCases.ts";
+import { PREPARED_BRIEFS_CONSTRAINT_CASES } from "./support/preparedBriefsCases.ts";
+import { MEETING_ATTENDANCE_CONSTRAINT_CASES } from "./support/meetingAttendanceCases.ts";
+import { MEETING_BOOKING_DETAILS_CONSTRAINT_CASES } from "./support/meetingBookingDetailsCases.ts";
+import { MEETING_RECORDINGS_CONSTRAINT_CASES } from "./support/meetingRecordingsCases.ts";
+import { seedCrm, type SeededCrm } from "./support/crmFixtures.ts";
+import { seedMail, type SeededMail } from "./support/mailFixtures.ts";
+import { OUTBOUND_CONSTRAINT_CASES } from "./support/outboundCases.ts";
+import { SENDER_RECOVERY_CONSTRAINT_CASES } from "./support/senderRecoveryCases.ts";
+import { PROVIDER_INCIDENT_CONSTRAINT_CASES } from "./support/providerIncidentCases.ts";
+import { NOTIFICATION_CONSTRAINT_CASES } from "./support/notificationCases.ts";
+import { HUMAN_REPLY_CONSTRAINT_CASES } from "./support/humanReplyCases.ts";
+import {
+  seedOutbound,
+  type SeededOutbound,
+} from "./support/outboundFixtures.ts";
 
 /**
  * A failing insert for every foundation constraint.
@@ -224,6 +237,28 @@ const selectedImportConstraintCases: readonly Case[] = [
   },
 ];
 const peopleConstraintCases: readonly Case[] = [
+  ...(
+    ["selected_opportunity_pair", "selected_opportunity_identity"] as const
+  ).map((constraint): Case => ({
+    constraint,
+    run: async (f) => {
+      const personId = await seedIndependentPerson(f);
+      return f.session.query(
+        `INSERT INTO crm_selected_sources(workspace_id,person_id,owner_user_id,source_key_hash,excerpt,content_hash,opportunity_id,opportunity_firm_id) VALUES($1,$2,$3,$4,'Selected excerpt',$5,'00000000-0000-4000-8000-000000000000',$6)`,
+        [
+          workspace(f),
+          personId,
+          admin(f),
+          payloadHash("selected-opportunity"),
+          payloadHash("excerpt"),
+          constraint === "selected_opportunity_pair"
+            ? null
+            : "00000000-0000-4000-8000-000000000000",
+        ],
+      );
+    },
+  })),
+
   {
     constraint: "crm_people_pkey",
     run: async (f) => {
@@ -2235,16 +2270,39 @@ describe("foundation constraints", () => {
     await database.drop();
   });
 
-  it('refuses current-vector reset before a replacement embedding can be supplied',async()=>{
-    await fixture.session.query('BEGIN');
-    try{const record=await seedCurrentCanonicalWindow(fixture);
-      await fixture.session.query('SAVEPOINT reset_attempt');
-      await expect(fixture.session.query("UPDATE crm_ask_canonical_windows SET state='pending',embedding=NULL WHERE workspace_id=$1 AND id=$2",[record.workspaceId,record.windowId])).rejects.toMatchObject({constraint:'crm_ask_canonical_window_immutable'});
-      await fixture.session.query('ROLLBACK TO SAVEPOINT reset_attempt');
-      const retained=(await fixture.session.query<{state:string;embedding:number[]}>("SELECT state,embedding FROM crm_ask_canonical_windows WHERE workspace_id=$1 AND id=$2",[record.workspaceId,record.windowId])).rows[0]!;
-      expect(retained.state).toBe('current');expect(retained.embedding).toEqual(Array(256).fill(1));
-      await expect(fixture.session.query("UPDATE crm_ask_canonical_windows SET embedding=$3::double precision[] WHERE workspace_id=$1 AND id=$2",[record.workspaceId,record.windowId,Array(256).fill(2)])).rejects.toMatchObject({constraint:'crm_ask_canonical_window_immutable'});
-    }finally{await fixture.session.query('ROLLBACK');}
+  it("refuses current-vector reset before a replacement embedding can be supplied", async () => {
+    await fixture.session.query("BEGIN");
+    try {
+      const record = await seedCurrentCanonicalWindow(fixture);
+      await fixture.session.query("SAVEPOINT reset_attempt");
+      await expect(
+        fixture.session.query(
+          "UPDATE crm_ask_canonical_windows SET state='pending',embedding=NULL WHERE workspace_id=$1 AND id=$2",
+          [record.workspaceId, record.windowId],
+        ),
+      ).rejects.toMatchObject({
+        constraint: "crm_ask_canonical_window_immutable",
+      });
+      await fixture.session.query("ROLLBACK TO SAVEPOINT reset_attempt");
+      const retained = (
+        await fixture.session.query<{ state: string; embedding: number[] }>(
+          "SELECT state,embedding FROM crm_ask_canonical_windows WHERE workspace_id=$1 AND id=$2",
+          [record.workspaceId, record.windowId],
+        )
+      ).rows[0]!;
+      expect(retained.state).toBe("current");
+      expect(retained.embedding).toEqual(Array(256).fill(1));
+      await expect(
+        fixture.session.query(
+          "UPDATE crm_ask_canonical_windows SET embedding=$3::double precision[] WHERE workspace_id=$1 AND id=$2",
+          [record.workspaceId, record.windowId, Array(256).fill(2)],
+        ),
+      ).rejects.toMatchObject({
+        constraint: "crm_ask_canonical_window_immutable",
+      });
+    } finally {
+      await fixture.session.query("ROLLBACK");
+    }
   });
 
   it.each(cases.map((testCase) => [testCase.constraint, testCase] as const))(
