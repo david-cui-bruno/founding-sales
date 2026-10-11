@@ -6,7 +6,9 @@
 #       [--images-run <id>] [--enables-sending] [--out <file>]
 #   infra/scripts/record.sh put       <root> <prefix> --api-digest D --worker-digest D --release-record <file>
 #   infra/scripts/record.sh read-back <root> <prefix> --api-digest D --worker-digest D --release-record <file> \
-#       [--allow-created]
+#       [--allow-created] [--after-bootstrap]
+# --after-bootstrap is only for an isolated acquisition diagnostic after verified
+# migration/startup/workspace bootstrap. It never changes the saved creation plan.
 #
 # The worker sends only while a stored record names its own image digest, so a release
 # stores the record BEFORE the plan and apply (`put`): a put after the rollout would leave
@@ -37,7 +39,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 record_usage() {
   echo "usage: record.sh from-ci <gate run id> <commit> <api digest> <worker digest> [--images-run <id>] [--enables-sending] [--out <file>]" >&2
-  echo "       record.sh put|read-back <root> <prefix> --api-digest D --worker-digest D --release-record <file> [--allow-created]" >&2
+  echo "       record.sh put|read-back <root> <prefix> --api-digest D --worker-digest D --release-record <file> [--allow-created] [--after-bootstrap]" >&2
   exit 2
 }
 
@@ -263,7 +265,7 @@ PY
 # put and read-back
 # ---------------------------------------------------------------------------
 record_store() {
-  local stage=$1 root=${2:-} prefix=${3:-} api='' worker='' file='' allow_created=0 digest
+  local stage=$1 root=${2:-} prefix=${3:-} api='' worker='' file='' allow_created=0 after_bootstrap=0 digest
   shift 3 2>/dev/null || record_usage
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -271,6 +273,7 @@ record_store() {
       --worker-digest) worker=${2:-}; shift 2 ;;
       --release-record) file=${2:-}; shift 2 ;;
       --allow-created) allow_created=1; shift ;;
+      --after-bootstrap) after_bootstrap=1; shift ;;
       *) fail "record.sh $stage does not take '$1'" ;;
     esac
   done
@@ -301,16 +304,20 @@ record_store() {
   host="$(release_json_path "${network_plan:-}" "database_host")"
   account="${FSS_RELEASE_ACCOUNT:-$(release_caller_account)}"
   region="${AWS_REGION:-us-east-1}"
-  if [ "$(release_json_path "${plan:-}" "bootstrap" "false")" = "true" ]; then
+  if [ "$(release_json_path "${plan:-}" "bootstrap" "false")" = "true" ] && [ "$after_bootstrap" != 1 ]; then
     fail "the plan says bootstrap=true: before its first apply there is no database to store a record in. Put it after the deploy."
   fi
 
   # The operations definition as ECS holds it now, which must be this environment's
   # worker image by digest; the task is held to exactly that image.
-  local definition
+  local definition repository_name="${prefix}-worker"
+  if [ "$after_bootstrap" = 1 ]; then
+    [ "$environment" = rehearsal ] || fail "post-bootstrap records require an isolated rehearsal."
+    repository_name=fss-rh-worker
+  fi
   definition="$(release_task_definition "$environment" "$operations")"
   if [ -n "$definition" ]; then
-    digest="$(FSS_JSON="$definition" FSS_REPOSITORY="${account}.dkr.ecr.${region}.amazonaws.com/${prefix}-worker" python3 -c '
+    digest="$(FSS_JSON="$definition" FSS_REPOSITORY="${account}.dkr.ecr.${region}.amazonaws.com/${repository_name}" python3 -c '
 import json, os, re, sys
 definition = json.loads(os.environ["FSS_JSON"]) or {}
 image = next((str(entry.get("image", "")) for entry in definition.get("containerDefinitions") or [] if entry.get("name") == "operations"), "")
@@ -321,6 +328,53 @@ print(match.group(1))
 ')" || fail "$stage: the operations task definition is not the worker image by digest (above); nothing was put."
   else
     digest='<read-from-the-operations-definition>'
+  fi
+  if [ "$after_bootstrap" = 1 ]; then
+    [ "$environment" = rehearsal ] && [ -n "$definition" ] \
+      || fail "post-bootstrap records require an actual isolated diagnostic operations definition."
+    local diagnostic database checked_schema
+    diagnostic="$(release_output "$root" crm_acquisition_diagnostic json)"
+    database="$(release_output "$root" database_name)"
+    checked_schema="$(node --input-type=module -e 'import(process.argv[1]).then(({REQUIRED_SCHEMA})=>process.stdout.write(String(REQUIRED_SCHEMA)))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/diagnostic-schema.mjs")" \
+      || fail "post-bootstrap diagnostic schema is unavailable."
+    if ! FSS_RECORD_DIAGNOSTIC="$diagnostic" FSS_RECORD_DEFINITION="$definition" \
+      FSS_RECORD_DATABASE="$database" FSS_RECORD_PREFIX="$prefix" FSS_RECORD_SCHEMA="$checked_schema" \
+      FSS_RECORD_WORKER="$worker" FSS_RECORD_DIGEST="$digest" FSS_RECORD_FILE="$file" \
+      FSS_RECORD_CLUSTER="$cluster" FSS_RECORD_SECRET="$secret" FSS_RECORD_HOST="$host" \
+      FSS_RECORD_ACCOUNT="$account" FSS_RECORD_REGION="$region" python3 - <<'PY'
+import json, os, re
+try:
+    d=json.loads(os.environ['FSS_RECORD_DIAGNOSTIC'])
+    prefix=os.environ['FSS_RECORD_PREFIX']; database=os.environ['FSS_RECORD_DATABASE']
+    environment=d['environment_id']; tags=d['tags']
+    assert re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', environment)
+    assert database == 'fss_diagnostic_'+prefix[7:].replace('-','_') == d['database_name']
+    assert tags['CalliePurpose']=='acquisition_acceptance' and tags['CallieDiagnosticEnvironment']==environment
+    account=os.environ['FSS_RECORD_ACCOUNT']; region=os.environ['FSS_RECORD_REGION']
+    assert d['ecs_cluster_arn']==os.environ['FSS_RECORD_CLUSTER']==f'arn:aws:ecs:{region}:{account}:cluster/{prefix}-cluster'
+    assert d['database_secret_arn']==os.environ['FSS_RECORD_SECRET']
+    assert d['database_secret_arn'].startswith(f'arn:aws:secretsmanager:{region}:{account}:secret:{prefix}/app-runtime-database-')
+    assert d['database_endpoint']==os.environ['FSS_RECORD_HOST'] and d['database_endpoint']
+    assert d['database_instance_arn']==f'arn:aws:rds:{region}:{account}:db:{prefix}-pg'
+    assert os.environ['FSS_RECORD_DIGEST']==os.environ['FSS_RECORD_WORKER']
+    definition=json.loads(os.environ['FSS_RECORD_DEFINITION'])
+    containers=[c for c in definition['containerDefinitions'] if c['name']=='operations']; assert len(containers)==1
+    entries=containers[0]['environment']; values={v['name']:v['value'] for v in entries}; assert len(values)==len(entries)
+    assert values['FSS_SCHEMA_MIN']==values['FSS_SCHEMA_MAX']==os.environ['FSS_RECORD_SCHEMA']
+    assert values['FSS_DATABASE_NAME']==database and values['FSS_DATABASE_HOST']==d['database_endpoint']
+    assert values['FSS_SENDING_ENABLED']=='false'
+    nested=json.loads(values['FSS_CRM_ACQUISITION_DIAGNOSTIC'])
+    assert nested=={'environmentId':environment,'region':region,'databaseInstanceArn':d['database_instance_arn'],'databaseSecretArn':d['database_secret_arn'],'ecsClusterArn':d['ecs_cluster_arn']}
+    secrets=containers[0]['secrets']; secret_values={v['name']:v['valueFrom'] for v in secrets}; assert len(secrets)==len(secret_values)
+    assert secret_values['DATABASE_SECRET_ARN']==d['database_secret_arn']
+    record=json.load(open(os.environ['FSS_RECORD_FILE']))
+    assert record['source']=='ci-gate' and record['suite']=='pass' and record['enablesSending'] is False
+except Exception:
+    raise SystemExit(1)
+PY
+    then
+      fail "post-bootstrap diagnostic isolation, schema, image or non-sending CI record refused."
+    fi
   fi
   if [ "$digest" = "$worker" ]; then
     rehearsal_log "$stage: the operations task definition runs this release's worker image ($worker): the apply has run"
