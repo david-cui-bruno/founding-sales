@@ -1,6 +1,6 @@
 # Continuous business Gmail source handoff (#568)
 
-This source handoff composes #563–#567. It does not establish actual Gmail authorization, provider completeness, representative AI quality, independent review or activation. The integration owner must bind the final commit/image/schema and run applicable disposable deployed-base upgrades before release consideration. No deployed state was inspected for this source-only work.
+This source handoff composes #563–#567, bound with Ask integration to runtime `fd6c63cbda305717f8f7a9f1bf97ac9625d9e66b` / schema98. It does not establish actual Gmail authorization, provider completeness, representative AI quality, independent review or activation. The integration owner must bind the final commit/image/schema and run applicable disposable deployed-base upgrades before release consideration. No deployed state was inspected for this source-only work.
 
 ## Composed acquisition boundary
 

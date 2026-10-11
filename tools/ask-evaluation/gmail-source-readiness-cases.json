@@ -1,5 +1,5 @@
 {
-  "version": "crm-gmail-source-readiness-cases-v1",
+  "version": "crm-gmail-source-readiness-cases-v2",
   "issues": [
     548,
     562,
@@ -14,14 +14,14 @@
   },
   "canonicalSourceBinding": {
     "sourcePullRequest": "https://github.com/david-cui-bruno/founding-sales/pull/570",
-    "runtimeImplementationCommit": "26a0e26d52550e8c57924a3f4e49ab1fc0dbc2b4",
-    "schemaVersionRequired": 96,
+    "runtimeImplementationCommit": "fd6c63cbda305717f8f7a9f1bf97ac9625d9e66b",
+    "schemaVersionRequired": 98,
     "bindingKind": "controlled_source_candidate_only",
     "activationAllowed": false,
     "realRunFreeze": "Rebind exact merged source/image, dataset, independent labels, configuration and authority before authorized real evaluation."
   },
-  "implementationCommit": "26a0e26d52550e8c57924a3f4e49ab1fc0dbc2b4",
-  "schemaVersionRequired": 93,
+  "implementationCommit": "fd6c63cbda305717f8f7a9f1bf97ac9625d9e66b",
+  "schemaVersionRequired": 98,
   "sourceActivationAllowed": false,
   "originalHeldOutExpectations": "unchanged; this development supplement cannot be used as independent holdout",
   "cases": [
