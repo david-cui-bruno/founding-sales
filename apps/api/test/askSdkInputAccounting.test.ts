@@ -42,6 +42,11 @@ async function journey(options:{maxInputBytes?:number;maxSteps?:number;usage?:nu
 it('reserves complete ordinary SDK input before dispatch so captured legal tools execute',async()=>{
  const result=await journey();expect(result).toMatchObject({calls:2,read:{state:'complete'},diagnostics:{executedToolNames:['search_history']}});expect(Number(result.reservations[0]!.max_input_tokens)).toBeGreaterThanOrEqual(2359);
 });
+it('passes the same actual remaining generation budget to composition and each model call',async()=>{
+ const bounds:(number|undefined)[]=[],runs:(number|undefined)[]=[];
+ const result=await journey({mutate:ordinary=>({...ordinary,inputBound:input=>{bounds.push(input.remainingSteps);return ordinary.inputBound!(input);},runStep:async input=>{runs.push(input.remainingSteps);return ordinary.runStep(input);}})});
+ expect(result.calls).toBe(2);expect(bounds).toEqual([3,2]);expect(runs).toEqual([3,2]);
+});
 it('refuses full composed input over the explicit byte ceiling before any call or reservation',async()=>{
  const result=await journey({maxInputBytes:3000});expect(result).toMatchObject({calls:0,read:{state:'unavailable',reason:'input_bound_reached'},reservations:[]});
 });

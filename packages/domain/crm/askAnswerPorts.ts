@@ -151,11 +151,13 @@ export interface AskAgentStepAdapter extends AskAdapterRoute {
     readonly question: string;
     readonly transcript: readonly unknown[];
     readonly maxOutputTokens: number;
+    readonly remainingSteps?: number;
   }): { readonly inputBytes: number; readonly maxInputTokens: number } | null;
   runStep(input: {
     readonly question: string;
     readonly transcript: readonly unknown[];
     readonly maxOutputTokens: number;
+    readonly remainingSteps?: number;
     readonly signal: AbortSignal;
   }): Promise<{
     readonly acceptance: "accepted" | "unknown" | "not_accepted";

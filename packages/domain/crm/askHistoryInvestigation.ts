@@ -1,4 +1,4 @@
-import {askAgentScopeSchema,type AskAgentScope,type CanonicalSourceReference} from '@fss/contracts';
+import {askSourceCursorSchema,askAgentScopeSchema,type AskAgentScope,type CanonicalSourceReference} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {discoverAskSources,readAskCanonicalCorpus} from './askCorpus.ts';
 import {readMailConversation} from '../mail/crmSources.ts';
@@ -32,6 +32,21 @@ export async function discoverAskHistorySources(context:RepositoryContext,scope:
  return {sources,partial:true,scannedCandidates,nextAfter:after??null};
 }
 export async function discoverAskIndexSources(context:RepositoryContext,scope:AskAgentScope,limit=100){return discoverAskHistorySources(context,scope,{candidateCeiling:limit});}
+/** Browse current authorized retained copies without guessing an original keyword.
+ * The continuation follows the last returned copy, never a prefetched page tail.
+ */
+export async function browseAskHistory(context:RepositoryContext,scope:AskAgentScope,input:{limit:number;after?:Cursor|undefined;deadlineAt?:number}){
+ if(!Number.isInteger(input.limit)||input.limit<1||input.limit>5||input.after!==undefined&&!askSourceCursorSchema.safeParse(input.after).success)return null;
+ if(!askAgentScopeSchema.safeParse(scope).success)return null;
+ if(input.deadlineAt!==undefined&&Date.now()>=input.deadlineAt)return {eligibleSources:[],sources:[],matches:null,partial:true,scannedCandidates:0,nextAfter:input.after??null,retrieval:'bounded_catalog' as const,semantic:'unavailable' as const};
+ const catalog=await discoverAskHistorySources(context,scope,{...scope.kind==='selected'||input.after===undefined?{}:{after:input.after},...input.deadlineAt===undefined?{}:{deadlineAt:input.deadlineAt}});if(!catalog)return null;
+ const ordered=scope.kind==='selected'?[...catalog.sources].sort((a,b)=>a.kind===b.kind?(a.sourceId===b.sourceId?0:a.sourceId<b.sourceId?-1:1):a.kind<b.kind?-1:1):catalog.sources;
+ const after=input.after;
+ const eligible=scope.kind==='selected'&&after!==undefined?ordered.filter(source=>source.kind>after.kind||source.kind===after.kind&&source.sourceId>after.sourceId):ordered;
+ const sources=eligible.slice(0,input.limit),remaining=eligible.length>sources.length,last=sources.at(-1);
+ const nextAfter=remaining&&last?{kind:last.kind,sourceId:last.sourceId}:catalog.nextAfter;
+ return {eligibleSources:sources,sources,matches:null,partial:catalog.partial||remaining,scannedCandidates:catalog.scannedCandidates,nextAfter,retrieval:'bounded_catalog' as const,semantic:'unavailable' as const};
+}
 /** Local PostgreSQL ranking of retained originals; never acquires mail or invokes a model. */
 export async function searchAskHistory(context:RepositoryContext,scope:AskAgentScope,input:{query:string;limit:number;after?:Cursor|undefined;deadlineAt?:number}){
  if(input.query.trim().length<1||input.query.length>300||!Number.isInteger(input.limit)||input.limit<1||input.limit>20)return null;

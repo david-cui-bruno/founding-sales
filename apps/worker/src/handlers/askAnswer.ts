@@ -18,7 +18,7 @@ import {CRM_SUPPORTED_AGENT_ASK_VERSIONS} from '@fss/domain/crm/capabilityAuthor
 import {searchCanonicalIndex} from '@fss/domain/crm/askCanonicalIndex.ts';
 import type {CanonicalSourceReference} from '@fss/contracts';
 import {admitAskSources,admitAskRecord} from '@fss/domain/crm/askExecutionEvidence.ts';
-import {copiedAskSource,searchAskHistory,readAskConversationSources,readAskConversationAttribution} from '@fss/domain/crm/askHistoryInvestigation.ts';
+import {copiedAskSource,browseAskHistory,searchAskHistory,readAskConversationSources,readAskConversationAttribution} from '@fss/domain/crm/askHistoryInvestigation.ts';
 import {resolveAskRecords,readAskScopedExact} from '@fss/domain/crm/askInvestigationRecords.ts';
 import {localDate} from '@fss/domain/src/rules/localClock.ts';
 
@@ -139,7 +139,7 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
 }
 
 const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000),kind:z.enum(['fact','inference','conflict']),citationWindowIds:z.array(z.uuid()).min(1).max(10)})).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
-const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','read_conversation','resolve_records']),input:z.unknown()});
+const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','browse_history','read_conversation','resolve_records']),input:z.unknown()});
 async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition,located:NonNullable<Awaited<ReturnType<typeof locate>>>){
  const {context,requestId,version,epoch}=located,agent=runtime.agent,limits=runtime.agentLimits;
  const update=async(state:string,reason:string|null)=>withTransaction(input.session,async()=>{await lockAskLifecycle(context);if(await fenced(input))await setState(context,requestId,version,epoch,state,reason);});
@@ -162,7 +162,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
    // Legacy/custom adapters may omit this optional method. Ordinary SDK adapters
    // always count their full actual system/tools/messages via the shared composer.
    const legacyBytes=Buffer.byteLength(JSON.stringify({question:snapshot.question,transcript}))+2048;
-   bound=originalInputBound?originalInputBound.call(agent,{question:snapshot.question,transcript:structuredClone(transcript),maxOutputTokens:limits.maxOutputTokens}):{inputBytes:legacyBytes,maxInputTokens:legacyBytes};
+   bound=originalInputBound?originalInputBound.call(agent,{question:snapshot.question,transcript:structuredClone(transcript),maxOutputTokens:limits.maxOutputTokens,remainingSteps:limits.maxSteps-step+1}):{inputBytes:legacyBytes,maxInputTokens:legacyBytes};
   }catch{/* Invalid composition refuses before any financial reservation or call. */}
   if(bound===null||!Number.isSafeInteger(bound.inputBytes)||bound.inputBytes<0||!Number.isSafeInteger(bound.maxInputTokens)||bound.maxInputTokens<0||bound.maxInputTokens>1000000){await update('unavailable','processing_failed');return;}
   if(!unchanged()){await update('stale','source_changed');return;}
@@ -189,7 +189,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
   const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
   const timeout=new Promise<Awaited<ReturnType<typeof run>>>(resolve=>{timer=setTimeout(()=>{controller.abort();resolve({acceptance:'unknown',usage:null,answer:null,toolCalls:[]});},Math.max(1,limits.deadlineMs-(Date.now()-started)));});
   const modelStarted=performance.now();
-  let outcome:Awaited<ReturnType<typeof run>>;try{outcome=structuredClone(await Promise.race([run({question:snapshot.question,transcript:structuredClone(transcript),maxOutputTokens:limits.maxOutputTokens,signal:controller.signal}),timeout]));}catch{outcome={acceptance:'unknown',usage:null,answer:null,toolCalls:[]};}finally{if(timer)clearTimeout(timer);}
+  let outcome:Awaited<ReturnType<typeof run>>;try{outcome=structuredClone(await Promise.race([run({question:snapshot.question,transcript:structuredClone(transcript),maxOutputTokens:limits.maxOutputTokens,remainingSteps:limits.maxSteps-step+1,signal:controller.signal}),timeout]));}catch{outcome={acceptance:'unknown',usage:null,answer:null,toolCalls:[]};}finally{if(timer)clearTimeout(timer);}
   const modelDurationMs=Math.max(0,Math.floor(performance.now()-modelStarted));
   const usage=z.strictObject({inputTokens:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),outputTokens:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)}).safeParse(outcome.usage),cost=usage.success?crmTokenCostCents(usage.data.inputTokens,usage.data.outputTokens,reserved.purpose.inputTokenPriceMicros,reserved.purpose.outputTokenPriceMicros):null;
   const unknown=outcome.acceptance==='unknown'||!usage.success||cost===null||!Number.isSafeInteger(cost)||cost>2147483647;
@@ -209,22 +209,29 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
      if(records.selection==='ambiguous'||records.selection==='unresolved'){await recordCrmAuditEvent(context,{action:'crm.ask_tool_executed',subjectKind:'crm_ask_request',subjectId:requestId,detail:{requestVersion:version,requestEpoch:epoch,step,name:call.name}});await withTransaction(input.session,async()=>{await lockAskLifecycle(context);const before=await readCurrentAskInput(context,requestId,version,epoch,route);if(!before||before.inputHash!==expectedInputHash||!await fenced(input))return;await context.db.query("UPDATE crm_ask_requests SET clarification=$5::jsonb,state='unavailable',reason='identity_clarification_required',progress_stage='unavailable' WHERE workspace_id=$1 AND id=$2 AND version=$3 AND epoch=$4 AND state='pending' AND cancelled_at IS NULL",[context.scope.workspaceId,requestId,version,epoch,JSON.stringify({kind:'identity_ambiguous',query:args.data.query??'',recordKind:args.data.kind==='person'?'people':'firms',scope:intent,matches:records.records,truncated:!records.scanComplete})]);});return;}
 
     }
-    else if(call.name==='search_history'||call.name==='read_conversation'){
+    else if(call.name==='search_history'||call.name==='browse_history'||call.name==='read_conversation'){
      const cursor=z.strictObject({kind:z.enum(['selected_note','mail','call_transcript','meeting_transcript']),sourceId:z.uuid()});
-     const args=call.name==='search_history'?z.strictObject({query:z.string().trim().min(1).max(300),limit:z.number().int().min(1).max(20),after:cursor.optional()}).safeParse(call.input):z.strictObject({sourceId:z.uuid(),kind:z.enum(['selected_note','mail','call_transcript','meeting_transcript']),limit:z.number().int().min(1).max(10)}).safeParse(call.input);
+     const args=call.name==='search_history'?z.strictObject({query:z.string().trim().min(1).max(300),limit:z.number().int().min(1).max(20),after:cursor.optional()}).safeParse(call.input):call.name==='browse_history'?z.strictObject({limit:z.number().int().min(1).max(5),after:cursor.optional()}).safeParse(call.input):z.strictObject({sourceId:z.uuid(),kind:z.enum(['selected_note','mail','call_transcript','meeting_transcript']),limit:z.number().int().min(1).max(10)}).safeParse(call.input);
      if(!args.success){await update('unavailable','unsupported_answer');return;}
      const raw=args.data;
      if('sourceId' in raw&&!live.scope.sources.some(source=>source.sourceId===raw.sourceId&&source.kind===raw.kind)){await update('unavailable','unsupported_answer');return;}
-     let found:NonNullable<Awaited<ReturnType<typeof readAskConversationSources>>>|Omit<NonNullable<Awaited<ReturnType<typeof searchAskHistory>>>,'retrieval'|'semantic'> & {retrieval:'ranked_lexical'|'hybrid_rrf';semantic:'unavailable'|'unverified'}|null='query' in raw?await searchAskHistory(context,intent,{...raw,deadlineAt:started+limits.deadlineMs}):await readAskConversationSources(context,intent,{...raw,anchor:live.scope.sources.find(source=>source.sourceId===raw.sourceId&&source.kind===raw.kind)!,deadlineAt:started+limits.deadlineMs});
+     let found:NonNullable<Awaited<ReturnType<typeof browseAskHistory>>>|NonNullable<Awaited<ReturnType<typeof readAskConversationSources>>>|Omit<NonNullable<Awaited<ReturnType<typeof searchAskHistory>>>,'retrieval'|'semantic'> & {retrieval:'ranked_lexical'|'hybrid_rrf';semantic:'unavailable'|'unverified'}|null='query' in raw&&typeof raw.query==='string'?await searchAskHistory(context,intent,{...raw,query:raw.query,deadlineAt:started+limits.deadlineMs}):!('sourceId' in raw)?await browseAskHistory(context,intent,{...raw,deadlineAt:started+limits.deadlineMs}):await readAskConversationSources(context,intent,{...raw,anchor:live.scope.sources.find(source=>source.sourceId===raw.sourceId&&source.kind===raw.kind)!,deadlineAt:started+limits.deadlineMs});
      if(!found){await update('unavailable','source_unavailable');return;}
-     if('query' in raw&&found.matches!==null){const ranked=await rankAskHistoryHybrid(input,runtime,live,found,raw.query,raw.limit,started+limits.deadlineMs);if(ranked.unknown){await update('unknown_acceptance','provider_acceptance_unknown');return;}found=ranked.history;}
+     if('query' in raw&&typeof raw.query==='string'&&found.matches!==null){const ranked=await rankAskHistoryHybrid(input,runtime,live,found,raw.query,raw.limit,started+limits.deadlineMs);if(ranked.unknown){await update('unknown_acceptance','provider_acceptance_unknown');return;}found=ranked.history;}
      const known=new Set(live.scope.sources.map(source=>`${source.kind}:${source.sourceId}`));let room=10-known.size;const sources=found.sources.filter(source=>known.has(`${source.kind}:${source.sourceId}`)||room-->0);
      const admitted=await withTransaction(input.session,async()=>{await lockAskLifecycle(context);const before=await readCurrentAskInput(context,requestId,version,epoch,route);return !!before&&before.inputHash===expectedInputHash&&await fenced(input)&&await admitAskSources(context,executionKey,sources.map(copiedAskSource));});
      if(!admitted){await update('stale','source_changed');return;}live=await current();if(!live){await update('stale','source_changed');return;}expectedInputHash=live.inputHash;
-     const keys=new Set(sources.map(source=>`${source.kind}:${source.sourceId}`));const windows=live.windows.filter(window=>keys.has(`${window.source.kind}:${window.source.sourceId}`)&&(found.matches===null||found.matches.some(match=>match.source.kind===window.source.kind&&match.source.sourceId===window.source.sourceId&&match.locator===window.source.locator))).sort((a,b)=>sources.findIndex(source=>source.kind===a.source.kind&&source.sourceId===a.source.sourceId)-sources.findIndex(source=>source.kind===b.source.kind&&source.sourceId===b.source.sourceId)||a.ordinal-b.ordinal).slice(0,20);
+     const keys=new Set(sources.map(source=>`${source.kind}:${source.sourceId}`));let windows=live.windows.filter(window=>keys.has(`${window.source.kind}:${window.source.sourceId}`)&&(found.matches===null||found.matches.some(match=>match.source.kind===window.source.kind&&match.source.sourceId===window.source.sourceId&&match.locator===window.source.locator))).sort((a,b)=>sources.findIndex(source=>source.kind===a.source.kind&&source.sourceId===a.source.sourceId)-sources.findIndex(source=>source.kind===b.source.kind&&source.sourceId===b.source.sourceId)||a.ordinal-b.ordinal);
+     const previewWindowCount=windows.length;
+     if(call.name==='browse_history'){const seen=new Set<string>();windows=windows.filter(window=>{const key=`${window.source.kind}:${window.source.sourceId}`;if(seen.has(key))return false;seen.add(key);return true;});}
+     windows=windows.slice(0,20);
      const attribution=call.name==='read_conversation'?await readAskConversationAttribution(context,sources):undefined;if(attribution===null){await update('stale','source_changed');return;}
-     value={windows,scope:live.scopeDescriptor,...attribution===undefined?{}:{attribution},partial:found.partial||sources.length<found.sources.length,...found.matches!==null?{retrieval:found.retrieval,semantic:found.semantic,scannedCandidates:found.scannedCandidates,nextAfter:found.nextAfter}:{}};
-     if(found.matches!==null)retrievalSummary={method:found.retrieval,semantic:found.semantic,partial:found.partial||sources.length<found.sources.length};
+     const partial=found.partial||sources.length<found.sources.length||call.name==='browse_history'&&previewWindowCount>windows.length;
+     const sourceCeilingReached=sources.length<found.sources.length;
+     const lastAdmitted=sources.at(-1);
+     const nextAfter=call.name==='browse_history'&&sourceCeilingReached?(lastAdmitted?{kind:lastAdmitted.kind,sourceId:lastAdmitted.sourceId}:'after' in raw?raw.after??null:null):'nextAfter' in found?found.nextAfter:null;
+     value={windows,scope:live.scopeDescriptor,...call.name==='browse_history'?{preview:true,previewWindowLimit:1,sourceCeilingReached}:{},...attribution===undefined?{}:{attribution},partial,...'retrieval' in found?{retrieval:found.retrieval,semantic:found.semantic,scannedCandidates:found.scannedCandidates,nextAfter}:{}};
+     if('retrieval' in found)retrievalSummary={method:found.retrieval,semantic:found.semantic,partial};
     }
     else{
      if(exactResults.length>=20){await update('unavailable','input_bound_reached');return;}const args=z.strictObject({operation:z.enum(['opportunities','tasks','reply_status']),firmId:z.uuid().optional()}).safeParse(call.input);if(!args.success){await update('unavailable','unsupported_answer');return;}
