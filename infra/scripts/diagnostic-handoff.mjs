@@ -8,6 +8,7 @@ import {
 } from 'node:crypto';
 import {
   readFileSync,
+  chmodSync,
   writeFileSync,
   mkdirSync,
   rmSync,
@@ -422,7 +423,15 @@ export async function preparePrivateProposal({
     },
   });
   if (!receipt) refuse('private_preparation_unavailable');
-  return receipt;
+  const inspection = inspectRetainedProposal({
+    approvalPath, expectedApprovalSha256,
+    proposalRunId: process.env.GITHUB_RUN_ID,
+    proposalAttempt: process.env.GITHUB_RUN_ATTEMPT,
+    expectedPlanSha256: receipt.planSha256,
+    expectedEnvelopeSha256: receipt.envelopeSha256,
+    outDirectory: resolve(outDirectory, 'proposal-inspection'),
+  });
+  return {...receipt, inspectionPerformed:true, inspection};
 }
 export function escrowPlan({
   approvalPath,
@@ -1045,6 +1054,76 @@ export function loadRegisteredLifecycleLeaseForCleanup({
     cleanupOnly: true,
   };
 }
+/** Documentary review only: no lease, registration, mutation or execution authority. */
+export function inspectRetainedProposal({
+  approvalPath, expectedApprovalSha256, proposalRunId, proposalAttempt,
+  expectedPlanSha256, expectedEnvelopeSha256, outDirectory,
+}) {
+  const approval = approvedFile(approvalPath, expectedApprovalSha256);
+  const execution = {
+    runId: text(proposalRunId, /^[1-9][0-9]*$/u),
+    attempt: text(proposalAttempt, /^[1-9][0-9]*$/u),
+  };
+  text(expectedPlanSha256, HASH);
+  text(expectedEnvelopeSha256, HASH);
+  parseStorageApprovalForRead({
+    ...approval, planSha256: expectedPlanSha256, manifestSha256: '0'.repeat(64),
+    observedProposal: execution, storageApprovalSha256: expectedApprovalSha256,
+  });
+  const approved = date(approval.approvedAt), expires = date(approval.expiresAt);
+  if (approved > Date.now() || expires <= approved || expires > approved + 14400000)
+    refuse('invalid_handoff');
+  // Expiry closes execution, not the read-only inspection of this exact retained object.
+  freshDestination(outDirectory);
+  privateDirectory(outDirectory);
+  try {
+    identity();
+    const intent = readIntentRecord(approval, expectedApprovalSha256, 'storage', outDirectory);
+    if (JSON.stringify(intent.execution) !== JSON.stringify(execution))
+      refuse('proposal_run_changed');
+    const path = resolve(outDirectory, 'download.private.json');
+    const key = objectKey({...approval, planSha256: expectedPlanSha256});
+    aws(['s3api', 'get-object', '--bucket', approval.state.bucket, '--key', key, path]);
+    chmodSync(path, 0o600);
+    const raw = readFileSync(path);
+    if (sha(raw) !== expectedEnvelopeSha256) refuse('envelope_hash_changed');
+    const packet = JSON.parse(raw.toString('utf8')), meta = packet.metadata;
+    parseStorageApprovalForRead(meta);
+    for (const name of Object.keys(approval))
+      if (JSON.stringify(meta[name]) !== JSON.stringify(approval[name]))
+        refuse('envelope_binding_changed');
+    if (meta.storageApprovalSha256 !== expectedApprovalSha256 ||
+        meta.planSha256 !== expectedPlanSha256 ||
+        JSON.stringify(meta.observedProposal) !== JSON.stringify(execution))
+      refuse('envelope_binding_changed');
+    const {plan, manifest, manifestBytes, configuration, alarmDigestArchive} =
+      decryptPayload(packet, meta, outDirectory);
+    write(resolve(outDirectory, 'review.tfplan'), plan);
+    write(resolve(outDirectory, 'manifest.private.json'), manifestBytes);
+    write(resolve(outDirectory, 'configuration.private.json'), bytes(configuration));
+    if (alarmDigestArchive !== undefined)
+      write(resolve(outDirectory, 'alarm-digest.private.zip'), alarmDigestArchive);
+    const receipt = {
+      version: 'fss.diagnostic-inspection.v1',
+      proposalRunId: execution.runId, proposalAttempt: execution.attempt,
+      sourceCommit: meta.sourceCommit, imageBuildCommit: meta.imageBuildCommit,
+      images: meta.images, schema: manifest.diagnostic.schema,
+      objectKey: key, approvalSha256: expectedApprovalSha256,
+      envelopeSha256: expectedEnvelopeSha256, planSha256: meta.planSha256,
+      manifestSha256: meta.manifestSha256, configurationSha256: meta.configurationSha256,
+      ...(alarmDigestArchive === undefined ? {} : {archiveSha256: sha(alarmDigestArchive)}),
+      applyAllowed: false, lifecycleAuthority: false, activationAllowed: false,
+    };
+    write(resolve(outDirectory, 'inspection-receipt.json'), bytes(receipt));
+    // Temporary transport records are not review artifacts.
+    rmSync(path, {force:true});
+    rmSync(resolve(outDirectory, 'storage-intent-read.private.json'), {force:true});
+    return receipt;
+  } catch (error) {
+    rmSync(outDirectory, {recursive:true, force:true});
+    throw error;
+  }
+}
 export function loadReviewedPlan(input) {
   return loadPacket(input);
 }
@@ -1117,7 +1196,7 @@ function decryptPayload(packet, meta, outDirectory, allowReviewedSchema = false)
       manifest = JSON.parse(manifestBytes);
     const plan = Buffer.from(payload.plan, 'base64');
     validatePayload(meta, manifest, payload.configuration, plan, manifestBytes, allowReviewedSchema);
-    return { plan, manifest, configuration: payload.configuration, alarmDigestArchive };
+    return { plan, manifest, manifestBytes, configuration: payload.configuration, alarmDigestArchive };
   } finally {
     dataKey?.fill(0);
   }
@@ -1190,16 +1269,22 @@ if (
         expectedApprovalSha256: args[1],
         outDirectory: args[2],
       });
+    else if (action === 'inspect' && args.length === 7)
+      console.log(JSON.stringify(inspectRetainedProposal({
+        approvalPath:args[0], expectedApprovalSha256:args[1],
+        proposalRunId:args[2], proposalAttempt:args[3],
+        expectedPlanSha256:args[4], expectedEnvelopeSha256:args[5], outDirectory:args[6],
+      })));
     else if (action === 'prepare' && args.length === 5)
-      await preparePrivateProposal({
+      console.log(JSON.stringify(await preparePrivateProposal({
         approvalPath: args[0],
         expectedApprovalSha256: args[1],
         configurationInputPath: args[2],
         outDirectory: args[3],
         root: args[4],
-      });
+      })));
     else if (action === 'escrow' && [6,7].includes(args.length))
-      escrowPlan({
+      console.log(JSON.stringify(escrowPlan({
         approvalPath: args[0],
         expectedApprovalSha256: args[1],
         planPath: args[2],
@@ -1207,7 +1292,7 @@ if (
         configurationPath: args[4],
         outDirectory: args[5],
         root: args[6],
-      });
+      })));
     else if (action === 'register' && args.length === 3)
       registerLifecycleLease({
         leasePath: args[0],

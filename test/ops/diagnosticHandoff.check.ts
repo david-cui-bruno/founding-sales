@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import {
   mkdtempSync,
   readFileSync,
@@ -8,6 +8,7 @@ import {
   mkdirSync,
   chmodSync,
   existsSync,
+  statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -146,8 +147,8 @@ it('privately conserves one exact proposal for a later reviewed lease and refuse
       `#!/usr/bin/env node
 const fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(process.env.COMMAND_LOG,a.slice(0,2).join(' ')+"\\n");
 const val=(key)=>a[a.indexOf(key)+1];const object=(key)=>process.env.OBJECT_STORE+'/'+require('crypto').createHash('sha256').update(key).digest('hex');fs.mkdirSync(process.env.OBJECT_STORE,{recursive:true});
-if(a[0]==='sts')console.log(JSON.stringify({Account:'326255650484',Arn:'arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/run'}));
-else if(a[0]==='kms')console.log(JSON.stringify({KeyId:val('--key-id'),Plaintext:Buffer.alloc(32,7).toString('base64'),CiphertextBlob:Buffer.from('opaque-kms-key').toString('base64')}));
+if(a[0]==='sts')console.log(JSON.stringify({Account:'326255650484',Arn:process.env.WRONG_ROLE?'arn:aws:sts::326255650484:assumed-role/other/run':'arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/run'}));
+else if(a[0]==='kms')console.log(JSON.stringify({KeyId:process.env.WRONG_KMS?'wrong-key':val('--key-id'),Plaintext:Buffer.alloc(32,7).toString('base64'),CiphertextBlob:Buffer.from('opaque-kms-key').toString('base64')}));
 else if(a[1]==='list-objects-v2')console.log(JSON.stringify({Contents:fs.existsSync(object(val('--prefix')))?[{Key:val('--prefix')}]:[]}));
 else if(a[1]==='put-object'){if(fs.existsSync(object(val('--key'))))process.exit(1);fs.copyFileSync(val('--body'),object(val('--key')));if(process.env.FAIL_PUT_AFTER_WRITE){console.error('PRIVATE-CLOUD-SENTINEL');process.exit(1);}console.log('{}');}
 else if(a[1]==='get-object'){fs.copyFileSync(object(val('--key')),a[6]);if(process.env.BAD_READBACK)fs.writeFileSync(a[6],'changed-object');console.log('{}');}
@@ -315,6 +316,94 @@ else process.exit(1);
     const receipt = JSON.parse(
       readFileSync(join(directory, 'escrow', 'escrow-receipt.json'), 'utf8'),
     );
+    expect(JSON.parse(escrow.stdout)).toEqual(receipt);
+    expect(Object.keys(receipt).sort()).toEqual([
+      'observedCurrentObject','objectKey','envelopeSha256','planSha256','manifestSha256',
+      'configurationSha256','approvalSha256','applyPerformed','retentionErasureSupported',
+    ].sort());
+    expect(escrow.stdout).not.toMatch(/PRIVATE-|ciphertext|encryptedDataKey|configuration":/u);
+    // The public inspector must review the retained proposal without any lease.
+    const inspectionArgs = (out: string) => [
+      'inspect', files.approval, digest(readFileSync(files.approval, 'utf8')),
+      '777', '1', receipt.planSha256, receipt.envelopeSha256, out,
+    ];
+    const inspectDirectory = join(directory, 'inspection');
+    const beforeInspect = readFileSync(join(directory, 'commands.log'), 'utf8');
+    const inspected = run(inspectionArgs(inspectDirectory), 'unrelated');
+    expect(inspected.status, inspected.stderr).toBe(0);
+    expect(readFileSync(join(inspectDirectory, 'review.tfplan'), 'utf8')).toBe(plan);
+    expect(readFileSync(join(inspectDirectory, 'manifest.private.json'), 'utf8')).toBe(readFileSync(files.manifest, 'utf8'));
+    expect(JSON.parse(readFileSync(join(inspectDirectory, 'inspection-receipt.json'), 'utf8'))).toMatchObject({
+      proposalRunId:'777', proposalAttempt:'1', schema:REQUIRED_SCHEMA,
+      planSha256:receipt.planSha256, envelopeSha256:receipt.envelopeSha256,
+      applyAllowed:false, lifecycleAuthority:false, activationAllowed:false,
+    });
+    expect(statSync(inspectDirectory).mode & 0o777).toBe(0o700);
+    for (const file of ['review.tfplan','manifest.private.json','configuration.private.json','inspection-receipt.json','alarm-digest.private.zip'])
+      expect(statSync(join(inspectDirectory,file)).mode & 0o777).toBe(0o600);
+    const readCalls = readFileSync(join(directory, 'commands.log'), 'utf8').slice(beforeInspect.length);
+    expect(readCalls.trim().split('\n')).toEqual(['sts get-caller-identity', 's3api get-object', 's3api get-object', 'kms decrypt']);
+    expect(inspected.stdout + inspected.stderr).not.toContain(plan);
+    expect(run(inspectionArgs(inspectDirectory)).status).toBe(1);
+    expect(readFileSync(join(inspectDirectory, 'review.tfplan'), 'utf8')).toBe(plan);
+    const futureClock = join(directory, 'future-clock.mjs');
+    writeFileSync(futureClock, `Date.now=()=>${time.getTime()+3600000};`);
+    expect(run(inspectionArgs(join(directory, 'expired-inspection')), 'unrelated', {NODE_OPTIONS:`--import=${futureClock}`}).status).toBe(0);
+    for (const [index, env] of [{WRONG_ROLE:'1'}, {WRONG_KMS:'1'}].entries()) {
+      const out = join(directory, `inspect-refuse-${index}`);
+      const refusal = run(inspectionArgs(out), 'unrelated', env);
+      expect(refusal.status).toBe(1);
+      expect(existsSync(out)).toBe(false);
+      expect(refusal.stderr).not.toContain('PRIVATE-');
+    }
+    for (const index of [2,3,4,5,6]) {
+      const out=join(directory, `inspect-input-${index}`), args=inspectionArgs(out);
+      args[index]=index===2?'0'.repeat(64):index===3?'888':index===4?'2':'0'.repeat(64);
+      expect(run(args).status).toBe(1);
+      expect(existsSync(out)).toBe(false);
+    }
+    const intentKey=`fss/greenfield/rehearsal/${approval.prefix}/diagnostic/proposals/${approval.approvalId}/execution.json`;
+    const intentPath=join(store,digest(intentKey)), intentBytes=readFileSync(intentPath,'utf8');
+    for (const tamper of ['run','source','document']) {
+      const changed=JSON.parse(intentBytes), out=join(directory,`inspect-intent-${tamper}`);
+      if(tamper==='run') changed.execution.runId='999';
+      if(tamper==='source') changed.sourceCommit='9'.repeat(40);
+      if(tamper==='document') changed.documentBytes=Buffer.from('{}').toString('base64');
+      writeFileSync(intentPath,JSON.stringify(changed));
+      expect(run(inspectionArgs(out)).status).toBe(1);
+      expect(existsSync(out)).toBe(false);
+      writeFileSync(intentPath,intentBytes);
+    }
+    const changedApprovalPath=join(directory,'inspection-changed-approval.json');
+    writeFileSync(changedApprovalPath,JSON.stringify({...approval,sourceCommit:'9'.repeat(40)}));
+    const changedApprovalOut=join(directory,'inspect-changed-approval'), changedArgs=inspectionArgs(changedApprovalOut);
+    changedArgs[1]=changedApprovalPath; changedArgs[2]=digest(readFileSync(changedApprovalPath,'utf8'));
+    expect(run(changedArgs).status).toBe(1);
+    expect(existsSync(changedApprovalOut)).toBe(false);
+    const storedPacketPath=join(store,digest(receipt.objectKey));
+    const originalPacket=readFileSync(storedPacketPath, 'utf8');
+    for (const mutation of ['source','config','schema','authentication']) {
+      const packet=JSON.parse(originalPacket), key=Buffer.alloc(32,7);
+      const decipher=createDecipheriv('aes-256-gcm',key,Buffer.from(packet.nonce,'base64'));
+      decipher.setAAD(Buffer.from(JSON.stringify(packet.metadata)));
+      decipher.setAuthTag(Buffer.from(packet.tag,'base64'));
+      const payload=JSON.parse(Buffer.concat([decipher.update(Buffer.from(packet.ciphertext,'base64')),decipher.final()]).toString());
+      if(mutation==='source') packet.metadata.sourceCommit='9'.repeat(40);
+      if(mutation==='config') payload.configuration.bootstrap=false;
+      if(mutation==='schema') payload.configuration.api_schema_range={min:90,max:90};
+      const cipher=createCipheriv('aes-256-gcm',key,Buffer.from(packet.nonce,'base64'));
+      cipher.setAAD(Buffer.from(JSON.stringify(packet.metadata)));
+      packet.ciphertext=Buffer.concat([cipher.update(JSON.stringify(payload)),cipher.final()]).toString('base64');
+      packet.tag=cipher.getAuthTag().toString('base64');
+      if(mutation==='authentication') packet.tag=Buffer.alloc(16).toString('base64');
+      const changed=JSON.stringify(packet), out=join(directory,`inspect-${mutation}`), args=inspectionArgs(out);
+      writeFileSync(storedPacketPath,changed); args[6]=digest(changed);
+      const refusal=run(args);
+      expect(refusal.status, mutation).toBe(1);
+      expect(existsSync(out)).toBe(false);
+      expect(refusal.stderr).not.toContain(plan);
+      writeFileSync(storedPacketPath, originalPacket);
+    }
     const reviewed = {
       ...lease,
       configurationSha256: configHash,

@@ -273,7 +273,10 @@ elif a[:2]==['s3api','list-objects-v2']:print(json.dumps({'Contents':[{'Key':a[a
 elif a[:2]==['s3api','put-object']:
  if os.path.exists(objectfile(a[a.index('--key')+1])):sys.exit(1)
  shutil.copyfile(a[a.index('--body')+1],objectfile(a[a.index('--key')+1]));print('{}')
-elif a[:2]==['s3api','get-object']:shutil.copyfile(objectfile(a[a.index('--key')+1]),a[a.index('--key')+2]);print('{}')
+elif a[:2]==['s3api','get-object']:
+ if os.environ.get('INSPECTION_READ_FAIL')=='1' and '/proposal-inspection/' in a[a.index('--key')+2]:
+  print('private-cloud-sentinel',file=sys.stderr);sys.exit(1)
+ shutil.copyfile(objectfile(a[a.index('--key')+1]),a[a.index('--key')+2]);print('{}')
 else:sys.exit(1)
 `,
       docker: String.raw`#!/usr/bin/env python3
@@ -423,12 +426,32 @@ elif a[0]!='init':sys.exit(1)
     const prepared = spawnSync(process.execPath, ["--experimental-transform-types", handoffScript, "prepare", storagePath, createHash("sha256").update(storageBytes).digest("hex"), cfg, preparedOut, root], { encoding: "utf8", env: { ...env, OBJECT_STORE: store } });
     expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
     const storedReceipt = JSON.parse(readFileSync(join(preparedOut, "escrow", "escrow-receipt.json"), "utf8"));
+    const printedReceipt = JSON.parse(prepared.stdout.trim().split('\n').at(-1) ?? '');
+    expect(printedReceipt).toMatchObject({
+      ...storedReceipt, inspectionPerformed:true,
+      inspection:{schema:REQUIRED_SCHEMA,planSha256:storedReceipt.planSha256,
+        envelopeSha256:storedReceipt.envelopeSha256,lifecycleAuthority:false,applyAllowed:false},
+    });
+    expect(readFileSync(join(preparedOut, 'proposal-inspection', 'review.tfplan'), 'utf8')).toBe('private-plan-fixture');
     expect(storedReceipt).toMatchObject({ applyPerformed: false, planSha256: "747b2af5bcdd6819c68611119dc67922ee873424fc2dadd944b2e92d4b7b0934", retentionErasureSupported: false });
     expect(JSON.parse(readFileSync(store,"utf8")).version).toBe("fss.private-plan.v2");
     expect(readFileSync(store, "utf8")).not.toContain("private-plan-fixture");
     expect(prepared.stdout + prepared.stderr).not.toContain("opaque-key");
     expect(() => readFileSync(join(preparedOut, "plan.tfplan"))).toThrow();
     expect(() => readFileSync(join(preparedOut, "configuration.private.json"))).toThrow();
+    const failedInspectionApproval = {...storage, approvalId:'99999999-2222-4333-8444-555555555555'};
+    const failedApprovalPath = join(dir, 'failed-inspection-approval.json');
+    const failedApprovalBytes=JSON.stringify(failedInspectionApproval);
+    writeFileSync(failedApprovalPath,failedApprovalBytes);
+    const failedInspectionOut=join(dir,'failed-inspection-out');
+    const failedInspection=spawnSync(process.execPath,["--experimental-transform-types",handoffScript,'prepare',failedApprovalPath,
+      createHash('sha256').update(failedApprovalBytes).digest('hex'),cfg,failedInspectionOut,root],
+      {encoding:'utf8',env:{...env,OBJECT_STORE:join(dir,'inspection-refused-store.json'),INSPECTION_READ_FAIL:'1'}});
+    expect(failedInspection.status).toBe(1);
+    expect(failedInspection.stderr).toContain('cloud_command_refused');
+    expect(failedInspection.stdout+failedInspection.stderr).not.toMatch(/inspectionPerformed|envelopeSha256|private-cloud-sentinel/u);
+    expect(() => readFileSync(join(failedInspectionOut,'proposal-inspection','inspection-receipt.json'))).toThrow();
+    expect(JSON.parse(readFileSync(join(failedInspectionOut,'escrow','escrow-receipt.json'),'utf8')).applyPerformed).toBe(false);
     const refusedPreparation = spawnSync(process.execPath, ["--experimental-transform-types", handoffScript, "prepare", storagePath, createHash("sha256").update(storageBytes).digest("hex"), cfg, join(dir, "state-refused-preparation"), root], { encoding: "utf8", env: { ...env, OBJECT_STORE: join(dir, "refused-store.json"), STATE_UNREADABLE: "1" } });
     expect(refusedPreparation.status).toBe(1);
     expect(refusedPreparation.stderr).toContain("command_failed_terraform_show");
