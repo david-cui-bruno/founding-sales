@@ -82,7 +82,7 @@ export async function runAskUpgradeWorkflow(
   assert.equal(completed.value.status, 'done');
   assert.equal(completed.value.version, 2);
 
-  const session=await transact(()=>createAskSession(context,{commandId:randomUUID(),clientVersion:'1.0.13',scope:{kind:'person',personId}}));
+  const session=await transact(()=>createAskSession(context,{commandId:randomUUID(),clientVersion:'1.0.13',scope:{kind:'selected',sources:scope.sources}}));
   assert(session.ok);
   const turn=await transact(()=>requestAskSessionTurn(context,{commandId:randomUUID(),clientVersion:'1.0.13',...session.value,question:'What is the scheduling evidence?'}));
   assert(turn.ok&&turn.value.state==='unavailable','new agent request cannot acquire authority from upgrade');

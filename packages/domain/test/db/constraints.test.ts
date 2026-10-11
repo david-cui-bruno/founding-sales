@@ -1,3 +1,5 @@
+import {ASK_CANONICAL_INDEX_CONSTRAINT_CASES,seedCurrentCanonicalWindow} from './support/askCanonicalIndexCases.ts';
+import {ASK_EXECUTION_EVIDENCE_CONSTRAINT_CASES} from './support/askExecutionEvidenceCases.ts';
 import {ASK_SESSION_CONSTRAINT_CASES} from './support/askSessionCases.ts';
 import {CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES} from './support/crmAcquisitionDiagnosticCases.ts';
 import {CRM_CAPABILITY_CONSTRAINT_CASES} from './support/crmCapabilityCases.ts';
@@ -799,8 +801,10 @@ const relationshipConstraintCases: readonly Case[] = [
 ];
 
 const cases: readonly Case[] = [
+  ...ASK_CANONICAL_INDEX_CONSTRAINT_CASES,
   ...ASK_ANSWER_CONSTRAINT_CASES,
   ...ASK_SESSION_CONSTRAINT_CASES,
+  ...ASK_EXECUTION_EVIDENCE_CONSTRAINT_CASES,
   ...ASK_ACTION_CONSTRAINT_CASES,
   ...CRM_EVIDENCE_CONSTRAINT_CASES,
   ...CRM_COMMITMENT_CONSTRAINT_CASES,
@@ -2229,6 +2233,18 @@ describe("foundation constraints", () => {
 
   afterAll(async () => {
     await database.drop();
+  });
+
+  it('refuses current-vector reset before a replacement embedding can be supplied',async()=>{
+    await fixture.session.query('BEGIN');
+    try{const record=await seedCurrentCanonicalWindow(fixture);
+      await fixture.session.query('SAVEPOINT reset_attempt');
+      await expect(fixture.session.query("UPDATE crm_ask_canonical_windows SET state='pending',embedding=NULL WHERE workspace_id=$1 AND id=$2",[record.workspaceId,record.windowId])).rejects.toMatchObject({constraint:'crm_ask_canonical_window_immutable'});
+      await fixture.session.query('ROLLBACK TO SAVEPOINT reset_attempt');
+      const retained=(await fixture.session.query<{state:string;embedding:number[]}>("SELECT state,embedding FROM crm_ask_canonical_windows WHERE workspace_id=$1 AND id=$2",[record.workspaceId,record.windowId])).rows[0]!;
+      expect(retained.state).toBe('current');expect(retained.embedding).toEqual(Array(256).fill(1));
+      await expect(fixture.session.query("UPDATE crm_ask_canonical_windows SET embedding=$3::double precision[] WHERE workspace_id=$1 AND id=$2",[record.workspaceId,record.windowId,Array(256).fill(2)])).rejects.toMatchObject({constraint:'crm_ask_canonical_window_immutable'});
+    }finally{await fixture.session.query('ROLLBACK');}
   });
 
   it.each(cases.map((testCase) => [testCase.constraint, testCase] as const))(

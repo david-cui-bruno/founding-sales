@@ -82,6 +82,7 @@ export const mailConversationSchema = z.discriminatedUnion('state', [
       originalContexts: z.array(mailContextSchema).max(100),
       reviewedContexts: z.array(mailContextSchema).max(100),
       participants: z.array(z.string().max(320)).max(50),
+      envelope: z.strictObject({from:z.string().max(320).nullable(),to:z.array(z.string().max(320)).max(50),cc:z.array(z.string().max(320)).max(50)}).optional(),
       providerOrigin:z.enum(['received','sent','imported','unknown']).default('unknown'),
       parserVersion: z.string().max(100),
       attachments: z.array(z.strictObject({filename:z.string().max(300),mimeType:z.string().max(200),sizeBytes:z.number().int().nonnegative(),attachmentId:z.string().max(500)})).max(100).default([]),

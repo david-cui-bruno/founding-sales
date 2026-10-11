@@ -51,6 +51,7 @@ describe('job kind classes', () => {
     ]);
     expect(kindsOfClass('bulk')).toEqual([
       'crm.ask_answer',
+      'crm.ask_index',
       'crm.commitments_project',
       'crm.commitments_intent',
       'crm.mail_progress',

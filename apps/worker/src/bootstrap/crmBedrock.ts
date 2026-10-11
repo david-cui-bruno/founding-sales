@@ -21,10 +21,12 @@ export function composeCrmBedrock(options: {
   readonly revalidateExtraction?: NonNullable<NonNullable<HandlerComposition['crmExtraction']>['revalidatePurpose']>;
   readonly revalidateAskPurpose?: NonNullable<AskAnswerComposition['revalidatePurpose']>;
   readonly providerTimeoutMs?: number;
-}): Pick<HandlerComposition, 'crmExtraction' | 'crmAskAnswers'> {
+}): Pick<HandlerComposition, 'crmExtraction' | 'crmAskAnswers' | 'crmAskIndex'> {
   if (options.answer !== undefined && options.verifyPurpose === undefined)
     throw new Error('crm_ask_purpose_verifier_required');
+  if (options.embedding !== undefined && options.verifyPurpose === undefined) throw new Error('crm_embedding_purpose_verifier_required');
   return {
+    ...(options.embedding === undefined ? {} : {crmAskIndex:{embedding:createAskTitanAdapter(options.embedding),verifyPurpose:options.verifyPurpose!,...(options.revalidateAskPurpose?{revalidatePurpose:options.revalidateAskPurpose}:{}),...(options.allowControlledEvaluation===undefined?{}:{allowControlledEvaluation:options.allowControlledEvaluation}),...(options.providerTimeoutMs===undefined?{}:{providerTimeoutMs:options.providerTimeoutMs})}}),
     ...(options.extraction === undefined ? {} : { crmExtraction: {
       ...(options.verifyExtraction===undefined?{}:{verifyPurpose:options.verifyExtraction}),
       ...(options.revalidateExtraction===undefined?{}:{revalidatePurpose:options.revalidateExtraction}),

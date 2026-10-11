@@ -1,3 +1,4 @@
+import {readAskExecutionEvidence} from './askExecutionEvidence.ts';
 import {z} from 'zod';
 import {askActionChangedSchema,askActionAcknowledgmentSchema,askActionPageSchema,askExplicitCorpusScopeSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,crmSourceLookupSchema,type AskActionChange,type AskActionCreate,type AskActionRead,type CanonicalSourceReference} from '@fss/contracts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
@@ -41,7 +42,8 @@ export async function createAskAction(context:RepositoryContext,input:AskActionC
  if(current===null||current.question===null||current.version!==input.expectedVersion)return {ok:false as const,reason:'source_unavailable'};
  const row=(await context.db.query<{scope:unknown;initial_contexts:unknown;initial_access_closure:unknown;version:number;epoch:number}>('SELECT scope,initial_contexts,initial_access_closure,version,epoch FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR SHARE',[context.scope.workspaceId,input.requestId,actor.userId])).rows[0];
  if(row===undefined||row.version!==input.expectedVersion)return {ok:false as const,reason:'source_unavailable'};
- const scope=askExplicitCorpusScopeSchema.parse(row.scope),contexts=crmClaimContextSchema.array().max(10).parse(row.initial_contexts),original=crmOriginalAccessClosureSchema.parse(row.initial_access_closure);
+ const evidence=await readAskExecutionEvidence(context,{requestId:input.requestId,version:row.version,epoch:row.epoch});if(!evidence||evidence.scope.sources.length===0)return {ok:false as const,reason:'source_unavailable'};
+ const scope=askExplicitCorpusScopeSchema.parse(evidence.scope),contexts=evidence.contexts,original=evidence.closure;
  const target=input.action.kind==='preference'?null:input.action.target;
  if(target!==null&&!contexts.some(value=>target.kind==='firm'?value.firmIds.includes(target.firmId):value.personId===target.personId))return {ok:false as const,reason:'source_unavailable'};
  if(target?.kind==='firm'&&target.opportunityId!==undefined&&(await context.db.query('SELECT id FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND id=$3 FOR SHARE',[context.scope.workspaceId,target.firmId,target.opportunityId])).rows.length!==1)return {ok:false as const,reason:'source_unavailable'};
@@ -60,18 +62,19 @@ export async function createAskAction(context:RepositoryContext,input:AskActionC
  return {ok:true as const,value:askActionAcknowledgmentSchema.parse({actionId:created.id,version:created.version,kind:created.kind})};
 }
 /** Private note/task bodies are loaded only after all original input and support checks. */
-export async function readAskActions(context:RepositoryContext&{db:SessionQueryable},input:AskActionRead){
+export async function readAskActions(context:RepositoryContext&{db:SessionQueryable},input:AskActionRead,options:{inTransaction?:boolean}={}){
  const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return null;
  const scope=input.scope;
  const rows=(await context.db.query<ActionProof>(`SELECT id,version,kind,status,private_state,target_firm_id,target_person_id,target_opportunity_id,input_scope,initial_contexts,original_access_closure,support_refs,review_required,created_at,updated_at,completed_at FROM crm_ask_actions WHERE workspace_id=$1 AND owner_user_id=$2 AND ($3::uuid IS NULL OR id>$3) AND ($7::uuid IS NULL OR target_opportunity_id=$7::uuid) AND ($4='history' OR $4='person' AND target_person_id=$5::uuid OR $4='firm' AND target_firm_id=$5::uuid OR $4='today' AND kind='task' AND status='open' AND due IS NOT NULL AND CASE due->>'kind' WHEN 'date' THEN (due->>'date')::date <= (clock_timestamp() AT TIME ZONE (due->>'zone'))::date WHEN 'instant' THEN ((due->>'at')::timestamptz AT TIME ZONE (due->>'zone'))::date <= (clock_timestamp() AT TIME ZONE (due->>'zone'))::date ELSE false END) ORDER BY id LIMIT $6`,[context.scope.workspaceId,actor.userId,input.afterId??null,scope.kind,scope.kind==='person'?scope.personId:scope.kind==='firm'?scope.firmId:null,input.limit+1,scope.kind==='firm'?scope.opportunityId??null:null])).rows;
  const items=[];
  for(const row of rows.slice(0,input.limit)){
-  const item=await withTransaction(context.db,async()=>{
+  const currentItem=async()=>{
    const support=await currentActionSupport(context,row);
    const body=support.state==='current'?(await context.db.query<{human_text:string;due:unknown}>('SELECT human_text,due FROM crm_ask_actions WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3 AND version=$4 AND private_state=\'available\' FOR SHARE',[context.scope.workspaceId,actor.userId,row.id,row.version])).rows[0]:undefined;
    const readable=support.state==='current'&&body!==undefined;
    return {actionId:row.id,version:row.version,kind:row.kind,status:row.status,provenance:'human' as const,createdAt:row.created_at.toISOString(),updatedAt:row.updated_at.toISOString(),completedAt:row.completed_at?.toISOString()??null,target:readable?row.target_firm_id!==null?{kind:'firm',firmId:row.target_firm_id,...row.target_opportunity_id===null?{}:{opportunityId:row.target_opportunity_id}}:row.target_person_id!==null?{kind:'person',personId:row.target_person_id}:null:null,label:readable&&row.kind==='task'?body.human_text:null,text:readable&&row.kind!=='task'?body.human_text:null,due:readable?body.due:null,reviewRequired:row.review_required,supportState:readable?'current':support.state==='current'?'unavailable':support.state,sources:readable?support.sources:[]};
-  });
+  };
+  const item=options.inTransaction?await currentItem():await withTransaction(context.db,currentItem);
   items.push(item);
  }
  if(!await activeIdentityActor(context))return null;

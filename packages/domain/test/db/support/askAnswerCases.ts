@@ -80,7 +80,7 @@ cases.push({constraint:'crm_ask_financial_immutable',run:async f=>{
 }});
 cases.push(bad('crm_ask_history_revision_positive','crm_ask_requests',{history_revision:0}));
 for(const history_title of ['', '   ', 'x'.repeat(101)])cases.push(bad('crm_ask_history_title_bound','crm_ask_requests',{history_title}));
-export async function seedAskRequest(f:Pick<Fixture,'session'|'seeded'>){const row=request(f);await insert(f,'crm_ask_requests',row);return String(row['id']);}
+export async function seedAskRequest(f:Pick<Fixture,'session'|'seeded'>,patch:Row={}){const row={...request(f),...patch};await insert(f,'crm_ask_requests',row);return String(row['id']);}
 export async function seedAskFinancialReceipt(f:Pick<Fixture,'session'|'seeded'>){const row=await financial(f);await insert(f,'crm_ask_financial_receipts',row);return String(row['id']);}
 for(const validated_progress of ['{}','{"exactResults":null}','{"exactResults":{}}','{"exactResults":[],"provisionalText":"private"}'])cases.push(bad('crm_ask_validated_progress_bound','crm_ask_requests',{validated_progress}));
 for(const [constraint,patch]of [['crm_ask_agent_scope_redacted',{original_agent_scope:'{}'}],['crm_ask_validated_progress_redacted',{validated_progress:'{"exactResults":[]}'}]]as const)cases.push(bad(constraint,'crm_ask_requests',{state:'deleted',reason:'deleted',question:null,scope:null,initial_contexts:null,initial_access_closure:null,...patch}));

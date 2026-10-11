@@ -1,5 +1,6 @@
+import {readAskExecutionEvidence,admitAskSources,admitAskRecord} from './askExecutionEvidence.ts';
 import type {z} from 'zod';
-import {askAgentScopeSchema,askSessionViewSchema,askSessionPageSchema,type askSessionCreateSchema,type askSessionChangeSchema,type askSessionTurnSchema} from '@fss/contracts';
+import {askRecordMatchSchema,askAgentScopeSchema,askSessionViewSchema,askSessionPageSchema,type askSessionCreateSchema,type askSessionChangeSchema,type askSessionTurnSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from './identityAccess.ts';
 import {lockAskLifecycle} from './askAnswerLifecycle.ts';
@@ -31,7 +32,7 @@ export async function changeAskSession(context:RepositoryContext,input:z.infer<t
  }else if(action.kind==='delete'){
   const actor=context.scope.actor;if(actor.kind!=='user')return {ok:false as const,reason:'source_unavailable'};
   const turns=(await context.db.query<{request_id:string;history_revision:number}>('SELECT r.id AS request_id,r.history_revision FROM crm_ask_session_turns t JOIN crm_ask_requests r ON r.workspace_id=t.workspace_id AND r.id=t.request_id WHERE t.workspace_id=$1 AND t.session_id=$2 ORDER BY t.ordinal',[context.scope.workspaceId,row.id])).rows;
-  for(const turn of turns){const erased=await changeAskHistory(context,{commandId:input.commandId,clientVersion:input.clientVersion,requestId:turn.request_id,expectedRevision:turn.history_revision,action:{kind:'delete'}});if(!erased.ok)return erased;}
+  for(const turn of turns){const current=(await context.db.query<{history_revision:number;state:string}>('SELECT history_revision,state FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,turn.request_id])).rows[0];if(!current)return {ok:false as const,reason:'source_unavailable'};if(current.state==='deleted')continue;const erased=await changeAskHistory(context,{commandId:input.commandId,clientVersion:input.clientVersion,requestId:turn.request_id,expectedRevision:current.history_revision,action:{kind:'delete'}});if(!erased.ok)return erased;}
   await context.db.query("UPDATE crm_ask_sessions SET scope=NULL,title=NULL,pinned=false,state='deleted',version=version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",[context.scope.workspaceId,row.id]);
  }else{
   if(await resolveAskAgentScope(context,askAgentScopeSchema.parse(row.scope))===null)return {ok:false as const,reason:'source_unavailable'};
@@ -49,6 +50,10 @@ export async function requestAskSessionTurn(context:RepositoryContext,input:z.in
  if(count>=50)return {ok:false as const,reason:'input_bound_reached'};
  const created=await requestAskAnswer(context,{commandId:input.commandId,clientVersion:input.clientVersion,question:input.question,scope:{sources:resolved.sources},execution:'agent_v1',agentScope:scope.data});
  if(!created.ok)return created;
+ if(created.value.state==='pending'){
+  const previous=(await context.db.query<{id:string;version:number;epoch:number;original_agent_scope:unknown}>('SELECT r.id,r.version,r.epoch,r.original_agent_scope FROM crm_ask_session_turns t JOIN crm_ask_requests r ON r.workspace_id=t.workspace_id AND r.id=t.request_id WHERE t.workspace_id=$1 AND t.session_id=$2 AND r.state=\'complete\' ORDER BY t.ordinal DESC LIMIT 8',[context.scope.workspaceId,row.id])).rows;
+  for(const prior of previous){const intent=askAgentScopeSchema.safeParse(prior.original_agent_scope);if(!intent.success||!askScopeWithin(intent.data,scope.data))continue;const evidence=await readAskExecutionEvidence(context,{requestId:prior.id,version:prior.version,epoch:prior.epoch});if(!evidence)continue;const key={requestId:created.value.requestId,version:created.value.version,epoch:1};if(!await admitAskSources(context,key,evidence.scope.sources))continue;let admitted=true;for(const value of evidence.records){const record=askRecordMatchSchema.parse(value);if(!await admitAskRecord(context,key,{kind:record.kind,recordId:record.recordId},record)){admitted=false;break;}}if(!admitted)continue;await context.db.query('INSERT INTO crm_ask_history_dependencies(workspace_id,request_id,parent_request_id,parent_version,parent_epoch) VALUES($1,$2,$3,$4,$5)',[context.scope.workspaceId,key.requestId,prior.id,prior.version,prior.epoch]);}
+ }
  await context.db.query('INSERT INTO crm_ask_session_turns(workspace_id,session_id,request_id,ordinal) VALUES($1,$2,$3,$4)',[context.scope.workspaceId,row.id,created.value.requestId,count+1]);
  await context.db.query('UPDATE crm_ask_sessions SET version=version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,row.id]);
  return {ok:true as const,value:{sessionId:row.id,version:row.version+1,requestId:created.value.requestId,requestVersion:created.value.version,state:created.value.state}};
@@ -65,7 +70,7 @@ export async function readAskSession(context:RepositoryContext,sessionId:string)
    const prior=askAgentScopeSchema.safeParse(id.original_agent_scope);
    if(!prior.success||!scope.success||!askScopeWithin(prior.data,scope.data)){changed=true;continue;}
    if(id.scope?.sources?.length===0&&(!prior.success||!scope.success||!askScopeWithin(prior.data,scope.data))){changed=true;continue;}
-   if(id.scope?.sources?.some(source=>!permitted.sources.some(current=>current.workspaceId===source.workspaceId&&current.kind===source.kind&&current.sourceId===source.sourceId&&current.revision===source.revision&&current.contentHash===source.contentHash))){changed=true;continue;}
+   if(scope.success&&scope.data.kind==='selected'&&id.scope?.sources?.some(source=>!permitted.sources.some(current=>current.workspaceId===source.workspaceId&&current.kind===source.kind&&current.sourceId===source.sourceId&&current.revision===source.revision&&current.contentHash===source.contentHash))){changed=true;continue;}
    const turn=await readAskAnswer(context,id.request_id);if(turn===null){changed=true;continue;}turns.push(turn);if(turn.question===null)changed=true;}
  }
  const refreshed=(await context.db.query<SessionRow>('SELECT * FROM crm_ask_sessions WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,row.id])).rows[0]!;

@@ -1,3 +1,4 @@
+import {CURRENT_SCHEMA_VERSION} from '@fss/domain/db/schemaRange.ts';
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
@@ -262,7 +263,7 @@ it("refuses the current schema rather than silently widening the historical sche
  try{
   const current=new URL(url);current.pathname=`/${currentName}`;
   const currentClient=new pg.Client({connectionString:current.toString()});await currentClient.connect();
-  try{expect((await currentClient.query<{version:number}>('SELECT max(version) AS version FROM schema_versions')).rows[0]?.version).toBe(96);}finally{await currentClient.end();}
+  try{expect((await currentClient.query<{version:number}>('SELECT max(version) AS version FROM schema_versions')).rows[0]?.version).toBe(CURRENT_SCHEMA_VERSION);}finally{await currentClient.end();}
   const result=await run({FSS_MIGRATION_DATABASE_URL:current.toString()});
   expect(result.code).toBe(20);
   expect(JSON.parse(result.stderr.trim()).reason).toBe('diagnostic_bindings_environment_mismatch');

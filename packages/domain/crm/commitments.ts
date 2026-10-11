@@ -161,7 +161,7 @@ const todayKnownFirmAccess=`NOT EXISTS(WITH task_proofs AS (
  UNION SELECT m.firm_id::text FROM meeting_transcripts t JOIN meeting_recordings mr ON mr.workspace_id=t.workspace_id AND mr.id=t.recording_id JOIN meetings m ON m.workspace_id=mr.workspace_id AND m.id=mr.meeting_id WHERE r.target->'source'->>'kind'='meeting_transcript' AND t.workspace_id=r.workspace_id AND t.id=(r.target->'source'->>'sourceId')::uuid
  UNION SELECT cx.firm_id::text FROM crm_mail_sources s JOIN crm_mail_source_contexts cx ON cx.workspace_id=s.workspace_id AND cx.source_id=s.source_id AND ${mailContextPredicate()} WHERE r.target->'source'->>'kind'='mail' AND s.workspace_id=r.workspace_id AND s.source_id=(r.target->'source'->>'sourceId')::uuid AND cx.firm_id IS NOT NULL
 ) required JOIN firms f ON f.workspace_id=r.workspace_id AND f.id=required.id::uuid WHERE f.assigned_user_id IS DISTINCT FROM $2::uuid)`;
-export async function readCrmCommitments(context:RepositoryContext,input:CrmCommitmentRead,mail:CrmMailEvidencePort=createNativeCrmMailEvidence()){
+export async function readCrmCommitments(context:RepositoryContext,input:CrmCommitmentRead,mail:CrmMailEvidencePort=createNativeCrmMailEvidence(),selection:{allOpenTasks?:boolean}={}){
  const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return null;
  const scope=input.scope;
  if(scope.kind==='history'){
@@ -173,7 +173,7 @@ export async function readCrmCommitments(context:RepositoryContext,input:CrmComm
  WHEN 'person' THEN context_snapshot->>'personId'=$5
  WHEN 'firm' THEN context_snapshot->'firmIds' ? $5
  WHEN 'source' THEN target->'source'->>'sourceId'=$5 AND target->'source'->>'kind'=$6
- ELSE today_eligibility='current' AND ((state='applied' AND EXISTS(SELECT 1 FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND t.status='open')) OR (${pendingProjectionFailure})) END
+ ELSE ${selection.allOpenTasks?"state='applied' AND EXISTS(SELECT 1 FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND (t.task_key=r.activation_key OR t.review_id=r.id AND t.activation_receipt IS NOT NULL) AND t.status='open')":`today_eligibility='current' AND ((state='applied' AND EXISTS(SELECT 1 FROM crm_internal_tasks t WHERE t.workspace_id=r.workspace_id AND t.task_key=r.activation_key AND t.status='open')) OR (${pendingProjectionFailure}))`} END
  ORDER BY id LIMIT $7`,[context.scope.workspaceId,actor.userId,input.afterId??null,scope.kind,scope.kind==='person'?scope.personId:scope.kind==='firm'?scope.firmId:scope.kind==='source'?scope.sourceId:null,scope.kind==='source'?scope.sourceKind:null,input.limit+1,actor.role==='admin'])).rows;
  const candidates=rows.filter(row=>{if(row.state==='redacted')return false;const parsed=crmEvidenceClaimTargetSchema.safeParse(row.target);if(!parsed.success)return false;const contextView=row.context_snapshot as {personId?:string;firmIds?:string[]};return scope.kind==='source'?parsed.data.source.sourceId===scope.sourceId&&parsed.data.source.kind===scope.sourceKind:scope.kind==='person'?contextView.personId===scope.personId:scope.kind==='firm'?contextView.firmIds?.includes(scope.firmId)===true:true;});
  const live=candidates.filter(row=>row.state!=='redacted');const targets=live.map(row=>crmEvidenceClaimTargetSchema.parse(row.target));
@@ -196,7 +196,7 @@ export async function readCrmCommitments(context:RepositoryContext,input:CrmComm
   const earlierBefore=taskRows.filter(task=>task.review_id===row.id&&task.task_key!==row.activation_key&&task.status==='open'&&task.activation_receipt!==null);
   const earlier=(await context.db.query<Task>("SELECT * FROM crm_internal_tasks WHERE workspace_id=$1 AND review_id=$2 AND task_key IS DISTINCT FROM $3 AND status='open' AND activation_receipt IS NOT NULL ORDER BY id LIMIT 11 FOR SHARE",[context.scope.workspaceId,row.id,row.activation_key])).rows;
   if(JSON.stringify(earlier)!==JSON.stringify(earlierBefore))return null;
-  if(scope.kind==='today'&&(support===null||(row.state==='applied'?tasks[0]?.status!=='open':row.state!=='pending')||row.due===null||row.today_eligibility!=='current'))continue;
+  if(scope.kind==='today'&&(support===null||(selection.allOpenTasks?tasks[0]?.status!=='open'&&earlier.length===0:(row.state==='applied'?tasks[0]?.status!=='open':row.state!=='pending')||row.due===null||row.today_eligibility!=='current')))continue;
   items.push({supersededOpenTasks:earlier.slice(0,10).map(task=>({taskId:task.id,status:'open' as const,version:task.version,reviewRequired:true as const,reason:'human_action_changed' as const})),supersededOpenTasksTruncated:earlier.length>10,commitmentId:row.id,revision:row.revision,basis:row.basis,state:support===null?'review_required' as const:row.state,todayEligibility:support===null?null:row.today_eligibility,actor:support===null?null:row.actor,actionLabel:support===null?null:row.action_label,due:support===null?null:crmCommitmentDueSchema.parse(row.due),quote:support?.claim.quote??null,source:support?.source??null,task:tasks[0]===undefined?null:{taskId:tasks[0].id,status:tasks[0].status,version:tasks[0].version,completedAt:tasks[0].completed_at?.toISOString()??null}});
  }
  if(!await activeIdentityActor(context))return null;

@@ -7,7 +7,7 @@ import {METADATA_REVIEW_DISCLOSURE,businessAccountBinding} from '../business/acq
 import {MAIL_CAPTURE_VERSION} from '../mail/crmSources.ts';
 import {GMAIL_SCOPES} from '../mail/types.ts';
 export const CRM_SUPPORTED_ASK_VERSIONS=Object.freeze({processorVersion:'ask-answer-v1',retrievalVersion:'lexical-original-v1',answerVersion:'literal-v1',supportVersion:'exact-original-v1',chunkerVersion:'lexical-original-v1'});
-export const CRM_SUPPORTED_AGENT_ASK_VERSIONS=Object.freeze({processorVersion:'ask-agent-v1',retrievalVersion:'ask-hybrid-v1',answerVersion:'ask-agent-v1',supportVersion:'cited-evidence-v1',chunkerVersion:'lexical-original-v1'});
+export const CRM_SUPPORTED_AGENT_ASK_VERSIONS=Object.freeze({processorVersion:'ask-agent-v2',retrievalVersion:'ask-hybrid-v2',answerVersion:'ask-agent-v2',supportVersion:'cited-evidence-v1',chunkerVersion:'lexical-original-v1'});
 export const CRM_MAIL_CAPTURE_DISCLOSURE_TEXT='Callie may retain approved business email bodies, including incoming messages and original Sent replies, under the selected owner/account policy. Personal and excluded mail is not automatically copied. Disconnect stops acquisition but preserves approved copies; explicit deletion erases copied content and dependent evidence without deleting Gmail originals. Historical import is bounded and reports incomplete coverage. Hosted AI requires separate purpose, data handling, evaluation and budget approval. This consent does not authorize sending.';
 export const CRM_MAIL_CAPTURE_DISCLOSURE=Object.freeze({version:'crm-mail-body-acquisition-v1',sha256:createHash('sha256').update(CRM_MAIL_CAPTURE_DISCLOSURE_TEXT).digest('hex')});
 type Capability=CrmCapabilityConfiguration['capability'];

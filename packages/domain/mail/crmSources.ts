@@ -965,6 +965,9 @@ export async function readMailConversation(
         source_id: string;
         direction: 'incoming' | 'outgoing';
         subject: string | null;
+        header_from: string | null;
+        header_to: string[];
+        header_cc: string[];
         mailbox_id: string;
         source_revision: number;
         content_hash: string;
@@ -985,7 +988,7 @@ export async function readMailConversation(
         sent_proof: boolean;
       }
     >(
-      `SELECT s.*,m.direction,m.subject,m.attachment_references,b.body_text FROM crm_mail_sources s JOIN mail_messages m ON m.workspace_id=s.workspace_id AND m.id=s.source_id LEFT JOIN mail_message_bodies b ON b.workspace_id=s.workspace_id AND b.mail_message_id=s.source_id WHERE s.workspace_id=$1 AND s.source_id=$2 FOR UPDATE OF s`,
+      `SELECT s.*,m.direction,m.subject,m.header_from,m.header_to,m.header_cc,m.attachment_references,b.body_text FROM crm_mail_sources s JOIN mail_messages m ON m.workspace_id=s.workspace_id AND m.id=s.source_id LEFT JOIN mail_message_bodies b ON b.workspace_id=s.workspace_id AND b.mail_message_id=s.source_id WHERE s.workspace_id=$1 AND s.source_id=$2 FOR UPDATE OF s`,
       [context.scope.workspaceId, exact.sourceId],
     )
   ).rows[0];
@@ -1053,6 +1056,7 @@ export async function readMailConversation(
         .filter((cx) => cx.context_kind === 'reviewed')
         .map(contextDto),
       participants: row.participants,
+      envelope: {from:row.header_from,to:row.header_to,cc:row.header_cc},
       parserVersion: row.parser_version,
       attachments: row.attachment_references,
       representationDiagnostics: row.representation_diagnostics,

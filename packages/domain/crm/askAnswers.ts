@@ -1,6 +1,8 @@
+import {readAskScopedExact} from './askInvestigationRecords.ts';
+import {readAskExecutionEvidence} from './askExecutionEvidence.ts';
 import {askToolFirmIds} from './askAgentScope.ts';
 import {askAgentScopeSchema} from '@fss/contracts';
-import {askSupportedWorkSchema,askExplicitCorpusScopeSchema,askGroundedAnswerSchema,askAnswerAcknowledgmentSchema,askAnswerRequestPayloadSchema,askAnswerReadResultSchema,askAnswerSourceResultSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAnswerRequest} from '@fss/contracts';
+import {askIdentityClarificationSchema,askSupportedWorkSchema,askExplicitCorpusScopeSchema,askGroundedAnswerSchema,askAnswerAcknowledgmentSchema,askAnswerRequestPayloadSchema,askAnswerReadResultSchema,askAnswerSourceResultSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAnswerRequest} from '@fss/contracts';
 import {readAsk} from './ask.ts';
 import {askFingerprint} from './askAnswerAuthority.ts';
 import {resolveAskAgentScope} from './askAgentScope.ts';
@@ -68,13 +70,15 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
  if(row===undefined)return null;
  const metadata={requestId:row.id,version:row.version,createdAt:row.created_at.toISOString(),state:row.state,reason:row.reason,...row['execution_version']==='agent_v1'?{execution:'agent_v1',progress:{completedSteps:Number(row['completed_steps']),stage:row['progress_stage'],cancelledAt:row['cancelled_at'] instanceof Date?row['cancelled_at'].toISOString():null}}:{}};
  const unavailable=()=>askAnswerReadResultSchema.parse({...metadata,state:row.state==='complete'?'stale':row.state,reason:row.state==='deleted'?'deleted':row.state==='stale'?(row.reason??'source_changed'):'source_unavailable',question:null,fallback:null,answer:null});
- if(row.state==='deleted'||row.state==='stale')return unavailable();
+ if(row.state==='deleted'||row.state==='stale'||row.reason==='source_unavailable')return unavailable();
  const input=askAnswerRequestPayloadSchema.safeParse({question:row.question,scope:row.scope,execution:row['execution_version']});
  const originals=crmOriginalAccessClosureSchema.safeParse(row.initial_access_closure);
  const contexts=crmClaimContextSchema.array().max(10).safeParse(row.initial_contexts);
  if(!input.success||!originals.success||!contexts.success||contexts.data.length!==input.data.scope.sources.length)return unavailable();
  const intent=askAgentScopeSchema.safeParse(row['original_agent_scope']);
  if(row['original_agent_scope']!==null&&row['original_agent_scope']!==undefined&&!intent.success)return unavailable();
+ const evidence=await readAskExecutionEvidence(context,{requestId,version:row.version,epoch:row.epoch});if(!evidence)return unavailable();
+ input.data.scope=evidence.scope;contexts.data=evidence.contexts;originals.data=evidence.closure;
  const sources=input.data.scope.sources;
  if(!await lockConflictSources(context,sources,contexts.data,[originals.data]))return unavailable();
  for(const [index,source] of sources.entries()){
@@ -99,9 +103,11 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
  if(completed.success)for(const exact of completed.data.exactResults){
   const value=exact.value as {scope?:{firmId?:string}};
   const firmId=value?.scope?.firmId;
-  if(!firmId||!intentFirmIds.includes(firmId))continue;
-  const refreshed=await readAsk(context,exact.operation==='opportunities'?{operation:'opportunities',scope:{firmId},limit:20,status:'all'}:exact.operation==='tasks'?{operation:'tasks',scope:{firmId},limit:20}:{operation:'reply_status',scope:{firmId}});
+  if(firmId&&!intent.success&&!intentFirmIds.includes(firmId))continue;
+  if(!firmId&&(!intent.success||!['business','person'].includes(intent.data.kind)))continue;
+  const refreshed=intent.success?await readAskScopedExact(context,intent.data,{operation:exact.operation,...firmId?{firmId}:{},limit:20,status:'all'}):firmId?await readAsk(context,exact.operation==='opportunities'?{operation:'opportunities',scope:{firmId},limit:20,status:'all'}:exact.operation==='tasks'?{operation:'tasks',scope:{firmId},limit:20}:{operation:'reply_status',scope:{firmId}}):null;
   if(refreshed!==null&&askFingerprint(refreshed)===exact.valueHash)exactResults.push(exact);
  }
- return askAnswerReadResultSchema.parse({...metadata,question:input.data.question,fallback,...exactResults.length?{supportedWork:{exactResults}}:{},answer:finalAnswer===null?null:{...finalAnswer,...finalAnswer.exactResults?{exactResults,missingEvidence:exactResults.length===finalAnswer.exactResults.length?finalAnswer.missingEvidence:[...new Set([...finalAnswer.missingEvidence,'exact_state_changed'])]}:{}}});
+ const clarification=askIdentityClarificationSchema.safeParse(row['clarification']);
+ return askAnswerReadResultSchema.parse({...metadata,question:input.data.question,fallback,...clarification.success?{clarification:clarification.data}:{},...exactResults.length?{supportedWork:{exactResults}}:{},answer:finalAnswer===null?null:{...finalAnswer,...finalAnswer.exactResults?{exactResults,missingEvidence:exactResults.length===finalAnswer.exactResults.length?finalAnswer.missingEvidence:[...new Set([...finalAnswer.missingEvidence,'exact_state_changed'])]}:{}}});
 }

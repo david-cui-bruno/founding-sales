@@ -1,6 +1,5 @@
 import type {AskAgentScope} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {discoverAskSources} from './askCorpus.ts';
 import {activeIdentityActor,lockIdentityContext} from './identityAccess.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
 import {readProcessingContext} from './processingContext.ts';
@@ -12,9 +11,8 @@ export async function resolveAskAgentScope(context:RepositoryContext,scope:AskAg
  const firmIds=scope.kind==='firm'?[scope.firmId]:[];
  const personIds=scope.kind==='person'?[scope.personId]:[];
  if(!await lockIdentityContext(context,{firmIds,personIds}))return null;
- const page=scope.kind==='selected'?null:await discoverAskSources(context,{operation:'sources',scope:scope.kind==='firm'?{firmId:scope.firmId}:scope.kind==='person'?{personId:scope.personId}:{business:true},limit:50});
- if(scope.kind!=='selected'&&page===null)return null;
- const candidates=scope.kind==='selected'?scope.sources:page!.sources;
+ if(scope.kind!=='selected')return {sources:[],firmIds,personIds,partial:true};
+ const candidates=scope.sources;
  const sources=[];
  for(const candidate of candidates){
   if(sources.length===10)break;
@@ -28,9 +26,9 @@ export async function resolveAskAgentScope(context:RepositoryContext,scope:AskAg
   firmIds.push(...current.firmIds);if(current.personId!==null)personIds.push(current.personId);
   sources.push({...source,contentHash:resolved.source.contentHash});
  }
- if(scope.kind==='selected'&&sources.length!==scope.sources.length)return null;
+ if(sources.length!==scope.sources.length)return null;
  if(!await activeIdentityActor(context))return null;
- return {sources,firmIds:[...new Set(firmIds)].sort(),personIds:[...new Set(personIds)].sort(),partial:page!==null&&(page.nextAfter!==null||page.coverage.sizeBoundReached||candidates.length>10)};
+ return {sources,firmIds:[...new Set(firmIds)].sort(),personIds:[...new Set(personIds)].sort(),partial:false};
 }
 
 /** Complete source-access closure does not broaden the user's explicit tool intent. */

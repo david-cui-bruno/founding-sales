@@ -1,13 +1,16 @@
+import { crmCommitmentDueSchema } from "./crmCommitments.ts";
 import { z } from "zod";
 import { canonicalSourceReferenceSchema } from "./people.ts";
 import { crmSourceLookupSchema } from "./crmProcessing.ts";
 import { firmTaskDtoSchema, firmTimelineEventSchema } from "./crmSurface.ts";
 // Ask scopes use the same millisecond precision as displayed activity/provider dates.
 // Reject finer input instead of silently truncating it during interval validation.
-const askScopeDateSchema = z.iso.datetime().refine(
-  (value) => !/\.\d{4,}Z$/u.test(value),
-  "Ask date scopes support at most millisecond precision",
-);
+const askScopeDateSchema = z.iso
+  .datetime()
+  .refine(
+    (value) => !/\.\d{4,}Z$/u.test(value),
+    "Ask date scopes support at most millisecond precision",
+  );
 export const askScopeSchema = z
   .strictObject({
     firmId: z.uuid(),
@@ -20,9 +23,52 @@ export const askScopeSchema = z
       value.to === undefined ||
       Date.parse(value.from) < Date.parse(value.to),
   );
+export const askExactScopeSchema = z.union([
+  askScopeSchema,
+  z
+    .strictObject({
+      business: z.literal(true),
+      from: askScopeDateSchema.optional(),
+      to: askScopeDateSchema.optional(),
+    })
+    .refine(
+      (value) =>
+        value.from === undefined ||
+        value.to === undefined ||
+        Date.parse(value.from) < Date.parse(value.to),
+    ),
+]);
+export const askRecordScopeSchema = z.union([
+  z.strictObject({ business: z.literal(true) }),
+  z.strictObject({ firmId: z.uuid() }),
+  z.strictObject({ personId: z.uuid() }),
+]);
+export const askRecordMatchSchema = z.strictObject({
+  recordId: z.uuid(),
+  kind: z.enum(["person", "firm"]),
+  name: z.string(),
+  firmId: z.uuid().nullable(),
+  relationships: z
+    .array(
+      z.strictObject({
+        relationshipId: z.uuid(),
+        revision: z.number().int().positive(),
+        firmId: z.uuid(),
+        firmName: z.string(),
+        status: z.enum(["current", "historical", "unknown"]),
+        startDate: z.iso.date().nullable(),
+        endDate: z.iso.date().nullable(),
+        sourceState: z.enum(["available", "unavailable"]),
+        contextReview: z.enum(["current", "required"]),
+      }),
+    )
+    .max(50)
+    .optional(),
+  relationshipsComplete: z.boolean().optional(),
+});
 const askOpportunitiesReadSchema = z.strictObject({
   operation: z.literal("opportunities"),
-  scope: askScopeSchema,
+  scope: askExactScopeSchema,
   status: z.enum(["open", "all"]).default("open"),
   limit: z.number().int().min(1).max(50).default(20),
 });
@@ -33,7 +79,7 @@ export const askCoverageSchema = z.strictObject({
 });
 const askOpportunitiesResponseSchema = z.strictObject({
   operation: z.literal("opportunities"),
-  scope: askScopeSchema,
+  scope: askExactScopeSchema,
   dateBasis: z.literal("opportunity_opened_at"),
   count: z.string().regex(/^(0|[1-9]\d*)$/u),
   records: z
@@ -54,14 +100,30 @@ const askOpportunitiesResponseSchema = z.strictObject({
 
 const askRecordsReadSchema = z.strictObject({
   operation: z.literal("records"),
-  query: z.string().trim().min(1).max(160),
+  query: z.string().trim().min(1).max(160).optional(),
+  scope: askRecordScopeSchema.optional(),
   kind: z.enum(["people", "firms"]),
   afterId: z.uuid().optional(),
   limit: z.number().int().min(1).max(50).default(20),
 });
+export const askTaskScopeSchema = z.union([
+  askExactScopeSchema,
+  z
+    .strictObject({
+      personId: z.uuid(),
+      from: askScopeDateSchema.optional(),
+      to: askScopeDateSchema.optional(),
+    })
+    .refine(
+      (value) =>
+        value.from === undefined ||
+        value.to === undefined ||
+        Date.parse(value.from) < Date.parse(value.to),
+    ),
+]);
 const askTasksReadSchema = z.strictObject({
   operation: z.literal("tasks"),
-  scope: askScopeSchema,
+  scope: askTaskScopeSchema,
   limit: z.number().int().min(1).max(50).default(20),
 });
 export const askCopiedSourceSchema = crmSourceLookupSchema
@@ -100,10 +162,10 @@ const askActivityReadSchema = z.strictObject({
 });
 const askReplyReadSchema = z.strictObject({
   operation: z.literal("reply_status"),
-  scope: askScopeSchema,
+  scope: askExactScopeSchema,
 });
 export const askSourcesScopeSchema = z.union([
-  z.strictObject({business:z.literal(true)}),
+  z.strictObject({ business: z.literal(true) }),
   z.strictObject({ personId: z.uuid() }),
   z.strictObject({ firmId: z.uuid() }),
 ]);
@@ -146,29 +208,48 @@ export const askReadSchema = z.discriminatedUnion("operation", [
   askActivityReadSchema,
   askReplyReadSchema,
 ]);
-const askRecordsResponseSchema = z.strictObject({
+export const askRecordsResponseSchema = z.strictObject({
   operation: z.literal("records"),
   selection: z.enum(["none", "single", "ambiguous", "unresolved"]),
-  records: z
-    .array(
-      z.strictObject({
-        recordId: z.uuid(),
-        kind: z.enum(["person", "firm"]),
-        name: z.string(),
-        firmId: z.uuid().nullable(),
-      }),
-    )
-    .max(50),
+  records: z.array(askRecordMatchSchema).max(50),
   nextAfterId: z.uuid().nullable(),
   scanComplete: z.boolean(),
   coverage: askCoverageSchema,
 });
 const askTasksResponseSchema = z.strictObject({
   operation: z.literal("tasks"),
-  scope: askScopeSchema,
+  scope: askTaskScopeSchema,
   dateBasis: z.literal("task_due_at"),
   count: z.string().regex(/^(0|[1-9]\d*)$/u),
-  records: z.array(firmTaskDtoSchema).max(50),
+  records: z
+    .array(
+      z.union([
+        firmTaskDtoSchema.extend({ firmId: z.uuid().optional() }),
+        z.strictObject({
+          key: z.string().max(80),
+          kind: z.enum(["ask_task", "internal_task"]),
+          label: z.string().max(300),
+          dueAt: z.iso.datetime().nullable(),
+          due: crmCommitmentDueSchema,
+          status: z.literal("open"),
+          firmId: z.uuid().optional(),
+          personId: z.uuid().optional(),
+          reviewRequired: z.boolean(),
+          version: z.number().int().positive(),
+        }),
+      ]),
+    )
+    .max(50),
+  countBasis: z.enum(["exact", "lower_bound"]).optional(),
+  taskCoverage: z
+    .strictObject({
+      operationalCount: z.string().regex(/^(0|[1-9]\d*)$/u),
+      additionalScanComplete: z.boolean(),
+      candidateCeiling: z.literal(500),
+      manualScanned: z.number().int().min(0).max(500),
+      commitmentsScanned: z.number().int().min(0).max(500),
+    })
+    .optional(),
   truncated: z.boolean(),
   coverage: askCoverageSchema,
 });
@@ -233,7 +314,7 @@ const askActivityResponseSchema = z.strictObject({
 });
 const askReplyResponseSchema = z.strictObject({
   operation: z.literal("reply_status"),
-  scope: askScopeSchema,
+  scope: askExactScopeSchema,
   dateBasis: z.literal("provider_event_at"),
   verifiedOutgoingCount: z.string().regex(/^(0|[1-9]\d*)$/u),
   withoutVerifiedReplyCount: z.string().regex(/^(0|[1-9]\d*)$/u),
