@@ -26,6 +26,7 @@ const repository = fileURLToPath(new URL("../..", import.meta.url));
 const root = realpathSync(resolve(repository, "infra/roots/rehearsal"));
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 let uncertainStage = null;
+let preparationStep = null;
 let activeLease = null;
 let mutationDeadline = null;
 function command(
@@ -438,6 +439,7 @@ function readBootstrapBindings(directory, lease) {
 function prepare(leasePath, expectedHash, directory, lease, inputs) {
   assertApplied(directory, expectedHash, lease);
   uncertainStage = "preparation";
+  preparationStep = "configuration";
   if (Date.now() >= Date.parse(lease.cleanupAt)) throw new Error("cleanup_due");
   mutationDeadline = Date.parse(lease.cleanupAt);
   ownedConfiguration(
@@ -447,6 +449,7 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     lease,
     true,
   );
+  preparationStep = "isolation_verification";
   const outputs = JSON.parse(command("terraform", ["output", "-json"]));
   const value = (name) => outputs[name]?.value;
   const diagnostic = value("crm_acquisition_diagnostic");
@@ -548,7 +551,9 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
   )
     throw new Error("applied_outputs_changed");
   const environment = { FSS_REHEARSAL_REPORTS: resolve(directory, "reports") };
+  preparationStep = "release_record_provenance";
   const releaseRecord = prepareReleaseRecord(directory, lease, environment);
+  preparationStep = "private_runtime_configuration";
   const master = JSON.parse(
     JSON.parse(
       command("aws", [
@@ -617,6 +622,7 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
       rmSync(file, { force: true });
     }
   }
+  preparationStep = "migration_and_rollout";
   command(
     "bash",
     [
@@ -635,6 +641,7 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     undefined,
     environment,
   );
+  preparationStep = "workspace_bootstrap";
   command(
     "bash",
     [
@@ -656,12 +663,14 @@ function prepare(leasePath, expectedHash, directory, lease, inputs) {
     undefined,
     environment,
   );
+  preparationStep = "bootstrap_binding_verification";
   const bootstrapBindings=readBootstrapBindings(directory,lease);
   // A fresh isolated database has no release table before migration. Store the authentic
   // CI record after its first migration/rollout, then require normal existing readback.
   for (const stage of ["put", "read-back"]) {
+    preparationStep = stage === "put" ? "release_record_put" : "release_record_readback";
     if (sha(readFileSync(releaseRecord.path)) !== releaseRecord.sha256) throw new Error("release_record_binding_changed");
-    command("bash",[resolve(repository,"infra/scripts/record.sh"),stage,root,lease.prefix,"--api-digest",lease.images.api,"--worker-digest",lease.images.worker,"--release-record",releaseRecord.path],root,600000,undefined,environment);
+    command("bash",[resolve(repository,"infra/scripts/record.sh"),stage,root,lease.prefix,"--api-digest",lease.images.api,"--worker-digest",lease.images.worker,"--release-record",releaseRecord.path,"--after-bootstrap"],root,600000,undefined,environment);
   }
   if (Date.now() >= Date.parse(lease.cleanupAt)) throw new Error("cleanup_due");
   writeFileSync(
@@ -902,6 +911,7 @@ try {
       JSON.stringify({
         ok: false,
         reason: `${uncertainStage}_unknown`,
+        ...(uncertainStage === "preparation" ? { preparationStep } : {}),
         cleanupRequired: true,
         absenceVerified: false,
         fallbackOwner: activeLease.fallbackOwner,

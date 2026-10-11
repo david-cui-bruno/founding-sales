@@ -246,6 +246,8 @@ if a[1]=='bootstrap':
  open(p+'/bootstrap-workspace.json','w').write(json.dumps(report))
 if a[0].endswith('/record.sh'):
  if a[1]=='from-ci':os.execv('/bin/bash',['bash']+a)
+ if os.environ.get('REAL_RECORD_STORE')=='1':
+  env=dict(os.environ);env.update(json.loads(os.environ['RECORD_OFFLINE_OUTPUTS']));os.execve('/bin/bash',['bash']+a,env)
  if os.environ.get('FAIL_RECORD_STAGE')==a[1]:print('PRIVATE_RECORD_ERROR');sys.exit(1)
  print(json.dumps({'outcome':'created' if a[1]=='put' else 'existing'}))
 `,
@@ -1209,4 +1211,81 @@ it("refuses a dirty but valid schema declaration before retaining or applying a 
   expect(calls).not.toContain('"apply"');
   expect(existsSync(join(f.directory,"applied"))).toBe(false);
  } finally {rmSync(f.directory,{recursive:true,force:true});}
+});
+
+// Real record.sh is the public post-bootstrap boundary; external output adapters
+// retain bootstrap=true and do not claim dry-run storage or a live report replay.
+function recordBoundaryOutputs(fixture:ReturnType<typeof applicationFixture>) {
+ const prefix=fixture.lease.prefix;
+ const cluster=`arn:aws:ecs:us-east-1:326255650484:cluster/${prefix}-cluster`;
+ const secret=`arn:aws:secretsmanager:us-east-1:326255650484:secret:${prefix}/app-runtime-database-controlled`;
+ const databaseInstance=`arn:aws:rds:us-east-1:326255650484:db:${prefix}-pg`;
+ const diagnostic={environment_id:fixture.lease.environmentId,database_name:fixture.lease.databaseName,
+  database_instance_arn:databaseInstance,database_secret_arn:secret,ecs_cluster_arn:cluster,database_endpoint:'controlled-db.us-east-1.rds.amazonaws.com',
+  tags:{CalliePurpose:'acquisition_acceptance',CallieDiagnosticEnvironment:fixture.lease.environmentId}};
+ const definition={containerDefinitions:[{name:'operations',image:`326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@${fixture.lease.images.worker}`,
+  environment:[{name:'FSS_DATABASE_NAME',value:fixture.lease.databaseName},{name:'FSS_SENDING_ENABLED',value:'false'},{name:'FSS_DATABASE_HOST',value:'controlled-db.us-east-1.rds.amazonaws.com'},
+   {name:'FSS_SCHEMA_MIN',value:String(REQUIRED_SCHEMA)},{name:'FSS_SCHEMA_MAX',value:String(REQUIRED_SCHEMA)},
+   {name:'FSS_CRM_ACQUISITION_DIAGNOSTIC',value:JSON.stringify({region:'us-east-1',environmentId:fixture.lease.environmentId,databaseInstanceArn:databaseInstance,databaseSecretArn:secret,ecsClusterArn:cluster})}],
+  secrets:[{name:'DATABASE_SECRET_ARN',valueFrom:secret}]}]};
+ const outputs={FSS_REHEARSAL_DRY_RUN:'1',FSS_RELEASE_ACCOUNT:'326255650484',
+  FSS_RELEASE_OUTPUT_CLUSTER_ARN:cluster,
+  FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN:`arn:aws:ecs:us-east-1:326255650484:task-definition/${prefix}-operations:1`,
+  FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN:secret,
+  FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION:JSON.stringify({database_host:'controlled-db.us-east-1.rds.amazonaws.com',subnet_ids:['subnet-controlled'],security_group_id:'sg-controlled',assign_public_ip:'ENABLED',inbound_rule_count:0}),
+  FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME:'controlled-logs',FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN:JSON.stringify({bootstrap:true}),
+  FSS_RELEASE_OUTPUT_ENVIRONMENT:'rehearsal',FSS_RELEASE_OUTPUT_NAME_PREFIX:prefix,
+  FSS_RELEASE_OUTPUT_DATABASE_NAME:fixture.lease.databaseName,
+  FSS_RELEASE_OUTPUT_CRM_ACQUISITION_DIAGNOSTIC:JSON.stringify(diagnostic),FSS_RELEASE_TASK_DEFINITION:JSON.stringify(definition)};
+ return {outputs,diagnostic,definition};
+}
+it("routes post-bootstrap storage/readback through the normal record command", () => {
+ const fixture=applicationFixture();
+ try {
+  expect(fixture.invoke('apply').status).toBe(0);
+  fixture.env['REAL_RECORD_STORE']='1';
+  fixture.env['RECORD_OFFLINE_OUTPUTS']=JSON.stringify(recordBoundaryOutputs(fixture).outputs);
+  const prepared=fixture.invoke('prepare');
+  expect(prepared.status,prepared.stdout+prepared.stderr).toBe(0);
+  const calls=readFileSync(fixture.calls,'utf8').trim().split('\n').map(line=>JSON.parse(line));
+  expect(calls.filter(call=>call.program==='bash'&&call.args[0].endsWith('/record.sh')&&['put','read-back'].includes(call.args[1])).map(call=>call.args[1])).toEqual(['put','read-back']);
+ } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+it.each(['purpose','environment','schema','digest','sending','nested-secret','sending-environment','production','ordinary'])('normal record command refuses post-bootstrap %s mismatch', variant => {
+ const fixture=applicationFixture();
+ try {
+  expect(fixture.invoke('apply').status).toBe(0);
+  expect(fixture.invoke('prepare').status).toBe(0);
+  const {outputs,diagnostic,definition}=recordBoundaryOutputs(fixture);
+  if(variant==='production') {outputs.FSS_RELEASE_OUTPUT_ENVIRONMENT='production';outputs.FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN=JSON.stringify({bootstrap:false});}
+  if(variant==='purpose') diagnostic.tags.CalliePurpose='ordinary_capture';
+  if(variant==='environment') diagnostic.environment_id='99999999-9999-4999-8999-999999999999';
+  if(variant==='nested-secret') for(const e of definition.containerDefinitions[0]?.environment??[]) if(e.name==='FSS_CRM_ACQUISITION_DIAGNOSTIC'){const nested=JSON.parse(e.value);nested.databaseSecretArn='arn:aws:secretsmanager:us-east-1:326255650484:secret:unrelated';e.value=JSON.stringify(nested);}
+  if(variant==='sending-environment') for(const e of definition.containerDefinitions[0]?.environment??[]) if(e.name==='FSS_SENDING_ENABLED') e.value='true';
+  if(variant==='schema') for(const e of definition.containerDefinitions[0]?.environment??[]) if(e.name==='FSS_SCHEMA_MIN'||e.name==='FSS_SCHEMA_MAX') e.value=String(REQUIRED_SCHEMA-1);
+  if(variant==='digest'&&definition.containerDefinitions[0]) definition.containerDefinitions[0].image=`326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@sha256:${'f'.repeat(64)}`;
+  outputs.FSS_RELEASE_OUTPUT_CRM_ACQUISITION_DIAGNOSTIC=JSON.stringify(diagnostic);
+  outputs.FSS_RELEASE_TASK_DEFINITION=JSON.stringify(definition);
+  const path=join(fixture.directory,'private/preparation/release-record.private.json');
+  if(variant==='sending') {const r=JSON.parse(readFileSync(path,'utf8'));r.enablesSending=true;writeFileSync(path,JSON.stringify(r));}
+  const args=[resolve('infra/scripts/record.sh'),'put',resolve(variant==='production'?'infra/roots/production':'infra/roots/rehearsal'),variant==='production'?'fss-prod':fixture.lease.prefix,'--api-digest',fixture.lease.images.api,'--worker-digest',fixture.lease.images.worker,'--release-record',path];
+  if(variant!=='ordinary') args.push('--after-bootstrap');
+  const result=spawnSync('/bin/bash',args,{encoding:'utf8',env:{...fixture.env,...outputs}});
+  expect(result.status,result.stdout+result.stderr).toBe(1);
+  expect(result.stdout+result.stderr).not.toContain('ecs run-task');
+  if(variant==='ordinary') expect(result.stderr).toContain('the plan says bootstrap=true');
+  if(variant==='production') expect(result.stderr).toContain('post-bootstrap records require an isolated rehearsal');
+ } finally {rmSync(fixture.directory,{recursive:true,force:true});}
+});
+
+ it("reports only the fixed preparation step when release record put fails", () => {
+ const fixture=applicationFixture();
+ try {
+  expect(fixture.invoke('apply').status).toBe(0);
+  fixture.env['FAIL_RECORD_STAGE']='put';
+  const result=fixture.invoke('prepare');
+  expect(result.status).toBe(1);
+  expect(JSON.parse(result.stdout)).toMatchObject({ok:false,reason:'preparation_unknown',preparationStep:'release_record_put',cleanupRequired:true,activationAllowed:false});
+  expect(result.stdout+result.stderr).not.toContain('PRIVATE_RECORD_ERROR');
+ } finally {rmSync(fixture.directory,{recursive:true,force:true});}
 });
