@@ -40,3 +40,7 @@ Compare exact SQL correctness, ranked keywords, authorized real vectors and same
 | Release and capability-specific activation | #552: exact release/image/schema and applicable provider/evaluation receipts, explicit activation; capture does not wait on unrelated Ask acceptance. |
 
 Preserve the release hold, cap5/lower caps, original Shirley provider identity and cancelled follow-up, uncertain holds, admission off and routine replies off. Source merge is neither release nor acquisition/model/embedding/sending authorization.
+
+## Production image preparation
+
+The actual ARM64 worker image initially refused startup because npm installed the AI SDK under workspace-local dependencies that the Dockerfile did not retain. The corrected runtime preserves the lockfile-resolved production dependency layout and excludes optional SDK test-helper trees. Actual local ARM64 build/selftest, schema96 acceptance/schema95 refusal, nonroot execution and no-test/no-development-dependency verification pass; exact final CI image checks remain the canonical source gate in PR570. This verification used no provider credentials or calls.

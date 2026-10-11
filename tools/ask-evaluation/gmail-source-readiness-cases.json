@@ -14,13 +14,13 @@
   },
   "canonicalSourceBinding": {
     "sourcePullRequest": "https://github.com/david-cui-bruno/founding-sales/pull/570",
-    "runtimeImplementationCommit": "0cc55083876840a87b3508752d3563c88a45fefd",
+    "runtimeImplementationCommit": "26a0e26d52550e8c57924a3f4e49ab1fc0dbc2b4",
     "schemaVersionRequired": 96,
     "bindingKind": "controlled_source_candidate_only",
     "activationAllowed": false,
     "realRunFreeze": "Rebind exact merged source/image, dataset, independent labels, configuration and authority before authorized real evaluation."
   },
-  "implementationCommit": "0cc55083876840a87b3508752d3563c88a45fefd",
+  "implementationCommit": "26a0e26d52550e8c57924a3f4e49ab1fc0dbc2b4",
   "schemaVersionRequired": 93,
   "sourceActivationAllowed": false,
   "originalHeldOutExpectations": "unchanged; this development supplement cannot be used as independent holdout",
