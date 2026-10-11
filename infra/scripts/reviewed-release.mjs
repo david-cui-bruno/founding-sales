@@ -52,8 +52,8 @@ function current() {
 }
 function backupReadiness() {
   const instance = aws(['rds', 'describe-db-instances', '--db-instance-identifier', 'fss-prod-pg']).DBInstances?.[0];
-  if (instance?.DBInstanceIdentifier !== 'fss-prod-pg' || instance.DBInstanceStatus !== 'available' || instance.BackupRetentionPeriod < 1 || !instance.EarliestRestorableTime || !instance.LatestRestorableTime) throw new Error('reviewed_backup_unavailable');
-  return { retentionDays: instance.BackupRetentionPeriod, earliestRestorableTime: instance.EarliestRestorableTime, latestRestorableTime: instance.LatestRestorableTime, restoreTested: false };
+  if (instance?.DBInstanceIdentifier !== 'fss-prod-pg' || instance.DBInstanceStatus !== 'available' || instance.BackupRetentionPeriod !== 35 || typeof instance.LatestRestorableTime !== 'string' || !Number.isFinite(Date.parse(instance.LatestRestorableTime))) throw new Error('reviewed_backup_unavailable');
+  return { retentionDays: instance.BackupRetentionPeriod, earliestRestorableTime: null, latestRestorableTime: instance.LatestRestorableTime, restoreTested: false };
 }
 function imageDocument(file) {
   const value = read(file);

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -41,7 +41,7 @@ function controlledRelease(failure = '') {
 if(args[0]==='sts') value={Account:'123456789012',Arn:'arn:aws:sts::123456789012:assumed-role/fss-prod-ci-maintenance/fss-prod-maintenance-1'};
 else if(args[1]==='describe-services'){const name=args[args.indexOf('--services')+1];value={services:[{status:'ACTIVE',taskDefinition:'arn:aws:ecs:us-east-1:123456789012:task-definition/'+name+':1',desiredCount:name.endsWith('api')?2:1,runningCount:name.endsWith('api')?2:1,pendingCount:0,networkConfiguration:{awsvpcConfiguration:{subnets:['subnet-12345678'],securityGroups:['sg-12345678'],assignPublicIp:'ENABLED'}}}]};}
 else if(args[1]==='describe-task-definition'){const ref=args[args.indexOf('--task-definition')+1]; const name=ref.split('fss-prod-')[1].split(':')[0];value=defs[name];}
-else if(args[1]==='describe-db-instances') value={DBInstances:[{BackupRetentionPeriod:35,LatestRestorableTime:'2026-10-11T14:00:00Z',EarliestRestorableTime:'2026-09-10T14:00:00Z',DBInstanceStatus:'available',Endpoint:{Address:'database.invalid'},DBName:'fss'}]};
+else if(args[1]==='describe-db-instances') value={DBInstances:[{BackupRetentionPeriod:process.env.TEST_FAIL==='backup-retention'?1:35,LatestRestorableTime:process.env.TEST_FAIL==='backup-invalid'?'invalid-time':process.env.TEST_FAIL==='backup-missing'?null:'2026-10-11T14:00:00Z',DBInstanceStatus:process.env.TEST_FAIL==='backup-unavailable'?'backing-up':'available',Endpoint:{Address:'database.invalid'},DBName:'fss'}]};
 else if(args[1]==='describe-security-groups') value={SecurityGroups:[{IpPermissions:[]}]};
 else if(args[1]==='register-task-definition'){const doc=JSON.parse(fs.readFileSync(args[args.indexOf('--cli-input-json')+1].slice(7)));fs.appendFileSync(process.env.TEST_DIRECTORY+'/registered.jsonl',JSON.stringify(doc)+'\\n');value={taskDefinition:{taskDefinitionArn:'arn:aws:ecs:us-east-1:123456789012:task-definition/'+doc.family+':2'}};}
 else if(args[1]==='update-service') value={service:{}}; else throw new Error('Unhandled controlled cloud operation');console.log(JSON.stringify(value));`);
@@ -64,13 +64,21 @@ describe('routine maintenance through controlled cloud and existing operation se
     const { directory, result } = controlledRelease();
     try {
       expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(join(directory, 'status.json'), 'utf8'))).toMatchObject({ phase: 'verified', outcome: 'completed', schema: 2, backup: { restoreTested: false, retentionDays: 35 } });
+      expect(JSON.parse(readFileSync(join(directory, 'status.json'), 'utf8'))).toMatchObject({ phase: 'verified', outcome: 'completed', schema: 2, backup: { restoreTested: false, retentionDays: 35, earliest: null, latest: '2026-10-11T14:00:00Z' } });
       const steps: string[][] = readFileSync(join(directory, 'steps.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
       const meaningful = steps.filter(step => !(step[0] === 'deploy.sh' && step[2] === 'gate')).map(step => `${step[0]} ${step[1]}`);
       expect(meaningful).toEqual(['record.sh from-ci', 'record.sh put', 'images.sh promote', 'stop.sh infra/roots/production', 'deploy.sh release', 'record.sh read-back', 'deploy.sh ci', 'productionSmoke.mjs https://api.example.invalid']);
       expect(readFileSync(join(directory, 'calls.jsonl'), 'utf8')).toContain('fss-prod-pg');
       const registered = readFileSync(join(directory, 'registered.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as { containerDefinitions: { environment: { name: string; value: string }[] }[] });
       for (const definition of registered) expect(definition.containerDefinitions[0]?.environment).toContainEqual({ name: 'FSS_CRM_CAPABILITY_ADAPTERS', value: 'preserved-settings' });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+  it.each(['backup-retention', 'backup-invalid', 'backup-missing', 'backup-unavailable'])('refuses %s before record or migration writes', failure => {
+    const { directory, result } = controlledRelease(failure);
+    try {
+      expect(result.status).toBe(1);
+      expect(JSON.parse(readFileSync(join(directory, 'status.json'), 'utf8'))).toMatchObject({ outcome: 'refused', writesStarted: false, reason: 'backup_readiness_unavailable' });
+      expect(existsSync(join(directory, 'steps.jsonl'))).toBe(false);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
   it('keeps migration failure unknown, never starts a rollback and exposes forward-repair status', () => {

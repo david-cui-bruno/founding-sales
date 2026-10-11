@@ -71,8 +71,8 @@ try {
     // Inventory existing recovery, not an inferred successful restore.
     const databases = aws(['rds', 'describe-db-instances', '--db-instance-identifier', 'fss-prod-pg']).DBInstances;
     const database = databases?.[0];
-    if (databases?.length !== 1 || database.BackupRetentionPeriod !== 35 || !database.LatestRestorableTime || !database.EarliestRestorableTime || database.DBInstanceStatus !== 'available') throw new Error('backup_readiness_unavailable');
-    status.backup = { retentionDays: 35, earliest: database.EarliestRestorableTime, latest: database.LatestRestorableTime, restoreTested: false }; save();
+    if (databases?.length !== 1 || database.BackupRetentionPeriod !== 35 || typeof database.LatestRestorableTime !== 'string' || !Number.isFinite(Date.parse(database.LatestRestorableTime)) || database.DBInstanceStatus !== 'available') throw new Error('backup_readiness_unavailable');
+    status.backup = { retentionDays: 35, earliest: null, latest: database.LatestRestorableTime, restoreTested: false }; save();
     const definitions = {};
     for (const name of ['api', 'worker', 'migration', 'operations']) {
       const source = aws(['ecs', 'describe-task-definition', '--task-definition', observed[name]?.taskDefinition || `fss-prod-${name}`, '--include', 'TAGS']);
