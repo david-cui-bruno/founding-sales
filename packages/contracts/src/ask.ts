@@ -103,6 +103,7 @@ const askReplyReadSchema = z.strictObject({
   scope: askScopeSchema,
 });
 export const askSourcesScopeSchema = z.union([
+  z.strictObject({business:z.literal(true)}),
   z.strictObject({ personId: z.uuid() }),
   z.strictObject({ firmId: z.uuid() }),
 ]);

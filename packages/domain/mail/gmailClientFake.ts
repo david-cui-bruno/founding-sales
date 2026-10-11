@@ -439,6 +439,12 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       };
     },
 
+    getThreadMessageIds: async (_access,threadId) => {
+      record('getThreadMessageIds',{threadId});
+      if(fixture.grantRevoked)throw new GmailClientError('unexpected_status','grant revoked',401);
+      const ids=fixture.messages.filter(message=>message.threadId===threadId).map(message=>message.id);
+      return ids.length===0?null:{threadId,messageIds:ids.slice(0,500),complete:ids.length<=500};
+    },
     listMessageIds: async (_access, request: GmailListRequest): Promise<GmailListOutcome> => {
       record('listMessageIds', {
         afterEpochSeconds: request.afterEpochSeconds,

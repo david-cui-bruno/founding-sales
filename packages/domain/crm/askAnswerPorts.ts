@@ -4,6 +4,8 @@ import type {CanonicalSourceReference,CrmTokenPriceMicros} from '@fss/contracts'
 export type AskPaidStage='answer'|'embedding_query'|'embedding_document'|'support';
 export interface AskPurposeSnapshot {
  readonly purpose:'answer'|'embedding'|'support';
+ readonly agentLimits?:AskAgentLimits;
+ readonly embeddingDimensions?:256|512|1024;
  readonly revision:number;
  readonly endpointId:string;
  readonly modelVersion:string;
@@ -50,6 +52,10 @@ export interface AskSupportAdapter {
  run(input:{readonly question:string;readonly windows:readonly AskInputWindow[];readonly claims:unknown;readonly maxOutputTokens:number;readonly signal:AbortSignal}):Promise<{readonly acceptance:'accepted'|'unknown'|'not_accepted';readonly usage:AskAdapterUsage|null;readonly support:unknown}>;
 }
 export interface AskAnswerComposition {
+ readonly agent?:AskAgentStepAdapter;
+ readonly embedding?:AskEmbeddingAdapter;
+ readonly agentLimits?:AskAgentLimits;
+ readonly embeddingDimensions?:256|512|1024;
  readonly retrieval?:AskRetrievalAdapter;
  readonly answer?:AskAnswerAdapter;
  readonly support?:AskSupportAdapter;
@@ -57,4 +63,15 @@ export interface AskAnswerComposition {
  readonly verifyPurpose?:(input:AskPurposeProofInput)=>Promise<AskPurposeProof|null>;
  readonly allowControlledEvaluation?:boolean;
  readonly providerTimeoutMs?:number;
+}
+
+/** Exactly one externally billed generation; execution owns all subsequent steps. */
+export interface AskAgentStepAdapter extends AskAdapterRoute {
+ runStep(input:{readonly question:string;readonly transcript:readonly unknown[];readonly maxOutputTokens:number;readonly signal:AbortSignal}):Promise<{readonly acceptance:'accepted'|'unknown'|'not_accepted';readonly usage:AskAdapterUsage|null;readonly answer:unknown;readonly toolCalls:readonly {readonly id:string;readonly name:string;readonly input:unknown}[]}>;
+}
+export interface AskAgentLimits {readonly maxSteps:number;readonly maxInputBytes:number;readonly maxOutputTokens:number;readonly deadlineMs:number}
+/** Embedding purpose and rates are independent of answering authority. */
+export interface AskEmbeddingAdapter extends AskAdapterRoute {
+ readonly dimensions:256|512|1024;
+ embed(input:{readonly text:string;readonly signal:AbortSignal}):Promise<{readonly acceptance:'accepted'|'unknown'|'not_accepted';readonly usage:AskAdapterUsage|null;readonly vector:readonly number[]|null}>;
 }

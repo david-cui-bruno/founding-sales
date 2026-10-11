@@ -243,6 +243,7 @@ async function lockBusinessMetadataForDeletion(
     )
   ).rows.map((value) => value.address);
   await lockBusinessMetadataAddresses(context, metadataAddresses);
+  await context.db.query('SELECT endpoint FROM crm_business_correspondent_rules WHERE workspace_id=$1 AND endpoint=ANY($2::text[]) ORDER BY mailbox_id,account_binding,endpoint FOR UPDATE',[context.scope.workspaceId,metadataAddresses]);
   await context.db.query(
     `SELECT b.id FROM crm_business_conversations b WHERE b.workspace_id=$1
     AND ${BUSINESS_METADATA_IN_SCOPE} ORDER BY b.id FOR UPDATE`,
@@ -507,6 +508,7 @@ async function measure(
   const byContact = [workspace, contact, firm] as const;
 
   const removes: Record<string, number> = {
+    crm_ask_window_vectors:await countOf(context,`SELECT count(*) AS count FROM crm_ask_window_vectors v JOIN crm_ask_request_windows w ON w.workspace_id=v.workspace_id AND w.id=v.window_id WHERE v.workspace_id=$1 AND w.request_id IN(${CRM_ASK_REQUEST_IDS})`,byContact),
     crm_ask_request_windows:await countOf(context,`SELECT count(*) AS count FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id IN(${CRM_ASK_REQUEST_IDS})`,byContact),
     crm_mail_progress_receipts:await countOf(context,`SELECT count(*) AS count FROM crm_mail_progress_receipts r WHERE ${CRM_PROGRESS_IN_SCOPE}`,byContact),
     email_addresses: await countOf(
@@ -755,6 +757,7 @@ async function measure(
            AND s.id NOT IN (${CRM_SELECTED_SOURCE_IDS}))`,
       byContact,
     ),
+    crm_business_correspondent_rules: await countOf(context,`SELECT count(*) AS count FROM crm_business_correspondent_rules WHERE workspace_id=$1 AND endpoint IN (${BUSINESS_TARGET_ADDRESSES})`,byContact),
     crm_mail_import_messages: await countOf(context,`SELECT count(*) AS count FROM crm_mail_import_messages x WHERE x.workspace_id=$1 AND ${IMPORT_METADATA_IN_SCOPE}`,byContact),
     crm_business_conversations: await countOf(
       context,
@@ -780,6 +783,7 @@ async function measure(
         )
       ).length,
     crm_ask_actions:await countOf(context,`SELECT count(*) AS count FROM crm_ask_actions a WHERE a.workspace_id=$1 AND ${CRM_ASK_ACTION_IN_SCOPE}`,byContact),
+    crm_ask_sessions:await countOf(context,`SELECT count(*) AS count FROM crm_ask_sessions s WHERE s.workspace_id=$1 AND (s.title IS NOT NULL OR s.pinned) AND s.id IN(SELECT session_id FROM crm_ask_session_turns WHERE workspace_id=$1 AND request_id IN(${CRM_ASK_REQUEST_IDS}))`,byContact),
     crm_ask_requests:await countOf(context,`SELECT count(*) AS count FROM crm_ask_requests a WHERE a.workspace_id=$1 AND ${CRM_ASK_REQUEST_IN_SCOPE}`,byContact),
     crm_selected_sources: await countOf(
       context,
@@ -993,10 +997,13 @@ async function measure(
       FROM crm_mail_sources WHERE workspace_id=$1 AND source_id IN (${CRM_MAIL_MESSAGE_IDS})
     UNION ALL SELECT 'mail_capture',id::text,1,encode(sha256(convert_to(concat(source_id::text,context_snapshot::text,job_id::text,lease_fencing_token::text,account_binding),'UTF8')),'hex'),state
       FROM crm_mail_capture_identities WHERE workspace_id=$1 AND id IN (${CRM_MAIL_CAPTURE_IDS})
-    UNION ALL SELECT 'business_metadata',b.id::text,b.metadata_revision,b.metadata_hash,b.metadata_availability
+    UNION ALL SELECT 'correspondent_rule',encode(sha256(convert_to(concat_ws(':',r.mailbox_id,r.account_binding,r.endpoint),'UTF8')),'hex'),r.revision,encode(sha256(convert_to(to_jsonb(r)::text,'UTF8')),'hex'),r.active::text FROM crm_business_correspondent_rules r WHERE r.workspace_id=$1 AND r.endpoint IN (${BUSINESS_TARGET_ADDRESSES})
+    UNION ALL SELECT 'business_metadata',b.id::text,b.metadata_revision,encode(sha256(convert_to(concat_ws(':',b.metadata_hash,b.decision_revision,b.human_decision,b.explicit_selected_at::text),'UTF8')),'hex'),b.metadata_availability
       FROM crm_business_conversations b WHERE b.workspace_id=$1 AND ${BUSINESS_METADATA_IN_SCOPE}
     UNION ALL SELECT 'mail_import_metadata',x.id::text,x.revision,encode(sha256(convert_to(concat_ws(':',x.message_hash,x.provider_message_id,x.provider_thread_id,x.provider_at::text,x.scope,x.reason),'UTF8')),'hex'),x.state FROM crm_mail_import_messages x WHERE x.workspace_id=$1 AND ${IMPORT_METADATA_IN_SCOPE}
     UNION ALL SELECT 'ask_request',a.id::text,a.version,encode(sha256(convert_to(concat_ws(':',a.epoch::text,a.scope::text,a.initial_contexts::text,a.initial_access_closure::text,a.question,a.result::text,jsonb_build_array(a.history_revision,a.history_title,a.history_pinned,a.history_updated_at)::text),'UTF8')),'hex'),a.state FROM crm_ask_requests a WHERE a.workspace_id=$1 AND ${CRM_ASK_REQUEST_IN_SCOPE}
+    UNION ALL SELECT 'ask_vector',concat_ws(':',v.window_id::text,v.purpose_revision::text,v.model_version),v.purpose_revision,encode(sha256(convert_to(to_jsonb(v)::text,'UTF8')),'hex'),'current' FROM crm_ask_window_vectors v JOIN crm_ask_request_windows w ON w.workspace_id=v.workspace_id AND w.id=v.window_id WHERE v.workspace_id=$1 AND w.request_id IN(${CRM_ASK_REQUEST_IDS})
+    UNION ALL SELECT 'ask_session',s.id::text,s.version,encode(sha256(convert_to(to_jsonb(s)::text,'UTF8')),'hex'),s.state FROM crm_ask_sessions s WHERE s.workspace_id=$1 AND s.id IN(SELECT session_id FROM crm_ask_session_turns WHERE workspace_id=$1 AND request_id IN(${CRM_ASK_REQUEST_IDS}))
     UNION ALL SELECT 'ask_action',a.id::text,a.version,encode(sha256(convert_to(to_jsonb(a)::text,'UTF8')),'hex'),a.private_state FROM crm_ask_actions a WHERE a.workspace_id=$1 AND ${CRM_ASK_ACTION_IN_SCOPE}
     ORDER BY kind,id`,
       byContact,
@@ -1343,11 +1350,13 @@ export async function commitDeletion(
   const byContact = [workspace, scope.contactId, scope.firmId] as const;
   const removed: Record<string, number> = {};
   const redacted: Record<string, number> = {};
+  redacted['crm_ask_sessions']=(await context.db.query(`UPDATE crm_ask_sessions SET title=NULL,pinned=false,version=version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND (title IS NOT NULL OR pinned) AND id IN(SELECT session_id FROM crm_ask_session_turns WHERE workspace_id=$1 AND request_id=ANY($2::uuid[]))`,[workspace,closure.askRequests])).rowCount??0;
   // Record private erasure before any canonical source lifecycle hook can clear it.
+  removed['crm_ask_window_vectors']=(await context.db.query(`DELETE FROM crm_ask_window_vectors v USING crm_ask_request_windows w WHERE v.workspace_id=$1 AND w.workspace_id=v.workspace_id AND w.id=v.window_id AND w.request_id=ANY($2::uuid[])`,[workspace,closure.askRequests])).rowCount??0;
   removed['crm_ask_request_windows']=(await context.db.query(`DELETE FROM crm_ask_request_windows WHERE workspace_id=$1 AND request_id=ANY($2::uuid[])`,[workspace,closure.askRequests])).rowCount??0;
   const erasedAsk = await context.db.query(`UPDATE crm_ask_requests a SET question=NULL,scope=NULL,initial_contexts=NULL,initial_access_closure=NULL,result=NULL,result_at=NULL,state='deleted',reason='deleted',version=version+1,epoch=epoch+1,updated_at=now() WHERE a.workspace_id=$1 AND a.id=ANY($2::uuid[]) AND a.state<>'deleted'`,[workspace,closure.askRequests]);
   redacted['crm_ask_requests']=erasedAsk.rowCount??0;
-  redacted['crm_ask_actions']=(await context.db.query(`UPDATE crm_ask_actions SET private_state='deleted',target_firm_id=NULL,target_person_id=NULL,human_text=NULL,due=NULL,input_scope=NULL,initial_contexts=NULL,original_access_closure=NULL,support_refs=NULL,review_required=(kind='task' AND status='open'),version=version+1,updated_at=now() WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND private_state='available'`,[workspace,closure.askActions])).rowCount??0;
+  redacted['crm_ask_actions']=(await context.db.query(`UPDATE crm_ask_actions SET private_state='deleted',target_firm_id=NULL,target_person_id=NULL,target_opportunity_id=NULL,human_text=NULL,due=NULL,input_scope=NULL,initial_contexts=NULL,original_access_closure=NULL,support_refs=NULL,review_required=(kind='task' AND status='open'),version=version+1,updated_at=now() WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND private_state='available'`,[workspace,closure.askActions])).rowCount??0;
   const affectedAnchorIds = (
     await context.db.query<{ id: string }>(
       `${CRM_HUMAN_ANCHOR_IDS} ORDER BY a.id`,
@@ -1839,6 +1848,7 @@ export async function commitDeletion(
   const metadataIds = measured.identityVersions
     .filter((value) => value.kind === "business_metadata")
     .map((value) => value.id);
+  redacted['crm_business_correspondent_rules']=(await context.db.query(`DELETE FROM crm_business_correspondent_rules r WHERE workspace_id=$1 AND encode(sha256(convert_to(concat_ws(':',r.mailbox_id,r.account_binding,r.endpoint),'UTF8')),'hex')=ANY($2::text[])`,[context.scope.workspaceId,measured.identityVersions.filter(value=>value.kind==='correspondent_rule').map(value=>value.id)])).rowCount??0;
   redacted["crm_business_conversations"] = 0;
   for (let offset = 0; offset < metadataIds.length; offset += 100) {
     const result = await redactBusinessMetadata(context, {

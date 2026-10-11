@@ -206,6 +206,7 @@ it.each(['received', 'sent'])('retains all inline MIME text and provider-observe
     const read = await dispatch({ method: 'POST', path: '/crm/business/mail/read/v2', body: { sourceId: outcome!.progress['sourceId'], sourceRevision: 1, contentHash: createHash('sha256').update(text).digest('hex') }, query: new URLSearchParams(), headers: { authorization: `Bearer ${token}` } }, { session: fixture.db, auth: fixture.deps, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false });
     expect(read.body).toMatchObject({ state: 'available', source: { passage: text, direction: origin === 'sent' ? 'outgoing' : 'incoming', completeness: 'complete', sentProof: false } });
     expect(JSON.stringify(read.body)).not.toContain('"kind":"authored"');
+    expect(read.body).toMatchObject({source:{ranges:[{start:0,end:27,kind:'unknown'},{start:27,end:text.length,kind:'quoted'}]}});
   } finally { await fixture.stop(); }
 });
 
@@ -238,4 +239,17 @@ it.each(['attachment', 'html', 'truncated', 'draft', 'changed_labels', 'changed_
     }
     expect(reads).toBe(2);
   } finally { await fixture.stop(); }
+});
+
+it('captures archived incoming mail and canonical attachment metadata without fetching bytes', async () => {
+ const fixture=await createAuthFixture();try{
+ const approved=await approveCaptureFixture(fixture);const passage='Review the repairs.';const reads:string[]=[];
+ const gmail=createGmailHttpClient({apiBaseUrl:'https://gmail.example.test',fetch:async url=>{reads.push(url);const full=new URL(url).searchParams.get('format')==='full';return {status:200,headers:{},body:JSON.stringify({id:'approved-message',threadId:'approved-thread',internalDate:String(Date.now()),labelIds:[],payload:full?{mimeType:'multipart/mixed',parts:[{mimeType:'text/plain',body:{data:Buffer.from(passage).toString('base64url')}},{mimeType:'application/pdf',filename:'Repairs.pdf',body:{attachmentId:'pdf-ref',size:2048}}]}:{headers:[{name:'From',value:'person@example.test'},{name:'To',value:'business@example.test'},{name:'Subject',value:'Repairs'}]}})}}});
+ const handler=captureHandler({proofVerifier:{verify:async()=>true},provider:createGmailMailCaptureProvider({gmail,resolveAccess:async()=>({mailboxId:approved.mailbox.id,providerAccountId:'google-business',generation:1,mailboxEmail:'business@example.test',access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}})})});
+ const outcome=await handler.handle({session:fixture.db,scope:workspaceScope(approved.workspaceId,{kind:'system',component:'worker'}),job:approved.job});
+ const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+ const read=await dispatch({method:'POST',path:'/crm/business/mail/read/v2',body:{sourceId:outcome!.progress['sourceId'],sourceRevision:1,contentHash:createHash('sha256').update(passage).digest('hex')},query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}}, {session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+ expect(read.body).toMatchObject({state:'available',source:{direction:'incoming',providerOrigin:'received',parserVersion:'gmail-bounded-mime-v3',attachments:[{filename:'Repairs.pdf',mimeType:'application/pdf',sizeBytes:2048,attachmentId:'pdf-ref'}],representationDiagnostics:[]}});
+ expect(reads.every(url=>!url.includes('/attachments/'))).toBe(true);
+ }finally{await fixture.stop();}
 });

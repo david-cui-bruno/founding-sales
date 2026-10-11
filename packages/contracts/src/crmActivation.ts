@@ -5,6 +5,7 @@ import { crmInputTokenPriceMicrosSchema, crmTokenPriceMicrosSchema } from './crm
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const name = z.string().trim().min(1).max(200);
 const revision = z.number().int().positive().max(2147483647);
+export const askAgentLimitsSchema=z.strictObject({maxSteps:z.number().int().min(1).max(32),maxInputBytes:z.number().int().min(1).max(1000000),maxOutputTokens:z.number().int().min(1).max(4096),deadlineMs:z.number().int().min(1).max(60000)});
 export const crmCapabilitySchema = z.enum(['metadata_review','mail_capture','mail_backfill','crm_extraction','ask_answer']);
 const common = { workspaceId:z.uuid(), ownerUserId:z.uuid(), revision };
 const mailbox = { mailboxId:z.uuid(), providerAccountId:name, generation:revision, accountBinding:hash };
@@ -15,7 +16,7 @@ export const crmCapabilityConfigurationSchema = z.discriminatedUnion('capability
  z.strictObject({...common,...mailbox,capability:z.literal('mail_capture'),policyRevision:revision,disclosureVersion:name,disclosureSha256:hash,grantReceipt:name,providerPolicyReceipt:name,evaluationReceipt:name,releaseReceipt:name,captureVersion:name}),
  z.strictObject({...common,...mailbox,capability:z.literal('mail_backfill'),scopeFingerprint:hash,allocationFingerprint:hash}),
  z.strictObject({...common,...route,...prices,capability:z.literal('crm_extraction'),processorVersion:name}),
- z.strictObject({...common,...route,...prices,capability:z.literal('ask_answer'),purpose:z.literal('answer'),evaluationFingerprint:hash,processorVersion:name,retrievalVersion:name,answerVersion:name,supportVersion:name,chunkerVersion:name}),
+ z.strictObject({...common,...route,...prices,capability:z.literal('ask_answer'),purpose:z.enum(['answer','embedding']),agentLimits:askAgentLimitsSchema.optional(),embeddingDimensions:z.union([z.literal(256),z.literal(512),z.literal(1024)]).optional(),evaluationFingerprint:hash,processorVersion:name,retrievalVersion:name,answerVersion:name,supportVersion:name,chunkerVersion:name}),
 ]);
 export type CrmCapabilityConfiguration=z.infer<typeof crmCapabilityConfigurationSchema>;
 export const crmCapabilityAuthorityReceiptSchema=z.strictObject({
@@ -27,10 +28,10 @@ export const crmCapabilityAuthorityReceiptSchema=z.strictObject({
 }).refine(value=>Date.parse(value.validUntil)>Date.parse(value.verifiedAt),{message:'Receipt expiry must follow verification'});
 export type CrmCapabilityAuthorityReceipt=z.infer<typeof crmCapabilityAuthorityReceiptSchema>;
 const command={commandId:commandIdSchema,clientVersion:semanticVersionSchema};
-const target={capability:crmCapabilitySchema,mailboxId:z.uuid().optional(),expectedRevision:z.number().int().nonnegative()};
+const target={capability:crmCapabilitySchema,purpose:z.enum(['answer','embedding']).optional(),mailboxId:z.uuid().optional(),expectedRevision:z.number().int().nonnegative()};
 export const crmCapabilityActivateSchema=z.strictObject({...command,...target,authorityReceiptId:z.uuid()});
 export const crmCapabilityDisableSchema=z.strictObject({...command,...target});
-export const crmCapabilityReadSchema=z.strictObject({capability:crmCapabilitySchema,mailboxId:z.uuid().optional()});
+export const crmCapabilityReadSchema=z.strictObject({capability:crmCapabilitySchema,purpose:z.enum(['answer','embedding']).optional(),mailboxId:z.uuid().optional()});
 export const crmCapabilityReadResponseSchema=z.strictObject({capability:crmCapabilitySchema,mailboxId:z.uuid().nullable(),configured:z.boolean(),revision:z.number().int().nonnegative(),enabled:z.boolean(),ready:z.boolean(),reason:z.string().max(100),authorityReceiptId:z.uuid().nullable(),proposedRevision:revision,proposedConfigurationFingerprint:hash.nullable(),configuration:crmCapabilityConfigurationSchema.nullable()});
 export const crmMailCaptureControlsSaveSchema=z.strictObject({...command,mailboxId:z.uuid(),expectedRevision:z.number().int().nonnegative(),expectedGeneration:revision,expectedAccountBinding:hash,policyRevision:revision,disclosureVersion:name,disclosureSha256:hash,grantReceipt:name,providerPolicyReceipt:name,evaluationReceipt:name,releaseReceipt:name});
-export const crmAskPurposeSaveSchema=z.strictObject({...command,expectedRevision:z.number().int().nonnegative(),purpose:z.enum(['answer','embedding','support']),enabled:z.boolean(),...route,...prices,evaluationFingerprint:hash,processorVersion:name,retrievalVersion:name,answerVersion:name,supportVersion:name,chunkerVersion:name});
+export const crmAskPurposeSaveSchema=z.strictObject({...command,expectedRevision:z.number().int().nonnegative(),purpose:z.enum(['answer','embedding','support']),agentLimits:askAgentLimitsSchema.optional(),embeddingDimensions:z.union([z.literal(256),z.literal(512),z.literal(1024)]).optional(),enabled:z.boolean(),...route,...prices,evaluationFingerprint:hash,processorVersion:name,retrievalVersion:name,answerVersion:name,supportVersion:name,chunkerVersion:name});

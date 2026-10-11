@@ -15,6 +15,16 @@ async function action(f:Pick<Fixture,'session'|'seeded'>):Promise<Row>{
 function bad(constraint:string,patch:Row):Case{return {constraint,run:async f=>insert(f,{...await action(f),...patch})};}
 const redacted={private_state:'deleted',target_firm_id:null,target_person_id:null,human_text:null,due:null,input_scope:null,initial_contexts:null,original_access_closure:null,support_refs:null};
 const cases:Case[]=[
+ bad('crm_ask_action_opportunity_shape',{target_opportunity_id:missing}),
+ {constraint:'crm_ask_action_opportunity_fkey',run:async f=>insert(f,{...await action(f),kind:'note',status:'active',target_firm_id:f.crm.alpha.firmId,target_opportunity_id:missing})},
+ {constraint:'crm_ask_action_opportunity_immutable',run:async f=>{
+  const row=await action(f),requestId=randomUUID();
+  const contexts=JSON.stringify([{personId:null,firmIds:[f.crm.alpha.firmId],relationships:[],review:'current'}]),closure=JSON.stringify({firmIds:[f.crm.alpha.firmId],personIds:[]});
+  await f.session.query("INSERT INTO crm_ask_requests(workspace_id,id,owner_user_id,question,scope,initial_contexts,initial_access_closure,state,reason) SELECT workspace_id,$3,owner_user_id,question,scope,$4::jsonb,$5::jsonb,'unavailable','purpose_unavailable' FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2",[row['workspace_id']!,row['source_request_id']!,requestId,contexts,closure]);
+  await insert(f,{...row,source_request_id:requestId,kind:'note',status:'active',target_firm_id:f.crm.alpha.firmId,initial_contexts:contexts,original_access_closure:closure});
+  return f.session.query('UPDATE crm_ask_actions SET target_opportunity_id=$3 WHERE workspace_id=$1 AND id=$2',[row['workspace_id']!,row['id']!,f.crm.alpha.opportunityId]);
+ }},
+
  {constraint:'crm_ask_action_due',run:async f=>insert(f,{...await action(f),kind:'task',status:'open',target_firm_id:f.crm.alpha.firmId,due:JSON.stringify({kind:'date',date:'2026-13-99',zone:'America/New_York',expression:'User chosen date'})})},
  {constraint:'crm_ask_action_current_request',run:async f=>insert(f,{...await action(f),owner_user_id:f.seeded.alpha.admin.userId})},
  bad('crm_ask_action_current_request',{source_request_version:2}),

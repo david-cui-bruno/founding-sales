@@ -6,7 +6,7 @@ import {recordRetainedOriginalMetadata} from '@fss/domain/mail/crmMailOriginals.
 import {z} from 'zod';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {readBackfillAuthority,type BackfillAuthority} from '@fss/domain/mail/crmBackfillAuthority.ts';
-import {revalidateBackfillPublication,readBackfillAllocation,reserveBackfillRead,observeBackfillRead,type BackfillAllocationVerifier,type BackfillReadMethod} from '@fss/domain/mail/crmBackfillBudget.ts';
+import {revalidateBackfillPublication,readBackfillAllocation,reserveBackfillRead,observeBackfillRead,type BackfillAllocationVerifier,type BackfillExpansionReadScope,type BackfillReadMethod} from '@fss/domain/mail/crmBackfillBudget.ts';
 import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {GmailClientError,type GmailClient,type GmailAccessGrant} from '@fss/domain/mail/gmailClient.ts';
 import type {MailCaptureProofVerifier} from '@fss/domain/mail/crmSources.ts';
@@ -38,12 +38,13 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   if(authority===null||authority.proof.accountBinding!==parsed.data.accountBinding||authority.proof.generation!==parsed.data.generation||authority.proof.controlsRevision!==parsed.data.controlsRevision||authority.proof.policyRevision!==parsed.data.policyRevision){await block('acquisition_binding_changed');return;}
   if(await readBackfillAllocation(context,authority.proof.mailboxId)===null){await block('quota_configuration_required');return;}
   let recoveryScope:HistoryRecovery|undefined;
+  let expansionReadScope:BackfillExpansionReadScope|undefined;
   async function providerRead<T>(method:BackfillReadMethod,bound:BackfillAuthority,read:(access:GmailAccessGrant)=>Promise<T>,original?:RetainedCopyTraversal):Promise<T>{
    if(!await adapters.proofVerifier.verify(bound.proof))throw new BackfillFailure('acquisition_verification_required');
    const proofInput={workspaceId:input.scope.workspaceId,mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation};
    const access=await adapters.resolveAccess(proofInput);
    if(access===null||access.mailboxId!==proofInput.mailboxId||access.providerAccountId!==proofInput.providerAccountId||access.generation!==proofInput.generation)throw new BackfillFailure('acquisition_binding_changed');
-   const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,...recoveryScope===undefined?{}:{expectedRecovery:{id:recoveryScope.id,revision:recoveryScope.revision,epoch:recoveryScope.epoch,configurationHash:recoveryScope.configuration_hash}},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
+   const reservation=await reserveBackfillRead(context,{importId,mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,accountBinding:bound.proof.accountBinding,generation:bound.proof.generation,method,expectedProof:bound.proof,...expansionReadScope?{expectedExpansion:expansionReadScope}:{},...recoveryScope===undefined?{}:{expectedRecovery:{id:recoveryScope.id,revision:recoveryScope.revision,epoch:recoveryScope.epoch,configurationHash:recoveryScope.configuration_hash}},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},adapters.allocationVerifier);
    if(reservation===null)throw new BackfillFailure('quota_or_authority_unavailable');
    if(original!==undefined&&(method!=='metadata'||!await revalidateRetainedCopyTraversal(context,{revalidateAuthority,authority:bound,traversal:original,...recoveryScope===undefined?{}:{recovery:recoveryScope},jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken})))throw new BackfillFailure('original_copy_authority_changed');
    let result:T;
@@ -76,6 +77,38 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    }
   }
   try{
+   const expansion=(await input.session.query<{id:string;conversation_id:string;decision_revision:number;state:string;revision:number;message_ids:string[];next_ordinal:number;enumeration_complete:boolean;provider_thread_id:string}>(`SELECT e.*,c.provider_thread_id FROM crm_mail_thread_expansions e JOIN crm_business_conversations c ON c.workspace_id=e.workspace_id AND c.id=e.conversation_id WHERE e.workspace_id=$1 AND e.import_id=$2 AND e.state IN ('pending','enumerating') AND EXISTS(SELECT 1 FROM crm_mail_imports i WHERE i.workspace_id=e.workspace_id AND i.id=e.import_id AND i.history_complete) AND NOT EXISTS(SELECT 1 FROM crm_mail_history_recoveries r WHERE r.workspace_id=e.workspace_id AND r.import_id=e.import_id AND r.state IN ('pending_profile','enumerating','draining')) ORDER BY e.id LIMIT 1`,[input.scope.workspaceId,importId])).rows[0];
+   if(expansion){
+    expansionReadScope={id:expansion.id,revision:expansion.revision,conversationId:expansion.conversation_id,decisionRevision:expansion.decision_revision};
+    const bound=authority;
+    const validExpansion=async()=>{
+     const current=await readBackfillAuthority(context,importId,true);
+     if(!current||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||!await revalidateAuthority(context,current))return false;
+     return (await input.session.query(`SELECT e.id FROM crm_mail_thread_expansions e JOIN crm_business_conversations c ON c.workspace_id=e.workspace_id AND c.id=e.conversation_id WHERE e.workspace_id=$1 AND e.id=$2 AND e.revision=$3 AND c.mailbox_id=$4 AND c.account_binding=$5 AND c.owner_user_id=$6 AND c.decision_revision=e.decision_revision AND c.metadata_availability='available' AND (c.human_decision='include' OR (c.human_decision IS NULL AND c.category='business')) FOR UPDATE OF e FOR SHARE OF c`,[input.scope.workspaceId,expansion.id,expansion.revision,bound.proof.mailboxId,bound.proof.accountBinding,bound.proof.ownerUserId])).rows.length===1;
+    };
+    if(!await withTransaction(input.session,validExpansion)){
+     await withTransaction(input.session,async()=>{if(await fenced(input))await input.session.query(`UPDATE crm_mail_thread_expansions SET state='deleted',reason='decision_or_account_changed',message_ids='[]',next_ordinal=0,revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND revision=$3`,[input.scope.workspaceId,expansion.id,expansion.revision]);});return;
+    }
+    if(expansion.state==='pending'){
+     if(!adapters.gmail.getThreadMessageIds){await withTransaction(input.session,async()=>{if(await fenced(input)&&await validExpansion())await input.session.query(`UPDATE crm_mail_thread_expansions SET state='blocked',reason='thread_provider_unavailable',revision=revision+1 WHERE workspace_id=$1 AND id=$2 AND revision=$3`,[input.scope.workspaceId,expansion.id,expansion.revision]);});return;}
+     let listed;
+     try{listed=await providerRead('thread',bound,access=>adapters.gmail.getThreadMessageIds!(access,expansion.provider_thread_id));}
+     catch(error){if(error instanceof BackfillFailure&&error.message==='quota_or_authority_unavailable')throw error;await withTransaction(input.session,async()=>{if(await fenced(input)&&await validExpansion())await input.session.query(`UPDATE crm_mail_thread_expansions SET state='blocked',reason='thread_read_unknown',revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,expansion.id]);});if(error instanceof BackfillFailure&&error.message==='quota_or_authority_unavailable')throw error;return;}
+     if(listed&&(listed.threadId!==expansion.provider_thread_id||listed.messageIds.length>500||listed.messageIds.some(id=>!/^[A-Za-z0-9_-]{1,128}$/u.test(id))||new Set(listed.messageIds).size!==listed.messageIds.length))throw new BackfillFailure('provider_evidence_invalid');
+     await withTransaction(input.session,async()=>{if(await fenced(input)&&await validExpansion())await input.session.query(`UPDATE crm_mail_thread_expansions SET state='enumerating',message_ids=$3::jsonb,enumeration_complete=$4,reason=$5,revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,expansion.id,JSON.stringify(listed?.messageIds??[]),listed?.complete??false,listed===null?'thread_unavailable':listed.complete?null:'thread_oversized']);});return;
+    }
+    if(expansion.next_ordinal>=expansion.message_ids.length){await withTransaction(input.session,async()=>{if(await fenced(input)&&await validExpansion())await input.session.query(`UPDATE crm_mail_thread_expansions SET state=$3,revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,expansion.id,expansion.enumeration_complete?'complete':'partial']);});return;}
+    const messageId=expansion.message_ids[expansion.next_ordinal]!;
+    let metadata;
+    try{metadata=(await providerMetadata(bound,messageId)).metadata;}catch(error){if(error instanceof BackfillFailure&&error.message==='quota_or_authority_unavailable')throw error;await withTransaction(input.session,async()=>{if(await fenced(input)&&await validExpansion())await input.session.query(`UPDATE crm_mail_thread_expansions SET state='blocked',reason='message_read_unknown',revision=revision+1 WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,expansion.id]);});return;}
+    if(metadata&&metadata.threadId!==expansion.provider_thread_id)throw new BackfillFailure('provider_evidence_invalid');
+    await withTransaction(input.session,async()=>{
+     if(!await fenced(input)||!await validExpansion())return;
+     const receipt=metadata===null||metadata.labelIds.includes('DRAFT')?undefined:await adapters.observer.observe(context,{mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation,metadata,acquisitionOrigin:{importId},olderContext:{conversationId:expansion.conversation_id,decisionRevision:expansion.decision_revision}});
+     await recordBackfillMetadata(context,{revalidateAuthority,authority:bound,messageId,metadata,scope:'expanded',observationReceipt:receipt});
+     await input.session.query(`UPDATE crm_mail_thread_expansions SET next_ordinal=next_ordinal+1,revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,expansion.id]);
+    });return;
+   }
    if(authority.historyAnchor!==null&&(await input.session.query("SELECT 1 FROM crm_mail_import_slices WHERE workspace_id=$1 AND import_id=$2 AND state='pending' LIMIT 1",[input.scope.workspaceId,importId])).rows.length===0){
     const traversal=await prepareRetainedCopyTraversal(context,{revalidateAuthority,authority,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken});
     if(traversal!==undefined){

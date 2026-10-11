@@ -1,0 +1,52 @@
+import {composeCrmGmail} from '../../worker/src/bootstrap/crmGmail.ts';
+import {createApprovedBusinessMailObserver} from '@fss/domain/mail/crmSources.ts';
+import {createGmailHttpClient} from '@fss/domain/mail/gmailClientHttp.ts';
+import {createHash,randomUUID} from 'node:crypto';
+import {expect,it} from 'vitest';
+import {createAuthFixture} from './support/authFixture.ts';
+import {issueSessionFor} from './support/sessionFixture.ts';
+import {dispatch} from '../src/server.ts';
+import {businessAccountBinding,METADATA_REVIEW_DISCLOSURE} from '@fss/domain/business/acquisition.ts';
+import {recordedGmailClient} from '@fss/domain/mail/gmailClientFake.ts';
+import {claimJobs} from '@fss/domain/jobs/jobStore.ts';
+import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+it.each(['available','revoked'])('previews an explicitly selected older message without bodies and requires a current versioned inclusion (%s)',async scenario=>{
+ const fixture=await createAuthFixture();try{
+ const {workspaceId,admin}=fixture.alpha;const token=(await issueSessionFor(fixture,fixture.alpha,admin)).accessToken;
+ const mailbox=(await fixture.db.query<{id:string;owner_user_id:string;email_address:string;provider_account_id:string;generation:number;status:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'business@example.test','google-business','connected') RETURNING *",[workspaceId,admin.userId])).rows[0]!;const binding=businessAccountBinding(workspaceId,mailbox)!;
+ await fixture.db.query("INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,disclosure_version,disclosure_sha256) VALUES($1,$2,$3,'google-business',$4,1,1,true,$5,$6)",[workspaceId,mailbox.id,admin.userId,binding,METADATA_REVIEW_DISCLOSURE.version,METADATA_REVIEW_DISCLOSURE.sha256]);
+ await fixture.db.query("INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'google-business',$4,1,1,true,1,'fixture',repeat('b',64),'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')",[workspaceId,mailbox.id,admin.userId,binding]);
+ await fixture.db.query("INSERT INTO crm_mail_import_allocations(workspace_id,mailbox_id,revision,owner_user_id,account_binding,generation,project_hash,user_hash,user_limit_units,project_limit_units,user_headroom_units,project_headroom_units,profile_units,list_units,history_units,metadata_units,body_units,verification_sha256,verified_until) VALUES($1,$2,1,$3,$4,1,repeat('c',64),repeat('d',64),1000,1000,500,500,1,1,1,20,20,repeat('e',64),clock_timestamp()+interval '1 hour')",[workspaceId,mailbox.id,admin.userId,binding]);
+ const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+ const cmd=(fields:Record<string,unknown>)=>({commandId:randomUUID(),clientVersion:'1.4.0',...fields});
+ await post('/crm/business/mail/import/request',cmd({mailboxId:mailbox.id}));
+ const request=cmd({mailboxId:mailbox.id,expectedGeneration:1,expectedAccountBinding:binding,expectedPolicyRevision:1,providerMessageId:'older-message'});
+ expect((await post('/crm/business/selection/request',request)).body).toMatchObject({status:'accepted',result:{status:'queued',captureAllowed:false}});
+ expect((await post('/crm/business/selection/request',request)).body).toMatchObject({replayed:true});
+ const gmail=recordedGmailClient({emailAddress:'business@example.test',historyId:'100',messages:[{id:'older-message',threadId:'older-thread',historyId:'100',internalDateEpochMilliseconds:Date.now()-200*86400000,headers:{From:'person@example.test',To:'business@example.test',Subject:'Historic repairs'},body:'Review the older repair plan.'}]});
+ const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailBackfill:{gmail,resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:{observe:async()=>{}}}});
+ const job=(await claimJobs(fixture.db,{owner:'selection-fixture',kinds:['crm.business_selection'],limit:1,leaseSeconds:120}))[0]!;
+ if(scenario==='revoked'){await fixture.db.query('UPDATE mailboxes SET generation=generation+1 WHERE workspace_id=$1 AND id=$2',[workspaceId,mailbox.id]);expect(await registry.get('crm.business_selection')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job})).toMatchObject({progress:{outcome:'selection_authority_changed'}});expect(gmail.calls).toEqual([]);return;}
+ expect(await registry.get('crm.business_selection')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job})).toMatchObject({progress:{outcome:'preview_available',captureAllowed:false}});
+ const page=(await post('/crm/business/review/read',{mailboxId:mailbox.id})).body as {conversations:{conversationId:string;metadataRevision:number;decisionRevision:number}[]};expect(page).toMatchObject({conversations:[{subject:'Historic repairs',effectiveDecision:'needs_review'}]});
+ const row=page.conversations[0]!;const decision=cmd({mailboxId:mailbox.id,conversationId:row.conversationId,expectedAccountBinding:binding,expectedGeneration:1,expectedPolicyRevision:1,expectedMetadataRevision:row.metadataRevision,expectedDecisionRevision:row.decisionRevision,decision:'include'});
+ expect((await post('/crm/business/review/decide',decision)).body).toMatchObject({status:'accepted',result:{captureAllowed:false,decisionRevision:1}});
+ const threadHttp=createGmailHttpClient({apiBaseUrl:'https://gmail.example.test',fetch:async()=>({status:200,headers:{},body:JSON.stringify({id:'older-thread',messages:[{id:'older-message'}]})})});
+ const deps={gmail:{...gmail,getThreadMessageIds:threadHttp.getThreadMessageIds!},resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:randomUUID(),expiresAtEpochSeconds:Date.now()/1000+3600}}),proofVerifier:{verify:async()=>true},allocationVerifier:{verify:async()=>true},observer:createApprovedBusinessMailObserver()};
+ const composed=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,...composeCrmGmail(deps)});
+ const backfillJob=(await claimJobs(fixture.db,{owner:'selected-composition',kinds:['crm.mail_backfill'],limit:1,leaseSeconds:120}))[0]!;
+ for(let i=0;i<95;i++)await composed.get('crm.mail_backfill')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:backfillJob});
+ expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({threadCoverage:{completedThreads:'1',enumeratedMessages:'1'}});
+ const captureJob=(await claimJobs(fixture.db,{owner:'selected-copy',kinds:['crm.mail_capture'],limit:1,leaseSeconds:120}))[0]!;expect(captureJob).toBeDefined();
+ const copied=await composed.get('crm.mail_capture')!.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job:captureJob});expect(copied).toMatchObject({progress:{outcome:'captured'}});
+ const sourceId=copied!.progress['sourceId'];const text='Review the older repair plan.';
+ expect((await post('/crm/business/mail/read/v2',{sourceId,sourceRevision:1,contentHash:createHash('sha256').update(text).digest('hex')})).body).toMatchObject({state:'available',source:{passage:text,providerOrigin:'unknown',ranges:[{kind:'unknown'}]}});
+ expect((await post('/crm/business/mail/import/read',{mailboxId:mailbox.id})).body).toMatchObject({threadCoverage:{completedThreads:'1',enumeratedMessages:'1'}});
+ expect((await post('/crm/business/review/decide',{...decision,commandId:randomUUID(),expectedDecisionRevision:1,decision:'clear'})).body).toMatchObject({status:'accepted',result:{decisionRevision:2}});
+ expect((await post('/crm/business/review/read',{mailboxId:mailbox.id})).body).toMatchObject({conversations:[{humanDecision:null,effectiveDecision:'needs_review',decisionRevision:2}]});
+ expect(gmail.bodyReads).toEqual(['older-message']);
+ expect((await post('/crm/business/review/decide',{...decision,commandId:randomUUID()})).body).toMatchObject({status:'refused',reason:'stale_decision'});
+ }finally{await fixture.stop();}
+});

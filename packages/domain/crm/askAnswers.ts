@@ -1,4 +1,9 @@
-import {askGroundedAnswerSchema,askAnswerAcknowledgmentSchema,askAnswerRequestPayloadSchema,askAnswerReadResultSchema,askAnswerSourceResultSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAnswerRequest} from '@fss/contracts';
+import {askToolFirmIds} from './askAgentScope.ts';
+import {askAgentScopeSchema} from '@fss/contracts';
+import {askSupportedWorkSchema,askExplicitCorpusScopeSchema,askGroundedAnswerSchema,askAnswerAcknowledgmentSchema,askAnswerRequestPayloadSchema,askAnswerReadResultSchema,askAnswerSourceResultSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAnswerRequest} from '@fss/contracts';
+import {readAsk} from './ask.ts';
+import {askFingerprint} from './askAnswerAuthority.ts';
+import {resolveAskAgentScope} from './askAgentScope.ts';
 import {createHash} from 'node:crypto';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from './identityAccess.ts';
@@ -15,6 +20,9 @@ const copiedMail=createNativeCrmMailEvidence();
 
 /** Private inputs are retained only after the complete selected copy closure is locked. */
 export async function requestAskAnswer(context:RepositoryContext,input:AskAnswerRequest){
+ const resolvedScope=input.execution==='agent_v1'&&input.agentScope?await resolveAskAgentScope(context,input.agentScope):null;
+ if(input.agentScope&&resolvedScope===null)return {ok:false as const,reason:'source_unavailable'};
+ if(resolvedScope)input={...input,scope:{sources:resolvedScope.sources}};
  const actor=context.scope.actor;
  if(actor.kind!=='user'||!await activeIdentityActor(context)||!await lockConflictSources(context,input.scope.sources))return {ok:false as const,reason:'source_unavailable'};
  const contexts=[];
@@ -32,10 +40,10 @@ export async function requestAskAnswer(context:RepositoryContext,input:AskAnswer
   closures.push(original);
  }
  if(!await lockConflictSources(context,input.scope.sources,contexts,closures))return {ok:false as const,reason:'source_unavailable'};
- const closure={firmIds:[...new Set([...closures.flatMap(value=>value.firmIds),...contexts.flatMap(value=>value.firmIds)])].sort(),personIds:[...new Set([...closures.flatMap(value=>value.personIds),...contexts.flatMap(value=>value.personId===null?[]:[value.personId])])].sort()};
+ const closure={firmIds:[...new Set([...closures.flatMap(value=>value.firmIds),...contexts.flatMap(value=>value.firmIds),...resolvedScope?.firmIds??[]])].sort(),personIds:[...new Set([...closures.flatMap(value=>value.personIds),...contexts.flatMap(value=>value.personId===null?[]:[value.personId]),...resolvedScope?.personIds??[]])].sort()};
  const purpose=await readAskPurpose(context,'answer');
  const state=purpose===null?'unavailable':'pending';
- const row=(await context.db.query<{id:string;version:number;epoch:number}>(`INSERT INTO crm_ask_requests(workspace_id,owner_user_id,question,scope,initial_contexts,initial_access_closure,state,reason,purpose_revision,evaluation_fingerprint) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10) RETURNING id,version,epoch`,[context.scope.workspaceId,actor.userId,input.question,JSON.stringify(input.scope),JSON.stringify(contexts),JSON.stringify(closure),state,purpose===null?'purpose_unavailable':null,purpose?.revision??null,purpose?.evaluationFingerprint??null])).rows[0]!;
+ const row=(await context.db.query<{id:string;version:number;epoch:number}>(`INSERT INTO crm_ask_requests(workspace_id,owner_user_id,question,scope,initial_contexts,initial_access_closure,state,reason,purpose_revision,evaluation_fingerprint,execution_version,original_agent_scope) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb) RETURNING id,version,epoch`,[context.scope.workspaceId,actor.userId,input.question,JSON.stringify(input.scope),JSON.stringify(contexts),JSON.stringify(closure),state,purpose===null?'purpose_unavailable':null,purpose?.revision??null,purpose?.evaluationFingerprint??null,input.execution??'legacy_v1',input.agentScope?JSON.stringify(input.agentScope):null])).rows[0]!;
  if(state==='pending')await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'crm.ask_answer',idempotencyKey:`ask-answer:${row.id}:${row.version}:${row.epoch}`,payload:{requestId:row.id,version:row.version,epoch:row.epoch},maxAttempts:3});
  return {ok:true as const,value:askAnswerAcknowledgmentSchema.parse({requestId:row.id,version:row.version,state})};
 }
@@ -58,13 +66,15 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
  if(actor.kind!=='user'||!await activeIdentityActor(context))return null;
  const row=(await context.db.query<PrivateRequest>('SELECT * FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3',[context.scope.workspaceId,requestId,actor.userId])).rows[0];
  if(row===undefined)return null;
- const metadata={requestId:row.id,version:row.version,createdAt:row.created_at.toISOString(),state:row.state,reason:row.reason};
+ const metadata={requestId:row.id,version:row.version,createdAt:row.created_at.toISOString(),state:row.state,reason:row.reason,...row['execution_version']==='agent_v1'?{execution:'agent_v1',progress:{completedSteps:Number(row['completed_steps']),stage:row['progress_stage'],cancelledAt:row['cancelled_at'] instanceof Date?row['cancelled_at'].toISOString():null}}:{}};
  const unavailable=()=>askAnswerReadResultSchema.parse({...metadata,state:row.state==='complete'?'stale':row.state,reason:row.state==='deleted'?'deleted':row.state==='stale'?(row.reason??'source_changed'):'source_unavailable',question:null,fallback:null,answer:null});
  if(row.state==='deleted'||row.state==='stale')return unavailable();
- const input=askAnswerRequestPayloadSchema.safeParse({question:row.question,scope:row.scope});
+ const input=askAnswerRequestPayloadSchema.safeParse({question:row.question,scope:row.scope,execution:row['execution_version']});
  const originals=crmOriginalAccessClosureSchema.safeParse(row.initial_access_closure);
  const contexts=crmClaimContextSchema.array().max(10).safeParse(row.initial_contexts);
  if(!input.success||!originals.success||!contexts.success||contexts.data.length!==input.data.scope.sources.length)return unavailable();
+ const intent=askAgentScopeSchema.safeParse(row['original_agent_scope']);
+ if(row['original_agent_scope']!==null&&row['original_agent_scope']!==undefined&&!intent.success)return unavailable();
  const sources=input.data.scope.sources;
  if(!await lockConflictSources(context,sources,contexts.data,[originals.data]))return unavailable();
  for(const [index,source] of sources.entries()){
@@ -80,7 +90,18 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
   const result=askGroundedAnswerSchema.safeParse(row.result);
   if(!result.success||JSON.stringify(conflicts.map(value=>[value.conflictId,value.revision,value.state,value.resolution]))!==JSON.stringify(result.data.conflicts.map(value=>[value.conflictId,value.revision,value.state,value.resolution])))return askAnswerReadResultSchema.parse({...metadata,state:'stale',reason:'source_changed',question:null,fallback:null,answer:null});
  }
- const fallback=await readAskCorpus(context,{scope:input.data.scope,query:input.data.question,limit:20});
- if(fallback===null||!await activeIdentityActor(context))return unavailable();
- return askAnswerReadResultSchema.parse({...metadata,question:input.data.question,fallback,answer:row.state==='complete'?row.result:null});
+ const fallback=input.data.scope.sources.length===0?null:await readAskCorpus(context,{scope:askExplicitCorpusScopeSchema.parse(input.data.scope),query:input.data.question,limit:20});
+ if((fallback===null&&input.data.scope.sources.length>0)||!await activeIdentityActor(context))return unavailable();
+ const finalAnswer=row.state==='complete'?askGroundedAnswerSchema.parse(row.result):null;
+ const completed=askSupportedWorkSchema.safeParse(finalAnswer?.exactResults?{exactResults:finalAnswer.exactResults}:row['validated_progress']);
+ const intentFirmIds=askToolFirmIds(intent.success?intent.data:null,originals.data.firmIds);
+ const exactResults=[];
+ if(completed.success)for(const exact of completed.data.exactResults){
+  const value=exact.value as {scope?:{firmId?:string}};
+  const firmId=value?.scope?.firmId;
+  if(!firmId||!intentFirmIds.includes(firmId))continue;
+  const refreshed=await readAsk(context,exact.operation==='opportunities'?{operation:'opportunities',scope:{firmId},limit:20,status:'all'}:exact.operation==='tasks'?{operation:'tasks',scope:{firmId},limit:20}:{operation:'reply_status',scope:{firmId}});
+  if(refreshed!==null&&askFingerprint(refreshed)===exact.valueHash)exactResults.push(exact);
+ }
+ return askAnswerReadResultSchema.parse({...metadata,question:input.data.question,fallback,...exactResults.length?{supportedWork:{exactResults}}:{},answer:finalAnswer===null?null:{...finalAnswer,...finalAnswer.exactResults?{exactResults,missingEvidence:exactResults.length===finalAnswer.exactResults.length?finalAnswer.missingEvidence:[...new Set([...finalAnswer.missingEvidence,'exact_state_changed'])]}:{}}});
 }

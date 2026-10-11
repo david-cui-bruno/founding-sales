@@ -20,7 +20,7 @@ const routes = {
  '/crm/capability/read': {action:'read',capability:null},
 } as const;
 export const CRM_CAPABILITY_PATHS = Object.keys(routes);
-function capabilityTarget(input:{capability:CrmCapabilityConfiguration['capability'];mailboxId?:string|undefined}){return {capability:input.capability,...input.mailboxId===undefined?{}:{mailboxId:input.mailboxId}};}
+function capabilityTarget(input:{capability:CrmCapabilityConfiguration['capability'];purpose?:'answer'|'embedding'|undefined;mailboxId?:string|undefined}){return {capability:input.capability,...input.purpose===undefined?{}:{purpose:input.purpose},...input.mailboxId===undefined?{}:{mailboxId:input.mailboxId}};}
 export async function routeCrmCapabilities(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!Object.hasOwn(routes,request.path))return null;
  const route=routes[request.path as keyof typeof routes];

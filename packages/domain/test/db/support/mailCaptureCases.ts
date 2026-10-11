@@ -16,6 +16,8 @@ export async function seedMailCaptureCatalogFixture(f: Fixture) {
  await f.session.query("INSERT INTO crm_mail_source_intents(workspace_id,source_kind,source_id,source_revision,content_hash) VALUES($1,'mail',$2,1,repeat('c',64))",[w,source]);
 }
 const mutations = [
+ ["crm_mail_sources_representation_diagnostics_check", "crm_mail_sources", "representation_diagnostics='{}'::jsonb"],
+ ["crm_mail_sources_provider_origin_check", "crm_mail_sources", "provider_origin='authored'"],
  ["crm_mail_capture_controls_provider_account_id_check", "crm_mail_capture_controls", "provider_account_id=''"],
  ["crm_mail_capture_controls_account_binding_check", "crm_mail_capture_controls", "account_binding='invalid'"],
  ["crm_mail_capture_controls_generation_check", "crm_mail_capture_controls", "generation=0"],

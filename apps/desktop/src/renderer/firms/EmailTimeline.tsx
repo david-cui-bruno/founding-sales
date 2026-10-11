@@ -558,6 +558,9 @@ export function EmailTimeline({
                 ? "Partial copied content"
                 : "Copied content unavailable"}
           </p>
+          {(source.representationDiagnostics??[]).map(reason=><p key={reason}>Representation gap: {reason.replaceAll('_',' ')}</p>)}
+          {(source.attachments??[]).length>0?<section aria-label="Email attachments"><h4>Attachments</h4><p>Metadata only. Attachment contents have not been fetched or analyzed.</p>{source.attachments.map(attachment=><details key={`${attachment.attachmentId}:${attachment.filename}`}><summary>{attachment.filename}</summary><p>{attachment.mimeType}; {attachment.sizeBytes} bytes</p><p>{attachment.attachmentId?"Available provider reference.":"Provider attachment reference unavailable."} Select a local copy through file import to analyze its content.</p></details>)}</section>:null}
+          {source.providerOrigin==="unknown"?<p>Provider direction attribution unknown.</p>:null}
           <p>Provider date: {source.occurredAt}</p>
           <p>
             {source.rawSenderDate === null

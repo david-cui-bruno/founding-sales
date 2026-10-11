@@ -1091,7 +1091,7 @@ it('registered retention preserves approved unmatched business copies beyond met
   }
 });
 
-it('registered sync stages approved metadata then capture through the pinned account-aware observer', async () => {
+it('registered sync qualifies an unknown business correspondent without body reads then captures through independent authority', async () => {
   const fixture = await createAuthFixture();
   try {
     const { workspaceId, ownerUserId, mailbox, binding } =
@@ -1138,19 +1138,13 @@ it('registered sync stages approved metadata then capture through the pinned acc
           headers: {
             From: 'Unknown@business.test',
             To: 'business@example.test',
-            Subject: 'Business',
+            Subject: 'Property management demo request',
           },
           body: passage,
         },
       ],
     });
-    const observer = createApprovedBusinessMailObserver({
-      categorizeMetadata: () => ({
-        category: 'business',
-        reason: 'business_metadata',
-        classifierVersion: 'fixture-metadata-v1',
-      }),
-    });
+    const observer = createApprovedBusinessMailObserver();
     const registry = registerHandlers(new HandlerRegistry(), {
       classifier: undefined,
       send: undefined,
@@ -1216,6 +1210,7 @@ it('registered sync stages approved metadata then capture through the pinned acc
       }),
       job: syncJob,
     });
+    expect(gmail.calls.some(call=>call.method==='getMetadata'), JSON.stringify(gmail.calls)).toBe(true);
     expect(
       gmail.calls.filter((call) => call.method === 'getBody'),
     ).toHaveLength(0);
@@ -2161,4 +2156,144 @@ it('serializes registered metadata observation and capture without reversing the
     if (!released) await barrier.query('ROLLBACK');
     await fixture.stop();
   }
+});
+
+it.each(['automated','legacy_policy'] as const)('registered sync holds %s business-looking mail without fetching a body or enrolling anyone', async (scenario) => {
+  const fixture = await createAuthFixture();
+  try {
+    const { workspaceId, mailbox, binding } =
+      await approveCaptureFixture(fixture);
+    await fixture.db.query(
+      'UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',
+      [
+        workspaceId,
+        mailbox.id,
+        METADATA_REVIEW_DISCLOSURE.version,
+        METADATA_REVIEW_DISCLOSURE.sha256,
+      ],
+    );
+    await fixture.db.query(
+      "UPDATE mailboxes SET sync_state='ready',history_id='1',history_id_updated_at=now(),baseline_from_at=now()-interval '1 hour',baseline_completed_at=now() WHERE workspace_id=$1 AND id=$2",
+      [workspaceId, mailbox.id],
+    );
+    if(scenario==='legacy_policy')await fixture.db.query("UPDATE crm_business_policies SET qualification_version='business-metadata-unclassified-v1' WHERE workspace_id=$1 AND mailbox_id=$2",[workspaceId,mailbox.id]);
+    const cipher = localEnvelopeCipher();
+    await storeRefreshToken(
+      {
+        scope: workspaceScope(workspaceId, {
+          kind: 'system',
+          component: 'worker',
+        }),
+        db: fixture.db,
+      },
+      {
+        mailboxId: mailbox.id,
+        plaintext: randomBytes(24).toString('base64url'),
+        cipher,
+      },
+    );
+    const passage = 'Business correspondence found by normal sync';
+    const gmail = recordedGmailClient({
+      emailAddress: 'business@example.test',
+      historyId: '2',
+      messages: [
+        {
+          id: 'approved-message',
+          threadId: 'approved-thread',
+          historyId: '2',
+          internalDateEpochMilliseconds: Date.now(),
+          labelIds: ['INBOX'],
+          headers: {
+            From: 'Unknown@business.test',
+            To: 'business@example.test',
+            Subject: 'Property management demo request',
+            ...(scenario==='automated'?{'List-Id':'news.business.test'}:{}),
+          },
+          body: passage,
+        },
+      ],
+    });
+    const observer = createApprovedBusinessMailObserver();
+    const registry = registerHandlers(new HandlerRegistry(), {
+      classifier: undefined,
+      send: undefined,
+      research: undefined,
+      mail: {
+        gmail,
+        cipher,
+        oauth: {
+          clientId: 'fixture',
+          clientSecret: randomBytes(24).toString('base64url'),
+          redirectUri: 'https://example.test/callback',
+          authorizationEndpoint: 'https://example.test/authorize',
+          tokenEndpoint: 'https://example.test/token',
+          revocationEndpoint: 'https://example.test/revoke',
+          apiBaseUrl: 'https://example.test/mail',
+        },
+        journal: recordingSuppressionJournal(),
+        replyPromoter: { async promoteReply() {} },
+        pushTopicName: 'projects/example/topics/mail',
+        businessMailObserver: observer,
+      },
+      crmMailCapture: {
+        proofVerifier: {
+          async verify(proof) {
+            return proof.accountBinding === binding;
+          },
+        },
+        provider: createGmailMailCaptureProvider({
+          gmail,
+          async resolveAccess(_request) {
+            return {
+              providerAccountId: 'google-business',
+              generation: 1,
+              mailboxId: mailbox.id,
+              access: {
+                accessToken: randomBytes(24).toString('base64url'),
+                expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 60,
+              },
+            };
+          },
+        }),
+      },
+    });
+    await enqueueJob(fixture.db, {
+      workspaceId,
+      kind: 'mail.sync',
+      idempotencyKey: 'observer-sync-fixture',
+      payload: { mailboxId: mailbox.id },
+    });
+    const syncJob = (
+      await claimJobs(fixture.db, {
+        owner: 'observer-sync',
+        kinds: ['mail.sync'],
+        limit: 1,
+        leaseSeconds: 120,
+      })
+    )[0]!;
+    await registry.get('mail.sync')!.handle({
+      session: fixture.db,
+      scope: workspaceScope(workspaceId, {
+        kind: 'system',
+        component: 'worker',
+      }),
+      job: syncJob,
+    });
+    expect(gmail.calls.some(call=>call.method==='getMetadata'), JSON.stringify(gmail.calls)).toBe(true);
+    expect(
+      gmail.calls.filter((call) => call.method === 'getBody'),
+    ).toHaveLength(0);
+    const captureJob = (
+      await claimJobs(fixture.db, {
+        owner: 'observer-capture',
+        kinds: ['crm.mail_capture'],
+        limit: 1,
+        leaseSeconds: 120,
+      })
+    )[0];
+    expect(captureJob).toBeUndefined();
+    const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+    const review=await dispatch({method:'POST',path:'/crm/business/review/read',body:{mailboxId:mailbox.id},query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+    expect(review.body).toMatchObject({conversations:expect.arrayContaining([expect.objectContaining(scenario==='automated'?{category:'newsletter',reason:'automated_list',effectiveDecision:'excluded'}:{category:'uncertain',reason:'unclassified_metadata',effectiveDecision:'needs_review'})])});
+  } finally {await fixture.stop();}
 });

@@ -1,3 +1,4 @@
+import {qualifyBusinessMailMetadata} from './businessQualification.ts';
 import {redactBackfillMetadataForSources} from './crmBackfillMetadata.ts';
 import { businessMetadataObservationSchema } from '@fss/contracts';
 import { enqueueJob } from '../jobs/jobStore.ts';
@@ -65,6 +66,8 @@ const providerMessageSchema = z
     subject: z.string().max(998),
     body: z.string().max(200000).nullable(),
     parserVersion: z.string().min(1).max(100),
+    attachments: z.array(z.strictObject({filename:z.string().max(300),mimeType:z.string().max(200),sizeBytes:z.number().int().nonnegative(),attachmentId:z.string().max(500)})).max(100).default([]),
+    representationDiagnostics:z.array(z.string().max(100)).max(20).default([]),
     representation: z.enum(['plain_text', 'html_flattened']),
     completeness: z.enum(['complete', 'partial', 'unavailable']),
     ranges: z
@@ -705,6 +708,7 @@ export function businessMailCaptureHandler(deps: {
           'UPDATE mail_messages SET business_capture_authorized=true,metadata_only=$3 WHERE workspace_id=$1 AND id=$2',
           [input.scope.workspaceId, sourceId, m.body === null],
         );
+        await input.session.query('UPDATE mail_messages SET attachment_references=$3::jsonb WHERE workspace_id=$1 AND id=$2',[input.scope.workspaceId,sourceId,JSON.stringify(m.attachments)]);
         const p = current.proof;
         const captureRevision = payload.recapture
           ? payload.recapture.expectedRevision + 1
@@ -726,7 +730,7 @@ export function businessMailCaptureHandler(deps: {
           m.ranges.some((r) => r.kind === 'authored') &&
           !m.ranges.every((r) => r.kind === 'forwarded' || r.kind === 'quoted');
         await input.session.query(
-          `INSERT INTO crm_mail_sources(workspace_id,source_id,capture_identity_id,source_revision,content_hash,owner_user_id,mailbox_id,provider_account_id,account_binding,acquired_generation,controls_revision,policy_revision,conversation_id,decision_revision,disclosure_version,disclosure_sha256,verification_receipts,parser_version,representation,completeness,passage_ranges,participants,raw_sender_date,provider_at,sent_proof,diagnostic_authorization_id) VALUES($1,$2,$3,$25,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20::jsonb,$21::jsonb,$22,$23,$24,$26) ON CONFLICT(workspace_id,source_id) DO UPDATE SET source_revision=EXCLUDED.source_revision,content_hash=EXCLUDED.content_hash,acquired_generation=EXCLUDED.acquired_generation,controls_revision=EXCLUDED.controls_revision,policy_revision=EXCLUDED.policy_revision,decision_revision=EXCLUDED.decision_revision,disclosure_version=EXCLUDED.disclosure_version,disclosure_sha256=EXCLUDED.disclosure_sha256,verification_receipts=EXCLUDED.verification_receipts,parser_version=EXCLUDED.parser_version,representation=EXCLUDED.representation,completeness=EXCLUDED.completeness,passage_ranges=EXCLUDED.passage_ranges,participants=EXCLUDED.participants,raw_sender_date=EXCLUDED.raw_sender_date,provider_at=EXCLUDED.provider_at,sent_proof=EXCLUDED.sent_proof,availability='available',observed_at=now()`,
+          `INSERT INTO crm_mail_sources(workspace_id,source_id,capture_identity_id,source_revision,content_hash,owner_user_id,mailbox_id,provider_account_id,account_binding,acquired_generation,controls_revision,policy_revision,conversation_id,decision_revision,disclosure_version,disclosure_sha256,verification_receipts,representation_diagnostics,provider_origin,parser_version,representation,completeness,passage_ranges,participants,raw_sender_date,provider_at,sent_proof,diagnostic_authorization_id) VALUES($1,$2,$3,$25,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$27::jsonb,$28,$17,$18,$19,$20::jsonb,$21::jsonb,$22,$23,$24,$26) ON CONFLICT(workspace_id,source_id) DO UPDATE SET source_revision=EXCLUDED.source_revision,content_hash=EXCLUDED.content_hash,acquired_generation=EXCLUDED.acquired_generation,controls_revision=EXCLUDED.controls_revision,policy_revision=EXCLUDED.policy_revision,decision_revision=EXCLUDED.decision_revision,disclosure_version=EXCLUDED.disclosure_version,disclosure_sha256=EXCLUDED.disclosure_sha256,verification_receipts=EXCLUDED.verification_receipts,representation_diagnostics=EXCLUDED.representation_diagnostics,provider_origin=EXCLUDED.provider_origin,parser_version=EXCLUDED.parser_version,representation=EXCLUDED.representation,completeness=EXCLUDED.completeness,passage_ranges=EXCLUDED.passage_ranges,participants=EXCLUDED.participants,raw_sender_date=EXCLUDED.raw_sender_date,provider_at=EXCLUDED.provider_at,sent_proof=EXCLUDED.sent_proof,availability='available',observed_at=now()`,
           [
             input.scope.workspaceId,
             sourceId,
@@ -759,6 +763,8 @@ export function businessMailCaptureHandler(deps: {
             sentProof,
             captureRevision,
             payload.diagnosticAuthorizationId??null,
+            JSON.stringify(m.representationDiagnostics),
+            m.origin,
           ],
         );
         if (
@@ -968,6 +974,9 @@ export async function readMailConversation(
         observed_at: Date;
         acquired_generation: number;
         participants: string[];
+        attachment_references: unknown;
+        representation_diagnostics:string[];
+        provider_origin:string;
         passage_ranges: unknown;
         parser_version: string;
         representation: string;
@@ -976,7 +985,7 @@ export async function readMailConversation(
         sent_proof: boolean;
       }
     >(
-      `SELECT s.*,m.direction,m.subject,b.body_text FROM crm_mail_sources s JOIN mail_messages m ON m.workspace_id=s.workspace_id AND m.id=s.source_id LEFT JOIN mail_message_bodies b ON b.workspace_id=s.workspace_id AND b.mail_message_id=s.source_id WHERE s.workspace_id=$1 AND s.source_id=$2 FOR UPDATE OF s`,
+      `SELECT s.*,m.direction,m.subject,m.attachment_references,b.body_text FROM crm_mail_sources s JOIN mail_messages m ON m.workspace_id=s.workspace_id AND m.id=s.source_id LEFT JOIN mail_message_bodies b ON b.workspace_id=s.workspace_id AND b.mail_message_id=s.source_id WHERE s.workspace_id=$1 AND s.source_id=$2 FOR UPDATE OF s`,
       [context.scope.workspaceId, exact.sourceId],
     )
   ).rows[0];
@@ -1045,6 +1054,9 @@ export async function readMailConversation(
         .map(contextDto),
       participants: row.participants,
       parserVersion: row.parser_version,
+      attachments: row.attachment_references,
+      representationDiagnostics: row.representation_diagnostics,
+      providerOrigin:row.provider_origin,
       representation: row.representation,
       completeness: row.completeness,
       rawSenderDate: row.raw_sender_date,
@@ -1209,7 +1221,7 @@ export async function changeMailSource(
       [context.scope.workspaceId, input.sourceId],
     );
     await context.db.query(
-      "UPDATE crm_mail_sources SET original_availability='unknown',original_observation_revision=original_observation_revision+1,original_observed_at=NULL,original_observed_generation=NULL,original_observed_account_binding=NULL,original_observation_reason=NULL,participants='[]',raw_sender_date=NULL,passage_ranges='[]',sent_proof=false,provider_at=NULL,observed_at=NULL,availability=$3,source_revision=$4 WHERE workspace_id=$1 AND source_id=$2",
+      "UPDATE crm_mail_sources SET original_availability='unknown',original_observation_revision=original_observation_revision+1,original_observed_at=NULL,original_observed_generation=NULL,original_observed_account_binding=NULL,original_observation_reason=NULL,participants='[]',raw_sender_date=NULL,representation_diagnostics='[]',provider_origin='unknown',passage_ranges='[]',sent_proof=false,provider_at=NULL,observed_at=NULL,availability=$3,source_revision=$4 WHERE workspace_id=$1 AND source_id=$2",
       [context.scope.workspaceId, input.sourceId, availability, revision],
     );
     await context.db.query(
@@ -2258,6 +2270,7 @@ export const approvedBusinessMailObservationSchema = z
     ownerUserId: z.string().uuid(),
     observation: businessMetadataObservationSchema,
     acquisitionOrigin:z.strictObject({importId:z.string().uuid()}).optional(),
+    olderContext:z.strictObject({conversationId:z.uuid(),decisionRevision:z.number().int().nonnegative()}).optional(),
   })
   .strict();
 /** Metadata review is not body permission. This only creates a separately verified worker intent. */
@@ -2288,7 +2301,10 @@ export async function observeApprovedBusinessMail(
     mailbox.status !== 'connected'
   )
     return { ok: false as const, reason: 'mailbox_binding_changed' };
-  const observed = await observeBusinessMetadata(context, observation);
+  const older=parsed.data.olderContext;
+  const priorOlder=older&&parsed.data.acquisitionOrigin?(await context.db.query<{id:string;metadata_revision:number}>(`SELECT c.id,c.metadata_revision FROM crm_business_conversations c JOIN crm_mail_thread_expansions e ON e.workspace_id=c.workspace_id AND e.conversation_id=c.id WHERE c.workspace_id=$1 AND c.id=$2 AND c.mailbox_id=$3 AND c.account_binding=$4 AND c.owner_user_id=$5 AND c.provider_thread_id=$6 AND c.decision_revision=$7 AND c.metadata_availability='available' AND (c.human_decision='include' OR (c.human_decision IS NULL AND c.category='business')) AND e.import_id=$8 AND e.decision_revision=c.decision_revision AND e.state='enumerating' FOR SHARE OF c,e`,[context.scope.workspaceId,older.conversationId,mailbox.id,businessAccountBinding(context.scope.workspaceId,mailbox),ownerUserId,observation.providerThreadId,older.decisionRevision,parsed.data.acquisitionOrigin.importId])).rows[0]:undefined;
+  if(older&&!priorOlder)return {ok:false as const,reason:'metadata_observation_unavailable'};
+  const observed = priorOlder?{ok:true as const,value:{conversationId:priorOlder.id,metadataRevision:priorOlder.metadata_revision,captureAllowed:false as const}}:await observeBusinessMetadata(context, observation);
   if (!observed.ok || observed.value.conversationId === null) return observed;
   const control = (
     await context.db.query<Control>(
@@ -2323,6 +2339,10 @@ export async function observeApprovedBusinessMail(
       ok: true as const,
       value: { ...observed.value, captureQueued: false },
     };
+  if(!older){
+   const imported=parsed.data.acquisitionOrigin?.importId??(await context.db.query<{id:string}>(`SELECT id FROM crm_mail_imports WHERE workspace_id=$1 AND mailbox_id=$2 AND account_binding=$3 AND generation=$4 AND controls_revision=$5 AND policy_revision=$6 ORDER BY observed_at DESC LIMIT 1`,[context.scope.workspaceId,mailbox.id,binding,mailbox.generation,control.revision,control.policy_revision])).rows[0]?.id;
+   if(imported)await context.db.query(`INSERT INTO crm_mail_thread_expansions(workspace_id,import_id,conversation_id,decision_revision) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,[context.scope.workspaceId,imported,conversation.id,conversation.decision_revision]);
+  }
   const prior = (
     await context.db.query<{ state: string }>(
       'SELECT state FROM crm_mail_capture_identities WHERE workspace_id=$1 AND mailbox_id=$2 AND account_binding=$3 AND provider_message_id=$4',
@@ -2387,6 +2407,7 @@ export function createApprovedBusinessMailObserver(
 ): BusinessMailMetadataObserver {
   return {
     async observe(context, input) {
+      if(input.metadata.labelIds.includes('DRAFT'))return {ok:false,reason:'metadata_observation_unavailable'};
       if(options.revalidateAuthority&&!await options.revalidateAuthority(context,input))return {ok:false,reason:'metadata_observation_unavailable'};
       const policy = (
         await context.db.query<{ revision: number }>(
@@ -2395,11 +2416,7 @@ export function createApprovedBusinessMailObserver(
         )
       ).rows[0];
       if (!policy) return {ok:false,reason:'metadata_observation_unavailable'};
-      const classification = options.categorizeMetadata?.(input.metadata) ?? {
-        category: 'uncertain',
-        reason: 'unclassified_metadata',
-        classifierVersion: 'business-metadata-unclassified-v1',
-      };
+      const classification = options.categorizeMetadata?.(input.metadata) ?? await qualifyBusinessMailMetadata(context,input);
       const participants = [
         headerValue(input.metadata.headers, 'From'),
         headerValue(input.metadata.headers, 'To'),
@@ -2419,6 +2436,7 @@ export function createApprovedBusinessMailObserver(
       const result=await observeApprovedBusinessMail(context, {
         ownerUserId: input.ownerUserId,
         ...input.acquisitionOrigin===undefined?{}:{acquisitionOrigin:input.acquisitionOrigin},
+        ...input.olderContext===undefined?{}:{olderContext:input.olderContext},
         observation: {
           mailboxId: input.mailboxId,
           providerAccountId: input.providerAccountId,

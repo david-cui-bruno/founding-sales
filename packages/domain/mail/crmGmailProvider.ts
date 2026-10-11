@@ -2,11 +2,21 @@ import type { GmailClient, GmailAccessGrant } from './gmailClient.ts';
 import { headerValue } from './gmailClient.ts';
 import type { MailCaptureProvider,MailCaptureProof } from './crmSources.ts';
 
+/** Structural quotation labels are context, never original-authorship or Sent proof. */
+function contextRanges(text:string|null){
+ if(!text)return [];
+ const marker=/^(?:[ \t]*On .+wrote:|[ \t]*>)[^\n]*|^[ \t]*-{2,}\s*(?:Forwarded message|Original Message)\s*-*/gimu;
+ const match=marker.exec(text);if(!match)return [{start:0,end:text.length,kind:'unknown' as const}];
+ const kind=/Forwarded message|Original Message/iu.test(match[0])?'forwarded' as const:'quoted' as const;
+ return [...(match.index>0?[{start:0,end:match.index,kind:'unknown' as const}]:[]),{start:match.index,end:text.length,kind}];
+}
+function headerAddresses(value:string|null|undefined){return [...(value??'').matchAll(/([^<>\s,]+@[^<>\s,]+)/gu)].map(match=>match[1]!);}
 interface ProvenMailAccess {
   mailboxId: string;
   providerAccountId: string;
   generation: number;
   access: GmailAccessGrant;
+  mailboxEmail?:string;
 }
 /** The resolver must prove the token's actual account and captured generation.
  * A requested account ID or the current mailbox email is not that proof. */
@@ -47,7 +57,7 @@ export function createGmailMailCaptureProvider(deps: {
       if (body?.labelIds !== undefined && JSON.stringify([...body.labelIds].sort()) !== JSON.stringify([...metadata.labelIds].sort()))
         throw new Error('CRM mail body labels changed');
       const labels = body?.labelIds ?? metadata.labelIds;
-      const origin = body?.threadId === undefined || body.labelIds === undefined ? 'unknown' : labels.includes('DRAFT') ? 'unknown' : labels.includes('SENT') ? 'sent' : labels.includes('INBOX') ? 'received' : 'unknown';
+      const origin = body?.threadId === undefined || body.labelIds === undefined ? 'unknown' : labels.includes('DRAFT') ? 'unknown' : labels.includes('SENT') ? 'sent' : labels.includes('INBOX') ? 'received' : proven.mailboxEmail && headerAddresses(headerValue(metadata.headers,'To')).some(value=>value.toLowerCase()===proven.mailboxEmail!.toLowerCase()) && !headerAddresses(headerValue(metadata.headers,'From')).some(value=>value.toLowerCase()===proven.mailboxEmail!.toLowerCase()) ? 'received' : 'unknown';
       const latest = await deps.resolveAccess(input);
       if (
         !latest ||
@@ -91,10 +101,12 @@ export function createGmailMailCaptureProvider(deps: {
         cc: addresses(headerValue(metadata.headers, 'Cc')),
         subject: (headerValue(metadata.headers, 'Subject') ?? '').slice(0, 998),
         body: text,
-        parserVersion: body?.completeness ? 'gmail-bounded-mime-v2' : 'gmail-existing-decoded-part-v1',
+        parserVersion: body?.completeness ? 'gmail-bounded-mime-v3' : 'gmail-existing-decoded-part-v1',
         representation: body?.plainText ? 'plain_text' : 'html_flattened',
         completeness: text === null ? 'unavailable' : body?.completeness === 'complete' && !body.truncated && body.plainText ? 'complete' : 'partial',
-        ranges: text ? [{ start: 0, end: text.length, kind: 'unknown' }] : [],
+        attachments: [...(body?.attachments ?? metadata.attachments)],
+        representationDiagnostics: [...(body?.representationDiagnostics ?? (body ? [] : ['body_unavailable']))],
+        ranges: contextRanges(body?.plainText ? text : null).length ? contextRanges(text) : text ? [{start:0,end:text.length,kind:'unknown'}] : [],
       };
     },
   };

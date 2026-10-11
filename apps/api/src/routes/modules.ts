@@ -1,3 +1,4 @@
+import {ASK_SESSION_PATHS,routeAskSessions} from './askSessions.ts';
 import {CRM_ACQUISITION_DIAGNOSTIC_PATHS,routeCrmAcquisitionDiagnostic} from './crmAcquisitionDiagnostic.ts';
 import {CRM_CAPABILITY_PATHS,routeCrmCapabilities} from './crmCapabilities.ts';
 import {ASK_ACTION_PATHS,routeAskActions} from './askActions.ts';
@@ -193,6 +194,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('selected-imports', { paths: SELECTED_IMPORT_PATHS }, routeSelectedImports, routing),
     moduleOf('selected-attachments', { paths: SELECTED_ATTACHMENT_PATHS }, routeSelectedAttachments, routing),
     moduleOf('people', { paths: PEOPLE_PATHS }, routePeople, routing),
+    moduleOf('ask-sessions',{paths:ASK_SESSION_PATHS},routeAskSessions,routing),
     moduleOf('ask', {paths:ASK_PATHS}, routeAsk, routing),
     moduleOf('ask-actions', {paths:ASK_ACTION_PATHS}, routeAskActions, routing),
     moduleOf('ask-history', {paths:ASK_HISTORY_PATHS}, routeAskHistory, routing),

@@ -1,5 +1,8 @@
+import {askToolFirmIds} from './askAgentScope.ts';
+import {askAgentScopeSchema} from '@fss/contracts';
+import {readAskSessionContext} from './askSessionContext.ts';
 import {createHash} from 'node:crypto';
-import {askExplicitCorpusScopeSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema} from '@fss/contracts';
+import {askExplicitCorpusScopeSchema,askAnswerRequestPayloadSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readAskInputConflicts} from './askAnswerConflicts.ts';
 import {readAskAnswer} from './askAnswers.ts';
@@ -18,12 +21,22 @@ export async function readCurrentAskInput(context:RepositoryContext,requestId:st
  if(read===null||read.state!=='pending'||read.question===null||read.reason==='source_unavailable'||read.version!==version)return null;
  const row=(await context.db.query<Record<string,unknown>>('SELECT * FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND version=$3 AND epoch=$4 FOR UPDATE',[context.scope.workspaceId,requestId,version,epoch])).rows[0];
  if(row===undefined||row['state']!=='pending')return null;
- const scope=askExplicitCorpusScopeSchema.parse(row['scope']);
+ const scope=askAnswerRequestPayloadSchema.parse({question:read.question,scope:row['scope'],execution:row['execution_version']}).scope;
  const contexts=crmClaimContextSchema.array().parse(row['initial_contexts']);
  const access=crmOriginalAccessClosureSchema.parse(row['initial_access_closure']);
+ const intent=askAgentScopeSchema.safeParse(row['original_agent_scope']);
+ if(row['original_agent_scope']!==null&&row['original_agent_scope']!==undefined&&!intent.success)return null;
+ const toolFirmIds=askToolFirmIds(intent.success?intent.data:null,access.firmIds);
+ const history=await readAskSessionContext(context,requestId,scope);
  const purpose=await readAskPurpose(context,'answer');
  if(purpose===null||purpose.revision!==row['purpose_revision']||purpose.evaluationFingerprint!==row['evaluation_fingerprint'])return null;
- const census=await readAskCanonicalCorpus(context,{scope});
+ if(scope.sources.length===0){
+  const configFingerprint=askFingerprint({purpose,route}),inputScopeFingerprint=askFingerprint(scope),contextFingerprint=askFingerprint(contexts),initialAccessFingerprint=askFingerprint(access);
+  const authorizationFingerprint=askFingerprint({workspaceId:context.scope.workspaceId,ownerUserId:row['owner_user_id'],inputScopeFingerprint,contextFingerprint,initialAccessFingerprint});
+  const proofInput:AskPurposeProofInput={stage:'answer',route:structuredClone(route),purpose,configFingerprint,authorizationFingerprint,workspaceId:context.scope.workspaceId,ownerUserId:String(row['owner_user_id']),inputScopeFingerprint,contextFingerprint,initialAccessFingerprint};
+  return {toolFirmIds,identityAmbiguous:contexts.some(value=>value.review!=='current'),history:history.turns,executionVersion:row['execution_version'],question:read.question,windows:[] as AskInputWindow[],groups:[] as AskInputGroup[],proofInput,inputHash:askFingerprint({toolFirmIds,question:read.question,scope,historyFingerprint:history.fingerprint,configFingerprint,authorizationFingerprint}),coverage:{scanComplete:true,acquisition:'unverified'},conflicts:[],inputBoundReached:false,retrievalPartial:true};
+ }
+ const census=await readAskCanonicalCorpus(context,{scope:askExplicitCorpusScopeSchema.parse(scope)});
  if(census===null||!census.coverage.scanComplete||census.windows.length===0)return null;
  let originalsComplete=true;
  for(const source of scope.sources){const original=await resolveCrmSource(context,source,copiedMail);if(original===null)return null;if(original.source.completeness!=='complete')originalsComplete=false;}
@@ -52,6 +65,6 @@ export async function readCurrentAskInput(context:RepositoryContext,requestId:st
  const configFingerprint=askFingerprint({purpose,route});
  const authorizationFingerprint=askFingerprint({workspaceId:context.scope.workspaceId,ownerUserId:row['owner_user_id'],inputScopeFingerprint,contextFingerprint,initialAccessFingerprint});
  const proofInput:AskPurposeProofInput={stage:'answer',route:structuredClone(route),purpose,configFingerprint,authorizationFingerprint,workspaceId:context.scope.workspaceId,ownerUserId:String(row['owner_user_id']),inputScopeFingerprint,contextFingerprint,initialAccessFingerprint};
- const inputHash=askFingerprint({question:read.question,windows:windows.map(window=>({id:window.id,source:window.source,textHash:window.textHash})),selectedWindowIds:[...selectedIds],conflicts,inputBoundReached:conflicts===null,configFingerprint,authorizationFingerprint});
- return {question:read.question,windows:selectedWindows,groups,proofInput,inputHash,coverage:census.coverage,conflicts:conflicts??[],inputBoundReached:conflicts===null,retrievalPartial:!originalsComplete||grouped.size>groups.length};
+ const inputHash=askFingerprint({toolFirmIds,question:read.question,historyFingerprint:history.fingerprint,windows:windows.map(window=>({id:window.id,source:window.source,textHash:window.textHash})),selectedWindowIds:[...selectedIds],conflicts,inputBoundReached:conflicts===null,configFingerprint,authorizationFingerprint});
+ return {toolFirmIds,identityAmbiguous:contexts.some(value=>value.review!=='current'),history:history.turns,question:read.question,executionVersion:row['execution_version'],windows:row['execution_version']==='agent_v1'?windows:selectedWindows,groups,proofInput,inputHash,coverage:census.coverage,conflicts:conflicts??[],inputBoundReached:conflicts===null,retrievalPartial:!originalsComplete||grouped.size>groups.length};
 }

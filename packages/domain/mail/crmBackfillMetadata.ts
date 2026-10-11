@@ -5,7 +5,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {GmailMessageMetadata} from './gmailClient.ts';
 import type {BackfillAuthority} from './crmBackfillAuthority.ts';
 /** Caller holds the current import/account closure. A causal record is never body permission. */
-export async function recordBackfillMetadata(context:RepositoryContext,input:{revalidateAuthority?:(context:RepositoryContext,authority:BackfillAuthority)=>Promise<boolean>;authority:BackfillAuthority;messageId:string;metadata:GmailMessageMetadata|null;scope:'historical'|'overlap'|'reconciliation';observationReceipt?:BusinessMailMetadataReceipt|void}){
+export async function recordBackfillMetadata(context:RepositoryContext,input:{revalidateAuthority?:(context:RepositoryContext,authority:BackfillAuthority)=>Promise<boolean>;authority:BackfillAuthority;messageId:string;metadata:GmailMessageMetadata|null;scope:'historical'|'overlap'|'reconciliation'|'expanded';observationReceipt?:BusinessMailMetadataReceipt|void}){
  if(input.revalidateAuthority&&!await input.revalidateAuthority(context,input.authority))return;
  const actor=context.scope.actor;if(actor.kind!=='system'||actor.component!=='worker')return;
  const {authority,messageId,metadata}=input;

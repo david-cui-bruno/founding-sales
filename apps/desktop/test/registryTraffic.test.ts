@@ -116,6 +116,14 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'sourcing.stopExperiment':{commandId:UUID,activationId:UUID,reason:'Stop the example.'},
   'sourcing.eraseExperiment':{commandId:UUID,id:UUID,expectedRevision:1},
   'ask.read':{operation:'records',query:'Example',kind:'people',limit:20},
+  'ask.sessionCreate':{scope:{kind:'business'}},
+  'ask.sessionTurn':{sessionId:UUID,version:1,question:'What changed?'},
+  'ask.sessionChange':{sessionId:UUID,version:1,action:{kind:'pin',pinned:true}},
+  'ask.sessionRead':{sessionId:UUID},
+  'ask.sessionList':{limit:20},
+  'ask.answerCancel':{requestId:UUID,expectedVersion:1},
+  'ask.investigationPreview':{requestId:UUID,expectedVersion:1,mode:'further'},
+  'ask.investigationCommit':{requestId:UUID,expectedVersion:1,mode:'further',previewHash:'a'.repeat(64)},
   'ask.answerRequest':{question:'Why?',scope:{sources:[{workspaceId:UUID,sourceId:UUID,kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:null}]}},
   'ask.actionRead':{scope:{kind:'today'},limit:20},
   'ask.actionChange':{actionId:UUID,expectedVersion:1,action:'complete_task'},
@@ -269,6 +277,10 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
     "crm.askAnswerDisable": { capability: "ask_answer",expectedRevision:1 },
   'crm.businessPolicyRead':{},
   'crm.businessPolicySave':{mailboxId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedRevision:0,enabled:false,disclosure:null},
+  'crm.businessSelectionRead':{mailboxId:UUID,previewJobId:UUID},
+  'crm.businessSelectionRequest':{mailboxId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedPolicyRevision:1,providerMessageId:'fixture-message'},
+  'crm.businessRulesRead':{mailboxId:UUID},
+  'crm.businessRuleSave':{mailboxId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),endpoint:'person@example.test',expectedRevision:0,decision:'include',active:true},
   'crm.businessReviewRead':{mailboxId:UUID,limit:50},
   'crm.businessReviewDecide':{mailboxId:UUID,conversationId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedPolicyRevision:1,expectedMetadataRevision:1,expectedDecisionRevision:0,decision:'exclude'},
   'crm.progressRead':{firmId:UUID,limit:50},
@@ -456,7 +468,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
       }),
     });
   return {
-    ask:Object.fromEntries(['read','historyList','historyChange','actionRead','actionChange','actionCreate','answerRequest','answerRead','answerSourceRead'].map(method=>[method,async(input:unknown)=>await operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps)[`ask.${method}` as OperationName](input as never)])),
+    ask:Object.fromEntries(['sessionCreate','sessionTurn','sessionChange','sessionRead','sessionList','answerCancel','investigationPreview','investigationCommit','read','historyList','historyChange','actionRead','actionChange','actionCreate','answerRequest','answerRead','answerSourceRead'].map(method=>[method,async(input:unknown)=>await operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps)[`ask.${method}` as OperationName](input as never)])),
     today: { ...today, ...(() => {
       const handlers = operationHandlers({ api, recordings: { identity: { current: () => 0 } } } as unknown as OperationHostDeps);
       return { actionsV2: async () => await handlers['today.actionsV2'](undefined as never), openActionV2: async (input: unknown) => await handlers['today.openActionV2'](input as never), actions: async () => await handlers['today.actions'](undefined as never), openAction: async (input: unknown) => await handlers['today.openAction'](input as never) };
@@ -511,7 +523,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
             "extractionActivate",
             "extractionDisable",
             "askAnswerActivate",
-            "askAnswerDisable",'commitmentsReview','commitmentsReviewStatus','commitmentsRead','commitmentsHistory','commitmentsComplete','evidenceWorkBind','evidenceWorkRead','evidenceWorkList','evidenceConflictSave','evidenceConflictResolve','evidenceConflictRead','evidenceConflictList','evidenceHistoryRead','evidenceHistoryList','evidenceDecide','evidenceRead','progressRead','processingSource','processingRead','processingRequest','processingPurpose','processingPurposeSave','processingHealth','processingRecordHealth','businessMailList','businessMailRead','businessMailReadV2','businessMailImportHealth','businessMailImportRequest','businessMailState','businessMailControls','businessMailDelete','businessMailRestore','businessMailRecapture','businessMailAssociate','dealCreate','dealReopen','businessPolicyRead','businessPolicySave','businessReviewRead','businessReviewDecide','relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedAttachmentReselect','selectedAttachmentAnalyze','selectedAttachmentCommit','selectedAttachmentRead','selectedAttachmentPreview','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture',
+            "askAnswerDisable",'commitmentsReview','commitmentsReviewStatus','commitmentsRead','commitmentsHistory','commitmentsComplete','evidenceWorkBind','evidenceWorkRead','evidenceWorkList','evidenceConflictSave','evidenceConflictResolve','evidenceConflictRead','evidenceConflictList','evidenceHistoryRead','evidenceHistoryList','evidenceDecide','evidenceRead','progressRead','processingSource','processingRead','processingRequest','processingPurpose','processingPurposeSave','processingHealth','processingRecordHealth','businessMailList','businessMailRead','businessMailReadV2','businessMailImportHealth','businessMailImportRequest','businessMailState','businessMailControls','businessMailDelete','businessMailRestore','businessMailRecapture','businessMailAssociate','dealCreate','dealReopen','businessPolicyRead','businessPolicySave','businessSelectionRead','businessSelectionRequest','businessRulesRead','businessRuleSave','businessReviewRead','businessReviewDecide','relationshipSave','relationshipCorrect','relationshipFirms','endpointList','endpointMatch','endpointClaim','endpointCorrect','firmSourceRead','firmSourceAdd','firmSourceDelete','firmSourceRestore','firmSourceRecapture','sourceContextRead','sourceContextSave','relationshipRead','selectedAttachmentReselect','selectedAttachmentAnalyze','selectedAttachmentCommit','selectedAttachmentRead','selectedAttachmentPreview','selectedImportPreview','selectedImportRead','selectedImportCommit','selectedImportCorrect','selectedImportDelete','selectedImportRestore','selectedImportRecapture','personList','personRead','personCreate','personSourceAdd','personSourceDelete','personSourceRestore','personSourceRecapture',
           ].map(method=>[method,async(input:unknown)=>await handlers[`crm.${method}` as OperationName](input as never)]),
         ),
       } as unknown as Host;

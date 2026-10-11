@@ -38,7 +38,9 @@ export async function readCrmMailImport(context: RepositoryContext, input: { mai
     ORDER BY i.observed_at DESC,i.id DESC LIMIT 1`, [context.scope.workspaceId, input.mailboxId, actor.userId])).rows[0];
   if(row===undefined)return null;
   const copyCoverage=await readBackfillCopyCoverage(context,row.id,row.metadata_counts.retainedUniqueMessages);
-  return {...health(row),copyCoverage,gapCoverage:await readHistoryRecoveryCoverage(context,row.id)};
+  const threadCoverage=(await context.db.query<{completedThreads:string;pendingThreads:string;partialThreads:string;blockedThreads:string;enumeratedMessages:string}>(`SELECT count(*) FILTER(WHERE state='complete')::text AS "completedThreads",count(*) FILTER(WHERE state IN ('pending','enumerating'))::text AS "pendingThreads",count(*) FILTER(WHERE state='partial')::text AS "partialThreads",count(*) FILTER(WHERE state='blocked')::text AS "blockedThreads",COALESCE(sum(jsonb_array_length(message_ids)),0)::text AS "enumeratedMessages" FROM crm_mail_thread_expansions WHERE workspace_id=$1 AND import_id=$2`,[context.scope.workspaceId,row.id])).rows[0]!;
+  const threadErrors=(await context.db.query<{conversationId:string;reason:string}>(`SELECT conversation_id::text AS "conversationId",reason FROM crm_mail_thread_expansions WHERE workspace_id=$1 AND import_id=$2 AND state IN ('blocked','partial') AND reason IS NOT NULL ORDER BY id LIMIT 100`,[context.scope.workspaceId,row.id])).rows;
+  return {...health(row),threadCoverage:{...threadCoverage,errors:threadErrors},copyCoverage,gapCoverage:await readHistoryRecoveryCoverage(context,row.id)};
 }
 /** Caller owns the command transaction. This persists scope, never enables capture. */
 export async function requestCrmMailImport(context: RepositoryContext, input: { mailboxId: string }) {

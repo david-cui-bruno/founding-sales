@@ -20,9 +20,20 @@ it('withholds private manual action content and refuses completion after origina
   const requested=await post('/ask/answers/request',command({question:'maintenance',scope:{sources:[{workspaceId:fixture.alpha.workspaceId,sourceId,kind:'selected_note',revision:1,contentHash:createHash('sha256').update(text).digest('hex'),locator:null}]}}));
   expect(requested.status).toBe(200);
   const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
-  const created=await post('/ask/actions/create',command({requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Discuss the private coordinator workflow.',due:null,target:{kind:'firm',firmId}}}));
+  const opportunityOpened=await post('/opportunities/v2/open',command({firmId,name:'Coordinator evaluation'}));
+  expect(opportunityOpened.status).toBe(200);
+  const opportunityId=(opportunityOpened.body as {result:{opportunityId:string}}).result.opportunityId;
+  const foreignFirmId=await seedFirm(fixture,{name:'Unrelated initiative',assignedUserId:fixture.alpha.salesperson.userId});
+  const foreignOpened=await post('/opportunities/v2/open',command({firmId:foreignFirmId,name:'Foreign evaluation'}));
+  expect(foreignOpened.status).toBe(200);
+  const foreignOpportunityId=(foreignOpened.body as {result:{opportunityId:string}}).result.opportunityId;
+  expect((await post('/ask/actions/create',command({requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'note',text:'Do not attach foreign initiative.',target:{kind:'firm',firmId,opportunityId:foreignOpportunityId}}}))).status).toBe(409);
+  const created=await post('/ask/actions/create',command({requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Discuss the private coordinator workflow.',due:null,target:{kind:'firm',firmId,opportunityId}}}));
   expect(created.status).toBe(200);
   const actionId=(created.body as {result:{actionId:string}}).result.actionId;
+  expect((await post('/ask/actions/read',{scope:{kind:'firm',firmId}})).body).toMatchObject({items:[{target:{kind:'firm',firmId,opportunityId}}]});
+  expect((await post('/ask/actions/read',{scope:{kind:'firm',firmId,opportunityId}})).body).toMatchObject({items:[{target:{kind:'firm',firmId,opportunityId}}]});
+  expect((await post('/ask/actions/read',{scope:{kind:'firm',firmId,opportunityId:foreignOpportunityId}})).body).toMatchObject({items:[]});
   // Controlled fixture revokes the original firm assignment; assertions remain public API reads.
   await fixture.db.query('UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2',[fixture.alpha.workspaceId,firmId,fixture.alpha.admin.userId]);
   const after=await post('/ask/actions/read',{scope:{kind:'history'}});
@@ -34,5 +45,10 @@ it('withholds private manual action content and refuses completion after origina
   const cancellation=await post('/ask/actions/change',command({actionId,expectedVersion:1,action:'cancel_task'}));
   expect(cancellation.status).toBe(200);
   expect(cancellation.body).toMatchObject({result:{actionId,version:2,status:'cancelled',completedAt:null}});
+  await fixture.db.query('UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2',[fixture.alpha.workspaceId,firmId,fixture.alpha.salesperson.userId]);
+  expect((await post('/ask/actions/read',{scope:{kind:'firm',firmId}})).body).toMatchObject({items:[{target:{kind:'firm',firmId,opportunityId}}]});
+  expect((await post('/crm/firm-sources/delete',command({firmId,sourceId,expectedRevision:1}))).status).toBe(200);
+  expect((await post('/ask/actions/read',{scope:{kind:'history'}})).body).toMatchObject({items:[{actionId,target:null,supportState:'deleted',sources:[]}]});
+
  }finally{await fixture.stop();}
 });

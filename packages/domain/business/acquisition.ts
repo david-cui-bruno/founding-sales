@@ -111,7 +111,7 @@ export async function saveBusinessPolicy(context: RepositoryContext, input: {
   if (!await activeBusinessActor(context))
     return { ok: false as const, reason: 'business_owner_required' };
   const revision = input.expectedRevision + 1;
-  await context.db.query(`INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,disclosure_version,disclosure_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,false,$8,$9) ON CONFLICT(workspace_id,mailbox_id) DO UPDATE SET owner_user_id=EXCLUDED.owner_user_id,provider_account_id=EXCLUDED.provider_account_id,account_binding=EXCLUDED.account_binding,generation=EXCLUDED.generation,revision=EXCLUDED.revision,enabled=false,authority_receipt_id=NULL,disclosure_version=EXCLUDED.disclosure_version,disclosure_sha256=EXCLUDED.disclosure_sha256`, [context.scope.workspaceId, mailbox.id, mailbox.owner_user_id, mailbox.provider_account_id, accountBinding, mailbox.generation, revision, input.disclosure?.version ?? null, input.disclosure?.sha256 ?? null]);
+  await context.db.query(`INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,disclosure_version,disclosure_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,false,$8,$9) ON CONFLICT(workspace_id,mailbox_id) DO UPDATE SET qualification_version='business-metadata-qualified-v2',owner_user_id=EXCLUDED.owner_user_id,provider_account_id=EXCLUDED.provider_account_id,account_binding=EXCLUDED.account_binding,generation=EXCLUDED.generation,revision=EXCLUDED.revision,enabled=false,authority_receipt_id=NULL,disclosure_version=EXCLUDED.disclosure_version,disclosure_sha256=EXCLUDED.disclosure_sha256`, [context.scope.workspaceId, mailbox.id, mailbox.owner_user_id, mailbox.provider_account_id, accountBinding, mailbox.generation, revision, input.disclosure?.version ?? null, input.disclosure?.sha256 ?? null]);
   await recordCrmAuditEvent(context, { action: 'crm.business_policy_saved', subjectKind: 'mailbox', subjectId: mailbox.id, detail: { revision, enabled: false, generation: mailbox.generation, accountBinding, disclosureVersion: input.disclosure?.version ?? null } });
   return { ok: true as const, value: { revision } };
 }
@@ -206,7 +206,7 @@ export async function readBusinessReview(context: RepositoryContext, input: {
     metadata_revision: number;
     decision_revision: number;
     human_decision: 'include' | 'exclude' | null;
-  }>(`SELECT id,subject,participants,latest_provider_at,category,reason,metadata_revision,decision_revision,human_decision FROM crm_business_conversations WHERE workspace_id=$1 AND mailbox_id=$2 AND account_binding=$3 AND owner_user_id=$4 AND ($5::uuid IS NULL OR id>$5) AND metadata_availability='available' AND latest_provider_at>=clock_timestamp()-interval '90 days' ORDER BY id LIMIT $6 FOR SHARE`, [context.scope.workspaceId, input.mailboxId, policy.accountBinding, policy.ownerUserId, input.after ?? null, input.limit + 1])).rows : [];
+  }>(`SELECT id,subject,participants,latest_provider_at,category,reason,metadata_revision,decision_revision,human_decision FROM crm_business_conversations WHERE workspace_id=$1 AND mailbox_id=$2 AND account_binding=$3 AND owner_user_id=$4 AND ($5::uuid IS NULL OR id>$5) AND metadata_availability='available' AND (latest_provider_at>=clock_timestamp()-interval '90 days' OR explicit_selected_at>=clock_timestamp()-interval '90 days') ORDER BY id LIMIT $6 FOR SHARE`, [context.scope.workspaceId, input.mailboxId, policy.accountBinding, policy.ownerUserId, input.after ?? null, input.limit + 1])).rows : [];
   if (!await activeBusinessActor(context))
     return null;
   const page = rows.slice(0, input.limit);
@@ -220,7 +220,7 @@ export async function decideBusinessReview(context: RepositoryContext, input: {
   expectedPolicyRevision: number;
   expectedMetadataRevision: number;
   expectedDecisionRevision: number;
-  decision: 'include' | 'exclude';
+  decision: 'include' | 'exclude' | 'clear';
 }) {
   const actor = context.scope.actor;
   if (actor.kind !== 'user')
@@ -237,7 +237,7 @@ export async function decideBusinessReview(context: RepositoryContext, input: {
   const row = (await context.db.query<{
     metadata_revision: number;
     decision_revision: number;
-  }>(`SELECT metadata_revision,decision_revision FROM crm_business_conversations WHERE workspace_id=$1 AND id=$2 AND mailbox_id=$3 AND account_binding=$4 AND owner_user_id=$5 AND metadata_availability='available' AND latest_provider_at>=clock_timestamp()-interval '90 days' FOR UPDATE`, [context.scope.workspaceId, input.conversationId, input.mailboxId, input.expectedAccountBinding, actor.userId])).rows[0];
+  }>(`SELECT metadata_revision,decision_revision FROM crm_business_conversations WHERE workspace_id=$1 AND id=$2 AND mailbox_id=$3 AND account_binding=$4 AND owner_user_id=$5 AND metadata_availability='available' AND (latest_provider_at>=clock_timestamp()-interval '90 days' OR explicit_selected_at>=clock_timestamp()-interval '90 days') FOR UPDATE`, [context.scope.workspaceId, input.conversationId, input.mailboxId, input.expectedAccountBinding, actor.userId])).rows[0];
   if (row === undefined)
     return { ok: false as const, reason: 'conversation_unavailable' };
   if (row.metadata_revision !== input.expectedMetadataRevision)
@@ -247,9 +247,10 @@ export async function decideBusinessReview(context: RepositoryContext, input: {
   if (!await activeBusinessActor(context))
     return { ok: false as const, reason: 'business_owner_required' };
   const revision = row.decision_revision + 1;
-  await context.db.query('UPDATE crm_business_conversations SET human_decision=$3,decision_revision=$4 WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, input.conversationId, input.decision, revision]);
+  await context.db.query('UPDATE crm_business_conversations SET human_decision=$3,decision_revision=$4 WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, input.conversationId, input.decision==='clear'?null:input.decision, revision]);
   await context.db.query('INSERT INTO crm_business_decision_revisions(workspace_id,conversation_id,revision,metadata_revision,policy_revision,actor_user_id,decision) VALUES($1,$2,$3,$4,$5,$6,$7)', [context.scope.workspaceId, input.conversationId, revision, row.metadata_revision, policy.revision, actor.userId, input.decision]);
   await recordCrmAuditEvent(context, { action: 'crm.business_review_decided', subjectKind: 'business_conversation', subjectId: input.conversationId, detail: { decision: input.decision, decisionRevision: revision, metadataRevision: row.metadata_revision, policyRevision: policy.revision } });
+  if(input.decision==='include')await context.db.query(`INSERT INTO crm_mail_thread_expansions(workspace_id,import_id,conversation_id,decision_revision) SELECT $1,i.id,$2,$3 FROM crm_mail_imports i JOIN crm_business_conversations c ON c.workspace_id=i.workspace_id AND c.id=$2 WHERE i.workspace_id=$1 AND i.mailbox_id=$4 AND i.account_binding=$5 AND i.generation=$6 AND c.explicit_selected_at IS NOT NULL ON CONFLICT DO NOTHING`,[context.scope.workspaceId,input.conversationId,revision,input.mailboxId,input.expectedAccountBinding,input.expectedGeneration]);
   return { ok: true as const, value: { decisionRevision: revision, captureAllowed: false as const } };
 }
 /** Whole metadata-copy deletion, with opaque no-resurrection identity and body-free decisions retained. */
@@ -267,12 +268,13 @@ export async function redactBusinessMetadata(context: RepositoryContext, input: 
     return { ok: false as const, reason: 'metadata_deletion_scope_invalid' };
   const rows = (await context.db.query<{
     id: string;
-  }>(`SELECT id FROM crm_business_conversations WHERE workspace_id=$1 AND metadata_availability='available' AND (id=ANY($2::uuid[]) OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(participants) AS address WHERE address=ANY($3::text[])) OR ($4 AND latest_provider_at<clock_timestamp()-interval '90 days' AND NOT EXISTS(SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=crm_business_conversations.workspace_id AND s.conversation_id=crm_business_conversations.id AND s.availability='available'))) ORDER BY id LIMIT ${input.expiredOnly && ids.length === 0 && addresses.length === 0 ? 100 : 101} FOR UPDATE`, [context.scope.workspaceId, ids, addresses, input.expiredOnly ?? false])).rows;
+  }>(`SELECT id FROM crm_business_conversations WHERE workspace_id=$1 AND metadata_availability='available' AND (id=ANY($2::uuid[]) OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(participants) AS address WHERE address=ANY($3::text[])) OR ($4 AND latest_provider_at<clock_timestamp()-interval '90 days' AND (explicit_selected_at IS NULL OR explicit_selected_at<clock_timestamp()-interval '90 days') AND NOT EXISTS(SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=crm_business_conversations.workspace_id AND s.conversation_id=crm_business_conversations.id AND s.availability='available'))) ORDER BY id LIMIT ${input.expiredOnly && ids.length === 0 && addresses.length === 0 ? 100 : 101} FOR UPDATE`, [context.scope.workspaceId, ids, addresses, input.expiredOnly ?? false])).rows;
   if (rows.length > 100)
     return { ok: false as const, reason: 'metadata_deletion_scope_limit' };
   if (actor.kind === 'user' && !await activeBusinessActor(context))
     return { ok: false as const, reason: 'metadata_deletion_denied' };
-  const changed = await context.db.query<{id:string}>("UPDATE crm_business_conversations SET metadata_availability='deleted',subject='',participants='[]'::jsonb,latest_provider_at=NULL,category='uncertain',reason='metadata_deleted',classifier_version='redacted',metadata_hash=repeat('0',64),metadata_revision=metadata_revision+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND (NOT $3 OR NOT EXISTS(SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=crm_business_conversations.workspace_id AND s.conversation_id=crm_business_conversations.id AND s.availability='available')) RETURNING id", [context.scope.workspaceId, rows.map(row => row.id), Boolean(input.expiredOnly && ids.length===0 && addresses.length===0)]);
+  const changed = await context.db.query<{id:string}>("UPDATE crm_business_conversations SET metadata_availability='deleted',explicit_selected_at=NULL,subject='',participants='[]'::jsonb,latest_provider_at=NULL,category='uncertain',reason='metadata_deleted',classifier_version='redacted',metadata_hash=repeat('0',64),metadata_revision=metadata_revision+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND (NOT $3 OR NOT EXISTS(SELECT 1 FROM crm_mail_sources s WHERE s.workspace_id=crm_business_conversations.workspace_id AND s.conversation_id=crm_business_conversations.id AND s.availability='available')) RETURNING id", [context.scope.workspaceId, rows.map(row => row.id), Boolean(input.expiredOnly && ids.length===0 && addresses.length===0)]);
+  if(addresses.length)await context.db.query('DELETE FROM crm_business_correspondent_rules WHERE workspace_id=$1 AND endpoint=ANY($2::text[])',[context.scope.workspaceId,addresses]);
   const importMetadataRedacted=await redactBackfillMetadataForConversations(context,changed.rows.map(row=>row.id));
   return { ok: true as const, value: { redacted: changed.rows.length, importMetadataRedacted, conversationIds: changed.rows.map(row => row.id) } };
 }

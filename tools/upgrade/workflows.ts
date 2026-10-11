@@ -1,3 +1,4 @@
+import {BUSINESS_GMAIL_UPGRADE_WORKFLOW,runBusinessGmailUpgradeWorkflow} from './businessGmailWorkflow.ts';
 import {runCrmPricingUpgradeWorkflow} from './crmPricingWorkflow.ts';
 import {ASK_UPGRADE_WORKFLOW,runAskUpgradeWorkflow} from './askWorkflows.ts';
 import {createPerson} from '@fss/domain/crm/people.ts';
@@ -285,6 +286,7 @@ export async function runWorkflows(
 
   const steps: readonly Step[] = [
     { name: ASK_UPGRADE_WORKFLOW, run: async () => await runAskUpgradeWorkflow(admin,handles) },
+    { name: BUSINESS_GMAIL_UPGRADE_WORKFLOW, run: async () => await runBusinessGmailUpgradeWorkflow(admin,handles) },
     { name:'crm.exactPricing (registered fake worker)',run:async()=>await runCrmPricingUpgradeWorkflow(admin) },
     {
       name: 'crm.selectedFile (explicit import)',

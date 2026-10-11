@@ -4,7 +4,7 @@ import {semanticVersionSchema} from './clientVersion.ts';
 import {crmCommitmentDueSchema} from './crmCommitments.ts';
 import {canonicalSourceReferenceSchema} from './people.ts';
 
-export const askActionTargetSchema=z.discriminatedUnion('kind',[z.strictObject({kind:z.literal('firm'),firmId:z.uuid()}),z.strictObject({kind:z.literal('person'),personId:z.uuid()})]);
+export const askActionTargetSchema=z.discriminatedUnion('kind',[z.strictObject({kind:z.literal('firm'),firmId:z.uuid(),opportunityId:z.uuid().optional()}),z.strictObject({kind:z.literal('person'),personId:z.uuid()})]);
 export const askActionFindingSchema=z.strictObject({kind:z.enum(['keyword_passage','answer_claim']),index:z.number().int().min(0).max(19)});
 export const askManualActionSchema=z.discriminatedUnion('kind',[
  z.strictObject({kind:z.literal('task'),label:z.string().trim().min(1).max(300),due:crmCommitmentDueSchema,target:askActionTargetSchema}),

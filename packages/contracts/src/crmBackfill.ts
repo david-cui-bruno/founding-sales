@@ -12,6 +12,7 @@ export const crmMailImportHealthSchema=z.strictObject({
  olderCopyReconciliation:olderCopyReconciliationSchema,
  gapCoverage:crmMailRecoveryCoverageSchema,connectionState:z.enum(['current','disconnected','changed']),importId:uuid,state:z.enum(['pending','partial','complete','blocked']),reason:z.string().max(100).nullable(),generation:z.number().int().positive(),
  fromAt:z.string().datetime(),toAt:z.string().datetime(),historyAnchor:z.string().regex(/^[0-9]{1,20}$/u).nullable(),historyComplete:z.boolean(),windowFrozen:z.boolean(),
+ threadCoverage:z.strictObject({completedThreads:conservedUnits,pendingThreads:conservedUnits,partialThreads:conservedUnits,blockedThreads:conservedUnits,enumeratedMessages:conservedUnits,errors:z.array(z.strictObject({conversationId:uuid,reason:z.string().max(100)})).max(100)}).optional(),
  metadataCoverage:z.strictObject({retainedUniqueMessages:conservedUnits,availableMetadataMessages:conservedUnits,refusedMetadataMessages:conservedUnits,confirmedMissingMessages:conservedUnits,deletedMetadataMessages:conservedUnits}),
  quotaAccounting:z.strictObject({scope:z.literal('callie_backfill_allocation'),reservedUnits:conservedUnits,observedUnits:conservedUnits,unknownUnits:conservedUnits}),
  copyCoverage:z.strictObject({scope:z.literal('permitted_import_corpus'),coverage:z.enum(['complete','partial']),retainedCopiedBodies:conservedUnits,unavailableCopies:conservedUnits,pendingCaptures:conservedUnits,reviewRequiredMetadata:conservedUnits,uncapturedMetadata:conservedUnits,unresolvedMetadata:conservedUnits}),

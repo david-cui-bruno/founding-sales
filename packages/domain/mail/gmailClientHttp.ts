@@ -189,9 +189,11 @@ interface MessagePart {
 /** A bounded retained representation. Completeness never asserts authorship. */
 function readRepresentation(payload: MessagePart | undefined, limit: number) {
   let count = 0, remaining = limit, partial = false, truncated = false, plainText = true;
+  const diagnostics = new Set<string>();
   const walk = (part: MessagePart, depth: number): string => {
-    if (++count > 500 || depth > 20) { partial = true; return ''; }
-    if (part.filename || part.body?.attachmentId) { partial = true; return ''; }
+    if (++count > 500 || depth > 20) { partial = true; diagnostics.add('mime_tree_limit'); return ''; }
+    if (part.filename) { partial = true; return ''; }
+    if (part.body?.attachmentId) { partial = true; diagnostics.add('external_text_unavailable'); return ''; }
     const type = part.mimeType?.toLowerCase();
     if (type?.startsWith('multipart/')) {
       const children = part.parts ?? [];
@@ -206,7 +208,7 @@ function readRepresentation(payload: MessagePart | undefined, limit: number) {
     }
     if (type !== 'text/plain' && type !== 'text/html') { partial = true; return ''; }
     const data = part.body?.data;
-    if (typeof data !== 'string' || !/^[A-Za-z0-9_-]*={0,2}$/u.test(data)) { partial = true; return ''; }
+    if (typeof data !== 'string' || !/^[A-Za-z0-9_-]*={0,2}$/u.test(data)) { partial = true; diagnostics.add('text_part_unavailable'); return ''; }
     // Bound decoding allocation independently of the MIME tree and provider-declared size.
     if (data.length > Math.ceil((remaining + 1) * 4 / 3) + 4) { truncated = true; partial = true; }
     const encoded = data.slice(0, Math.ceil((remaining + 1) * 4 / 3) + 4);
@@ -224,9 +226,10 @@ function readRepresentation(payload: MessagePart | undefined, limit: number) {
     return kept;
   };
   const text = payload ? walk(payload, 0) : '';
-  if (!payload) partial = true;
+  if (!payload) { partial = true; diagnostics.add('body_unavailable'); }
   if (text.length > limit) { partial = true; truncated = true; }
-  return { text: text.slice(0, limit), truncated, plainText, completeness: partial ? 'partial' as const : 'complete' as const };
+  if (truncated) diagnostics.add('truncated');
+  return { text: text.slice(0, limit), truncated, plainText, attachments: readAttachmentReferences(payload), representationDiagnostics: [...diagnostics], completeness: partial ? 'partial' as const : 'complete' as const };
 }
 
 export function readBodyText(payload: MessagePart | undefined): string {
@@ -244,12 +247,12 @@ export function readAttachmentReferences(payload: MessagePart | undefined): Gmai
     if (++visited > 500 || depth > 20) return;
     const filename = part.filename;
     const attachmentId = part.body?.attachmentId;
-    if (typeof filename === 'string' && filename.length > 0 && typeof attachmentId === 'string') {
+    if (typeof filename === 'string' && filename.length > 0) {
       found.push({
         filename: filename.slice(0, 300),
         mimeType: part.mimeType ?? 'application/octet-stream',
         sizeBytes: part.body?.size ?? 0,
-        attachmentId,
+        attachmentId: typeof attachmentId==="string"?attachmentId:"",
       });
     }
     for (const child of (part.parts ?? []).slice(0, 500)) walk(child, depth + 1);
@@ -648,6 +651,19 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       return { ok: true, records, nextPageToken: asString(json?.['nextPageToken']), historyId };
     },
 
+    getThreadMessageIds: async (access,threadId) => {
+      if(!/^[A-Za-z0-9_-]{1,128}$/u.test(threadId))throw new GmailClientError('malformed_response','invalid thread identity');
+      const response=await api(access,`/users/me/threads/${encodeURIComponent(threadId)}`,{format:'minimal',fields:'id,messages/id'});
+      if(response.status===404)return null;
+      if(response.status!==200)throw new GmailClientError('unexpected_status','thread enumeration unavailable',response.status);
+      if(response.body.length>1000000)throw new GmailClientError('malformed_response','thread enumeration oversized');
+      const json=parseJson(response.body);
+      const messages=json?.['messages'];
+      if(json?.['id']!==threadId||!Array.isArray(messages))throw new GmailClientError('malformed_response','thread identity unavailable');
+      const ids=messages.map(value=>asString(value!==null&&typeof value==='object'&&!Array.isArray(value)?value['id']:undefined));
+      if(ids.some(id=>id===null||!/^[A-Za-z0-9_-]{1,128}$/u.test(id))||new Set(ids).size!==ids.length)throw new GmailClientError('malformed_response','thread message identities unavailable');
+      return {threadId,messageIds:ids.slice(0,500).map(id=>id!),complete:ids.length<=500};
+    },
     listMessageIds: async (access, request: GmailListRequest): Promise<GmailListOutcome> =>
       await listIds(access, '', request, 'the Gmail message listing failed'),
 

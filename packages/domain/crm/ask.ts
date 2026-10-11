@@ -106,7 +106,7 @@ export async function readAsk(
     }
     const matches = (
       await context.db.query<{ ordinal: number }>(
-        "SELECT ordinal::int FROM unnest($1::text[]) WITH ORDINALITY AS chunk(text,ordinal) WHERE to_tsvector('simple',text) @@ websearch_to_tsquery('simple',$2) ORDER BY ordinal",
+        "SELECT ordinal::int FROM unnest($1::text[]) WITH ORDINALITY AS chunk(text,ordinal) WHERE to_tsvector('simple',text) @@ websearch_to_tsquery('simple',$2) ORDER BY ts_rank_cd(to_tsvector('simple',text),websearch_to_tsquery('simple',$2),32) DESC,ordinal",
         [chunks.map((chunk) => chunk.text), input.query],
       )
     ).rows;

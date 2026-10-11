@@ -1,3 +1,4 @@
+import {businessSelectionHandler} from '../handlers/businessSelection.ts';
 import {createCrmAcquisitionDiagnosticStartup} from '@fss/domain/mail/crmAcquisitionDiagnosticStartup.ts';
 import {createCrmAcquisitionDiagnosticCapture} from '@fss/domain/mail/crmAcquisitionDiagnosticCapture.ts';
 import {createServerCrmGmailAccessResolver} from './crmGmail.ts';
@@ -219,6 +220,7 @@ export function registerHandlers(
   registry.register(crmCommitmentJobHandler());
   registry.register(crmCommitmentIntentJobHandler(composition.crmExtraction?.mailEvidence));
   registry.register(crmMailBackfillJobHandler(composition.crmMailBackfill));
+  registry.register(businessSelectionHandler(composition.crmMailBackfill));
   registry.register(businessMailCaptureHandler(composition.crmMailCapture ?? { provider: { async read() { throw new Error('mail_capture_provider_unavailable'); } } }));
   registry.register(humanReplySendJobHandler(composition.send));
   registry.register(meetingFollowThroughJobHandler());
