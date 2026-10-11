@@ -1,12 +1,21 @@
 import { expect, it } from "vitest";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, writeFile, readFile, rm, chmod } from "node:fs/promises";
-import { tmpdir, networkInterfaces } from "node:os";
+import { access, mkdtemp, writeFile, readFile, rm, chmod } from "node:fs/promises";
+import { arch, platform, tmpdir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createServer, createConnection } from "node:net";
 const execute = promisify(execFile);
+it("has hydrated the native PostgreSQL runtime libraries needed by the isolated cluster", async () => {
+  const nativePackage = resolve("node_modules/@embedded-postgres", `${platform()}-${arch()}`);
+  const links: { target: string }[] = JSON.parse(await readFile(join(nativePackage, "native/pg-symlinks.json"), "utf8"));
+  expect(links.length).toBeGreaterThan(0);
+  // npm ci --ignore-scripts omits these link targets; initdb then cannot load
+  // its shared libraries. Check the actual selected installed package, not the
+  // external service container that ordinary database tests use.
+  for (const link of links) await expect(access(join(nativePackage, link.target))).resolves.toBeUndefined();
+});
 it.each(["normal", "orphan", "restricted_storage", "failed_cleanup"] as const)(
   "local acceptance runner cleans actual processes and copies after %s operation",
   async (mode) => {

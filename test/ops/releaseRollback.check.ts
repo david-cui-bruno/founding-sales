@@ -550,6 +550,8 @@ function rollback(stub: World, extra: readonly string[] = [], environment: Recor
   delete env['TERRAFORM'];
   // Explicit existing controlled adapter; a PATH stub alone must never authorize a real writer.
   env['FSS_REHEARSAL_AWS_COMMAND'] = join(stub.home, 'bin/aws');
+  // This is a local controlled rehearsal even when Vitest itself runs in GitHub.
+  env['GITHUB_ACTIONS'] = 'false';
   if (environment['FSS_REHEARSAL_DRY_RUN'] === undefined) delete env['FSS_REHEARSAL_DRY_RUN'];
   const result = spawnSync(
     SCRIPT,
@@ -914,6 +916,15 @@ describe('rollback.sh in a dry run', () => {
 });
 
 describe('retired standalone production rollback writer', () => {
+  it('refuses GitHub --apply even with a purported controlled adapter', () => {
+    const run = spawnSync('bash', [SCRIPT, 'infra/roots/production', 'fss-prod', '--apply'], {
+      encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true', FSS_REHEARSAL_AWS_COMMAND: '/nonexistent-aws', FSS_REHEARSAL_DRY_RUN: '', TERRAFORM: '/nonexistent-terraform' },
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('standalone production rollback apply is retired');
+    expect(run.stderr).not.toContain('nonexistent-aws');
+    expect(run.stderr).not.toContain('nonexistent-terraform');
+  });
   it('refuses real --apply before cloud or Terraform access even if the release hold is false', () => {
     const run = spawnSync('bash', [SCRIPT, 'infra/roots/production', 'fss-prod', '--apply'], {
       encoding: 'utf8', env: { ...process.env, FSS_RELEASE_HOLD: 'false', FSS_REHEARSAL_AWS_COMMAND: '', FSS_REHEARSAL_DRY_RUN: '', TERRAFORM: '/nonexistent-terraform' },

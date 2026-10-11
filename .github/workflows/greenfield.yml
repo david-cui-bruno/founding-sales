@@ -10,7 +10,9 @@ jobs:
     # Typecheck, lint (the workspace and the root scripts, one ESLint config), the
     # workspace tests and the release suite.
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Full broad gate reached ops near minute16; its measured live progress needs
+    # bounded room for the remaining real lifecycle checks and evaluation suite.
+    timeout-minutes: 35
     defaults:
       run:
         shell: bash
@@ -42,8 +44,13 @@ jobs:
           node-version-file: .node-version
       - name: Install
         # --ignore-scripts: the root postinstall fetches the Electron binary, which this
-        # job never runs. embedded-postgres is unused here because the service container is.
+        # job never runs. Most database tests use the service container; local diagnostic
+        # lifecycle acceptance deliberately starts its own embedded cluster.
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Hydrate only the pinned embedded PostgreSQL native library links
+        # This exact dependency postinstall restores required .so symlinks omitted
+        # by ignore-scripts. It does not run the root Electron download or other scripts.
+        run: npm rebuild @embedded-postgres/linux-x64 --ignore-scripts=false --no-audit --no-fund
       - name: No durability for the throwaway database
         # The container lives for this job, so waiting on disk flushes buys nothing; a
         # local run starts its embedded cluster with the same three settings
