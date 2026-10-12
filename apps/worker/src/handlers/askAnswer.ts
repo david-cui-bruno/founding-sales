@@ -144,6 +144,9 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
 // Reproduced normal-stop draft ending in an opening parenthesis. This narrow
 // refusal is not a general grammar or semantic-support validator; never repair it.
 const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000).refine(text=>!text.trimEnd().endsWith('(')),kind:z.enum(['fact','inference','conflict']),construction:askClaimConstructionSchema.optional(),citationWindowIds:z.array(z.uuid()).max(10),exactResultToolCallIds:z.array(z.string().min(1).max(100)).max(10).optional()}).refine(claim=>claim.citationWindowIds.length>0||(claim.exactResultToolCallIds?.length??0)>0)).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
+// Parse bounded model data first. Constructed facts do not need draft prose or
+// redundant citations; rendered claims still pass the complete legacy guard.
+const agentConstructionCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().max(1000),kind:z.enum(['fact','inference','conflict']),construction:askClaimConstructionSchema.optional(),citationWindowIds:z.array(z.string().max(100)).max(10),exactResultToolCallIds:z.array(z.string().max(100)).max(10).optional()})).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
 const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','browse_history','read_conversation','resolve_records']),input:z.unknown()});
 /** Internal model evidence authority never changes canonical proof or publication. */
 
@@ -267,7 +270,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
     transcript.push({toolCallId:call.id,name:call.name,input:call.input,result:value});
    }continue;
   }
-  const parsedCandidate=agentCandidate.safeParse(outcome.answer);
+  const parsedCandidate=agentConstructionCandidate.safeParse(outcome.answer);
   const constructed=parsedCandidate.success?parsedCandidate.data.claims.map(claim=>claim.construction?constructAskClaim({construction:claim.construction,windows:live.windows,exactResults,claim}):claim):null;
   if(constructed===null||constructed.some(claim=>claim===null)){await update('unavailable','unsupported_answer');return;}
   const candidate=agentCandidate.safeParse({...parsedCandidate.data,claims:constructed});if(!candidate.success||candidate.data.claims.some(claim=>new Set(claim.citationWindowIds).size!==claim.citationWindowIds.length||claim.citationWindowIds.some(id=>!live.windows.some(window=>window.id===id))||new Set(claim.exactResultToolCallIds??[]).size!==(claim.exactResultToolCallIds??[]).length||(claim.exactResultToolCallIds??[]).some(id=>!exactResults.some(exact=>exact.toolCallId===id)))){await update('unavailable','unsupported_answer');return;}
