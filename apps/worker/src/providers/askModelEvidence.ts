@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 interface ModelAnswer {
   readonly claims: readonly {
+    readonly construction?: { readonly mode: string; readonly windowId?: string; readonly quote?: string; readonly toolCallId?: string } | undefined;
     readonly citationWindowIds: readonly string[];
     readonly exactResultToolCallIds?: readonly string[] | undefined;
   }[];
@@ -169,6 +170,8 @@ export function projectAskModelEvidence(transcript: readonly unknown[]) {
       ...answer,
       claims: answer.claims.map(claim => ({
         ...claim,
+        ...(claim.construction?.mode === 'source_quote' && claim.construction.windowId ? {construction: {...claim.construction, windowId: originals.get(claim.construction.windowId) ?? claim.construction.windowId}} : {}),
+        ...((claim.construction?.mode === 'exact_count' || claim.construction?.mode === 'opportunity_record') && claim.construction.toolCallId ? {construction: {...claim.construction, toolCallId: exacts.get(claim.construction.toolCallId) ?? claim.construction.toolCallId}} : {}),
         citationWindowIds: claim.citationWindowIds.map(id => originals.get(id) ?? id),
         ...(claim.exactResultToolCallIds ? {
           exactResultToolCallIds: claim.exactResultToolCallIds.map(id => exacts.get(id) ?? id),
