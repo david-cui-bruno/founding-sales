@@ -39,3 +39,7 @@ The previous campaign remains395 calls/4552c against400/$50, all grants terminal
 Use rubric.md to separate responsiveness, support, attribution/coverage/temporal errors, style, format, expressibility and host-protocol proof. Any unsupported definitive claim or wrong-person attribution remains a blocker for the affected capability. Preserve release hold, sending caps/ramp, Shirley state, uncertain sends and admission/routine replies/autonomous calling OFF. #551 remains open.
 
 A consumed receipt is anchored beside its canonical authority file, independently of checkout/CWD. Copying the receipt to a new location is refused. Returned content/finish/usage are retained before unknown-usage validation stops the run; allocations remain conserved. `--check-authority` validates an exact receipt and consumption status without loading the provider SDK or dispatching.
+
+## Subsequent authorized observation
+
+The initial preparation statements above describe the frozen pre-dispatch state. David later approved a fresh96call/$15 authority, and all96 native requests completed on source15fe9305 with500c conserved allocation and no retries or usage holds. [Observed results and separate semantic review](../../../../docs/sourcing/ask-answer-v2-results-20261012.md) document contract and interpretation defects. The authority is consumed; this observation does not authorize further calls or activation. Historical preparation and raw responses remain intact.
