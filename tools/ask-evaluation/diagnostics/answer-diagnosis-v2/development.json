@@ -44,7 +44,7 @@
         }
       },
       "referenceAnswer": {
-        "text": "Harbor Example's team is discussing a partnership and requests a service overview. The email came from the shared partnerships endpoint; the individual speaker is unknown. A separate note suggests Rowan, but does not establish the author.",
+        "text": "Harbor Example's team is discussing a partnership and requests a service overview. The observed email endpoint is shared, and the individual speaker is unknown. [w2] A separate note suggests Rowan, but does not establish the author. [w1]",
         "references": [
           "w2",
           "w1"
@@ -170,7 +170,7 @@
         }
       },
       "referenceAnswer": {
-        "text": "Alder Example has 2 open opportunities recorded in the queried CRM state.",
+        "text": "Alder Example has 2 open opportunities recorded in the queried CRM state. [e1]",
         "references": [
           "e1"
         ]
@@ -241,7 +241,7 @@
         }
       },
       "referenceAnswer": {
-        "text": "Birch Example requested a revised pilot proposal including installation cost, but the email does not identify which pilot. The CRM lists East and West; confirm which one before assigning the request.",
+        "text": "Birch Example requested a revised pilot proposal including installation cost, but the email does not identify which pilot. [w1] The CRM lists East and West; confirm which one before assigning the request. [e1] [w1]",
         "references": [
           "w1",
           "e1"

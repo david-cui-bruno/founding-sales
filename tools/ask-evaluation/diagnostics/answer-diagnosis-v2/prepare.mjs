@@ -2,6 +2,7 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
 import {createHash} from 'node:crypto';
+import {inspectProse} from './format.mjs';
 const root=dirname(new URL(import.meta.url).pathname);
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const read=name=>readFileSync(resolve(root,name));
@@ -22,7 +23,9 @@ for(const split of ['development','reserved']){
   if(c.evidence.coverage.authority==='synthetic_host_observation'&&!c.evidence.coverage.ref)throw new Error('coverage_has_no_reference');
   if(c.referenceAnswer.references.some(r=>!refs.includes(r))||!c.referenceAnswer.references.length||!c.referenceAnswer.text.trim())throw new Error('reference_solution_invalid');
   const markers=[...c.referenceAnswer.text.matchAll(/\[([we]\d+)\]/gu)].map(m=>m[1]);
-  if(markers.some(r=>!c.referenceAnswer.references.includes(r)))throw new Error('unknown_reference_solution_marker');
+  if(!markers.length||c.referenceAnswer.references.some(r=>!markers.includes(r))||markers.some(r=>!c.referenceAnswer.references.includes(r)))throw new Error('unknown_reference_solution_marker');
+  const golden=inspectProse({text:c.referenceAnswer.text,stopReason:'end_turn',hasToolCalls:false,originals:new Set(c.evidence.originals.map(o=>o.ref)),exacts:new Set(refs.filter(ref=>ref.startsWith('e')))});
+  if(!golden.valid)throw new Error('reference_solution_fails_prose_grader');
   cases.push({...c,split,refs});
  }
 }
@@ -45,7 +48,7 @@ for(let repetition=1;repetition<=2;repetition++)for(let index=0;index<cases.leng
  }
 }
 if(rows.length!==96)throw new Error('comparison_matrix_invalid');
-const files=['prepare.mjs','development.json','reserved.json','semantic-guidance.txt','structured-completion.txt','prose-completion.txt','structured-tool.json'];
+const files=['prepare.mjs','format.mjs','development.json','reserved.json','semantic-guidance.txt','structured-completion.txt','prose-completion.txt','structured-tool.json'];
 const manifest={version:'answer-diagnosis-v2-preparation',status:'prepared_offline_not_authorized_for_dispatch',issue:551,region:'us-east-1',maxCalls:96,maxCents:1500,conservativePreparedAllocationCents:rows.reduce((sum,r)=>sum+r.allocationCents,0),models,files:Object.fromEntries(files.map(name=>[name,sha(read(name))])),limits:['synthetic gold context only','no Gmail/customer data','no tools executed or production publication','two formats by two existing AWS models','two repetitions of 12 cases','one attempt per cell; stop on ambiguous dispatch/usage','no quality or activation acceptance'],interpretation:'Format factor includes its completion instructions and output mode; this is not a pure JSON-only or whole-harness comparison. Coverage observations simulate known host data, not implemented production reads.',rows};
 if(manifest.conservativePreparedAllocationCents>manifest.maxCents)throw new Error('prepared_envelope_exceeds_proposal');
 writeFileSync(resolve(output,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{mode:0o600,flag:'wx'});
