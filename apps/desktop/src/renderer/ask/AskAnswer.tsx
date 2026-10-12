@@ -610,9 +610,11 @@ export function AskAnswer({
               Act on claim {index + 1}
             </button>
             {(claim.exactResultToolCallIds?.length ?? 0) > 0 && (
-              <p>This claim combines original evidence with a dated CRM observation. Use manual work to choose the next action.</p>
+              <p>{claim.citationWindowIds.length > 0
+                ? "This claim combines original evidence with a dated CRM observation. Use manual work to choose the next action."
+                : "This answer uses a dated CRM observation. Use manual work to choose the next action."}</p>
             )}
-            <p>Original evidence</p>
+            {claim.citationWindowIds.length > 0 && <p>Original evidence</p>}
             {claim.citationWindowIds.map((id, citation) => (
               <button
                 key={id}

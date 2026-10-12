@@ -8,8 +8,8 @@ import {seedFirm} from './support/crmSeed.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
-async function scenario(mode:'valid'|'unknown'|'duplicate'|'changed'|'after_changed'|'duplicate_call'|'session'|'cross_request'|'empty_original'|'over_count'|'over_id'){
- const f=await createAuthFixture();try{
+async function scenario(mode:'valid'|'unknown'|'duplicate'|'changed'|'after_changed'|'duplicate_call'|'session'|'cross_request'|'no_references'|'exact_only'|'exact_sourcefree'|'exact_changed'|'exact_after_changed'|'exact_deleted'|'exact_during_deleted'|'over_count'|'over_id'){
+ const exactOnly=mode.startsWith('exact_');const f=await createAuthFixture();try{
  const token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false});
  const cmd=(fields:object)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...fields});
@@ -27,26 +27,28 @@ async function scenario(mode:'valid'|'unknown'|'duplicate'|'changed'|'after_chan
  }
  let sessionId:string|undefined;
  if(mode==='session'){const created=await post('/ask/sessions/create',cmd({scope:{kind:'selected',sources:[{...source,kind:'selected_note',locator:null}]}}));expect(created.status).toBe(200);sessionId=z.object({result:z.object({sessionId:z.uuid()})}).parse(created.body).result.sessionId;}
- const request=mode==='session'?await post('/ask/sessions/turn',cmd({sessionId,version:1,question:'Which current pilot needs a revised proposal?'})):await post('/ask/answers/request',cmd({question:'Which current pilot needs a revised proposal?',execution:'agent_v1',scope:{sources:[{...source,kind:'selected_note',locator:null}]}}));expect(request.status).toBe(200);const requestId=z.object({result:z.object({requestId:z.uuid()})}).parse(request.body).result.requestId;
+ const request=mode==='session'?await post('/ask/sessions/turn',cmd({sessionId,version:1,question:'Which current pilot needs a revised proposal?'})):await post('/ask/answers/request',cmd({question:'Which current pilot needs a revised proposal?',execution:'agent_v1',...(mode==='exact_sourcefree'?{agentScope:{kind:'firm',firmId}}:{}),scope:{sources:mode==='exact_sourcefree'?[]:[{...source,kind:'selected_note',locator:null}]}}));expect(request.status).toBe(200);const requestId=z.object({result:z.object({requestId:z.uuid()})}).parse(request.body).result.requestId;
  let calls=0,authority:unknown;
  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{agent:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',async runStep(input){calls++;const window=z.object({windows:z.array(z.object({id:z.uuid()}))}).parse(input.transcript[0]).windows[0]!;if(calls===1)return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:10},answer:null,toolCalls:[{id:'read-current',name:'read_exact',input:{operation:'opportunities',firmId}}]};const result=z.object({name:z.literal('read_exact'),result:z.object({evidenceAuthority:z.unknown()})}).parse(input.transcript[1]);authority=result.result.evidenceAuthority;
  if(mode==='duplicate_call')return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:10},answer:null,toolCalls:[{id:'read-current',name:'read_exact',input:{operation:'tasks',firmId}}]};
- if(mode==='changed')expect((await post('/opportunities/stage',cmd({opportunityId:opportunityIds[0],toStageKey:'contacting',expectedStageKey:'new'}))).status).toBe(200);
- return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:10},answer:{claims:[{text:'Two current open pilots are at the new stage, but the original note does not identify which requires the revised proposal.',kind:'conflict',citationWindowIds:mode==='empty_original'?[]:[window.id],exactResultToolCallIds:mode==='unknown'?['another-request-result']:mode==='cross_request'?['foreign-read']:mode==='duplicate'?['read-current','read-current']:mode==='over_count'?Array.from({length:11},(_,index)=>`read-${index}`):mode==='over_id'?['x'.repeat(101)]:['read-current']},{text:'The original note does not identify which pilot it means.',kind:'fact',citationWindowIds:[window.id]}],abstained:false},toolCalls:[]};}},agentLimits:{maxSteps:3,maxInputBytes:100000,maxOutputTokens:1000,deadlineMs:60000},allowControlledEvaluation:true,verifyPurpose:async proof=>({configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture'})}});
+ if(mode==='exact_during_deleted')expect((await post('/crm/imports/delete',cmd({sourceId:source.sourceId,expectedSourceRevision:1,expectedMetadataRevision:1}))).status).toBe(200);
+ if(mode==='changed'||mode==='exact_changed')expect((await post('/opportunities/stage',cmd({opportunityId:opportunityIds[0],toStageKey:'contacting',expectedStageKey:'new'}))).status).toBe(200);
+ return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:10},answer:{claims:[{text:exactOnly?'Two current open pilots are recorded at the new stage.':'Two current open pilots are at the new stage, but the original note does not identify which requires the revised proposal.',kind:exactOnly?'fact':'conflict',citationWindowIds:exactOnly||mode==='no_references'?[]:[window.id],exactResultToolCallIds:mode==='no_references'?[]:mode==='unknown'?['another-request-result']:mode==='cross_request'?['foreign-read']:mode==='duplicate'?['read-current','read-current']:mode==='over_count'?Array.from({length:11},(_,index)=>`read-${index}`):mode==='over_id'?['x'.repeat(101)]:['read-current']},...exactOnly?[]:[{text:'The original note does not identify which pilot it means.',kind:'fact',citationWindowIds:[window.id]}]],abstained:false},toolCalls:[]};}},agentLimits:{maxSteps:3,maxInputBytes:100000,maxOutputTokens:1000,deadlineMs:60000},allowControlledEvaluation:true,verifyPurpose:async proof=>({configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture'})}});
  await runOnce(f.db,{registry,owner:'mixed-proof-worker',limit:100});
  const legacy=await post('/ask/answers/read',{requestId});
- const action=mode==='valid'?await post('/ask/actions/create',cmd({requestId,expectedVersion:1,finding:{kind:'answer_claim',index:0},action:{kind:'task',label:'Discuss pilot proposal',due:null,target:{kind:'firm',firmId}}})):null;
+ const action=mode==='valid'||exactOnly?await post('/ask/actions/create',cmd({requestId,expectedVersion:1,finding:{kind:'answer_claim',index:0},action:{kind:'task',label:'Discuss pilot proposal',due:null,target:{kind:'firm',firmId}}})):null;
  const originalAction=mode==='valid'?await post('/ask/actions/create',cmd({requestId,expectedVersion:1,finding:{kind:'answer_claim',index:1},action:{kind:'task',label:'Review original pilot ambiguity',due:null,target:{kind:'firm',firmId}}})):null;
  const actions=mode==='valid'?await post('/ask/actions/read',{scope:{kind:'firm',firmId}}):null;
  const sessionViews=sessionId===undefined?null:{rich:await post('/ask/sessions/read',{sessionId,includeExactResultCitations:true}),legacy:await post('/ask/sessions/read',{sessionId}),richList:await post('/ask/sessions/list',{includeExactResultCitations:true}),legacyList:await post('/ask/sessions/list',{})};
- if(mode==='after_changed'){const changed=await post('/opportunities/stage',cmd({opportunityId:opportunityIds[0],toStageKey:'contacting',expectedStageKey:'new'}));expect(changed.status,JSON.stringify(changed.body)).toBe(200);}
+ if(mode==='after_changed'||mode==='exact_after_changed'){const changed=await post('/opportunities/stage',cmd({opportunityId:opportunityIds[0],toStageKey:'contacting',expectedStageKey:'new'}));expect(changed.status,JSON.stringify(changed.body)).toBe(200);}
+ if(mode==='exact_deleted')expect((await post('/crm/imports/delete',cmd({sourceId:source.sourceId,expectedSourceRevision:1,expectedMetadataRevision:1}))).status).toBe(200);
  return {calls,authority,legacy,action,originalAction,actions,sessionViews,read:await post('/ask/answers/read',{requestId,includeExactResultCitations:true}),diagnostics:(await post('/ask/answers/diagnostics',{requestId})).body};
  }finally{await f.stop();}
 }
 it('publishes a mixed interpretation only with its original window and actually executed exact result',async()=>{
  const result=await scenario('valid');expect(result.calls).toBe(2);expect(result.authority).toMatchObject({kind:'current_exact_crm_state',toolCallId:'read-current',citationAuthority:'exact_result_only'});expect(result.read).toMatchObject({status:200,body:{state:'complete',answer:{claims:[{kind:'conflict',exactResultToolCallIds:['read-current'],verification:'cited_unverified'},{kind:'fact',text:'The original note does not identify which pilot it means.'}],exactResults:[{toolCallId:'read-current'}]}}});
 });
-it.each(['unknown','duplicate','cross_request','empty_original','over_count','over_id'] as const)('refuses %s exact result references without losing known billing',async mode=>{
+it.each(['unknown','duplicate','cross_request','no_references','over_count','over_id'] as const)('refuses %s exact result references without losing known billing',async mode=>{
  const result=await scenario(mode);expect(result.calls).toBe(2);expect(result.read).toMatchObject({status:200,body:{state:'unavailable',reason:'unsupported_answer',answer:null}});expect(result.diagnostics).toMatchObject({usage:{inputTokens:40,outputTokens:20},cost:{unsettledCents:0,estimated:false}});
 });
 it('refuses stale SQL state changed during the paid generation while conserving its observed usage',async()=>{
@@ -65,4 +67,18 @@ it('refuses an exact tool-call ID reused in a later generation because its evide
 it('negotiates rich citations and legacy-safe nested turns through ordinary session reads and lists',async()=>{
  const {sessionViews}=await scenario('session');expect(sessionViews?.rich).toMatchObject({status:200,body:{turns:[{state:'complete',answer:{claims:[{exactResultToolCallIds:['read-current']},{kind:'fact'}]}}]}});expect(sessionViews?.legacy).toMatchObject({status:200,body:{turns:[{state:'unavailable',reason:'unsupported_answer',answer:null}]}});expect(sessionViews?.richList).toMatchObject({status:200,body:{sessions:[{turns:[{state:'complete',answer:{claims:[{exactResultToolCallIds:['read-current']},{kind:'fact'}]}}]}]}});expect(sessionViews?.legacyList).toMatchObject({status:200,body:{sessions:[{turns:[{state:'unavailable',reason:'unsupported_answer',answer:null}]}]}});
  expect(JSON.stringify(sessionViews?.legacy.body)).not.toContain('exactResultToolCallIds');expect(JSON.stringify(sessionViews?.legacyList.body)).not.toContain('exactResultToolCallIds');
+});
+
+it('publishes exact-only natural prose with its executed SQL citation and no borrowed message citation',async()=>{
+ const result=await scenario('exact_only');expect(result.read).toMatchObject({status:200,body:{state:'complete',answer:{claims:[{text:'Two current open pilots are recorded at the new stage.',citationWindowIds:[],exactResultToolCallIds:['read-current'],verification:'cited_unverified'}]}}});expect(result.legacy).toMatchObject({body:{state:'unavailable',reason:'unsupported_answer',answer:null}});expect(result.action?.status).not.toBe(200);
+});
+
+it('publishes a source-free firm answer backed only by SQL observations',async()=>{
+ const result=await scenario('exact_sourcefree');expect(result.read).toMatchObject({body:{state:'complete',answer:{claims:[{kind:'fact',citationWindowIds:[],exactResultToolCallIds:['read-current']}],abstained:false}}});expect(result.action?.status).not.toBe(200);
+});
+it.each(['exact_changed','exact_after_changed'] as const)('invalidates %s SQL-only prose when its observed state changes',async mode=>{
+ const result=await scenario(mode);expect(result.read).toMatchObject({body:{state:'stale',reason:'source_changed',answer:null}});expect(result.diagnostics).toMatchObject({usage:{inputTokens:40,outputTokens:20},cost:{unsettledCents:0,estimated:false}});
+});
+it.each(['exact_deleted','exact_during_deleted'] as const)('erases exact-only narrative for %s uncited selected input',async mode=>{
+ const result=await scenario(mode);expect(result.read).toMatchObject({body:{state:'deleted',question:null,fallback:null,answer:null}});expect(result.diagnostics).toMatchObject({cost:{unsettledCents:0,estimated:false}});
 });

@@ -176,3 +176,20 @@ it('presents AI and provisional provenance once while keeping readable claims an
  expect(screen.getByText('Input coverage: complete. Semantic coverage: bounded_evaluated. Acquisition coverage: unverified.')).toBeTruthy();
  expect(screen.getByRole('button',{name:'Open citation 1 for claim 2'})).toBeTruthy();
 });
+
+it('shows an exact-only answer with dated CRM evidence without borrowing original evidence or allowing an action',async()=>{
+ const exactOnly:AskAnswerReadResult={...complete,answer:{...complete.answer!,resultVersion:'agent_v1',claims:[{text:'There are two current open pilots.',kind:'fact',verification:'cited_unverified',citationWindowIds:[],exactResultToolCallIds:['pilot-observation']}],exactResults:[{toolCallId:'pilot-observation',operation:'opportunities',valueHash:'c'.repeat(64),value:{operation:'opportunities',scope:{firmId:personId},dateBasis:'opportunity_opened_at',count:'2',records:[],truncated:false,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}}]}};
+ const actionCreate=vi.fn();
+ render(<Ask ports={{read,answerRequest:async()=>({requestId,version:1,state:'pending'}),answerRead:async()=>exactOnly,actionCreate}} privacyKey='owner:1' enabled/>);
+ await selectCopy();fireEvent.click(screen.getByRole('button',{name:'Explain selected copies'}));
+ expect(await screen.findByText('There are two current open pilots.')).toBeTruthy();
+ expect(screen.queryByText('Original evidence')).toBeNull();
+ expect(screen.queryByRole('button',{name:/Open citation/})).toBeNull();
+ expect(screen.queryByText('This claim combines original evidence with a dated CRM observation. Use manual work to choose the next action.')).toBeNull();
+ const link=screen.getByRole('link',{name:'Exact CRM observation: opportunities'});
+ expect(link.getAttribute('href')).toBe('#'+screen.getByRole('region',{name:'Exact opportunities'}).id);
+ fireEvent.click(link);
+ const action=screen.getByRole('button',{name:'Act on claim 1'});
+ expect(action.hasAttribute('disabled')).toBe(true);fireEvent.click(action);
+ expect(actionCreate).not.toHaveBeenCalled();
+});
