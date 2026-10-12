@@ -54,7 +54,7 @@ it('retains refusal when measured usage exceeds its complete reserved allowance'
  const result=await journey({usage:1000000});expect(result).toMatchObject({calls:1,read:{state:'unavailable',reason:'processing_failed'},diagnostics:{executedToolNames:[]}});
 });
 it('reports actual model step exhaustion separately from input byte exhaustion',async()=>{
- const result=await journey({maxSteps:1});expect(result).toMatchObject({calls:1,read:{state:'unavailable',reason:'step_bound_reached'},diagnostics:{executedToolNames:['search_history']}});
+ const result=await journey({maxSteps:1});expect(result).toMatchObject({calls:1,read:{state:'unavailable',reason:'step_bound_reached'},diagnostics:{executedToolNames:[]}});
 });
 it.each([null,{inputBytes:NaN,maxInputTokens:1},{inputBytes:1,maxInputTokens:-1},{inputBytes:1,maxInputTokens:Number.MAX_SAFE_INTEGER+1}])('refuses invalid adapter input bounds before reservation or external call (%j)',async bound=>{
  const result=await journey({mutate:agent=>({...agent,inputBound:()=>bound})});expect(result).toMatchObject({calls:0,read:{state:'unavailable',reason:'processing_failed'},reservations:[]});

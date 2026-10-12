@@ -1,6 +1,6 @@
 import {qualifyBusinessMailMetadata} from './businessQualification.ts';
 import {redactBackfillMetadataForSources} from './crmBackfillMetadata.ts';
-import { businessMetadataObservationSchema } from '@fss/contracts';
+import { businessMetadataObservationSchema, mailConversationSchema } from '@fss/contracts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { isSuppressed } from '../suppression/effective.ts';
 import { workspaceScope, repositoryContext } from '../db/workspaceScope.ts';
@@ -2103,8 +2103,9 @@ export async function loadPreparedMailSourceInput(
       reason: 'processing_authority_unavailable',
       text: null,
     } as const;
-  const original = await readMailConversation(context, exact);
-  if (original.state !== 'available' || original.source.passage === null)
+  const parsed = mailConversationSchema.safeParse(await readMailConversation(context, exact));
+  const original=parsed.success?parsed.data:null;
+  if (original===null || original.state !== 'available' || original.source.passage === null)
     return {
       state: 'unavailable',
       reason: 'body_unavailable',
@@ -2126,6 +2127,13 @@ export async function loadPreparedMailSourceInput(
     representation: original.source.representation,
     completeness: original.source.completeness,
     ranges: original.source.ranges,
+    direction: original.source.direction,
+    envelope: original.source.envelope,
+    occurredAt: original.source.occurredAt,
+    observedAt: original.source.observedAt,
+    rawSenderDate: original.source.rawSenderDate,
+    providerOrigin: original.source.providerOrigin,
+    sentProof: original.source.sentProof,
   } as const;
 }
 

@@ -47,6 +47,11 @@ export async function browseAskHistory(context:RepositoryContext,scope:AskAgentS
  const nextAfter=remaining&&last?{kind:last.kind,sourceId:last.sourceId}:catalog.nextAfter;
  return {eligibleSources:sources,sources,matches:null,partial:catalog.partial||remaining,scannedCandidates:catalog.scannedCandidates,nextAfter,retrieval:'bounded_catalog' as const,semantic:'unavailable' as const};
 }
+/** Ordinary questions retrieve ranked alternatives; explicit web-search syntax remains exact. */
+function explicitLexicalSyntax(query:string){return /"|(?:^|\s)-\S|\bOR\b/u.test(query);}
+export function askLexicalQuery(query:string){return explicitLexicalSyntax(query)?query:query.trim().split(/\s+/u).join(' OR ');}
+/** Plain questions use PostgreSQL's English stemming/stopwords; explicit literals keep simple lexemes. */
+export function askLexicalConfiguration(query:string){return explicitLexicalSyntax(query)?'simple':'english';}
 /** Local PostgreSQL ranking of retained originals; never acquires mail or invokes a model. */
 export async function searchAskHistory(context:RepositoryContext,scope:AskAgentScope,input:{query:string;limit:number;after?:Cursor|undefined;deadlineAt?:number}){
  if(input.query.trim().length<1||input.query.length>300||!Number.isInteger(input.limit)||input.limit<1||input.limit>20)return null;
@@ -56,7 +61,7 @@ export async function searchAskHistory(context:RepositoryContext,scope:AskAgentS
   if(input.deadlineAt!==undefined&&Date.now()>=input.deadlineAt){partial=true;break;}
   const corpus=await readAskCanonicalCorpus(context,{scope:{sources:[copiedAskSource(source)]}});if(!corpus){partial=true;continue;}
   partial ||= corpus.coverage.truncatedSources>0;
-  const ranked=(await context.db.query<{locator:string;score:number}>(`SELECT locator,ts_rank_cd(to_tsvector('simple',text),websearch_to_tsquery('simple',$3)) AS score FROM unnest($1::text[],$2::text[]) AS windows(locator,text) WHERE to_tsvector('simple',text) @@ websearch_to_tsquery('simple',$3) ORDER BY score DESC,locator LIMIT $4`,[corpus.windows.map(window=>window.locator),corpus.windows.map(window=>window.text),input.query,input.limit])).rows;
+  const ranked=(await context.db.query<{locator:string;score:number}>(`SELECT locator,ts_rank_cd(to_tsvector($5::regconfig,text),websearch_to_tsquery($5::regconfig,$3)) AS score FROM unnest($1::text[],$2::text[]) AS windows(locator,text) WHERE to_tsvector($5::regconfig,text) @@ websearch_to_tsquery($5::regconfig,$3) ORDER BY score DESC,locator LIMIT $4`,[corpus.windows.map(window=>window.locator),corpus.windows.map(window=>window.text),askLexicalQuery(input.query),input.limit,askLexicalConfiguration(input.query)])).rows;
   for(const row of ranked)matches.push({source,locator:row.locator,score:Number(row.score)});
  }
  matches.sort((a,b)=>b.score-a.score||a.source.sourceId.localeCompare(b.source.sourceId)||a.locator.localeCompare(b.locator));

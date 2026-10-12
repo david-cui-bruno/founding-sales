@@ -8,6 +8,20 @@ export interface MailProcessingAuthority {
  /** Actual native proof token, transient only: never a job/database payload. */
  nativeAuthority:unknown;
 }
+/** Model input preserves canonical raw text; headers are observations, not human identity.
+ * Locators always address text in UTF-16, never the serialized JSON envelope.
+ */
+export interface CrmMailModelEvidence {
+ format:'crm-mail-evidence-v1';
+ contextCoverage:'single_message_only';
+ source:{sourceId:string;sourceRevision:number;contentHash:string};
+ text:string;
+ representation:'plain_text'|'html_flattened';
+ completeness:'complete'|'partial'|'unavailable';
+ parserVersion:string;
+ ranges:readonly {start:number;end:number;kind:'authored'|'quoted'|'forwarded'|'unknown'}[];
+ message:{direction:'incoming'|'outgoing';envelope:{from:string|null;to:readonly string[];cc:readonly string[]};occurredAt:string;observedAt:string;rawSenderDate:string|null;providerOrigin:'received'|'sent'|'imported'|'unknown';sentProof:boolean;identityStatus:'unknown'};
+}
 /** Stored-copy read authority and current processing authority intentionally differ after disconnect. */
 export interface CrmMailEvidencePort {
  /** Optional native-only stored original proof; absent adapters always abstain. No verifier/network. */

@@ -18,7 +18,7 @@ import {CRM_SUPPORTED_AGENT_ASK_VERSIONS} from '@fss/domain/crm/capabilityAuthor
 import {searchCanonicalIndex} from '@fss/domain/crm/askCanonicalIndex.ts';
 import type {CanonicalSourceReference} from '@fss/contracts';
 import {admitAskSources,admitAskRecord} from '@fss/domain/crm/askExecutionEvidence.ts';
-import {copiedAskSource,browseAskHistory,searchAskHistory,readAskConversationSources,readAskConversationAttribution} from '@fss/domain/crm/askHistoryInvestigation.ts';
+import {copiedAskSource,askLexicalConfiguration,askLexicalQuery,browseAskHistory,searchAskHistory,readAskConversationSources,readAskConversationAttribution} from '@fss/domain/crm/askHistoryInvestigation.ts';
 import {resolveAskRecords,readAskScopedExact} from '@fss/domain/crm/askInvestigationRecords.ts';
 import {localDate} from '@fss/domain/src/rules/localClock.ts';
 
@@ -148,7 +148,8 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
  const unchanged=()=>runtime.agent===agent&&agent.endpointId===route.endpointId&&agent.modelVersion===route.modelVersion&&agent.providerKey===route.providerKey&&agent.runStep===originalRun&&agent.inputBound===originalInputBound;
  const current=async()=>withTransaction(input.session,async()=>{await lockAskLifecycle(context);if(!await fenced(input))return null;const row=(await context.db.query<{cancelled_at:Date|null}>('SELECT cancelled_at FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,requestId])).rows[0];if(row?.cancelled_at)return null;return readCurrentAskInput(context,requestId,version,epoch,route);});
  const initial=await current();if(!initial)return;if(initial.identityAmbiguous){await update('unavailable','identity_clarification_required');return;}
- const transcript:unknown[]=[...initial.history,{windows:initial.windows.map(window=>({id:window.id,ordinal:window.ordinal,source:window.source,text:window.text})),coverage:initial.coverage,scope:initial.scopeDescriptor}];
+ const initialAttribution=await readAskConversationAttribution(context,[...new Map(initial.windows.map(window=>[`${window.source.kind}:${window.source.sourceId}`,window.source])).values()]);if(initialAttribution===null){await update('stale','source_changed');return;}
+ const transcript:unknown[]=[...initial.history,{attribution:initialAttribution,windows:initial.windows.map(window=>({id:window.id,ordinal:window.ordinal,source:window.source,text:window.text})),coverage:initial.coverage,scope:initial.scopeDescriptor}];
  let retrievalSummary:unknown;let expectedInputHash=initial.inputHash;
  const executionKey={requestId,version,epoch};
  const intent=initial.agentScope??{kind:'selected' as const,sources:initial.scope.sources};
@@ -199,6 +200,8 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
   let live=await current();const liveProof=await verifyAskPurpose(runtime,snapshot.proofInput);if(!live||live.inputHash!==snapshot.inputHash||!liveProof||!unchanged()){await update('stale','source_changed');return;}
   const calls=z.array(toolCall).max(8).safeParse(outcome.toolCalls);if(!calls.success||new Set(calls.data.map(call=>call.id)).size!==calls.data.length){await update('unavailable','processing_failed');return;}
   if(calls.data.length){
+   // The last paid generation is reserved for synthesis, not another retrieval round.
+   if(step===limits.maxSteps){await update('unavailable','step_bound_reached');return;}
    for(const call of calls.data){const checked=await current();if(!checked||checked.inputHash!==expectedInputHash){await update('stale','source_changed');return;}live=checked;let value:unknown;
     if(call.name==='read_selected'){const args=z.strictObject({windowIds:z.array(z.uuid()).min(1).max(20)}).safeParse(call.input);if(!args.success||args.data.windowIds.some(id=>!checked.windows.some(window=>window.id===id))){await update('unavailable','unsupported_answer');return;}value=live.windows.filter(window=>args.data.windowIds.includes(window.id));}
     else if(call.name==='search_selected'){const args=z.strictObject({query:z.string().trim().min(1).max(300),limit:z.number().int().min(1).max(20)}).safeParse(call.input);if(!args.success){await update('unavailable','unsupported_answer');return;}const ranked=await rankAskAgentHybrid(input,runtime,live,args.data.query,args.data.limit,started+limits.deadlineMs);if(ranked.unknown){await update('unknown_acceptance','provider_acceptance_unknown');return;}value=ranked.value;if(ranked.value&&'retrieval' in ranked.value){const {windows:_,retrieval,...summary}=ranked.value;void _;retrievalSummary={method:retrieval,...summary};}}
@@ -225,7 +228,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
      const previewWindowCount=windows.length;
      if(call.name==='browse_history'){const seen=new Set<string>();windows=windows.filter(window=>{const key=`${window.source.kind}:${window.source.sourceId}`;if(seen.has(key))return false;seen.add(key);return true;});}
      windows=windows.slice(0,20);
-     const attribution=call.name==='read_conversation'?await readAskConversationAttribution(context,sources):undefined;if(attribution===null){await update('stale','source_changed');return;}
+     const attribution=await readAskConversationAttribution(context,sources);if(attribution===null){await update('stale','source_changed');return;}
      const partial=found.partial||sources.length<found.sources.length||call.name==='browse_history'&&previewWindowCount>windows.length;
      const sourceCeilingReached=sources.length<found.sources.length;
      const lastAdmitted=sources.at(-1);
@@ -264,8 +267,9 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
 async function rankAskAgentHybrid(input:JobHandlerInput,runtime:AskAnswerComposition,initial:NonNullable<Awaited<ReturnType<typeof readCurrentAskInput>>>,query:string,limit:number,deadlineAt:number){
  const located=await locate(input);if(!located)return {unknown:false,value:{windows:[],retrieval:'unavailable'}};
  const {context,requestId,version,epoch}=located;
- const lexical=(await context.db.query<{id:string}>(`SELECT id FROM unnest($1::uuid[],$2::text[]) AS windows(id,text) WHERE to_tsvector('simple',text) @@ websearch_to_tsquery('simple',$3) ORDER BY ts_rank_cd(to_tsvector('simple',text),websearch_to_tsquery('simple',$3)) DESC,id LIMIT $4`,[initial.windows.map(window=>window.id),initial.windows.map(window=>window.text),query,limit])).rows.map(row=>row.id);
+ const lexical=(await context.db.query<{id:string}>(`SELECT id FROM unnest($1::uuid[],$2::text[]) AS windows(id,text) WHERE to_tsvector($5::regconfig,text) @@ websearch_to_tsquery($5::regconfig,$3) ORDER BY ts_rank_cd(to_tsvector($5::regconfig,text),websearch_to_tsquery($5::regconfig,$3)) DESC,id LIMIT $4`,[initial.windows.map(window=>window.id),initial.windows.map(window=>window.text),askLexicalQuery(query),limit,askLexicalConfiguration(query)])).rows.map(row=>row.id);
  const fallback=()=>({unknown:false,value:{windows:lexical.map(id=>initial.windows.find(window=>window.id===id)!),retrieval:'ranked_lexical',semantic:'unavailable',partial:true}});
+ if(askLexicalConfiguration(query)==='simple')return fallback();
  const meter=await createAskEmbeddingMeter(input,runtime,initial,deadlineAt);if(!meter||initial.windows.length===0)return fallback();
  const {embed,purpose,route,adapter,proofInput}=meter;
  const queryVector=await embed(query,'embedding_query');if(!queryVector)return meter.unknown()?{unknown:true,value:null}:fallback();
@@ -334,6 +338,7 @@ async function createAskEmbeddingMeter(input:JobHandlerInput,runtime:AskAnswerCo
 }
 
 async function rankAskHistoryHybrid(input:JobHandlerInput,runtime:AskAnswerComposition,snapshot:NonNullable<Awaited<ReturnType<typeof readCurrentAskInput>>>,history:Omit<NonNullable<Awaited<ReturnType<typeof searchAskHistory>>>,'retrieval'|'semantic'> & {retrieval:'ranked_lexical'|'hybrid_rrf';semantic:'unavailable'|'unverified'},query:string,limit:number,deadlineAt:number){
+ if(askLexicalConfiguration(query)==='simple')return {unknown:false,history};
  const meter=await createAskEmbeddingMeter(input,runtime,snapshot,deadlineAt);if(!meter)return {unknown:false,history};
  const vector=await meter.embed(query,'embedding_query');if(!vector)return {unknown:meter.unknown(),history};
  const located=await locate(input);if(!located)return {unknown:false,history};

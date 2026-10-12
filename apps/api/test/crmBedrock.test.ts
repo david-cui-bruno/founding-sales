@@ -117,6 +117,7 @@ it('binds purpose-specific extraction into the normal registry and publishes exa
       expect(input.modelId).toBe('literal-v1');
       expect(input.messages[0]!.content[0]!.text).toBe(text);
       expect(input.inferenceConfig.maxTokens).toBe(4096);
+      expect(input).toMatchObject({additionalModelRequestFields:{thinking:{type:'disabled'}}});
       return { stopReason: 'tool_use', usage: { inputTokens: 20, outputTokens: 30 }, output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId: 'controlled-extraction', name: 'emit_crm_extraction', input: { claims: [{ kind: 'need', interpretation: 'Faster repairs', status: 'stated', locator: 'text:0:23', quote: text }] } } }] } } };
     } }, extraction: { endpointId: 'controlled-extraction', modelVersion: 'literal-v1', accessGrantVersion: 'extraction-only-grant', dataHandlingVersion: 'fixture-no-retention', providerKey: 'fixture.crm_extraction', fundingVerifiedUntil: '2099-01-01T00:00:00Z' } });
     const registry = registerHandlers(new HandlerRegistry(), { classifier: undefined, mail: undefined, send: undefined, research: undefined, ...composition });
@@ -179,7 +180,15 @@ it('does not publish apparently valid JSON when provider usage is absent', async
   } finally { await selected.fixture.stop(); }
 });
 
-it('extracts native transcript claims with original utterance locators and speaker attribution', async () => {
+const cacheUsageCases=[
+ {label:'uncached',usage:{inputTokens:50,outputTokens:30},known:true,inputTotal:50},
+ {label:'cache read',usage:{inputTokens:50,outputTokens:30,cacheReadInputTokens:20,cacheWriteInputTokens:0},known:true,inputTotal:70},
+ {label:'cache write pricing unbound',usage:{inputTokens:50,outputTokens:30,cacheWriteInputTokens:20},known:false,inputTotal:null},
+ {label:'fractional cache read',usage:{inputTokens:50,outputTokens:30,cacheReadInputTokens:1.5},known:false,inputTotal:null},
+ {label:'negative cache read',usage:{inputTokens:50,outputTokens:30,cacheReadInputTokens:-1},known:false,inputTotal:null},
+ {label:'cache total overflow',usage:{inputTokens:50,outputTokens:30,cacheReadInputTokens:Number.MAX_SAFE_INTEGER},known:false,inputTotal:null},
+];
+it.each(cacheUsageCases)('native extraction usage $label preserves original evidence and unknown holds', async example => {
   const selected = await selectedAnswer();
   try {
     const workspaceId = selected.fixture.alpha.workspaceId;
@@ -197,10 +206,29 @@ it('extracts native transcript claims with original utterance locators and speak
       expect(input.system[0]!.text).toContain('not serialized JSON');
       expect(Buffer.byteLength(input.system[0]!.text)).toBeLessThanOrEqual(1024);
       expect(JSON.parse(input.messages[0]!.content[0]!.text)).toMatchObject([{ utterance: 0, speaker: 'Fixture speaker', text: quote, locator: 'utterance:0:text:0:29' }]);
-      return { stopReason: 'tool_use', usage: { inputTokens: 50, outputTokens: 30 }, output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId: 'controlled-transcript', name: 'emit_crm_extraction', input: { claims: [{ kind: 'need', interpretation: 'Repair coordinator', status: 'stated', locator: 'utterance:0:text:0:29', quote }] } } }] } } };
+      return { stopReason: 'tool_use', usage: example.usage, output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId: 'controlled-transcript', name: 'emit_crm_extraction', input: { claims: [{ kind: 'need', interpretation: 'Repair coordinator', status: 'stated', locator: 'utterance:0:text:0:29', quote }] } } }] } } };
     } }, extraction: { endpointId: 'controlled-extraction', modelVersion: 'literal-v1', accessGrantVersion: 'extraction-only-grant', dataHandlingVersion: 'fixture-no-retention', providerKey: 'fixture.crm_extraction', fundingVerifiedUntil: '2099-01-01T00:00:00Z' } });
     const registry = registerHandlers(new HandlerRegistry(), { classifier: undefined, mail: undefined, send: undefined, research: undefined, ...composition });
     await runOnce(selected.fixture.db, { registry, owner: 'controlled-bedrock-native-extraction', limit: 20 });
-    expect((await selected.post('/crm/processing/read', { source })).body).toMatchObject({ state: 'complete', claims: [{ kind: 'need', quote, source: { sourceId: transcriptId, kind: 'meeting_transcript', speaker: 'Fixture speaker', locator: 'utterance:0:text:0:29' } }] });
+    expect((await selected.post('/crm/processing/read', { source })).body).toMatchObject(example.known?{ state: 'complete', claims: [{ kind: 'need', quote, source: { sourceId: transcriptId, kind: 'meeting_transcript', speaker: 'Fixture speaker', locator: 'utterance:0:text:0:29' } }],financial:{dispatchState:'settled'} }:{state:'unknown_acceptance',claims:[],financial:{dispatchState:'unknown_acceptance'}});
   } finally { await selected.fixture.stop(); }
+});
+
+
+it.each(cacheUsageCases)('registered native Ask transport accounts for $label conservatively',async example=>{
+ const selected=await selectedAnswer();
+ try{
+  let calls=0;
+  const adapter=createBedrockAskAnswerAdapter({endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',surface:{converse:async input=>{
+   calls++;const payload=JSON.parse(input.messages[0]!.content[0]!.text) as {windows:{id:string}[]};
+   return {stopReason:'end_turn',usage:example.usage,output:{message:{role:'assistant',content:[{text:JSON.stringify({claims:[{text:selected.text,kind:'extractive',citationWindowIds:[payload.windows[0]!.id]}],abstained:false})}]}}};
+  }}});
+  let observedUsage:Awaited<ReturnType<AskAnswerAdapter['run']>>['usage']|undefined;
+  const run:AskAnswerAdapter['run']=async input=>{const result=await adapter.run(input);observedUsage=result.usage;return result;};
+  await selected.run(run);
+  expect((await selected.post('/ask/answers/read',{requestId:selected.requestId})).body).toMatchObject(example.known?{state:'complete'}:{state:'unknown_acceptance',answer:null});
+  expect(observedUsage).toEqual(example.known?{inputTokens:example.inputTotal,outputTokens:30}:null);
+  if(!example.known)await selected.run(run);
+  expect(calls).toBe(1);
+ }finally{await selected.fixture.stop();}
 });
