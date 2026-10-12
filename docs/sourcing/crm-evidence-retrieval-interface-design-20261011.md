@@ -28,7 +28,9 @@ The private PostgreSQL adapter uses schema-qualified pgvector cosine distance wh
 
 ### Bounded investigator
 
-The host performs one accounted SDK generation per step and revalidates source/consent/cancellation across waits. Its final permitted generation advertises only the internal structured-output transport, with no external read tools; the host independently rejects late read-tool requests. Finalization remains inside the configured cap, not an uncounted extra request. Model routes are explicit allowlisted US profiles with no automatic fallback. Native and SDK transports explicitly disable thinking for this initial comparison so provider defaults do not invisibly consume the output budget.
+The host performs one accounted SDK generation per step and revalidates source/consent/cancellation across waits. The SDK uses an explicit strict `emit_answer` data tool with no execution function; its final permitted generation advertises only that output tool, with no external read tools. Exactly one valid output is converted to an answer; mixed, multiple and invalid outputs are refused without executing actions. Finalization remains inside the configured cap, not an uncounted extra request. Per-invocation SDK middleware captures returned usage before tool-choice errors so safe whole-JSON/single-fence compatibility can retain known billing without cross-call contamination. Model routes are explicit allowlisted US profiles with no automatic fallback. Native and SDK transports explicitly disable thinking for this initial comparison so provider defaults do not invisibly consume the output budget.
+
+Model windows carry server-derived evidence authority: selected unverified text, retained mail copy or retained transcript. Inline headers/coverage assertions stay reported text; occurrence and copy-observation dates are separate. Exact CRM tools remain usable and their original hash-bound values are rendered separately, with model-only authority explaining that they are not conversation citations. These labels and source guards do not establish semantic correctness; actual evaluation and owner review remain required.
 
 ### Evaluation authority
 

@@ -17,7 +17,7 @@ it('refuses unencodable input before dispatch',()=>{
 });
 it('requests SDK schema-bound final output while preserving retrieval tools and the complete input bound',async()=>{
  const {createAmazonBedrock}=await import('@ai-sdk/amazon-bedrock');let request:Record<string,unknown>|null=null;let providerCalls=0;
- const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async(_url,init)=>{request=JSON.parse(String(init?.body));providerCalls++;return new Response(JSON.stringify({output:{message:{role:'assistant',content:providerCalls===1?[{toolUse:{toolUseId:'read-1',name:'read_exact',input:{operation:'reply_status'}}}]:[{toolUse:{toolUseId:'final-1',name:'json',input:{claims:[],abstained:true}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40},metrics:{latencyMs:1}}),{headers:{'content-type':'application/json'}});}})('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+ const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async(_url,init)=>{request=JSON.parse(String(init?.body));providerCalls++;return new Response(JSON.stringify({output:{message:{role:'assistant',content:providerCalls===1?[{toolUse:{toolUseId:'read-1',name:'read_exact',input:{operation:'reply_status'}}}]:[{toolUse:{toolUseId:'final-1',name:'emit_answer',input:{claims:[],abstained:true}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40},metrics:{latencyMs:1}}),{headers:{'content-type':'application/json'}});}})('us.anthropic.claude-haiku-4-5-20251001-v1:0');
  const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
  const input={question:'What is supported?',transcript:[],maxOutputTokens:1000};
  expect(await adapter.runStep({...input,signal:new AbortController().signal})).toMatchObject({acceptance:'accepted',answer:null,toolCalls:[{id:'read-1',name:'read_exact',input:{operation:'reply_status'}}],usage:{inputTokens:30,outputTokens:10}});
@@ -25,8 +25,9 @@ it('requests SDK schema-bound final output while preserving retrieval tools and 
  expect(await adapter.runStep({...finalInput,signal:new AbortController().signal})).toMatchObject({acceptance:'accepted',answer:{claims:[],abstained:true},toolCalls:[],usage:{inputTokens:30,outputTokens:10}});
  expect(request).toMatchObject({toolConfig:{toolChoice:{any:{}}}});
  const parsed=JSON.parse(JSON.stringify(request)) as {toolConfig:{tools:{toolSpec:{name:string}}[]};additionalModelRequestFields?:unknown};
- expect(parsed.toolConfig.tools.map(tool=>tool.toolSpec.name).sort()).toEqual(['browse_history','json','read_conversation','read_exact','read_selected','resolve_records','search_history','search_selected']);
- expect(JSON.stringify(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='json'))).not.toMatch(/"(?:minLength|maxLength|minItems|maxItems|pattern)":/u);
+ expect(parsed.toolConfig.tools.map(tool=>tool.toolSpec.name).sort()).toEqual(['browse_history','emit_answer','read_conversation','read_exact','read_selected','resolve_records','search_history','search_selected']);
+ expect(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer')).toMatchObject({toolSpec:{strict:true}});
+ expect(JSON.stringify(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer'))).not.toMatch(/"(?:minLength|maxLength|minItems|maxItems|pattern)":/u);
  expect(adapter.inputBound!(finalInput)!.inputBytes).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(request)));
 });
 it('preserves known billing when an observed prose final answer violates structured output',async()=>{
@@ -52,11 +53,11 @@ it('uses only the explicit remaining-step budget for the final-turn instruction 
 });
 it('reserves the last generation for structured synthesis without any external retrieval tool',async()=>{
  const {createAmazonBedrock}=await import('@ai-sdk/amazon-bedrock');let calls=0;let request:unknown;
- const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async(_url,init)=>{calls++;request=JSON.parse(String(init?.body));return new Response(JSON.stringify({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'final',name:'json',input:{claims:[],abstained:true}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40},metrics:{latencyMs:1}}),{headers:{'content-type':'application/json'}});}})('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+ const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async(_url,init)=>{calls++;request=JSON.parse(String(init?.body));return new Response(JSON.stringify({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'final',name:'emit_answer',input:{claims:[],abstained:true}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40},metrics:{latencyMs:1}}),{headers:{'content-type':'application/json'}});}})('us.anthropic.claude-haiku-4-5-20251001-v1:0');
  const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
  const input={question:'What is supported?',transcript:[{toolCallId:'read-1',name:'read_exact',input:{operation:'tasks'},result:{records:[],coverage:{partial:true}}}],maxOutputTokens:1000,remainingSteps:1};
  expect(await adapter.runStep({...input,signal:new AbortController().signal})).toMatchObject({acceptance:'accepted',answer:{claims:[],abstained:true},toolCalls:[]});
- expect(request).toMatchObject({toolConfig:{tools:[{toolSpec:{name:'json'}}],toolChoice:{any:{}}}});
+ expect(request).toMatchObject({toolConfig:{tools:[{toolSpec:{name:'emit_answer',strict:true}}],toolChoice:{tool:{name:'emit_answer'}}}});
  expect((request as {toolConfig:{tools:unknown[]}}).toolConfig.tools).toHaveLength(1);expect(calls).toBe(1);
  expect(request).toMatchObject({additionalModelRequestFields:{thinking:{type:'disabled'}}});
  expect(adapter.inputBound!(input)!.inputBytes).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(request)));
@@ -78,4 +79,22 @@ it('conservatively bills SDK cached reads using its observed total input count',
  const model=new MockLanguageModelV3({doGenerate:async()=>({content:[{type:'text',text:'{"claims":[],"abstained":true}'}],finishReason:{unified:'stop',raw:'end_turn'},usage:{inputTokens:{total:70,noCache:50,cacheRead:20,cacheWrite:0},outputTokens:{total:10,text:10,reasoning:0}},warnings:[]})});
  const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
  expect(await adapter.runStep({question:'Synthetic?',transcript:[],maxOutputTokens:64,signal:new AbortController().signal})).toMatchObject({acceptance:'accepted',usage:{inputTokens:70,outputTokens:10}});
+});
+it.each([
+ {label:'one strict data output',content:[{type:'tool-call' as const,toolCallId:'output-1',toolName:'emit_answer',input:'{"claims":[],"abstained":true}'}],answer:{claims:[],abstained:true}},
+ {label:'malformed nested-string output',content:[{type:'tool-call' as const,toolCallId:'output-1',toolName:'emit_answer',input:'{"claims":"[]","abstained":true}'}],answer:null},
+ {label:'multiple final outputs',content:[{type:'tool-call' as const,toolCallId:'output-1',toolName:'emit_answer',input:'{"claims":[],"abstained":true}'},{type:'tool-call' as const,toolCallId:'output-2',toolName:'emit_answer',input:'{"claims":[],"abstained":true}'}],answer:null},
+ {label:'mixed final output and readonly request',content:[{type:'tool-call' as const,toolCallId:'output-1',toolName:'emit_answer',input:'{"claims":[],"abstained":true}'},{type:'tool-call' as const,toolCallId:'read-1',toolName:'read_exact',input:'{"operation":"tasks"}'}],answer:null},
+])('handles $label as output data only while conserving observed usage',async example=>{
+ const model=new MockLanguageModelV3({doGenerate:async()=>({content:example.content,finishReason:{unified:'tool-calls',raw:'tool_use'},usage:{inputTokens:{total:52,noCache:52,cacheRead:0,cacheWrite:0},outputTokens:{total:24,text:24,reasoning:0}},warnings:[]})});
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ expect(await adapter.runStep({question:'Synthetic?',transcript:[],maxOutputTokens:64,signal:new AbortController().signal})).toEqual({acceptance:'accepted',usage:{inputTokens:52,outputTokens:24},answer:example.answer,toolCalls:[]});
+});
+it('keeps known and unknown billing isolated when the same adapter runs concurrent final generations',async()=>{
+ let ready=0;let release=()=>{};const barrier=new Promise<void>(resolve=>{release=resolve;});
+ const model=new MockLanguageModelV3({doGenerate:async input=>{const cachedWrite=JSON.stringify(input.prompt).includes('cache-write-call');ready++;if(ready===2)release();await barrier;return {content:[{type:'text',text:'{"claims":[],"abstained":true}'}],finishReason:{unified:'stop',raw:'end_turn'},usage:{inputTokens:{total:cachedWrite?53:52,noCache:52,cacheRead:0,cacheWrite:cachedWrite?1:0},outputTokens:{total:24,text:24,reasoning:0}},warnings:[]};}});
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ const results=await Promise.all(['known-plain-call','cache-write-call'].map(question=>adapter.runStep({question,transcript:[],remainingSteps:1,maxOutputTokens:64,signal:new AbortController().signal})));
+ expect(results[0]).toEqual({acceptance:'accepted',usage:{inputTokens:52,outputTokens:24},answer:{claims:[],abstained:true},toolCalls:[]});
+ expect(results[1]).toEqual({acceptance:'unknown',usage:null,answer:null,toolCalls:[]});expect(ready).toBe(2);
 });
