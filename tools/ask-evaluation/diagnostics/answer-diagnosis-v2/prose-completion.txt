@@ -1,0 +1,1 @@
+Write the final answer as ordinary prose. Cite each factual clause with its supplied evidence markers, for example [w1] for an original and [e1] for an exact observation; mixed clauses need both. Exact-only answers may use e markers alone. Use only supplied markers. Do not emit JSON or request a tool. If no supported answer can be given, return exactly: Insufficient evidence.

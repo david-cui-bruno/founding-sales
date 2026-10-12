@@ -1,0 +1,64 @@
+{
+  "toolSpec": {
+    "name": "emit_answer",
+    "description": "Emit the final cited answer as structured data. This output tool never executes an action. Use an actual claims array and top-level abstained boolean.",
+    "strict": true,
+    "inputSchema": {
+      "json": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "claims": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "description": "Write complete natural sentences directly answering the question. Each claim is final prose, not an unfinished heading or alternative draft; avoid internal codes and repeated disclaimers already displayed by the UI. Retain uncertainty that materially changes the answer. Each factual clause must be supported by its cited evidence authorities. This also applies inside inference and conflict claims. Separate original-evidence ambiguity from exact CRM facts; SQL-only counts, stages, statuses or identifiers require actual exactResultToolCallIds in addition to original citations; never attach them to an original-only claim."
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "fact",
+                    "inference",
+                    "conflict"
+                  ]
+                },
+                "citationWindowIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Short original-window handles (w1, w2) supporting source clauses. SQL clauses additionally need exact handles, never a borrowed source citation."
+                },
+                "exactResultToolCallIds": {
+                  "description": "For mixed source/current CRM interpretations, cite the supplied short exact handles (e1, e2) here, one to ten unique handles. Original window handles remain required. Do not invent or reuse handles from history.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "text",
+                "kind",
+                "citationWindowIds"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Original-window-supported claims only. Mixed original and exact CRM facts require both original citationWindowIds and independent exactResultToolCallIds. Each clause must be supported by the appropriate authority; exact CRM values are also displayed separately."
+          },
+          "abstained": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "claims",
+          "abstained"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

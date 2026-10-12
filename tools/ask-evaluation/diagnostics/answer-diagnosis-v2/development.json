@@ -1,0 +1,366 @@
+{
+  "version": "answer-diagnosis-v2",
+  "split": "development",
+  "cases": [
+    {
+      "caseId": "dev2_01",
+      "category": "reported_identity_and_observed_mail",
+      "question": "Who is discussing a partnership with Harbor Example, and what do we know about the sender?",
+      "evidence": {
+        "originals": [
+          {
+            "ref": "w1",
+            "kind": "selected_note",
+            "text": "Copied message summary: From partnerships@harbor.example.test. Our team would like to discuss a partnership. I think Rowan wrote it.",
+            "occurredAt": null,
+            "observedAt": "2026-09-08T10:00:00Z",
+            "metadata": {
+              "synthetic": true,
+              "selection": "user_selected_note",
+              "interpretationLimit": "Header and author are reported by the note, not observed mail metadata."
+            }
+          },
+          {
+            "ref": "w2",
+            "kind": "mail",
+            "text": "Our team would like to discuss a partnership. Please send an overview of your service.",
+            "occurredAt": "2026-09-09T15:00:00Z",
+            "observedAt": "2026-09-09T15:05:00Z",
+            "metadata": {
+              "synthetic": true,
+              "authority": "synthetic_host_observation",
+              "from": "partnerships@harbor.example.test",
+              "endpointType": "shared",
+              "firmRelationship": "Harbor Example",
+              "individualSpeaker": null
+            }
+          }
+        ],
+        "observations": [],
+        "coverage": {
+          "authority": "not_observed",
+          "scope": {},
+          "value": {}
+        }
+      },
+      "referenceAnswer": {
+        "text": "Harbor Example's team is discussing a partnership and requests a service overview. The email came from the shared partnerships endpoint; the individual speaker is unknown. A separate note suggests Rowan, but does not establish the author.",
+        "references": [
+          "w2",
+          "w1"
+        ]
+      },
+      "requiredFacts": [
+        "The observed mail requests a service overview for a partnership discussion.",
+        "The controlled mail metadata identifies a shared endpoint associated with Harbor Example, not an individual speaker.",
+        "Rowan is only a tentative attribution in the selected note."
+      ],
+      "forbiddenClaims": [
+        "Rowan is the authenticated sender or an established employee of Harbor Example.",
+        "The selected note's copied From line is an observed mail header.",
+        "A shared endpoint establishes one named person's identity."
+      ],
+      "gradingNotes": [
+        "All names, endpoints, sources and metadata are independent synthetic fixtures; no private email is included.",
+        "Mail metadata is controlled synthetic host authority. Source body statements do not authenticate headers or person identity.",
+        "Critical semantic grading checks speaker uncertainty and reported versus observed attribution; synonymous business wording and sentence order are nonmaterial style differences."
+      ]
+    },
+    {
+      "caseId": "dev2_02",
+      "category": "observed_bounded_coverage",
+      "question": "Has Cedar Example replied to the pricing question?",
+      "evidence": {
+        "originals": [
+          {
+            "ref": "w1",
+            "kind": "mail",
+            "text": "Could you confirm whether the annual price includes onboarding?",
+            "occurredAt": "2026-09-10T14:00:00Z",
+            "observedAt": "2026-09-10T14:02:00Z",
+            "metadata": {
+              "synthetic": true,
+              "authority": "synthetic_host_observation",
+              "direction": "outgoing",
+              "conversationId": "synthetic_cedar_pricing",
+              "firmRelationship": "Cedar Example"
+            }
+          }
+        ],
+        "observations": [
+          {
+            "ref": "e1",
+            "operation": "exact_captured_reply_lookup",
+            "scope": {
+              "conversationId": "synthetic_cedar_pricing",
+              "channel": "email",
+              "after": "2026-09-10T14:00:00Z",
+              "through": "2026-09-11T21:00:00Z"
+            },
+            "value": {
+              "capturedIncomingReplyCount": 0
+            }
+          }
+        ],
+        "coverage": {
+          "authority": "synthetic_host_observation",
+          "scope": {
+            "conversationId": "synthetic_cedar_pricing",
+            "channel": "email",
+            "through": "2026-09-11T21:00:00Z"
+          },
+          "value": {
+            "capturedEmailThrough": "2026-09-11T21:00:00Z",
+            "laterEmailCoverage": "unknown",
+            "phoneCoverage": "not_imported",
+            "messagesCoverage": "not_imported"
+          },
+          "ref": "e2"
+        }
+      },
+      "referenceAnswer": {
+        "text": "No reply was found in captured email for this conversation through September 11 at 21:00 UTC. [e1] Later email coverage is unknown, and phone and Messages are not imported, so a reply elsewhere cannot be established. [e2]",
+        "references": [
+          "e1",
+          "e2"
+        ]
+      },
+      "requiredFacts": [
+        "The exact lookup found zero captured incoming replies in the specified conversation and time window.",
+        "The negative result is bounded to email captured through September 11 at 21:00 UTC.",
+        "Later email coverage is unknown; phone and Messages are not imported."
+      ],
+      "forbiddenClaims": [
+        "Cedar Example definitely did not reply.",
+        "All channels or later email were searched or completely captured.",
+        "The original message body establishes capture coverage."
+      ],
+      "gradingNotes": [
+        "Every datum is synthetic. Coverage authority is explicitly supplied controlled host metadata, not a source-body report or a claim that a current read tool implements coverage acquisition.",
+        "Critical semantic grading checks the negative result's scope and unknown channels; equivalent time-zone rendering or concise caveat wording is nonmaterial style.",
+        "The supplied coverage handle refers only to controlled synthetic host coverage; it does not claim an implemented production coverage query or independently authenticate source text.",
+        "The diagnostic strict grammar can cite the coverage handle as a structured observation, but every prose Claim still needs original support. Abstention with host exact/coverage display is acceptable when no supported mixed Claim is expressible. Do not attach an unrelated original merely to satisfy the grammar; grade expressibility separately."
+      ]
+    },
+    {
+      "caseId": "dev2_03",
+      "category": "sql_only_exact_observation",
+      "question": "How many open opportunities are recorded for Alder Example?",
+      "evidence": {
+        "originals": [],
+        "observations": [
+          {
+            "ref": "e1",
+            "operation": "exact_sql_opportunity_count",
+            "scope": {
+              "firmId": "synthetic_alder",
+              "firmName": "Alder Example",
+              "stageFilter": "open",
+              "observedAt": "2026-09-14T12:00:00Z"
+            },
+            "value": {
+              "count": 2
+            }
+          }
+        ],
+        "coverage": {
+          "authority": "not_observed",
+          "scope": {},
+          "value": {}
+        }
+      },
+      "referenceAnswer": {
+        "text": "Alder Example has 2 open opportunities recorded in the queried CRM state.",
+        "references": [
+          "e1"
+        ]
+      },
+      "requiredFacts": [
+        "The executed exact CRM observation reports 2 open opportunities for Alder Example.",
+        "The answer concerns recorded CRM state, not a complete inventory of real-world business initiatives."
+      ],
+      "forbiddenClaims": [
+        "An original message supports the count.",
+        "There are exactly 2 initiatives in all business history.",
+        "The observation establishes opportunity values, names, stages beyond open, or promised actions."
+      ],
+      "gradingNotes": [
+        "This original-free exact observation is wholly synthetic; e1 is a valid reference for the concise reference answer.",
+        "Current strict grammar requires an original citation for every Claim and cannot express this natural SQL-only Claim. Abstention accompanied by an exact observation display of e1 and count 2 is acceptable format behavior, not a model semantic error.",
+        "Grade count accuracy, scope and invented support as critical semantics; grade inability to render natural prose under the current contract separately as format expressibility. Harmless phrasing differences are nonmaterial."
+      ]
+    },
+    {
+      "caseId": "dev2_04",
+      "category": "mixed_sql_source_ambiguous_opportunity",
+      "question": "Which pilot needs a revised proposal at Birch Example?",
+      "evidence": {
+        "originals": [
+          {
+            "ref": "w1",
+            "kind": "mail",
+            "text": "The pilot needs a revised proposal. Please include the installation cost.",
+            "occurredAt": "2026-09-15T10:00:00Z",
+            "observedAt": "2026-09-15T10:01:00Z",
+            "metadata": {
+              "synthetic": true,
+              "authority": "synthetic_host_observation",
+              "firmRelationship": "Birch Example",
+              "opportunityAssociation": null
+            }
+          }
+        ],
+        "observations": [
+          {
+            "ref": "e1",
+            "operation": "exact_sql_firm_opportunities",
+            "scope": {
+              "firmId": "synthetic_birch",
+              "observedAt": "2026-09-15T11:00:00Z"
+            },
+            "value": {
+              "opportunities": [
+                {
+                  "id": "synthetic_east",
+                  "name": "East pilot",
+                  "stage": "proposal"
+                },
+                {
+                  "id": "synthetic_west",
+                  "name": "West pilot",
+                  "stage": "discovery"
+                }
+              ]
+            }
+          }
+        ],
+        "coverage": {
+          "authority": "not_observed",
+          "scope": {},
+          "value": {}
+        }
+      },
+      "referenceAnswer": {
+        "text": "Birch Example requested a revised pilot proposal including installation cost, but the email does not identify which pilot. The CRM lists East and West; confirm which one before assigning the request.",
+        "references": [
+          "w1",
+          "e1"
+        ]
+      },
+      "requiredFacts": [
+        "The source requests a revised proposal with installation cost.",
+        "The exact CRM observation lists East pilot and West pilot.",
+        "The request is unresolved between those opportunities; a targeted clarification is useful."
+      ],
+      "forbiddenClaims": [
+        "East is the requested pilot because its stage is proposal or it appears first.",
+        "West is the requested pilot without supporting source evidence.",
+        "The request establishes a new opportunity or changes either opportunity's stage."
+      ],
+      "gradingNotes": [
+        "Sources, firm, opportunities and exact observation are all synthetic and independent of retained development examples.",
+        "w1 supports the business request; e1 supports only the listed CRM opportunities and stages. Neither resolves the association.",
+        "Critical semantic grading checks unresolved assignment and clause-level support; an equivalent targeted question or omission of unnecessary stage details is nonmaterial style."
+      ]
+    },
+    {
+      "caseId": "dev2_05",
+      "category": "current_text_withdraws_quoted_commitment",
+      "question": "What has Ellis committed to send for Maple Example?",
+      "evidence": {
+        "originals": [
+          {
+            "ref": "w1",
+            "kind": "mail",
+            "text": "The old contract plan has been cancelled. I have not agreed to send a replacement yet.\n\nQuoted message from January 8, 2025, authored by Ellis: I will send the contract on January 10, 2025.",
+            "occurredAt": "2026-09-16T13:00:00Z",
+            "observedAt": "2026-09-16T13:02:00Z",
+            "metadata": {
+              "synthetic": true,
+              "authority": "synthetic_host_observation",
+              "author": "Ellis",
+              "firmRelationship": "Maple Example",
+              "authoredTextBoundary": "Before the blank line; remaining text is a historical quote."
+            }
+          }
+        ],
+        "observations": [],
+        "coverage": {
+          "authority": "not_observed",
+          "scope": {},
+          "value": {}
+        }
+      },
+      "referenceAnswer": {
+        "text": "The newer email says the old contract plan is cancelled and no replacement has been agreed. Its quoted January 2025 contract promise is historical. This source does not establish any later commitment or what actually happened to the old promise. [w1]",
+        "references": [
+          "w1"
+        ]
+      },
+      "requiredFacts": [
+        "The newer message text cancels the old contract plan.",
+        "The quoted promise is dated historical evidence, not a new promise.",
+        "This source contains no agreed replacement commitment."
+      ],
+      "forbiddenClaims": [
+        "Ellis currently owes a contract on January 10 or a newly inferred Friday.",
+        "The old contract was actually delivered or was never promised.",
+        "Ellis has no commitments anywhere in the complete relationship history."
+      ],
+      "gradingNotes": [
+        "All content and author metadata are controlled synthetic fixtures; no live correspondence is used.",
+        "Distinguish the current authored cancellation from the dated quote without erasing the historical promise. Coverage beyond this source is not observed.",
+        "Critical semantic grading checks temporal scope and withdrawal; equivalent plain wording for cancellation or absence of a replacement is nonmaterial style."
+      ]
+    },
+    {
+      "caseId": "dev2_06",
+      "category": "maintenance_need_and_offer",
+      "question": "What problem does Willow Example want help with, and is there a promised next step?",
+      "evidence": {
+        "originals": [
+          {
+            "ref": "w1",
+            "kind": "mail",
+            "text": "Coordinating repair contractors across our rentals takes too much of my time. I can send an example of our scheduling spreadsheet if that would help.",
+            "occurredAt": "2026-09-17T16:00:00Z",
+            "observedAt": "2026-09-17T16:01:00Z",
+            "metadata": {
+              "synthetic": true,
+              "authority": "synthetic_host_observation",
+              "author": "Sam",
+              "firmRelationship": "Willow Example"
+            }
+          }
+        ],
+        "observations": [],
+        "coverage": {
+          "authority": "not_observed",
+          "scope": {},
+          "value": {}
+        }
+      },
+      "referenceAnswer": {
+        "text": "The Willow Example email describes the time burden of coordinating repair contractors across rentals and offers a scheduling spreadsheet if helpful. It gives no definite promise or deadline. [w1] Asking for the example is a possible next step, not an action already taken. [w1]",
+        "references": [
+          "w1"
+        ]
+      },
+      "requiredFacts": [
+        "The business problem is time spent coordinating repair contractors across rentals.",
+        "Sharing a scheduling spreadsheet is a conditional offer, not a definite commitment."
+      ],
+      "forbiddenClaims": [
+        "Sam promised to send the spreadsheet or agreed to a deadline.",
+        "The source establishes the number of properties, budget, urgency, a purchase decision or a booked meeting.",
+        "The suggested follow-up was already sent or is an authorized outreach action."
+      ],
+      "gradingNotes": [
+        "This is a wholly synthetic business source with controlled synthetic author and firm metadata.",
+        "The answer should remain useful despite the absence of a commitment: explain the maintenance coordination need and offer a grounded follow-up suggestion.",
+        "Critical semantic grading checks business need and offer-versus-promise attribution; synonymous maintenance language and a concise alternative way to propose requesting the example are nonmaterial style.",
+        "Suggesting a grounded follow-up is optional; omitting one is not a critical semantic error because the question asks whether a next step was promised. No blanket authorship disclaimer is required; claims about a specific verified human remain unsupported unless supplied metadata establishes them."
+      ]
+    }
+  ]
+}
