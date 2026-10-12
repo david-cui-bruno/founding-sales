@@ -8,7 +8,7 @@ import {createAuthFixture} from './support/authFixture.ts';
 import {configuredAskFixture} from './support/configuredAskFixture.ts';
 import {seedFirm} from './support/crmSeed.ts';
 
-async function completionJourney(finish:'length'|'content-filter'|'stop',transport:'tool'|'text'='tool'){
+async function completionJourney(finish:'length'|'content-filter'|'stop',transport:'tool'|'text'='tool',claimText='The retained source requests faster repairs.'){
  const fixture=await createAuthFixture();try{
   const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const,providerKey:'controlled-completion',accessGrantVersion:'controlled-access',dataHandlingVersion:'controlled-handling',fundingVerifiedUntil:'2099-01-01T00:00:00Z',agentLimits:{maxSteps:3,maxInputBytes:50000,maxOutputTokens:1000,deadlineMs:60000}};
   const {db,post,command,saveDisabledPurpose,composeWorker}=await configuredAskFixture(fixture,route);
@@ -23,7 +23,7 @@ async function completionJourney(finish:'length'|'content-filter'|'stop',transpo
   let calls=0;
   const model=new MockLanguageModelV3({doGenerate:async input=>{
    calls++;const prompt=JSON.stringify(input.prompt),id=/\\"id\\":\\"(w[1-9]\d*)\\"/u.exec(prompt)?.[1];if(!id)throw new Error('controlled_current_window_missing');
-   const answer={claims:[{text:'The retained source requests faster repairs.',kind:'fact',citationWindowIds:[id]}],abstained:false};
+   const answer={claims:[{text:claimText,kind:'fact',citationWindowIds:[id]}],abstained:false};
    return {content:transport==='tool'?[{type:'tool-call' as const,toolCallId:'completion-output',toolName:'emit_answer',input:JSON.stringify(answer)}]:[{type:'text' as const,text:JSON.stringify(answer)}],finishReason:{unified:finish,raw:finish==='length'?'max_tokens':finish==='content-filter'?'content_filtered':'end_turn'},usage:{inputTokens:{total:50,noCache:50,cacheRead:0,cacheWrite:0},outputTokens:{total:10,text:10,reasoning:0}},warnings:[]};
   }});
   const registry=await composeWorker(model);
@@ -52,4 +52,10 @@ it('refuses content-filtered structured output even when a complete candidate wa
 it.each(['tool','text'] as const)('publishes normally completed cited %s answers and opens their current original',async transport=>{
  const result=await completionJourney('stop',transport);
  expect(result).toMatchObject({calls:1,read:{state:'complete',reason:null,answer:{claims:[{text:'The retained source requests faster repairs.',verification:'cited_unverified'}],abstained:false}},citation:{source:{passage:{text:'We need faster repairs.'}}},diagnostics:{completedSteps:1,usage:{inputTokens:50,outputTokens:10},cost:{unsettledCents:0,estimated:false}}});
+});
+
+// Exact draft fragment observed in the Sonnet run4c427384, despite normal stop.
+it.each(['tool','text'] as const)('refuses the reproduced unfinished %s claim on a normal stop without rewriting or retrying',async transport=>{
+ const result=await completionJourney('stop',transport,'The note reports that the old plan is explicitly rejected (');
+ expect(result).toMatchObject({calls:1,read:{state:'unavailable',reason:'unsupported_answer',answer:null},diagnostics:{completedSteps:1,usage:{inputTokens:50,outputTokens:10},cost:{unsettledCents:0,estimated:false}}});
 });

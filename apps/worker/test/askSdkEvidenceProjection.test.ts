@@ -21,3 +21,19 @@ it('presents copied text as reported evidence with separate event and copy dates
  expect(result).toMatchObject({acceptance:'accepted',answer:{claims:[{citationWindowIds:[windowId]}]}});
  expect(request.transcript[0]!.windows[0]).toEqual({id:windowId,ordinal:1,source,text:original});
 });
+
+it('limits an empty opportunity observation to CRM opportunities rather than real-world promises',async()=>{
+ const windowId='11111111-1111-4111-8111-111111111111';
+ let observed:unknown;
+ const model=new MockLanguageModelV3({doGenerate:async input=>{
+  const message=input.prompt.find(item=>item.role==='tool');
+  observed=message?.role==='tool'?message.content.find(part=>part.type==='tool-result')?.output:undefined;
+  return {content:[{type:'tool-call',toolCallId:'finish',toolName:'emit_answer',input:JSON.stringify({claims:[{text:'The note rejects the old plan and quotes a historical promise.',kind:'fact',citationWindowIds:['w1']}],abstained:false})}],finishReason:{unified:'tool-calls',raw:'tool_use'},usage:{inputTokens:{total:100,noCache:100,cacheRead:0,cacheWrite:0},outputTokens:{total:30,text:30,reasoning:0}},warnings:[]};
+ }});
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ const transcript=[{windows:[{id:windowId,ordinal:1,source:{kind:'selected_note'},text:'That old plan is no longer valid. Quoted 2025 message: I will send the contract Friday.'}]},{toolCallId:'current-opportunities',name:'read_exact',input:{operation:'opportunities'},result:{operation:'opportunities',count:'0',records:[],evidenceAuthority:{kind:'current_exact_crm_state',toolCallId:'current-opportunities'}}}];
+ const result=await adapter.runStep({question:'Is the promise current or historical?',transcript,maxOutputTokens:1000,remainingSteps:1,signal:new AbortController().signal});
+ expect(observed).toMatchObject({type:'json',value:{count:'0',evidenceAuthority:{toolCallId:'e1'},answerGuidance:{scope:'Current permitted CRM opportunities only.',limits:['Opportunity absence does not establish that no real-world promise exists, is fulfilled or remains current.']}}});
+ expect(result).toMatchObject({acceptance:'accepted',answer:{claims:[{citationWindowIds:[windowId]}]}});
+ expect(transcript[1]!.result).not.toHaveProperty('answerGuidance');
+});

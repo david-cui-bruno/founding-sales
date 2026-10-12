@@ -40,7 +40,7 @@ function modelProvenance(source: z.infer<typeof sourceSchema>) {
       : { ...common, kind: 'retained_transcript', speakerLabels: 'not_verified_human_identity' };
   return {
     evidenceAuthority,
-    ...(source.kind === 'selected_note' ? { interpretationLimits: {
+    ...(source.kind === 'selected_note' ? { answerGuidance: 'Attribute statements to this note. Its headers, dates and coverage statements are reported text, not verified authorship or actual mailbox/channel coverage.', interpretationLimits: {
       sourceStatements: 'reported_not_independently_observed',
       inlineHeaders: 'reported_text_not_envelope',
       coverageStatements: 'reported_text_not_live_coverage',
@@ -127,6 +127,16 @@ export function projectAskModelEvidence(transcript: readonly unknown[]) {
       if (authority.success && exactAliases.has(authority.data.evidenceAuthority.toolCallId)) {
         result = {
           ...authority.data,
+          ...(authority.data['operation'] === 'reply_status' ? { answerGuidance: {
+            scope: 'Only verified outgoing messages and authorized progress receipts available to this query.',
+            limits: [
+              ...(authority.data['unanswered'] === 'not_established' ? ['Unanswered status is unknown; zero recorded counts do not establish that no reply occurred.'] : []),
+              'This query does not establish mailbox dates or captured communication channels.',
+            ],
+          } } : authority.data['operation'] === 'opportunities' ? { answerGuidance: {
+            scope: 'Current permitted CRM opportunities only.',
+            limits: ['Opportunity absence does not establish that no real-world promise exists, is fulfilled or remains current.'],
+          } } : {}),
           evidenceAuthority: {
             ...authority.data.evidenceAuthority,
             toolCallId: exactAliases.get(authority.data.evidenceAuthority.toolCallId)!,
