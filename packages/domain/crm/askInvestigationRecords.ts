@@ -1,3 +1,4 @@
+import type { AskTaskDependency } from "./askTaskDependencies.ts";
 import type { AskAgentScope } from "@fss/contracts";
 import type { RepositoryContext } from "../db/workspaceScope.ts";
 import { readAsk } from "./ask.ts";
@@ -84,6 +85,7 @@ export async function readAskInvestigationExact(
     limit?: number | undefined;
     status?: "open" | "all" | undefined;
   },
+  observation: { observeTaskDependencies?: (dependencies: AskTaskDependency[]) => void } = {},
 ) {
   const intent = input.intent;
   let firmId = input.firmId;
@@ -104,7 +106,7 @@ export async function readAskInvestigationExact(
         ...(intent.to === undefined ? {} : { to: intent.to }),
       },
       limit: input.limit ?? 20,
-    });
+    }, {}, observation);
   if (intent.kind === "person") {
     const page = await readAskInvestigationRecords(context, {
       intent,
@@ -142,7 +144,7 @@ export async function readAskInvestigationExact(
       operation: "tasks",
       scope,
       limit: input.limit ?? 20,
-    });
+    }, {}, observation);
   return readAsk(context, {
     operation: "opportunities",
     scope,
@@ -215,4 +217,18 @@ export async function readAskScopedExact(
   return intent === null
     ? null
     : readAskInvestigationExact(context, { intent, ...input });
+}
+
+/** Host-only task proof travels beside, never inside, the public observation. */
+export async function readAskScopedExactObservation(
+  context: RepositoryContext,
+  intent: AskAgentScope | null,
+  input: Parameters<typeof readAskScopedExact>[2],
+) {
+  if (intent === null) return null;
+  let taskDependencies: AskTaskDependency[] = [];
+  const value = await readAskInvestigationExact(context, { intent, ...input }, {
+    observeTaskDependencies: dependencies => { taskDependencies = dependencies; },
+  });
+  return value === null ? null : { value, taskDependencies };
 }

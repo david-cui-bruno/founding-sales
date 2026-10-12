@@ -327,6 +327,32 @@ it("includes current explicit human tasks, respects undated/date scopes and filt
         })
       ).body,
     ).toMatchObject({ count: "0", records: [] });
+    for (const consumingRequestId of [exactId, personExactId]) {
+      const consumed = await post("/ask/answers/read", {
+        requestId: consumingRequestId,
+      });
+      expect(consumed.status).toBe(200);
+      expect.soft(consumed.body).toMatchObject({
+        state: "stale",
+        question: null,
+        fallback: null,
+        answer: null,
+      });
+    }
+    const historyAfterSourceDeletion = await post("/ask/history/list", {});
+    expect(historyAfterSourceDeletion.status).toBe(200);
+    for (const consumingRequestId of [exactId, personExactId]) {
+      expect.soft(historyAfterSourceDeletion.body).toMatchObject({
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            requestId: consumingRequestId,
+            state: "stale",
+            question: null,
+            title: null,
+          }),
+        ]),
+      });
+    }
   } finally {
     await fixture.stop();
   }

@@ -390,6 +390,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     crm_ask_window_vectors: coverage(['deletion_removes'],'Versioned model/configuration-bound numeric embeddings inherit original window authority. Scoped deletion explicitly counts and removes projections before original windows; lifecycle erasure cascades them and preview fingerprints include their versions.'),
     crm_ask_history_dependencies: coverage(['retained'],'Opaque owner-private request lineage; parent erasure invalidates all dependent private copies without retaining bodies.'),
     crm_ask_admitted_sources: coverage(['deletion_removes'],'Append-only investigation evidence and original access closure erased with the affected private request.'),
+    crm_ask_task_dependencies: coverage(['deletion_removes'],'Host-only independent task lineage erased with the affected private request; task-source invalidation erases its consumers without binding human tasks to old investigation history.'),
     crm_ask_admitted_records: coverage(['deletion_removes'],'Canonical identity match snapshots erased with the affected private request.'),
     crm_ask_request_windows: coverage(['deletion_removes'],'Immutable body-free canonical window and duplicate group proofs are removed with the whole affected private request.'),
     crm_ask_financial_receipts: coverage(['retained'],'Opaque priced stage, attempt and reservation receipts conserve provider spending after private source and request deletion; no question or copied conversation body.'),

@@ -22,6 +22,14 @@ The [contract correction](../sourcing/ask-answer-contract-correction-20261012.md
 
 Diagnostic code and frozen matrix remain on their archival branch; only research/results documentation is integrated here. No provider calls, release, activation or sending changes occurred in this correction. #551 stays open for actual useful configured outcomes; the release hold and sending safeguards remain.
 
+## Task-source deletion correction — October 12
+
+PR588 merged as `d8957efb` after independent reviews and all required CI passed; that source correction was not deployed. Subsequent authenticated command/registered-worker reproduction found that source-free task observations lacked transitive erasure: task lists hid deleted support, while consuming Ask requests/history retained copied private content.
+
+The correction adds bounded host-only dependencies on independent human/internal tasks, revalidates their complete original authority and registers all counted contributors before model exposure. Task support invalidation erases consuming question, answer, progress and history content. Investigation deletion preserves independent tasks; ordinary completion remains a current-state freshness change. Scoped deletion inventories, fingerprints, locks and removes dependency rows. Schema105 migration erases legacy task observations with unverifiable lineage rather than reconstructing incomplete evidence. Source integration, reviewed CI and release status must be checked at the correction PR; controlled results do not establish actual model quality.
+
+No provider calls, production changes, activation or sending occurred. #551 remains open for actual repaired-source usefulness and applicable readiness. The release hold and existing sending safeguards remain; larger evaluation funding remains a proposal until explicitly allocated.
+
 ## Evidence, prerequisites and refresh
 
 - Historical source/provider/release observations: [retained evidence history](current-state-history-20261011.md).
