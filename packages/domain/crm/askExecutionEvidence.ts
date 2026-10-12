@@ -54,7 +54,9 @@ export async function admitAskSources(context:RepositoryContext,key:AskExecution
 }
 async function recordProof(context:RepositoryContext,intent:AskAgentScope|null,record:{kind:'firm'|'person';recordId:string}){
  const selected=intent?.kind==='selected'?await resolveAskAgentScope(context,intent):null;
- const restriction=intent?.kind==='selected'?selected===null?null:{firmIds:selected.firmIds,personIds:selected.personIds}:intent?.kind==='firm'?{firmIds:[intent.firmId]}:intent?.kind==='person'?{personIds:[intent.personId]}:undefined;
+ // Match the resolver's selected-firm restriction: a firm-only original need
+ // not name a person. Selected person proofs retain both identity restrictions.
+ const restriction=intent?.kind==='selected'?selected===null?null:record.kind==='firm'?{firmIds:selected.firmIds}:{firmIds:selected.firmIds,personIds:selected.personIds}:intent?.kind==='firm'?{firmIds:[intent.firmId]}:intent?.kind==='person'?{personIds:[intent.personId]}:undefined;
  if(restriction===null)return null;
  const page=await readAskRecords(context,{operation:'records',kind:record.kind==='firm'?'firms':'people',limit:1,query:''},{...restriction,recordId:record.recordId});
  return page?.records.find(item=>item.recordId===record.recordId)??null;
