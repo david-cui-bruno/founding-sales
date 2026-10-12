@@ -26,3 +26,7 @@ Use terms defined in `GLOSSARY.md` when naming domain concepts in issues, propos
 ## Flag ADR conflicts
 
 When a proposal contradicts an existing ADR, name the ADR and explain why its decision should be reconsidered. Keep the original decision visible rather than silently overriding it.
+
+## CRM and Ask changes
+
+When changing capture, processing, Ask, deletion or owner setup, use [CRM/Ask module map](crm-ask-modules.md) for owning modules and agreed verification seams.

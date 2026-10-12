@@ -1,6 +1,6 @@
 # Callie Founder Sales System (FSS)
 
-Callie is a 24/7 maintenance agent for property managers: it handles tenant requests and coordinates contractors, including calling them when needed. FSS is the system the founder uses to find independent and regional residential property-management firms, call them, and follow up by email. Every morning **Today** lists the firms to call; the work behind it (research, sequences, mailbox sync, suppression) runs in the cloud, and the Mac app is a thin client.
+Callie is a 24/7 maintenance agent for property managers: it handles tenant requests and coordinates contractors, including calling them when needed. FSS is the system the founder uses to find independent and regional residential property-management firms, call them, and follow up by email. FSS also keeps business relationships, conversation evidence, opportunities and action-focused **Today** work, with an **Ask** section for grounded retrieval. Research, mailbox sync, processing and guarded sequences run in the cloud; the Mac app provides the user interface. Current source readiness and actual deployed capability status are distinct; consult [current operating state](docs/operations/current-state.md).
 
 ## What is in this repository
 
@@ -32,7 +32,7 @@ npx playwright install chromium   # only for the desktop window specs
 npm run gate:greenfield           # typecheck, lint, every workspace's tests and the ops suite; what CI runs
 npm run typecheck                 # = typecheck:greenfield
 npm run lint                      # one ESLint config over apps, packages, test/ops and scripts
-npm test                          # = test:greenfield and test:ops
+npm test                          # workspace, ops and Ask evaluation suites
 npm run test:desktop:e2e          # the desktop window in chromium; not part of the gate
 FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop -- /tmp/callie-smoke   # an unsigned local bundle
 ```
@@ -40,6 +40,8 @@ FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop -- /tmp/callie-smok
 The tests run against a real PostgreSQL 16 (embedded locally, a service container in CI); `docs/greenfield/workspace.md` has the details and `docs/greenfield/install.md` the desktop build, signing and update channel.
 
 ## Read next
+
+- [CRM/Ask module map](docs/agents/crm-ask-modules.md): owning modules and test seams for capture, evidence, retrieval and deletion.
 
 - `docs/greenfield/release.md`: how a release goes out; production has been live since 24 September 2026. The records of the releases before 25 September are in `docs/archive/release-records.md`.
 - `docs/greenfield/processes.md`: what the API and the worker do and how they start and stop.
