@@ -1,6 +1,6 @@
 # Current operating state
 
-## Current completion focus — October 11, 2026 (America/New_York)
+## Current completion focus — October 12, 2026 (America/New_York)
 
 The [engineering design audit](../sourcing/engineering-design-audit-20261011.md) records the agreed David-only end state, proportional review, cleanup priorities and execution lanes. Core completion is #549/#550/#551/#552; independent outreach #425/#438 and native #460/#466 remain open. Four parents track these eight outcomes. Closed source foundations remain closed.
 
@@ -8,7 +8,9 @@ PR585 housekeeping is merged (`3f797851`); PR586 partial-output guard and Ask-on
 
 The [strict-output paired diagnosis](../sourcing/ask-strict-paired-diagnosis-20261012.md) is complete. Fresh ordinary-worker synthetic capture used14calls/155c; native strict-on/off replay used12calls/152c. No fragments reproduced; turning strict off did not improve usefulness and one response malformed its claims array. Source attribution, exact observation citations and reported-versus-actual coverage remain defects. Keep strict output and reasoning disabled. Diagnostic source `d164ffd4` is on a separate branch, not deployed.
 
-Campaign journal conserves321 dispatched calls/3653c allocation (not invoice), within400/$50. All grants terminal; no further dispatch planned. #551 stays open with quality and activation pending. Next: a focused answer-construction correction and labeled validation through the ordinary worker seams; preserve independent roadmap lanes and all holds.
+The [evidence authority TDD correction](../sourcing/ask-evidence-authority-tdd-20261012.md) adds local interpretation guidance and a narrow refusal for the observed normal-stop draft ending in an opening parenthesis. Actual source1799807b synthetic evaluation completed14calls/156c; delegated review found4/6 useful, with contract/coverage defects remaining. Later host refusal is verified by controlled ordinary-worker replay, not another paid quality run. Correction source is on a separate branch pending integration, not deployed.
+
+Campaign journal conserves335 dispatched calls/3809c allocation (not invoice), within400/$50. All grants terminal; no further dispatch planned. #551 stays open with quality and activation pending. Next: integrate reviewed safe source work and address the remaining answer-construction defects with labeled evaluation; preserve independent roadmap lanes and all holds.
 
 ## Evidence, prerequisites and refresh
 
