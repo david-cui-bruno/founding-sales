@@ -4,11 +4,11 @@
 
 The [engineering design audit](../sourcing/engineering-design-audit-20261011.md) records the agreed David-only end state, proportional review, cleanup priorities and execution lanes. Core completion is #549/#550/#551/#552; independent outreach #425/#438 and native #460/#466 remain open. Four parents track these eight outcomes. Closed source foundations remain closed.
 
-PR584 is merged (`a2c2b676`); merged source schema104 remains held. Dated production evidence is backendd49/schema88/signed desktop1.0.51, not a fresh operational observation from this audit. The Ask prototype branch is experimental and must not be merged wholesale. Release/bootstrap approval and capability-specific real outcomes remain pending; no sending or activation controls changed.
+PR585 housekeeping is merged (`3f797851`); PR586 partial-output guard and Ask-only runner are merged (`dae0aad7`). Merged source schema104 remains held. Dated production evidence is backendd49/schema88/signed desktop1.0.51; this diagnosis made no fresh production-state observation. Deployment/bootstrap and capability outcomes remain pending.
 
-The latest paired Sonnet4.6 reasoning run finished24calls/448c conservative allocation. Both arms returned12/12 structurally complete answers, but provenance/coverage errors persisted and no clear usefulness improvement was observed. Keep reasoning disabled; these fixed-context synthetic results do not prove ordinary integration or readiness. Campaign journal conserves281calls/3190c total allocation (not invoice), within400/$50; no further dispatch is planned. Earlier counts below are dated history.
+The [strict-output paired diagnosis](../sourcing/ask-strict-paired-diagnosis-20261012.md) is complete. Fresh ordinary-worker synthetic capture used14calls/155c; native strict-on/off replay used12calls/152c. No fragments reproduced; turning strict off did not improve usefulness and one response malformed its claims array. Source attribution, exact observation citations and reported-versus-actual coverage remain defects. Keep strict output and reasoning disabled. Diagnostic source `d164ffd4` is on a separate branch, not deployed.
 
-Next: consolidate active instructions and agent module navigation, deepen the existing Ask evidence projection/test setup, and complete actual core journeys. Use the existing lean release flow once the explicit hold prerequisites are resolved; no new platform or broad rewrite.
+Campaign journal conserves321 dispatched calls/3653c allocation (not invoice), within400/$50. All grants terminal; no further dispatch planned. #551 stays open with quality and activation pending. Next: a focused answer-construction correction and labeled validation through the ordinary worker seams; preserve independent roadmap lanes and all holds.
 
 ## Evidence, prerequisites and refresh
 
