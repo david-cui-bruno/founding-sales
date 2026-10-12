@@ -100,9 +100,10 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
     await runOnce(db,{registry,owner:'approved-synthetic-extraction',limit:10});
     outputs['extraction']=(await post('/crm/processing/read',{source})).body;
    }
+   let askRequestId:string|undefined;
    if(scope.askIds.includes(item.caseId)){
     const requested=await post('/ask/answers/request',command({question:scope.askQuestions[item.caseId],execution:'agent_v1',...requestScope}));expect(requested.status).toBe(200);
-    const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
+    const requestId=(requested.body as {result:{requestId:string}}).result.requestId;askRequestId=requestId;
     await runOnce(db,{registry,owner:'approved-synthetic-ask',limit:10});
     outputs['ask']=(await post('/ask/answers/read',{requestId,includeExactResultCitations:true})).body;
     outputs['diagnostics']=(await post('/ask/answers/diagnostics',{requestId})).body;
@@ -112,6 +113,12 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
    // dispatch further cases against an unverified failing provider boundary.
    if(['ask','extraction'].some(key=>{const result=outputs[key];return typeof result==='object'&&result!==null&&'state' in result&&result.state==='unknown_acceptance';})){phase='unknown_acceptance_stopped';throw new Error('synthetic_unknown_acceptance_stopped');}
    for(const source of cleanupSources)expect((await post('/crm/imports/delete',command({sourceId:source.sourceId,expectedSourceRevision:source.revision,expectedMetadataRevision:source.metadataRevision}))).status).toBe(200);
+   if(scope.scopeVersion===4&&askRequestId){
+    const answer=await post('/ask/answers/read',{requestId:askRequestId,includeExactResultCitations:true});expect(answer.status).toBe(200);
+    const history=await post('/ask/history/list',{});expect(history.status).toBe(200);
+    writeFileSync(resolve(directory,`${item.caseId}-cleanup.json`),JSON.stringify({caseId:item.caseId,deletedSources:cleanupSources.map(source=>({sourceId:source.sourceId,revision:source.revision})),answer:answer.body,history:history.body},null,2),{mode:0o600,flag:'wx'});
+    if(cleanupSources.length)expect(answer.body).toMatchObject({question:null,fallback:null,answer:null});
+   }
   }
   phase='complete_candidates_human_review_pending';
  }finally{
