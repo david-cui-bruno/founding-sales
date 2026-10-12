@@ -11,7 +11,7 @@ import {seedFirm} from './support/crmSeed.ts';
 // Controlled generation proves the context/citation boundary, not model quality.
 it('separates a note-reported email cutoff from unknown reply status through the ordinary configured worker',async()=>{
  const fixture=await createAuthFixture();try{
-  const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-sonnet-4-6',providerKey:'controlled.authority',accessGrantVersion:'controlled-access',dataHandlingVersion:'controlled-handling',fundingVerifiedUntil:'2099-01-01T00:00:00Z',agentLimits:{maxSteps:3,maxInputBytes:50000,maxOutputTokens:1000,deadlineMs:60000}};
+  const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-sonnet-4-6' as const,providerKey:'controlled.authority',accessGrantVersion:'controlled-access',dataHandlingVersion:'controlled-handling',fundingVerifiedUntil:'2099-01-01T00:00:00Z',agentLimits:{maxSteps:3,maxInputBytes:50000,maxOutputTokens:1000,deadlineMs:60000}};
   const {db,post,command,saveDisabledPurpose,composeWorker}=await configuredAskFixture(fixture,route);
   const firmId=await seedFirm(fixture,{name:'Reported email coverage',assignedUserId:fixture.alpha.admin.userId});
   const text='Captured email ends Friday; no later email reply is captured. Phone and Messages are not imported.';
@@ -31,7 +31,7 @@ it('separates a note-reported email cutoff from unknown reply status through the
    expect(window).toMatchObject({text,answerGuidance:'Attribute statements to this note. Its headers, dates and coverage statements are reported text, not verified authorship or actual mailbox/channel coverage.'});
    if(calls===2){
     const message=input.prompt.find(item=>item.role==='tool');
-    const result=message?.role==='tool'?message.content[0]?.output:undefined;
+    const result=message?.role==='tool'?message.content.find(part=>part.type==='tool-result')?.output:undefined;
     const data=z.object({type:z.literal('json'),value:z.object({unanswered:z.literal('not_established'),verifiedOutgoingCount:z.literal('0'),evidenceAuthority:z.object({toolCallId:z.literal('e1')}),answerGuidance:z.object({scope:z.literal('Only verified outgoing messages and authorized progress receipts available to this query.'),limits:z.array(z.string())})})}).parse(result).value;
     expect(data.answerGuidance.limits).toContain('Unanswered status is unknown; zero recorded counts do not establish that no reply occurred.');
     expect(data.answerGuidance.limits).toContain('This query does not establish mailbox dates or captured communication channels.');

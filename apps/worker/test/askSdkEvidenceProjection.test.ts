@@ -27,7 +27,7 @@ it('limits an empty opportunity observation to CRM opportunities rather than rea
  let observed:unknown;
  const model=new MockLanguageModelV3({doGenerate:async input=>{
   const message=input.prompt.find(item=>item.role==='tool');
-  observed=message?.role==='tool'?message.content[0]?.output:undefined;
+  observed=message?.role==='tool'?message.content.find(part=>part.type==='tool-result')?.output:undefined;
   return {content:[{type:'tool-call',toolCallId:'finish',toolName:'emit_answer',input:JSON.stringify({claims:[{text:'The note rejects the old plan and quotes a historical promise.',kind:'fact',citationWindowIds:['w1']}],abstained:false})}],finishReason:{unified:'tool-calls',raw:'tool_use'},usage:{inputTokens:{total:100,noCache:100,cacheRead:0,cacheWrite:0},outputTokens:{total:30,text:30,reasoning:0}},warnings:[]};
  }});
  const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
