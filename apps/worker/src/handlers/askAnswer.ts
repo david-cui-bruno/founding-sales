@@ -142,7 +142,7 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
 
 // Reproduced normal-stop draft ending in an opening parenthesis. This narrow
 // refusal is not a general grammar or semantic-support validator; never repair it.
-const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000).refine(text=>!text.trimEnd().endsWith('(')),kind:z.enum(['fact','inference','conflict']),citationWindowIds:z.array(z.uuid()).max(10),exactResultToolCallIds:z.array(z.string().min(1).max(100)).min(1).max(10).optional()}).refine(claim=>claim.citationWindowIds.length>0||(claim.exactResultToolCallIds?.length??0)>0)).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
+const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000).refine(text=>!text.trimEnd().endsWith('(')),kind:z.enum(['fact','inference','conflict']),citationWindowIds:z.array(z.uuid()).max(10),exactResultToolCallIds:z.array(z.string().min(1).max(100)).max(10).optional()}).refine(claim=>claim.citationWindowIds.length>0||(claim.exactResultToolCallIds?.length??0)>0)).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
 const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','browse_history','read_conversation','resolve_records']),input:z.unknown()});
 /** Internal model evidence authority never changes canonical proof or publication. */
 
