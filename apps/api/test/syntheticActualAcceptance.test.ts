@@ -1,3 +1,4 @@
+import {parseSyntheticHistoryFixtures,runSyntheticHistoryJourney,SYNTHETIC_HISTORY_UNKNOWN_ACCEPTANCE} from './support/syntheticHistoryJourney.ts';
 import {parseSyntheticAskFixtures,prepareSyntheticAskFixture} from './support/syntheticAskFixtures.ts';
 import {snapshotSyntheticAcceptanceSource,claimSharedSyntheticAcceptanceDirectory} from './support/syntheticSourceBinding.ts';
 import {createConverseCapture} from '../../../tools/ask-evaluation/diagnostics/capture-converse.ts';
@@ -33,12 +34,13 @@ const sha=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
 it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes the exact approved synthetic scope through ordinary configured workers',async()=>{
  const scopeBytes=readFileSync(scopeFile);
  const approvalFile=process.env['FSS_SYNTHETIC_APPROVAL_FILE'];if(!approvalFile)throw new Error('exact_paid_scope_approval_required');
- const newFixtures=(JSON.parse(scopeBytes.toString()) as {scopeVersion?:unknown}).scopeVersion===4;
- const labelsBytes=readFileSync(resolve(repository,newFixtures?'tools/ask-evaluation/fixtures/ask-contract-v4.json':'tools/ask-evaluation/owner-provisional-labels.json'));
- const {scope,approval,pricing}=validateSyntheticAcceptance({scopeBytes,approvalBytes:readFileSync(approvalFile),labelsBytes,readSource:path=>readFileSync(resolve(repository,path)),...newFixtures?{sourceTree:snapshotSyntheticAcceptanceSource(repository)}:{}});
+ const version=(JSON.parse(scopeBytes.toString()) as {scopeVersion?:unknown}).scopeVersion;
+ const newFixtures=version===4,historyFixtures=version===5;
+ const labelsBytes=readFileSync(resolve(repository,historyFixtures?'tools/ask-evaluation/fixtures/ask-history-continuity-v1.json':newFixtures?'tools/ask-evaluation/fixtures/ask-contract-v4.json':'tools/ask-evaluation/owner-provisional-labels.json'));
+ const {scope,approval,pricing}=validateSyntheticAcceptance({scopeBytes,approvalBytes:readFileSync(approvalFile),labelsBytes,readSource:path=>readFileSync(resolve(repository,path)),...(newFixtures||historyFixtures)?{sourceTree:snapshotSyntheticAcceptanceSource(repository)}:{}});
  const labels=JSON.parse(labelsBytes.toString()) as {cases:{caseId:string;syntheticText:string;expectedOutcome:string;forbiddenOutcome:string;eventAt:string}[]};
- const chosen=scope.scopeVersion===4?parseSyntheticAskFixtures(labelsBytes).cases.map(item=>({caseId:item.id,firmName:item.firmName,expectedOutcome:item.expected.join(' '),forbiddenOutcome:item.forbidden.join(' '),syntheticText:'',eventAt:null,fixtureCase:item})):[...new Set([...scope.extractionIds,...scope.askIds])].map(id=>{const found=labels.cases.find(item=>item.caseId===id);if(!found)throw new Error('frozen_case_missing');return {...found,firmName:['dev_01','dev_06'].includes(found.caseId)?'Example Sales':`Synthetic ${found.caseId}`,fixtureCase:undefined};});
- const directory=scope.scopeVersion===4?claimSharedSyntheticAcceptanceDirectory(repository,scope.runId,sha(scopeBytes)):claimSyntheticAcceptanceDirectory(repository,scope.runId);
+ const chosen=historyFixtures?[]:scope.scopeVersion===4?parseSyntheticAskFixtures(labelsBytes).cases.map(item=>({caseId:item.id,firmName:item.firmName,expectedOutcome:item.expected.join(' '),forbiddenOutcome:item.forbidden.join(' '),syntheticText:'',eventAt:null,fixtureCase:item})):[...new Set([...scope.extractionIds,...scope.askIds])].map(id=>{const found=labels.cases.find(item=>item.caseId===id);if(!found)throw new Error('frozen_case_missing');return {...found,firmName:['dev_01','dev_06'].includes(found.caseId)?'Example Sales':`Synthetic ${found.caseId}`,fixtureCase:undefined};});
+ const directory=(scope.scopeVersion===4||scope.scopeVersion===5)?claimSharedSyntheticAcceptanceDirectory(repository,scope.runId,sha(scopeBytes)):claimSyntheticAcceptanceDirectory(repository,scope.runId);
  writeFileSync(resolve(directory,'approved-scope.json'),scopeBytes,{mode:0o600,flag:'wx'});
  const budget=syntheticPaidBudget({maxSteps:scope.maxSteps,maxCents:scope.maxCents,inputTokenPriceMicros:pricing.inputTokenPriceMicros,outputTokenPriceMicros:pricing.outputTokenPriceMicros,persist:snapshot=>writeFileSync(resolve(directory,'aggregate-budget.json'),JSON.stringify(snapshot),{mode:0o600})});
  const fixture=await createAuthFixture();let phase='transport_probe';
@@ -92,6 +94,17 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
   // All originals are committed under disabled extraction settings. Ordinary
   // workers may now process only the four explicit processing requests.
   if(scope.extractionIds.length)expect((await post('/crm/processing/purpose/activate',command({capability:'crm_extraction',expectedRevision:1,approval:approvalDecision}))).body).toMatchObject({status:'accepted'});
+  if(historyFixtures){
+   try{
+    for(const item of parseSyntheticHistoryFixtures(labelsBytes).cases){
+     await runSyntheticHistoryJourney({fixture,post,command,item,
+      execute:async()=>{await runOnce(db,{registry,owner:'approved-synthetic-history',limit:10});},
+      capture:captured=>writeFileSync(resolve(directory,`${captured.id}-${captured.phase}.json`),JSON.stringify({modelVersion:scope.modelVersion,scopeSha256:sha(scopeBytes),...captured},null,2),{mode:0o600,flag:'wx'}),
+     });
+    }
+   }catch(error){if(error instanceof Error&&error.message===SYNTHETIC_HISTORY_UNKNOWN_ACCEPTANCE)phase='unknown_acceptance_stopped';throw error;}
+   phase='complete_candidates_human_review_pending';return;
+  }
   for(const {item,sources,cleanupSources,requestScope,seedObservation} of prepared){
    const outputs:Record<string,unknown>={caseId:item.caseId,expectedOutcome:item.expectedOutcome,forbiddenOutcome:item.forbiddenOutcome,humanQualityReview:'pending',modelVersion:scope.modelVersion,stage:scope.stage??'legacy_history_investigation',thinking:scope.thinking??'legacy_policy',pricing,inputLimitations:['selected_text_authorship_unverified','label_event_timezone_is_not_canonical_source_metadata; use only separately frozen question context or report unknown'],acquisition:'selected_unverified',seedObservation,evaluatedScope:requestScope};
    if(scope.extractionIds.includes(item.caseId)){

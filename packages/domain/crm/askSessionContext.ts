@@ -4,7 +4,7 @@ import {askAgentScopeSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {askCopiedSourceSchema,type askAnswerRequestPayloadSchema} from '@fss/contracts';
 import type {z} from 'zod';
-import {readAskAnswer} from './askAnswers.ts';
+import {readAskConversationTurn} from './askAnswers.ts';
 import {askFingerprint} from './askAnswerAuthority.ts';
 /** Previous turns are dated context only; every original input must remain in the new current scope. */
 export async function readAskSessionContext(context:RepositoryContext,requestId:string,scope:z.infer<typeof askAnswerRequestPayloadSchema>['scope']){
@@ -24,8 +24,8 @@ export async function readAskSessionContext(context:RepositoryContext,requestId:
   if(!currentScope.success||!previousScope.success||!askScopeWithin(previousScope.data,currentScope.data))continue;
   const evidence=await readAskExecutionEvidence(context,{requestId:previous.request_id,version:previous.version,epoch:previous.epoch});
   if(!evidence||!evidence.scope.sources.every(source=>key(source)!==null&&keys.has(key(source))))continue;
-  const readable=await readAskAnswer(context,previous.request_id);
-  if(readable===null||readable.question===null||readable.state!=='complete'||readable.answer===null)continue;
+  const readable=await readAskConversationTurn(context,previous.request_id);
+  if(readable===null)continue;
   turns.push({question:readable.question,answer:readable.answer,createdAt:readable.createdAt});
  }
  return {turns,fingerprint:askFingerprint(turns)};
