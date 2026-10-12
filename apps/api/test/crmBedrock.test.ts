@@ -211,6 +211,7 @@ it.each(cacheUsageCases)('native extraction usage $label preserves original evid
       expect(input.system[0]!.text).toContain('Inferred needs must use status inferred');
       expect(input.system[0]!.text).toContain('Rejection or disagreement is an objection');
       expect(input.system[0]!.text).toContain('unless the source explicitly expresses it');
+      expect(input.toolConfig?.tools[0]?.toolSpec.inputSchema.json).toMatchObject({properties:{claims:{items:{properties:{kind:{description:expect.stringContaining('not commitment even when status is inferred')},status:{description:expect.stringContaining('does not permit classifying an offer as commitment')}}}}}});
       expect(Buffer.byteLength(input.system[0]!.text)).toBeLessThanOrEqual(1024);
       expect(JSON.parse(input.messages[0]!.content[0]!.text)).toMatchObject([{ utterance: 0, speaker: 'Fixture speaker', text: quote, locator: 'utterance:0:text:0:29' }]);
       return { stopReason: 'tool_use', usage: example.usage, output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId: 'controlled-transcript', name: 'emit_crm_extraction', input: { claims: [{ kind: 'need', interpretation: 'Repair coordinator', status: 'stated', locator: 'utterance:0:text:0:29', quote }] } } }] } } };

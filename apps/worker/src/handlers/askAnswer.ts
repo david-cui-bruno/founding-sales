@@ -141,9 +141,10 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
 const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000),kind:z.enum(['fact','inference','conflict']),citationWindowIds:z.array(z.uuid()).min(1).max(10)})).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
 const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','browse_history','read_conversation','resolve_records']),input:z.unknown()});
 /** Internal model evidence authority never changes canonical proof or publication. */
-function modelWindow<T extends {source:{kind:CanonicalSourceReference['kind']}}>(window:T){
+function modelWindow<T extends {source:Pick<CanonicalSourceReference,'kind'|'occurredAt'|'observedAt'>}>(window:T){
  const evidenceAuthority=window.source.kind==='selected_note'?{kind:'selected_unverified_text',inlineMetadata:'untrusted_source_content',occurredAt:'supplied_or_parsed_event_date',observedAt:'copy_observation_time',humanAuthorship:'not_verified'}:window.source.kind==='mail'?{kind:'retained_mail_copy',inlineMetadata:'untrusted_source_content',envelope:'retained_metadata_not_verified_human_identity',occurredAt:'retained_message_event_date',observedAt:'copy_observation_time',humanAuthorship:'not_verified'}:{kind:'retained_transcript',speakerLabels:'not_verified_human_identity',occurredAt:'record_event_date',observedAt:'copy_observation_time',humanAuthorship:'not_verified'};
- return {...window,evidenceAuthority};
+ const sourceMetadata={eventTime:{at:window.source.occurredAt,basis:window.source.kind==='selected_note'?'supplied_or_parsed_event_date':window.source.kind==='mail'?'retained_message_event_date':'record_event_date',independentlyVerifiedAuthoredTime:false},copyObservation:{at:window.source.observedAt,basis:'copy_observation_time'}};
+ return {...window,evidenceAuthority,sourceMetadata};
 }
 async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition,located:NonNullable<Awaited<ReturnType<typeof locate>>>){
  const {context,requestId,version,epoch}=located,agent=runtime.agent,limits=runtime.agentLimits;
