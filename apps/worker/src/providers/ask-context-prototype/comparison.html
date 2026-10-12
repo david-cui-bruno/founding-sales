@@ -1,0 +1,443 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Compact Ask context — actual comparison</title><style>body{font:16px/1.5 system-ui;color:#172b32;background:#f7f9f9;margin:32px auto;max-width:1180px;padding:0 24px}section{background:white;border:1px solid #d7e2e2;border-radius:10px;padding:20px;margin:20px 0}h1{font-size:30px}h2{font-size:21px}h3{font-size:17px;color:#126b69}.pair{display:grid;grid-template-columns:1fr 1fr;gap:24px}article{padding:12px 0;border-top:1px solid #d7e2e2}pre{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}small{color:#53686e}.verdict{border-left:5px solid #126b69;padding-left:16px}@media(max-width:750px){.pair{grid-template-columns:1fr}}</style>
+<h1>Compact context: smaller input, no usefulness gain</h1><p>THROWAWAY · synthetic native replay · not the activated Callie app</p><section class="verdict"><h2>Keep the current view for now</h2><p>Independent conservative review: <b>baseline 6/12 useful; compact 6/12 useful</b>. Raw candidates: 11/12 and 12/12. Complete prose: 11/12 in each arm. Valid shape and references do not establish semantic support.</p><p>Compact input tokens were 6.5% lower (55,092 → 51,492 across12 generations per arm). Observed median generation time was 4,073.5 → 3,234.5 ms; this small native replay is not a production latency benchmark. Attribution worsened in some cases; every coverage answer still overstated source-reported limits.</p><p>24 calls /310c conservative allocation, not invoice. No retries, external tools, Gmail data, publication or activation. Same Sonnet4.6, strict schema, tools, required choice, disabled thinking and1,000-token ceiling. Only message evidence view changed.</p><p><a href="demo.html">Explore the evidence logic demo</a>. The outputs below are verbatim; fragments and erroneous statements are intentionally retained.</p></section><section><h2>What commitment is stated, who states it, and what deadline is supported?</h2><details><summary>Exact original text</summary><pre>Mira at Example Sales says: &quot;I will send the proposal Friday, October 16.&quot;</pre></details><div class="pair"><article><h3>Baseline · repetition 1</h3><small>raw_candidate · 4308 input tokens · 2243 ms</small><p>The note reports that Mira at Example Sales states the commitment: &quot;I will send the proposal Friday, October 16.&quot; The stated deadline is Friday, October 16.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports that Mira at Example Sales states the commitment: \&quot;I will send the proposal Friday, October 16.\&quot; The stated deadline is Friday, October 16.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 1</h3><small>raw_candidate · 4060 input tokens · 2336 ms</small><p>The note reports that Mira at Example Sales states: &quot;I will send the proposal Friday, October 16,&quot; committing to deliver a proposal by that date.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports that Mira at Example Sales states: \&quot;I will send the proposal Friday, October 16,\&quot; committing to deliver a proposal by that date.&quot;
+    }
+  ]
+}</pre></details></article></div><div class="pair"><article><h3>Baseline · repetition 2</h3><small>raw_candidate · 4308 input tokens · 2133 ms</small><p>The note reports that Mira at Example Sales states: &quot;I will send the proposal Friday, October 16&quot; — committing to delivering a proposal by that date.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports that Mira at Example Sales states: \&quot;I will send the proposal Friday, October 16\&quot; — committing to delivering a proposal by that date.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 2</h3><small>raw_candidate · 4060 input tokens · 2086 ms</small><p>The note reports that Mira at Example Sales states the commitment: &quot;I will send the proposal Friday, October 16,&quot; with that date serving as the stated deadline.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports that Mira at Example Sales states the commitment: \&quot;I will send the proposal Friday, October 16,\&quot; with that date serving as the stated deadline.&quot;
+    }
+  ]
+}</pre></details></article></div></section><section><h2>Who wrote the team correspondence? Distinguish observed team headers from a verified individual speaker.</h2><details><summary>Exact original text</summary><pre>From team@example.test: &quot;Our team is considering a partnership.&quot; No signature or individual speaker evidence.</pre></details><div class="pair"><article><h3>Baseline · repetition 1</h3><small>raw_candidate · 4607 input tokens · 4858 ms</small><p>The note reports correspondence originating from the address &#x27;team@example.test&#x27;, with the message: &quot;Our team is considering a partnership.&quot; — this is a team-level email header as reported in the note text, not an independently verified envelope or sender address.</p><p>The note explicitly states there is no signature or individual speaker evidence, so no verified individual author can be identified from this correspondence — only the team header &#x27;team@example.test&#x27; is observable.</p><p>Because human authorship is not verified and the source is an unverified selected note, the team address reflects reported text only; it cannot be attributed to a specific named individual without further corroborating evidence.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports correspondence originating from the address &#x27;team@example.test&#x27;, with the message: \&quot;Our team is considering a partnership.\&quot; — this is a team-level email header as reported in the note text, not an independently verified envelope or sender address.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note explicitly states there is no signature or individual speaker evidence, so no verified individual author can be identified from this correspondence — only the team header &#x27;team@example.test&#x27; is observable.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;Because human authorship is not verified and the source is an unverified selected note, the team address reflects reported text only; it cannot be attributed to a specific named individual without further corroborating evidence.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 1</h3><small>raw_candidate · 4283 input tokens · 4558 ms</small><p>The one retained correspondence on file originated from the address &#x27;team@example.test&#x27; and contained the statement &quot;Our team is considering a partnership.&quot; — this is a shared team address, not a verified individual speaker.</p><p>No individual author or reported speaker is identified in the source: the attribution metadata shows reportedSpeaker as null, human authorship is not verified, and there is no personal signature or named individual within the body of the message.</p><p>The &#x27;From: team@example.test&#x27; header is an observed metadata label, not proof of any specific person&#x27;s authorship; the actual human who composed the message cannot be determined from available evidence.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The one retained correspondence on file originated from the address &#x27;team@example.test&#x27; and contained the statement \&quot;Our team is considering a partnership.\&quot; — this is a shared team address, not a verified individual speaker.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;No individual author or reported speaker is identified in the source: the attribution metadata shows reportedSpeaker as null, human authorship is not verified, and there is no personal signature or named individual within the body of the message.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;The &#x27;From: team@example.test&#x27; header is an observed metadata label, not proof of any specific person&#x27;s authorship; the actual human who composed the message cannot be determined from available evidence.&quot;
+    }
+  ]
+}</pre></details></article></div><div class="pair"><article><h3>Baseline · repetition 2</h3><small>raw_candidate · 4607 input tokens · 3885 ms</small><p>The note reports a single piece of correspondence attributed to the header address &#x27;team@example.test,&#x27; which states: &quot;Our team is considering a partnership.&quot; This is an observed team-level header only — no individual signature, named speaker, or other verified authorship evidence is present in the note.</p><p>Because the source has no identified speaker (speaker field is null) and human authorship is explicitly marked as not verified, it is not possible to attribute this message to any specific individual; it can only be described as correspondence carrying a shared team address.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports a single piece of correspondence attributed to the header address &#x27;team@example.test,&#x27; which states: \&quot;Our team is considering a partnership.\&quot; This is an observed team-level header only — no individual signature, named speaker, or other verified authorship evidence is present in the note.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;Because the source has no identified speaker (speaker field is null) and human authorship is explicitly marked as not verified, it is not possible to attribute this message to any specific individual; it can only be described as correspondence carrying a shared team address.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 2</h3><small>raw_candidate · 4283 input tokens · 4714 ms</small><p>The one retained correspondence on file shows a team inbox address — &#x27;team@example.test&#x27; — in the observed header, with the body stating &#x27;Our team is considering a partnership.&#x27;</p><p>No individual speaker is identified: the source attribution records reportedSpeaker as null, human authorship is not verified, and the note contains no personal signature or other individual-authorship evidence.</p><p>The observable header (&#x27;team@example.test&#x27;) indicates a shared or group address, but this alone does not establish which individual, if any, composed or sent the message — only the team alias is observed, not a verified personal author.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The one retained correspondence on file shows a team inbox address — &#x27;team@example.test&#x27; — in the observed header, with the body stating &#x27;Our team is considering a partnership.&#x27;&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;No individual speaker is identified: the source attribution records reportedSpeaker as null, human authorship is not verified, and the note contains no personal signature or other individual-authorship evidence.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;The observable header (&#x27;team@example.test&#x27;) indicates a shared or group address, but this alone does not establish which individual, if any, composed or sent the message — only the team alias is observed, not a verified personal author.&quot;
+    }
+  ]
+}</pre></details></article></div></section><section><h2>Which current pilot opportunity needs a revised proposal? Check the current opportunities before assigning it and preserve ambiguity.</h2><details><summary>Exact original text</summary><pre>Example Sales has explicit North and South pilot opportunities. An email says: &quot;The pilot needs a revised proposal.&quot; No pilot is named.</pre></details><div class="pair"><article><h3>Baseline · repetition 1</h3><small>raw_candidate · 4891 input tokens · 3526 ms</small><p>The CRM currently shows two open pilot opportunities in the &#x27;new&#x27; stage — **North pilot** and **South pilot** — but the note reports an email stating &quot;The pilot needs a revised proposal&quot; without naming which pilot it refers to. It is not possible to determine from the available evidence whether the revised proposal is needed for the North pilot, the South pilot, or both.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;conflict&quot;,
+      &quot;text&quot;: &quot;The CRM currently shows two open pilot opportunities in the &#x27;new&#x27; stage — **North pilot** and **South pilot** — but the note reports an email stating \&quot;The pilot needs a revised proposal\&quot; without naming which pilot it refers to. It is not possible to determine from the available evidence whether the revised proposal is needed for the North pilot, the South pilot, or both.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 1</h3><small>raw_candidate · 4575 input tokens · 3166 ms</small><p>There are currently two open pilot opportunities in the CRM — &quot;North pilot&quot; and &quot;South pilot&quot; — both at the &quot;new&quot; stage. A note reports that an email states &quot;The pilot needs a revised proposal,&quot; but no specific pilot is named in that source. It is therefore ambiguous which of the two pilot opportunities requires the revised proposal; the available evidence does not allow a definitive assignment.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;conflict&quot;,
+      &quot;text&quot;: &quot;There are currently two open pilot opportunities in the CRM — \&quot;North pilot\&quot; and \&quot;South pilot\&quot; — both at the \&quot;new\&quot; stage. A note reports that an email states \&quot;The pilot needs a revised proposal,\&quot; but no specific pilot is named in that source. It is therefore ambiguous which of the two pilot opportunities requires the revised proposal; the available evidence does not allow a definitive assignment.&quot;
+    }
+  ]
+}</pre></details></article></div><div class="pair"><article><h3>Baseline · repetition 2</h3><small>invalid_candidate · 4891 input tokens · 6985 ms</small><p>The CRM currently shows two open pilot opportunities in the &#x27;new&#x27; stage: **North pilot** and **South pilot**. A note reports that an email states </p><p>The note reports an email saying &quot;The pilot needs a revised proposal,&quot; but no specific pilot is named in that email, so it is not possible to determine from available evidence whether the North pilot or South pilot is the one requiring a revised proposal — the ambiguity is unresolved.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;conflict&quot;,
+      &quot;text&quot;: &quot;The CRM currently shows two open pilot opportunities in the &#x27;new&#x27; stage: **North pilot** and **South pilot**. A note reports that an email states &quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot; w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports an email saying \&quot;The pilot needs a revised proposal,\&quot; but no specific pilot is named in that email, so it is not possible to determine from available evidence whether the North pilot or South pilot is the one requiring a revised proposal — the ambiguity is unresolved.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 2</h3><small>raw_candidate · 4575 input tokens · 3303 ms</small><p>There are currently two open pilot opportunities in the CRM — &#x27;North pilot&#x27; and &#x27;South pilot&#x27;, both at the &#x27;new&#x27; stage. A note reports that an email states &#x27;The pilot needs a revised proposal,&#x27; but no specific pilot is named in that communication. It is therefore ambiguous which of the two pilot opportunities requires the revised proposal; the note cannot be reliably assigned to either one without further clarification.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;conflict&quot;,
+      &quot;text&quot;: &quot;There are currently two open pilot opportunities in the CRM — &#x27;North pilot&#x27; and &#x27;South pilot&#x27;, both at the &#x27;new&#x27; stage. A note reports that an email states &#x27;The pilot needs a revised proposal,&#x27; but no specific pilot is named in that communication. It is therefore ambiguous which of the two pilot opportunities requires the revised proposal; the note cannot be reliably assigned to either one without further clarification.&quot;
+    }
+  ]
+}</pre></details></article></div></section><section><h2>Is the contract promise current or historical? Preserve the rejection of the old plan.</h2><details><summary>Exact original text</summary><pre>New authored text: &quot;That old plan is no longer valid.&quot; Quoted 2025 message: &quot;I will send the contract Friday.&quot;</pre></details><div class="pair"><article><h3>Baseline · repetition 1</h3><small>raw_candidate · 4673 input tokens · 4262 ms</small><p>The note reports that the old plan has been explicitly rejected: &quot;That old plan is no longer valid.&quot;</p><p>The note also quotes what appears to be an earlier (2025) message stating &quot;I will send the contract Friday,&quot; which is presented as historical quoted text within the newer note rather than as a current, active promise.</p><p>Based on the note&#x27;s framing — new authored text invalidating the old plan alongside a quoted past message — the contract promise appears to be historical rather than currently active; however, authorship and timing are not independently verified, so whether a fresh contract commitment has since replaced it cannot be confirmed from available evidence.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports that the old plan has been explicitly rejected: \&quot;That old plan is no longer valid.\&quot;&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note also quotes what appears to be an earlier (2025) message stating \&quot;I will send the contract Friday,\&quot; which is presented as historical quoted text within the newer note rather than as a current, active promise.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;Based on the note&#x27;s framing — new authored text invalidating the old plan alongside a quoted past message — the contract promise appears to be historical rather than currently active; however, authorship and timing are not independently verified, so whether a fresh contract commitment has since replaced it cannot be confirmed from available evidence.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 1</h3><small>raw_candidate · 4357 input tokens · 2822 ms</small><p>The note reports that the old plan is explicitly rejected (</p><p>placeholder</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports that the old plan is explicitly rejected (&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;placeholder&quot;
+    }
+  ]
+}</pre></details></article></div><div class="pair"><article><h3>Baseline · repetition 2</h3><small>raw_candidate · 4673 input tokens · 5026 ms</small><p>The note reports that the old plan has been explicitly rejected — it states: &quot;That old plan is no longer valid.&quot;</p><p>The note also quotes a message — attributed to 2025 — that reads: &quot;I will send the contract Friday,&quot; which represents a contract promise; however, since this is a quoted passage within a selected note of unverified authorship and the CRM currently shows no open opportunities for this firm, it is unclear whether that promise is still current or has since been fulfilled or lapsed.</p><p>Taken together, the rejection of the old plan stands on the note&#x27;s own authority, but the currency of the contract promise cannot be confirmed from available evidence alone — further follow-up would be needed to determine whether the contract was ultimately sent and agreed upon.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports that the old plan has been explicitly rejected — it states: \&quot;That old plan is no longer valid.\&quot;&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note also quotes a message — attributed to 2025 — that reads: \&quot;I will send the contract Friday,\&quot; which represents a contract promise; however, since this is a quoted passage within a selected note of unverified authorship and the CRM currently shows no open opportunities for this firm, it is unclear whether that promise is still current or has since been fulfilled or lapsed.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;Taken together, the rejection of the old plan stands on the note&#x27;s own authority, but the currency of the contract promise cannot be confirmed from available evidence alone — further follow-up would be needed to determine whether the contract was ultimately sent and agreed upon.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 2</h3><small>raw_candidate · 4357 input tokens · 3135 ms</small><p>The note reports a quoted 2025 message stating &quot;I will send the contract Friday,&quot; which represents the contract promise on record; its current vs. historical status cannot be independently verified, as the authored time is unverified and no live CRM opportunity is linked to it.</p><p>The note also explicitly states &quot;That old plan is no longer valid,&quot; preserving the rejection of the old plan as recorded.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports a quoted 2025 message stating \&quot;I will send the contract Friday,\&quot; which represents the contract promise on record; its current vs. historical status cannot be independently verified, as the authored time is unverified and no live CRM opportunity is linked to it.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note also explicitly states \&quot;That old plan is no longer valid,\&quot; preserving the rejection of the old plan as recorded.&quot;
+    }
+  ]
+}</pre></details></article></div></section><section><h2>What maintenance coordination need is supported by the retained sources?</h2><details><summary>Exact original text</summary><pre>Source 1: &quot;Coordinating repair contractors across our rentals is taking too much time.&quot; Source 2: &quot;We like the website colors.&quot;</pre></details><div class="pair"><article><h3>Baseline · repetition 1</h3><small>raw_candidate · 4327 input tokens · 2341 ms</small><p>The note reports the stated need: &quot;Coordinating repair contractors across our rentals is taking too much time,&quot; indicating a maintenance coordination pain point around managing repair contractors efficiently across multiple rental properties.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports the stated need: \&quot;Coordinating repair contractors across our rentals is taking too much time,\&quot; indicating a maintenance coordination pain point around managing repair contractors efficiently across multiple rental properties.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 1</h3><small>raw_candidate · 4077 input tokens · 10260 ms</small><p>The note reports the following maintenance coordination need: &quot;Coordinating repair contractors across our rentals is taking too much time,&quot; indicating a pain point around managing multiple repair contractors efficiently across a rental property portfolio.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports the following maintenance coordination need: \&quot;Coordinating repair contractors across our rentals is taking too much time,\&quot; indicating a pain point around managing multiple repair contractors efficiently across a rental property portfolio.&quot;
+    }
+  ]
+}</pre></details></article></div><div class="pair"><article><h3>Baseline · repetition 2</h3><small>raw_candidate · 4327 input tokens · 2505 ms</small><p>The note reports the statement: &quot;Coordinating repair contractors across our rentals is taking too much time,&quot; indicating a need for more efficient maintenance coordination — specifically, managing and scheduling repair contractors across multiple rental properties.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports the statement: \&quot;Coordinating repair contractors across our rentals is taking too much time,\&quot; indicating a need for more efficient maintenance coordination — specifically, managing and scheduling repair contractors across multiple rental properties.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 2</h3><small>raw_candidate · 4077 input tokens · 2358 ms</small><p>The note reports the statement: &quot;Coordinating repair contractors across our rentals is taking too much time,&quot; indicating a need to streamline or improve the coordination of repair contractors across rental properties.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports the statement: \&quot;Coordinating repair contractors across our rentals is taking too much time,\&quot; indicating a need to streamline or improve the coordination of repair contractors across rental properties.&quot;
+    }
+  ]
+}</pre></details></article></div></section><section><h2>Was there a reply after Friday? What captured channels and coverage limits prevent a definitive answer?</h2><details><summary>Exact original text</summary><pre>Captured email ends Friday. Phone/Messages are not imported. No later email reply is captured.</pre></details><div class="pair"><article><h3>Baseline · repetition 1</h3><small>raw_candidate · 4740 input tokens · 5095 ms</small><p>The note says that captured email ends on Friday and that no later email reply is captured after that point.</p><p>A definitive answer is not possible for two reasons: first, the note reports that phone and messages channels are not imported into the CRM, so any reply sent via those channels would be invisible; second, the exact CRM reply-status query returned zero verified outgoing messages and zero records with a tracked reply, which the system explicitly cautions does not establish that no reply occurred — it only reflects what has been authorized and captured. Together, the email-only capture cutoff and the absence of phone/messaging imports leave any post-Friday reply on those channels entirely undetectable.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note says that captured email ends on Friday and that no later email reply is captured after that point.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;A definitive answer is not possible for two reasons: first, the note reports that phone and messages channels are not imported into the CRM, so any reply sent via those channels would be invisible; second, the exact CRM reply-status query returned zero verified outgoing messages and zero records with a tracked reply, which the system explicitly cautions does not establish that no reply occurred — it only reflects what has been authorized and captured. Together, the email-only capture cutoff and the absence of phone/messaging imports leave any post-Friday reply on those channels entirely undetectable.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 1</h3><small>raw_candidate · 4394 input tokens · 5716 ms</small><p>No reply after Friday has been captured in the retained records: the note reports that captured email ends on Friday and no later email reply is present, and the exact reply-status check likewise shows zero verified outgoing messages and no unanswered status established.</p><p>The note explicitly reports that phone calls and Messages (e.g. SMS/iMessage) are not imported into the system, meaning those channels carry no coverage at all.</p><p>A definitive answer is prevented by three factors: (1) the email channel is reported as cut off at Friday with no guarantee of complete mailbox acquisition beyond that point; (2) phone and Messages channels are wholly absent from retained copies; and (3) the exact CRM query scope covers only authorized progress receipts and is marked partial, so any reply sent via an unimported channel or after the capture cut-off would be invisible to this system.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;No reply after Friday has been captured in the retained records: the note reports that captured email ends on Friday and no later email reply is present, and the exact reply-status check likewise shows zero verified outgoing messages and no unanswered status established.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note explicitly reports that phone calls and Messages (e.g. SMS/iMessage) are not imported into the system, meaning those channels carry no coverage at all.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;A definitive answer is prevented by three factors: (1) the email channel is reported as cut off at Friday with no guarantee of complete mailbox acquisition beyond that point; (2) phone and Messages channels are wholly absent from retained copies; and (3) the exact CRM query scope covers only authorized progress receipts and is marked partial, so any reply sent via an unimported channel or after the capture cut-off would be invisible to this system.&quot;
+    }
+  ]
+}</pre></details></article></div><div class="pair"><article><h3>Baseline · repetition 2</h3><small>raw_candidate · 4740 input tokens · 5516 ms</small><p>No reply after Friday has been captured: the note reports that captured email ends on Friday and no later email reply is recorded, and the exact CRM reply-status query found zero verified outgoing messages and no established unanswered status.</p><p>The note reports that phone and Messages channels are not imported, meaning any reply sent via those channels would not appear in the retained record.</p><p>A definitive answer is not possible for two reasons: (1) the exact CRM coverage is limited to authorized progress receipts only and zero counts do not prove no reply occurred; and (2) the note reports the captured record is cut off at Friday and excludes phone and Messages, so a reply made after Friday through any non-email channel — or even email outside the import window — would be invisible to this system.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;No reply after Friday has been captured: the note reports that captured email ends on Friday and no later email reply is recorded, and the exact CRM reply-status query found zero verified outgoing messages and no established unanswered status.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note reports that phone and Messages channels are not imported, meaning any reply sent via those channels would not appear in the retained record.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;A definitive answer is not possible for two reasons: (1) the exact CRM coverage is limited to authorized progress receipts only and zero counts do not prove no reply occurred; and (2) the note reports the captured record is cut off at Friday and excludes phone and Messages, so a reply made after Friday through any non-email channel — or even email outside the import window — would be invisible to this system.&quot;
+    }
+  ]
+}</pre></details></article><article><h3>Compact · repetition 2</h3><small>raw_candidate · 4394 input tokens · 5184 ms</small><p>No reply after Friday is captured in the retained record: the exact CRM reply-status check found zero verified outgoing messages and no unanswered status established, and the note states that captured email ends on Friday with no later email reply present.</p><p>The note explicitly reports that phone calls and direct messages (e.g., SMS/iMessage) are not imported into the CRM, so those channels are absent from coverage entirely.</p><p>Because captured email cuts off at Friday and non-email channels are not imported, it is not possible to say definitively whether a reply occurred after Friday — a reply sent by phone, text, or any unimported channel, or via email after the capture cutoff, would not appear here.</p><details><summary>Raw model output and references</summary><pre>{
+  &quot;abstained&quot;: false,
+  &quot;claims&quot;: [
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;exactResultToolCallIds&quot;: [
+        &quot;e1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;No reply after Friday is captured in the retained record: the exact CRM reply-status check found zero verified outgoing messages and no unanswered status established, and the note states that captured email ends on Friday with no later email reply present.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;fact&quot;,
+      &quot;text&quot;: &quot;The note explicitly reports that phone calls and direct messages (e.g., SMS/iMessage) are not imported into the CRM, so those channels are absent from coverage entirely.&quot;
+    },
+    {
+      &quot;citationWindowIds&quot;: [
+        &quot;w1&quot;
+      ],
+      &quot;kind&quot;: &quot;inference&quot;,
+      &quot;text&quot;: &quot;Because captured email cuts off at Friday and non-email channels are not imported, it is not possible to say definitively whether a reply occurred after Friday — a reply sent by phone, text, or any unimported channel, or via email after the capture cutoff, would not appear here.&quot;
+    }
+  ]
+}</pre></details></article></div></section>
