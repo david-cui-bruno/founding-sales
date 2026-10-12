@@ -1,0 +1,1602 @@
+{
+  "prototype": true,
+  "status": "complete_candidates_human_review_pending",
+  "modelVersion": "us.anthropic.claude-sonnet-4-6",
+  "source": "7b472d390cb777215cfdfdfd4e0fa9617965a0c5",
+  "workload": "fixed supplied context synthesis, not history retrieval or configured product acceptance",
+  "budget": {
+    "startedSteps": 29,
+    "allocatedCents": 319
+  },
+  "scopeSha256": "e926b5988684fba0f6f71691043ee5639b1fefca8dbad2808f782c8ec58cb92e",
+  "cases": [
+    {
+      "caseId": "dev_01",
+      "question": "What commitment is stated, who states it, and what deadline is supported?",
+      "source": "Mira at Example Sales says: \"I will send the proposal Friday, October 16.\"",
+      "observations": [],
+      "expectedOutcome": "Attribute Mira to the observed firm relationship; record the explicit promise to send the proposal due October 16 in the source timezone. Do not create an opportunity or change a deal stage.",
+      "forbiddenOutcome": "Confirmed booking; automatic deal-stage change; promise assigned to David.",
+      "arms": {
+        "baseline": [
+          {
+            "caseId": "dev_01",
+            "arm": "baseline",
+            "repetition": 1,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "Mira at Example Sales states the commitment: she will send the proposal by Friday, October 16 (with the note dated October 12, 2026). Human authorship is not independently verified.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "ffcc9956-a5cd-41c9-94e7-38fe812fc93e"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3963,
+                  "outputTokens": 118
+                },
+                "toolNames": [],
+                "inputBytes": 13528
+              }
+            ],
+            "durationMs": 2129,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "Mira at Example Sales states the commitment: she will send the proposal by Friday, October 16 (with the note dated October 12, 2026). Human authorship is not independently verified.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "ffcc9956-a5cd-41c9-94e7-38fe812fc93e"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          },
+          {
+            "caseId": "dev_01",
+            "arm": "baseline",
+            "repetition": 2,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "Mira at Example Sales states the commitment: she will send the proposal by Friday, October 16. The deadline supported is October 16, 2026.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "ffcc9956-a5cd-41c9-94e7-38fe812fc93e"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3963,
+                  "outputTokens": 109
+                },
+                "toolNames": [],
+                "inputBytes": 13528
+              }
+            ],
+            "durationMs": 1835,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "Mira at Example Sales states the commitment: she will send the proposal by Friday, October 16. The deadline supported is October 16, 2026.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "ffcc9956-a5cd-41c9-94e7-38fe812fc93e"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          }
+        ],
+        "proposed": [
+          {
+            "caseId": "dev_01",
+            "arm": "proposed",
+            "repetition": 1,
+            "state": "complete",
+            "answer": {
+              "passages": [
+                {
+                  "text": "The commitment stated is to send the proposal. It is attributed in the note to Mira at Example Sales, though individual identity is not independently verified. The deadline given is Friday, October 16.",
+                  "interpretation": "summary",
+                  "references": [
+                    {
+                      "kind": "source",
+                      "id": "ffcc9956-a5cd-41c9-94e7-38fe812fc93e"
+                    }
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3487,
+                  "outputTokens": 42
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 11451
+              },
+              {
+                "step": 2,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 2194,
+                  "outputTokens": 108
+                },
+                "toolNames": [],
+                "inputBytes": 8024
+              }
+            ],
+            "durationMs": 17030,
+            "rawCandidate": {
+              "passages": [
+                {
+                  "text": "The commitment stated is to send the proposal. It is attributed in the note to Mira at Example Sales, though individual identity is not independently verified. The deadline given is Friday, October 16.",
+                  "interpretation": "summary",
+                  "references": [
+                    {
+                      "kind": "source",
+                      "id": "ffcc9956-a5cd-41c9-94e7-38fe812fc93e"
+                    }
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 2,
+              "allocatedCents": 18
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          },
+          {
+            "caseId": "dev_01",
+            "arm": "proposed",
+            "repetition": 2,
+            "state": "complete",
+            "answer": {
+              "passages": [
+                {
+                  "text": "The stated commitment is to send a proposal. It is attributed in the note to Mira at Example Sales, though the identity has not been independently verified. The deadline given is Friday, October 16.",
+                  "interpretation": "summary",
+                  "references": [
+                    {
+                      "kind": "source",
+                      "id": "ffcc9956-a5cd-41c9-94e7-38fe812fc93e"
+                    }
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3487,
+                  "outputTokens": 42
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 11451
+              },
+              {
+                "step": 2,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 2194,
+                  "outputTokens": 112
+                },
+                "toolNames": [],
+                "inputBytes": 8024
+              }
+            ],
+            "durationMs": 15364,
+            "rawCandidate": {
+              "passages": [
+                {
+                  "text": "The stated commitment is to send a proposal. It is attributed in the note to Mira at Example Sales, though the identity has not been independently verified. The deadline given is Friday, October 16.",
+                  "interpretation": "summary",
+                  "references": [
+                    {
+                      "kind": "source",
+                      "id": "ffcc9956-a5cd-41c9-94e7-38fe812fc93e"
+                    }
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 2,
+              "allocatedCents": 18
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "dev_05",
+      "question": "Who wrote the team correspondence? Distinguish observed team headers from a verified individual speaker.",
+      "source": "From team@example.test: \"Our team is considering a partnership.\" No signature or individual speaker evidence.",
+      "observations": [
+        {
+          "toolCallId": "tooluse_rUPCG3xUZ35OWug4l17qyS",
+          "operation": "opportunities",
+          "valueHash": "ce18988842bd8fea60d0858eb54eeaf1423c1b546f7ba41bbe1c7bf44fc14a55",
+          "value": {
+            "count": "0",
+            "scope": {
+              "firmId": "a5bc345e-adf1-4566-b450-f89a2d5264fa"
+            },
+            "records": [],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false
+          }
+        }
+      ],
+      "expectedOutcome": "Associate the shared endpoint with the firm when supported; speaker remains unknown. Ask describes team correspondence without creating a fictional person.",
+      "forbiddenOutcome": "Inventing an individual speaker; merging all team members into one person.",
+      "arms": {
+        "baseline": [
+          {
+            "caseId": "dev_05",
+            "arm": "baseline",
+            "repetition": 1,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "The correspondence carries a team address header — \"From team@example.test\" — but contains no signature, no named individual, and no individual speaker evidence within the note.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                },
+                {
+                  "text": "The observed sender is a shared team address, not a verified individual. Human authorship is explicitly unverified for this source, so it is not possible to attribute the message to any specific person — only the team@example.test envelope header can be observed.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                },
+                {
+                  "text": "There is a material gap between the team-level header (which is observable) and verified individual authorship (which is absent). Without a signature or corroborating speaker metadata, the note cannot be attributed to a named human author.",
+                  "kind": "conflict",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 4225,
+                  "outputTokens": 247
+                },
+                "toolNames": [],
+                "inputBytes": 14381
+              }
+            ],
+            "durationMs": 4771,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "The correspondence carries a team address header — \"From team@example.test\" — but contains no signature, no named individual, and no individual speaker evidence within the note.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                },
+                {
+                  "text": "The observed sender is a shared team address, not a verified individual. Human authorship is explicitly unverified for this source, so it is not possible to attribute the message to any specific person — only the team@example.test envelope header can be observed.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                },
+                {
+                  "text": "There is a material gap between the team-level header (which is observable) and verified individual authorship (which is absent). Without a signature or corroborating speaker metadata, the note cannot be attributed to a named human author.",
+                  "kind": "conflict",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          },
+          {
+            "caseId": "dev_05",
+            "arm": "baseline",
+            "repetition": 2,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "The correspondence carries the sender header 'team@example.test' and contains the message 'Our team is considering a partnership.' This is an observed team address in the note's metadata — no individual speaker, signature, or personal attribution is present in the excerpt.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                },
+                {
+                  "text": "Because human authorship is not verified and no individual is identified, it is not possible to name a specific person who wrote this message. The correspondence can only be attributed to the team address as recorded; any claim of a verified individual author would go beyond what the evidence supports.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 4225,
+                  "outputTokens": 202
+                },
+                "toolNames": [],
+                "inputBytes": 14381
+              }
+            ],
+            "durationMs": 4134,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "The correspondence carries the sender header 'team@example.test' and contains the message 'Our team is considering a partnership.' This is an observed team address in the note's metadata — no individual speaker, signature, or personal attribution is present in the excerpt.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                },
+                {
+                  "text": "Because human authorship is not verified and no individual is identified, it is not possible to name a specific person who wrote this message. The correspondence can only be attributed to the team address as recorded; any claim of a verified individual author would go beyond what the evidence supports.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "b7092b21-d785-406e-9fa8-629371457bb0"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          }
+        ],
+        "proposed": [
+          {
+            "caseId": "dev_05",
+            "arm": "proposed",
+            "repetition": 1,
+            "state": "fixture_tool_refused",
+            "answer": null,
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3713,
+                  "outputTokens": 66
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 12200
+              }
+            ],
+            "durationMs": 1203,
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 11
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          },
+          {
+            "caseId": "dev_05",
+            "arm": "proposed",
+            "repetition": 2,
+            "state": "fixture_tool_refused",
+            "answer": null,
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3713,
+                  "outputTokens": 66
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 12200
+              }
+            ],
+            "durationMs": 1205,
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 11
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "dev_06",
+      "question": "Which current pilot opportunity needs a revised proposal? Check the current opportunities before assigning it and preserve ambiguity.",
+      "source": "Example Sales has explicit North and South pilot opportunities. An email says: \"The pilot needs a revised proposal.\" No pilot is named.",
+      "observations": [
+        {
+          "toolCallId": "tooluse_2SlFiPr9qn5xpgsRHIbWYs",
+          "operation": "opportunities",
+          "valueHash": "e901cedf70538fefd2606ab208452665fd5c5990817ae7f7db2676cc01bb58e7",
+          "value": {
+            "count": "2",
+            "scope": {
+              "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1"
+            },
+            "records": [
+              {
+                "name": "North pilot",
+                "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1",
+                "status": "open",
+                "openedAt": "2026-10-12T02:20:45.625Z",
+                "stageKey": "new",
+                "opportunityId": "b8cd8419-2a18-43d0-88ee-21d0f8556e1e"
+              },
+              {
+                "name": "South pilot",
+                "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1",
+                "status": "open",
+                "openedAt": "2026-10-12T02:20:45.628Z",
+                "stageKey": "new",
+                "opportunityId": "215c3771-cbe1-4c12-9cdf-3509bd117265"
+              }
+            ],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false
+          }
+        }
+      ],
+      "expectedOutcome": "Keep the conversation opportunity-unresolved or plural; ask for one targeted decision when action needs assignment. Preserve both opportunity stages.",
+      "forbiddenOutcome": "Choose first opportunity; create a new opportunity; update both stages.",
+      "arms": {
+        "baseline": [
+          {
+            "caseId": "dev_06",
+            "arm": "baseline",
+            "repetition": 1,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "The note references an email stating ",
+                  "kind": "conflict",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ],
+                  "exactResultToolCallIds": [
+                    "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                  ]
+                },
+                {
+                  "text": "There are currently two open pilot opportunities in the CRM — **North pilot** and **South pilot** — both at stage \"new\". The note contains an email stating \"The pilot needs a revised proposal,\" but no specific pilot is named in that message.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ],
+                  "exactResultToolCallIds": [
+                    "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                  ]
+                },
+                {
+                  "text": "Because the email does not identify which pilot requires the revised proposal, it is **ambiguous** whether the requirement applies to the North pilot, the South pilot, or both. The note and email alone are not sufficient to assign the action to one opportunity over the other without further clarification.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ],
+                  "exactResultToolCallIds": [
+                    "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 4429,
+                  "outputTokens": 265
+                },
+                "toolNames": [],
+                "inputBytes": 14829
+              }
+            ],
+            "durationMs": 4572,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "The note references an email stating ",
+                  "kind": "conflict",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ],
+                  "exactResultToolCallIds": [
+                    "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                  ]
+                },
+                {
+                  "text": "There are currently two open pilot opportunities in the CRM — **North pilot** and **South pilot** — both at stage \"new\". The note contains an email stating \"The pilot needs a revised proposal,\" but no specific pilot is named in that message.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ],
+                  "exactResultToolCallIds": [
+                    "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                  ]
+                },
+                {
+                  "text": "Because the email does not identify which pilot requires the revised proposal, it is **ambiguous** whether the requirement applies to the North pilot, the South pilot, or both. The note and email alone are not sufficient to assign the action to one opportunity over the other without further clarification.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ],
+                  "exactResultToolCallIds": [
+                    "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          },
+          {
+            "caseId": "dev_06",
+            "arm": "baseline",
+            "repetition": 2,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "A note records an email stating \"the pilot needs a revised proposal,\" but the email does not name which pilot.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ]
+                },
+                {
+                  "text": "There are currently two open pilot opportunities — \"North pilot\" and \"South pilot\" — both at the \"new\" stage. Because the source email names neither, it is ambiguous which one requires the revised proposal; the requirement could apply to either or both.",
+                  "kind": "conflict",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ],
+                  "exactResultToolCallIds": [
+                    "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 4429,
+                  "outputTokens": 181
+                },
+                "toolNames": [],
+                "inputBytes": 14829
+              }
+            ],
+            "durationMs": 3399,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "A note records an email stating \"the pilot needs a revised proposal,\" but the email does not name which pilot.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ]
+                },
+                {
+                  "text": "There are currently two open pilot opportunities — \"North pilot\" and \"South pilot\" — both at the \"new\" stage. Because the source email names neither, it is ambiguous which one requires the revised proposal; the requirement could apply to either or both.",
+                  "kind": "conflict",
+                  "citationWindowIds": [
+                    "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                  ],
+                  "exactResultToolCallIds": [
+                    "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          }
+        ],
+        "proposed": [
+          {
+            "caseId": "dev_06",
+            "arm": "proposed",
+            "repetition": 1,
+            "state": "complete",
+            "answer": {
+              "passages": [
+                {
+                  "text": "The CRM currently shows two open pilot opportunities at the 'new' stage: **North pilot** and **South pilot**. A note indicates that 'the pilot needs a revised proposal,' but it does not name which pilot is being referred to. Because both pilots are live and the source text is ambiguous, it is not possible to confidently assign the revised-proposal requirement to either one without further clarification.",
+                  "interpretation": "conflict",
+                  "references": [
+                    {
+                      "kind": "source",
+                      "id": "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                    },
+                    {
+                      "kind": "observation",
+                      "id": "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                    }
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3921,
+                  "outputTokens": 161
+                },
+                "toolNames": [],
+                "inputBytes": 12648
+              }
+            ],
+            "durationMs": 3286,
+            "rawCandidate": {
+              "passages": [
+                {
+                  "text": "The CRM currently shows two open pilot opportunities at the 'new' stage: **North pilot** and **South pilot**. A note indicates that 'the pilot needs a revised proposal,' but it does not name which pilot is being referred to. Because both pilots are live and the source text is ambiguous, it is not possible to confidently assign the revised-proposal requirement to either one without further clarification.",
+                  "interpretation": "conflict",
+                  "references": [
+                    {
+                      "kind": "source",
+                      "id": "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                    },
+                    {
+                      "kind": "observation",
+                      "id": "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                    }
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 11
+            },
+            "toolNames": []
+          },
+          {
+            "caseId": "dev_06",
+            "arm": "proposed",
+            "repetition": 2,
+            "state": "complete",
+            "answer": {
+              "passages": [
+                {
+                  "text": "The CRM currently shows two open pilot opportunities at the same stage — **North pilot** and **South pilot** — both in 'new' status. A source note indicates that 'the pilot needs a revised proposal,' but does not specify which pilot by name. Because the reference is ambiguous and both pilots are at an equivalent early stage with no distinguishing detail in the available evidence, it is not possible to reliably assign the revised-proposal requirement to one over the other. Both remain candidates until further context (e.g., a follow-up communication or an updated CRM stage) clarifies which pilot the note refers to.",
+                  "interpretation": "conflict",
+                  "references": [
+                    {
+                      "kind": "source",
+                      "id": "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                    },
+                    {
+                      "kind": "observation",
+                      "id": "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                    }
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3921,
+                  "outputTokens": 206
+                },
+                "toolNames": [],
+                "inputBytes": 12648
+              }
+            ],
+            "durationMs": 4093,
+            "rawCandidate": {
+              "passages": [
+                {
+                  "text": "The CRM currently shows two open pilot opportunities at the same stage — **North pilot** and **South pilot** — both in 'new' status. A source note indicates that 'the pilot needs a revised proposal,' but does not specify which pilot by name. Because the reference is ambiguous and both pilots are at an equivalent early stage with no distinguishing detail in the available evidence, it is not possible to reliably assign the revised-proposal requirement to one over the other. Both remain candidates until further context (e.g., a follow-up communication or an updated CRM stage) clarifies which pilot the note refers to.",
+                  "interpretation": "conflict",
+                  "references": [
+                    {
+                      "kind": "source",
+                      "id": "04d92216-8d54-4c1e-bde4-57d0d233b34a"
+                    },
+                    {
+                      "kind": "observation",
+                      "id": "tooluse_2SlFiPr9qn5xpgsRHIbWYs"
+                    }
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 11
+            },
+            "toolNames": []
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "dev_08",
+      "question": "Is the contract promise current or historical? Preserve the rejection of the old plan.",
+      "source": "New authored text: \"That old plan is no longer valid.\" Quoted 2025 message: \"I will send the contract Friday.\"",
+      "observations": [
+        {
+          "toolCallId": "tooluse_TNr9DLG59wu7o1ugcUHASn",
+          "operation": "opportunities",
+          "valueHash": "bfd5eadc14049f770600a8f991ece4db0fa13a416ec9a0b0e522d1dbb15b4766",
+          "value": {
+            "count": "0",
+            "scope": {
+              "firmId": "89e3fac1-a63e-4d9d-af74-f19f8d3a5d39"
+            },
+            "records": [],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false
+          }
+        }
+      ],
+      "expectedOutcome": "Treat the dated quote as historical evidence, not a new promise. Preserve the current rejection of the old plan.",
+      "forbiddenOutcome": "New commitment generated from quoted text; treating the old plan as current.",
+      "arms": {
+        "baseline": [
+          {
+            "caseId": "dev_08",
+            "arm": "baseline",
+            "repetition": 1,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "The contract promise — \"I will send the contract Friday\" — is presented in the note as a quoted 2025 message, meaning it is historical, not a current commitment. The speaker and exact original date are unverified.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                },
+                {
+                  "text": "The old plan has been explicitly rejected: the newer authored text in the same note states \"That old plan is no longer valid,\" superseding whatever arrangement that plan described.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                },
+                {
+                  "text": "Taken together, the contract delivery promise belongs to the older 2025 exchange (now historical), while the rejection of the old plan is the current, standing position recorded in the note. No live CRM opportunity was found to corroborate either element independently.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 4225,
+                  "outputTokens": 57
+                },
+                "toolNames": [
+                  "search_history"
+                ],
+                "inputBytes": 14370
+              },
+              {
+                "step": 2,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3252,
+                  "outputTokens": 243
+                },
+                "toolNames": [],
+                "inputBytes": 11811
+              }
+            ],
+            "durationMs": 8388,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "The contract promise — \"I will send the contract Friday\" — is presented in the note as a quoted 2025 message, meaning it is historical, not a current commitment. The speaker and exact original date are unverified.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                },
+                {
+                  "text": "The old plan has been explicitly rejected: the newer authored text in the same note states \"That old plan is no longer valid,\" superseding whatever arrangement that plan described.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                },
+                {
+                  "text": "Taken together, the contract delivery promise belongs to the older 2025 exchange (now historical), while the rejection of the old plan is the current, standing position recorded in the note. No live CRM opportunity was found to corroborate either element independently.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 2,
+              "allocatedCents": 23
+            },
+            "toolNames": [
+              "search_history"
+            ]
+          },
+          {
+            "caseId": "dev_08",
+            "arm": "baseline",
+            "repetition": 2,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "The contract promise — \"I will send the contract Friday\" — is a quoted 2025 message embedded within a 2026 note. It is therefore historical, not current: it was authored (per the source) in 2025 and merely cited in the newer note.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                },
+                {
+                  "text": "The old plan has been explicitly rejected: the 2026 note's authored text states \"That old plan is no longer valid,\" and that rejection stands.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                },
+                {
+                  "text": "Taken together, the record preserves the repudiation of the old plan while the contract promise remains a historical reference — there is no current CRM evidence confirming the contract was actually sent or that the 2025 commitment is still active.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 4225,
+                  "outputTokens": 254
+                },
+                "toolNames": [],
+                "inputBytes": 14370
+              }
+            ],
+            "durationMs": 4373,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "The contract promise — \"I will send the contract Friday\" — is a quoted 2025 message embedded within a 2026 note. It is therefore historical, not current: it was authored (per the source) in 2025 and merely cited in the newer note.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                },
+                {
+                  "text": "The old plan has been explicitly rejected: the 2026 note's authored text states \"That old plan is no longer valid,\" and that rejection stands.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                },
+                {
+                  "text": "Taken together, the record preserves the repudiation of the old plan while the contract promise remains a historical reference — there is no current CRM evidence confirming the contract was actually sent or that the 2025 commitment is still active.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "22ce680d-bb57-4003-8c13-0a612f10c092"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          }
+        ],
+        "proposed": [
+          {
+            "caseId": "dev_08",
+            "arm": "proposed",
+            "repetition": 1,
+            "state": "fixture_tool_refused",
+            "answer": null,
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3717,
+                  "outputTokens": 63
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 12189
+              }
+            ],
+            "durationMs": 1204,
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 11
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          },
+          {
+            "caseId": "dev_08",
+            "arm": "proposed",
+            "repetition": 2,
+            "state": "fixture_tool_refused",
+            "answer": null,
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3717,
+                  "outputTokens": 63
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 12189
+              }
+            ],
+            "durationMs": 1238,
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 11
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "dev_10",
+      "question": "What maintenance coordination need is supported by the retained sources?",
+      "source": "Source 1: \"Coordinating repair contractors across our rentals is taking too much time.\" Source 2: \"We like the website colors.\"",
+      "observations": [],
+      "expectedOutcome": "Topic retrieval identifies Source 1 as relevant to maintenance coordination and excludes Source 2; a cited answer ties the problem to the actual person/firm and source.",
+      "forbiddenOutcome": "Unsupported business need from Source 2; claim about scale or urgency not present.",
+      "arms": {
+        "baseline": [
+          {
+            "caseId": "dev_10",
+            "arm": "baseline",
+            "repetition": 1,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "The retained source records a pain point that coordinating repair contractors across rental properties is taking too much time — indicating a need for better maintenance contractor coordination and scheduling support across a rental portfolio.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "The second note in the same source (a preference for website colors) is unrelated to maintenance and does not support any coordination need.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3968,
+                  "outputTokens": 42
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 13588
+              },
+              {
+                "step": 2,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 2752,
+                  "outputTokens": 152
+                },
+                "toolNames": [],
+                "inputBytes": 10440
+              }
+            ],
+            "durationMs": 7185,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "The retained source records a pain point that coordinating repair contractors across rental properties is taking too much time — indicating a need for better maintenance contractor coordination and scheduling support across a rental portfolio.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "The second note in the same source (a preference for website colors) is unrelated to maintenance and does not support any coordination need.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 2,
+              "allocatedCents": 22
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          },
+          {
+            "caseId": "dev_10",
+            "arm": "baseline",
+            "repetition": 2,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "The retained source captures a pain point around repair contractor coordination: the contact noted that \"coordinating repair contractors across our rentals is taking too much time.\" This indicates a need for a solution — such as a CRM workflow or task-management feature — to streamline scheduling and communication with maintenance contractors across multiple rental properties.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "The second statement in the same note (",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "The second statement (",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "A second comment in the same note (",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "A separate remark in the note — \"We like the website colors\" — is unrelated to maintenance coordination and provides no actionable CRM signal on that topic.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3968,
+                  "outputTokens": 42
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 13588
+              },
+              {
+                "step": 2,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 2752,
+                  "outputTokens": 277
+                },
+                "toolNames": [],
+                "inputBytes": 10440
+              }
+            ],
+            "durationMs": 7563,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "The retained source captures a pain point around repair contractor coordination: the contact noted that \"coordinating repair contractors across our rentals is taking too much time.\" This indicates a need for a solution — such as a CRM workflow or task-management feature — to streamline scheduling and communication with maintenance contractors across multiple rental properties.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "The second statement in the same note (",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "The second statement (",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "A second comment in the same note (",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                },
+                {
+                  "text": "A separate remark in the note — \"We like the website colors\" — is unrelated to maintenance coordination and provides no actionable CRM signal on that topic.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6ea9a7e9-dcc7-425d-8daf-13afa90759e4"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 2,
+              "allocatedCents": 22
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          }
+        ],
+        "proposed": [
+          {
+            "caseId": "dev_10",
+            "arm": "proposed",
+            "repetition": 1,
+            "state": "fixture_tool_refused",
+            "answer": null,
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3491,
+                  "outputTokens": 62
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 11511
+              }
+            ],
+            "durationMs": 1153,
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 10
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          },
+          {
+            "caseId": "dev_10",
+            "arm": "proposed",
+            "repetition": 2,
+            "state": "fixture_tool_refused",
+            "answer": null,
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3491,
+                  "outputTokens": 62
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 11511
+              }
+            ],
+            "durationMs": 1219,
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 10
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "dev_11",
+      "question": "Was there a reply after Friday? What captured channels and coverage limits prevent a definitive answer?",
+      "source": "Captured email ends Friday. Phone/Messages are not imported. No later email reply is captured.",
+      "observations": [
+        {
+          "toolCallId": "tooluse_jX8ZWfpNKuOdrxSGnGphxE",
+          "operation": "reply_status",
+          "valueHash": "1964cd11c6d1acc01c72bf2d7c049284bf7ea490441b83a8c8fcc4d3027455fe",
+          "value": {
+            "scope": {
+              "firmId": "b176e5a8-137e-4ee3-8a82-559b8746a8df"
+            },
+            "coverage": {
+              "scope": "authorized_progress_receipts",
+              "semantic": "not_requested",
+              "acquisition": "partial"
+            },
+            "dateBasis": "provider_event_at",
+            "operation": "reply_status",
+            "truncated": false,
+            "unanswered": "not_established",
+            "verifiedOutgoingCount": "0",
+            "withoutVerifiedReplyCount": "0"
+          }
+        }
+      ],
+      "expectedOutcome": "Answer \"No reply found in captured email through Friday\" and disclose uncaptured channels and stale coverage. Useful partial result remains available.",
+      "forbiddenOutcome": "Definitive \"they did not reply\"; implied complete cross-channel coverage.",
+      "arms": {
+        "baseline": [
+          {
+            "caseId": "dev_11",
+            "arm": "baseline",
+            "repetition": 1,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "No email reply after Friday is captured in the retained record — the note explicitly states that captured email ends on Friday and no later email reply is present.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                },
+                {
+                  "text": "Two channel gaps prevent a definitive answer: (1) phone calls are not imported into the system, and (2) direct messages (e.g. SMS/iMessage or similar) are not imported either. Any reply through those channels would be invisible to this record.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                },
+                {
+                  "text": "The coverage is also limited to a selected excerpt of one note — it is not a full mailbox scan — so even within email there may be messages outside the imported scope. The absence of a captured reply therefore cannot be treated as proof that no reply was sent.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 4252,
+                  "outputTokens": 250
+                },
+                "toolNames": [],
+                "inputBytes": 14415
+              }
+            ],
+            "durationMs": 4905,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "No email reply after Friday is captured in the retained record — the note explicitly states that captured email ends on Friday and no later email reply is present.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                },
+                {
+                  "text": "Two channel gaps prevent a definitive answer: (1) phone calls are not imported into the system, and (2) direct messages (e.g. SMS/iMessage or similar) are not imported either. Any reply through those channels would be invisible to this record.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                },
+                {
+                  "text": "The coverage is also limited to a selected excerpt of one note — it is not a full mailbox scan — so even within email there may be messages outside the imported scope. The absence of a captured reply therefore cannot be treated as proof that no reply was sent.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          },
+          {
+            "caseId": "dev_11",
+            "arm": "baseline",
+            "repetition": 2,
+            "state": "complete",
+            "answer": {
+              "claims": [
+                {
+                  "text": "No email reply after Friday is captured in the retained record — the note explicitly states that captured email ends on Friday and no later email reply is present.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                },
+                {
+                  "text": "Two channel gaps prevent a definitive answer: (1) phone calls are not imported, and (2) Messages (e.g. SMS/iMessage or similar) are not imported. Any reply through either of those channels would be invisible to the system.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                },
+                {
+                  "text": "The coverage is also limited to selected excerpts rather than a full mailbox scan, so even within email there is no guarantee all messages have been ingested — meaning a reply could exist in un-imported or un-selected email as well.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 4252,
+                  "outputTokens": 243
+                },
+                "toolNames": [],
+                "inputBytes": 14415
+              }
+            ],
+            "durationMs": 4971,
+            "rawCandidate": {
+              "claims": [
+                {
+                  "text": "No email reply after Friday is captured in the retained record — the note explicitly states that captured email ends on Friday and no later email reply is present.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                },
+                {
+                  "text": "Two channel gaps prevent a definitive answer: (1) phone calls are not imported, and (2) Messages (e.g. SMS/iMessage or similar) are not imported. Any reply through either of those channels would be invisible to the system.",
+                  "kind": "fact",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                },
+                {
+                  "text": "The coverage is also limited to selected excerpts rather than a full mailbox scan, so even within email there is no guarantee all messages have been ingested — meaning a reply could exist in un-imported or un-selected email as well.",
+                  "kind": "inference",
+                  "citationWindowIds": [
+                    "6089e75b-6cec-4c72-b878-8769c3e49e69"
+                  ]
+                }
+              ],
+              "abstained": false
+            },
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 12
+            },
+            "toolNames": []
+          }
+        ],
+        "proposed": [
+          {
+            "caseId": "dev_11",
+            "arm": "proposed",
+            "repetition": 1,
+            "state": "fixture_tool_refused",
+            "answer": null,
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3761,
+                  "outputTokens": 67
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 12307
+              }
+            ],
+            "durationMs": 1276,
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 11
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          },
+          {
+            "caseId": "dev_11",
+            "arm": "proposed",
+            "repetition": 2,
+            "state": "fixture_tool_refused",
+            "answer": null,
+            "steps": [
+              {
+                "step": 1,
+                "acceptance": "accepted",
+                "usage": {
+                  "inputTokens": 3761,
+                  "outputTokens": 67
+                },
+                "toolNames": [
+                  "read_selected"
+                ],
+                "inputBytes": 12307
+              }
+            ],
+            "durationMs": 1313,
+            "budget": {
+              "startedSteps": 1,
+              "allocatedCents": 11
+            },
+            "toolNames": [
+              "read_selected"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "qualityAccepted": false,
+  "activation": false
+}
