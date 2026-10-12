@@ -17,7 +17,7 @@ it('presents copied text as reported evidence with separate event and copy dates
  const bound=adapter.inputBound!(request);
  expect(bound).not.toBeNull();
  const result=await adapter.runStep({...request,signal:new AbortController().signal});
- expect(suppliedContext).toMatchObject({context:[{windows:[{id:'w1',text:original,evidenceAuthority:{kind:'selected_unverified_text',inlineMetadata:'untrusted_source_content',humanAuthorship:'not_verified'},sourceMetadata:{eventTime:{at:'2026-10-01T14:00:00.000Z',basis:'supplied_or_parsed_event_date',independentlyVerifiedAuthoredTime:false},copyObservation:{at:'2026-10-12T02:00:00.000Z',basis:'copy_observation_time'}}}]}]});
+ expect(suppliedContext).toMatchObject({context:[{windows:[{id:'w1',text:original,interpretationLimits:{sourceStatements:'reported_not_independently_observed',inlineHeaders:'reported_text_not_envelope',coverageStatements:'reported_text_not_live_coverage',eventTime:'reported_not_verified_authored_time'},evidenceAuthority:{kind:'selected_unverified_text',inlineMetadata:'untrusted_source_content',humanAuthorship:'not_verified'},sourceMetadata:{eventTime:{at:'2026-10-01T14:00:00.000Z',basis:'supplied_or_parsed_event_date',independentlyVerifiedAuthoredTime:false},copyObservation:{at:'2026-10-12T02:00:00.000Z',basis:'copy_observation_time'}}}]}]});
  expect(result).toMatchObject({acceptance:'accepted',answer:{claims:[{citationWindowIds:[windowId]}]}});
  expect(request.transcript[0]!.windows[0]).toEqual({id:windowId,ordinal:1,source,text:original});
 });

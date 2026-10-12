@@ -39,10 +39,10 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
  const fixture=await createAuthFixture();let phase='transport_probe';
  try{
   const observations:unknown[]=[];
-  const actual=await boundedActualBedrock(budget,scope.modelVersion,observation=>{observations.push(observation);writeFileSync(resolve(directory,'private-transport-observations.json'),JSON.stringify(observations,null,2),{mode:0o600});},scope.scopeVersion===2?{thinking:'disabled'}:undefined);
+  const actual=await boundedActualBedrock(budget,scope.modelVersion,observation=>{observations.push(observation);writeFileSync(resolve(directory,'private-transport-observations.json'),JSON.stringify(observations,null,2),{mode:0o600});},scope.scopeVersion!==undefined?{thinking:'disabled'}:undefined);
   // One scoped, bounded transport probe precedes any truthful configured-model
   // attestation; it counts against the SAME aggregate ceiling and never uses Gmail.
-  const probe=await actual.surface.converse({modelId:scope.modelVersion,system:[{text:'Return JSON only: []. No tools.'}],messages:[{role:'user',content:[{text:'Synthetic diagnostic transport probe. Return [].'}]}],inferenceConfig:{maxTokens:32,temperature:0},...(scope.scopeVersion===2?{additionalModelRequestFields:{thinking:{type:'disabled'}}}:{})},new AbortController().signal);
+  const probe=await actual.surface.converse({modelId:scope.modelVersion,system:[{text:'Return JSON only: []. No tools.'}],messages:[{role:'user',content:[{text:'Synthetic diagnostic transport probe. Return [].'}]}],inferenceConfig:{maxTokens:32,temperature:0},...(scope.scopeVersion!==undefined?{additionalModelRequestFields:{thinking:{type:'disabled'}}}:{})},new AbortController().signal);
   const observed=probe as {usage?:{inputTokens?:number;outputTokens?:number};output?:{message?:{content?:{text?:string}[]}}};
   if(!Number.isInteger(observed.usage?.inputTokens)||!Number.isInteger(observed.usage?.outputTokens)||!observed.output?.message?.content?.some(item=>item.text))throw new Error('actual_transport_not_observed');
   writeFileSync(resolve(directory,'transport-observation.json'),JSON.stringify({modelVersion:scope.modelVersion,scopeSha256:sha(scopeBytes),usage:observed.usage,syntheticOnly:true}),{mode:0o600});
@@ -63,7 +63,7 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
   const command=(body:object)=>({...body,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
   const approvalDecision={consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,reviewedEvaluationReference:approval.reference,limitations:['representative_quality_unverified','limited_business_examples']};
   const common={enabled:false,expectedRevision:0,endpointId:route.endpointId,modelVersion:route.modelVersion,accessGrantVersion:route.accessGrantVersion,dataHandlingVersion:route.dataHandlingVersion,dailyCeilingCents:scope.maxCents,monthlyCeilingCents:scope.maxCents,inputTokenPriceMicros:Number.isInteger(pricing.inputTokenPriceMicros)?pricing.inputTokenPriceMicros:String(pricing.inputTokenPriceMicros),outputTokenPriceMicros:Number.isInteger(pricing.outputTokenPriceMicros)?pricing.outputTokenPriceMicros:String(pricing.outputTokenPriceMicros)};
-  expect((await post('/crm/processing/purpose/save',command(common))).status).toBe(200);
+  if(scope.extractionIds.length)expect((await post('/crm/processing/purpose/save',command(common))).status).toBe(200);
 
   expect((await post('/ask/purpose/save',command({...common,purpose:'answer',evaluationFingerprint:scope.labelsSha256,...CRM_SUPPORTED_AGENT_ASK_VERSIONS,agentLimits:configuration.answer!.agentLimits}))).status).toBe(200);
   expect((await post('/ask/purpose/activate',command({capability:'ask_answer',purpose:'answer',expectedRevision:1,approval:approvalDecision}))).body).toMatchObject({status:'accepted'});
@@ -84,7 +84,7 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
   }
   // All originals are committed under disabled extraction settings. Ordinary
   // workers may now process only the four explicit processing requests.
-  expect((await post('/crm/processing/purpose/activate',command({capability:'crm_extraction',expectedRevision:1,approval:approvalDecision}))).body).toMatchObject({status:'accepted'});
+  if(scope.extractionIds.length)expect((await post('/crm/processing/purpose/activate',command({capability:'crm_extraction',expectedRevision:1,approval:approvalDecision}))).body).toMatchObject({status:'accepted'});
   for(const {item,firmId,source,metadataRevision} of prepared){
    const outputs:Record<string,unknown>={caseId:item.caseId,expectedOutcome:item.expectedOutcome,forbiddenOutcome:item.forbiddenOutcome,humanQualityReview:'pending',modelVersion:scope.modelVersion,stage:scope.stage??'legacy_history_investigation',thinking:scope.thinking??'legacy_policy',pricing,inputLimitations:['selected_text_authorship_unverified','label_event_timezone_is_not_canonical_source_metadata; use only separately frozen question context or report unknown'],acquisition:'selected_unverified'};
    if(scope.extractionIds.includes(item.caseId)){
