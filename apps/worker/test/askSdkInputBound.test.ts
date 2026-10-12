@@ -1,4 +1,5 @@
 import {expect,it} from 'vitest';
+import {z} from 'zod';
 import {MockLanguageModelV3} from 'ai/test';
 import {createAskSdkStepAdapter} from '../src/providers/askAgentSdk.ts';
 it('counts the same actual SDK system/tools/encoded messages before provider dispatch',async()=>{
@@ -26,8 +27,8 @@ it('requests SDK schema-bound final output while preserving retrieval tools and 
  expect(request).toMatchObject({toolConfig:{toolChoice:{any:{}}}});
  const parsed=JSON.parse(JSON.stringify(request)) as {toolConfig:{tools:{toolSpec:{name:string}}[]};additionalModelRequestFields?:unknown};
  expect(parsed.toolConfig.tools.map(tool=>tool.toolSpec.name).sort()).toEqual(['browse_history','emit_answer','read_conversation','read_exact','read_selected','resolve_records','search_history','search_selected']);
- expect(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer')).toMatchObject({toolSpec:{strict:true,inputSchema:{json:{properties:{claims:{description:expect.stringContaining('Do not mix exactResults'),items:{properties:{text:{description:expect.stringContaining('Each factual clause')},citationWindowIds:{description:expect.stringContaining('not SQL-only state')}}}}}}}}});
- expect(JSON.stringify(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer'))).not.toMatch(/"(?:minLength|maxLength|minItems|maxItems|pattern)":/u);
+ expect(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer')).toMatchObject({toolSpec:{strict:true,inputSchema:{json:{properties:{claims:{description:expect.stringContaining('Mixed original and exact CRM facts'),items:{properties:{text:{description:expect.stringContaining('Each factual clause')},citationWindowIds:{description:expect.stringContaining('SQL clauses additionally need')}}}}}}}}});
+ expect(JSON.stringify(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer'))).toContain('exactResultToolCallIds');
  expect(adapter.inputBound!(finalInput)!.inputBytes).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(request)));
 });
 it('preserves known billing when an observed prose final answer violates structured output',async()=>{
@@ -97,4 +98,45 @@ it('keeps known and unknown billing isolated when the same adapter runs concurre
  const results=await Promise.all(['known-plain-call','cache-write-call'].map(question=>adapter.runStep({question,transcript:[],remainingSteps:1,maxOutputTokens:64,signal:new AbortController().signal})));
  expect(results[0]).toEqual({acceptance:'accepted',usage:{inputTokens:52,outputTokens:24},answer:{claims:[],abstained:true},toolCalls:[]});
  expect(results[1]).toEqual({acceptance:'unknown',usage:null,answer:null,toolCalls:[]});expect(ready).toBe(2);
+});
+it('sends only supported strict-tool schema keywords through the real Bedrock SDK wire',async()=>{
+ const {createAmazonBedrock}=await import('@ai-sdk/amazon-bedrock');let calls=0;let rejected:string[]=[];let observedRequest:unknown;
+ const unsupported=(value:unknown):string[]=>{if(Array.isArray(value))return value.flatMap(unsupported);if(value===null||typeof value!=='object')return [];return Object.entries(value).flatMap(([key,child])=>['minLength','maxLength','maxItems','minimum','maximum','multipleOf'].includes(key)||key==='minItems'&&child!==0&&child!==1?[key]:unsupported(child));};
+ const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async(_url,init)=>{
+  calls++;observedRequest=JSON.parse(String(init?.body));const request=z.object({toolConfig:z.object({tools:z.array(z.object({toolSpec:z.object({strict:z.boolean().optional(),inputSchema:z.object({json:z.unknown()})})}))})}).parse(observedRequest);rejected=request.toolConfig.tools.flatMap(tool=>tool.toolSpec.strict===true?unsupported(tool.toolSpec.inputSchema.json):[]);
+  // AWS documents immediate HTTP400 for unsupported strict schema keywords.
+  if(rejected.length)return new Response(JSON.stringify({message:'Unsupported strict JSON schema constraints'}),{status:400,headers:{'content-type':'application/json','x-amzn-errortype':'ValidationException'}});
+  return new Response(JSON.stringify({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'final',name:'emit_answer',input:{claims:[],abstained:true}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40},metrics:{latencyMs:1}}),{headers:{'content-type':'application/json'}});
+ }})('us.anthropic.claude-sonnet-4-6');
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});const input={question:'Synthetic?',transcript:[],remainingSteps:1,maxOutputTokens:1000};
+ expect(await adapter.runStep({...input,signal:new AbortController().signal})).toMatchObject({acceptance:'accepted',answer:{claims:[],abstained:true},toolCalls:[],usage:{inputTokens:30,outputTokens:10}});expect(rejected).toEqual([]);expect(calls).toBe(1);expect(adapter.inputBound!(input)!.inputBytes).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(observedRequest)));
+});
+it('keeps an actual SDK HTTP400 without reported usage unknown and never retries it',async()=>{
+ const {createAmazonBedrock}=await import('@ai-sdk/amazon-bedrock');let calls=0;
+ const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async()=>{calls++;return new Response(JSON.stringify({message:'Unsupported schema'}),{status:400,headers:{'content-type':'application/json','x-amzn-errortype':'ValidationException'}});}})('us.anthropic.claude-sonnet-4-6');
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});expect(await adapter.runStep({question:'Synthetic?',transcript:[],remainingSteps:1,maxOutputTokens:1000,signal:new AbortController().signal})).toEqual({acceptance:'unknown',usage:null,answer:null,toolCalls:[]});expect(calls).toBe(1);
+});
+it('round-trips short original and exact citation handles through the real SDK without changing canonical evidence',async()=>{
+ const {createAmazonBedrock}=await import('@ai-sdk/amazon-bedrock');const windowId='05817032-268c-4647-989d-43398e32fbd7';const sourceId='08f0a939-4961-420e-a70c-06c69d101daa';let calls=0;let body='';
+ const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async(_url,init)=>{calls++;body=String(init?.body);return new Response(JSON.stringify({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'response',name:calls===1?'read_selected':'emit_answer',input:calls===1?{windowIds:['w7']}:{claims:[{text:'A supported mixed interpretation.',kind:'inference',citationWindowIds:['w7'],exactResultToolCallIds:['e1']}],abstained:false}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40},metrics:{latencyMs:1}}),{headers:{'content-type':'application/json'}});}})('us.anthropic.claude-sonnet-4-6');
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ const input={question:'What is supported?',transcript:[{windows:[{id:windowId,ordinal:7,source:{kind:'selected_note',sourceId},text:'Original evidence.',evidenceAuthority:{kind:'selected_unverified_text'}}]},{toolCallId:'actual-exact-call',name:'read_exact',input:{operation:'tasks'},result:{count:'1',evidenceAuthority:{kind:'current_exact_crm_state',toolCallId:'actual-exact-call',citationAuthority:'exact_result_only'}}}],maxOutputTokens:1000};
+ expect(await adapter.runStep({...input,remainingSteps:2,signal:new AbortController().signal})).toMatchObject({acceptance:'accepted',toolCalls:[{name:'read_selected',input:{windowIds:[windowId]}}]});expect(body).toContain('w7');expect(body).not.toContain(windowId);
+ const last={...input,remainingSteps:1};expect(await adapter.runStep({...last,signal:new AbortController().signal})).toMatchObject({acceptance:'accepted',answer:{claims:[{citationWindowIds:[windowId],exactResultToolCallIds:['actual-exact-call']}]},toolCalls:[]});expect(adapter.inputBound!(last)!.inputBytes).toBeGreaterThanOrEqual(Buffer.byteLength(body));expect(calls).toBe(2);
+});
+it('maps identical short handles privately for concurrent calls and never borrows parent-history citation authority',async()=>{
+ const first='05817032-268c-4647-989d-43398e32fbd7',second='15928043-379d-4758-989d-43398e32fbd7',parent='26939054-48ae-4869-989d-43398e32fbd7';
+ const model=new MockLanguageModelV3({doGenerate:async()=>({content:[{type:'tool-call',toolCallId:'out',toolName:'emit_answer',input:'{"claims":[{"text":"Evidence.","kind":"fact","citationWindowIds":["w1"]}],"abstained":false}'}],finishReason:{unified:'tool-calls',raw:'tool_use'},usage:{inputTokens:{total:52,noCache:52,cacheRead:0,cacheWrite:0},outputTokens:{total:24,text:24,reasoning:0}},warnings:[]})});
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ const results=await Promise.all([first,second].map(id=>adapter.runStep({question:'Evidence?',transcript:[{history:{windows:[{id:parent,ordinal:1,source:{kind:'selected_note'},text:'Parent-only history.',evidenceAuthority:{kind:'selected_unverified_text'}}]}},{windows:[{id,ordinal:1,source:{kind:'selected_note'},text:'Current evidence.',evidenceAuthority:{kind:'selected_unverified_text'}}]}],remainingSteps:1,maxOutputTokens:64,signal:new AbortController().signal})));
+ expect(results[0]).toMatchObject({answer:{claims:[{citationWindowIds:[first]}]}});expect(results[1]).toMatchObject({answer:{claims:[{citationWindowIds:[second]}]}});
+});
+it('keeps short handles stable when later server tool results add windows and leaves unknown citations invalid',async()=>{
+ const old='05817032-268c-4647-989d-43398e32fbd7',fresh='15928043-379d-4758-989d-43398e32fbd7';
+ let seen='';const model=new MockLanguageModelV3({doGenerate:async input=>{seen=JSON.stringify(input.prompt);return {content:[{type:'tool-call',toolCallId:'out',toolName:'emit_answer',input:'{"claims":[{"text":"Evidence.","kind":"fact","citationWindowIds":["w7","w11","w999","05817032-268c-4aa-989d-43398e32fbd7"],"exactResultToolCallIds":["e2","e999"]}],"abstained":false}'}],finishReason:{unified:'tool-calls',raw:'tool_use'},usage:{inputTokens:{total:52,noCache:52,cacheRead:0,cacheWrite:0},outputTokens:{total:24,text:24,reasoning:0}},warnings:[]};}});
+ const window=(id:string,ordinal:number)=>({id,ordinal,source:{kind:'selected_note'},text:'Evidence.',evidenceAuthority:{kind:'selected_unverified_text'}});
+ const exact=(id:string)=>({toolCallId:id,name:'read_exact',input:{operation:'tasks'},result:{evidenceAuthority:{kind:'current_exact_crm_state',toolCallId:id}}});
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ const result=await adapter.runStep({question:'Evidence?',transcript:[{windows:[window(old,7)]},exact('first-exact'),{toolCallId:'browse',name:'browse_history',input:{limit:2},result:{windows:[window(fresh,11),window(old,7)]}},exact('second-exact')],remainingSteps:1,maxOutputTokens:64,signal:new AbortController().signal});
+ expect(result).toMatchObject({answer:{claims:[{citationWindowIds:[old,fresh,'w999','05817032-268c-4aa-989d-43398e32fbd7'],exactResultToolCallIds:['second-exact','e999']}]}});expect(seen).toContain('w7');expect(seen).toContain('w11');expect(seen).not.toContain(old);expect(seen).not.toContain(fresh);
 });

@@ -36,7 +36,7 @@ it('uses ordinary configured AI SDK composition, host history tools and current 
   let calls=0;const observedPrompts:string[]=[];
   const model=new MockLanguageModelV3({doGenerate:async input=>{
    calls++;const prompt=JSON.stringify(input.prompt);observedPrompts.push(prompt);
-   const ids=[...prompt.matchAll(/"id":"([a-f0-9-]{36})"/gu),...prompt.matchAll(/\\"id\\":\\"([a-f0-9-]{36})\\"/gu)].map(match=>match[1]!);
+   const ids=[...prompt.matchAll(/"id":"(w[1-9]\d*|[a-f0-9-]{36})"/gu),...prompt.matchAll(/\\"id\\":\\"(w[1-9]\d*|[a-f0-9-]{36})\\"/gu)].map(match=>match[1]!);
    const tool=prompt.includes('Resolve repeated name')?{type:'tool-call' as const,toolCallId:'resolve-ambiguous-firm',toolName:'resolve_records',input:JSON.stringify({query:'Repeated Example',kind:'firm',limit:10})}:calls===1?{type:'tool-call' as const,toolCallId:'find-retained-repairs',toolName:'search_history',input:JSON.stringify({query:'repairs',limit:5})}:calls===2?{type:'tool-call' as const,toolCallId:'read-retained-context',toolName:'read_conversation',input:JSON.stringify({sourceId:imported.source.sourceId,kind:'selected_note',limit:3})}:null;
    return {content:tool?[tool]:[{type:'text' as const,text:JSON.stringify({claims:[{text:'The retained source requests faster repairs.',kind:'fact',citationWindowIds:[ids.at(-1)!]}],abstained:false})}],finishReason:{unified:tool?'tool-calls' as const:'stop' as const,raw:tool?'tool_use':'end_turn'},usage:{inputTokens:{total:50,noCache:50,cacheRead:0,cacheWrite:0},outputTokens:{total:10,text:10,reasoning:0}},warnings:[]};
   }});

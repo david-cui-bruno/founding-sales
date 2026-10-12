@@ -6,8 +6,8 @@ export const askPorts: AskPorts = {
   sessionCreate:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.sessionCreate',input);},
   sessionTurn:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.sessionTurn',input);},
   sessionChange:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.sessionChange',input);},
-  sessionRead:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.read('ask.sessionRead',input);},
-  sessionList:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.read('ask.sessionList',input);},
+  sessionRead:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.read('ask.sessionRead',{...input,includeExactResultCitations:true});},
+  sessionList:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.read('ask.sessionList',{...input,includeExactResultCitations:true});},
 
   actionCreate:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.actionCreate',input);},
   historyChange:async input=>{const bridge=operations();if(bridge===undefined)throw new Error('unavailable');return await bridge.command('ask.historyChange',input);},
@@ -27,7 +27,7 @@ export const askPorts: AskPorts = {
   answerRead: async input => {
     const bridge = operations();
     if (bridge === undefined) throw new Error('unavailable');
-    return await bridge.read('ask.answerRead',input);
+    return await bridge.read('ask.answerRead',{...input,includeExactResultCitations:true});
   },
   answerSourceRead: async input => {
     const bridge = operations();

@@ -96,10 +96,13 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
     const requested=await post('/ask/answers/request',command({question:scope.askQuestions[item.caseId],execution:'agent_v1',...syntheticAskStageScope(scope.stage,firmId,{...source,kind:'selected_note'})}));expect(requested.status).toBe(200);
     const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
     await runOnce(db,{registry,owner:'approved-synthetic-ask',limit:10});
-    outputs['ask']=(await post('/ask/answers/read',{requestId})).body;
+    outputs['ask']=(await post('/ask/answers/read',{requestId,includeExactResultCitations:true})).body;
     outputs['diagnostics']=(await post('/ask/answers/diagnostics',{requestId})).body;
    }
    writeFileSync(resolve(directory,`${item.caseId}.json`),JSON.stringify(outputs,null,2),{mode:0o600,flag:'wx'});
+   // An ambiguous attempt keeps its full allocation and ends this batch. Do not
+   // dispatch further cases against an unverified failing provider boundary.
+   if(['ask','extraction'].some(key=>{const result=outputs[key];return typeof result==='object'&&result!==null&&'state' in result&&result.state==='unknown_acceptance';})){phase='unknown_acceptance_stopped';throw new Error('synthetic_unknown_acceptance_stopped');}
    expect((await post('/crm/imports/delete',command({sourceId:source.sourceId,expectedSourceRevision:source.revision,expectedMetadataRevision:metadataRevision}))).status).toBe(200);
   }
   phase='complete_candidates_human_review_pending';

@@ -135,7 +135,7 @@ export function AskAnswer({
       setOpened(null);
       sourceEpoch.current++;
       try {
-        const fresh = await answerRead({ requestId: id });
+        const fresh = await answerRead({ requestId: id, includeExactResultCitations: true });
         if (captured !== epoch.current) return;
         if (fresh.requestId !== id) throw new Error("request_changed");
         setResult(fresh);
@@ -513,7 +513,8 @@ export function AskAnswer({
       )}
       {result?.state === "complete" && result.answer !== null && (
         <div>
-          <h2>Explanation from selected copies</h2>
+          <h2>{result.answer.resultVersion === "agent_v1" ? "AI answer" : "Explanation from selected copies"}</h2>
+          {result.answer.resultVersion === "agent_v1" && <p>AI-generated interpretation · Provisional quality. Check original evidence and dated CRM observations before relying on it.</p>}
           <p>
             Input coverage: {result.answer.coverage.input}. Semantic coverage:{" "}
             {result.answer.coverage.semantic}. Acquisition coverage:{" "}
@@ -547,6 +548,7 @@ export function AskAnswer({
         return (
           <section
             key={proof.toolCallId}
+            id={`ask-exact-${result.requestId}-${encodeURIComponent(proof.toolCallId)}`}
             aria-label={`Exact ${proof.operation}`}
           >
             <h3>Exact {proof.operation.replace("_", " ")}</h3>
@@ -559,6 +561,13 @@ export function AskAnswer({
               answer.
             </p>
             {"count" in value && <p>Count: {value.count}</p>}
+            {value.operation === "opportunities" && value.records.map(record => (
+              <article key={record.opportunityId}>
+                <h4>{record.name ?? "Unnamed opportunity"}</h4>
+                <p>Status: {record.status} · Stage: {record.stageKey}</p>
+                <p>Opened: {record.openedAt}</p>
+              </article>
+            ))}
             {value.operation === "tasks" &&
               value.countBasis === "lower_bound" && (
                 <p>
@@ -582,22 +591,28 @@ export function AskAnswer({
       {result?.state === "complete" &&
         result.answer?.claims.map((claim, index) => (
           <div key={index}>
-            <p>
+            {(claim.kind === "inferred" || claim.kind === "inference" || claim.kind === "conflict" || result.answer?.resultVersion !== "agent_v1") && <p>
               {claim.kind === "inferred" || claim.kind === "inference"
-                ? "Inference from source evidence"
+                ? result.answer?.resultVersion === "agent_v1" ? "Inference" : "Inference from source evidence"
                 : claim.kind === "conflict"
-                  ? "Conflicting source evidence"
+                  ? "Conflicting evidence"
                   : claim.verification === "cited_unverified"
                     ? "Cited interpretation; verify against original evidence"
                     : "Supported by source evidence"}
-            </p>
+            </p>}
             <p>{claim.text}</p>
             <button
-              disabled={!enabled || !ports.actionCreate}
-              onClick={() => setFinding({ kind: "answer_claim", index })}
+              disabled={!enabled || !ports.actionCreate || (claim.exactResultToolCallIds?.length ?? 0) > 0}
+              onClick={() => {
+                if ((claim.exactResultToolCallIds?.length ?? 0) === 0) setFinding({ kind: "answer_claim", index });
+              }}
             >
               Act on claim {index + 1}
             </button>
+            {(claim.exactResultToolCallIds?.length ?? 0) > 0 && (
+              <p>This claim combines original evidence with a dated CRM observation. Use manual work to choose the next action.</p>
+            )}
+            <p>Original evidence</p>
             {claim.citationWindowIds.map((id, citation) => (
               <button
                 key={id}
@@ -609,6 +624,11 @@ export function AskAnswer({
                 Open citation {citation + 1} for claim {index + 1}
               </button>
             ))}
+            {claim.exactResultToolCallIds?.map(id => {
+              const proof = result.answer?.exactResults?.find(item => item.toolCallId === id);
+              if (!proof || !askResponseSchema.safeParse(proof.value).success) return <p key={id}>Exact CRM observation unavailable.</p>;
+              return <p key={id}><a href={`#ask-exact-${result.requestId}-${encodeURIComponent(id)}`}>Exact CRM observation: {proof.operation.replace("_", " ")}</a></p>;
+            })}
           </div>
         ))}
       {result?.fallback !== null && result?.fallback !== undefined && (

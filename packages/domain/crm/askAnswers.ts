@@ -2,7 +2,7 @@ import {readAskScopedExact} from './askInvestigationRecords.ts';
 import {readAskExecutionEvidence} from './askExecutionEvidence.ts';
 import {askToolFirmIds} from './askAgentScope.ts';
 import {askAgentScopeSchema} from '@fss/contracts';
-import {askIdentityClarificationSchema,askSupportedWorkSchema,askExplicitCorpusScopeSchema,askGroundedAnswerSchema,askAnswerAcknowledgmentSchema,askAnswerRequestPayloadSchema,askAnswerReadResultSchema,askAnswerSourceResultSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAnswerRequest} from '@fss/contracts';
+import {askIdentityClarificationSchema,askSupportedWorkSchema,askExplicitCorpusScopeSchema,askGroundedAnswerSchema,askAnswerAcknowledgmentSchema,askAnswerRequestPayloadSchema,askAnswerReadResultSchema,askAnswerSourceResultSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAnswerRequest,type AskAnswerReadResult} from '@fss/contracts';
 import {readAsk} from './ask.ts';
 import {askFingerprint} from './askAnswerAuthority.ts';
 import {resolveAskAgentScope} from './askAgentScope.ts';
@@ -97,6 +97,10 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
  const fallback=input.data.scope.sources.length===0?null:await readAskCorpus(context,{scope:askExplicitCorpusScopeSchema.parse(input.data.scope),query:input.data.question,limit:20});
  if((fallback===null&&input.data.scope.sources.length>0)||!await activeIdentityActor(context))return unavailable();
  const finalAnswer=row.state==='complete'?askGroundedAnswerSchema.parse(row.result):null;
+ const mixedReferences=finalAnswer?.claims.flatMap(claim=>claim.exactResultToolCallIds??[])??[];
+ const storedExact=finalAnswer?.exactResults??[];
+ const storedExactIds=new Set(storedExact.map(exact=>exact.toolCallId));
+ if(mixedReferences.length>0&&(finalAnswer?.resultVersion!=='agent_v1'||storedExactIds.size!==storedExact.length||finalAnswer.claims.some(claim=>new Set(claim.exactResultToolCallIds??[]).size!==(claim.exactResultToolCallIds??[]).length)||mixedReferences.some(id=>!storedExactIds.has(id))))return unavailable();
  const completed=askSupportedWorkSchema.safeParse(finalAnswer?.exactResults?{exactResults:finalAnswer.exactResults}:row['validated_progress']);
  const intentFirmIds=askToolFirmIds(intent.success?intent.data:null,originals.data.firmIds);
  const exactResults=[];
@@ -108,6 +112,17 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
   const refreshed=intent.success?await readAskScopedExact(context,intent.data,{operation:exact.operation,...firmId?{firmId}:{},limit:20,status:'all'}):firmId?await readAsk(context,exact.operation==='opportunities'?{operation:'opportunities',scope:{firmId},limit:20,status:'all'}:exact.operation==='tasks'?{operation:'tasks',scope:{firmId},limit:20}:{operation:'reply_status',scope:{firmId}}):null;
   if(refreshed!==null&&askFingerprint(refreshed)===exact.valueHash)exactResults.push(exact);
  }
+ const currentExactIds=new Set(exactResults.map(exact=>exact.toolCallId));
+ if(mixedReferences.some(id=>!currentExactIds.has(id)))return askAnswerReadResultSchema.parse({...metadata,state:'stale',reason:'source_changed',question:null,fallback:null,answer:null});
  const clarification=askIdentityClarificationSchema.safeParse(row['clarification']);
  return askAnswerReadResultSchema.parse({...metadata,question:input.data.question,fallback,...clarification.success?{clarification:clarification.data}:{},...exactResults.length?{supportedWork:{exactResults}}:{},answer:finalAnswer===null?null:{...finalAnswer,...finalAnswer.exactResults?{exactResults,missingEvidence:exactResults.length===finalAnswer.exactResults.length?finalAnswer.missingEvidence:[...new Set([...finalAnswer.missingEvidence,'exact_state_changed'])]}:{}}});
+}
+
+/** Older strict readers cannot express mixed proof. Never downgrade SQL-derived
+ * narrative to an original-only claim or shift its stored action index. */
+export function projectAskAnswerForClient(value:AskAnswerReadResult,includeExactResultCitations:boolean):AskAnswerReadResult{
+ if(includeExactResultCitations)return value;
+ if(value.answer?.claims.some(claim=>(claim.exactResultToolCallIds?.length??0)>0))return askAnswerReadResultSchema.parse({requestId:value.requestId,version:value.version,createdAt:value.createdAt,state:'unavailable',reason:'unsupported_answer',question:value.question,fallback:value.fallback,answer:null});
+ if(value.answer===null)return value;
+ return {...value,answer:{...value.answer,claims:value.answer.claims.map(claim=>{const legacy={...claim};delete legacy.exactResultToolCallIds;return legacy;})}};
 }

@@ -1,5 +1,14 @@
 # Current operating state
 
+## October12 source continuation and delegated output review
+
+[PR583](https://github.com/david-cui-bruno/founding-sales/pull/583) merged as `0f41fa5f33f4fcdf5814890f812c0bc5fe8e11e3` at01:37:19UTC after exact `1ac34b83` gate/image checks passed. No schema delta: source remains104, with production release hold preserved. Eight execution issues remain #425/#438/#460/#466/#549/#550/#551/#552; #548 is closed as preparation only.
+
+The authorized synthetic Sonnet4.6/Haiku4.5 campaign has144 started calls and1435c conservative allocation across eight separately frozen grants; this is not invoiced cost and earlier allowances remain separately consumed. On identical final source `1ac34b83`, Sonnet returned six complete Ask responses and four complete extraction generations (18calls/229c); Haiku returned four Ask responses, refused two uncited inferences, and four complete extraction generations (23calls/141c). Sonnet no longer commitment-types the conditional offer in this run; its inferred need category remains a usefulness concern. Haiku still emits a stated commitment for the offer and fails that critical label. Sonnet's SQL stage values are accurate but borrow a note citation; this is a citation/proof-class mismatch, not an invented stage or a stage write. No vectors, unseen holdout or representative quality is established.
+
+David delegated answer review to Codex, identifying awkward phrasing despite the right general idea. Codex judged the results to need improvement; no owner usefulness acceptance or activation is recorded. The next source repair adds explicit mixed original/SQL references and separate UI proof, current-value invalidation, legacy projection and mixed-action refusal; plain language guidance moves technical qualifiers into product metadata while retaining material uncertainty. Controlled tests do not attest fresh actual output quality. Preserve all sending safeguards and the held backlog release; no Gmail data, production, sending or activation was authorized by synthetic funding.
+
+
 ## Latest source and audit checkpoint — October 11, after PR582
 
 Continuation: [#548](https://github.com/david-cui-bruno/founding-sales/issues/548) is closed as initial evaluation preparation. Its duplicated actual-output review moved to #550/#551 and remains required before affected #552 Enable. Twelve prior-reviewed synthetic development labels stay frozen; eight real development and ten independent holdout allocations remain unbound. No useful actual output, representative quality, unseen holdout, paid allowance, release or activation is accepted by preparation closure. Eight execution issues remain #425/#438/#460/#466/#549/#550/#551/#552. [PR583](https://github.com/david-cui-bruno/founding-sales/pull/583) contains the source continuation; its final compatibility repair and exact CI are pending. Earlier counts below describe their stated checkpoints.
