@@ -46,6 +46,10 @@ function modelProvenance(source: z.infer<typeof sourceSchema>) {
     },
   };
 }
+/** Shared model-facing labels for any configured step adapter. */
+export function projectAskOriginalEvidence<T extends { source: z.infer<typeof sourceSchema> }>(window: T) {
+  return { ...window, ...modelProvenance(window.source) };
+}
 function windows(value: unknown): unknown[] {
   const list = z.object({ windows: z.array(z.unknown()) }).passthrough().safeParse(value);
   return list.success ? list.data.windows : [];
@@ -97,7 +101,7 @@ export function projectAskModelEvidence(transcript: readonly unknown[]) {
   function projectWindow(value: unknown) {
     const window = windowSchema.safeParse(value);
     return window.success && originalAliases.has(window.data.id)
-      ? { ...window.data, id: originalAliases.get(window.data.id)!, ...modelProvenance(window.data.source) }
+      ? { ...projectAskOriginalEvidence(window.data), id: originalAliases.get(window.data.id)! }
       : value;
   }
   function projectWindows(value: unknown) {
