@@ -179,6 +179,10 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    let currentIndependent=false;try{currentIndependent=options.revalidatePurpose?await options.revalidatePurpose(context,authorityOf(row))===true:options.allowControlledEvaluation===true;}catch{currentIndependent=false;}
    if(bound(source,dispatch.text)!==reserved.inputTokens||!publicationIndependent||!currentIndependent){await setState(context,row.id,'stale','source_or_authority_changed');return;}
    if(resolved===null||currentContext===null||row.authorization_hash!==authorizationHash||processingContextHash(currentContext)!==row.context_hash||capturedContext===null||!sameProcessingContext(capturedContext,currentContext)||p===null||!samePurposeSnapshot(p,r)||!await fenced(input)){await setState(context,row.id,'stale','source_or_authority_changed');return;}
+   // Mail interpretation includes observed headers/date/ranges as well as raw text.
+   // Re-read under the already reverified native authority: unchanged text hash
+   // alone cannot prove that this complete model evidence remained current.
+   if(source.kind==='mail'&&(mailAuthority===null||await mailEvidence.loadOriginalInput(context,mailAuthority)!==dispatch.text)){await setState(context,row.id,'stale','source_or_authority_changed');return;}
    if(!await centsWithin(context,p,await databaseNow(context),await workspaceBusinessZone(context),0,options.adapter?.providerKey??'unavailable')){await setState(context,row.id,'failed','budget_authority_changed');return;}
    if(validUsage&&answer.usage!==null&&(bounds===undefined||answer.usage.inputTokens>bounds.max_input_tokens||answer.usage.outputTokens>bounds.max_output_tokens)){await setState(context,row.id,'failed','provider_usage_exceeded');return;}
    const claims=claimsSchema.safeParse(answer.claims);

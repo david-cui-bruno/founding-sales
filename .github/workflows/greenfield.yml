@@ -18,7 +18,7 @@ jobs:
         shell: bash
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:0.8.2-pg16-trixie@sha256:fce8fb583b92ef8af5150b373a96415d46a8cd38ba09b38efeea17c8b4c7d782
         env:
           # A throwaway credential for a container that exists for one job and is
           # reachable only from it. Nothing in the repository depends on this value.
@@ -34,6 +34,8 @@ jobs:
     env:
       # The test harness adopts this cluster instead of starting embedded-postgres.
       FSS_TEST_POSTGRES_URL: postgresql://postgres:greenfield-ci@127.0.0.1:5432/postgres
+      # Native vector tests install the extension only in their owned fixtures.
+      FSS_TEST_REQUIRE_PGVECTOR: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

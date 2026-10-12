@@ -13,6 +13,7 @@ import {askFingerprint,readAskPurpose} from './askAnswerAuthority.ts';
 import type {AskAdapterRoute,AskPurposeSnapshot,AskPurposeProofInput} from './askAnswerPorts.ts';
 import {lockAskLifecycle} from './askAnswerLifecycle.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
+import {rankCanonicalVectors} from './askVectorDistance.ts';
 const mail=createNativeCrmMailEvidence();
 const reviewPermitted=(scope:AskAgentScope,review:string)=>review==='current'||scope.kind==='business'||scope.kind==='selected';
 const hash=(text:string)=>createHash('sha256').update(text).digest('hex');
@@ -83,7 +84,7 @@ export async function searchCanonicalIndex(context:RepositoryContext,input:{elig
  const actor=context.scope.actor;const empty={windows:[],coverage:{state:'unavailable' as const,eligibleSourceCount:input.eligibleSources.length,indexedSourceCount:0,staleCount:0}};
  if(actor.kind!=='user'||!await activeIdentityActor(context)||!Number.isInteger(input.limit)||input.limit<1||input.limit>20||!input.purpose.embeddingDimensions||input.queryVector.length!==input.purpose.embeddingDimensions||input.queryVector.some(value=>!Number.isFinite(value))||input.queryVector.every(value=>value===0)||!Number.isFinite(input.queryVector.reduce((sum,value)=>sum+value*value,0)))return empty;
  const purpose=await readAskPurpose(context,'embedding');if(!purpose||!isDeepStrictEqual(purpose,input.purpose))return empty;
- const eligible=input.eligibleSources.slice(0,1000);const rows=(await context.db.query<Record<string,unknown>>(`SELECT w.*, (SELECT sum(a*b)/nullif(sqrt(sum(a*a))*sqrt(sum(b*b)),0) FROM unnest(w.embedding,$5::double precision[]) pair(a,b)) AS score FROM crm_ask_canonical_windows w WHERE w.workspace_id=$1 AND w.owner_user_id=$2 AND w.state='current' AND w.config_fingerprint=$3 AND w.dimensions=$4 AND EXISTS(SELECT 1 FROM jsonb_to_recordset($6::jsonb) r(kind text,"sourceId" uuid,revision integer,"contentHash" text) WHERE r.kind=w.source_kind AND r."sourceId"=w.source_id AND r.revision=w.source_revision AND r."contentHash"=w.source_hash) ORDER BY score DESC NULLS LAST,w.source_id,w.locator LIMIT 1000`,[context.scope.workspaceId,actor.userId,askFingerprint({purpose,route:input.route}),input.queryVector.length,[...input.queryVector],JSON.stringify(eligible)])).rows;
+ const eligible=input.eligibleSources.slice(0,1000);const {rows}=await rankCanonicalVectors(context.db,{workspaceId:context.scope.workspaceId,ownerUserId:actor.userId,configFingerprint:askFingerprint({purpose,route:input.route}),queryVector:input.queryVector,eligibleSources:eligible});
  const windows:{source:CanonicalSourceReference;locator:string;text:string;score:number}[]=[];const indexed=new Set<string>();let staleCount=0;
  for(const row of rows){const source=eligible.find(source=>source.kind===row['source_kind']&&source.sourceId===row['source_id']);if(!source)continue;const original=await indexOriginal(context,source);const window=original?.windows.find(window=>window.locator===row['locator']);
  if(!window||hash(window.text)!==row['text_hash']||processingContextHash(original!.context)!==row['context_hash']||!isDeepStrictEqual(original!.closure,row['original_access_closure'])){staleCount++;continue;}

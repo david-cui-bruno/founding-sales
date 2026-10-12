@@ -13,5 +13,9 @@ export async function routeCrmProgress(request:ApiRequest,options:RoutingOptions
  if(request.method!=='POST')return {status:405,body:redactError('method_not_allowed')};
  const parsed=crmProgressReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
  const read=await withTransaction(options.auth.db,()=>readCrmProgress(scoped.context,parsed.data));
- return read===null?{status:404,body:redactError('not_found')}:{status:200,body:read};
+ if(read===null)return {status:404,body:redactError('not_found')};
+ // Previously admitted desktops decode an exact strict version1 shape.
+ // New observations are an explicit read extension, never unsolicited fields.
+ const body=parsed.data.includeCommunicationObservations===true?read:{version:read.version,events:read.events,truncated:read.truncated,coverage:read.coverage};
+ return {status:200,body};
 }

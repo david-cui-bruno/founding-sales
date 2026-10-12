@@ -1,6 +1,7 @@
 import {seedFirm} from './support/crmSeed.ts';
 import { createHash,randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
+import { createBedrockCrmExtractionAdapter } from '../../worker/src/providers/crmBedrock.ts';
 import { createNativeCrmMailEvidence } from '@fss/domain/crm/nativeMailEvidence.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { enqueueJob, claimJobs } from '@fss/domain/jobs/jobStore.ts';
@@ -110,7 +111,7 @@ it('reads exact native copied mail evidence after disconnect without granting pr
   await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[workspaceId]);
   expect((await commandPost('/crm/processing/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,source})).status).toBe(200);
   let modelCalls=0;
-  const extraction=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{ allowControlledEvaluation:true,mailEvidence:verifiedPort,adapter:{endpointId:'mail-evaluation',modelVersion:'fixture-mail-v1',accessGrantVersion:'fixture-mail-grant',dataHandlingVersion:'fixture-mail-partial-policy',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async input=>{modelCalls++;expect(input.text).toContain('"completeness":"partial"');return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:30},claims:[{kind:'need',interpretation:'Maintenance discussion requested',status:'stated',locator:'text:0:8',quote:'Could we'}]};}}}});
+  const extraction=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{ allowControlledEvaluation:true,mailEvidence:verifiedPort,adapter:{endpointId:'mail-evaluation',modelVersion:'fixture-mail-v1',accessGrantVersion:'fixture-mail-grant',dataHandlingVersion:'fixture-mail-partial-policy',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async input=>{modelCalls++;expect(JSON.parse(input.text)).toMatchObject({format:'crm-mail-evidence-v1',contextCoverage:'single_message_only',text:passage,source:{sourceId,sourceRevision:source.revision,contentHash:source.contentHash},message:{direction:'incoming',occurredAt:'2026-10-08T15:00:00.000Z',envelope:{from:null,to:[],cc:[]},sentProof:false,identityStatus:'unknown'},completeness:'partial',ranges:[{start:0,end:39,kind:'unknown'}]});return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:30},claims:[{kind:'need',interpretation:'Maintenance discussion requested',status:'stated',locator:'text:0:8',quote:'Could we'}]};}}}});
   await runOnce(fixture.db,{registry:extraction,owner:'mail-extraction-evaluation',limit:20});
   expect(modelCalls).toBe(1);
   const processed=await commandPost('/crm/processing/read',{source});
@@ -483,5 +484,41 @@ it('retains the conservative charge and replay blocker when unknown acceptance r
   expect((await post('/crm/processing/read',{source})).body).toMatchObject({state:'unknown_acceptance',reason:'prior_acceptance_unknown'});
   expect((await post('/crm/business/mail/delete',command({sourceId,expectedRevision:1}))).status).toBe(200);
   expect((await post('/crm/processing/health/read',{sourceId,kind:'mail'})).body).toMatchObject({availability:'deleted',unknownAcceptance:true,generations:expect.arrayContaining([expect.objectContaining({state:'deleted',financial:expect.objectContaining({dispatchState:'unknown_acceptance',settlementState:'estimated',settledCents:1})})])});
+ }finally{await fixture.stop();}
+});
+
+
+it.each([
+ {label:'unique quote repaired',passage:'😀 Header\nNeed "repair" at C:\\homes.\n> Old promise',quotedStart:37,length:50,locator:'text:0:26',state:'complete'},
+ {label:'repeated quote with valid existing position',passage:'😀 Header\nNeed "repair" at C:\\homes.\nNeed "repair" at C:\\homes.\n> Old promise',quotedStart:64,length:77,locator:'text:10:36',state:'complete'},
+ {label:'ambiguous repeated quote refused',passage:'😀 Header\nNeed "repair" at C:\\homes.\nNeed "repair" at C:\\homes.\n> Old promise',quotedStart:64,length:77,locator:'text:0:26',state:'failed'},
+ {label:'metadata changed during model wait',passage:'😀 Header\nNeed "repair" at C:\\homes.\n> Old promise',quotedStart:37,length:50,locator:'text:0:26',state:'stale'},
+])('maps native mail extraction canonical UTF16: $label without inventing authorship',async example=>{
+ const fixture=await createAuthFixture();
+ try{
+  const {workspaceId,binding,job}=await approveCaptureFixture(fixture);
+  const passage=example.passage;
+  const quote='Need "repair" at C:\\homes.';
+  const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:{verify:async()=>true},provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['SENT'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:'Thu, 8 Oct 2026 10:00:00 -0500',from:'business@example.test',to:['customer@example.test'],cc:[],subject:'Repairs',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'complete',ranges:[{start:0,end:example.quotedStart,kind:'unknown'},{start:example.quotedStart,end:example.length,kind:'quoted'}]})}}});
+  const handler=capture.get('crm.mail_capture');if(!handler)throw new Error('capture absent');
+  const captured=await handler.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
+  const sourceId=captured?.progress['sourceId'];if(typeof sourceId!=='string')throw new Error('native capture failed');
+  const source={workspaceId,sourceId,kind:'mail',revision:1,contentHash:createHash('sha256').update(passage).digest('hex'),locator:null};
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+  const port=createNativeCrmMailEvidence({verify:async proof=>proof.accountBinding===binding});
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,crmMailEvidence:port});
+  await fixture.db.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'native-mail','fixture-mail','grant','policy',100,1000,1,1,$2)",[workspaceId,fixture.alpha.admin.userId]);
+  expect((await post('/crm/processing/request',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,source})).status).toBe(200);
+  let calls=0;
+  const adapter=createBedrockCrmExtractionAdapter({endpointId:'native-mail',modelVersion:'fixture-mail',providerKey:'fixture.crm_extraction',accessGrantVersion:'grant',dataHandlingVersion:'policy',fundingVerifiedUntil:'2099-01-01T00:00:00Z',surface:{converse:async input=>{
+   calls++;expect(input.system[0]!.text).toContain('raw text field');
+   expect(JSON.parse(input.messages[0]!.content[0]!.text)).toMatchObject({format:'crm-mail-evidence-v1',contextCoverage:'single_message_only',text:passage,message:{direction:'outgoing',sentProof:false,identityStatus:'unknown',rawSenderDate:'Thu, 8 Oct 2026 10:00:00 -0500'}});
+   if(example.state==='stale')await fixture.db.query("UPDATE mail_messages SET header_from='other@example.test' WHERE workspace_id=$1 AND id=$2",[workspaceId,sourceId]);
+   return {stopReason:'tool_use',usage:{inputTokens:40,outputTokens:20},output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'mail-output',name:'emit_crm_extraction',input:{claims:[{kind:'need',status:'stated',interpretation:'Repair discussion',quote,locator:example.locator}]}}}]}}};
+  }}});
+  await runOnce(fixture.db,{registry:registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{allowControlledEvaluation:true,mailEvidence:port,adapter}}),owner:'native-mail-envelope',limit:20});
+  expect(calls).toBe(1);
+  expect((await post('/crm/processing/read',{source})).body).toMatchObject(example.state==='complete'?{state:'complete',claims:[{quote,source:{locator:'text:10:36',speaker:null}}],financial:{dispatchState:'settled',settledCents:1}}:{state:example.state,reason:example.state==='stale'?'source_or_authority_changed':'invalid_quote',claims:[],financial:{dispatchState:'settled',settledCents:1}});
+  expect((await post('/crm/business/mail/read',{sourceId,sourceRevision:1,contentHash:source.contentHash})).body).toMatchObject({source:{sentProof:false,ranges:[{start:0,end:example.quotedStart,kind:'unknown'},{start:example.quotedStart,end:example.length,kind:'quoted'}]}});
  }finally{await fixture.stop();}
 });

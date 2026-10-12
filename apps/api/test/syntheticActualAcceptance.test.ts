@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {readFileSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {expect,it} from 'vitest';
@@ -17,6 +17,7 @@ import {dispatch} from '../src/server.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION} from './support/authFixture.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {seedFirm} from './support/crmSeed.ts';
+import {validateSyntheticAcceptance,claimSyntheticAcceptanceDirectory,syntheticAskStageScope} from './support/syntheticAcceptanceApproval.ts';
 
 const repository=fileURLToPath(new URL('../../../',import.meta.url));
 const scopeFile=process.env['FSS_SYNTHETIC_SCOPE_FILE']?resolve(process.env['FSS_SYNTHETIC_SCOPE_FILE']!):resolve(repository,'.context/551-actual-synthetic-scope.json');
@@ -26,27 +27,22 @@ const sha=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
 // model. Expectations and original synthetic inputs are bound before dispatch;
 // outputs are private human-review candidates, not automatic quality acceptance.
 it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes the exact approved synthetic scope through ordinary configured workers',async()=>{
- const scopeBytes=readFileSync(scopeFile);const scope=JSON.parse(scopeBytes.toString()) as {runId:string;modelVersion:string;labelsSha256:string;extractionIds:string[];askIds:string[];maxSteps:number;maxCents:number;maxAskSteps:number;maxAskInputBytes:number;maxAskOutputTokens:number;askQuestions:Record<string,string>;sourceSha256:Record<string,string>};
+ const scopeBytes=readFileSync(scopeFile);
  const approvalFile=process.env['FSS_SYNTHETIC_APPROVAL_FILE'];if(!approvalFile)throw new Error('exact_paid_scope_approval_required');
- const approval=JSON.parse(readFileSync(approvalFile,'utf8')) as {approved:boolean;approvedBy:string;scopeSha256:string;humanLabelsReviewed:boolean;reference:string};
- if(approval.approved!==true||approval.approvedBy!=='David Cui'||approval.scopeSha256!==sha(scopeBytes)||approval.humanLabelsReviewed!==true||!approval.reference)throw new Error('exact_paid_scope_approval_required');
- for(const [path,fingerprint] of Object.entries(scope.sourceSha256)){if(sha(readFileSync(resolve(repository,path)))!==fingerprint)throw new Error('approved_runner_changed');}
- const labelsBytes=readFileSync(labelsFile);if(sha(labelsBytes)!==scope.labelsSha256||scope.maxSteps!==25||scope.maxCents!==100||scope.modelVersion!=='us.anthropic.claude-haiku-4-5-20251001-v1:0')throw new Error('frozen_scope_changed');
+ const labelsBytes=readFileSync(labelsFile);
+ const {scope,approval,pricing}=validateSyntheticAcceptance({scopeBytes,approvalBytes:readFileSync(approvalFile),labelsBytes,readSource:path=>readFileSync(resolve(repository,path))});
  const labels=JSON.parse(labelsBytes.toString()) as {cases:{caseId:string;syntheticText:string;expectedOutcome:string;forbiddenOutcome:string;eventAt:string}[]};
  const chosen=[...new Set([...scope.extractionIds,...scope.askIds])].map(id=>{const found=labels.cases.find(item=>item.caseId===id);if(!found)throw new Error('frozen_case_missing');return found;});
- if(!/^[a-f0-9-]{36}$/u.test(scope.runId))throw new Error('frozen_run_id_required');
- const directory=resolve(repository,'.context',`synthetic-acceptance-${scope.runId}`);
- // Exclusive fixed run directory prevents reusing one paid approval for multiple
- // fresh $1 allowances. Failed/ambiguous runs retain the marker and allocations.
- mkdirSync(directory,{mode:0o700});
- const budget=syntheticPaidBudget({maxSteps:scope.maxSteps,maxCents:scope.maxCents,persist:snapshot=>writeFileSync(resolve(directory,'aggregate-budget.json'),JSON.stringify(snapshot),{mode:0o600})});
+ const directory=claimSyntheticAcceptanceDirectory(repository,scope.runId);
+ writeFileSync(resolve(directory,'approved-scope.json'),scopeBytes,{mode:0o600,flag:'wx'});
+ const budget=syntheticPaidBudget({maxSteps:scope.maxSteps,maxCents:scope.maxCents,inputTokenPriceMicros:pricing.inputTokenPriceMicros,outputTokenPriceMicros:pricing.outputTokenPriceMicros,persist:snapshot=>writeFileSync(resolve(directory,'aggregate-budget.json'),JSON.stringify(snapshot),{mode:0o600})});
  const fixture=await createAuthFixture();let phase='transport_probe';
  try{
   const observations:unknown[]=[];
-  const actual=await boundedActualBedrock(budget,scope.modelVersion,observation=>{observations.push(observation);writeFileSync(resolve(directory,'private-transport-observations.json'),JSON.stringify(observations,null,2),{mode:0o600});});
+  const actual=await boundedActualBedrock(budget,scope.modelVersion,observation=>{observations.push(observation);writeFileSync(resolve(directory,'private-transport-observations.json'),JSON.stringify(observations,null,2),{mode:0o600});},scope.scopeVersion===2?{thinking:'disabled'}:undefined);
   // One scoped, bounded transport probe precedes any truthful configured-model
   // attestation; it counts against the SAME aggregate ceiling and never uses Gmail.
-  const probe=await actual.surface.converse({modelId:scope.modelVersion,system:[{text:'Return JSON only: []. No tools.'}],messages:[{role:'user',content:[{text:'Synthetic diagnostic transport probe. Return [].'}]}],inferenceConfig:{maxTokens:32,temperature:0}},new AbortController().signal);
+  const probe=await actual.surface.converse({modelId:scope.modelVersion,system:[{text:'Return JSON only: []. No tools.'}],messages:[{role:'user',content:[{text:'Synthetic diagnostic transport probe. Return [].'}]}],inferenceConfig:{maxTokens:32,temperature:0},...(scope.scopeVersion===2?{additionalModelRequestFields:{thinking:{type:'disabled'}}}:{})},new AbortController().signal);
   const observed=probe as {usage?:{inputTokens?:number;outputTokens?:number};output?:{message?:{content?:{text?:string}[]}}};
   if(!Number.isInteger(observed.usage?.inputTokens)||!Number.isInteger(observed.usage?.outputTokens)||!observed.output?.message?.content?.some(item=>item.text))throw new Error('actual_transport_not_observed');
   writeFileSync(resolve(directory,'transport-observation.json'),JSON.stringify({modelVersion:scope.modelVersion,scopeSha256:sha(scopeBytes),usage:observed.usage,syntheticOnly:true}),{mode:0o600});
@@ -55,7 +51,7 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
   const route={
    region:'us-east-1' as const,
    endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,
-   modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const,
+   modelVersion:scope.modelVersion,
    providerKey:'synthetic',
    accessGrantVersion:'synthetic',
    dataHandlingVersion:'synthetic-only-US-geographic-profile-v1',
@@ -66,7 +62,7 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
   const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:db,auth:{...fixture.deps,db},supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,crmCapabilityRuntime:runtime});
   const command=(body:object)=>({...body,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
   const approvalDecision={consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,reviewedEvaluationReference:approval.reference,limitations:['representative_quality_unverified','limited_business_examples']};
-  const common={enabled:false,expectedRevision:0,endpointId:route.endpointId,modelVersion:route.modelVersion,accessGrantVersion:route.accessGrantVersion,dataHandlingVersion:route.dataHandlingVersion,dailyCeilingCents:100,monthlyCeilingCents:100,inputTokenPriceMicros:'1.1',outputTokenPriceMicros:'5.5'};
+  const common={enabled:false,expectedRevision:0,endpointId:route.endpointId,modelVersion:route.modelVersion,accessGrantVersion:route.accessGrantVersion,dataHandlingVersion:route.dataHandlingVersion,dailyCeilingCents:scope.maxCents,monthlyCeilingCents:scope.maxCents,inputTokenPriceMicros:Number.isInteger(pricing.inputTokenPriceMicros)?pricing.inputTokenPriceMicros:String(pricing.inputTokenPriceMicros),outputTokenPriceMicros:Number.isInteger(pricing.outputTokenPriceMicros)?pricing.outputTokenPriceMicros:String(pricing.outputTokenPriceMicros)};
   expect((await post('/crm/processing/purpose/save',command(common))).status).toBe(200);
 
   expect((await post('/ask/purpose/save',command({...common,purpose:'answer',evaluationFingerprint:scope.labelsSha256,...CRM_SUPPORTED_AGENT_ASK_VERSIONS,agentLimits:configuration.answer!.agentLimits}))).status).toBe(200);
@@ -90,14 +86,14 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
   // workers may now process only the four explicit processing requests.
   expect((await post('/crm/processing/purpose/activate',command({capability:'crm_extraction',expectedRevision:1,approval:approvalDecision}))).body).toMatchObject({status:'accepted'});
   for(const {item,firmId,source,metadataRevision} of prepared){
-   const outputs:Record<string,unknown>={caseId:item.caseId,expectedOutcome:item.expectedOutcome,forbiddenOutcome:item.forbiddenOutcome,humanQualityReview:'pending',acquisition:'selected_unverified'};
+   const outputs:Record<string,unknown>={caseId:item.caseId,expectedOutcome:item.expectedOutcome,forbiddenOutcome:item.forbiddenOutcome,humanQualityReview:'pending',modelVersion:scope.modelVersion,stage:scope.stage??'legacy_history_investigation',thinking:scope.thinking??'legacy_policy',pricing,inputLimitations:['selected_text_authorship_unverified','label_event_timezone_is_not_canonical_source_metadata; use only separately frozen question context or report unknown'],acquisition:'selected_unverified'};
    if(scope.extractionIds.includes(item.caseId)){
     expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
     await runOnce(db,{registry,owner:'approved-synthetic-extraction',limit:10});
     outputs['extraction']=(await post('/crm/processing/read',{source})).body;
    }
    if(scope.askIds.includes(item.caseId)){
-    const requested=await post('/ask/answers/request',command({question:scope.askQuestions[item.caseId],execution:'agent_v1',agentScope:{kind:'firm',firmId},scope:{sources:[]}}));expect(requested.status).toBe(200);
+    const requested=await post('/ask/answers/request',command({question:scope.askQuestions[item.caseId],execution:'agent_v1',...syntheticAskStageScope(scope.stage,firmId,{...source,kind:'selected_note'})}));expect(requested.status).toBe(200);
     const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
     await runOnce(db,{registry,owner:'approved-synthetic-ask',limit:10});
     outputs['ask']=(await post('/ask/answers/read',{requestId})).body;
@@ -108,7 +104,7 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
   }
   phase='complete_candidates_human_review_pending';
  }finally{
-  writeFileSync(resolve(directory,'run-status.json'),JSON.stringify({phase,scopeSha256:sha(scopeBytes),budget:budget.snapshot(),qualityAccepted:false,productionActivation:false}),{mode:0o600});
+  writeFileSync(resolve(directory,'run-status.json'),JSON.stringify({phase,scopeSha256:sha(scopeBytes),modelVersion:scope.modelVersion,stage:scope.stage??'legacy_history_investigation',thinking:scope.thinking??'legacy_policy',pricing,budget:budget.snapshot(),qualityAccepted:false,productionActivation:false}),{mode:0o600});
   await fixture.stop();
  }
 },900000);
