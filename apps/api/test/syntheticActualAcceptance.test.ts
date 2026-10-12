@@ -100,6 +100,9 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
     outputs['diagnostics']=(await post('/ask/answers/diagnostics',{requestId})).body;
    }
    writeFileSync(resolve(directory,`${item.caseId}.json`),JSON.stringify(outputs,null,2),{mode:0o600,flag:'wx'});
+   // An ambiguous attempt keeps its full allocation and ends this batch. Do not
+   // dispatch further cases against an unverified failing provider boundary.
+   if(['ask','extraction'].some(key=>{const result=outputs[key];return typeof result==='object'&&result!==null&&'state' in result&&result.state==='unknown_acceptance';})){phase='unknown_acceptance_stopped';throw new Error('synthetic_unknown_acceptance_stopped');}
    expect((await post('/crm/imports/delete',command({sourceId:source.sourceId,expectedSourceRevision:source.revision,expectedMetadataRevision:metadataRevision}))).status).toBe(200);
   }
   phase='complete_candidates_human_review_pending';

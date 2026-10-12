@@ -1,4 +1,5 @@
 import {expect,it} from 'vitest';
+import {z} from 'zod';
 import {MockLanguageModelV3} from 'ai/test';
 import {createAskSdkStepAdapter} from '../src/providers/askAgentSdk.ts';
 it('counts the same actual SDK system/tools/encoded messages before provider dispatch',async()=>{
@@ -97,4 +98,21 @@ it('keeps known and unknown billing isolated when the same adapter runs concurre
  const results=await Promise.all(['known-plain-call','cache-write-call'].map(question=>adapter.runStep({question,transcript:[],remainingSteps:1,maxOutputTokens:64,signal:new AbortController().signal})));
  expect(results[0]).toEqual({acceptance:'accepted',usage:{inputTokens:52,outputTokens:24},answer:{claims:[],abstained:true},toolCalls:[]});
  expect(results[1]).toEqual({acceptance:'unknown',usage:null,answer:null,toolCalls:[]});expect(ready).toBe(2);
+});
+it('sends only supported strict-tool schema keywords through the real Bedrock SDK wire',async()=>{
+ const {createAmazonBedrock}=await import('@ai-sdk/amazon-bedrock');let calls=0;let rejected:string[]=[];let observedRequest:unknown;
+ const unsupported=(value:unknown):string[]=>{if(Array.isArray(value))return value.flatMap(unsupported);if(value===null||typeof value!=='object')return [];return Object.entries(value).flatMap(([key,child])=>['minLength','maxLength','maxItems','minimum','maximum','multipleOf'].includes(key)||key==='minItems'&&child!==0&&child!==1?[key]:unsupported(child));};
+ const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async(_url,init)=>{
+  calls++;observedRequest=JSON.parse(String(init?.body));const request=z.object({toolConfig:z.object({tools:z.array(z.object({toolSpec:z.object({strict:z.boolean().optional(),inputSchema:z.object({json:z.unknown()})})}))})}).parse(observedRequest);rejected=request.toolConfig.tools.flatMap(tool=>tool.toolSpec.strict===true?unsupported(tool.toolSpec.inputSchema.json):[]);
+  // AWS documents immediate HTTP400 for unsupported strict schema keywords.
+  if(rejected.length)return new Response(JSON.stringify({message:'Unsupported strict JSON schema constraints'}),{status:400,headers:{'content-type':'application/json','x-amzn-errortype':'ValidationException'}});
+  return new Response(JSON.stringify({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'final',name:'emit_answer',input:{claims:[],abstained:true}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40},metrics:{latencyMs:1}}),{headers:{'content-type':'application/json'}});
+ }})('us.anthropic.claude-sonnet-4-6');
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});const input={question:'Synthetic?',transcript:[],remainingSteps:1,maxOutputTokens:1000};
+ expect(await adapter.runStep({...input,signal:new AbortController().signal})).toMatchObject({acceptance:'accepted',answer:{claims:[],abstained:true},toolCalls:[],usage:{inputTokens:30,outputTokens:10}});expect(rejected).toEqual([]);expect(calls).toBe(1);expect(adapter.inputBound!(input)!.inputBytes).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(observedRequest)));
+});
+it('keeps an actual SDK HTTP400 without reported usage unknown and never retries it',async()=>{
+ const {createAmazonBedrock}=await import('@ai-sdk/amazon-bedrock');let calls=0;
+ const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async()=>{calls++;return new Response(JSON.stringify({message:'Unsupported schema'}),{status:400,headers:{'content-type':'application/json','x-amzn-errortype':'ValidationException'}});}})('us.anthropic.claude-sonnet-4-6');
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});expect(await adapter.runStep({question:'Synthetic?',transcript:[],remainingSteps:1,maxOutputTokens:1000,signal:new AbortController().signal})).toEqual({acceptance:'unknown',usage:null,answer:null,toolCalls:[]});expect(calls).toBe(1);
 });
