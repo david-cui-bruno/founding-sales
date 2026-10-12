@@ -1,0 +1,76 @@
+# Roadmap decision history retained October 11, 2026
+
+For the current completion lane use [operating roadmap](roadmap-20261007.md). Preserve decisions not superseded by later approved amendments; dated counts and pending statuses are historical evidence.
+
+## Current ticket reconciliation — October 11, after PR582
+
+Eight execution tickets remain #425/#438/#460/#466/#549/#550/#551/#552; #418/#441/#479/#497 are tracking issues. #548 is closed as initial evaluation preparation; actual configured-model usefulness review remains in #550/#551 before affected Enable. #547/#580/#581 are source-complete in merged PR582 (`b57e7dcc`), with exact-source and main CI passed. Current merged source targets schema104, while fresh public production health still reports d49/schema88. Main deployment38178977774 completed as held, not deployed. PR583 contains the evidence/retrieval source continuation and awaits final compatibility verification and exact CI. Current contracts on #497 and #547–#552/#580/#581 supersede older managed-AWS/per-release CRM receipt and blanket representative-quality wording.
+
+Closed CRM foundations #480–#496 and conversational Ask/Gmail #555–#568 remain reusable source implementations. #549 owns ordinary deployed business acquisition/recovery/provider observations; local #547 proved only its two explicitly approved messages and cleanup. #550 owns actual interpretation and supported progress/Today/booking usefulness. #551 owns actual Ask retrieval/answers/latency, independently of sending. #548 owns reviewed labels and honest evaluation classes. #552 owns concrete held-backlog deployment/configuration and separately verified capability Enable/Disable. Capture, selected-source Ask, hosted processing, indexing, native notifications and LinkedIn preserve independent scope prerequisites.
+
+The next critical path is research/contract reconciliation for real model evidence and retrieval, proportional actual evaluation with a fresh approved allowance, plus the separately approved release bootstrap and concrete held-backlog review. No new paid call, role apply, release or activation is authorized by this roadmap. #438/#425/#460/#466 continue independently within their settled targeting/sending/native acceptance decisions. Do not reopen all closed implementation tickets or rebuild their foundations; add or amend targeted implementation work only once a reviewed gap has a concrete contract.
+
+The latest research/audit is captured in `ask-architecture-reassessment-20261011.md`, `ask-pgvector-hybrid-review-20261011.md` and companion ticket/codebase audit reports. Proposed model/turn-budget/retrieval changes are not yet provider configuration or accepted quality. Earlier execution order and schema99 references below are historical planning; current source is104. Preserve the release hold, cap5/lower caps, original Shirley identity/cancelled follow-up, uncertain sends and admission/routine replies/calling off.
+
+
+Status: shared understanding confirmed by David after the grilling interview and mailbox-ramp research. Implementation authorized; housekeeping precedes the next code changes. This is the current priority/decision record and supersedes conflicting October 5 planning statuses. Historical plans retain useful implementation detail, not current workflow authority. Do not use Superpowers; use installed Matt Pocock skills when relevant.
+
+## Outcome and working model
+
+Aim for three qualified property-manager conversations. This is an outcome target, not a gate on engineering, social work, or other useful development. Keep building and improving during live operation. Review accumulated results after two weeks of live operation; fix issues and use evidence continuously, without waiting for that checkpoint.
+
+David does not review proposed recipients. He handles substantive replies within one business day and up to three introductory calls per week. Routine automatic replies remain off. No new pricing answer is approved by this plan.
+
+## Priorities and acceptance
+
+1. Strengthen sender ramp and delivery controls. Sender mailbox is new or barely used. Existing five/day allowance is the first stage of a healthy-day ramp, not a permanent cap or a required daily quota. Base advancement on actual volume and delivery evidence, inspect inter-message pacing, and define reduction/hold/recovery behavior. Unknown reputation data is not positive evidence. Verify actual received-message authentication. Do not add a synthetic warm-up service by default. See [primary-source research](mailbox-warmup-research.md). Exact revised thresholds require an evidence-backed design; no cap override is authorized by this record.
+2. Improve supported prospect inflow. Preserve current geography and residential-management criteria. Verify identity, first-party contact association and freshness. Public evidence of maintenance pain is optional for email-first outreach; never fabricate pain. Existing teams/software are context, not automatic exclusions. Improve sources/contact recovery before proposing broader targeting. Research ambiguous prospects within existing budgets, then defer them without a recipient-review queue for David.
+3. Implement and evaluate autonomous verified-fit admission. Update the current manual-review-dependent path and evaluate the exact policy/prompt versions before activation. Preserve deduplication, stops, ownership, route validation, timezone and other settled protections. Connect existing lead-ranking logic. After evaluation and sending-path verification, David authorizes selecting and contacting policy-matching prospects without another individual approval. Meaningful targeting-policy changes still require his approval. This authorization is conditional; it is not evidence that automatic admission is already live.
+4. Verify real sending, replies and booking. Preserve Shirley's original approved message/enrollment and morning schedule. Verify durable provider submission, subsequent cadence, reply/booking interruption and reliable visibility for David. Submission is not proof of inbox placement. Preserve five-email cadence and coordinated channel rules; no new autonomous calling authorization.
+5. Measure outcomes continuously. Distinguish retained discovery hits, supported prospects, sending attempts, delivery failures, opt-outs, replies, bookings and held qualified conversations. Exclude manually staged candidates from automatic-discovery yield. Use the two-week review to choose improvements, not freeze development or infer too much from small samples.
+6. Continue broader roadmap by impact. Useful UI work, remaining social adapters, call-learning validation and other features may proceed while the system operates. Discovery through booking has priority. Preserve the existing UI stack, budgets and external publication approval boundaries; Stripe remains undefined/deferred rather than implicitly authorized scope.
+
+## Confirmed Ask and business Gmail completion — October 10
+
+The same target end state now includes [conversational Ask #554](https://github.com/david-cui-bruno/founding-sales/issues/554) and [continuous relevant business Gmail capture #562](https://github.com/david-cui-bruno/founding-sales/issues/562). Business Gmail only; no full-inbox archive or personal-mailbox connector. These add source work without reopening closed CRM foundations or activating a capability.
+
+- Ask: #555 establishes the bounded agent and per-step contracts; #556 and #559 follow independently; #556 unlocks #557/#558/#560; #561 integrates source. Final conversational acceptance #551 depends on #548/#549/#561.
+- Gmail: #563 establishes qualification/continuity contracts; #564/#565/#566 follow independently; #567 follows #564; #568 integrates source. Final ordinary capture acceptance #549 depends on #547/#568.
+- Complete source implementation is recorded in [PR570](https://github.com/david-cui-bruno/founding-sales/pull/570) for all thirteen children (runtime `fd6c63cbda305717f8f7a9f1bf97ac9625d9e66b`, schema98), with one shared schema/contracts integrator and parallel Ask/Gmail work. Use its exact review/check/upgrade/merge receipts and the [readiness inventory](../operations/ask-gmail-source-readiness.md); implementation order above is retained dependency history. Provider/evaluation/activation acceptance remains separate.
+- Prepare #548 evaluations in parallel, distinguishing synthetic/public regression, actual provider integration and representative quality. Missing real examples do not block implementation or preparation, but no passing quality evidence is invented.
+- #552 retains capability-specific activation: capture need not wait on Ask; applicable purpose/provider/evaluation/release receipts still apply. Discovery #438, conditional admission #425 and native acceptance #460/#466 remain separate roadmap work.
+
+Use the [focused interface design](ask-gmail-interface-design-20261011.md) for module ownership, preparation and existing test seams; the [deep architecture research](ask-architecture-deep-research-20261010.md) supports the architecture choice. One integration owner controls shared schema/contracts/canonical access/deletion before parallel flow work. No new provider reads, paid calls, grants, release or sending is authorized by these pointers.
+
+## Current release and operational boundaries
+
+Use [current operating state](../operations/current-state.md) for the dated verified release/sending snapshot, evidence and refresh procedure. This roadmap records decisions and priorities, not a second copy of production status.
+
+## October11 parallel completion follow-up
+
+All thirteen Ask/business-Gmail implementation children and their implementation parents are closed after PR570 and exact checked merge. Remaining execution acceptance is #547–#552, native #460/#466, supported discovery #438 and conditional email admission #425. The parallel preparation reports linked from `docs/operations/current-state.md` retain measured controlled results and remaining live gates.
+
+[#572](https://github.com/david-cui-bruno/founding-sales/issues/572) fixes the stale schema90 diagnostic across the entire checked-source chain, with additive schema99 and preserved historical cleanup. Actual disposable88→99 and98→99 upgrades pass all eleven stages, including registered-worker dispatch coverage. Complete exact full checks and CI/merge before a fresh saved diagnostic proposal. No infrastructure application or expired lease reuse, release, provider grant, sending-control change or activation follows merely from implementation completion.
+
+
+## Approved roadmap simplification — October11,2026
+
+David explicitly approved isolated local Gmail acceptance and monitored David-only provisional AI use. ADR0010/0009 amendments preserve historical decisions and current safeguards. This changes the implementation/quality contract; it does not claim local/provider/model acceptance or authorize a release, paid evaluation or activation.
+
+Published two complete source units: #580 protected release prepare/execute/status and #581 trusted readiness/evidence assembly plus explicitly scoped provisional AI policy. Revised #547 to implement the disposable local real-Google/API/worker/PostgreSQL acceptance path using the dedicated nonproduction Google project, exact two Shirley originals and existing conserved budgets. Temporary AWS rerun is superseded, not dispatched. No permanent staging or new deployment platform.
+
+Reconciled #548/#549/#550/#551/#552 and narrowed #466 to remaining installed native behavior. Closed implementation tickets remain closed. Thirty allocations are coverage planning, not thirty required customer threads; synthetic/provider/representative evidence remain distinct. Current code still blocks hosted AI on actual_representative until #581 is implemented, checked and normally released. Missing actual budget/data/provider authority remains pending.
+
+Parallel source frontier: #547, #580, #581 and #548 preparation, with one shared contracts/schema integration owner. #549 follows actual #547; final #550/#551 also require implemented #581 and applicable #548/#549 evidence. #552 follows #580/#581 with applicable source/quality evidence; Gmail-backed scopes additionally require #549, without blanket Ask/native gates. #438/#425/#460/#466 remain independent applicable work.
+
+Preserve production schema88/signed1.0.51 as dated shipped evidence and schema99 as current unreleased source. Release hold, cap5/lower caps, original Shirley provider identity/cancelled follow-up, uncertain holds and disabled admission/routine replies/calling remain. No provider reads, paid calls, new recipients/enrollment, AWS application, release or activation occurred in this reconciliation.
+
+## Final approved lean operating model — October11
+
+The grilling decisions are settled: normal breakage/short maintenance/hours of forward repair are acceptable; preserve data/history, source/member access and unintended-send controls. Merge normally auto-deploys app and explicitly eligible routine migrations after focused CI. Destructive/privilege/unknown changes require one review; the current88→99 backlog remains specifically held.
+
+#580 is now automatic delivery using existing stop/migrate/start and proportional CI, not a new release platform. #581 is ordinary authenticated owner consent/configuration plus audit and persistent Enable/Disable, replacing independent privileged per-release capability receipt provisioning. Changed data/provider/model/purpose/budget scopes require real owner approval; unchanged releases preserve valid settings. The provisional David-only quality policy remains, with Codex technical checks, actual model integration, a useful reviewed labeled set and a few owner usefulness judgments.
+
+ADR0009 latest amendment and ADR0011 record this final design. This supersedes the earlier trusted-assembler/technical-rebinding proposal. #547 remains disposable local real-Google acceptance. Current source still implements the old mechanism until #581 replaces it; no bypass or fixture mode is allowed. No provider read, paid call, role change, current held rollout or activation occurred in this reconciliation. Sending/calling/admission controls remain unchanged.
+
+Parallel implementation frontier is #547/#580/#581, with one integration owner for shared schema/contracts. #548 preparation can proceed independently; #549 follows actual capture and final #550/#551 depend on implemented owner setup and applicable source/evaluation evidence. No additional simplification tickets were added.
