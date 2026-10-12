@@ -1,3 +1,6 @@
+import {createConverseCapture} from '../../../tools/ask-evaluation/diagnostics/capture-converse.ts';
+import {createBedrockAskSdkModel} from '../../worker/src/providers/askAgentSdk.ts';
+import {loadCrmBedrockSurface} from '../../worker/src/providers/crmBedrock.ts';
 import {createHash,randomUUID} from 'node:crypto';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -39,7 +42,8 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
  const fixture=await createAuthFixture();let phase='transport_probe';
  try{
   const observations:unknown[]=[];
-  const actual=await boundedActualBedrock(budget,scope.modelVersion,observation=>{observations.push(observation);writeFileSync(resolve(directory,'private-transport-observations.json'),JSON.stringify(observations,null,2),{mode:0o600});},scope.scopeVersion!==undefined?{thinking:'disabled'}:undefined);
+  const capturedTransports=scope.scopeVersion===3&&scope.captureNative===true?{model:createBedrockAskSdkModel({region:'us-east-1',modelVersion:scope.modelVersion,fetch:createConverseCapture({directory:resolve(directory,'native')}).fetch}),surface:await loadCrmBedrockSurface({region:'us-east-1',timeoutMilliseconds:30000})}:undefined;
+  const actual=await boundedActualBedrock(budget,scope.modelVersion,observation=>{observations.push(scope.captureNative?{...observation,output:undefined}:observation);writeFileSync(resolve(directory,'private-transport-observations.json'),JSON.stringify(observations,null,2),{mode:0o600});},scope.scopeVersion!==undefined?{thinking:'disabled'}:undefined,capturedTransports);
   // One scoped, bounded transport probe precedes any truthful configured-model
   // attestation; it counts against the SAME aggregate ceiling and never uses Gmail.
   const probe=await actual.surface.converse({modelId:scope.modelVersion,system:[{text:'Return JSON only: []. No tools.'}],messages:[{role:'user',content:[{text:'Synthetic diagnostic transport probe. Return [].'}]}],inferenceConfig:{maxTokens:32,temperature:0},...(scope.scopeVersion!==undefined?{additionalModelRequestFields:{thinking:{type:'disabled'}}}:{})},new AbortController().signal);
