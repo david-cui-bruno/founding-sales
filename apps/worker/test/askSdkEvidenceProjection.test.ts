@@ -33,7 +33,7 @@ it('limits an empty opportunity observation to CRM opportunities rather than rea
  const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
  const transcript=[{windows:[{id:windowId,ordinal:1,source:{kind:'selected_note'},text:'That old plan is no longer valid. Quoted 2025 message: I will send the contract Friday.'}]},{toolCallId:'current-opportunities',name:'read_exact',input:{operation:'opportunities'},result:{operation:'opportunities',count:'0',records:[],evidenceAuthority:{kind:'current_exact_crm_state',toolCallId:'current-opportunities'}}}];
  const result=await adapter.runStep({question:'Is the promise current or historical?',transcript,maxOutputTokens:1000,remainingSteps:1,signal:new AbortController().signal});
- expect(observed).toMatchObject({type:'json',value:{count:'0',evidenceAuthority:{toolCallId:'e1'},answerGuidance:{scope:'Current permitted CRM opportunities only.',limits:['Opportunity absence does not establish that no real-world promise exists, is fulfilled or remains current.']}}});
+ expect(observed).toMatchObject({type:'json',value:{count:'0',evidenceAuthority:{toolCallId:'e1'},answerGuidance:{scope:'Current permitted CRM opportunities only.',limits:expect.arrayContaining(['Opportunity absence does not establish that no real-world promise exists, is fulfilled or remains current.'])}}});
  expect(result).toMatchObject({acceptance:'accepted',answer:{claims:[{citationWindowIds:[windowId]}]}});
  expect(transcript[1]!.result).not.toHaveProperty('answerGuidance');
 });

@@ -24,11 +24,13 @@ The earlier two immutable comparison grants are consumed:25calls/202c conserved 
 
 ## Next work and safeguards
 
-Complete focused evidence/presentation repairs and scope-specific readiness. The merged continuity repair retains only the still-authorized dated question for exact-observation freshness changes; public stale reads, deleted originals and narrowed scopes still erase or exclude private content. The [history/session preparation](../sourcing/ask-history-continuity-preparation-20261012.md) preserves the earlier controlled evidence/proposal; its actual approved outcome is now recorded above.
+Complete focused evidence/presentation repairs and scope-specific readiness. The [contextual guidance source change](../sourcing/ask-evidence-precision-source-20261012.md) addresses anonymous-speaker, current-versus-historical state and per-claim mixed-reference guidance through the existing SDK seam. Controlled payload/lifecycle checks are separate from hosted-model compliance; the measured concerns above remain unresolved until actual repaired-source review. PR594 merged as `7c7f0eca`, preserving the actual history/session report.
+
+The merged continuity repair retains only the still-authorized dated question for exact-observation freshness changes; public stale reads, deleted originals and narrowed scopes still erase or exclude private content. The [history/session preparation](../sourcing/ask-history-continuity-preparation-20261012.md) preserves the earlier controlled evidence/proposal; its actual approved outcome is now recorded above.
 
 The known-context repaired comparison and its delegated usefulness review are complete; no broader provider allowance follows. Keep structured, hosted-answering, extraction, acquisition and optional semantic readiness separate. #549/#552 share normal deployed capture evidence; selected-source Ask does not wait on Gmail or native/LinkedIn. #550 still needs applicable useful extraction and ordinary booking/progress outcomes. Deployment/bootstrap and scoped Enable remain pending; no ticket closes from controlled adapters or source merge alone.
 
-Preserve cap5/lower caps/ramp, recipient-local weekday mornings, original Shirley provider identity and cancelled follow-up, uncertain sends, targeting, and automatic admission/routine replies/autonomous calling OFF. Never use installed desktop credentials. This continuation made only the26approved synthetic history/session model calls above. No production writes, activation or sending occurred.
+Preserve cap5/lower caps/ramp, recipient-local weekday mornings, original Shirley provider identity and cancelled follow-up, uncertain sends, targeting, and automatic admission/routine replies/autonomous calling OFF. Never use installed desktop credentials. The actual history/session comparison made only the26approved synthetic calls above. The subsequent contextual-guidance source work made no provider calls, production writes, activation or sending changes.
 
 ## Procedures and retained evidence
 

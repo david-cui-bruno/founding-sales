@@ -46,6 +46,7 @@ function modelProvenance(source: z.infer<typeof sourceSchema>) {
       inlineHeaders: 'reported_text_not_envelope',
       coverageStatements: 'reported_text_not_live_coverage',
       eventTime: 'reported_not_verified_authored_time',
+      speakerIdentity: 'A firm association does not identify the speaker. If the recorded speaker is unknown, use "the note says"; do not invent a contact, employee or firm author. Named attribution inside the text remains reported text.',
       temporalRelationships: 'Preserve which action a date, relative time or condition modifies. A statement date is not its promised action date. Leave relative timing unresolved without a supported anchor; copy observation time is not an anchor.',
     } } : {}),
     sourceMetadata: {
@@ -144,7 +145,10 @@ export function projectAskModelEvidence(transcript: readonly unknown[]) {
             ],
           } } : authority.data['operation'] === 'opportunities' ? { answerGuidance: {
             scope: 'Current permitted CRM opportunities only.',
-            limits: ['Opportunity absence does not establish that no real-world promise exists, is fulfilled or remains current.'],
+            limits: [
+              'Opportunity absence does not establish that no real-world promise exists, is fulfilled or remains current.',
+              'stageKey and status describe current observed CRM state. openedAt records when the opportunity opened; it does not establish its stage or status at that past time.',
+            ],
           } } : {}),
           evidenceAuthority: {
             ...authority.data.evidenceAuthority,
