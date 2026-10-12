@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "runId": "5779df87-3808-4097-b541-45166c204bdf",
+  "project": "colormyworld-prod-dc824",
+  "account": "davidcui824@gmail.com",
+  "syntheticOnly": true,
+  "maxCalls": 5,
+  "maxCents": 785,
+  "arms": [
+    {
+      "id": "gemini_4096",
+      "model": "gemini-3.8-flash",
+      "outputTokens": 4096
+    }
+  ],
+  "casesSha256": "94b444369ce0b07e0c3426846c713479e0c90e8f3a6443307958b7c176b3d10d",
+  "runnerSha256": "3f9c3e0921ea362f61aa5f09c797670cdbea277f621dfe736294fc3da1161727",
+  "purpose": "Generation-only paired token and model diagnostic on fixed synthetic evidence, not worker integration or activation",
+  "creditEligibility": "unverified",
+  "parentCampaign": {
+    "maxCalls": 60,
+    "maxCents": 1000,
+    "conservedPriorCalls": 11,
+    "conservedPriorCents": 215
+  },
+  "reason": "Known project permission/quota repair; new authorized principal, no IAM changes or retry of unknown acceptance"
+}

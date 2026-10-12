@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "runId": "7f350336-909f-4507-883f-005ed83ecb14",
+  "project": "colormyworld-prod-dc824",
+  "account": "david@framewisehealth.com",
+  "syntheticOnly": true,
+  "maxCalls": 15,
+  "maxCents": 1000,
+  "arms": [
+    {
+      "id": "sonnet_1000",
+      "model": "us.anthropic.claude-sonnet-4-6",
+      "outputTokens": 1000
+    },
+    {
+      "id": "sonnet_4096",
+      "model": "us.anthropic.claude-sonnet-4-6",
+      "outputTokens": 4096
+    },
+    {
+      "id": "gemini_4096",
+      "model": "gemini-3.8-flash",
+      "outputTokens": 4096
+    }
+  ],
+  "casesSha256": "94b444369ce0b07e0c3426846c713479e0c90e8f3a6443307958b7c176b3d10d",
+  "runnerSha256": "9eea4a4a1c37d7223f59751d43ed13f04447e1fc2575bdaf545e5589af7e271d",
+  "purpose": "Generation-only paired token and model diagnostic on fixed synthetic evidence, not worker integration or activation",
+  "creditEligibility": "unverified"
+}
