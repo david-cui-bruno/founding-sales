@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,within} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import type {AskAnswerReadResult} from '@fss/contracts';
 import {Ask,type AskPorts} from '../src/renderer/ask/Ask.tsx';
@@ -26,7 +26,7 @@ it('requests an explanation only for selected versions and publishes a fresh ans
  fireEvent.click(screen.getByRole('button',{name:'Explain selected copies'}));
  expect(await screen.findByText('Alex asked for simpler scheduling.')).toBeTruthy();
  expect(answerRequest).toHaveBeenCalledWith({question:'What matters to Alex?',scope:{sources:[{workspaceId:requestId,sourceId:personId,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]}});
- expect(answerRead).toHaveBeenCalledWith({requestId});
+ expect(answerRead).toHaveBeenCalledWith({requestId,includeExactResultCitations:true});
  expect(screen.getByRole('button',{name:'Search selected copies'})).toBeTruthy();
 });
 
@@ -41,7 +41,7 @@ it('polls only the accepted request while pending without requesting another exp
  await act(async()=>{await vi.advanceTimersByTimeAsync(2000);});
  expect(screen.getByText('Alex asked for simpler scheduling.')).toBeTruthy();
  expect(answerRequest).toHaveBeenCalledTimes(1);
- expect(answerRead.mock.calls).toEqual([[{requestId}],[{requestId}]]);
+ expect(answerRead.mock.calls).toEqual([[{requestId,includeExactResultCitations:true}],[{requestId,includeExactResultCitations:true}]]);
 });
 
 it('stops automatic pending reads after a bounded wait and refreshes the same request explicitly',async()=>{
@@ -141,4 +141,38 @@ it('evicts a protected quote and explanation when a later citation read is refus
  expect(await screen.findByText('Citation unavailable. Check this explanation again before using it.')).toBeTruthy();
  expect(screen.queryByText('Private original quote')).toBeNull();
  expect(screen.queryByText('Alex asked for simpler scheduling.')).toBeNull();
+});
+
+it('keeps original evidence distinct from linked exact opportunity observations and requires manual action for mixed claims',async()=>{
+ const mixed:AskAnswerReadResult={...complete,answer:{...complete.answer!,resultVersion:'agent_v1',claims:[{text:'The old note disagrees with the current pilot stages.',kind:'conflict',verification:'cited_unverified',citationWindowIds:[windowId],exactResultToolCallIds:['pilot-observation']}],exactResults:[{toolCallId:'pilot-observation',operation:'opportunities',valueHash:'c'.repeat(64),value:{operation:'opportunities',scope:{firmId:personId},dateBasis:'opportunity_opened_at',count:'2',records:[{opportunityId:windowId,firmId:personId,name:'North pilot',status:'open',stageKey:'new',openedAt:'2026-10-09T11:00:00.000Z'},{opportunityId:requestId,firmId:personId,name:'South pilot',status:'open',stageKey:'qualified',openedAt:'2026-10-09T11:00:00.000Z'}],truncated:false,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}}}]}};
+ const actionCreate=vi.fn();
+ const answerRead=vi.fn(async()=>mixed);
+ render(<Ask ports={{read,answerRequest:async()=>({requestId,version:1,state:'pending'}),answerRead,actionCreate}} privacyKey='owner:1' enabled/>);
+ await selectCopy();fireEvent.click(screen.getByRole('button',{name:'Explain selected copies'}));
+ await screen.findByText('The old note disagrees with the current pilot stages.');
+ expect(answerRead).toHaveBeenCalledWith({requestId,includeExactResultCitations:true});
+ expect(screen.getByText('Original evidence')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Open citation 1 for claim 1'})).toBeTruthy();
+ const link=screen.getByRole('link',{name:'Exact CRM observation: opportunities'});
+ const observation=screen.getByRole('region',{name:'Exact opportunities'});
+ expect(link.getAttribute('href')).toBe('#'+observation.id);
+ expect(within(observation).getByText('North pilot')).toBeTruthy();
+ expect(within(observation).getByText('South pilot')).toBeTruthy();
+ expect(within(observation).getByText('Status: open · Stage: qualified')).toBeTruthy();
+ const action=screen.getByRole('button',{name:'Act on claim 1'});
+ expect(action.hasAttribute('disabled')).toBe(true);fireEvent.click(action);
+ expect(actionCreate).not.toHaveBeenCalled();
+ expect(screen.getByText('This claim combines original evidence with a dated CRM observation. Use manual work to choose the next action.')).toBeTruthy();
+});
+
+it('presents AI and provisional provenance once while keeping readable claims and evidence controls',async()=>{
+ const answerRead=async()=>({...complete,answer:{...complete.answer!,resultVersion:'agent_v1' as const,claims:[{text:'Alex wants simpler scheduling.',kind:'fact' as const,verification:'cited_unverified' as const,citationWindowIds:[windowId]},{text:'A short demo may help.',kind:'inference' as const,verification:'cited_unverified' as const,citationWindowIds:[windowId]}]}});
+ render(<Ask ports={{read,answerRequest:async()=>({requestId,version:1,state:'pending'}),answerRead}} privacyKey='owner:1' enabled/>);
+ await selectCopy();fireEvent.click(screen.getByRole('button',{name:'Explain selected copies'}));
+ expect(await screen.findByRole('heading',{name:'AI answer'})).toBeTruthy();
+ expect(screen.getAllByText('AI-generated interpretation · Provisional quality. Check original evidence and dated CRM observations before relying on it.')).toHaveLength(1);
+ expect(screen.queryByText('Cited interpretation; verify against original evidence')).toBeNull();
+ expect(screen.getByText('Inference')).toBeTruthy();
+ expect(screen.getByText('Input coverage: complete. Semantic coverage: bounded_evaluated. Acquisition coverage: unverified.')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Open citation 1 for claim 2'})).toBeTruthy();
 });

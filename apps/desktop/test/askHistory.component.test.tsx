@@ -57,7 +57,7 @@ it('reopens saved history through a fresh answer read without requesting new inf
  fireEvent.click(screen.getByRole('button',{name:'Read private history'}));
  fireEvent.click(await screen.findByRole('button',{name:'Open investigation'}));
  expect(await screen.findByText('Scheduling is the supported concern.')).toBeTruthy();
- expect(answerRead).toHaveBeenCalledWith({requestId});
+ expect(answerRead).toHaveBeenCalledWith({requestId,includeExactResultCitations:true});
  expect(answerRequest).not.toHaveBeenCalled();
  expect(screen.queryByRole('button',{name:'Explain selected copies'})).toBeNull();
 });

@@ -16,6 +16,7 @@ it('opens a private conversation, sends a follow-up through its version and star
  fireEvent.change(screen.getByLabelText('Ask a question'),{target:{value:'What changed?'}});
  fireEvent.click(screen.getByRole('button',{name:'Ask question'}));
  await screen.findByText('Question saved. Processing may require configuration.');
+ expect(sessionRead).toHaveBeenCalledWith({sessionId,includeExactResultCitations:true});
  expect(sessionTurn).toHaveBeenCalledWith({sessionId,version:1,question:'What changed?'});
  fireEvent.click(screen.getByRole('button',{name:'New conversation'}));
  await screen.findByText('Scope: approved business history');expect(sessionCreate).toHaveBeenCalledTimes(2);
@@ -30,4 +31,16 @@ it('previews an explicit session date range before confirming a version-bound ch
  fireEvent.click(screen.getByRole('button',{name:'Confirm conversation date range'}));
  await screen.findByText('Scope: approved business history');
  expect(sessionChange).toHaveBeenCalledWith({sessionId,version:1,action:{kind:'scope',scope:{kind:'business',from:'2026-10-01T00:00:00.000Z',to:'2026-10-11T00:00:00.000Z'},confirmExpansion:true}});
+});
+
+it('reads conversation history with mixed evidence enabled and reopens the same session',async()=>{
+ const session={sessionId,version:1,scope:{kind:'business' as const},title:'Pilot comparison',pinned:false,state:'active' as const,createdAt:'2026-10-10T12:00:00.000Z',turns:[],coverage:'current' as const};
+ const sessionList=vi.fn(async()=>({sessions:[session],nextAfter:null,truncated:false}));
+ const sessionRead=vi.fn(async()=>session);
+ render(<Ask ports={{read:async()=>{throw Error('unused');},sessionCreate:async()=>({sessionId,version:1}),sessionList,sessionRead}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByRole('button',{name:'Read conversations'}));
+ fireEvent.click(await screen.findByRole('button',{name:/Pilot comparison/}));
+ await screen.findByText('Scope: approved business history');
+ expect(sessionList).toHaveBeenCalledWith({limit:20,includeExactResultCitations:true});
+ expect(sessionRead).toHaveBeenCalledWith({sessionId,includeExactResultCitations:true});
 });

@@ -138,7 +138,7 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
  }};
 }
 
-const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000),kind:z.enum(['fact','inference','conflict']),citationWindowIds:z.array(z.uuid()).min(1).max(10)})).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
+const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000),kind:z.enum(['fact','inference','conflict']),citationWindowIds:z.array(z.uuid()).min(1).max(10),exactResultToolCallIds:z.array(z.string().min(1).max(100)).min(1).max(10).optional()})).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
 const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','browse_history','read_conversation','resolve_records']),input:z.unknown()});
 /** Internal model evidence authority never changes canonical proof or publication. */
 function modelWindow<T extends {source:Pick<CanonicalSourceReference,'kind'|'occurredAt'|'observedAt'>}>(window:T){
@@ -206,6 +206,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
   let live=await current();const liveProof=await verifyAskPurpose(runtime,snapshot.proofInput);if(!live||live.inputHash!==snapshot.inputHash||!liveProof||!unchanged()){await update('stale','source_changed');return;}
   const calls=z.array(toolCall).max(8).safeParse(outcome.toolCalls);if(!calls.success||new Set(calls.data.map(call=>call.id)).size!==calls.data.length){await update('unavailable','processing_failed');return;}
   if(calls.data.length){
+   if(calls.data.some(call=>call.name==='read_exact'&&exactResults.some(exact=>exact.toolCallId===call.id))){await update('unavailable','unsupported_answer');return;}
    // The last paid generation is reserved for synthesis, not another retrieval round.
    if(step===limits.maxSteps){await update('unavailable','step_bound_reached');return;}
    for(const call of calls.data){const checked=await current();if(!checked||checked.inputHash!==expectedInputHash){await update('stale','source_changed');return;}live=checked;let value:unknown;
@@ -255,12 +256,12 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
      exactResults.push({toolCallId:call.id,operation:args.data.operation,valueHash:askFingerprint(value),value});if(Buffer.byteLength(JSON.stringify({exactResults}))>60000){await update('unavailable','input_bound_reached');return;}
      await withTransaction(input.session,async()=>{await lockAskLifecycle(context);const current=await readCurrentAskInput(context,requestId,version,epoch,route);if(!current||current.inputHash!==expectedInputHash||!await fenced(input))return;await context.db.query("UPDATE crm_ask_requests SET validated_progress=$5::jsonb WHERE workspace_id=$1 AND id=$2 AND version=$3 AND epoch=$4 AND state='pending' AND cancelled_at IS NULL",[context.scope.workspaceId,requestId,version,epoch,JSON.stringify({exactResults})]);});
     }
-    if(call.name==='read_exact'&&typeof value==='object'&&value!==null&&!Array.isArray(value))value={...value,evidenceAuthority:{kind:'current_exact_crm_state',citationAuthority:'exact_result_only',conversationCitationAllowed:false}};
+    if(call.name==='read_exact'&&typeof value==='object'&&value!==null&&!Array.isArray(value))value={...value,evidenceAuthority:{kind:'current_exact_crm_state',toolCallId:call.id,citationAuthority:'exact_result_only',conversationCitationAllowed:false}};
     await recordCrmAuditEvent(context,{action:'crm.ask_tool_executed',subjectKind:'crm_ask_request',subjectId:requestId,detail:{requestVersion:version,requestEpoch:epoch,step,name:call.name}});
     transcript.push({toolCallId:call.id,name:call.name,input:call.input,result:value});
    }continue;
   }
-  const candidate=agentCandidate.safeParse(outcome.answer);if(!candidate.success||candidate.data.claims.some(claim=>new Set(claim.citationWindowIds).size!==claim.citationWindowIds.length||claim.citationWindowIds.some(id=>!live.windows.some(window=>window.id===id)))){await update('unavailable','unsupported_answer');return;}
+  const candidate=agentCandidate.safeParse(outcome.answer);if(!candidate.success||candidate.data.claims.some(claim=>new Set(claim.citationWindowIds).size!==claim.citationWindowIds.length||claim.citationWindowIds.some(id=>!live.windows.some(window=>window.id===id))||new Set(claim.exactResultToolCallIds??[]).size!==(claim.exactResultToolCallIds??[]).length||(claim.exactResultToolCallIds??[]).some(id=>!exactResults.some(exact=>exact.toolCallId===id)))){await update('unavailable','unsupported_answer');return;}
   await withTransaction(input.session,async()=>{await lockAskLifecycle(context);const final=await readCurrentAskInput(context,requestId,version,epoch,route);let authority=false;try{authority=runtime.revalidatePurpose?await runtime.revalidatePurpose(context,snapshot.proofInput):runtime.allowControlledEvaluation===true;}catch{/* Closed. */}if(!authority||!final||final.inputHash!==expectedInputHash||!await fenced(input))return;
    const cancellation=(await context.db.query<{cancelled_at:Date|null}>('SELECT cancelled_at FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,requestId])).rows[0];if(cancellation?.cancelled_at)return;
    for(const exact of exactResults){const value=exact.value as {scope:{firmId?:string}};const refreshed=await readAskScopedExact(context,intent,{operation:exact.operation,...value.scope.firmId?{firmId:value.scope.firmId}:{},limit:20,...exact.operation==='opportunities'?{status:'all' as const}:{}});if(refreshed===null||askFingerprint(refreshed)!==exact.valueHash){await setState(context,requestId,version,epoch,'stale','source_changed');return;}}

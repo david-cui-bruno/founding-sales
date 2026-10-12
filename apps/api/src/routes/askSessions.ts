@@ -1,3 +1,4 @@
+import {projectAskAnswerForClient} from '@fss/domain/crm/askAnswers.ts';
 import {askSessionCreateSchema,askSessionChangeSchema,askSessionTurnSchema,askSessionReadSchema,askSessionListSchema} from '@fss/contracts';
 import {createAskSession,changeAskSession,requestAskSessionTurn,readAskSession,listAskSessions} from '@fss/domain/crm/askSessions.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -17,8 +18,8 @@ export async function routeAskSessions(request:ApiRequest,options:RoutingOptions
  const scoped=contextForPrincipal(options.auth,verified.principal);if(!scoped.ok)return scoped.result;
  if(request.path==='/ask/sessions/read'){
   const parsed=askSessionReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
-  const result=await withTransaction(options.auth.db,()=>readAskSession(scoped.context,parsed.data.sessionId));return result===null?{status:404,body:redactError('not_found')}:{status:200,body:result};
+  const result=await withTransaction(options.auth.db,()=>readAskSession(scoped.context,parsed.data.sessionId));return result===null?{status:404,body:redactError('not_found')}:{status:200,body:{...result,turns:result.turns.map(turn=>projectAskAnswerForClient(turn,parsed.data.includeExactResultCitations===true))}};
  }
  const parsed=askSessionListSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
- const result=await withTransaction(options.auth.db,()=>listAskSessions(scoped.context,parsed.data));return result===null?{status:404,body:redactError('not_found')}:{status:200,body:result};
+ const result=await withTransaction(options.auth.db,()=>listAskSessions(scoped.context,parsed.data));return result===null?{status:404,body:redactError('not_found')}:{status:200,body:{...result,sessions:result.sessions.map(session=>({...session,turns:session.turns.map(turn=>projectAskAnswerForClient(turn,parsed.data.includeExactResultCitations===true))}))}};
 }

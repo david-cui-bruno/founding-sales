@@ -50,7 +50,7 @@ export async function createAskAction(context:RepositoryContext,input:AskActionC
  let references:CanonicalSourceReference[];
  if(input.finding.kind==='keyword_passage')references=current.fallback?.passages[input.finding.index]?.sources??[];
  else{
-  const claim=current.answer?.claims[input.finding.index];if(claim===undefined)return {ok:false as const,reason:'source_unavailable'};
+  const claim=current.answer?.claims[input.finding.index];if(claim===undefined||(claim.exactResultToolCallIds?.length??0)>0)return {ok:false as const,reason:'source_unavailable'};
   references=[];
   for(const windowId of claim.citationWindowIds){const result=await readAskAnswerSource(context,{requestId:input.requestId,expectedVersion:input.expectedVersion,windowId});if(result===null||result.source.passage===null||(current.answer?.resultVersion!=='agent_v1'&&!result.source.passage.text.includes(claim.text)))return {ok:false as const,reason:'source_unavailable'};references.push(result.source.source);}
  }
