@@ -96,7 +96,7 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
     const requested=await post('/ask/answers/request',command({question:scope.askQuestions[item.caseId],execution:'agent_v1',...syntheticAskStageScope(scope.stage,firmId,{...source,kind:'selected_note'})}));expect(requested.status).toBe(200);
     const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
     await runOnce(db,{registry,owner:'approved-synthetic-ask',limit:10});
-    outputs['ask']=(await post('/ask/answers/read',{requestId})).body;
+    outputs['ask']=(await post('/ask/answers/read',{requestId,includeExactResultCitations:true})).body;
     outputs['diagnostics']=(await post('/ask/answers/diagnostics',{requestId})).body;
    }
    writeFileSync(resolve(directory,`${item.caseId}.json`),JSON.stringify(outputs,null,2),{mode:0o600,flag:'wx'});
