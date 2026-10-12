@@ -10,7 +10,9 @@ The [strict-output paired diagnosis](../sourcing/ask-strict-paired-diagnosis-202
 
 The [evidence authority TDD correction](../sourcing/ask-evidence-authority-tdd-20261012.md) adds local interpretation guidance and a narrow refusal for the observed normal-stop draft ending in an opening parenthesis. Actual source1799807b synthetic evaluation completed14calls/156c; delegated review found4/6 useful, with contract/coverage defects remaining. Later host refusal is verified by controlled ordinary-worker replay, not another paid quality run. [PR587](https://github.com/david-cui-bruno/founding-sales/pull/587) carries the correction; consult its exact checks and merge state for integration status. This work performed no production rollout.
 
-Campaign journal conserves335 dispatched calls/3809c allocation (not invoice), within400/$50. All grants terminal; no further dispatch planned. #551 stays open with quality and activation pending. Next: address the remaining answer-construction defects with labeled evaluation; preserve independent roadmap lanes and all holds.
+The compact-context comparison yielded6/12 useful answers in each arm; do not integrate it. The subsequent answer-only tool-exposure comparison yielded9/12 useful baseline answers versus8/12 answer-only, despite38.4% fewer input tokens. All coverage answers still made unsupported inferences. Both are archived diagnostics, not production changes or representative-quality proof. PR587 merged as a19dacec; no rollout was performed by these comparisons.
+
+Campaign journal conserves383 dispatched calls/4399c allocation (not invoice), within400/$50. All grants terminal; no further dispatch planned. #551 stays open with quality and activation pending. Next: address the remaining answer-construction defects with labeled evaluation; preserve independent roadmap lanes and all holds.
 
 ## Evidence, prerequisites and refresh
 
