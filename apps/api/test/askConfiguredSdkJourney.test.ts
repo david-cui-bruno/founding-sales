@@ -72,3 +72,30 @@ it('uses ordinary configured AI SDK composition, host history tools and current 
   expect((await post('/ask/answers/source/read',{requestId,expectedVersion:1,windowId:citation})).status).toBe(404);
  }finally{await fixture.stop();}
 });
+
+it('uses the configured SDK to publish and retain a source-free exact-only session answer',async()=>{
+ const fixture=await createAuthFixture();try{
+  const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-sonnet-4-6' as const,providerKey:'controlled.ask_sdk',accessGrantVersion:'controlled-access',dataHandlingVersion:'controlled-handling',fundingVerifiedUntil:'2099-01-01T00:00:00Z',agentLimits:{maxSteps:4,maxInputBytes:50000,maxOutputTokens:1000,deadlineMs:60000}};
+  const {db,post,command,saveDisabledPurpose,composeWorker}=await configuredAskFixture(fixture,route);
+  const firmId=await seedFirm(fixture,{name:'Exact-only firm',assignedUserId:fixture.alpha.admin.userId});
+  expect((await saveDisabledPurpose('b'.repeat(64))).status).toBe(200);
+  expect((await post('/ask/purpose/activate',command({capability:'ask_answer',purpose:'answer',expectedRevision:1,approval:{consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,reviewedEvaluationReference:'controlled-synthetic-contract-only',limitations:['representative_quality_unverified']}}))).body).toMatchObject({status:'accepted'});
+  let calls=0;
+  const model=new MockLanguageModelV3({doGenerate:async()=>{
+   calls++;const read=calls===1;
+   return {content:[read?{type:'tool-call' as const,toolCallId:'current-opportunities',toolName:'read_exact',input:JSON.stringify({operation:'opportunities',firmId})}:{type:'tool-call' as const,toolCallId:'final',toolName:'emit_answer',input:JSON.stringify({claims:[{text:'There are no open opportunities recorded for this firm.',kind:'fact',citationWindowIds:[],exactResultToolCallIds:['e1']}],abstained:false})}],finishReason:{unified:'tool-calls' as const,raw:'tool_use'},usage:{inputTokens:{total:50,noCache:50,cacheRead:0,cacheWrite:0},outputTokens:{total:10,text:10,reasoning:0}},warnings:[]};
+  }});
+  const registry=await composeWorker(model);
+  const created=await post('/ask/sessions/create',command({scope:{kind:'firm',firmId}}));expect(created.status).toBe(200);const sessionId=(created.body as {result:{sessionId:string}}).result.sessionId;
+  const turn=await post('/ask/sessions/turn',command({sessionId,version:1,question:'How many open opportunities are recorded?'}));expect(turn.status).toBe(200);const requestId=(turn.body as {result:{requestId:string}}).result.requestId;
+  expect((await runOnce(db,{registry,owner:'ordinary-sdk-exact-only',limit:20})).failed).toBe(0);
+  expect((await post('/ask/answers/read',{requestId,includeExactResultCitations:true})).body).toMatchObject({state:'complete',answer:{claims:[{text:'There are no open opportunities recorded for this firm.',citationWindowIds:[],exactResultToolCallIds:['current-opportunities']}],abstained:false}});
+  expect((await post('/ask/sessions/read',{sessionId,includeExactResultCitations:true})).body).toMatchObject({turns:[{state:'complete',answer:{claims:[{citationWindowIds:[],exactResultToolCallIds:['current-opportunities']}]}}]});
+  expect((await post('/ask/sessions/list',{includeExactResultCitations:true})).body).toMatchObject({sessions:[{turns:[{state:'complete'}]}]});
+  expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'unavailable',answer:null});
+  expect((await post('/ask/sessions/read',{sessionId})).body).toMatchObject({turns:[{state:'unavailable',answer:null}]});
+  expect((await post('/ask/sessions/list',{})).body).toMatchObject({sessions:[{turns:[{state:'unavailable',answer:null}]}]});
+  expect((await post('/ask/actions/create',command({requestId,expectedVersion:1,finding:{kind:'answer_claim',index:0},action:{kind:'task',label:'Review exact state',due:null,target:{kind:'firm',firmId}}}))).status).not.toBe(200);
+  expect((await post('/ask/answers/diagnostics',{requestId})).body).toMatchObject({usage:{inputTokens:100,outputTokens:20},cost:{unsettledCents:0,estimated:false}});
+ }finally{await fixture.stop();}
+});

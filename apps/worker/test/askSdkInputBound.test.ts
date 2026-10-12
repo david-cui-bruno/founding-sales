@@ -27,7 +27,7 @@ it('requests SDK schema-bound final output while preserving retrieval tools and 
  expect(request).toMatchObject({toolConfig:{toolChoice:{any:{}}}});
  const parsed=JSON.parse(JSON.stringify(request)) as {toolConfig:{tools:{toolSpec:{name:string}}[]};additionalModelRequestFields?:unknown};
  expect(parsed.toolConfig.tools.map(tool=>tool.toolSpec.name).sort()).toEqual(['browse_history','emit_answer','read_conversation','read_exact','read_selected','resolve_records','search_history','search_selected']);
- expect(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer')).toMatchObject({toolSpec:{strict:true,inputSchema:{json:{properties:{claims:{description:expect.stringContaining('Mixed original and exact CRM facts'),items:{properties:{text:{description:expect.stringContaining('Each factual clause')},citationWindowIds:{description:expect.stringContaining('SQL clauses additionally need')}}}}}}}}});
+ expect(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer')).toMatchObject({toolSpec:{strict:true,inputSchema:{json:{properties:{claims:{description:expect.stringContaining('Supported source-only, exact-only or mixed claims'),items:{properties:{text:{description:expect.stringContaining('Each factual clause')},citationWindowIds:{description:expect.stringContaining('Empty for exact-only claims; SQL clauses need')}}}}}}}}});
  expect(JSON.stringify(parsed.toolConfig.tools.find(tool=>tool.toolSpec.name==='emit_answer'))).toContain('exactResultToolCallIds');
  expect(adapter.inputBound!(finalInput)!.inputBytes).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(request)));
 });

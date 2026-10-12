@@ -44,4 +44,7 @@ it('keeps a bounded 50-promise Today page and unrelated unanswered work with tru
   expect(body.actions[0]?.kind).toBe('reply');
   expect(body.promiseCoverage).toEqual({scope:'current_authorized_work',truncated:true,nextAfterId:expect.any(String)});
  }finally{await fixture.stop();}
-},90_000);
+// This volume journey performs 51 public attestations and projection jobs.
+// Baseline CI measured 65s; concurrent CI hit 90s while focused execution passed
+// in 18s. This is a fixture budget, not a Today request latency allowance.
+},180_000);

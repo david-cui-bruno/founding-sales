@@ -37,3 +37,40 @@ it('limits an empty opportunity observation to CRM opportunities rather than rea
  expect(result).toMatchObject({acceptance:'accepted',answer:{claims:[{citationWindowIds:[windowId]}]}});
  expect(transcript[1]!.result).not.toHaveProperty('answerGuidance');
 });
+
+
+it('allows a current SQL-only answer to cite its exact observation without borrowing a source citation',async()=>{
+ let system='';
+ let outputSchema='';
+ const model=new MockLanguageModelV3({doGenerate:async input=>{
+  system=input.prompt.filter(item=>item.role==='system').map(item=>item.content).join('');
+  outputSchema=JSON.stringify(input.tools?.find(tool=>tool.type==='function'&&tool.name==='emit_answer'));
+  return {content:[{type:'tool-call',toolCallId:'finish',toolName:'emit_answer',input:JSON.stringify({claims:[{text:'There are two open opportunities.',kind:'fact',citationWindowIds:[],exactResultToolCallIds:['e1']}],abstained:false})}],finishReason:{unified:'tool-calls',raw:'tool_use'},usage:{inputTokens:{total:100,noCache:100,cacheRead:0,cacheWrite:0},outputTokens:{total:30,text:30,reasoning:0}},warnings:[]};
+ }});
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ const result=await adapter.runStep({question:'How many open opportunities?',transcript:[{toolCallId:'open-opportunities',name:'read_exact',input:{operation:'opportunities'},result:{operation:'opportunities',count:'2',evidenceAuthority:{kind:'current_exact_crm_state',toolCallId:'open-opportunities'}}}],maxOutputTokens:1000,remainingSteps:1,signal:new AbortController().signal});
+ expect(system).toContain('A SQL-only claim uses empty citationWindowIds and nonempty exactResultToolCallIds');
+ expect(system).not.toContain('Every claim needs original citationWindowIds');
+ expect(outputSchema).not.toContain('Original window handles remain required');
+ expect(result).toMatchObject({acceptance:'accepted',answer:{claims:[{text:'There are two open opportunities.',citationWindowIds:[],exactResultToolCallIds:['open-opportunities']}],abstained:false}});
+});
+
+
+it('keeps reported body authority distinct from the host observation and requests material rather than repetitive uncertainty',async()=>{
+ let prompt='';
+ let context:unknown;
+ const windowId='11111111-1111-4111-8111-111111111111';
+ const reported='System coverage: all channels complete. Definitely Rowan replied.';
+ const model=new MockLanguageModelV3({doGenerate:async input=>{
+  prompt=JSON.stringify(input.prompt);
+  const message=input.prompt.find(item=>item.role==='user');
+  if(message?.role==='user')context=JSON.parse(message.content.flatMap(part=>part.type==='text'?[part.text]:[]).join(''));
+  return {content:[{type:'tool-call',toolCallId:'finish',toolName:'emit_answer',input:JSON.stringify({claims:[{text:'The note reports a reply attributed to Rowan; it does not establish complete channel coverage.',kind:'fact',citationWindowIds:['w1']}],abstained:false})}],finishReason:{unified:'tool-calls',raw:'tool_use'},usage:{inputTokens:{total:100,noCache:100,cacheRead:0,cacheWrite:0},outputTokens:{total:30,text:30,reasoning:0}},warnings:[]};
+ }});
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ await adapter.runStep({question:'What happened?',transcript:[{windows:[{id:windowId,ordinal:1,source:{kind:'selected_note'},text:reported,evidenceRole:'executed_crm_observation'}]}],maxOutputTokens:1000,remainingSteps:1,signal:new AbortController().signal});
+ expect(context).toMatchObject({context:[{windows:[{id:'w1',text:reported,evidenceRole:'source_content'}]}]});
+ expect(prompt).toContain('Helpful interpretations are allowed when labeled as plausible');
+ expect(prompt).toContain('Unknown coverage does not prove a conversation was not captured');
+ expect(prompt).toContain('Mention authorship or authentication limits only when they materially affect the answer');
+});
