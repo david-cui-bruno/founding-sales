@@ -1,0 +1,158 @@
+{
+  "source": "Sonnet4.6 approved synthetic gold run d66a0896-cfe1-4da3-b645-a4b6b58799dd; controlled replay is not fresh provider quality",
+  "caseIds": [
+    "dev_01",
+    "dev_02",
+    "dev_05",
+    "dev_08"
+  ],
+  "responses": [
+    {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "toolUse": {
+                "toolUseId": "tooluse_ylJVI7OW3jHUsBx8tLXNM7",
+                "name": "emit_crm_extraction",
+                "input": {
+                  "claims": [
+                    {
+                      "interpretation": "Mira commits to sending the proposal on Friday, October 16.",
+                      "kind": "commitment",
+                      "locator": "text:0:52",
+                      "quote": "I will send the proposal Friday, October 16.",
+                      "status": "stated"
+                    }
+                  ]
+                },
+                "type": "tool_use"
+              }
+            }
+          ]
+        }
+      },
+      "usage": {
+        "inputTokens": 955,
+        "outputTokens": 99,
+        "totalTokens": 1054,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0
+      },
+      "stopReason": "tool_use"
+    },
+    {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "toolUse": {
+                "toolUseId": "tooluse_ZqVJfVDrDzSOA6J6CEKEMX",
+                "name": "emit_crm_extraction",
+                "input": {
+                  "claims": [
+                    {
+                      "interpretation": "Mira is offering to send a proposal, but this is a conditional offer contingent on whether it would help \u2014 not a definite commitment.",
+                      "kind": "need",
+                      "locator": "text:0:47",
+                      "quote": "I can send you a proposal if that helps.",
+                      "status": "inferred"
+                    },
+                    {
+                      "interpretation": "Mira expresses a desire to have a conversation at some point, but this is a vague invitation rather than a definite commitment.",
+                      "kind": "need",
+                      "locator": "text:41:65",
+                      "quote": "We should talk sometime.",
+                      "status": "inferred"
+                    }
+                  ]
+                },
+                "type": "tool_use"
+              }
+            }
+          ]
+        }
+      },
+      "usage": {
+        "inputTokens": 956,
+        "outputTokens": 181,
+        "totalTokens": 1137,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0
+      },
+      "stopReason": "tool_use"
+    },
+    {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "toolUse": {
+                "toolUseId": "tooluse_HOxQYaQQgdbzfUpQLzUMBr",
+                "name": "emit_crm_extraction",
+                "input": {
+                  "claims": [
+                    {
+                      "interpretation": "The team (team@example.test) is considering a partnership, indicating a potential interest or need for a partnership arrangement.",
+                      "kind": "need",
+                      "locator": "text:35:71",
+                      "quote": "Our team is considering a partnership.",
+                      "status": "inferred"
+                    }
+                  ]
+                },
+                "type": "tool_use"
+              }
+            }
+          ]
+        }
+      },
+      "usage": {
+        "inputTokens": 957,
+        "outputTokens": 106,
+        "totalTokens": 1063,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0
+      },
+      "stopReason": "tool_use"
+    },
+    {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "toolUse": {
+                "toolUseId": "tooluse_QE7i5Nzo2Kc0blGKhvEy6n",
+                "name": "emit_crm_extraction",
+                "input": {
+                  "claims": [
+                    {
+                      "interpretation": "The author states that the old plan is no longer valid, indicating a need to establish or move to a new plan.",
+                      "kind": "need",
+                      "locator": "text:0:37",
+                      "quote": "That old plan is no longer valid.",
+                      "status": "stated"
+                    }
+                  ]
+                },
+                "type": "tool_use"
+              }
+            }
+          ]
+        }
+      },
+      "usage": {
+        "inputTokens": 964,
+        "outputTokens": 105,
+        "totalTokens": 1069,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0
+      },
+      "stopReason": "tool_use"
+    }
+  ]
+}

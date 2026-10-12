@@ -85,8 +85,10 @@ export function createBedrockAskAnswerAdapter(route: Route): AskAnswerAdapter {
 const extractionEnvelope=z.strictObject({claims:z.array(z.strictObject({kind:z.enum(['need','objection','commitment']),interpretation:z.string().min(1).max(1000),status:z.enum(['stated','inferred']),locator:z.string().min(1).max(200),quote:z.string().min(1).max(2000)})).max(50)});
 const extractionToolSchema={type:'object',properties:{claims:{type:'array',items:{type:'object',properties:{kind:{type:'string',enum:['need','objection','commitment']},interpretation:{type:'string'},status:{type:'string',enum:['stated','inferred']},locator:{type:'string'},quote:{type:'string'}},required:['kind','interpretation','status','locator','quote'],additionalProperties:false}}},required:['claims'],additionalProperties:false};
 const mailEvidenceEnvelope=z.strictObject({format:z.literal('crm-mail-evidence-v1'),contextCoverage:z.literal('single_message_only'),source:z.strictObject({sourceId:z.uuid(),sourceRevision:z.number().int().positive(),contentHash:z.string().regex(/^[a-f0-9]{64}$/u)}),text:z.string().max(200000),representation:z.enum(['plain_text','html_flattened']),completeness:z.enum(['complete','partial','unavailable']),parserVersion:z.string().max(100),ranges:z.array(z.strictObject({start:z.number().int().nonnegative(),end:z.number().int().nonnegative(),kind:z.enum(['authored','quoted','forwarded','unknown'])})).max(10000),message:z.strictObject({direction:z.enum(['incoming','outgoing']),envelope:z.strictObject({from:z.string().max(320).nullable(),to:z.array(z.string().max(320)).max(50),cc:z.array(z.string().max(320)).max(50)}),occurredAt:z.string().datetime(),observedAt:z.string().datetime(),rawSenderDate:z.string().max(200).nullable(),providerOrigin:z.enum(['received','sent','imported','unknown']),sentProof:z.boolean(),identityStatus:z.literal('unknown')})});
-/** Only the native versioned envelope can map serialized input back to canonical text. */
-function canonicalMailText(input:Parameters<CrmExtractionAdapter['run']>[0]):string|null{
+/** Only an exact raw selected-original hash or native versioned mail envelope
+ * can map model positions back to canonical text. Transcripts keep utterance locators. */
+function canonicalExtractionText(input:Parameters<CrmExtractionAdapter['run']>[0]):string|null{
+ if(input.source.kind==='selected_note')return createHash('sha256').update(input.text).digest('hex')===input.source.contentHash?input.text:null;
  if(input.source.kind!=='mail')return null;
  let value:unknown;try{value=JSON.parse(input.text) as unknown;}catch{return null;}
  const parsed=mailEvidenceEnvelope.safeParse(value);if(!parsed.success)return null;
@@ -95,8 +97,8 @@ function canonicalMailText(input:Parameters<CrmExtractionAdapter['run']>[0]):str
  if(evidence.ranges.some(range=>range.end<range.start||range.end>evidence.text.length))return null;
  return evidence.text;
 }
-function alignMailQuotes(input:Parameters<CrmExtractionAdapter['run']>[0],claims:z.infer<typeof extractionEnvelope>['claims']){
- const text=canonicalMailText(input);if(text===null)return claims;
+function alignCanonicalQuotes(input:Parameters<CrmExtractionAdapter['run']>[0],claims:z.infer<typeof extractionEnvelope>['claims']){
+ const text=canonicalExtractionText(input);if(text===null)return claims;
  return claims.map(claim=>{
   const range=/^text:(0|[1-9]\d*):(0|[1-9]\d*)$/u.exec(claim.locator);
   if(range!==null&&Number(range[2])>Number(range[1])&&text.slice(Number(range[1]),Number(range[2]))===claim.quote)return claim;
@@ -111,7 +113,8 @@ function composeExtraction(route:Route,input:Parameters<CrmExtractionAdapter['ru
  return {modelId:route.modelVersion,system:[{text:system}],messages:[{role:'user',content:[{text:input.text}]}],inferenceConfig:{maxTokens:input.maxOutputTokens,temperature:0},additionalModelRequestFields:{thinking:{type:'disabled'}},toolConfig:{tools:[{toolSpec:{name:'emit_crm_extraction',description:'Return source-grounded extraction candidates only; this output is data, never an action.',strict:true,inputSchema:{json:extractionToolSchema}}}],toolChoice:{any:{}}}};
 }
 const extractionResponseSchema=z.object({stopReason:z.string(),usage:responseSchema.shape.usage,output:z.unknown().optional()});
-const extractionOutputSchema=z.object({message:z.object({role:z.literal('assistant'),content:z.tuple([z.strictObject({toolUse:z.strictObject({toolUseId:z.string().min(1),name:z.literal('emit_crm_extraction'),input:extractionEnvelope})})])})});
+/** Optional type:'tool_use' is captured actual AWS protocol, not an action allowance. */
+const extractionOutputSchema=z.object({message:z.object({role:z.literal('assistant'),content:z.tuple([z.strictObject({toolUse:z.strictObject({toolUseId:z.string().min(1),name:z.literal('emit_crm_extraction'),input:extractionEnvelope,type:z.literal('tool_use').optional()})})])})});
 export function createBedrockCrmExtractionAdapter(route: Route & Pick<CrmExtractionAdapter, 'accessGrantVersion' | 'dataHandlingVersion' | 'fundingVerifiedUntil'>): CrmExtractionAdapter {
  const frozen=Object.freeze({...route,...freezeRoute(route)});
  return Object.freeze({endpointId:frozen.endpointId,modelVersion:frozen.modelVersion,providerKey:frozen.providerKey,accessGrantVersion:frozen.accessGrantVersion,dataHandlingVersion:frozen.dataHandlingVersion,fundingVerifiedUntil:frozen.fundingVerifiedUntil,
@@ -136,7 +139,7 @@ export function createBedrockCrmExtractionAdapter(route: Route & Pick<CrmExtract
    if(usage===null)return {acceptance:'unknown' as const,usage:null,claims:null};
    const output=extractionOutputSchema.safeParse(response.data.output);
    // Output tool is data only: no execution, follow-up request or retries.
-   return {acceptance:'accepted' as const,usage,claims:response.data.stopReason==='tool_use'&&output.success?alignMailQuotes(input,output.data.message.content[0].toolUse.input.claims):null};
+   return {acceptance:'accepted' as const,usage,claims:response.data.stopReason==='tool_use'&&output.success?alignCanonicalQuotes(input,output.data.message.content[0].toolUse.input.claims):null};
   }});
 }
 
