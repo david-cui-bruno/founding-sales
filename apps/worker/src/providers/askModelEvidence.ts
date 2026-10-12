@@ -46,6 +46,7 @@ function modelProvenance(source: z.infer<typeof sourceSchema>) {
       inlineHeaders: 'reported_text_not_envelope',
       coverageStatements: 'reported_text_not_live_coverage',
       eventTime: 'reported_not_verified_authored_time',
+      temporalRelationships: 'Preserve which action a date, relative time or condition modifies. A statement date is not its promised action date. Leave relative timing unresolved without a supported anchor; copy observation time is not an anchor.',
     } } : {}),
     sourceMetadata: {
       eventTime: { at: source.occurredAt ?? null, basis: eventBasis, independentlyVerifiedAuthoredTime: false },
@@ -113,7 +114,13 @@ export function projectAskModelEvidence(transcript: readonly unknown[]) {
   }
   function projectWindows(value: unknown) {
     const list = z.object({ windows: z.array(z.unknown()) }).passthrough().safeParse(value);
-    return list.success ? { ...list.data, windows: list.data.windows.map(projectWindow) } : value;
+    return list.success ? { ...list.data, windows: list.data.windows.map(projectWindow), answerGuidance: {
+      scope: 'Only authorized retained copies inspected within this Ask scope.',
+      limits: [
+        'A complete scan describes the bounded copied-source scan, not complete mailbox, time or channel coverage.',
+        'No matches or omitted texts do not establish that messages did not occur or are absent elsewhere in Callie.',
+      ],
+    } } : value;
   }
   const projected = transcript.map(entry => {
     const tool = toolSchema.safeParse(entry);
