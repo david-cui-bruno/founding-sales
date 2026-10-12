@@ -31,9 +31,18 @@ function validatePair(body){
  const payloads=compact.messages.flatMap(m=>m.content.flatMap(b=>b.text?[JSON.parse(b.text).context??[]]:b.toolResult?b.toolResult.content.filter(c=>c.text).map(c=>JSON.parse(c.text)):[]));
  const records=payloads.flat(),originals=records.flatMap(p=>p.originals??[]),observations=records.flatMap(p=>p.observations??[]),old=inventory(body);
  if(originals.length!==old.originals.length||observations.length!==old.observations.length)throw new Error('evidence_lost');
- for(const w of old.originals){const fresh=originals.find(x=>x.id===w.id);if(!fresh||fresh.text!==w.text||fresh.kind!==w.source.kind||fresh.navigation.sourceId!==w.source.sourceId||!same(fresh.dates,w.sourceMetadata))throw new Error('original_changed');}
+ for(const w of old.originals){const fresh=originals.find(x=>x.id===w.id);if(!fresh||fresh.text!==w.text||fresh.kind!==w.source.kind||fresh.navigation.sourceId!==w.source.sourceId||fresh.navigation.locator!==w.source.locator||!same(fresh.dates,w.sourceMetadata))throw new Error('original_changed');}
  for(const o of old.observations){const fresh=observations.find(x=>x.id===o.evidenceAuthority.toolCallId);if(!fresh||!same(fresh.queryScope,o.scope))throw new Error('observation_scope_changed');for(const key of Object.keys(o).filter(k=>!['evidenceAuthority','answerGuidance','scope','coverage'].includes(k)))if(!same(o[key],fresh.value[key]))throw new Error('observation_changed');}
  for(let i=0;i<body.messages.length;i++)for(let j=0;j<body.messages[i].content.length;j++){const a=body.messages[i].content[j],b=compact.messages[i].content[j];if(a.toolUse&&!same(a,b))throw new Error('tool_argument_changed');}
+ for(const m of body.messages)for(const b of m.content){
+  const containers=b.text?(JSON.parse(b.text).context??[]):b.toolResult?b.toolResult.content.filter(c=>c.text).map(c=>JSON.parse(c.text)):[];
+  for(const c of containers){
+   if(c&&Array.isArray(c.windows))for(const w of c.windows){const fresh=originals.find(x=>x.id===w.id);if(!same(fresh.attribution.canonicalAssociations,(c.scope?.sourceContexts??[]).filter(x=>x.sourceId===w.source.sourceId&&x.kind===w.source.kind))||!same(fresh.attribution.sourceLabels,(c.attribution??[]).filter(x=>x.sourceId===w.source.sourceId&&x.kind===w.source.kind))||fresh.attribution.reportedSpeaker!==(w.source.speaker??null))throw new Error('attribution_changed');}
+   const projected=compactNativeBody({messages:[{role:'user',content:[{toolResult:{content:[{text:JSON.stringify(c)}]}}]}]}).messages[0].content[0].toolResult.content[0].text;
+   const mapped=JSON.parse(projected);if(c?.coverage&&!same(c.coverage,c.evidenceAuthority?.kind==='current_exact_crm_state'?mapped.coverage?.exactQuery:mapped.coverage?.selectedScan))throw new Error('coverage_changed');
+   if(c&&Array.isArray(c.windows))for(const key of ['partial','preview','previewWindowLimit','sourceCeilingReached','retrieval','semantic','scannedCandidates'])if(!same(c[key],mapped.coverage.retrieval[key]))throw new Error('retrieval_scope_changed');
+  }
+ }
  return {compact,originalIds:new Set(old.originals.map(w=>w.id)),exactIds:new Set(old.observations.map(o=>o.evidenceAuthority.toolCallId))};
 }
 function candidate(raw,allowed){
@@ -67,7 +76,9 @@ if(process.argv.includes('--dry-run')){
    const frame=frames[i],body=arm==='compact'?frame.checked.compact:frame.body,row={caseId:frame.caseId,repetition,arm,state:'not_dispatched',requestSha256:sha(JSON.stringify(body)),requestBytes:Buffer.byteLength(JSON.stringify(body))};results.push(row);save();const started=Date.now();let raw;
    try{raw=await budget.run({...body,modelId:scope.modelVersion},1000,async()=>{row.state='dispatched_unknown';save();return client.send(new ConverseCommand({...body,modelId:scope.modelVersion}),{abortSignal:AbortSignal.timeout(60000)});});}
    catch{row.state=budget.snapshot().startedSteps===results.length?'unknown_acceptance':'preflight_refused';phase=row.state==='unknown_acceptance'?'unknown_acceptance_stopped':'preflight_stopped';save();throw new Error(phase);}
-   const u=raw.usage;if(!u||![u.inputTokens,u.outputTokens].every(n=>Number.isSafeInteger(n)&&n>=0)||u.outputTokens>1000||(u.cacheWriteInputTokens??0)>0){row.state='unknown_usage';phase='unknown_acceptance_stopped';save();throw new Error(phase);}
+   const u=raw.usage,boundedInput=Buffer.byteLength(JSON.stringify({...body,modelId:scope.modelVersion}),'utf8')+2048;
+   const caches=[u?.cacheReadInputTokens,u?.cacheWriteInputTokens];
+   if(!u||![u.inputTokens,u.outputTokens].every(n=>Number.isSafeInteger(n)&&n>=0)||u.inputTokens>boundedInput||u.outputTokens>1000||caches.some(n=>n!==undefined&&(!Number.isSafeInteger(n)||n<0||n>boundedInput))||(u.cacheWriteInputTokens??0)>0){row.state='unknown_usage';phase='unknown_acceptance_stopped';save();throw new Error(phase);}
    row.response={stopReason:raw.stopReason,usage:u,output:{message:{content:(raw.output?.message?.content??[]).filter(b=>b.text!==undefined||b.toolUse!==undefined).map(b=>b.toolUse?{toolUse:{toolUseId:b.toolUse.toolUseId,name:b.toolUse.name,input:b.toolUse.input}}:{text:b.text})}}};
    Object.assign(row,candidate(row.response,frame.checked),{durationMs:Date.now()-started});save();
   }
