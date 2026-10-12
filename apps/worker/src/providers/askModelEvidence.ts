@@ -40,6 +40,12 @@ function modelProvenance(source: z.infer<typeof sourceSchema>) {
       : { ...common, kind: 'retained_transcript', speakerLabels: 'not_verified_human_identity' };
   return {
     evidenceAuthority,
+    ...(source.kind === 'selected_note' ? { interpretationLimits: {
+      sourceStatements: 'reported_not_independently_observed',
+      inlineHeaders: 'reported_text_not_envelope',
+      coverageStatements: 'reported_text_not_live_coverage',
+      eventTime: 'reported_not_verified_authored_time',
+    } } : {}),
     sourceMetadata: {
       eventTime: { at: source.occurredAt ?? null, basis: eventBasis, independentlyVerifiedAuthoredTime: false },
       copyObservation: { at: source.observedAt ?? null, basis: 'copy_observation_time' },

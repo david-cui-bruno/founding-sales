@@ -24,3 +24,10 @@ it('admits only separately approved V2 per-run ten-dollar ceilings while leaving
  expect(()=>validateSyntheticAcceptance(input({maxCents:1001}))).toThrow();
  expect(()=>validateSyntheticAcceptance(input({scopeVersion:undefined,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0',maxSteps:25,maxCents:1000,maxAskSteps:3,stage:undefined,thinking:undefined,pricing:undefined}))).toThrow('frozen_scope_changed');
 });
+
+it('allows an explicitly frozen Ask-only evaluation without an extraction workload or allowance',()=>{
+ const askOnly={scopeVersion:3,modelVersion:'us.anthropic.claude-sonnet-4-6',extractionIds:[],maxSteps:37};
+ expect(validateSyntheticAcceptance(input(askOnly)).scope.extractionIds).toEqual([]);
+ expect(()=>validateSyntheticAcceptance(input({...askOnly,extractionIds:['dev_01']}))).toThrow();
+ expect(()=>validateSyntheticAcceptance(input({...askOnly,maxSteps:36}))).toThrow();
+});
