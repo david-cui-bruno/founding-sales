@@ -48,7 +48,7 @@ if(process.argv.includes('--dry-run')){
  const campaign=JSON.parse(readFileSync('.context/roadmap-audit-20261011/model-comparison-campaign/campaign.json'));
  const grant=campaign.grants.find(g=>g.runId===scope.runId);
  const ids=['dev_01','dev_05','dev_06','dev_08','dev_10','dev_11'];
- if(!grant||grant.state!=='reserved_before_dispatch'||grant.scopeSha256!==sha(bytes)||scope.maxCalls!==24||scope.maxCents!==500||scope.repetitions!==2||scope.modelVersion!=='us.anthropic.claude-sonnet-4-6'||!same(frames.map(f=>f.caseId),ids))throw new Error('exact_campaign_scope_required');
+ if(!grant||grant.state!=='reserved_before_dispatch'||grant.maxCalls!==scope.maxCalls||grant.maxCents!==scope.maxCents||grant.source!==scope.sourceCommit||grant.model!==scope.modelVersion||grant.scopeSha256!==sha(bytes)||scope.maxCalls!==24||scope.maxCents!==500||scope.repetitions!==2||scope.modelVersion!=='us.anthropic.claude-sonnet-4-6'||!same(frames.map(f=>f.caseId),ids))throw new Error('exact_campaign_scope_required');
  const committed=campaign.grants.reduce((total,g)=>{const terminal=g.fundingState==='closed_per_call_allocations_conserved';return {calls:total.calls+(terminal?g.actualBudget.startedSteps:g.maxCalls),cents:total.cents+(terminal?g.actualBudget.allocatedCents:g.maxCents)};},{calls:0,cents:0});
  if(campaign.maxCalls!==400||campaign.maxCents!==5000||committed.calls>campaign.maxCalls||committed.cents>campaign.maxCents||scope.grantIndex!==grant.index||scope.campaignId!==campaign.campaignId||scope.labelsSha256!==sha(readFileSync('tools/ask-evaluation/owner-provisional-labels.json')))throw new Error('campaign_limit_or_labels_changed');
  if(execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()!==scope.sourceCommit)throw new Error('source_changed');
