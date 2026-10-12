@@ -36,6 +36,12 @@ The existing opt-in runner now supports separately bound version4 fixtures for t
 
 Version4 binds the actual tracked application/schema/dependency working files plus commit and uses a host-wide opaque once-only scope marker before loading a model. Historical fixture versions and grants retain their original restrictions. No new framework, production authority, model setting or sending permission is introduced. Paid comparison has not run; exact source review, a frozen executable scope and a fresh explicit allowance remain prerequisites. Prior grants are consumed and the larger campaign remains a proposal.
 
+## Actual ordinary-worker comparison and publication repair — October 12
+
+PR590 preparation merged as `67089b6b`. David approved the exact fresh two-run34call/$10 synthetic comparison. The [actual configured-worker results](../sourcing/ask-ordinary-worker-v4-results-20261012.md) completed on frozen source2d612dc2: Sonnet published2/8, Haiku4/8, with25calls/202c conserved allocation (not invoice), no retries and all source-backed deletion readbacks erased. Both exact-state questions answered correctly. Independent review found unsupported coverage and timing claims in some unpublished drafts; this small synthetic run does not establish representative quality or a model winner.
+
+Nine source-only drafts were refused because the worker rejected an explicit empty exact-reference array that the SDK/public contract allows. A narrow source correction aligns that list contract while retaining required original-or-exact authority; configured regression went red before repair,31focused tests pass afterward, and all six captured Sonnet drafts structurally replay through the worker offline. Repaired-source actual model usefulness is not yet measured. Haiku's separate ambiguous-pilot `resolve_records` failure reproduced because selected-firm proof added an empty people filter absent from resolution. Source now aligns the selected-firm restrictions while preserving selected-person and outside-record guards; seven focused tests including captured replay pass. These two repairs are in PR591, not deployed. #551 remains open. Both evaluation grants are consumed; the release hold, deployed-state uncertainty and sending safeguards remain unchanged.
+
 ## Evidence, prerequisites and refresh
 
 - Historical source/provider/release observations: [retained evidence history](current-state-history-20261011.md).
