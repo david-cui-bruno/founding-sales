@@ -63,13 +63,22 @@ export async function readAskAnswerSource(context:RepositoryContext,input:{reque
 
 interface PrivateRequest extends Record<string,unknown>{id:string;owner_user_id:string;version:number;epoch:number;created_at:Date;question:string|null;scope:unknown;initial_contexts:unknown;initial_access_closure:unknown;state:string;reason:string|null;result:unknown}
 /** Saved input is not authority: every read checks its initial and current copy closure. */
-export async function readAskAnswer(context:RepositoryContext,requestId:string){
+async function readAuthorizedAskAnswer(context:RepositoryContext,requestId:string){
  const actor=context.scope.actor;
  if(actor.kind!=='user'||!await activeIdentityActor(context))return null;
  const row=(await context.db.query<PrivateRequest>('SELECT * FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3',[context.scope.workspaceId,requestId,actor.userId])).rows[0];
  if(row===undefined)return null;
+ // One current closure check serves public history and private dated context.
+ // A question-only context can be returned only at the exact-freshness refusal below.
+ const project=(read:unknown,questionOnly?:{question:string;createdAt:string})=>{
+  const value=askAnswerReadResultSchema.parse(read);
+  const conversation=value.state==='complete'&&value.question!==null&&value.answer!==null
+   ?{question:value.question,answer:value.answer,createdAt:value.createdAt}
+   :questionOnly?{...questionOnly,answer:null}:null;
+  return {read:value,conversation};
+ };
  const metadata={requestId:row.id,version:row.version,createdAt:row.created_at.toISOString(),state:row.state,reason:row.reason,...row['execution_version']==='agent_v1'?{execution:'agent_v1',progress:{completedSteps:Number(row['completed_steps']),stage:row['progress_stage'],cancelledAt:row['cancelled_at'] instanceof Date?row['cancelled_at'].toISOString():null}}:{}};
- const unavailable=()=>askAnswerReadResultSchema.parse({...metadata,state:row.state==='complete'?'stale':row.state,reason:row.state==='deleted'?'deleted':row.state==='stale'?(row.reason??'source_changed'):'source_unavailable',question:null,fallback:null,answer:null});
+ const unavailable=()=>project({...metadata,state:row.state==='complete'?'stale':row.state,reason:row.state==='deleted'?'deleted':row.state==='stale'?(row.reason??'source_changed'):'source_unavailable',question:null,fallback:null,answer:null});
  if(row.state==='deleted'||row.state==='stale'||row.reason==='source_unavailable')return unavailable();
  const input=askAnswerRequestPayloadSchema.safeParse({question:row.question,scope:row.scope,execution:row['execution_version']});
  const originals=crmOriginalAccessClosureSchema.safeParse(row.initial_access_closure);
@@ -90,9 +99,9 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
  if(locked===undefined||locked.version!==row.version||locked.epoch!==row.epoch||locked.state!==row.state||JSON.stringify(locked.scope)!==JSON.stringify(row.scope)||locked.question!==row.question)return unavailable();
  if(row.state==='complete'){
   const conflicts=await readAskInputConflicts(context,input.data.scope,originals.data);
-  if(conflicts===null)return askAnswerReadResultSchema.parse({...metadata,state:'unavailable',reason:'input_bound_reached',question:null,fallback:null,answer:null});
+  if(conflicts===null)return project({...metadata,state:'unavailable',reason:'input_bound_reached',question:null,fallback:null,answer:null});
   const result=askGroundedAnswerSchema.safeParse(row.result);
-  if(!result.success||JSON.stringify(conflicts.map(value=>[value.conflictId,value.revision,value.state,value.resolution]))!==JSON.stringify(result.data.conflicts.map(value=>[value.conflictId,value.revision,value.state,value.resolution])))return askAnswerReadResultSchema.parse({...metadata,state:'stale',reason:'source_changed',question:null,fallback:null,answer:null});
+  if(!result.success||JSON.stringify(conflicts.map(value=>[value.conflictId,value.revision,value.state,value.resolution]))!==JSON.stringify(result.data.conflicts.map(value=>[value.conflictId,value.revision,value.state,value.resolution])))return project({...metadata,state:'stale',reason:'source_changed',question:null,fallback:null,answer:null});
  }
  const fallback=input.data.scope.sources.length===0?null:await readAskCorpus(context,{scope:askExplicitCorpusScopeSchema.parse(input.data.scope),query:input.data.question,limit:20});
  if((fallback===null&&input.data.scope.sources.length>0)||!await activeIdentityActor(context))return unavailable();
@@ -104,18 +113,35 @@ export async function readAskAnswer(context:RepositoryContext,requestId:string){
  const completed=askSupportedWorkSchema.safeParse(finalAnswer?.exactResults?{exactResults:finalAnswer.exactResults}:row['validated_progress']);
  const intentFirmIds=askToolFirmIds(intent.success?intent.data:null,originals.data.firmIds);
  const exactResults=[];
+ let exactReadsAvailable=completed.success;
  if(completed.success)for(const exact of completed.data.exactResults){
   const value=exact.value as {scope?:{firmId?:string}};
   const firmId=value?.scope?.firmId;
-  if(firmId&&!intent.success&&!intentFirmIds.includes(firmId))continue;
-  if(!firmId&&(!intent.success||!['business','person'].includes(intent.data.kind)))continue;
+  if(firmId&&!intent.success&&!intentFirmIds.includes(firmId)){exactReadsAvailable=false;continue;}
+  if(!firmId&&(!intent.success||!['business','person'].includes(intent.data.kind))){exactReadsAvailable=false;continue;}
   const refreshed=intent.success?await readAskScopedExact(context,intent.data,{operation:exact.operation,...firmId?{firmId}:{},limit:20,status:'all'}):firmId?await readAsk(context,exact.operation==='opportunities'?{operation:'opportunities',scope:{firmId},limit:20,status:'all'}:exact.operation==='tasks'?{operation:'tasks',scope:{firmId},limit:20}:{operation:'reply_status',scope:{firmId}}):null;
-  if(refreshed!==null&&askFingerprint(refreshed)===exact.valueHash)exactResults.push(exact);
+  if(refreshed===null)exactReadsAvailable=false;
+  else if(askFingerprint(refreshed)===exact.valueHash)exactResults.push(exact);
  }
  const currentExactIds=new Set(exactResults.map(exact=>exact.toolCallId));
- if(mixedReferences.some(id=>!currentExactIds.has(id)))return askAnswerReadResultSchema.parse({...metadata,state:'stale',reason:'source_changed',question:null,fallback:null,answer:null});
+ if(mixedReferences.some(id=>!currentExactIds.has(id))){
+  return project(
+   {...metadata,state:'stale',reason:'source_changed',question:null,fallback:null,answer:null},
+   exactReadsAvailable?{question:input.data.question,createdAt:metadata.createdAt}:undefined,
+  );
+ }
  const clarification=askIdentityClarificationSchema.safeParse(row['clarification']);
- return askAnswerReadResultSchema.parse({...metadata,question:input.data.question,fallback,...clarification.success?{clarification:clarification.data}:{},...exactResults.length?{supportedWork:{exactResults}}:{},answer:finalAnswer===null?null:{...finalAnswer,...finalAnswer.exactResults?{exactResults,missingEvidence:exactResults.length===finalAnswer.exactResults.length?finalAnswer.missingEvidence:[...new Set([...finalAnswer.missingEvidence,'exact_state_changed'])]}:{}}});
+ return project({...metadata,question:input.data.question,fallback,...clarification.success?{clarification:clarification.data}:{},...exactResults.length?{supportedWork:{exactResults}}:{},answer:finalAnswer===null?null:{...finalAnswer,...finalAnswer.exactResults?{exactResults,missingEvidence:exactResults.length===finalAnswer.exactResults.length?finalAnswer.missingEvidence:[...new Set([...finalAnswer.missingEvidence,'exact_state_changed'])]}:{}}});
+}
+
+/** Public stale reads never expose copied question or answer content. */
+export async function readAskAnswer(context:RepositoryContext,requestId:string){
+ return (await readAuthorizedAskAnswer(context,requestId))?.read??null;
+}
+/** Session reference only: a changed exact observation cannot carry its old
+ * answer, while source/access invalidation cannot carry even the question. */
+export async function readAskConversationTurn(context:RepositoryContext,requestId:string){
+ return (await readAuthorizedAskAnswer(context,requestId))?.conversation??null;
 }
 
 /** Older strict readers cannot express mixed proof. Never downgrade SQL-derived

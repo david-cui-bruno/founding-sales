@@ -6,7 +6,7 @@ The approved [operating roadmap](../sourcing/roadmap-20261007.md) has eight open
 
 ## Source, production and release
 
-PR590 merged as `67089b6b`; source targets schema105. PR591 merged as `3a919179` after all required CI passed, repairing source-only answers with explicit empty exact references and selected-firm admission without a person. Its independent Spec review passes; Standards has no hard violations and one optional test-setup duplication suggestion. Thirty-five focused API tests and applicable typechecks/lint pass. Consult PR591 for exact CI/merge status. Scoped-search/temporal guidance has controlled SDK evidence and the separately measured limited comparison below; no causal ablation or representative-quality claim is made.
+PR590 merged as `67089b6b`; source targets schema105. PR591 merged as `3a919179` after all required CI passed, repairing source-only answers with explicit empty exact references and selected-firm admission without a person. PR592 merged as `0a761e9f` after required CI passed, integrating reviewed scoped-search/temporal guidance and the separately measured limited comparison below. No causal ablation or representative-quality claim is made.
 
 Read-only production inspection at 18:13Z confirms backend `d49dda37dfb6d95cb7c5aa077da2f32b2724dc79`, schema88, stable API2/worker1, and present/tagged immutable images. Mailbox controls and release smoke/record were not inspected. Signed desktop1.0.51 remains dated evidence, not a fresh installed observation.
 
@@ -22,7 +22,9 @@ The earlier two immutable comparison grants are consumed:25calls/202c conserved 
 
 ## Next work and safeguards
 
-Finish PR592 integration, then complete bounded history/session and scope-specific readiness. The known-context repaired comparison and its delegated usefulness review are complete; no broader provider allowance follows. Keep structured, hosted-answering, extraction, acquisition and optional semantic readiness separate. #549/#552 share normal deployed capture evidence; selected-source Ask does not wait on Gmail or native/LinkedIn. #550 still needs applicable useful extraction and ordinary booking/progress outcomes. Deployment/bootstrap and scoped Enable remain pending; no ticket closes from controlled adapters or source merge alone.
+Complete bounded history/session and scope-specific readiness. Controlled configured-worker journeys discovered a continuity bug: a current stage change correctly erased the stale public answer but also removed the prior question needed to resolve a pronoun. The source repair retains only the still-authorized dated question for exact-observation freshness changes; public stale reads, deleted originals and narrowed scopes still erase or exclude private content. The [history/session preparation](../sourcing/ask-history-continuity-preparation-20261012.md) records controlled evidence and the proposed actual-model comparison. No paid history/session run has occurred or been authorized yet.
+
+The known-context repaired comparison and its delegated usefulness review are complete; no broader provider allowance follows. Keep structured, hosted-answering, extraction, acquisition and optional semantic readiness separate. #549/#552 share normal deployed capture evidence; selected-source Ask does not wait on Gmail or native/LinkedIn. #550 still needs applicable useful extraction and ordinary booking/progress outcomes. Deployment/bootstrap and scoped Enable remain pending; no ticket closes from controlled adapters or source merge alone.
 
 Preserve cap5/lower caps/ramp, recipient-local weekday mornings, original Shirley provider identity and cancelled follow-up, uncertain sends, targeting, and automatic admission/routine replies/autonomous calling OFF. Never use installed desktop credentials. The repaired comparison made only the28approved synthetic model calls above. No production writes, activation or sending occurred in this continuation.
 

@@ -1,0 +1,59 @@
+{
+  "version": "ask-history-continuity-v1",
+  "cases": [
+    {
+      "id": "history_01",
+      "kind": "history",
+      "category": "separate_correction",
+      "firmName": "Juniper History Example",
+      "question": "What is the latest stated plan for the sample at Juniper History Example?",
+      "originals": [
+        {"slot": "initial", "firm": "primary", "text": "Juniper History Example, October 1: I will send the sample Thursday.", "occurredAt": null},
+        {"slot": "correction", "firm": "primary", "text": "Juniper History Example, October 2: Cancel that Thursday plan because stock is unavailable. I have not agreed to a replacement date.", "occurredAt": null}
+      ],
+      "opportunities": [],
+      "expected": [
+        "Discover the separately retained cancellation rather than treating an initial sample search as exhaustive.",
+        "The later note cancels the reported Thursday plan and gives no agreed replacement date.",
+        "Cite the cancellation original; dates in the notes remain reported source content, not independently observed authored dates."
+      ],
+      "forbidden": ["The Thursday promise is still current.", "A replacement date or completed delivery has been established.", "Catalog order proves recency or selected-copy coverage proves complete mailbox coverage."]
+    },
+    {
+      "id": "history_02",
+      "kind": "history",
+      "category": "conditional_offer",
+      "firmName": "Harbor History Example",
+      "question": "What help has been offered to Harbor History Example, and has an import been agreed?",
+      "originals": [
+        {"slot": "offer", "firm": "primary", "text": "Harbor History Example: If you send a scrubbed sample, I could show how the fields map next week. We have not agreed to implement an import.", "occurredAt": null},
+        {"slot": "context", "firm": "primary", "text": "Harbor History Example planning note: We are discussing field mapping before deciding whether to pursue an import. No implementation decision has been made.", "occurredAt": null},
+        {"slot": "distractor", "firm": "distractor", "text": "Other Harbor Example: Our field mapping demo is booked for next week and we agreed to implement an import.", "occurredAt": null}
+      ],
+      "opportunities": [],
+      "expected": ["A conditional offer to demonstrate mapping next week after receiving a scrubbed sample.", "No agreed import implementation or booked demo is established for Harbor History Example.", "Other Harbor Example is outside the immutable firm scope and must not support the answer."],
+      "forbidden": ["A sample has already been sent.", "The demo is booked or implementation is agreed.", "Borrow the other firm's agreement or schedule.", "Turn demonstration timing into a deadline for sending the sample."]
+    },
+    {
+      "id": "history_03",
+      "kind": "history",
+      "category": "pilot_ambiguity",
+      "firmName": "Fir History Example",
+      "question": "Which pilot needs a revised proposal at Fir History Example?",
+      "originals": [{"slot": "need", "firm": "primary", "text": "Fir History Example conversation: The pilot needs a revised proposal including installation cost.", "occurredAt": null}],
+      "opportunities": [{"name": "East pilot", "stage": "qualified"}, {"name": "West pilot", "stage": "new"}],
+      "expected": ["The original asks for a revision but does not identify the pilot.", "Current East and West names or stages require executed exact evidence.", "Any stage-based plausibility remains uncertain and neither pilot is ruled out."],
+      "forbidden": ["East is definitively the pilot needing revision.", "West cannot need revision because its stage is new.", "Use a source citation alone to establish current CRM opportunity names or stages."]
+    },
+    {
+      "id": "continuity",
+      "kind": "session",
+      "firmName": "North Continuity Example",
+      "opportunity": {"name": "North pilot", "stage": "new", "changedStage": "qualified"},
+      "turns": [
+        {"id": "continuity_01", "question": "What stage is the North pilot recorded at for North Continuity Example?", "expected": ["North pilot is currently recorded at new based on executed exact state.", "Use exact references with no fabricated original citation."], "forbidden": ["Qualified is already the current stage.", "An original conversation citation supports this SQL-only answer."]},
+        {"id": "continuity_02", "question": "What stage is it recorded at now?", "expected": ["Resolve it from the prior question as North pilot within the same immutable firm scope.", "Read current exact CRM state again and report qualified after the explicit human stage change.", "Do not treat the previous answer's new stage as current or as independent evidence."], "forbidden": ["Report the obsolete new stage as current.", "Resolve the pronoun to a different opportunity or expand the firm scope.", "Cite a prior answer or reuse an old exact handle as current evidence."]}
+      ]
+    }
+  ]
+}

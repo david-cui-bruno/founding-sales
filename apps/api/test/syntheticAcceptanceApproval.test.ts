@@ -45,3 +45,17 @@ it('accepts eight version4 fixtures with exact questions and a frozen whole-sour
 it.each([{labelsPath:undefined},{sourceCommit:undefined},{sourceTreeSha256:undefined},{sourceCommit:'c'.repeat(40)},{askIds:['crm2_01']},{askQuestions:{crm2_01:'A different unreviewed question'}},{extractionIds:['dev_01']},{stage:'history_investigation',maxAskSteps:6,maxSteps:49},{maxSteps:16}])('refuses incomplete or changed version4 fixture authority before dispatch (%j)',changes=>{
  expect(()=>validateSyntheticAcceptance(inputV4(changes))).toThrow();
 });
+
+function historyInput(changes:Record<string,unknown>={}){
+ const source=Buffer.from('frozen source'),labelsBytes=readFileSync(new URL('../../../tools/ask-evaluation/fixtures/ask-history-continuity-v1.json',import.meta.url));
+ const labels=JSON.parse(labelsBytes.toString()) as {cases:({id:string;question:string}|{turns:{id:string;question:string}[]})[]};
+ const turns=labels.cases.flatMap(item=>'turns' in item?item.turns:[item]);
+ const scopeBytes=bytes({scopeVersion:5,captureNative:true,maxRequestInputBytes:30000,maxNativeOutputTokens:4096,maxProbeOutputTokens:32,runId:randomUUID(),modelVersion:'us.anthropic.claude-sonnet-4-6',labelsPath:'tools/ask-evaluation/fixtures/ask-history-continuity-v1.json',labelsSha256:sha(labelsBytes),sourceCommit:'a'.repeat(40),sourceTreeSha256:'b'.repeat(64),extractionIds:[],askIds:turns.map(turn=>turn.id),askQuestions:Object.fromEntries(turns.map(turn=>[turn.id,turn.question])),maxSteps:31,maxCents:1000,maxAskSteps:6,maxAskInputBytes:30000,maxAskOutputTokens:1000,sourceSha256:Object.fromEntries([...SYNTHETIC_ACCEPTANCE_CRITICAL_SOURCES,'apps/api/test/support/syntheticHistoryJourney.ts'].map(path=>[path,sha(source)])),stage:'history_investigation',thinking:'disabled',pricing:{inputTokenPriceMicros:6.6,outputTokenPriceMicros:33,basis:'conservative_upper_bound_not_invoice'},...changes});
+ return {scopeBytes,labelsBytes,approvalBytes:bytes({approved:true,approvedBy:'David Cui',scopeSha256:sha(scopeBytes),humanLabelsReviewed:true,reference:'Offline history scope fixture; no spending authority'}),readSource:()=>source,sourceTree:{commit:'a'.repeat(40),sha256:'b'.repeat(64)}};
+}
+it('binds five history/session questions and their combined six-generation ceiling to a separate exact source approval',()=>{
+ expect(validateSyntheticAcceptance(historyInput()).scope).toMatchObject({scopeVersion:5,maxAskSteps:6,maxSteps:31,extractionIds:[],askIds:['history_01','history_02','history_03','continuity_01','continuity_02']});
+});
+it.each([{maxSteps:30},{maxAskSteps:4},{askIds:['history_01']},{askQuestions:{}},{extractionIds:['history_01']},{labelsPath:'tools/ask-evaluation/fixtures/ask-contract-v4.json'},{sourceSha256:{}},{sourceCommit:undefined},{sourceTreeSha256:undefined}])('refuses an incomplete or expanded history/session grant before dispatch (%j)',changes=>{
+ expect(()=>validateSyntheticAcceptance(historyInput(changes))).toThrow();
+});
