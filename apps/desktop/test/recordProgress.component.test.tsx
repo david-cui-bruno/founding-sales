@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {cleanup,render,screen,act} from '@testing-library/react';
-import {afterEach,expect,it} from 'vitest';
+import {afterEach,expect,it,vi} from 'vitest';
 import {RecordProgress} from '../src/renderer/firms/RecordProgress.tsx';
 import type {CrmProgressResponse} from '@fss/contracts';
 const firmId='11111111-1111-4111-8111-111111111111',id='22222222-2222-4222-8222-222222222222';
@@ -20,8 +20,10 @@ it('clears the previous record and ignores a late answer after the account chang
 
 it('displays observed correspondence separately when human authorship and reply milestones are unverified',async()=>{
  const observed:CrmProgressResponse={...page,events:[],communicationObservations:[{id,kind:'message_sent',occurredAt:'2026-10-08T15:00:00.000Z',dateBasis:'provider_event',observedAt:'2026-10-09T15:00:00.000Z',firmIds:[firmId],personIds:[],source:{workspaceId:firmId,sourceId:id,kind:'mail',revision:1,contentHash:'a'.repeat(64),locator:null,speaker:null,occurredAt:'2026-10-08T15:00:00.000Z',observedAt:'2026-10-09T15:00:00.000Z',completeness:'complete',availability:'available'},attribution:'observed_correspondence',humanAuthorship:'not_verified',replyRelation:'not_established'}],communicationObservationsTruncated:true};
- render(<RecordProgress enabled firmId={firmId} privacyKey="account-a" ports={{read:async()=>observed}}/>);
+ const read=vi.fn(async()=>observed);
+ render(<RecordProgress enabled firmId={firmId} privacyKey="account-a" ports={{read}}/>);
  expect(await screen.findByRole('region',{name:'Observed correspondence'})).toBeTruthy();
+ expect(read).toHaveBeenCalledWith({firmId,limit:50,includeCommunicationObservations:true});
  expect(screen.getByText('Outgoing email')).toBeTruthy();
  expect(screen.getByText('These messages show email activity. They do not confirm a reply milestone or a promise.')).toBeTruthy();
  expect(screen.getByText('Showing the first 50 communication observations.')).toBeTruthy();

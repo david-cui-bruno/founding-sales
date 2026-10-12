@@ -1,3 +1,5 @@
+import {z} from 'zod';
+import {crmProgressEventSchema} from '@fss/contracts';
 import {randomUUID} from 'node:crypto';
 import {expect,it} from 'vitest';
 import {businessAccountBinding} from '@fss/domain/business/acquisition.ts';
@@ -45,7 +47,7 @@ it('shows ordinary observed correspondence without inventing authorship, verifie
  try{
   const sent=await f.capture('sent','sent'),received=await f.capture('received','received');
   await f.capture('unknown','unknown');await f.capture('imported','imported');
-  const read=await f.post('/crm/progress/read',{firmId:f.firmId});
+  const read=await f.post('/crm/progress/read',{includeCommunicationObservations:true,firmId:f.firmId});
   expect(read.status).toBe(200);
   expect(read.body).toMatchObject({events:[],coverage:'partial',communicationObservationsTruncated:false,communicationObservations:expect.arrayContaining([
    {id:sent,kind:'message_sent',occurredAt:'2026-10-08T15:00:00.000Z',dateBasis:'provider_event',observedAt:expect.any(String),firmIds:[f.firmId],personIds:[],source:expect.objectContaining({sourceId:sent,revision:2,speaker:null}),attribution:'observed_correspondence',humanAuthorship:'not_verified',replyRelation:'not_established'},
@@ -61,9 +63,9 @@ it('removes erased originals from observed correspondence and preserves bounded 
  const f=await observationFixture();
  try{
   const first=await f.capture('first','sent');await f.capture('second','received');
-  expect((await f.post('/crm/progress/read',{firmId:f.firmId,limit:1})).body).toMatchObject({events:[],coverage:'partial',communicationObservations:[expect.any(Object)],communicationObservationsTruncated:true});
+  expect((await f.post('/crm/progress/read',{includeCommunicationObservations:true,firmId:f.firmId,limit:1})).body).toMatchObject({events:[],coverage:'partial',communicationObservations:[expect.any(Object)],communicationObservationsTruncated:true});
   expect((await f.post('/crm/business/mail/delete',f.command({sourceId:first,expectedRevision:2}))).status).toBe(200);
-  const after=(await f.post('/crm/progress/read',{firmId:f.firmId})).body as {communicationObservations:{id:string}[]};
+  const after=(await f.post('/crm/progress/read',{includeCommunicationObservations:true,firmId:f.firmId})).body as {communicationObservations:{id:string}[]};
   expect(after.communicationObservations).toHaveLength(1);
   expect(after.communicationObservations.some(row=>row.id===first)).toBe(false);
  }finally{await f.fixture.stop();}
@@ -75,7 +77,7 @@ it('does not expand an administrator record read into another owner mailbox or a
   await f.capture('other-owner','received',f.fixture.alpha.salesperson.userId);
   const sourceId=await f.capture('inconsistent','sent');
   await f.fixture.db.query("UPDATE mail_messages SET direction='incoming' WHERE workspace_id=$1 AND id=$2",[f.workspaceId,sourceId]);
-  expect((await f.post('/crm/progress/read',{firmId:f.firmId})).body).toMatchObject({events:[],communicationObservations:[],communicationObservationsTruncated:false});
+  expect((await f.post('/crm/progress/read',{includeCommunicationObservations:true,firmId:f.firmId})).body).toMatchObject({events:[],communicationObservations:[],communicationObservationsTruncated:false});
  }finally{await f.fixture.stop();}
 });
 
@@ -87,7 +89,7 @@ it('uses explicitly associated source person context without asserting that pers
   expect(created.status).toBe(200);
   const personId=(created.body as {result:{personId:string}}).result.personId;
   expect((await f.post('/crm/business/mail/associate',f.command({sourceId,expectedRevision:2,personId,firmId:f.firmId}))).status).toBe(200);
-  expect((await f.post('/crm/progress/read',{personId})).body).toMatchObject({events:[],communicationObservations:[{id:sourceId,personIds:[personId],firmIds:[f.firmId],humanAuthorship:'not_verified',replyRelation:'not_established',source:{revision:3,speaker:null}}]});
+  expect((await f.post('/crm/progress/read',{includeCommunicationObservations:true,personId})).body).toMatchObject({events:[],communicationObservations:[{id:sourceId,personIds:[personId],firmIds:[f.firmId],humanAuthorship:'not_verified',replyRelation:'not_established',source:{revision:3,speaker:null}}]});
  }finally{await f.fixture.stop();}
 });
 
@@ -100,6 +102,22 @@ it('excludes diagnostic-only copied sources even when their provider origin and 
   const document={id,purpose:'acquisition_acceptance',workspaceId:f.workspaceId,ownerUserId:source.owner_user_id,mailboxId:source.mailbox_id};
   await f.fixture.db.query("INSERT INTO crm_acquisition_diagnostic_authorizations(workspace_id,id,owner_user_id,mailbox_id,authorization_sha256,authorization_document,verified_at,valid_until) VALUES($1,$2,$3,$4,repeat('a',64),$5::jsonb,'2026-10-01T00:00:00Z','2026-11-01T00:00:00Z')",[f.workspaceId,id,source.owner_user_id,source.mailbox_id,JSON.stringify(document)]);
   await f.fixture.db.query('UPDATE crm_mail_sources SET conversation_id=NULL,diagnostic_authorization_id=$3 WHERE workspace_id=$1 AND source_id=$2',[f.workspaceId,sourceId,id]);
-  expect((await f.post('/crm/progress/read',{firmId:f.firmId})).body).toMatchObject({events:[],communicationObservations:[],communicationObservationsTruncated:false});
+  expect((await f.post('/crm/progress/read',{includeCommunicationObservations:true,firmId:f.firmId})).body).toMatchObject({events:[],communicationObservations:[],communicationObservationsTruncated:false});
+ }finally{await f.fixture.stop();}
+});
+
+
+it('preserves the admitted legacy progress response unless observations are explicitly requested',async()=>{
+ const f=await observationFixture();
+ try{
+  await f.capture('legacy-compatible','received');
+  // Exact previously released wire shape: olddesktop rejects unknown keys.
+  const legacy=z.strictObject({version:z.literal(1),events:z.array(crmProgressEventSchema).max(50),truncated:z.boolean(),coverage:z.literal('partial')});
+  for(const body of [{firmId:f.firmId},{firmId:f.firmId,includeCommunicationObservations:false}]){
+   const read=await f.post('/crm/progress/read',body);
+   expect(read.status).toBe(200);
+   expect(legacy.parse(read.body)).toEqual({version:1,events:[],truncated:false,coverage:'partial'});
+  }
+  expect((await f.post('/crm/progress/read',{firmId:f.firmId,includeCommunicationObservations:true})).body).toMatchObject({communicationObservations:[{kind:'message_received'}]});
  }finally{await f.fixture.stop();}
 });
