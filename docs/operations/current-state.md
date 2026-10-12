@@ -1,5 +1,17 @@
 # Current operating state
 
+## Current completion focus — October 11, 2026 (America/New_York)
+
+The [engineering design audit](../sourcing/engineering-design-audit-20261011.md) records the agreed David-only end state, proportional review, cleanup priorities and execution lanes. Core completion is #549/#550/#551/#552; independent outreach #425/#438 and native #460/#466 remain open. Four parents track these eight outcomes. Closed source foundations remain closed.
+
+PR584 is merged (`a2c2b676`); merged source schema104 remains held. Dated production evidence is backendd49/schema88/signed desktop1.0.51, not a fresh operational observation from this audit. The Ask prototype branch is experimental and must not be merged wholesale. Release/bootstrap approval and capability-specific real outcomes remain pending; no sending or activation controls changed.
+
+The latest paired Sonnet4.6 reasoning run finished24calls/448c conservative allocation. Both arms returned12/12 structurally complete answers, but provenance/coverage errors persisted and no clear usefulness improvement was observed. Keep reasoning disabled; these fixed-context synthetic results do not prove ordinary integration or readiness. Campaign journal conserves281calls/3190c total allocation (not invoice), within400/$50; no further dispatch is planned. Earlier counts below are dated history.
+
+Next: consolidate active instructions and agent module navigation, deepen the existing Ask evidence projection/test setup, and complete actual core journeys. Use the existing lean release flow once the explicit hold prerequisites are resolved; no new platform or broad rewrite.
+
+## Dated evidence and earlier checkpoints
+
 ## October12 source continuation and delegated output review
 
 [PR583](https://github.com/david-cui-bruno/founding-sales/pull/583) merged as `0f41fa5f33f4fcdf5814890f812c0bc5fe8e11e3` at01:37:19UTC after exact `1ac34b83` gate/image checks passed. No schema delta: source remains104, with production release hold preserved. Eight execution issues remain #425/#438/#460/#466/#549/#550/#551/#552; #548 is closed as preparation only.
