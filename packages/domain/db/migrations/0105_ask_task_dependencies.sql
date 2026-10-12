@@ -24,6 +24,16 @@ BEGIN
  RETURN NEW;
 END $$;
 CREATE CONSTRAINT TRIGGER crm_ask_task_dependency_current AFTER INSERT ON crm_ask_task_dependencies DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_crm_ask_task_dependency();
+-- A non-source stale transition must not discard lineage while leaving the private question.
+-- Schema96 already blanks progress; clear the whole dependent private copy atomically.
+CREATE FUNCTION redact_crm_ask_stale_task_copy() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.state IN ('stale','deleted') AND EXISTS(SELECT 1 FROM crm_ask_task_dependencies WHERE workspace_id=NEW.workspace_id AND request_id=NEW.id) THEN
+  NEW.question:=NULL;NEW.result:=NULL;NEW.result_at:=NULL;NEW.validated_progress:=NULL;NEW.clarification:=NULL;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER redact_crm_ask_stale_task_copy BEFORE UPDATE ON crm_ask_requests FOR EACH ROW EXECUTE FUNCTION redact_crm_ask_stale_task_copy();
 CREATE FUNCTION erase_crm_ask_task_dependencies() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.state IN ('stale','deleted') OR NEW.question IS NULL THEN DELETE FROM crm_ask_task_dependencies WHERE workspace_id=NEW.workspace_id AND request_id=NEW.id; END IF;
