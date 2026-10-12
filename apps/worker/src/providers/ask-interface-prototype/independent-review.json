@@ -1,0 +1,378 @@
+{
+  "runId": "3284f336-bf9f-4f64-9f64-10bf38499c47",
+  "reviewer": "Codex independent evidence-contract agent",
+  "resultsSha256": "c4f4db3c2ec87b87a88ada422044eabf66893bba3fbf56a7482fcf44883bf67f",
+  "workload": "fixed supplied context synthesis, not history retrieval or configured product acceptance",
+  "budget": {
+    "startedSteps": 36,
+    "allocatedCents": 378
+  },
+  "gradingBasis": "Review all delivered paragraphs against identical raw selected-note context and supplied synthetic exact observations. Reported source-attributed authored text is allowed; it does not verify human authorship or current real-system coverage. Plausible minor year/rejection wording does not fail otherwise supported conclusions. Structural acceptance, grounding and readability are separate.",
+  "summary": {
+    "baseline": {
+      "cells": 12,
+      "delivered": 12,
+      "groundedAllMaterialClaims": 5,
+      "readable": 10,
+      "usefulWithoutMaterialCorrection": 5
+    },
+    "proposed": {
+      "cells": 12,
+      "delivered": 12,
+      "groundedAllMaterialClaims": 5,
+      "readable": 12,
+      "usefulWithoutMaterialCorrection": 5
+    }
+  },
+  "rows": [
+    {
+      "caseId": "dev_01",
+      "arm": "baseline",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [
+        "year_inferred_without_explicit_qualification"
+      ],
+      "reason": "Answers commitment, named reported speaker and date; 2026 is a plausible inference from supplied event metadata, not an independently verified authored date. Minor qualification issue.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_01",
+      "arm": "baseline",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [],
+      "reason": "Directly answers the reported commitment and date; explicitly distinguishes source date and unverified authorship.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_01",
+      "arm": "proposed",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [
+        "verbose_authorship_disclaimer"
+      ],
+      "reason": "Faithful reported attribution and stated month/day; clear but longer than needed.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_01",
+      "arm": "proposed",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [
+        "verbose_authorship_disclaimer"
+      ],
+      "reason": "Faithful reported commitment and unknown identity; concise enough to use.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_05",
+      "arm": "baseline",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "pasted_header_promoted_to_observed_sender"
+      ],
+      "reason": "Correctly leaves individual author unknown, but calls a pasted selected-note header an observed sender header; the shared-mailbox interpretation is plausible, not provider-observed.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_05",
+      "arm": "baseline",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "pasted_header_promoted_to_observed_sender",
+        "body_claim_promoted_to_source_metadata",
+        "verbose_repetition"
+      ],
+      "reason": "Explicitly calls pasted header source metadata/observed sender address. Individual authorship uncertainty is useful but provenance is wrong.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_05",
+      "arm": "proposed",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "pasted_header_promoted_to_observed_sender"
+      ],
+      "reason": "Attributes the excerpt to source initially, but ends by treating the reported header as the observed sender. No verified person is invented; provenance still needs correction.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_05",
+      "arm": "proposed",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "pasted_header_promoted_to_provider_envelope",
+        "null_metadata_leaks_into_prose",
+        "verbose_repetition"
+      ],
+      "reason": "Says correspondence was sent from this address and calls it an observed envelope header, although observedMailEnvelope is null and source is selected_note.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_06",
+      "arm": "baseline",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [
+        "long_answer"
+      ],
+      "reason": "Correct SQL count/status/stage with original and exact references; preserves ambiguous pilot rather than assigning one. Clarification suggestion is recognizable advice.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_06",
+      "arm": "baseline",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [],
+      "reason": "Correct two open pilots at new stage and unspecified revised-proposal target; both authorities cited.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_06",
+      "arm": "proposed",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [
+        "long_answer"
+      ],
+      "reason": "Correct SQL names/status/stage plus source ambiguity with both references. Does not silently assign an opportunity.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_06",
+      "arm": "proposed",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [],
+      "reason": "Clear grounded mixed answer, distinguishes new stage from open status and preserves target ambiguity.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_08",
+      "arm": "baseline",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": false,
+      "usefulness": "needs_repair_before_use",
+      "semanticFlags": [
+        "unfinished_duplicate_fragments",
+        "current_authored_position_overclaim"
+      ],
+      "reason": "Historical quote interpretation is useful, but two repeated unfinished fragments impair readability and current authored-position framing overstates selected-source authority.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_08",
+      "arm": "baseline",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [
+        "strong_rejection_wording"
+      ],
+      "reason": "Correctly attributes quoted 2025 promise and rejection to the note and discloses unverified human authorship. Source-attributed authored text is allowed; formally set aside is stronger wording but not a claim of independently verified authorship.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_08",
+      "arm": "proposed",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "current_standing_rejection_overclaim"
+      ],
+      "reason": "Historical promise identified correctly. Current-standing repudiation that should not be treated as provisional/open exceeds what a selected note establishes about current state.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_08",
+      "arm": "proposed",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": true,
+      "readable": true,
+      "usefulness": "useful_without_material_correction",
+      "semanticFlags": [
+        "strong_rejection_wording",
+        "long_answer"
+      ],
+      "reason": "Preserves quoted historical promise and rejection as reported by the note; explicitly says present contract status is not established. Not independently verified authorship. Reversible wording is stronger than needed but scoped to this evidence.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_10",
+      "arm": "baseline",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "inferred_solution_presented_as_fact"
+      ],
+      "reason": "Correct time-consuming coordination pain and irrelevant colors; introduces streamlined management/dispatch solution within fact rather than separating inference.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_10",
+      "arm": "baseline",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": false,
+      "usefulness": "needs_repair_before_use",
+      "semanticFlags": [
+        "inferred_solution_presented_as_fact",
+        "unfinished_fragment"
+      ],
+      "reason": "Useful actual coordination pain is present, but inferred streamlined support is labeled fact and an unfinished second claim is delivered.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_10",
+      "arm": "proposed",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "inferred_solution_presented_as_summary"
+      ],
+      "reason": "Actual pain is clear, but streamlining/centralizing scheduling and oversight is an inferred remedy represented as summary.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_10",
+      "arm": "proposed",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "inferred_solution_presented_as_summary",
+        "unsupported_scale_emphasis"
+      ],
+      "reason": "Correct time burden; demand for tooling/process and scheduling/communication at scale goes beyond raw pain without labeling inference.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_11",
+      "arm": "baseline",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "source_reported_channel_coverage_promoted_to_system_truth"
+      ],
+      "reason": "No definitive denial of reply and selected-excerpt limitation are useful. Claims phone/direct-message import absence as current system truth rather than the note report.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_11",
+      "arm": "baseline",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "source_reported_channel_coverage_promoted_to_system_truth"
+      ],
+      "reason": "Keeps later reply unknown but treats imported-email cutoff and phone/Messages import absence as actual acquisition state. No false zero-unanswered assertion appears.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_11",
+      "arm": "proposed",
+      "repetition": 1,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "source_reported_channel_coverage_promoted_to_system_truth",
+        "unsupported_hard_email_cutoff_causal_claim"
+      ],
+      "reason": "Correct inability to rule out a reply, but infers all emails after Friday were not imported and global phone/Messages gaps from note text.",
+      "falseZeroUnansweredObserved": false
+    },
+    {
+      "caseId": "dev_11",
+      "arm": "proposed",
+      "repetition": 2,
+      "delivered": true,
+      "groundedAllMaterialClaims": false,
+      "readable": true,
+      "usefulness": "useful_partial_needs_correction",
+      "semanticFlags": [
+        "source_reported_channel_coverage_promoted_to_system_truth"
+      ],
+      "reason": "Correct selected-copy uncertainty; still states actual system phone/Messages absence. No false zero-unanswered assertion appears.",
+      "falseZeroUnansweredObserved": false
+    }
+  ],
+  "verdict": "Neither arm meets the semantic acceptance gate. Proposed removes two observed fragment failures but does not repair pasted-header provenance, inferred-solution labeling or source-reported channel coverage promotion. Both arms avoid false zero-unanswered in these repetitions.",
+  "limitations": [
+    "Known six-case development set; two repeated generations per arm are not independent representative data.",
+    "No statistical significance or unseen/representative reliability claimed.",
+    "Fixed supplied synthetic context, not retrieval, database authorization/freshness, acquisition or full product acceptance.",
+    "Comparison changes both representation/prompt/output interface; it cannot isolate which change caused behavior.",
+    "Judgment distinguishes material overclaims from harmless source-attributed paraphrase."
+  ],
+  "qualityAccepted": false,
+  "activation": false
+}
