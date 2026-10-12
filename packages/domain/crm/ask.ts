@@ -1,3 +1,4 @@
+import type { AskTaskDependency } from "./askTaskDependencies.ts";
 import { readAskAdditionalOpenTasks } from "./askOpenTasks.ts";
 import { readAskRecords, type AskRecordRestriction } from "./askRecords.ts";
 import { readAskCorpus, discoverAskSources } from "./askCorpus.ts";
@@ -19,6 +20,7 @@ export async function readAsk(
   context: RepositoryContext,
   input: z.infer<typeof askReadSchema>,
   recordRestriction: AskRecordRestriction = {},
+  observation: { observeTaskDependencies?: (dependencies: AskTaskDependency[]) => void } = {},
 ) {
   if (input.operation === "sources") return discoverAskSources(context, input);
   if (input.operation === "reply_status") {
@@ -256,7 +258,7 @@ export async function readAsk(
         input.limit + 1,
       ])
     ).rows;
-    const additional = await readAskAdditionalOpenTasks(context, input.scope);
+    const additional = await readAskAdditionalOpenTasks(context, input.scope, observation.observeTaskDependencies);
     if (additional === null) return null;
     const operational = rows.slice(0, input.limit).map((row) => ({
       ...(firmId === null ? { firmId: row.firm_id } : {}),

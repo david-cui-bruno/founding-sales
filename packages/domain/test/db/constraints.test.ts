@@ -2,6 +2,7 @@ import {
   ASK_CANONICAL_INDEX_CONSTRAINT_CASES,
   seedCurrentCanonicalWindow,
 } from "./support/askCanonicalIndexCases.ts";
+import { ASK_TASK_DEPENDENCY_CONSTRAINT_CASES } from "./support/askTaskDependencyCases.ts";
 import { ASK_EXECUTION_EVIDENCE_CONSTRAINT_CASES } from "./support/askExecutionEvidenceCases.ts";
 import { ASK_SESSION_CONSTRAINT_CASES } from "./support/askSessionCases.ts";
 import { CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES } from "./support/crmAcquisitionDiagnosticCases.ts";
@@ -840,6 +841,7 @@ const cases: readonly Case[] = [
   ...ASK_ANSWER_CONSTRAINT_CASES,
   ...ASK_SESSION_CONSTRAINT_CASES,
   ...ASK_EXECUTION_EVIDENCE_CONSTRAINT_CASES,
+  ...ASK_TASK_DEPENDENCY_CONSTRAINT_CASES,
   ...ASK_ACTION_CONSTRAINT_CASES,
   ...CRM_EVIDENCE_CONSTRAINT_CASES,
   ...CRM_COMMITMENT_CONSTRAINT_CASES,

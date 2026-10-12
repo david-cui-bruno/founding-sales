@@ -96,3 +96,15 @@ export async function changeAskAction(context:RepositoryContext,input:AskActionC
  if(changed===undefined)return {ok:false as const,reason:'source_unavailable'};
  return {ok:true as const,value:askActionChangedSchema.parse({actionId:changed.id,version:changed.version,status:changed.status,completedAt:changed.completed_at.toISOString()})};
 }
+
+/** A copied task depends on its independent original proof, never saved investigation history. */
+export async function readAskTaskSourceAuthority(context: RepositoryContext, taskId: string, expectedVersion?: number) {
+ const actor = context.scope.actor;
+ if (actor.kind !== 'user' || !await activeIdentityActor(context)) return null;
+ const row = (await context.db.query<ActionProof>(`SELECT id,version,kind,status,private_state,target_firm_id,target_person_id,target_opportunity_id,input_scope,initial_contexts,original_access_closure,support_refs,review_required,created_at,updated_at,completed_at FROM crm_ask_actions WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3`, [context.scope.workspaceId, actor.userId, taskId])).rows[0];
+ if (!row || row.kind !== 'task' || expectedVersion !== undefined && (row.version !== expectedVersion || row.status !== 'open')) return null;
+ if ((await currentActionSupport(context, row)).state !== 'current') return null;
+ const locked = (await context.db.query<ActionProof>(`SELECT id,version,kind,status,private_state,target_firm_id,target_person_id,target_opportunity_id,input_scope,initial_contexts,original_access_closure,support_refs,review_required,created_at,updated_at,completed_at FROM crm_ask_actions WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3 FOR SHARE`, [context.scope.workspaceId, actor.userId, taskId])).rows[0];
+ if (JSON.stringify(locked) !== JSON.stringify(row)) return null;
+ return { closure: crmOriginalAccessClosureSchema.parse(row.original_access_closure) };
+}

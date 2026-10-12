@@ -1,3 +1,4 @@
+import {admitAskTaskDependencies,readAskTaskDependencyLedger} from '@fss/domain/crm/askTaskDependencies.ts';
 import {projectAskOriginalEvidence as modelWindow} from '../providers/askModelEvidence.ts';
 import {recordCrmAuditEvent} from '@fss/domain/crm/audit.ts';
 import {askDiagnosticToolNameSchema} from '@fss/contracts';
@@ -20,7 +21,7 @@ import {searchCanonicalIndex} from '@fss/domain/crm/askCanonicalIndex.ts';
 import type {CanonicalSourceReference} from '@fss/contracts';
 import {admitAskSources,admitAskRecord} from '@fss/domain/crm/askExecutionEvidence.ts';
 import {copiedAskSource,askLexicalConfiguration,askLexicalQuery,browseAskHistory,searchAskHistory,readAskConversationSources,readAskConversationAttribution} from '@fss/domain/crm/askHistoryInvestigation.ts';
-import {resolveAskRecords,readAskScopedExact} from '@fss/domain/crm/askInvestigationRecords.ts';
+import {resolveAskRecords,readAskScopedExact,readAskScopedExactObservation} from '@fss/domain/crm/askInvestigationRecords.ts';
 import {localDate} from '@fss/domain/src/rules/localClock.ts';
 
 const candidateSchema=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000),kind:z.enum(['extractive','inferred']),citationWindowIds:z.array(z.uuid()).min(1).max(10)})).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
@@ -245,7 +246,12 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
     else{
      if(exactResults.length>=20){await update('unavailable','input_bound_reached');return;}const args=z.strictObject({operation:z.enum(['opportunities','tasks','reply_status']),firmId:z.uuid().optional()}).safeParse(call.input);if(!args.success){await update('unavailable','unsupported_answer');return;}
      if(args.data.firmId!==undefined&&((intent.kind==='firm'&&args.data.firmId!==intent.firmId)||(intent.kind==='selected'&&!live.toolFirmIds.includes(args.data.firmId)))){await update('unavailable','unsupported_answer');return;}
-     value=await readAskScopedExact(context,intent,{...args.data,limit:20,...args.data.operation==='opportunities'?{status:'all' as const}:{}});if(value===null){await update('unavailable','source_unavailable');return;}
+     const exactInput={...args.data,limit:20,...args.data.operation==='opportunities'?{status:'all' as const}:{}};
+     const observed=await withTransaction(input.session,async()=>{await lockAskLifecycle(context);return readAskScopedExactObservation(context,intent,exactInput);});if(observed===null){await update('unavailable','source_unavailable');return;}value=observed.value;
+     if(observed.taskDependencies.length>0){
+      const admitted=await withTransaction(input.session,async()=>{await lockAskLifecycle(context);const existing=await readAskTaskDependencyLedger(context,executionKey);if(new Set([...existing,...observed.taskDependencies].map(task=>`${task.kind}:${task.taskId}`)).size>1000)return 'bound' as const;if(!await admitAskTaskDependencies(context,executionKey,observed.taskDependencies))return false;const refreshed=await readAskScopedExact(context,intent,exactInput);if(refreshed===null||askFingerprint(refreshed)!==askFingerprint(value))return false;return await fenced(input);});
+      if(admitted==='bound'){await update('unavailable','input_bound_reached');return;}if(!admitted){await update('stale','source_changed');return;}live=await current();if(!live||live.baseInputHash!==initial.baseInputHash){await update('stale','source_changed');return;}expectedInputHash=live.inputHash;
+     }
      if(intent.kind!=='selected'){
       const records=z.object({records:z.array(z.object({firmId:z.uuid().optional()}).passthrough()).max(50).optional()}).passthrough().safeParse(value);
       const firmIds=[...new Set([...(args.data.firmId===undefined?[]:[args.data.firmId]),...(records.success?records.data.records??[]:[]).flatMap(record=>record.firmId===undefined?[]:[record.firmId])])];

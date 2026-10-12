@@ -1,3 +1,4 @@
+import {readAskTaskDependencyEvidence,readAskTaskDependencyLedger} from './askTaskDependencies.ts';
 import {isDeepStrictEqual} from 'node:util';
 import {resolveAskAgentScope} from './askAgentScope.ts';
 import {askAgentScopeSchema,askAnswerRequestPayloadSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,type AskAgentScope} from '@fss/contracts';
@@ -74,14 +75,15 @@ export async function readAskExecutionEvidence(context:RepositoryContext,key:Ask
  for(const row of rows){const source=askAnswerRequestPayloadSchema.shape.scope.shape.sources.element.parse({workspaceId:context.scope.workspaceId,kind:row['source_kind'],sourceId:row['source_id'],revision:row['source_revision'],contentHash:row['source_hash'],locator:null});sources.push(source);contexts.push(crmClaimContextSchema.parse(row['context_snapshot']));closures.push(crmOriginalAccessClosureSchema.parse(row['original_access_closure']));}
  if(sources.length>10||!await lockConflictSources(context,sources,contexts,[initial.closure,...closures]))return null;
  for(const [index,source]of sources.entries()){const current=await readProcessingContext(context,source,mail);if(JSON.stringify(current)!==JSON.stringify(contexts[index])||!await resolveCrmSource(context,source,mail))return null;}
+ const taskEvidence=await readAskTaskDependencyEvidence(context,key);if(!taskEvidence)return null;
  const records=(await context.db.query<{record_kind:'firm'|'person';record_id:string;record_snapshot:unknown}>('SELECT record_kind,record_id,record_snapshot FROM crm_ask_admitted_records WHERE workspace_id=$1 AND request_id=$2 AND request_version=$3 AND request_epoch=$4 ORDER BY record_kind,record_id',[context.scope.workspaceId,key.requestId,key.version,key.epoch])).rows;
  for(const record of records){if(!isDeepStrictEqual(await recordProof(context,initial.intent,{kind:record.record_kind,recordId:record.record_id}),record.record_snapshot))return null;}
  const closure={firmIds:[...new Set([...initial.closure.firmIds,...closures.flatMap(c=>c.firmIds),...records.filter(r=>r.record_kind==='firm').map(r=>r.record_id)])].sort(),personIds:[...new Set([...initial.closure.personIds,...closures.flatMap(c=>c.personIds),...records.filter(r=>r.record_kind==='person').map(r=>r.record_id)])].sort()};
- if(!await lockIdentityContext(context,closure))return null;
+ if(!await lockIdentityContext(context,closure)||!await lockIdentityContext(context,taskEvidence.closure))return null;
  // After locking original evidence, fence the parent and verify the append-only ledger did not grow during this read.
  const fenced=await parent(context,key,false,true);if(!fenced||!isDeepStrictEqual(fenced.scope,initial.scope)||!isDeepStrictEqual(fenced.contexts,initial.contexts)||!isDeepStrictEqual(fenced.closure,initial.closure)||!isDeepStrictEqual(fenced.intent,initial.intent))return null;
  const finalSources=(await context.db.query<Record<string,unknown>>('SELECT * FROM crm_ask_admitted_sources WHERE workspace_id=$1 AND request_id=$2 AND request_version=$3 AND request_epoch=$4 ORDER BY admission_ordinal',[context.scope.workspaceId,key.requestId,key.version,key.epoch])).rows;
  const finalRecords=(await context.db.query<{record_kind:'firm'|'person';record_id:string;record_snapshot:unknown}>('SELECT record_kind,record_id,record_snapshot FROM crm_ask_admitted_records WHERE workspace_id=$1 AND request_id=$2 AND request_version=$3 AND request_epoch=$4 ORDER BY record_kind,record_id',[context.scope.workspaceId,key.requestId,key.version,key.epoch])).rows;
- if(!isDeepStrictEqual(rows,finalSources)||!isDeepStrictEqual(records,finalRecords))return null;
- return {scope:{sources},contexts,closure,sourceClosures:closures,records:records.map(r=>r.record_snapshot),intent:initial.intent,fingerprint:askFingerprint({scope:{sources},contexts,closure,records}),baseFingerprint:askFingerprint({scope:initial.scope,contexts:initial.contexts,closure:initial.closure,intent:initial.intent})};
+ if(!isDeepStrictEqual(rows,finalSources)||!isDeepStrictEqual(records,finalRecords)||!isDeepStrictEqual(taskEvidence.dependencies,await readAskTaskDependencyLedger(context,key)))return null;
+ return {scope:{sources},contexts,closure,sourceClosures:closures,records:records.map(r=>r.record_snapshot),intent:initial.intent,fingerprint:askFingerprint({scope:{sources},contexts,closure,records,taskDependencies:taskEvidence.dependencies,taskAccessClosure:taskEvidence.closure}),baseFingerprint:askFingerprint({scope:initial.scope,contexts:initial.contexts,closure:initial.closure,intent:initial.intent})};
 }

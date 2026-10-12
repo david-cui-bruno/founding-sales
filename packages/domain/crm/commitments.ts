@@ -289,3 +289,8 @@ export async function admitVerifiedCommitmentIntent(context:RepositoryContext,in
  if((await context.db.query('SELECT 1 FROM crm_claim_review_anchors WHERE workspace_id=$1 AND review_family_hash=$2 AND current_decision_revision>0 LIMIT 1',[context.scope.workspaceId,familyHash])).rows.length>0)return;
  await reviewCrmCommitment(context,{commandId:input.generationId,clientVersion:'0.0.0',source:input.source,claimId:input.claimId,claimRevision:1,claimHash:metadata.claim_hash,contextHash:input.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:before?.revision??0,classification:'internal_promise',actor:'self',actionLabel:action[0]!.toUpperCase()+action.slice(1),due:due.data,sourceZoneReceipt:{sourceRevision:input.source.revision,sourceHash:input.source.contentHash!,zone:'UTC',eventAt:proof.providerEventAt}},mail,'verified_original',async()=>JSON.stringify(await locate())===JSON.stringify(metadata)&&await fence());
 }
+
+/** Dependency reuse follows the same durable-original commitment authority as current task reads. */
+export async function readCrmCommitmentSupportAuthority(context: RepositoryContext, target: ReturnType<typeof crmEvidenceClaimTargetSchema.parse>, anchorId: string) {
+ return await supported(context, target, createNativeCrmMailEvidence(), anchorId) !== null && await conflictFree(context, anchorId);
+}

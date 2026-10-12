@@ -344,12 +344,12 @@ it("includes current explicit human tasks, respects undated/date scopes and filt
     for (const consumingRequestId of [exactId, personExactId]) {
       expect.soft(historyAfterSourceDeletion.body).toMatchObject({
         items: expect.arrayContaining([
-          {
+          expect.objectContaining({
             requestId: consumingRequestId,
             state: "stale",
             question: null,
             title: null,
-          },
+          }),
         ]),
       });
     }
