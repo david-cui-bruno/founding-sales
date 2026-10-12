@@ -26,7 +26,7 @@ it('gives explicit array, exact-state and unverified-date instructions to the SD
  expect(prompt).toContain('Do not cite a conversation window for counts, stages or opportunity names established only by read_exact');
  expect(prompt).toContain('occurredAt is a source event date; observedAt is capture/import time');
  expect(prompt).toContain('User-supplied dates do not establish authorship');
- expect(prompt).toContain('Prefer one to three directly responsive statements');
+ expect(prompt).toContain('Prefer one to three complete, directly responsive sentences');
  expect(prompt).toContain('Do not repeat internal authority codes');
  expect(prompt).toContain('Preserve uncertainty when it changes the answer');
 });
