@@ -1,3 +1,4 @@
+import {crmProcessingResultSchema} from '@fss/contracts';
 import capturedSonnet46 from './support/capturedSonnet46Extraction.json' with {type:'json'};
 import provisionalLabels from '../../../tools/ask-evaluation/owner-provisional-labels.json' with {type:'json'};
 import { createHash, randomUUID } from 'node:crypto';
@@ -206,6 +207,10 @@ it.each(cacheUsageCases)('native extraction usage $label preserves original evid
     const composition = composeCrmBedrock({allowControlledEvaluation:true, surface: { async converse(input) {
       expect(input.system[0]!.text).toContain('utterance:N:text:start:end');
       expect(input.system[0]!.text).toContain('not serialized JSON');
+      expect(input.system[0]!.text).toContain('stated means a direct assertion');
+      expect(input.system[0]!.text).toContain('Inferred needs must use status inferred');
+      expect(input.system[0]!.text).toContain('Rejection or disagreement is an objection');
+      expect(input.system[0]!.text).toContain('unless the source explicitly expresses it');
       expect(Buffer.byteLength(input.system[0]!.text)).toBeLessThanOrEqual(1024);
       expect(JSON.parse(input.messages[0]!.content[0]!.text)).toMatchObject([{ utterance: 0, speaker: 'Fixture speaker', text: quote, locator: 'utterance:0:text:0:29' }]);
       return { stopReason: 'tool_use', usage: example.usage, output: { message: { role: 'assistant', content: [{ toolUse: { toolUseId: 'controlled-transcript', name: 'emit_crm_extraction', input: { claims: [{ kind: 'need', interpretation: 'Repair coordinator', status: 'stated', locator: 'utterance:0:text:0:29', quote }] } } }] } } };
@@ -248,8 +253,9 @@ it.each(capturedSonnet46.caseIds)('replays actual synthetic Sonnet4.6 native out
   let calls=0;
   const composition=composeCrmBedrock({allowControlledEvaluation:true,extraction:{endpointId:'controlled-extraction',modelVersion,accessGrantVersion:'extraction-only-grant',dataHandlingVersion:'fixture-no-retention',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z'},surface:{converse:async input=>{calls++;expect(input.modelId).toBe(modelVersion);expect(input.messages[0]!.content[0]!.text).toBe(label.syntheticText);return response;}}});
   await runOnce(selected.fixture.db,{registry:registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,...composition}),owner:'captured-sonnet-native',limit:20});
-  const processed=(await selected.post('/crm/processing/read',{source})).body;
-  expect(processed).toMatchObject({state:'complete',claims:response.output.message.content[0]!.toolUse.input.claims.map(claim=>({quote:claim.quote})),financial:{dispatchState:'settled'}});
+  const processed=crmProcessingResultSchema.parse((await selected.post('/crm/processing/read',{source})).body);
+  expect(processed).toMatchObject({state:'complete',financial:{dispatchState:'settled'}});
+  expect(processed.claims.map(claim=>claim.quote).sort()).toEqual(response.output.message.content[0]!.toolUse.input.claims.map(claim=>claim.quote).sort());
   expect(calls).toBe(1);
  }finally{await selected.fixture.stop();}
 });

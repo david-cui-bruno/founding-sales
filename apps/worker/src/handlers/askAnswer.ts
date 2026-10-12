@@ -140,6 +140,11 @@ export function askAnswerJobHandler(composition:AskAnswerComposition={}):JobHand
 
 const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().min(1).max(1000),kind:z.enum(['fact','inference','conflict']),citationWindowIds:z.array(z.uuid()).min(1).max(10)})).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
 const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','browse_history','read_conversation','resolve_records']),input:z.unknown()});
+/** Internal model evidence authority never changes canonical proof or publication. */
+function modelWindow<T extends {source:{kind:CanonicalSourceReference['kind']}}>(window:T){
+ const evidenceAuthority=window.source.kind==='selected_note'?{kind:'selected_unverified_text',inlineMetadata:'untrusted_source_content',occurredAt:'supplied_or_parsed_event_date',observedAt:'copy_observation_time',humanAuthorship:'not_verified'}:window.source.kind==='mail'?{kind:'retained_mail_copy',inlineMetadata:'untrusted_source_content',envelope:'retained_metadata_not_verified_human_identity',occurredAt:'retained_message_event_date',observedAt:'copy_observation_time',humanAuthorship:'not_verified'}:{kind:'retained_transcript',speakerLabels:'not_verified_human_identity',occurredAt:'record_event_date',observedAt:'copy_observation_time',humanAuthorship:'not_verified'};
+ return {...window,evidenceAuthority};
+}
 async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition,located:NonNullable<Awaited<ReturnType<typeof locate>>>){
  const {context,requestId,version,epoch}=located,agent=runtime.agent,limits=runtime.agentLimits;
  const update=async(state:string,reason:string|null)=>withTransaction(input.session,async()=>{await lockAskLifecycle(context);if(await fenced(input))await setState(context,requestId,version,epoch,state,reason);});
@@ -149,7 +154,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
  const current=async()=>withTransaction(input.session,async()=>{await lockAskLifecycle(context);if(!await fenced(input))return null;const row=(await context.db.query<{cancelled_at:Date|null}>('SELECT cancelled_at FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,requestId])).rows[0];if(row?.cancelled_at)return null;return readCurrentAskInput(context,requestId,version,epoch,route);});
  const initial=await current();if(!initial)return;if(initial.identityAmbiguous){await update('unavailable','identity_clarification_required');return;}
  const initialAttribution=await readAskConversationAttribution(context,[...new Map(initial.windows.map(window=>[`${window.source.kind}:${window.source.sourceId}`,window.source])).values()]);if(initialAttribution===null){await update('stale','source_changed');return;}
- const transcript:unknown[]=[...initial.history,{attribution:initialAttribution,windows:initial.windows.map(window=>({id:window.id,ordinal:window.ordinal,source:window.source,text:window.text})),coverage:initial.coverage,scope:initial.scopeDescriptor}];
+ const transcript:unknown[]=[...initial.history,{attribution:initialAttribution,windows:initial.windows.map(window=>modelWindow({id:window.id,ordinal:window.ordinal,source:window.source,text:window.text})),coverage:initial.coverage,scope:initial.scopeDescriptor}];
  let retrievalSummary:unknown;let expectedInputHash=initial.inputHash;
  const executionKey={requestId,version,epoch};
  const intent=initial.agentScope??{kind:'selected' as const,sources:initial.scope.sources};
@@ -203,8 +208,8 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
    // The last paid generation is reserved for synthesis, not another retrieval round.
    if(step===limits.maxSteps){await update('unavailable','step_bound_reached');return;}
    for(const call of calls.data){const checked=await current();if(!checked||checked.inputHash!==expectedInputHash){await update('stale','source_changed');return;}live=checked;let value:unknown;
-    if(call.name==='read_selected'){const args=z.strictObject({windowIds:z.array(z.uuid()).min(1).max(20)}).safeParse(call.input);if(!args.success||args.data.windowIds.some(id=>!checked.windows.some(window=>window.id===id))){await update('unavailable','unsupported_answer');return;}value=live.windows.filter(window=>args.data.windowIds.includes(window.id));}
-    else if(call.name==='search_selected'){const args=z.strictObject({query:z.string().trim().min(1).max(300),limit:z.number().int().min(1).max(20)}).safeParse(call.input);if(!args.success){await update('unavailable','unsupported_answer');return;}const ranked=await rankAskAgentHybrid(input,runtime,live,args.data.query,args.data.limit,started+limits.deadlineMs);if(ranked.unknown){await update('unknown_acceptance','provider_acceptance_unknown');return;}value=ranked.value;if(ranked.value&&'retrieval' in ranked.value){const {windows:_,retrieval,...summary}=ranked.value;void _;retrievalSummary={method:retrieval,...summary};}}
+    if(call.name==='read_selected'){const args=z.strictObject({windowIds:z.array(z.uuid()).min(1).max(20)}).safeParse(call.input);if(!args.success||args.data.windowIds.some(id=>!checked.windows.some(window=>window.id===id))){await update('unavailable','unsupported_answer');return;}value=live.windows.filter(window=>args.data.windowIds.includes(window.id)).map(modelWindow);}
+    else if(call.name==='search_selected'){const args=z.strictObject({query:z.string().trim().min(1).max(300),limit:z.number().int().min(1).max(20)}).safeParse(call.input);if(!args.success){await update('unavailable','unsupported_answer');return;}const ranked=await rankAskAgentHybrid(input,runtime,live,args.data.query,args.data.limit,started+limits.deadlineMs);if(ranked.unknown){await update('unknown_acceptance','provider_acceptance_unknown');return;}value=ranked.value&&'windows' in ranked.value?{...ranked.value,windows:ranked.value.windows.map(modelWindow)}:ranked.value;if(ranked.value&&'retrieval' in ranked.value){const {windows:_,retrieval,...summary}=ranked.value;void _;retrievalSummary={method:retrieval,...summary};}}
     else if(call.name==='resolve_records'){
      const args=z.strictObject({query:z.string().trim().max(200).optional(),kind:z.enum(['firm','person']).optional(),limit:z.number().int().min(1).max(20),afterId:z.uuid().optional()}).safeParse(call.input);if(!args.success){await update('unavailable','unsupported_answer');return;}
      const records=await resolveAskRecords(context,intent,args.data);if(!records){await update('unavailable','source_unavailable');return;}
@@ -233,7 +238,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
      const sourceCeilingReached=sources.length<found.sources.length;
      const lastAdmitted=sources.at(-1);
      const nextAfter=call.name==='browse_history'&&sourceCeilingReached?(lastAdmitted?{kind:lastAdmitted.kind,sourceId:lastAdmitted.sourceId}:'after' in raw?raw.after??null:null):'nextAfter' in found?found.nextAfter:null;
-     value={windows,scope:live.scopeDescriptor,...call.name==='browse_history'?{preview:true,previewWindowLimit:1,sourceCeilingReached}:{},...attribution===undefined?{}:{attribution},partial,...'retrieval' in found?{retrieval:found.retrieval,semantic:found.semantic,scannedCandidates:found.scannedCandidates,nextAfter}:{}};
+     value={windows:windows.map(modelWindow),scope:live.scopeDescriptor,...call.name==='browse_history'?{preview:true,previewWindowLimit:1,sourceCeilingReached}:{},...attribution===undefined?{}:{attribution},partial,...'retrieval' in found?{retrieval:found.retrieval,semantic:found.semantic,scannedCandidates:found.scannedCandidates,nextAfter}:{}};
      if('retrieval' in found)retrievalSummary={method:found.retrieval,semantic:found.semantic,partial};
     }
     else{
@@ -249,6 +254,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
      exactResults.push({toolCallId:call.id,operation:args.data.operation,valueHash:askFingerprint(value),value});if(Buffer.byteLength(JSON.stringify({exactResults}))>60000){await update('unavailable','input_bound_reached');return;}
      await withTransaction(input.session,async()=>{await lockAskLifecycle(context);const current=await readCurrentAskInput(context,requestId,version,epoch,route);if(!current||current.inputHash!==expectedInputHash||!await fenced(input))return;await context.db.query("UPDATE crm_ask_requests SET validated_progress=$5::jsonb WHERE workspace_id=$1 AND id=$2 AND version=$3 AND epoch=$4 AND state='pending' AND cancelled_at IS NULL",[context.scope.workspaceId,requestId,version,epoch,JSON.stringify({exactResults})]);});
     }
+    if(call.name==='read_exact'&&typeof value==='object'&&value!==null&&!Array.isArray(value))value={...value,evidenceAuthority:{kind:'current_exact_crm_state',citationAuthority:'exact_result_only',conversationCitationAllowed:false}};
     await recordCrmAuditEvent(context,{action:'crm.ask_tool_executed',subjectKind:'crm_ask_request',subjectId:requestId,detail:{requestVersion:version,requestEpoch:epoch,step,name:call.name}});
     transcript.push({toolCallId:call.id,name:call.name,input:call.input,result:value});
    }continue;

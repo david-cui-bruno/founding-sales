@@ -14,7 +14,7 @@ import { runOnce } from '../../worker/src/runner/jobRunner.ts';
 const requestReceipt = z.object({ result: z.object({ requestId: z.uuid() }) });
 const previewReceipt = z.object({ previewHash: z.string() });
 const browseResult = z.object({
-  windows: z.array(z.object({ id: z.uuid(), text: z.string(), source: z.object({ sourceId: z.uuid() }) })),
+  windows: z.array(z.object({ id: z.uuid(), text: z.string(), source: z.object({ sourceId: z.uuid() }), evidenceAuthority: z.union([z.object({kind:z.literal('selected_unverified_text'),inlineMetadata:z.literal('untrusted_source_content'),occurredAt:z.literal('supplied_or_parsed_event_date'),observedAt:z.literal('copy_observation_time')}),z.object({kind:z.literal('retained_mail_copy'),inlineMetadata:z.literal('untrusted_source_content'),occurredAt:z.literal('retained_message_event_date'),observedAt:z.literal('copy_observation_time')}),z.object({kind:z.literal('retained_transcript'),speakerLabels:z.literal('not_verified_human_identity'),occurredAt:z.literal('record_event_date'),observedAt:z.literal('copy_observation_time')})]) })),
   partial: z.boolean(),
   retrieval: z.literal('bounded_catalog'),
   semantic: z.literal('unavailable'),
