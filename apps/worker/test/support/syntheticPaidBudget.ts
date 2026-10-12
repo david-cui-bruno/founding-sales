@@ -1,8 +1,10 @@
-/** One sequential opt-in acceptance run, shared by extraction and Ask. Unknown calls
+/** One sequential opt-in acceptance run, shared by extraction and Ask. The $10
+ * individual source ceiling grants no funding; separately approved exact scopes
+ * and the campaign ledger constrain actual authority. Unknown calls
  * consume their entire conservative allocation; no automatic provider retry. */
 export function syntheticPaidBudget(options:{maxSteps:number;maxCents:number;inputTokenPriceMicros?:number;outputTokenPriceMicros?:number;persist:(snapshot:{startedSteps:number;allocatedCents:number})=>void}){
  const inputPrice=options.inputTokenPriceMicros??1.1,outputPrice=options.outputTokenPriceMicros??5.5;
- if(!Number.isSafeInteger(options.maxSteps)||options.maxSteps<1||options.maxSteps>50||!Number.isSafeInteger(options.maxCents)||options.maxCents<1||options.maxCents>500||!Number.isFinite(inputPrice)||inputPrice<=0||inputPrice>1000||!Number.isFinite(outputPrice)||outputPrice<0||outputPrice>1000)throw new Error('synthetic_budget_configuration_invalid');
+ if(!Number.isSafeInteger(options.maxSteps)||options.maxSteps<1||options.maxSteps>50||!Number.isSafeInteger(options.maxCents)||options.maxCents<1||options.maxCents>1000||!Number.isFinite(inputPrice)||inputPrice<=0||inputPrice>1000||!Number.isFinite(outputPrice)||outputPrice<0||outputPrice>1000)throw new Error('synthetic_budget_configuration_invalid');
  const maxSteps=options.maxSteps,maxCents=options.maxCents;
  let startedSteps=0;let allocatedCents=0;
  return {snapshot:()=>({startedSteps,allocatedCents}),async run<T>(input:unknown,maxOutputTokens:number,call:()=>Promise<T>):Promise<T>{

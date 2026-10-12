@@ -9,7 +9,7 @@ it('pins the reviewed region/profile and exact independent purpose bindings with
 it('rejects config flags that imply authority or silently substitute another provider endpoint',()=>{for(const input of [{enabled:true},{capture:true,approved:true},{extraction:{...route,region:'us-west-2'}},{answer:{...route,modelVersion:'global.anthropic.claude-haiku'}}])expect(()=>readCrmCapabilityStartup({FSS_CRM_CAPABILITY_ADAPTERS:JSON.stringify(input)})).toThrow('crm_capability_adapter_configuration_invalid');});
 
 it('constructs only explicitly configured current US models without calls, activation or fallback',async()=>{
- for(const modelVersion of ['us.anthropic.claude-sonnet-5-5','us.anthropic.claude-haiku-5-5'] as const){
+ for(const modelVersion of ['us.anthropic.claude-sonnet-5-5','us.anthropic.claude-haiku-5-5','us.anthropic.claude-sonnet-4-6'] as const){
   const selected={...route,modelVersion};
   const configuration=readCrmCapabilityStartup({FSS_CRM_CAPABILITY_ADAPTERS:JSON.stringify({extraction:selected,answer:selected})});
   let calls=0;const runtime=createCrmCapabilityRuntime(configuration,identity);
