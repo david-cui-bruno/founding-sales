@@ -1,14 +1,14 @@
 # Current operating state
 
-## Current completion focus — October 11, 2026 (America/New_York)
+## Current completion focus — October 12, 2026 (America/New_York)
 
 The [engineering design audit](../sourcing/engineering-design-audit-20261011.md) records the agreed David-only end state, proportional review, cleanup priorities and execution lanes. Core completion is #549/#550/#551/#552; independent outreach #425/#438 and native #460/#466 remain open. Four parents track these eight outcomes. Closed source foundations remain closed.
 
-PR584 is merged (`a2c2b676`); merged source schema104 remains held. Dated production evidence is backendd49/schema88/signed desktop1.0.51, not a fresh operational observation from this audit. The Ask prototype branch is experimental and must not be merged wholesale. Release/bootstrap approval and capability-specific real outcomes remain pending; no sending or activation controls changed.
+PR585 housekeeping (`3f797851`) and PR586 partial-output/source-limit repairs (`dae0aad7`) are merged after exact-source checks. Merged source schema104 remains held. Dated production evidence is backendd49/schema88/signed desktop1.0.51, not a fresh operational observation from this audit. The Ask prototype branch is experimental and must not be merged wholesale. Release/bootstrap approval and capability-specific real outcomes remain pending; no sending or activation controls changed.
 
-The latest paired Sonnet4.6 reasoning run finished24calls/448c conservative allocation. Both arms returned12/12 structurally complete answers, but provenance/coverage errors persisted and no clear usefulness improvement was observed. Keep reasoning disabled; these fixed-context synthetic results do not prove ordinary integration or readiness. Campaign journal conserves281calls/3190c total allocation (not invoice), within400/$50; no further dispatch is planned. Earlier counts below are dated history.
+The latest ordinary configured-worker Sonnet4.6 synthetic run published6answers with14calls/156c conservative allocation. Independent Codex review found3/6 useful without correction; incomplete prose and unsupported remedy/coverage conclusions remain. Published output is not hosted-quality acceptance. Campaign conserves295calls/3346c total allocation (not invoice), within400/$50; no further dispatch is currently planned. Reasoning remains disabled after the earlier paired run showed no clear benefit.
 
-Next: consolidate active instructions and agent module navigation, deepen the existing Ask evidence projection/test setup, and complete actual core journeys. Use the existing lean release flow once the explicit hold prerequisites are resolved; no new platform or broad rewrite.
+Current instructions/module-map and shared projection/test-setup cleanup are complete. [Focused output diagnosis](../sourcing/ask-strict-output-diagnosis-research-20261012.md) reproduces preserved unfinished strings offline and identifies a different upstream native-JSON issue, without claiming that issue explains our explicit tool path. Next: capture fresh synthetic-only request/response boundaries and compare strict on/off with all other final-generation settings frozen. No additional paid call, deployment or activation was made during this investigation. Preserve the existing lean release flow and hold prerequisites.
 
 ## Evidence, prerequisites and refresh
 
