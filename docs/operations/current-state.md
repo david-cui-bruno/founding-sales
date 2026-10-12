@@ -4,7 +4,7 @@
 
 The [engineering design audit](../sourcing/engineering-design-audit-20261011.md) records the agreed David-only end state, proportional review, cleanup priorities and execution lanes. Core completion is #549/#550/#551/#552; independent outreach #425/#438 and native #460/#466 remain open. Four parents track these eight outcomes. Closed source foundations remain closed.
 
-PR585 housekeeping is merged (`3f797851`); PR586 partial-output guard and Ask-only runner are merged (`dae0aad7`). Merged source schema104 remains held. Dated production evidence is backendd49/schema88/signed desktop1.0.51; this diagnosis made no fresh production-state observation. Deployment/bootstrap and capability outcomes remain pending.
+PR585 housekeeping is merged (`3f797851`); PR586 partial-output guard and Ask-only runner are merged (`dae0aad7`). Merged source through PR589 (`a7155a6b`) targets schema105 and remains held. Dated production evidence is backendd49/schema88/signed desktop1.0.51; this diagnosis made no fresh production-state observation. Deployment/bootstrap and capability outcomes remain pending.
 
 The [strict-output paired diagnosis](../sourcing/ask-strict-paired-diagnosis-20261012.md) is complete. Fresh ordinary-worker synthetic capture used14calls/155c; native strict-on/off replay used12calls/152c. No fragments reproduced; turning strict off did not improve usefulness and one response malformed its claims array. Source attribution, exact observation citations and reported-versus-actual coverage remain defects. Keep strict output and reasoning disabled. Diagnostic source `d164ffd4` is on a separate branch, not deployed.
 
@@ -26,9 +26,15 @@ Diagnostic code and frozen matrix remain on their archival branch; only research
 
 PR588 merged as `d8957efb` after independent reviews and all required CI passed; that source correction was not deployed. Subsequent authenticated command/registered-worker reproduction found that source-free task observations lacked transitive erasure: task lists hid deleted support, while consuming Ask requests/history retained copied private content.
 
-The correction adds bounded host-only dependencies on independent human/internal tasks, revalidates their complete original authority and registers all counted contributors before model exposure. Task support invalidation erases consuming question, answer, progress and history content. Investigation deletion preserves independent tasks; ordinary completion remains a current-state freshness change. Scoped deletion inventories, fingerprints, locks and removes dependency rows. Schema105 migration erases legacy task observations with unverifiable lineage rather than reconstructing incomplete evidence. Source integration, reviewed CI and release status must be checked at the correction PR; controlled results do not establish actual model quality.
+The correction adds bounded host-only dependencies on independent human/internal tasks, revalidates their complete original authority and registers all counted contributors before model exposure. Task support invalidation erases consuming question, answer, progress and history content. Investigation deletion preserves independent tasks; ordinary completion remains a current-state freshness change. Scoped deletion inventories, fingerprints, locks and removes dependency rows. Schema105 migration erases legacy task observations with unverifiable lineage rather than reconstructing incomplete evidence. PR589 merged as `a7155a6b` after both review axes and all required CI passed. Controlled results do not establish actual model quality.
 
 No provider calls, production changes, activation or sending occurred. #551 remains open for actual repaired-source usefulness and applicable readiness. The release hold and existing sending safeguards remain; larger evaluation funding remains a proposal until explicitly allocated.
+
+## Ordinary-worker eight-case evaluation preparation — October 12
+
+The existing opt-in runner now supports separately bound version4 fixtures for two exact-state cases and six interpretation cases. Public setup freezes actual firm names, opportunities, task dates/completion and selected original copies; keyword task preparation happens before disposable answering activation. Grading labels remain outside model inputs. Controlled configured-SDK/registered-worker preflight covers exact-only/mixed citations, original navigation, current history, deletion and request framing. These controls establish plumbing, not semantic usefulness.
+
+Version4 binds the actual tracked application/schema/dependency working files plus commit and uses a host-wide opaque once-only scope marker before loading a model. Historical fixture versions and grants retain their original restrictions. No new framework, production authority, model setting or sending permission is introduced. Paid comparison has not run; exact source review, a frozen executable scope and a fresh explicit allowance remain prerequisites. Prior grants are consumed and the larger campaign remains a proposal.
 
 ## Evidence, prerequisites and refresh
 

@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {expect,it} from 'vitest';
@@ -30,4 +30,18 @@ it('allows an explicitly frozen Ask-only evaluation without an extraction worklo
  expect(validateSyntheticAcceptance(input(askOnly)).scope.extractionIds).toEqual([]);
  expect(()=>validateSyntheticAcceptance(input({...askOnly,extractionIds:['dev_01']}))).toThrow();
  expect(()=>validateSyntheticAcceptance(input({...askOnly,maxSteps:36}))).toThrow();
+});
+
+function inputV4(changes:Record<string,unknown>={}){
+ const labelsBytes=readFileSync(new URL('../../../tools/ask-evaluation/fixtures/ask-contract-v4.json',import.meta.url));
+ const fixture=JSON.parse(labelsBytes.toString()) as {cases:{id:string;question:string}[]};
+ const base=input({scopeVersion:4,modelVersion:'us.anthropic.claude-sonnet-4-6',labelsPath:'tools/ask-evaluation/fixtures/ask-contract-v4.json',labelsSha256:sha(labelsBytes),extractionIds:[],askIds:fixture.cases.map(c=>c.id),askQuestions:Object.fromEntries(fixture.cases.map(c=>[c.id,c.question])),stage:'gold_context',maxAskSteps:2,maxSteps:17,captureNative:true,sourceCommit:'a'.repeat(40),sourceTreeSha256:'b'.repeat(64),...changes});
+ return {...base,labelsBytes,sourceTree:{commit:'a'.repeat(40),sha256:'b'.repeat(64)}};
+}
+it('accepts eight version4 fixtures with exact questions and a frozen whole-source snapshot',()=>{
+ const value=inputV4();expect(validateSyntheticAcceptance(value).scope.askIds).toHaveLength(8);
+ expect(()=>validateSyntheticAcceptance({...value,sourceTree:{commit:'a'.repeat(40),sha256:'c'.repeat(64)}})).toThrow('approved_runner_changed');
+});
+it.each([{labelsPath:undefined},{sourceCommit:undefined},{sourceTreeSha256:undefined},{sourceCommit:'c'.repeat(40)},{askIds:['crm2_01']},{askQuestions:{crm2_01:'A different unreviewed question'}},{extractionIds:['dev_01']},{stage:'history_investigation',maxAskSteps:6,maxSteps:49},{maxSteps:16}])('refuses incomplete or changed version4 fixture authority before dispatch (%j)',changes=>{
+ expect(()=>validateSyntheticAcceptance(inputV4(changes))).toThrow();
 });

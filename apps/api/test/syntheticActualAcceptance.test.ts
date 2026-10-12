@@ -1,3 +1,5 @@
+import {parseSyntheticAskFixtures,prepareSyntheticAskFixture} from './support/syntheticAskFixtures.ts';
+import {snapshotSyntheticAcceptanceSource,claimSharedSyntheticAcceptanceDirectory} from './support/syntheticSourceBinding.ts';
 import {createConverseCapture} from '../../../tools/ask-evaluation/diagnostics/capture-converse.ts';
 import {createBedrockAskSdkModel} from '../../worker/src/providers/askAgentSdk.ts';
 import {loadCrmBedrockSurface} from '../../worker/src/providers/crmBedrock.ts';
@@ -24,7 +26,6 @@ import {validateSyntheticAcceptance,claimSyntheticAcceptanceDirectory,syntheticA
 
 const repository=fileURLToPath(new URL('../../../',import.meta.url));
 const scopeFile=process.env['FSS_SYNTHETIC_SCOPE_FILE']?resolve(process.env['FSS_SYNTHETIC_SCOPE_FILE']!):resolve(repository,'.context/551-actual-synthetic-scope.json');
-const labelsFile=resolve(repository,'tools/ask-evaluation/owner-provisional-labels.json');
 const sha=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
 // This is a separately approved, opt-in paid acceptance. Required CI never calls a
 // model. Expectations and original synthetic inputs are bound before dispatch;
@@ -32,17 +33,18 @@ const sha=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
 it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes the exact approved synthetic scope through ordinary configured workers',async()=>{
  const scopeBytes=readFileSync(scopeFile);
  const approvalFile=process.env['FSS_SYNTHETIC_APPROVAL_FILE'];if(!approvalFile)throw new Error('exact_paid_scope_approval_required');
- const labelsBytes=readFileSync(labelsFile);
- const {scope,approval,pricing}=validateSyntheticAcceptance({scopeBytes,approvalBytes:readFileSync(approvalFile),labelsBytes,readSource:path=>readFileSync(resolve(repository,path))});
+ const newFixtures=(JSON.parse(scopeBytes.toString()) as {scopeVersion?:unknown}).scopeVersion===4;
+ const labelsBytes=readFileSync(resolve(repository,newFixtures?'tools/ask-evaluation/fixtures/ask-contract-v4.json':'tools/ask-evaluation/owner-provisional-labels.json'));
+ const {scope,approval,pricing}=validateSyntheticAcceptance({scopeBytes,approvalBytes:readFileSync(approvalFile),labelsBytes,readSource:path=>readFileSync(resolve(repository,path)),...newFixtures?{sourceTree:snapshotSyntheticAcceptanceSource(repository)}:{}});
  const labels=JSON.parse(labelsBytes.toString()) as {cases:{caseId:string;syntheticText:string;expectedOutcome:string;forbiddenOutcome:string;eventAt:string}[]};
- const chosen=[...new Set([...scope.extractionIds,...scope.askIds])].map(id=>{const found=labels.cases.find(item=>item.caseId===id);if(!found)throw new Error('frozen_case_missing');return found;});
- const directory=claimSyntheticAcceptanceDirectory(repository,scope.runId);
+ const chosen=scope.scopeVersion===4?parseSyntheticAskFixtures(labelsBytes).cases.map(item=>({caseId:item.id,firmName:item.firmName,expectedOutcome:item.expected.join(' '),forbiddenOutcome:item.forbidden.join(' '),syntheticText:'',eventAt:null,fixtureCase:item})):[...new Set([...scope.extractionIds,...scope.askIds])].map(id=>{const found=labels.cases.find(item=>item.caseId===id);if(!found)throw new Error('frozen_case_missing');return {...found,firmName:['dev_01','dev_06'].includes(found.caseId)?'Example Sales':`Synthetic ${found.caseId}`,fixtureCase:undefined};});
+ const directory=scope.scopeVersion===4?claimSharedSyntheticAcceptanceDirectory(repository,scope.runId,sha(scopeBytes)):claimSyntheticAcceptanceDirectory(repository,scope.runId);
  writeFileSync(resolve(directory,'approved-scope.json'),scopeBytes,{mode:0o600,flag:'wx'});
  const budget=syntheticPaidBudget({maxSteps:scope.maxSteps,maxCents:scope.maxCents,inputTokenPriceMicros:pricing.inputTokenPriceMicros,outputTokenPriceMicros:pricing.outputTokenPriceMicros,persist:snapshot=>writeFileSync(resolve(directory,'aggregate-budget.json'),JSON.stringify(snapshot),{mode:0o600})});
  const fixture=await createAuthFixture();let phase='transport_probe';
  try{
   const observations:unknown[]=[];
-  const capturedTransports=scope.scopeVersion===3&&scope.captureNative===true?{model:createBedrockAskSdkModel({region:'us-east-1',modelVersion:scope.modelVersion,fetch:createConverseCapture({directory:resolve(directory,'native')}).fetch}),surface:await loadCrmBedrockSurface({region:'us-east-1',timeoutMilliseconds:30000})}:undefined;
+  const capturedTransports=scope.scopeVersion!==undefined&&scope.scopeVersion>=3&&scope.captureNative===true?{model:createBedrockAskSdkModel({region:'us-east-1',modelVersion:scope.modelVersion,fetch:createConverseCapture({directory:resolve(directory,'native')}).fetch}),surface:await loadCrmBedrockSurface({region:'us-east-1',timeoutMilliseconds:30000})}:undefined;
   const actual=await boundedActualBedrock(budget,scope.modelVersion,observation=>{observations.push(scope.captureNative?{...observation,output:undefined}:observation);writeFileSync(resolve(directory,'private-transport-observations.json'),JSON.stringify(observations,null,2),{mode:0o600});},scope.scopeVersion!==undefined?{thinking:'disabled'}:undefined,capturedTransports);
   // One scoped, bounded transport probe precedes any truthful configured-model
   // attestation; it counts against the SAME aggregate ceiling and never uses Gmail.
@@ -70,12 +72,12 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
   if(scope.extractionIds.length)expect((await post('/crm/processing/purpose/save',command(common))).status).toBe(200);
 
   expect((await post('/ask/purpose/save',command({...common,purpose:'answer',evaluationFingerprint:scope.labelsSha256,...CRM_SUPPORTED_AGENT_ASK_VERSIONS,agentLimits:configuration.answer!.agentLimits}))).status).toBe(200);
-  expect((await post('/ask/purpose/activate',command({capability:'ask_answer',purpose:'answer',expectedRevision:1,approval:approvalDecision}))).body).toMatchObject({status:'accepted'});
   const composed=await composeCrmCapabilities({configuration,runtime:{...runtime,side:'worker'},openSession:async()=>({session:await fixture.database.appRuntimeSession(),close:async()=>{}}),answerModel:actual.model,loadSurface:async()=>actual.surface});
   const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,...composed.handlers});
   const prepared=[];
   for(const item of chosen){
-   const firmId=await seedFirm(fixture,{name:['dev_01','dev_06'].includes(item.caseId)?'Example Sales':`Synthetic ${item.caseId}`,assignedUserId:fixture.alpha.admin.userId});
+   const firmId=await seedFirm(fixture,{name:item.firmName,assignedUserId:fixture.alpha.admin.userId});
+   if(item.fixtureCase){const result=await prepareSyntheticAskFixture(post,command,{workspaceId:fixture.alpha.workspaceId,firmId},item.fixtureCase);prepared.push({item,firmId,...result});continue;}
    if(item.caseId==='dev_06'){
     for(const name of ['North pilot','South pilot'])expect((await post('/opportunities/v2/open',command({firmId,name}))).status).toBe(200);
    }
@@ -84,20 +86,22 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
    expect((await post('/crm/imports/commit',command({...selection,personId:null,firmId,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash,parserVersion:'selected-v1'}))).status).toBe(200);
    const imported=selectedImportPageSchema.parse((await post('/crm/imports/read',{firmId,limit:10})).body).imports[0]!;
    const source={workspaceId:imported.source.workspaceId,sourceId:imported.source.sourceId,kind:'selected_note',revision:imported.source.revision,contentHash:imported.source.contentHash,locator:null};
-   prepared.push({item,firmId,source,metadataRevision:imported.metadata.revision});
+   prepared.push({item,firmId,sources:[{...source,kind:'selected_note' as const}],cleanupSources:[{...source,kind:'selected_note' as const,metadataRevision:imported.metadata.revision}],requestScope:syntheticAskStageScope(scope.stage,firmId,{...source,kind:'selected_note'}),seedObservation:{}});
   }
+  expect((await post('/ask/purpose/activate',command({capability:'ask_answer',purpose:'answer',expectedRevision:1,approval:approvalDecision}))).body).toMatchObject({status:'accepted'});
   // All originals are committed under disabled extraction settings. Ordinary
   // workers may now process only the four explicit processing requests.
   if(scope.extractionIds.length)expect((await post('/crm/processing/purpose/activate',command({capability:'crm_extraction',expectedRevision:1,approval:approvalDecision}))).body).toMatchObject({status:'accepted'});
-  for(const {item,firmId,source,metadataRevision} of prepared){
-   const outputs:Record<string,unknown>={caseId:item.caseId,expectedOutcome:item.expectedOutcome,forbiddenOutcome:item.forbiddenOutcome,humanQualityReview:'pending',modelVersion:scope.modelVersion,stage:scope.stage??'legacy_history_investigation',thinking:scope.thinking??'legacy_policy',pricing,inputLimitations:['selected_text_authorship_unverified','label_event_timezone_is_not_canonical_source_metadata; use only separately frozen question context or report unknown'],acquisition:'selected_unverified'};
+  for(const {item,sources,cleanupSources,requestScope,seedObservation} of prepared){
+   const outputs:Record<string,unknown>={caseId:item.caseId,expectedOutcome:item.expectedOutcome,forbiddenOutcome:item.forbiddenOutcome,humanQualityReview:'pending',modelVersion:scope.modelVersion,stage:scope.stage??'legacy_history_investigation',thinking:scope.thinking??'legacy_policy',pricing,inputLimitations:['selected_text_authorship_unverified','label_event_timezone_is_not_canonical_source_metadata; use only separately frozen question context or report unknown'],acquisition:'selected_unverified',seedObservation,evaluatedScope:requestScope};
    if(scope.extractionIds.includes(item.caseId)){
+    const source=sources[0];if(!source)throw new Error('synthetic_extraction_original_required');
     expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
     await runOnce(db,{registry,owner:'approved-synthetic-extraction',limit:10});
     outputs['extraction']=(await post('/crm/processing/read',{source})).body;
    }
    if(scope.askIds.includes(item.caseId)){
-    const requested=await post('/ask/answers/request',command({question:scope.askQuestions[item.caseId],execution:'agent_v1',...syntheticAskStageScope(scope.stage,firmId,{...source,kind:'selected_note'})}));expect(requested.status).toBe(200);
+    const requested=await post('/ask/answers/request',command({question:scope.askQuestions[item.caseId],execution:'agent_v1',...requestScope}));expect(requested.status).toBe(200);
     const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
     await runOnce(db,{registry,owner:'approved-synthetic-ask',limit:10});
     outputs['ask']=(await post('/ask/answers/read',{requestId,includeExactResultCitations:true})).body;
@@ -107,7 +111,7 @@ it.skipIf(process.env['FSS_RUN_APPROVED_SYNTHETIC_ACCEPTANCE']!=='1')('executes 
    // An ambiguous attempt keeps its full allocation and ends this batch. Do not
    // dispatch further cases against an unverified failing provider boundary.
    if(['ask','extraction'].some(key=>{const result=outputs[key];return typeof result==='object'&&result!==null&&'state' in result&&result.state==='unknown_acceptance';})){phase='unknown_acceptance_stopped';throw new Error('synthetic_unknown_acceptance_stopped');}
-   expect((await post('/crm/imports/delete',command({sourceId:source.sourceId,expectedSourceRevision:source.revision,expectedMetadataRevision:metadataRevision}))).status).toBe(200);
+   for(const source of cleanupSources)expect((await post('/crm/imports/delete',command({sourceId:source.sourceId,expectedSourceRevision:source.revision,expectedMetadataRevision:source.metadataRevision}))).status).toBe(200);
   }
   phase='complete_candidates_human_review_pending';
  }finally{
