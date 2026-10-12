@@ -1,0 +1,17 @@
+# Construction evaluation — stopped before answers
+
+David approved the exact frozen `7acd0d3c` Sonnet4.6 synthetic history/session scope: five previously reviewed cases,31 call slots/$10, disabled thinking, no retries, no Gmail or production. Whole source hash `26d3dd2910f73543a733ff95b719133eda9c555fe8a9faf653f8a6b752c0cbe0`; scope hash `7bf4c49679f41c48fcd1d31cc699f5ca5b81110b2f9bd22a32c8186d3c93d4dd`. Source repair merged through PR596 as `b8cdf38d`, with all required checks and independent reviews passing; it remains separate from activation and deployment.
+
+The actual run `9afd7b1a-e5e8-4d87-95fa-e358b4d827a1` stopped at the first Ask step. Its preceding transport probe returned26input/4output tokens. The native SDK request received HTTP400; the adapter retained unknown acceptance and the runner stopped without retry or later scenarios. Two call slots/16c conservative allocation were consumed, not invoice cost. No useful answers were produced: first case attempted, other four not run. The frozen run cannot be reused, and unused ceiling is not a fresh grant.
+
+Both synthetic original-source deletions were accepted. Final history deletion and readback erased the question, answer and fallback; history inventory is empty and the recorded final cleanup failure list is empty. This does not assert that deleting the source alone erased the question of the unknown-acceptance request: the source-cleanup observation retains it until explicit history deletion. No sending, production write, capability activation or release-hold change occurred.
+
+## Offline investigation and correction
+
+The captured response stores HTTP status but not the provider error message, so the exact rejection reason is unavailable. The captured serialized strict `emit_answer` schema contains `oneOf` in the new construction field. AWS lists `anyOf`/`const` among the supported subset and describes immediate400 for unsupported schema features. [AWS structured output documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html).
+
+Ranked hypotheses: new `oneOf` grammar; other schema complexity/unsupported feature; changed provider/profile setting. Profile metadata was freshly ACTIVE, and the same-model probe succeeded, but neither proves strict grammar acceptance. No live counterfactual request was made.
+
+A no-network regression through the real Bedrock SDK and external fake fetch reproduces `oneOf` in the outgoing strict tool request. It fails before changing the schema and passes afterward. The correction uses an ordinary Zod union, emitting documented `anyOf`; literal mode values keep the alternatives disjoint and preserve host validation.36 focused SDK checks and11 configured construction journey cases pass. This fixes an observed documented-subset mismatch; the actual400 cause and corrected provider acceptance remain unconfirmed. No fresh semantic usefulness result follows.
+
+Private approval/proposal is in `.context/ask-construction-evaluation-20261012/`; original captures, allocation and cleanup observations are in `.context/synthetic-acceptance-9afd7b1a-e5e8-4d87-95fa-e358b4d827a1/`. Preserve the original failed source and artifacts. #551 stays open for actual strict-provider acceptance, useful model construction selection and applicable readiness. A changed-source evaluation needs a new concrete approved scope and allowance. Sending safeguards and release hold remain unchanged.

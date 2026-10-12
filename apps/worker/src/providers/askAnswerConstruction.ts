@@ -3,7 +3,9 @@ import type { AskInputWindow } from '@fss/domain/crm/askAnswerPorts.ts';
 
 // Provider grammar stays free of Bedrock-unsupported length keywords. The host
 // validates bounds and evidence against its current authorized snapshot below.
-export const askClaimConstructionSchema = z.discriminatedUnion('mode', [
+// Ordinary union emits supported anyOf; discriminatedUnion emits oneOf.
+// Literal mode values keep the branches disjoint without weakening validation.
+export const askClaimConstructionSchema = z.union([
   z.strictObject({ mode: z.literal('source_quote'), windowId: z.string(), quote: z.string() }),
   z.strictObject({ mode: z.literal('exact_count'), toolCallId: z.string() }),
   z.strictObject({ mode: z.literal('opportunity_record'), toolCallId: z.string(), opportunityId: z.string() }),

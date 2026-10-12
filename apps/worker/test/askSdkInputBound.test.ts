@@ -2,6 +2,22 @@ import {expect,it} from 'vitest';
 import {z} from 'zod';
 import {MockLanguageModelV3} from 'ai/test';
 import {createAskSdkStepAdapter} from '../src/providers/askAgentSdk.ts';
+it('sends construction alternatives using the documented Bedrock strict schema subset',async()=>{
+ const {createAmazonBedrock}=await import('@ai-sdk/amazon-bedrock');let request:unknown;
+ const model=createAmazonBedrock({region:'us-east-1',credentialProvider:async()=>({accessKeyId:'controlled',secretAccessKey:'controlled'}),fetch:async(_url,init)=>{
+  request=JSON.parse(String(init?.body));
+  return new Response(JSON.stringify({output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'final',name:'emit_answer',input:{claims:[],abstained:true}}}]}},stopReason:'tool_use',usage:{inputTokens:30,outputTokens:10,totalTokens:40},metrics:{latencyMs:1}}),{headers:{'content-type':'application/json'}});
+ }})('us.anthropic.claude-sonnet-4-6');
+ const adapter=createAskSdkStepAdapter({region:'us-east-1',endpointId:'bedrock-runtime.us-east-1.amazonaws.com',modelVersion:'controlled',providerKey:'controlled',model});
+ await adapter.runStep({question:'Synthetic construction grammar',transcript:[],maxOutputTokens:1000,remainingSteps:1,signal:new AbortController().signal});
+ const sent=JSON.stringify(request);
+ // AWS lists anyOf/const for strict tools, not oneOf. Zod discriminated unions
+ // emit oneOf in the actual serialized Converse request; ordinary unions do not.
+ expect(sent).not.toContain('"oneOf"');
+ expect(sent).toContain('"source_quote"');
+ expect(sent).toContain('"opportunity_record"');
+ expect(sent).toContain('"anyOf"');
+});
 it('counts the same actual SDK system/tools/encoded messages before provider dispatch',async()=>{
  let actualBytes=0;
  const model=new MockLanguageModelV3({doGenerate:async input=>{actualBytes=Buffer.byteLength(JSON.stringify(input));return {content:[{type:'text',text:'{"claims":[],"abstained":true}'}],finishReason:{unified:'stop',raw:'end_turn'},usage:{inputTokens:{total:30,noCache:30,cacheRead:0,cacheWrite:0},outputTokens:{total:10,text:10,reasoning:0}},warnings:[]};}});
