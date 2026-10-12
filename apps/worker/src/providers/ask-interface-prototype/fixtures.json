@@ -1,0 +1,966 @@
+{
+  "prototype": true,
+  "workload": "fixed supplied context synthesis, not history retrieval or configured product acceptance",
+  "sourceBase": "ec57e77162baf9479d67e55558a392a5f072dadc",
+  "labelsSha256": "a0c46e127a10870b968be0cbb890ebd7d44066f9f23c9915609f096e6fc3509d",
+  "modelVersion": "us.anthropic.claude-sonnet-4-6",
+  "thinking": "disabled",
+  "temperature": "provider default, no explicit override, same both arms",
+  "maxAskSteps": 2,
+  "maxOutputTokens": 1000,
+  "maxInputBytes": 25000,
+  "repetitions": 2,
+  "cases": [
+    {
+      "caseId": "dev_01",
+      "question": "What commitment is stated, who states it, and what deadline is supported?",
+      "source": "Mira at Example Sales says: \"I will send the proposal Friday, October 16.\"",
+      "observations": [],
+      "window": {
+        "id": "ffcc9956-a5cd-41c9-94e7-38fe812fc93e",
+        "ordinal": 1,
+        "source": {
+          "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+          "sourceId": "3ac6940a-b38d-4506-b318-f3c18c8bac35",
+          "kind": "selected_note",
+          "revision": 1,
+          "contentHash": "a90647f5ee4f254e6268a4060437fbaaa821dfd063d95870664bb6f633a514d4",
+          "locator": "text:0:74",
+          "speaker": null,
+          "occurredAt": "2026-10-12T14:00:00Z",
+          "observedAt": "2026-10-12T02:20:00.000Z",
+          "completeness": "selected_excerpt",
+          "availability": "available"
+        },
+        "text": "Mira at Example Sales says: \"I will send the proposal Friday, October 16.\"",
+        "textHash": "a90647f5ee4f254e6268a4060437fbaaa821dfd063d95870664bb6f633a514d4",
+        "evidenceAuthority": {
+          "kind": "selected_unverified_text",
+          "inlineMetadata": "untrusted_source_content",
+          "occurredAt": "supplied_or_parsed_event_date",
+          "observedAt": "copy_observation_time",
+          "humanAuthorship": "not_verified"
+        },
+        "sourceMetadata": {
+          "eventTime": {
+            "at": "2026-10-12T14:00:00Z",
+            "basis": "supplied_or_parsed_event_date",
+            "independentlyVerifiedAuthoredTime": false
+          },
+          "copyObservation": {
+            "at": "2026-10-12T02:20:00.000Z",
+            "basis": "copy_observation_time"
+          }
+        }
+      },
+      "transcript": [
+        {
+          "windows": [
+            {
+              "id": "ffcc9956-a5cd-41c9-94e7-38fe812fc93e",
+              "ordinal": 1,
+              "source": {
+                "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                "sourceId": "3ac6940a-b38d-4506-b318-f3c18c8bac35",
+                "kind": "selected_note",
+                "revision": 1,
+                "contentHash": "a90647f5ee4f254e6268a4060437fbaaa821dfd063d95870664bb6f633a514d4",
+                "locator": "text:0:74",
+                "speaker": null,
+                "occurredAt": "2026-10-12T14:00:00Z",
+                "observedAt": "2026-10-12T02:20:00.000Z",
+                "completeness": "selected_excerpt",
+                "availability": "available"
+              },
+              "text": "Mira at Example Sales says: \"I will send the proposal Friday, October 16.\"",
+              "textHash": "a90647f5ee4f254e6268a4060437fbaaa821dfd063d95870664bb6f633a514d4",
+              "evidenceAuthority": {
+                "kind": "selected_unverified_text",
+                "inlineMetadata": "untrusted_source_content",
+                "occurredAt": "supplied_or_parsed_event_date",
+                "observedAt": "copy_observation_time",
+                "humanAuthorship": "not_verified"
+              },
+              "sourceMetadata": {
+                "eventTime": {
+                  "at": "2026-10-12T14:00:00Z",
+                  "basis": "supplied_or_parsed_event_date",
+                  "independentlyVerifiedAuthoredTime": false
+                },
+                "copyObservation": {
+                  "at": "2026-10-12T02:20:00.000Z",
+                  "basis": "copy_observation_time"
+                }
+              }
+            }
+          ],
+          "attribution": {
+            "humanIdentity": "not_verified",
+            "observedMailEnvelope": null
+          },
+          "coverage": {
+            "scanComplete": true,
+            "scope": "explicit_selected_copies",
+            "acquisition": "unverified",
+            "input": "selected_excerpt"
+          },
+          "scope": {
+            "intent": {
+              "kind": "selected",
+              "sources": [
+                {
+                  "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                  "sourceId": "3ac6940a-b38d-4506-b318-f3c18c8bac35",
+                  "kind": "selected_note",
+                  "revision": 1,
+                  "contentHash": "a90647f5ee4f254e6268a4060437fbaaa821dfd063d95870664bb6f633a514d4",
+                  "locator": "text:0:74",
+                  "speaker": null,
+                  "occurredAt": "2026-10-12T14:00:00Z",
+                  "observedAt": "2026-10-12T02:20:00.000Z",
+                  "completeness": "selected_excerpt",
+                  "availability": "available"
+                }
+              ]
+            },
+            "sourceCount": 1
+          }
+        }
+      ],
+      "expectedOutcome": "Attribute Mira to the observed firm relationship; record the explicit promise to send the proposal due October 16 in the source timezone. Do not create an opportunity or change a deal stage.",
+      "forbiddenOutcome": "Confirmed booking; automatic deal-stage change; promise assigned to David."
+    },
+    {
+      "caseId": "dev_05",
+      "question": "Who wrote the team correspondence? Distinguish observed team headers from a verified individual speaker.",
+      "source": "From team@example.test: \"Our team is considering a partnership.\" No signature or individual speaker evidence.",
+      "observations": [
+        {
+          "toolCallId": "tooluse_rUPCG3xUZ35OWug4l17qyS",
+          "operation": "opportunities",
+          "valueHash": "ce18988842bd8fea60d0858eb54eeaf1423c1b546f7ba41bbe1c7bf44fc14a55",
+          "value": {
+            "count": "0",
+            "scope": {
+              "firmId": "a5bc345e-adf1-4566-b450-f89a2d5264fa"
+            },
+            "records": [],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false
+          }
+        }
+      ],
+      "window": {
+        "id": "b7092b21-d785-406e-9fa8-629371457bb0",
+        "ordinal": 1,
+        "source": {
+          "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+          "sourceId": "fd4ddd86-1fdf-4c20-a6e1-992a7e98f129",
+          "kind": "selected_note",
+          "revision": 1,
+          "contentHash": "6b969a969b42b1cbb55d137b7b0d9b58f7ca9a51b96268568707234d44edf5e5",
+          "locator": "text:0:109",
+          "speaker": null,
+          "occurredAt": "2026-10-12T14:00:00Z",
+          "observedAt": "2026-10-12T02:20:00.000Z",
+          "completeness": "selected_excerpt",
+          "availability": "available"
+        },
+        "text": "From team@example.test: \"Our team is considering a partnership.\" No signature or individual speaker evidence.",
+        "textHash": "6b969a969b42b1cbb55d137b7b0d9b58f7ca9a51b96268568707234d44edf5e5",
+        "evidenceAuthority": {
+          "kind": "selected_unverified_text",
+          "inlineMetadata": "untrusted_source_content",
+          "occurredAt": "supplied_or_parsed_event_date",
+          "observedAt": "copy_observation_time",
+          "humanAuthorship": "not_verified"
+        },
+        "sourceMetadata": {
+          "eventTime": {
+            "at": "2026-10-12T14:00:00Z",
+            "basis": "supplied_or_parsed_event_date",
+            "independentlyVerifiedAuthoredTime": false
+          },
+          "copyObservation": {
+            "at": "2026-10-12T02:20:00.000Z",
+            "basis": "copy_observation_time"
+          }
+        }
+      },
+      "transcript": [
+        {
+          "windows": [
+            {
+              "id": "b7092b21-d785-406e-9fa8-629371457bb0",
+              "ordinal": 1,
+              "source": {
+                "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                "sourceId": "fd4ddd86-1fdf-4c20-a6e1-992a7e98f129",
+                "kind": "selected_note",
+                "revision": 1,
+                "contentHash": "6b969a969b42b1cbb55d137b7b0d9b58f7ca9a51b96268568707234d44edf5e5",
+                "locator": "text:0:109",
+                "speaker": null,
+                "occurredAt": "2026-10-12T14:00:00Z",
+                "observedAt": "2026-10-12T02:20:00.000Z",
+                "completeness": "selected_excerpt",
+                "availability": "available"
+              },
+              "text": "From team@example.test: \"Our team is considering a partnership.\" No signature or individual speaker evidence.",
+              "textHash": "6b969a969b42b1cbb55d137b7b0d9b58f7ca9a51b96268568707234d44edf5e5",
+              "evidenceAuthority": {
+                "kind": "selected_unverified_text",
+                "inlineMetadata": "untrusted_source_content",
+                "occurredAt": "supplied_or_parsed_event_date",
+                "observedAt": "copy_observation_time",
+                "humanAuthorship": "not_verified"
+              },
+              "sourceMetadata": {
+                "eventTime": {
+                  "at": "2026-10-12T14:00:00Z",
+                  "basis": "supplied_or_parsed_event_date",
+                  "independentlyVerifiedAuthoredTime": false
+                },
+                "copyObservation": {
+                  "at": "2026-10-12T02:20:00.000Z",
+                  "basis": "copy_observation_time"
+                }
+              }
+            }
+          ],
+          "attribution": {
+            "humanIdentity": "not_verified",
+            "observedMailEnvelope": null
+          },
+          "coverage": {
+            "scanComplete": true,
+            "scope": "explicit_selected_copies",
+            "acquisition": "unverified",
+            "input": "selected_excerpt"
+          },
+          "scope": {
+            "intent": {
+              "kind": "selected",
+              "sources": [
+                {
+                  "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                  "sourceId": "fd4ddd86-1fdf-4c20-a6e1-992a7e98f129",
+                  "kind": "selected_note",
+                  "revision": 1,
+                  "contentHash": "6b969a969b42b1cbb55d137b7b0d9b58f7ca9a51b96268568707234d44edf5e5",
+                  "locator": "text:0:109",
+                  "speaker": null,
+                  "occurredAt": "2026-10-12T14:00:00Z",
+                  "observedAt": "2026-10-12T02:20:00.000Z",
+                  "completeness": "selected_excerpt",
+                  "availability": "available"
+                }
+              ]
+            },
+            "sourceCount": 1
+          }
+        },
+        {
+          "toolCallId": "tooluse_rUPCG3xUZ35OWug4l17qyS",
+          "name": "read_exact",
+          "input": {
+            "operation": "opportunities",
+            "firmId": "a5bc345e-adf1-4566-b450-f89a2d5264fa"
+          },
+          "result": {
+            "count": "0",
+            "scope": {
+              "firmId": "a5bc345e-adf1-4566-b450-f89a2d5264fa"
+            },
+            "records": [],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false,
+            "evidenceAuthority": {
+              "kind": "current_exact_crm_state",
+              "toolCallId": "tooluse_rUPCG3xUZ35OWug4l17qyS",
+              "citationAuthority": "exact_result_only",
+              "conversationCitationAllowed": false
+            }
+          }
+        }
+      ],
+      "expectedOutcome": "Associate the shared endpoint with the firm when supported; speaker remains unknown. Ask describes team correspondence without creating a fictional person.",
+      "forbiddenOutcome": "Inventing an individual speaker; merging all team members into one person."
+    },
+    {
+      "caseId": "dev_06",
+      "question": "Which current pilot opportunity needs a revised proposal? Check the current opportunities before assigning it and preserve ambiguity.",
+      "source": "Example Sales has explicit North and South pilot opportunities. An email says: \"The pilot needs a revised proposal.\" No pilot is named.",
+      "observations": [
+        {
+          "toolCallId": "tooluse_2SlFiPr9qn5xpgsRHIbWYs",
+          "operation": "opportunities",
+          "valueHash": "e901cedf70538fefd2606ab208452665fd5c5990817ae7f7db2676cc01bb58e7",
+          "value": {
+            "count": "2",
+            "scope": {
+              "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1"
+            },
+            "records": [
+              {
+                "name": "North pilot",
+                "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1",
+                "status": "open",
+                "openedAt": "2026-10-12T02:20:45.625Z",
+                "stageKey": "new",
+                "opportunityId": "b8cd8419-2a18-43d0-88ee-21d0f8556e1e"
+              },
+              {
+                "name": "South pilot",
+                "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1",
+                "status": "open",
+                "openedAt": "2026-10-12T02:20:45.628Z",
+                "stageKey": "new",
+                "opportunityId": "215c3771-cbe1-4c12-9cdf-3509bd117265"
+              }
+            ],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false
+          }
+        }
+      ],
+      "window": {
+        "id": "04d92216-8d54-4c1e-bde4-57d0d233b34a",
+        "ordinal": 1,
+        "source": {
+          "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+          "sourceId": "203afe0b-5c66-4f6f-b14a-7f114df52306",
+          "kind": "selected_note",
+          "revision": 1,
+          "contentHash": "cff1cd87133d39435960eb8e81c563bfdd3df6698c2571b4b41e55c617638ac5",
+          "locator": "text:0:135",
+          "speaker": null,
+          "occurredAt": "2026-10-12T14:00:00Z",
+          "observedAt": "2026-10-12T02:20:00.000Z",
+          "completeness": "selected_excerpt",
+          "availability": "available"
+        },
+        "text": "Example Sales has explicit North and South pilot opportunities. An email says: \"The pilot needs a revised proposal.\" No pilot is named.",
+        "textHash": "cff1cd87133d39435960eb8e81c563bfdd3df6698c2571b4b41e55c617638ac5",
+        "evidenceAuthority": {
+          "kind": "selected_unverified_text",
+          "inlineMetadata": "untrusted_source_content",
+          "occurredAt": "supplied_or_parsed_event_date",
+          "observedAt": "copy_observation_time",
+          "humanAuthorship": "not_verified"
+        },
+        "sourceMetadata": {
+          "eventTime": {
+            "at": "2026-10-12T14:00:00Z",
+            "basis": "supplied_or_parsed_event_date",
+            "independentlyVerifiedAuthoredTime": false
+          },
+          "copyObservation": {
+            "at": "2026-10-12T02:20:00.000Z",
+            "basis": "copy_observation_time"
+          }
+        }
+      },
+      "transcript": [
+        {
+          "windows": [
+            {
+              "id": "04d92216-8d54-4c1e-bde4-57d0d233b34a",
+              "ordinal": 1,
+              "source": {
+                "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                "sourceId": "203afe0b-5c66-4f6f-b14a-7f114df52306",
+                "kind": "selected_note",
+                "revision": 1,
+                "contentHash": "cff1cd87133d39435960eb8e81c563bfdd3df6698c2571b4b41e55c617638ac5",
+                "locator": "text:0:135",
+                "speaker": null,
+                "occurredAt": "2026-10-12T14:00:00Z",
+                "observedAt": "2026-10-12T02:20:00.000Z",
+                "completeness": "selected_excerpt",
+                "availability": "available"
+              },
+              "text": "Example Sales has explicit North and South pilot opportunities. An email says: \"The pilot needs a revised proposal.\" No pilot is named.",
+              "textHash": "cff1cd87133d39435960eb8e81c563bfdd3df6698c2571b4b41e55c617638ac5",
+              "evidenceAuthority": {
+                "kind": "selected_unverified_text",
+                "inlineMetadata": "untrusted_source_content",
+                "occurredAt": "supplied_or_parsed_event_date",
+                "observedAt": "copy_observation_time",
+                "humanAuthorship": "not_verified"
+              },
+              "sourceMetadata": {
+                "eventTime": {
+                  "at": "2026-10-12T14:00:00Z",
+                  "basis": "supplied_or_parsed_event_date",
+                  "independentlyVerifiedAuthoredTime": false
+                },
+                "copyObservation": {
+                  "at": "2026-10-12T02:20:00.000Z",
+                  "basis": "copy_observation_time"
+                }
+              }
+            }
+          ],
+          "attribution": {
+            "humanIdentity": "not_verified",
+            "observedMailEnvelope": null
+          },
+          "coverage": {
+            "scanComplete": true,
+            "scope": "explicit_selected_copies",
+            "acquisition": "unverified",
+            "input": "selected_excerpt"
+          },
+          "scope": {
+            "intent": {
+              "kind": "selected",
+              "sources": [
+                {
+                  "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                  "sourceId": "203afe0b-5c66-4f6f-b14a-7f114df52306",
+                  "kind": "selected_note",
+                  "revision": 1,
+                  "contentHash": "cff1cd87133d39435960eb8e81c563bfdd3df6698c2571b4b41e55c617638ac5",
+                  "locator": "text:0:135",
+                  "speaker": null,
+                  "occurredAt": "2026-10-12T14:00:00Z",
+                  "observedAt": "2026-10-12T02:20:00.000Z",
+                  "completeness": "selected_excerpt",
+                  "availability": "available"
+                }
+              ]
+            },
+            "sourceCount": 1
+          }
+        },
+        {
+          "toolCallId": "tooluse_2SlFiPr9qn5xpgsRHIbWYs",
+          "name": "read_exact",
+          "input": {
+            "operation": "opportunities",
+            "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1"
+          },
+          "result": {
+            "count": "2",
+            "scope": {
+              "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1"
+            },
+            "records": [
+              {
+                "name": "North pilot",
+                "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1",
+                "status": "open",
+                "openedAt": "2026-10-12T02:20:45.625Z",
+                "stageKey": "new",
+                "opportunityId": "b8cd8419-2a18-43d0-88ee-21d0f8556e1e"
+              },
+              {
+                "name": "South pilot",
+                "firmId": "3da7e3a0-a1a9-4968-b8e7-f7ada0d684d1",
+                "status": "open",
+                "openedAt": "2026-10-12T02:20:45.628Z",
+                "stageKey": "new",
+                "opportunityId": "215c3771-cbe1-4c12-9cdf-3509bd117265"
+              }
+            ],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false,
+            "evidenceAuthority": {
+              "kind": "current_exact_crm_state",
+              "toolCallId": "tooluse_2SlFiPr9qn5xpgsRHIbWYs",
+              "citationAuthority": "exact_result_only",
+              "conversationCitationAllowed": false
+            }
+          }
+        }
+      ],
+      "expectedOutcome": "Keep the conversation opportunity-unresolved or plural; ask for one targeted decision when action needs assignment. Preserve both opportunity stages.",
+      "forbiddenOutcome": "Choose first opportunity; create a new opportunity; update both stages."
+    },
+    {
+      "caseId": "dev_08",
+      "question": "Is the contract promise current or historical? Preserve the rejection of the old plan.",
+      "source": "New authored text: \"That old plan is no longer valid.\" Quoted 2025 message: \"I will send the contract Friday.\"",
+      "observations": [
+        {
+          "toolCallId": "tooluse_TNr9DLG59wu7o1ugcUHASn",
+          "operation": "opportunities",
+          "valueHash": "bfd5eadc14049f770600a8f991ece4db0fa13a416ec9a0b0e522d1dbb15b4766",
+          "value": {
+            "count": "0",
+            "scope": {
+              "firmId": "89e3fac1-a63e-4d9d-af74-f19f8d3a5d39"
+            },
+            "records": [],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false
+          }
+        }
+      ],
+      "window": {
+        "id": "22ce680d-bb57-4003-8c13-0a612f10c092",
+        "ordinal": 1,
+        "source": {
+          "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+          "sourceId": "649c16d2-968e-4d91-9650-e19ea3271b47",
+          "kind": "selected_note",
+          "revision": 1,
+          "contentHash": "cc1c96e12655d804920eaf5809872eb4f218db00fd783edada3a2c9437c1b9d4",
+          "locator": "text:0:110",
+          "speaker": null,
+          "occurredAt": "2026-10-12T14:00:00Z",
+          "observedAt": "2026-10-12T02:20:00.000Z",
+          "completeness": "selected_excerpt",
+          "availability": "available"
+        },
+        "text": "New authored text: \"That old plan is no longer valid.\" Quoted 2025 message: \"I will send the contract Friday.\"",
+        "textHash": "cc1c96e12655d804920eaf5809872eb4f218db00fd783edada3a2c9437c1b9d4",
+        "evidenceAuthority": {
+          "kind": "selected_unverified_text",
+          "inlineMetadata": "untrusted_source_content",
+          "occurredAt": "supplied_or_parsed_event_date",
+          "observedAt": "copy_observation_time",
+          "humanAuthorship": "not_verified"
+        },
+        "sourceMetadata": {
+          "eventTime": {
+            "at": "2026-10-12T14:00:00Z",
+            "basis": "supplied_or_parsed_event_date",
+            "independentlyVerifiedAuthoredTime": false
+          },
+          "copyObservation": {
+            "at": "2026-10-12T02:20:00.000Z",
+            "basis": "copy_observation_time"
+          }
+        }
+      },
+      "transcript": [
+        {
+          "windows": [
+            {
+              "id": "22ce680d-bb57-4003-8c13-0a612f10c092",
+              "ordinal": 1,
+              "source": {
+                "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                "sourceId": "649c16d2-968e-4d91-9650-e19ea3271b47",
+                "kind": "selected_note",
+                "revision": 1,
+                "contentHash": "cc1c96e12655d804920eaf5809872eb4f218db00fd783edada3a2c9437c1b9d4",
+                "locator": "text:0:110",
+                "speaker": null,
+                "occurredAt": "2026-10-12T14:00:00Z",
+                "observedAt": "2026-10-12T02:20:00.000Z",
+                "completeness": "selected_excerpt",
+                "availability": "available"
+              },
+              "text": "New authored text: \"That old plan is no longer valid.\" Quoted 2025 message: \"I will send the contract Friday.\"",
+              "textHash": "cc1c96e12655d804920eaf5809872eb4f218db00fd783edada3a2c9437c1b9d4",
+              "evidenceAuthority": {
+                "kind": "selected_unverified_text",
+                "inlineMetadata": "untrusted_source_content",
+                "occurredAt": "supplied_or_parsed_event_date",
+                "observedAt": "copy_observation_time",
+                "humanAuthorship": "not_verified"
+              },
+              "sourceMetadata": {
+                "eventTime": {
+                  "at": "2026-10-12T14:00:00Z",
+                  "basis": "supplied_or_parsed_event_date",
+                  "independentlyVerifiedAuthoredTime": false
+                },
+                "copyObservation": {
+                  "at": "2026-10-12T02:20:00.000Z",
+                  "basis": "copy_observation_time"
+                }
+              }
+            }
+          ],
+          "attribution": {
+            "humanIdentity": "not_verified",
+            "observedMailEnvelope": null
+          },
+          "coverage": {
+            "scanComplete": true,
+            "scope": "explicit_selected_copies",
+            "acquisition": "unverified",
+            "input": "selected_excerpt"
+          },
+          "scope": {
+            "intent": {
+              "kind": "selected",
+              "sources": [
+                {
+                  "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                  "sourceId": "649c16d2-968e-4d91-9650-e19ea3271b47",
+                  "kind": "selected_note",
+                  "revision": 1,
+                  "contentHash": "cc1c96e12655d804920eaf5809872eb4f218db00fd783edada3a2c9437c1b9d4",
+                  "locator": "text:0:110",
+                  "speaker": null,
+                  "occurredAt": "2026-10-12T14:00:00Z",
+                  "observedAt": "2026-10-12T02:20:00.000Z",
+                  "completeness": "selected_excerpt",
+                  "availability": "available"
+                }
+              ]
+            },
+            "sourceCount": 1
+          }
+        },
+        {
+          "toolCallId": "tooluse_TNr9DLG59wu7o1ugcUHASn",
+          "name": "read_exact",
+          "input": {
+            "operation": "opportunities",
+            "firmId": "89e3fac1-a63e-4d9d-af74-f19f8d3a5d39"
+          },
+          "result": {
+            "count": "0",
+            "scope": {
+              "firmId": "89e3fac1-a63e-4d9d-af74-f19f8d3a5d39"
+            },
+            "records": [],
+            "coverage": {
+              "scope": "current_permitted_crm_state",
+              "semantic": "not_requested",
+              "acquisition": "unverified"
+            },
+            "dateBasis": "opportunity_opened_at",
+            "operation": "opportunities",
+            "truncated": false,
+            "evidenceAuthority": {
+              "kind": "current_exact_crm_state",
+              "toolCallId": "tooluse_TNr9DLG59wu7o1ugcUHASn",
+              "citationAuthority": "exact_result_only",
+              "conversationCitationAllowed": false
+            }
+          }
+        }
+      ],
+      "expectedOutcome": "Treat the dated quote as historical evidence, not a new promise. Preserve the current rejection of the old plan.",
+      "forbiddenOutcome": "New commitment generated from quoted text; treating the old plan as current."
+    },
+    {
+      "caseId": "dev_10",
+      "question": "What maintenance coordination need is supported by the retained sources?",
+      "source": "Source 1: \"Coordinating repair contractors across our rentals is taking too much time.\" Source 2: \"We like the website colors.\"",
+      "observations": [],
+      "window": {
+        "id": "6ea9a7e9-dcc7-425d-8daf-13afa90759e4",
+        "ordinal": 1,
+        "source": {
+          "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+          "sourceId": "f2bff12a-6296-49c2-ab87-163fc0378577",
+          "kind": "selected_note",
+          "revision": 1,
+          "contentHash": "5c592782f5dcb3308f5146d0bbe732066c9f6682d516807f3cd18d680408affb",
+          "locator": "text:0:127",
+          "speaker": null,
+          "occurredAt": "2026-10-12T14:00:00Z",
+          "observedAt": "2026-10-12T02:20:00.000Z",
+          "completeness": "selected_excerpt",
+          "availability": "available"
+        },
+        "text": "Source 1: \"Coordinating repair contractors across our rentals is taking too much time.\" Source 2: \"We like the website colors.\"",
+        "textHash": "5c592782f5dcb3308f5146d0bbe732066c9f6682d516807f3cd18d680408affb",
+        "evidenceAuthority": {
+          "kind": "selected_unverified_text",
+          "inlineMetadata": "untrusted_source_content",
+          "occurredAt": "supplied_or_parsed_event_date",
+          "observedAt": "copy_observation_time",
+          "humanAuthorship": "not_verified"
+        },
+        "sourceMetadata": {
+          "eventTime": {
+            "at": "2026-10-12T14:00:00Z",
+            "basis": "supplied_or_parsed_event_date",
+            "independentlyVerifiedAuthoredTime": false
+          },
+          "copyObservation": {
+            "at": "2026-10-12T02:20:00.000Z",
+            "basis": "copy_observation_time"
+          }
+        }
+      },
+      "transcript": [
+        {
+          "windows": [
+            {
+              "id": "6ea9a7e9-dcc7-425d-8daf-13afa90759e4",
+              "ordinal": 1,
+              "source": {
+                "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                "sourceId": "f2bff12a-6296-49c2-ab87-163fc0378577",
+                "kind": "selected_note",
+                "revision": 1,
+                "contentHash": "5c592782f5dcb3308f5146d0bbe732066c9f6682d516807f3cd18d680408affb",
+                "locator": "text:0:127",
+                "speaker": null,
+                "occurredAt": "2026-10-12T14:00:00Z",
+                "observedAt": "2026-10-12T02:20:00.000Z",
+                "completeness": "selected_excerpt",
+                "availability": "available"
+              },
+              "text": "Source 1: \"Coordinating repair contractors across our rentals is taking too much time.\" Source 2: \"We like the website colors.\"",
+              "textHash": "5c592782f5dcb3308f5146d0bbe732066c9f6682d516807f3cd18d680408affb",
+              "evidenceAuthority": {
+                "kind": "selected_unverified_text",
+                "inlineMetadata": "untrusted_source_content",
+                "occurredAt": "supplied_or_parsed_event_date",
+                "observedAt": "copy_observation_time",
+                "humanAuthorship": "not_verified"
+              },
+              "sourceMetadata": {
+                "eventTime": {
+                  "at": "2026-10-12T14:00:00Z",
+                  "basis": "supplied_or_parsed_event_date",
+                  "independentlyVerifiedAuthoredTime": false
+                },
+                "copyObservation": {
+                  "at": "2026-10-12T02:20:00.000Z",
+                  "basis": "copy_observation_time"
+                }
+              }
+            }
+          ],
+          "attribution": {
+            "humanIdentity": "not_verified",
+            "observedMailEnvelope": null
+          },
+          "coverage": {
+            "scanComplete": true,
+            "scope": "explicit_selected_copies",
+            "acquisition": "unverified",
+            "input": "selected_excerpt"
+          },
+          "scope": {
+            "intent": {
+              "kind": "selected",
+              "sources": [
+                {
+                  "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                  "sourceId": "f2bff12a-6296-49c2-ab87-163fc0378577",
+                  "kind": "selected_note",
+                  "revision": 1,
+                  "contentHash": "5c592782f5dcb3308f5146d0bbe732066c9f6682d516807f3cd18d680408affb",
+                  "locator": "text:0:127",
+                  "speaker": null,
+                  "occurredAt": "2026-10-12T14:00:00Z",
+                  "observedAt": "2026-10-12T02:20:00.000Z",
+                  "completeness": "selected_excerpt",
+                  "availability": "available"
+                }
+              ]
+            },
+            "sourceCount": 1
+          }
+        }
+      ],
+      "expectedOutcome": "Topic retrieval identifies Source 1 as relevant to maintenance coordination and excludes Source 2; a cited answer ties the problem to the actual person/firm and source.",
+      "forbiddenOutcome": "Unsupported business need from Source 2; claim about scale or urgency not present."
+    },
+    {
+      "caseId": "dev_11",
+      "question": "Was there a reply after Friday? What captured channels and coverage limits prevent a definitive answer?",
+      "source": "Captured email ends Friday. Phone/Messages are not imported. No later email reply is captured.",
+      "observations": [
+        {
+          "toolCallId": "tooluse_jX8ZWfpNKuOdrxSGnGphxE",
+          "operation": "reply_status",
+          "valueHash": "1964cd11c6d1acc01c72bf2d7c049284bf7ea490441b83a8c8fcc4d3027455fe",
+          "value": {
+            "scope": {
+              "firmId": "b176e5a8-137e-4ee3-8a82-559b8746a8df"
+            },
+            "coverage": {
+              "scope": "authorized_progress_receipts",
+              "semantic": "not_requested",
+              "acquisition": "partial"
+            },
+            "dateBasis": "provider_event_at",
+            "operation": "reply_status",
+            "truncated": false,
+            "unanswered": "not_established",
+            "verifiedOutgoingCount": "0",
+            "withoutVerifiedReplyCount": "0"
+          }
+        }
+      ],
+      "window": {
+        "id": "6089e75b-6cec-4c72-b878-8769c3e49e69",
+        "ordinal": 1,
+        "source": {
+          "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+          "sourceId": "c3df7a56-8f2e-4124-9d21-3c4787b3625a",
+          "kind": "selected_note",
+          "revision": 1,
+          "contentHash": "603a4b8ddd7a1031ff148e917ed2a63b24d6faa3e9f34caab0fc5b38c7999bc2",
+          "locator": "text:0:94",
+          "speaker": null,
+          "occurredAt": "2026-10-12T14:00:00Z",
+          "observedAt": "2026-10-12T02:20:00.000Z",
+          "completeness": "selected_excerpt",
+          "availability": "available"
+        },
+        "text": "Captured email ends Friday. Phone/Messages are not imported. No later email reply is captured.",
+        "textHash": "603a4b8ddd7a1031ff148e917ed2a63b24d6faa3e9f34caab0fc5b38c7999bc2",
+        "evidenceAuthority": {
+          "kind": "selected_unverified_text",
+          "inlineMetadata": "untrusted_source_content",
+          "occurredAt": "supplied_or_parsed_event_date",
+          "observedAt": "copy_observation_time",
+          "humanAuthorship": "not_verified"
+        },
+        "sourceMetadata": {
+          "eventTime": {
+            "at": "2026-10-12T14:00:00Z",
+            "basis": "supplied_or_parsed_event_date",
+            "independentlyVerifiedAuthoredTime": false
+          },
+          "copyObservation": {
+            "at": "2026-10-12T02:20:00.000Z",
+            "basis": "copy_observation_time"
+          }
+        }
+      },
+      "transcript": [
+        {
+          "windows": [
+            {
+              "id": "6089e75b-6cec-4c72-b878-8769c3e49e69",
+              "ordinal": 1,
+              "source": {
+                "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                "sourceId": "c3df7a56-8f2e-4124-9d21-3c4787b3625a",
+                "kind": "selected_note",
+                "revision": 1,
+                "contentHash": "603a4b8ddd7a1031ff148e917ed2a63b24d6faa3e9f34caab0fc5b38c7999bc2",
+                "locator": "text:0:94",
+                "speaker": null,
+                "occurredAt": "2026-10-12T14:00:00Z",
+                "observedAt": "2026-10-12T02:20:00.000Z",
+                "completeness": "selected_excerpt",
+                "availability": "available"
+              },
+              "text": "Captured email ends Friday. Phone/Messages are not imported. No later email reply is captured.",
+              "textHash": "603a4b8ddd7a1031ff148e917ed2a63b24d6faa3e9f34caab0fc5b38c7999bc2",
+              "evidenceAuthority": {
+                "kind": "selected_unverified_text",
+                "inlineMetadata": "untrusted_source_content",
+                "occurredAt": "supplied_or_parsed_event_date",
+                "observedAt": "copy_observation_time",
+                "humanAuthorship": "not_verified"
+              },
+              "sourceMetadata": {
+                "eventTime": {
+                  "at": "2026-10-12T14:00:00Z",
+                  "basis": "supplied_or_parsed_event_date",
+                  "independentlyVerifiedAuthoredTime": false
+                },
+                "copyObservation": {
+                  "at": "2026-10-12T02:20:00.000Z",
+                  "basis": "copy_observation_time"
+                }
+              }
+            }
+          ],
+          "attribution": {
+            "humanIdentity": "not_verified",
+            "observedMailEnvelope": null
+          },
+          "coverage": {
+            "scanComplete": true,
+            "scope": "explicit_selected_copies",
+            "acquisition": "unverified",
+            "input": "selected_excerpt"
+          },
+          "scope": {
+            "intent": {
+              "kind": "selected",
+              "sources": [
+                {
+                  "workspaceId": "b5e186fe-3f9b-419e-a240-e5ddb2fbac73",
+                  "sourceId": "c3df7a56-8f2e-4124-9d21-3c4787b3625a",
+                  "kind": "selected_note",
+                  "revision": 1,
+                  "contentHash": "603a4b8ddd7a1031ff148e917ed2a63b24d6faa3e9f34caab0fc5b38c7999bc2",
+                  "locator": "text:0:94",
+                  "speaker": null,
+                  "occurredAt": "2026-10-12T14:00:00Z",
+                  "observedAt": "2026-10-12T02:20:00.000Z",
+                  "completeness": "selected_excerpt",
+                  "availability": "available"
+                }
+              ]
+            },
+            "sourceCount": 1
+          }
+        },
+        {
+          "toolCallId": "tooluse_jX8ZWfpNKuOdrxSGnGphxE",
+          "name": "read_exact",
+          "input": {
+            "operation": "reply_status",
+            "firmId": "b176e5a8-137e-4ee3-8a82-559b8746a8df"
+          },
+          "result": {
+            "scope": {
+              "firmId": "b176e5a8-137e-4ee3-8a82-559b8746a8df"
+            },
+            "coverage": {
+              "scope": "authorized_progress_receipts",
+              "semantic": "not_requested",
+              "acquisition": "partial"
+            },
+            "dateBasis": "provider_event_at",
+            "operation": "reply_status",
+            "truncated": false,
+            "unanswered": "not_established",
+            "verifiedOutgoingCount": "0",
+            "withoutVerifiedReplyCount": "0",
+            "evidenceAuthority": {
+              "kind": "current_exact_crm_state",
+              "toolCallId": "tooluse_jX8ZWfpNKuOdrxSGnGphxE",
+              "citationAuthority": "exact_result_only",
+              "conversationCitationAllowed": false
+            }
+          }
+        }
+      ],
+      "expectedOutcome": "Answer \"No reply found in captured email through Friday\" and disclose uncaptured channels and stale coverage. Useful partial result remains available.",
+      "forbiddenOutcome": "Definitive \"they did not reply\"; implied complete cross-channel coverage."
+    }
+  ],
+  "priorOutputDisclosure": "prior case data/observations reused; old model-generated answers never supplied to either arm; labels excluded from requests; not unseen/representative"
+}
