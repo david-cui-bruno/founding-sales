@@ -134,6 +134,14 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       ["operational", "retained"],
       "Coded mailbox safety history and hold identities; retained after prospect deletion/departure and with the whole database restore. Deadlines do not authorize fresh external action.",
     ),
+    linkedin_outreach_settings: coverage(
+      ["retained"],
+      "Current owner/account-identifying standing-policy metadata, including approved action/data/model/budget bindings; no copied prospect conversations, private message bodies or credentials. Retained through disable/revoke, account disconnect, source deletion and departure. Current membership, policy revision and exact account binding are rechecked before use, so retained settings cannot restore authority; no automatic retention sweep or prospect-content deletion applies to this configuration.",
+    ),
+    linkedin_outreach_policy_revisions: coverage(
+      ["retained"],
+      "Immutable body-free owner-approval and disable/revoke history with exact account-identifying configuration metadata, policy rules, acquisition/model/grant versions and spending ceilings. No copied or derived prospect message content or credentials. Retained independently of source deletion, account disconnect and departure to preserve dated consent/stop audit. Old revisions are documentary only and cannot authorize work after a current revision, account or membership change.",
+    ),
     social_weekly_settings: coverage(
       ["operational"],
       "Owner opt-in and next weekly draft check; active membership required, no transcripts or publication permission.",
