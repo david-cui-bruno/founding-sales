@@ -69,6 +69,8 @@ async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftReq
  }
  const blocks=input.factBlocks.length?await readApprovedAnswerBlocks(ctx,input.factBlocks):{ok:true as const,value:[]};
  if(!blocks.ok)return {ok:false,reason:blocks.reason};
+ // Tagged facts carry status/original-source authority that the legacy prompt cannot retain.
+ if(blocks.value.some(b=>b.socialInput))return {ok:false,reason:'grounded_mode_required'};
  const prepared=prepareSocialDraftInput(sources,blocks.value);if(!prepared)return {ok:false,reason:'no_supported_theme_or_input_too_large'};
  const hash=createHash('sha256').update(JSON.stringify({hashes,input:prepared.input,provenance:prepared.provenance})).digest('hex');
  return {ok:true,value:{...prepared,hash}};

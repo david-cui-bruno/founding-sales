@@ -8,12 +8,23 @@ import {ApprovedFactsEditor} from '../src/renderer/outreach/ApprovedFactsEditor.
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
 afterEach(cleanup);
 
+it('keeps untagged facts selectable in legacy mode while excluding tagged news from the request',async()=>{
+ const plain={id:'00000000-0000-4000-8000-000000000003',version:1,text:'Bounded maintenance intake.'},tagged={id:'00000000-0000-4000-8000-000000000004',version:1,text:'An original engineering news claim.',socialInput:{topic:'news' as const,status:'observation' as const,sanitized:true as const}};
+ const source={kind:'public' as const,id:'00000000-0000-4000-8000-000000000005',revision:1,label:'Public maintenance source',observedAt:'2026-10-13T10:00:00Z'},request=vi.fn(async()=>({requestId:'00000000-0000-4000-8000-000000000006',reason:null}));
+ render(<DraftsProvider><SocialDraftStudio onUse={vi.fn()} ports={{read:async()=>({view:{sources:[source],facts:[plain,tagged],requests:[]},reason:null}),request}}/></DraftsProvider>);
+ await screen.findByText(plain.text);expect(screen.queryByText(tagged.text)).toBeNull();
+ fireEvent.click(screen.getByLabelText(/Public maintenance source/));fireEvent.click(screen.getByLabelText(plain.text));fireEvent.click(screen.getByRole('button',{name:'Generate drafts'}));
+ await waitFor(()=>expect(request).toHaveBeenCalledWith({commandId:expect.any(String),sourceRefs:[{kind:'public',id:source.id,revision:1}],factBlocks:[{id:plain.id,version:1}]}));
+});
+
 it('selects an approved planned build input for LinkedIn only without selecting private sources',async()=>{
  const fact={id:'00000000-0000-4000-8000-000000000001',version:2,text:'Planning a bounded maintenance intake worker.',socialInput:{topic:'build' as const,status:'planned' as const,sanitized:true as const}};
  const request=vi.fn(async()=>({requestId:'00000000-0000-4000-8000-000000000002',reason:null}));
  render(<DraftsProvider><SocialDraftStudio onUse={vi.fn()} ports={{read:async()=>({view:{sources:[],facts:[fact],requests:[]},reason:null}),request}}/></DraftsProvider>);
- await screen.findByText(fact.text);
+ await screen.findByRole('button',{name:'Generate drafts'});
+ expect(screen.queryByText(fact.text)).toBeNull();
  fireEvent.click(screen.getByLabelText('LinkedIn grounded draft'));
+ await screen.findByText(fact.text);
  fireEvent.click(screen.getByLabelText(/Planning a bounded maintenance intake worker/));
  expect(screen.getByText(/planned · version 2/)).toBeTruthy();
  fireEvent.click(screen.getByRole('button',{name:'Generate drafts'}));

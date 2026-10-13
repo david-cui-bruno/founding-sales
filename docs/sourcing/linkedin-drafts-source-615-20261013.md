@@ -33,6 +33,7 @@ Authenticated intake is `/outreach/answer-blocks/save`, `/approve`, `/retire` an
 | Voice | Prompt wire asserts style is not factual authority, actual output paragraph bytes preserved in product, no reference-writer factual corpus supplied |
 | Spend/model/data limits | Unknown token count, shared exhausted budget, daily/monthly lane caps, Disable across waits, maximum estimated settlement and known over-maximum cost review |
 | Legacy behavior | Existing API manual/drafting, domain social/governance, registered-worker/model and desktop social/outreach/registry regressions |
+| Independent review P2 source fence | Tagged facts excluded from legacy desktop selection/submission and weekly factBlocks; authenticated mode-less planned/news requests refused; untagged authenticated request → registered worker → all-platform ready read remains supported; historical tagged ready content erased on public read/list |
 | Independent review/CI | Coordinator-owned follow-up, not claimed by this implementation |
 
 ## Honest tests-first record
@@ -46,3 +47,24 @@ Authenticated intake is `/outreach/answer-blocks/save`, `/approve`, `/retire` an
 Focused runs observed API30/30 grounded cases, domain87/87 social/governance/migration cases, worker5/5 and the existing desktop social/outreach cases passing. Complete repository typecheck and lint passed. Final exact commands, head, counts and any final follow-ups are in the coordinator completion report.
 
 No paid provider call, external research/news feed, private harvest/code export, native/browser/cloud action, production write, push, PR, issue write, release or runtime Enable was performed. Controlled provider transport and synthetic owner/source facts do not establish actual semantic quality, present-corpus sufficiency, live account readiness or actual-provider acceptance.
+
+## Independent review P2 source fence repair
+
+October13,2026, based on clean head `e9bf79f5b5b796f176121d53b9e54f781517030a`. This is only the approved source-fence repair, not automatic legacy-to-grounded routing or a new weekly feature. The shared budget, locking and refusal machinery is unchanged. Fact-bearing ready reads also revalidate their original selection so historical mode-less tagged requests cannot retain displayed accepted text, including when a referenced fact version has disappeared. Untagged current facts retain the existing all-platform prompt and output.
+
+Observed tests-first failures before implementation:
+
+- 19:10 UTC: `npm run test --workspace apps/api -- socialGroundedDrafts.test.ts -t fences`: planned and bounded-original-reference news facts incorrectly returned200 instead of409. Untagged public request through scheduler/registry/claim/runner and real model adapter with controlled transport already passed.
+- 19:10 UTC: `npm run test --workspace packages/domain -- test/social/weekly.test.ts`: durable weekly selection contained the tagged build fact as well as the untagged fact.
+- 19:10 UTC: `npm run test --workspace apps/desktop -- socialGroundedDrafts.component.test.tsx`: tagged planned fact was visible with grounded mode off.
+- 19:11 UTC: `npm run test --workspace apps/api -- socialGroundedDrafts.test.ts -t historical`: historical mode-less tagged ready read returned ready text rather than review/null. Historical queued corruption was already held by existing controls and is regression evidence, not a newly observed RED. Historical persistence shape uses explicit fixture SQL after authenticated intake, not a claimed public mutation endpoint.
+
+Focused GREEN commands on pinned Node24.20.0:
+
+- `npm run test --workspace apps/api -- socialGroundedDrafts.test.ts socialDrafts.test.ts`:36/36, including the existing checked first-party news registered-worker/deletion cases.
+- `npm run test --workspace packages/domain -- test/social`:62/62.
+- `npm run test --workspace apps/worker -- socialDraft.test.ts socialDraftModel.test.ts`:5/5.
+- `npm run test --workspace apps/desktop -- socialGroundedDrafts.component.test.tsx socialDraftStudio.test.tsx socialWeekly.test.tsx`:8 cases after adding mixed legacy picker/payload regression. That additional mixed case is regression evidence, not claimed RED-first.
+- Root `npm run typecheck` and `npm run lint`. No full root gate was run. Exact final head and final check results are reported to the coordinator.
+
+Remaining acceptance is coordinator integration/full root gate and independent review/CI. Controlled fixtures remain source/control evidence only, not actual-provider or semantic-quality acceptance. No #550 fixture, other worktree, GitHub write, provider/account/browser/cloud operation or paid action is part of this repair.

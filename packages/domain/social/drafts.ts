@@ -34,7 +34,9 @@ export async function readSocialDraftRequest(ctx:RepositoryContext,id:string):Pr
  return row?refreshGroundedDraftRead(ctx,row):null;
 }
 export async function refreshGroundedDraftRead(ctx:RepositoryContext,row:SocialDraftRow):Promise<SocialDraftRow>{
- if(row.source_selection.mode&&row.state==='ready'){
+ // Historical mode-less requests can contain tagged facts. Revalidate fact-bearing
+ // ready reads too, including deleted versions, instead of displaying their stale text.
+ if((row.source_selection.mode||row.source_selection.factBlocks.length)&&row.state==='ready'){
   const current=ctx.scope.actor.kind==='user'?await readSocialDraftSources(ctx,row.source_selection):await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
   if(!current.ok||current.value.hash!==row.source_hash){
    await ctx.db.query("UPDATE social_draft_requests SET state='review',concepts=NULL,reason='source_changed_or_unavailable',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state='ready'",[ctx.scope.workspaceId,row.id]);

@@ -36,6 +36,27 @@ async function fixture(){
 const fact='I am planning a bounded worker for maintenance intake.';
 const text=fact+'\n\nThe scope matters here. Keeping the input bounded makes the work easier to inspect.\n\nThis is a plan, not shipped behavior.';
 
+it.each(['planned','news','untagged'] as const)('fences %s facts from the legacy public request and preserves the ordinary all-platform worker',async scenario=>{
+ const h=await fixture();try{
+ const source=await h.call('/sourcing/candidates/save',h.command({firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'After-hours maintenance support.',sourceUrl:'https://example.test/maintenance',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Owner public input'}));expect(source.status).toBe(200);
+ const sourceId=(source.body as {result:{id:string}}).result.id;
+ const original=randomUUID(),claim='Bounded maintenance intake.';
+ let ref:{id:string;version:number};
+ if(scenario==='untagged'){
+  const saved=await h.call('/outreach/answer-blocks/save',h.command({kind:'product',text:claim}));expect(saved.status).toBe(200);ref=(saved.body as {result:{id:string;version:number}}).result;
+  expect((await h.call('/outreach/answer-blocks/approve',h.command(ref))).status).toBe(200);
+ }else ref=await h.save(claim,scenario==='news'?{topic:'news',status:'observation',sanitized:true,sourceRef:{kind:'public',id:original,revision:1,url:'https://example.test/original',checkedAt:new Date().toISOString()}}:{topic:'build',status:'planned',sanitized:true});
+ const response=await h.call('/social/drafts/request',h.command({sourceRefs:[{kind:'public',id:sourceId,revision:1}],factBlocks:[ref]}));
+ if(scenario!=='untagged'){
+  expect(response.status).toBe(409);expect(response.body).toMatchObject({status:'refused',reason:'grounded_mode_required'});
+  expect((await h.call('/social/drafts',{})).body).toMatchObject({requests:[]});return;
+ }
+ expect(response.status).toBe(200);const id=(response.body as {result:{requestId:string}}).result.requestId;let calls=0;
+ await h.run(socialDraftHandler(socialDraftModel({kind:'bedrock',countTokens:async request=>{expect(JSON.stringify(request.messages)).toContain(claim);return 100;},create:async()=>{calls++;return {stop_reason:'end_turn',content:[{type:'text',text:JSON.stringify({concepts:[{theme:'after_hours',factRefs:[ref],variants:['linkedin','facebook','x'].map(platform=>({platform,text:claim}))}]})}],usage:{input_tokens:100,output_tokens:20}};}})));
+ expect(calls).toBe(1);expect(await h.read(id)).toMatchObject({request:{state:'ready',factBlocks:[ref],concepts:[{variants:[{platform:'linkedin'},{platform:'facebook'},{platform:'x'}]}]}});
+ }finally{await h.f.stop();}
+});
+
 it('generates a LinkedIn build draft through governed intake, ordinary registered worker and authenticated readback',async()=>{
  const h=await fixture();try{
  const ref=await h.save(fact),id=await h.request(ref);
@@ -52,6 +73,22 @@ it('generates a LinkedIn build draft through governed intake, ordinary registere
  expect((await h.call('/outreach/answer-blocks/retire',h.command(ref))).status).toBe(200);
  expect(await h.read(id)).toMatchObject({request:{state:'review',concepts:null,reason:'source_changed_or_unavailable'}});
  expect((await h.call('/social/drafts',{})).body).toMatchObject({facts:[],requests:[{id,state:'review',concepts:null}]});
+ }finally{await h.f.stop();}
+});
+
+it.each(['queued','ready'] as const)('holds historical mode-less tagged %s requests at the registered worker or public read boundary',async state=>{
+ const h=await fixture();try{
+ const ref=await h.save(fact),id=await h.request(ref);let calls=0;
+ const port=h.generate(ref,text,{before:async()=>{calls++;}});
+ if(state==='ready')await h.run(socialDraftHandler(port));
+ // Persist the historical bypass shape. No public endpoint can now create this shape.
+ const source=await h.call('/sourcing/candidates/save',h.command({firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'After-hours maintenance support.',sourceUrl:'https://example.test/maintenance',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Owner public input'}));expect(source.status).toBe(200);
+ const sourceId=(source.body as {result:{id:string}}).result.id;
+ await h.f.db.query("UPDATE social_draft_requests SET source_selection=jsonb_set(source_selection-'mode','{sourceRefs}',$3::jsonb) WHERE workspace_id=$1 AND id=$2",[h.f.alpha.workspaceId,id,JSON.stringify([{kind:'public',id:sourceId,revision:1}])]);
+ if(state==='queued')await h.run(socialDraftHandler(port));
+ expect(calls).toBe(state==='queued'?0:1);
+ expect(await h.read(id)).toMatchObject({request:{state:'review',concepts:null,reason:'source_changed_or_unavailable'}});
+ expect((await h.call('/social/drafts',{})).body).toMatchObject({requests:[{id,state:'review',concepts:null}]});
  }finally{await h.f.stop();}
 });
 
