@@ -25,7 +25,7 @@ export async function validateBookingCreate(context:RepositoryContext,input:Book
  const actor=context.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'owner_required'};
  const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];if(member?.role!=='admin'||member.status!=='active')return {ok:false,reason:'owner_required'};
  await lockSettingForRead(context,'booking_policy');
- const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
+ const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,capability:'provider_action',...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
  if(policy.kind!=='available')return {ok:false,reason:policy.reason};const snapshot=policy.snapshot;
  if(!snapshot.operationalReady)return {ok:false,reason:'booking_readiness_unavailable'};
  const cost=await bookingCreateCostReason(runtime,snapshot);if(cost!==null)return {ok:false,reason:cost};

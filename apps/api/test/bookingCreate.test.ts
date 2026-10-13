@@ -4,7 +4,8 @@ import {describe,it,expect} from 'vitest';
 import {calcomBookingCreateClient} from '../src/integrations/calcomBookingCreateClient.ts';
 import {claimJobs} from '@fss/domain/jobs/jobStore.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
-import {workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {workspaceScope,repositoryContext} from '@fss/domain/db/workspaceScope.ts';
+import {readCurrentBookingPolicy} from '@fss/domain/meetings/bookingPolicy.ts';
 import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
 import {startIntegrationServer} from './support/integrationServer.ts';
@@ -31,6 +32,26 @@ export async function setupBooking(){
  return {...f,runtime,bindings,payload,requests,controls,runBooking,replayBooking};
 }
 describe('ordinary owner-confirmed agreed booking admission',()=>{
+ it('owner-confirmed provider action works without interpretation-model readiness while aggregate and interpretation remain held',async()=>{
+  const f=await setupBooking();try{
+   f.bindings.model.qualityReviewRevision=null;
+   const read=f.runtime.policy.readEvidence;f.runtime.policy.readEvidence=async(context,binding)=>{const evidence=await read(context,binding);return evidence===null?null:{...evidence,modelConsent:false,modelAcceptance:false};};
+   expect((await f.request('POST','/meetings/booking-policy',f.command({action:'save',expectedRevision:1,bindings:f.bindings}))).status).toBe(200);
+   const policy=await f.request('GET','/meetings/booking-policy');expect(policy.body).toMatchObject({enabled:false,readiness:{ready:false,reasons:['model_consent_unverified','model_acceptance_unverified','model_quality_review_missing']}});
+   const context=repositoryContext(workspaceScope(f.fixture.alpha.workspaceId,{kind:'user',userId:f.fixture.alpha.admin.userId,role:'admin'}),f.db);
+   for(const capability of ['booking','interpretation'] as const)expect(await readCurrentBookingPolicy(context,{ownerUserId:f.fixture.alpha.admin.userId,capability},f.runtime.policy)).toMatchObject({kind:'available',snapshot:{capability,operationalReady:false,enabled:false}});
+   const response=await f.request('POST','/meetings/booking-create',f.command({...f.payload,expectedPolicyRevision:2}));expect(response.status,JSON.stringify(response.body)).toBe(200);
+   const id=(response.body as {result:{submissionId:string}}).result.submissionId;await f.runBooking();
+   expect((await f.request('GET',`/meetings/booking-create?submissionId=${id}`)).body).toMatchObject({state:'accepted',providerBookingUid:'booking-31',meetingId:expect.any(String)});
+   expect(f.requests.filter(r=>r.init.method==='POST')).toHaveLength(1);
+  }finally{await f.fixture.stop();}
+ });
+ it.each(['sourceAuthority','calendarFreeBusy','providerAdapter','accountAccess','eventSettings','senderAuthority','releaseReady','funding','unavailable'] as const)('provider-only action still refuses current %s despite ignoring model-only readiness',async change=>{
+  const f=await setupBooking();try{
+   const read=f.runtime.policy.readEvidence;f.runtime.policy.readEvidence=async(context,binding)=>{const evidence=await read(context,binding);if(evidence===null||change==='unavailable')return null;return {...evidence,modelConsent:false,modelAcceptance:false,...(change==='funding'?{funding:{...evidence.funding,status:'held' as const}}:{[change]:false})};};
+   expect((await f.request('POST','/meetings/booking-create',f.command(f.payload))).body).toMatchObject({reason:'booking_readiness_unavailable'});expect(f.requests).toHaveLength(0);
+  }finally{await f.fixture.stop();}
+ });
  it.each(['unchanged','firm','contact','address','version'] as const)('exact durable Route hint %s is rechecked without appending a changed firm lock',async change=>{
   const f=await setupBooking();try{const otherFirm=await seedFirm(f.fixture,{name:'Controlled moved Route',assignedUserId:f.fixture.alpha.admin.userId});const otherContact=await seedContact(f.fixture,{firmId:otherFirm,fullName:'Changed prospect'});const sameFirmContact=await seedContact(f.fixture,{firmId:f.firmId,fullName:'Same firm changed prospect'});
    let hinted=false;const firmLocks:string[]=[];
