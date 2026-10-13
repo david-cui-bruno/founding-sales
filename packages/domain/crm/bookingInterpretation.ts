@@ -22,9 +22,10 @@ export async function requestBookingInterpretation(context: RepositoryContext, i
   const loaded = await loadBookingInterpretationSources(context, sources);
   if (!loaded || loaded.originals[0]!.ownerUserId !== context.scope.actor.userId) return { ok: false as const, reason: 'booking_source_unavailable' };
   const current=await authority.read(context,{ownerUserId:context.scope.actor.userId});
-  const snapshot=current.kind==='available'&&current.snapshot.operationalReady&&'capability' in current.snapshot&&current.snapshot.capability==='interpretation'?current.snapshot:null;
+  const unresolved=(await context.db.query(`SELECT 1 FROM crm_booking_interpretations i JOIN provider_reservations r ON r.workspace_id=i.workspace_id AND r.id=i.reservation_id WHERE i.workspace_id=$1 AND i.source_refs @> $2::jsonb AND r.state IN ('calling','estimated') LIMIT 1`,[context.scope.workspaceId,JSON.stringify([{sourceId:input.source.sourceId}])])).rows.length>0;
+  const snapshot=!unresolved&&current.kind==='available'&&current.snapshot.operationalReady&&'capability' in current.snapshot&&current.snapshot.capability==='interpretation'?current.snapshot:null;
   const state=snapshot===null?'unavailable':'pending';
-  const reason=current.kind==='unavailable'?current.reason:snapshot===null?'booking_interpretation_not_ready':null;
+  const reason=unresolved?'prior_model_acceptance_unresolved':current.kind==='unavailable'?current.reason:snapshot===null?'booking_interpretation_not_ready':null;
   const row = (await context.db.query<BookingInterpretationRow>(
     `INSERT INTO crm_booking_interpretations(workspace_id,requested_by,source_refs,source_fingerprint,provenance,state,reason,authority_snapshot)
      VALUES($1,$2,$3::jsonb,$4,$5::jsonb,$6,$7,$8::jsonb) RETURNING *`,

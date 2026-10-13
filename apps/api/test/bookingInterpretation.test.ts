@@ -131,3 +131,11 @@ it('separates an unconditional accepted prior slot from a durable original sales
  await executeCandidate({intent:'accept_slot',agreement:{sourceId:source.sourceId,start:0,end:agreement.length,quote:agreement},slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York',evidence:{sourceId:prior.sourceId,start:0,end:offer.length,quote:offer}},substantive:{sourceId:source.sourceId,start:agreement.length+1,end:text.length,quote:question}});
  expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'slot_proposal',permission:false,schedulingPaused:false,handoff:{ownerUserId:fixture.alpha.admin.userId,action:'answer_sales_question',evidence:{sourceId:source.sourceId,quote:question}}}});
 });
+it('conservatively settles unknown model acceptance and refuses a new charge for the same original',async()=>{
+ const {source,requestId}=await configuredRequest('Can we arrange a call?');
+ await executeCandidate(null,undefined,true);
+ const visible=await post('/crm/booking/interpretation/read',{requestId});
+ expect(visible.body).toMatchObject({state:'unknown_acceptance',outcome:null,financial:{state:'estimated'}});
+ const retry=await post('/crm/booking/interpretation/request',command({source,priorSources:[]}));
+ expect(retry.body).toMatchObject({result:{state:'unavailable',reason:'prior_model_acceptance_unresolved'}});
+});
