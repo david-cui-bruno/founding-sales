@@ -83,7 +83,7 @@ export function bookingInterpretationJobHandler(options: BookingInterpretationOp
     const handoff={ownerUserId:row.requested_by,action:questionSupported?'answer_sales_question':'review_conditional_scheduling',evidence:questionSupported?question:evidence};
     if(parsed.success&&supported&&(parsed.data.intent==='opt_out'||parsed.data.intent==='refusal'))outcome={kind:'stop',reason:parsed.data.intent,evidence,permission:false};
     else if(parsed.success&&supported&&(parsed.data.intent==='conditional'||parsed.data.intent==='handoff'))outcome={kind:'david_handoff',schedulingPaused:true,handoff,permission:false};
-    else if(parsed.success&&supported&&parsed.data.intent==='accept_slot'&&exactSlot&&parsed.data.substantive===null)outcome={kind:'slot_proposal',slot,agreement:evidence,attendeeAddress:original.envelope.from,permission:false,requires:['current_attendee_route','fresh_freebusy','guarded_create']};
+    else if(parsed.success&&supported&&parsed.data.intent==='accept_slot'&&exactSlot&&(question===null||questionSupported))outcome={kind:'slot_proposal',slot,agreement:evidence,attendeeAddress:original.envelope.from,permission:false,schedulingPaused:false,...(questionSupported?{handoff}:{}),requires:['current_attendee_route','fresh_freebusy','guarded_create']};
     else if(parsed.success&&supported&&parsed.data.intent==='interest'&&parsed.data.slot===null&&parsed.data.substantive===null)outcome={kind:'approved_link',bookingUrl:snapshot.bindings.event.bookingUrl,permission:false};
     else outcome={kind:'clarification',reason:'booking_candidate_requires_review',permission:false};
    }
