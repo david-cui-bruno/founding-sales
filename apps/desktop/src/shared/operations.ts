@@ -34,6 +34,7 @@ import { crmDecisionHistoryReadSchema, crmDecisionHistoryPageSchema } from "@fss
 import { crmDecisionHistoryListSchema, crmDecisionHistoryListPageSchema } from "@fss/contracts";
 import { crmEvidenceReadSchema, crmEvidencePageSchema, crmEvidenceDecidePayloadSchema, crmEvidenceDecidedSchema } from "@fss/contracts";
 import {crmMailImportReadSchema,crmMailImportAcknowledgmentSchema,crmMailImportHealthSchema} from "@fss/contracts";
+import {bookingInterpretationRequestSchema,bookingInterpretationReadSchema,bookingInterpretationViewSchema} from '@fss/contracts';
 import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSchema,explicitOpportunityResultSchema} from '@fss/contracts';
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
 import {mailSourcesListSchema,mailSourceListSchema,mailSourceReadSchema,mailConversationSchema,mailConversationV2Schema,mailSourceChangePayloadSchema,mailSourceChangedSchema,mailControlsReadSchema,mailCaptureControlsSchema,mailSourceStateReadSchema,mailSourceStateSchema,mailSourceRecaptureQueuedSchema,mailSourceAssociatePayloadSchema} from '@fss/contracts';
@@ -46,6 +47,7 @@ import {relationshipSaveSchema,relationshipCorrectSchema,firmListResponseSchema}
 import {relationshipReadSchema,relationshipListSchema} from '@fss/contracts';
 import {personCreateSchema,personReadSchema,personListSchema,personSourceAddSchema,personSourceChangeSchema,personSourceRecaptureSchema,personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
+import {bookingPolicySettingsViewSchema,bookingPolicyChangeSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,notificationRuntimeStatusSchema} from '@fss/contracts';
 import { todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOpenResponseSchema } from '@fss/contracts';
@@ -924,9 +926,9 @@ export const OPERATIONS = {
   'social.weekly': {kind:'read',calls:[{method:'POST',path:'/social/weekly'}],input:z.strictObject({}),output:z.strictObject({view:socialWeeklySchema.nullable(),reason:z.string().nullable()}),transform:'Owner weekly drafting setting'},
   'social.recurringPosting': {kind:'read',calls:[{method:'POST',path:'/social/linkedin-recurring/read'}],input:z.strictObject({}),output:z.strictObject({view:linkedinRecurringViewSchema.nullable(),reason:z.string().nullable()}),transform:'Read current guarded recurring outcomes, never grant publication permission'},
   'social.postingPolicy': {kind:'read',calls:[{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:z.strictObject({}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Separate owner posting scope and pending readiness'},
-  'social.savePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/save'}],input:linkedinPostingPolicySaveSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Save or revise disclosed posting scope, never Enable'},
-  'social.disablePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/disable'}],input:z.strictObject({expectedRevision:z.number().int().positive(),commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Disable posting policy and invalidate bound candidates'},
-  'social.revokePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/revoke'}],input:z.strictObject({expectedRevision:z.number().int().positive(),commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Revoke posting scope without erasing submission evidence'},
+  'social.savePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/save'},{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:linkedinPostingPolicySaveSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Save or revise disclosed posting scope, never Enable'},
+  'social.disablePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/disable'},{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:z.strictObject({expectedRevision:z.number().int().positive(),commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Disable posting policy and invalidate bound candidates'},
+  'social.revokePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/revoke'},{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:z.strictObject({expectedRevision:z.number().int().positive(),commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Revoke posting scope without erasing submission evidence'},
   'social.bindPostingCandidate': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/bind-candidate'}],input:linkedinPostingCandidateBindSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({binding:linkedinPostingCandidateBindingSchema.nullable(),reason:z.string().nullable()}),transform:'Owner-stage existing manually approved text delivery with trusted policy stop fence'},
   'social.saveWeekly': {kind:'command',calls:[{method:'POST',path:'/social/weekly/save'}],input:socialWeeklySaveSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({view:socialWeeklySchema.nullable(),reason:z.string().nullable()}),transform:'Explicit weekly draft opt-in, never publication'},
   'social.drafts': {kind:'read',calls:[{method:'POST',path:'/social/drafts'}],input:z.strictObject({}),output:z.strictObject({view:socialDraftWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Owner sources, approved facts and draft suggestions'},
@@ -1343,6 +1345,8 @@ export const OPERATIONS = {
   'crm.processingPurposeSave':{kind:'command',calls:[{method:'POST',path:'/crm/processing/purpose/save'}],input:crmExtractionPurposeSaveSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({revision:z.number().int().positive(),enabled:z.literal(false)}),transform:'disabled-only purpose configuration; main owns envelope'},
   'crm.processingHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/health/read'}],input:crmProcessingHealthReadSchema,output:crmProcessingHealthSchema,transform:'body-free status survives deletion; no blind paid retry'},
   'crm.processingRecordHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/record/read'}],input:crmProcessingRecordReadSchema,output:crmProcessingRecordHealthSchema,transform:'bounded owner-private body-free native record status survives transcript deletion'},
+  'crm.bookingInterpretationRequest':{kind:'command',calls:[{method:'POST',path:'/crm/booking/interpretation/request'}],input:bookingInterpretationRequestSchema.omit({commandId:true,clientVersion:true}),output:bookingInterpretationViewSchema,transform:'exact admitted-message booking candidate request, never permission to send or create'},
+  'crm.bookingInterpretationRead':{kind:'read',calls:[{method:'POST',path:'/crm/booking/interpretation/read'}],input:bookingInterpretationReadSchema,output:bookingInterpretationViewSchema,transform:'current authorized booking proposal, clarification, stop or David handoff'},
   'crm.businessMailList': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/list'}],input:mailSourcesListSchema,output:mailSourceListSchema,transform:'bounded copied-email identity page with current source access'},
   'crm.businessMailRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read'}],input:mailSourceReadSchema,output:mailConversationSchema,transform:'exact permitted copied source revision and provenance'},
   'crm.businessMailReadV2': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read/v2'}],input:mailSourceReadSchema,output:mailConversationV2Schema,transform:'exact permitted copied source revision and provenance'},
@@ -2002,6 +2006,14 @@ export const OPERATIONS = {
     kind:'read',calls:[{method:'GET',path:'/meetings/booking-capacity'}],input:nothing,
     output:z.strictObject({capacity:bookingCapacityResponseSchema.nullable()}),
     transform:'Read-only Cal.com event configuration and scoped retained booking evidence; no available-slot inference',
+  },
+  'meetings.bookingPolicy': {
+    kind:'read',calls:[{method:'GET',path:'/meetings/booking-policy?view=settings'}],input:nothing,
+    output:z.strictObject({view:bookingPolicySettingsViewSchema.nullable()}),transform:'Current owner booking scope and exact configured choices, never automatic Enable',
+  },
+  'meetings.bookingPolicyChange': {
+    kind:'command',calls:[{method:'POST',path:'/meetings/booking-policy'}],input:bookingPolicyChangeSchema,
+    output:z.strictObject({revision:z.number().int().positive().nullable(),reason:z.string().max(80).nullable()}),transform:'Version-fenced explicit owner save, Disable or Revoke without provider writes',
   },
   'meetings.brief': {
     kind: 'read',

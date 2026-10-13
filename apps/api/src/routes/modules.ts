@@ -1,3 +1,4 @@
+import {BOOKING_CREATE_PATHS,routeBookingCreate} from './bookingCreate.ts';
 import {ASK_SESSION_PATHS,routeAskSessions} from './askSessions.ts';
 import {CRM_ACQUISITION_DIAGNOSTIC_PATHS,routeCrmAcquisitionDiagnostic} from './crmAcquisitionDiagnostic.ts';
 import {CRM_CAPABILITY_PATHS,routeCrmCapabilities} from './crmCapabilities.ts';
@@ -21,6 +22,7 @@ import { LINKEDIN_POSTING_POLICY_PATHS, routeLinkedinPostingPolicy } from './lin
 import {LINKEDIN_RECURRING_PATHS,routeLinkedinRecurring} from './linkedinRecurringPosting.ts';
 import { PEOPLE_PATHS, routePeople } from './people.ts';
 import {BOOKING_CAPACITY_PATHS,routeBookingCapacity} from './bookingCapacity.ts';
+import {BOOKING_POLICY_PATHS,routeBookingPolicy} from './bookingPolicy.ts';
 import {SOCIAL_PATHS,routeSocial} from './social.ts';
 import {SOURCING_LEARNING_PATHS,routeSourcingLearning} from './sourcingLearning.ts';
 import {OUTREACH_PATHS,routeOutreach} from './outreach.ts';
@@ -176,6 +178,7 @@ function healthModule(routing: RoutingOptions): RouteModule {
 export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[] {
   return [
     healthModule(routing),
+    moduleOf('booking-create',{paths:BOOKING_CREATE_PATHS},routeBookingCreate,routing),
     moduleOf('sourcing-learning',{paths:SOURCING_LEARNING_PATHS},routeSourcingLearning,routing),
     moduleOf('sourcing', { paths: SOURCING_PATHS }, routeSourcing, routing),
     moduleOf('auth', { prefixes: ['/auth'] }, routeAuth, routing),
@@ -193,6 +196,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // not an invitation.
     moduleOf('crm-mail-import', {paths: CRM_MAIL_IMPORT_PATHS}, routeCrmMailImport, routing),
     moduleOf('business-mail', { paths: BUSINESS_MAIL_PATHS }, routeBusinessMail, routing),
+    moduleOf('booking-interpretation', {paths:BOOKING_INTERPRETATION_PATHS}, routeBookingInterpretation, routing),
     moduleOf('business-acquisition', { paths: BUSINESS_PATHS }, routeBusinessAcquisition, routing),
     moduleOf('people-relationships', { paths: IDENTITY_PATHS }, routePeopleRelationships, routing),
     moduleOf('selected-imports', { paths: SELECTED_IMPORT_PATHS }, routeSelectedImports, routing),
@@ -245,6 +249,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // paths; none reaches Cal.com.
     moduleOf('meetings', { paths: MEETING_PATHS }, routeMeetings, routing),
     moduleOf('booking-capacity', {paths:BOOKING_CAPACITY_PATHS},routeBookingCapacity,routing),
+    moduleOf('booking-policy', {paths:BOOKING_POLICY_PATHS},routeBookingPolicy,routing),
     // Lane M4: exact paths under /meetings/recordings, beside M1's exact /meetings paths.
     moduleOf('meeting-auto-recording', {paths:MEETING_AUTO_RECORDING_PATHS}, routeMeetingAutoRecording,routing),
     moduleOf('meeting-follow-through', { paths: MEETING_FOLLOW_THROUGH_PATHS }, routeMeetingFollowThrough, routing),
@@ -322,3 +327,4 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('attachments', { paths: ATTACHMENT_PATHS }, routeAttachments, routing),
   ];
 }
+import {BOOKING_INTERPRETATION_PATHS,routeBookingInterpretation} from './bookingInterpretation.ts';

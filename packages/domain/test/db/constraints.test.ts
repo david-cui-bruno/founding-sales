@@ -1,3 +1,4 @@
+import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {
   ASK_CANONICAL_INDEX_CONSTRAINT_CASES,
   seedCurrentCanonicalWindow,
@@ -18,6 +19,7 @@ import { CRM_PROGRESS_CONSTRAINT_CASES } from "./support/crmProgressCases.ts";
 import { MAIL_CAPTURE_CONSTRAINT_CASES } from "./support/mailCaptureCases.ts";
 import { BUSINESS_ACQUISITION_CONSTRAINT_CASES } from "./support/businessAcquisitionCases.ts";
 import { CRM_EXTRACTION_CONSTRAINT_CASES } from "./support/crmExtractionCases.ts";
+import { BOOKING_INTERPRETATION_CONSTRAINT_CASES } from "./support/bookingInterpretationCases.ts";
 import { LINKEDIN_POLICY_CONSTRAINT_CASES } from "./support/linkedinPolicyCases.ts";
 import { LINKEDIN_RECURRING_CONSTRAINT_CASES } from "./support/linkedinRecurringCases.ts";
 import { LINKEDIN_POSTING_POLICY_CONSTRAINT_CASES } from "./support/linkedinPostingPolicyCases.ts";
@@ -873,6 +875,7 @@ const relationshipConstraintCases: readonly Case[] = [
 ];
 
 const cases: readonly Case[] = [
+  ...BOOKING_CREATE_CONSTRAINT_CASES,
   ...ASK_CANONICAL_INDEX_CONSTRAINT_CASES,
   ...ASK_ANSWER_CONSTRAINT_CASES,
   ...ASK_SESSION_CONSTRAINT_CASES,
@@ -2229,6 +2232,7 @@ const cases: readonly Case[] = [
   ...MAIL_CAPTURE_CONSTRAINT_CASES,
   ...CRM_BACKFILL_CONSTRAINT_CASES,
   ...CRM_EXTRACTION_CONSTRAINT_CASES,
+  ...BOOKING_INTERPRETATION_CONSTRAINT_CASES,
   ...CRM_PROGRESS_CONSTRAINT_CASES,
   ...peopleConstraintCases,
   ...relationshipConstraintCases,

@@ -47,6 +47,12 @@ The final authenticated pure-read freshness check occurs after begin's network r
 
 The unchanged native LinkedIn adapter then awaits its internal `same()` account probe before `executeJavaScriptInIsolatedWorld` executes the submit script. The script checks composer/content/media/button, stores its window marker and clicks synchronously. A server HTTP check cannot atomically cover the final check → native account-probe wait → irreversible click distributed race. This implementation makes no claim that revocation atomically prevents every external action after final admission, and cannot unsend submitted work. No native/provider acceptance or live account operation was performed.
 
+## Reviewer readback repair
+
+Independent Spec review found that retrying a lost save response after another owner session revoked could display the immutable saved revision-1 receipt while durable current state was revoked revision 2. A normal host/API `app_runtime` test reproduced this genuine RED. The same-command retry now performs fresh authenticated policy readback after confirmed save/disable/revoke success, guarded by the original session generation before and after both waits. Immutable API receipts and command IDs remain unchanged. A visible UI host/transport test confirms Revoked 2, its held reason and the identical retry command ID. If current readback is unavailable after confirmation, UI removes the stale scope, displays current state as unavailable, and offers a read refresh rather than another policy command. The unavailable-current UI assertion also failed before the repair. API session-switch-during-readback and offline-read regressions pass. Closed operation declarations include the existing policy read as the conditional second request, without adding authority or a new operation.
+
+Baseline `8e0939ce` was kept separate from this isolated repair checkout. Two initially appended test-only hunks briefly overlapped the baseline gate before the concurrency notice, then were transferred exactly and removed with narrow edits. The original checkout was verified clean again; that overlapping gate is not claimed as pristine exact-head final acceptance. Root owns renewed review/gates on the repaired immutable head.
+
 ## Exact changed file inventory
 
 - API: `apps/api/src/routes/{linkedinPostingPolicy.ts,modules.ts,social.ts}` and `apps/api/test/{linkedinPostingPolicy.test.ts,routeMounting.test.ts}`.

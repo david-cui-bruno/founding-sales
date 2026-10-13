@@ -15,6 +15,7 @@ import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
 import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
 import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
 import {crmCaptureExtractionJobHandler} from '../handlers/crmCaptureExtraction.ts';
+import {bookingInterpretationJobHandler} from '../handlers/bookingInterpretation.ts';
 import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts';
 import { crmExtractJobHandler } from '../handlers/crmExtract.ts';
 import {askIndexJobHandler} from '../handlers/askIndex.ts';
@@ -38,6 +39,7 @@ import { meetingAutoRecordingJobHandler,meetingAutoRecordingSource } from '../ha
 import { readZoomMeetingsConfiguration } from '../zoom/meetingsClient.ts';
 import { calcomDemoClient } from '../calcom/bookingClient.ts';
 import { readCalcomSecret } from '@fss/domain/meetings/calcomSecret.ts';
+import {bookingCreateJobHandler} from '../handlers/bookingCreate.ts';
 import { meetingFollowThroughJobHandler, meetingFollowThroughSource } from '../handlers/meetingFollowThrough.ts';
 import { meetingAnalyzeJobHandler, meetingAnalysesSource, readMeetingAnalysisComposition, type MeetingAnalyzeOptions } from '../handlers/meetingAnalyze.ts';
 import { meetingTranscribeJobHandler, meetingTranscriptionsSource, type MeetingTranscribeOptions } from '../handlers/meetingTranscribe.ts';
@@ -134,6 +136,8 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  */
 export interface HandlerComposition {
   readonly linkedinRecurring?:Parameters<typeof linkedinRecurringHandler>[0];
+  readonly bookingCreate?:Parameters<typeof bookingCreateJobHandler>[0];
+  readonly bookingInterpretation?: Parameters<typeof bookingInterpretationJobHandler>[0];
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
   readonly crmAskIndex?: Parameters<typeof askIndexJobHandler>[0];
@@ -228,6 +232,7 @@ export function registerHandlers(
   registry.register(businessMailCaptureHandler(composition.crmMailCapture ?? { provider: { async read() { throw new Error('mail_capture_provider_unavailable'); } } }));
   registry.register(humanReplySendJobHandler(composition.send));
   registry.register(meetingFollowThroughJobHandler());
+  registry.register(bookingCreateJobHandler(composition.bookingCreate));
   if(composition.meetingAutoRecording)registry.register(meetingAutoRecordingJobHandler(composition.meetingAutoRecording));
   registry.register(suppressionFinalizeJobHandler());
   // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
@@ -251,6 +256,7 @@ export function registerHandlers(
   );
   registry.register(retentionBatchJobHandler());
   registry.register(crmExtractJobHandler(composition.crmExtraction??{}));
+  registry.register(bookingInterpretationJobHandler(composition.bookingInterpretation??{}));
   registry.register(askIndexJobHandler(composition.crmAskIndex??{}));
   registry.register(askAnswerJobHandler(composition.crmAskAnswers??{}));
   registry.register(crmCaptureExtractionJobHandler(composition.crmExtraction?.mailEvidence));

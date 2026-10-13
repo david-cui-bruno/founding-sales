@@ -60,6 +60,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   crm_capability_owner_approvals:coverage(['retained'],'Immutable body-free owner approval audit retains configuration fingerprints, attested checks, quality tier and acknowledged limitations. Current owner membership and configuration are rechecked before use; no conversation content or credentials.'),
   crm_acquisition_diagnostic_authorizations:coverage(['retained'],'Immutable body-free acquisition diagnostic owner consent and revocation audit; exact current owner/account/expiry/environment binding prevents reuse; no copied content or tokens.'),
   crm_acquisition_diagnostic_reads:coverage(['retained'],'Body-free exact scoped provider read accounting survives source deletion and revocation; no original content or tokens.'),
+  booking_create_submissions: coverage(['retained','deletion_redacts'], 'Durable owner-scoped pending/accepted/failed/unknown booking receipts and at-most-once markers. Private agreement/offered-source UUID/hash, attendee Route and source fingerprint provenance atomically redact on canonical source deletion, correction, unavailable transition or source-context changes. Only opaque dedupe barriers, owner/account/event identity, slot reservation and accepted external UID/meeting facts remain as business history, not renewed source authority. Current source/access/owner/policy/adapter scope rechecks gate every new external operation; a redacted uncertain write never replays or pretends cancellation. Meeting deletion clears the meeting link through its existing FK.'),
   crm_capability_authority_receipts: coverage(
     ['retained'],
     'Immutable body-free reviewed capability configuration, evidence/release hashes and opaque review references, with one recorded revocation. Retained as authorization audit history after expiry, source deletion, disconnect and departure; never a copied body or token store. Active membership, exact owner/account/generation, current configuration, release, expiry and revocation are rechecked before use; retained history cannot restore authority.',
@@ -902,6 +903,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     meeting_recordings: coverage(
       ["deletion_removes"],
       "One uploaded audio file of a demo: its Zoom file name, size, digest and object key; removed with the meeting (ON DELETE CASCADE); the object expires a day after upload.",
+    ),
+    crm_booking_interpretations: coverage(
+      ["retained", "deletion_redacts", "departure_revokes"],
+      "Native source UPDATE/DELETE erases private provenance and proposals while source-free financial linkage survives. Every read and worker stage revalidates original access and owner membership; departure refuses further processing.",
     ),
   });
 

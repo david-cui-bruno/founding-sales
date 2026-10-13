@@ -18,6 +18,7 @@ export function LinkedinPostingPolicy({ports=defaults}:{ports?:LinkedinPostingPo
   if(busy)return;const g=live.current;setBusy(true);setPending(action);setError(null);
   try{const result=action.kind==='save'?await port.current.save(action.input):await port.current.stop(action.kind,action.input);if(g!==live.current)return;
    if(result.view){accept(result.view);setPending(null);}
+   else if(result.reason==='current_read_unavailable'){setView(null);setAccountId('');setApproved(false);setPending(null);setError('The change was confirmed. Current posting policy is unavailable. Refresh before making another change.');}
    else if(['offline','unreadable_answer'].includes(result.reason??''))setError('The change is not confirmed. Retry the same request.');
    else{setPending(null);setError(result.reason==='stale_revision'?'The policy changed elsewhere. Refresh and review it before trying again.':`The change was refused: ${(result.reason??'unavailable').replaceAll('_',' ')}. Refresh before trying again.`);}
   }catch{if(g===live.current)setError('The change is not confirmed. Retry the same request.');}finally{if(g===live.current)setBusy(false);}
