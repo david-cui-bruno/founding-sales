@@ -1,4 +1,3 @@
-import {BOOKING_POLICY_PATHS,routeBookingPolicy} from './bookingPolicy.ts';
 import {ASK_SESSION_PATHS,routeAskSessions} from './askSessions.ts';
 import {CRM_ACQUISITION_DIAGNOSTIC_PATHS,routeCrmAcquisitionDiagnostic} from './crmAcquisitionDiagnostic.ts';
 import {CRM_CAPABILITY_PATHS,routeCrmCapabilities} from './crmCapabilities.ts';

@@ -19,10 +19,20 @@ function authored(source:Original,evidence:Citation|null):boolean {
  const ranges=z.array(z.object({kind:z.string(),start:z.number().int().nonnegative(),end:z.number().int().nonnegative()})).safeParse(source.ranges);
  return evidence!==null&&evidence.sourceId===source.sourceId&&evidence.end>evidence.start&&source.passage?.slice(evidence.start,evidence.end)===evidence.quote&&ranges.success&&ranges.data.some(range=>range.kind==='authored'&&range.start<=evidence.start&&range.end>=evidence.end);
 }
-function exactSlot(slot:z.infer<typeof slotSchema>,originals:readonly Original[],now:string):boolean {
+function exactSlot(slot:z.infer<typeof slotSchema>,originals:readonly Original[],now:string,agreement:Citation):boolean {
  const offered=originals.find(source=>source.sourceId===slot.evidence.sourceId);
  const original=originals[0]!;
  if(!offered||!authored(offered,slot.evidence)||originals.length>2||original.envelope.cc.length!==0||original.envelope.to.length!==1)return false;
+ if(offered.sourceId!==original.sourceId){
+  if(offered.direction!=='outgoing'||!offered.sentProof||offered.completeness!=='complete'||offered.envelope.cc.length!==0||offered.envelope.to.length!==1||offered.envelope.to[0]?.toLowerCase()!==original.envelope.from?.toLowerCase()||offered.envelope.from?.toLowerCase()!==original.envelope.to[0]?.toLowerCase())return false;
+  const ranges=z.array(z.object({kind:z.string(),start:z.number(),end:z.number()})).safeParse(offered.ranges);
+  if(!ranges.success)return false;
+  const full=ranges.data.filter(range=>range.kind==='authored').map(range=>offered.passage?.slice(range.start,range.end)??'').join('\n');
+  const uniqueDates=new Set(full.match(/\b\d{4}-\d{2}-\d{2}\b/g)??[]),uniqueTimes=new Set(full.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/g)??[]),uniqueZones=new Set(full.match(/\b[A-Za-z_]+(?:\/[A-Za-z_+-]+)+\b/g)??[]);
+  const uniquelyOffered=uniqueDates.size===1&&uniqueDates.has(slot.localDate)&&uniqueTimes.size===1&&uniqueTimes.has(slot.localTime)&&uniqueZones.size===1&&uniqueZones.has(slot.timeZone);
+  const explicitlySelected=agreement.quote.includes(slot.localDate)&&agreement.quote.includes(slot.localTime)&&agreement.quote.includes(slot.timeZone);
+  if(!uniquelyOffered&&!explicitlySelected)return false;
+ }
  if(!/^\d{4}-\d{2}-\d{2}$/.test(slot.localDate)||!Number.isFinite(Date.parse(slot.localDate))||new Date(slot.localDate).toISOString().slice(0,10)!==slot.localDate||!/^([01]\d|2[0-3]):[0-5]\d$/.test(slot.localTime)||slot.localDate<=now.slice(0,10))return false;
  try{if(!slot.timeZone.includes('/'))return false;new Intl.DateTimeFormat('en-US',{timeZone:slot.timeZone});}catch{return false;}
  // Only explicitly represented dates and zones are admitted. Relative or abbreviated evidence clarifies.
@@ -48,7 +58,7 @@ export function bookingInterpretationOutcome(input:{candidate:unknown;originals:
  if(refusal)return {kind:'stop' as const,reason:'refusal' as const,evidence:candidate.agreement,permission:false as const};
  if(candidate.intent==='conditional'||candidate.intent==='handoff'||conditional)return {kind:'david_handoff' as const,schedulingPaused:true,handoff,permission:false as const};
  const explicitAgreement=/\b(yes|that works|works for me|agreed|confirmed|book it|schedule it|see you|sounds good|let'?s do it)\b/i.test(candidate.agreement!.quote)&&!/\b(interested|learning more|maybe|sometime)\b/i.test(candidate.agreement!.quote);
- if(candidate.intent==='accept_slot'&&explicitAgreement&&candidate.slot!==null&&exactSlot(candidate.slot,input.originals,input.now))return {kind:'slot_proposal' as const,slot:candidate.slot,agreement:candidate.agreement,attendeeAddress:original.envelope.from,permission:false as const,schedulingPaused:false,...(questionSupported?{handoff}:{}),requires:['current_attendee_route','fresh_freebusy','guarded_create']};
+ if(candidate.intent==='accept_slot'&&explicitAgreement&&candidate.slot!==null&&exactSlot(candidate.slot,input.originals,input.now,candidate.agreement!))return {kind:'slot_proposal' as const,slot:candidate.slot,agreement:candidate.agreement,attendeeAddress:original.envelope.from,permission:false as const,schedulingPaused:false,...(questionSupported?{handoff}:{}),requires:['current_attendee_route','fresh_freebusy','guarded_create']};
  if(candidate.intent==='interest'&&candidate.slot===null)return {kind:'approved_link' as const,bookingUrl:input.snapshot.bindings.event.bookingUrl,permission:false as const,schedulingPaused:false,...(questionSupported?{handoff}:{})};
  return {...clarification,...(questionSupported?{handoff}:{})};
 }

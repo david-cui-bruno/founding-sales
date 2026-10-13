@@ -35,23 +35,31 @@ export function bookingInterpretationJobHandler(options: BookingInterpretationOp
    }
    await policyLock(context);
    const snapshot=row.authority_snapshot as BookingPolicySnapshot|null;
-   const current=snapshot===null?null:await authority.revalidate(context,snapshot);
    const model=options.model;
-   const ready=loaded!==null&&loaded.fingerprint===row.source_fingerprint&&loaded.originals[0]!.ownerUserId===row.requested_by&&current?.kind==='available'&&current.snapshot.operationalReady&&current.snapshot.capability==='interpretation';
-   if(!ready||!model||current?.kind!=='available'||model.providerKey!==current.snapshot.bindings.model.providerKey||model.route!==current.snapshot.bindings.model.route||model.modelVersion!==current.snapshot.bindings.model.modelVersion||model.accountBinding!==current.snapshot.bindings.model.accountBinding||Date.parse(model.fundingVerifiedUntil)<=Date.now()||loaded?.originals[0]!.accountBinding!==current.snapshot.bindings.sender.accountId){
+   const ready=loaded!==null&&loaded.fingerprint===row.source_fingerprint&&loaded.originals[0]!.ownerUserId===row.requested_by&&snapshot?.capability==='interpretation';
+   if(!ready||!model||snapshot===null){
     await input.session.query("UPDATE crm_booking_interpretations SET state='unavailable',reason='booking_source_model_or_authority_unavailable',outcome=NULL WHERE workspace_id=$1 AND id=$2 AND state='pending'",[input.scope.workspaceId,id]);return null;}
    const text=bookingInterpretationModelInput(loaded.originals);
    const maxInput=text===null?null:model.inputBound(text);if(maxInput===null||text===null){await input.session.query("UPDATE crm_booking_interpretations SET state='unavailable',reason='booking_model_input_unavailable' WHERE workspace_id=$1 AND id=$2 AND state='pending'",[input.scope.workspaceId,id]);return null;}
    const cents=centsOf('claude-haiku-4-5',{inputTokens:maxInput,outputTokens:BOOKING_MAX_OUTPUT_TOKENS},'bedrock');
-   await lockBookingBudget(context);const budget=await authority.budget(context,current.snapshot);
-   if(budget?.allowance!=='available'||(budget.remainingDailyCents??0)<cents||(budget.remainingMonthlyCents??0)<cents){
+   await lockBookingBudget(context);const observed=await authority.budget(context,snapshot);
+   const fresh=observed?.snapshot,budget=observed?.budget;
+   if(!fresh||fresh.capability!=='interpretation'||!bookingPolicySnapshotReadyAt(fresh,new Date().toISOString())||model.providerKey!==fresh.bindings.model.providerKey||model.route!==fresh.bindings.model.route||model.modelVersion!==fresh.bindings.model.modelVersion||model.accountBinding!==fresh.bindings.model.accountBinding||Date.parse(model.fundingVerifiedUntil)<=Date.now()||loaded.originals[0]!.accountBinding!==fresh.bindings.sender.accountId||budget?.allowance!=='available'||(budget.remainingDailyCents??0)<cents||(budget.remainingMonthlyCents??0)<cents){
     await input.session.query("UPDATE crm_booking_interpretations SET state='unavailable',reason='booking_budget_unavailable' WHERE workspace_id=$1 AND id=$2 AND state='pending'",[input.scope.workspaceId,id]);return null;}
    const reservation=await reserveAttempt(context,{providerKey:'aws_bedrock.booking',subjectKind:'booking_interpretation',subjectId:id,attempt:1,at:new Date().toISOString(),businessTimeZone:'America/New_York',cents,modelName:'claude-haiku-4-5',maxInputTokens:maxInput,maxOutputTokens:BOOKING_MAX_OUTPUT_TOKENS});
    if(!await markCalling(context,reservation.id))return null;
    await input.session.query("UPDATE crm_booking_interpretations SET state='processing',reservation_id=$3 WHERE workspace_id=$1 AND id=$2 AND state='pending'",[input.scope.workspaceId,id,reservation.id]);
-   return {context,row,loaded,text,reservation,snapshot:current.snapshot,model};
+   return {context,row,loaded,text,reservation,snapshot:fresh,model};
   });
   if(!prepared)return;
+  if(!bookingPolicySnapshotReadyAt(prepared.snapshot,new Date().toISOString())||Date.parse(prepared.model.fundingVerifiedUntil)<=Date.now()){
+   await withTransaction(input.session,async()=>{
+    await lockBookingBudget(prepared.context);
+    const released=await settleAttempt(prepared.context,{reservationId:prepared.reservation.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}});
+    if(released!==null)await input.session.query("UPDATE crm_booking_interpretations SET state='unavailable',reason='booking_authority_expired_before_call',outcome=NULL WHERE workspace_id=$1 AND id=$2 AND state='processing'",[input.scope.workspaceId,id]);
+   });
+   return;
+  }
   let result:Awaited<ReturnType<BookingInterpretationModel['run']>>;
   try{result=await prepared.model.run({text:prepared.text,signal:AbortSignal.timeout(60000)});}catch{result={acceptance:'unknown',usage:null,candidate:null};}
   await withTransaction(input.session,async()=>{

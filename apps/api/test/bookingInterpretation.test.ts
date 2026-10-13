@@ -43,7 +43,7 @@ const post = (path: string, body: unknown) => dispatch({ method: 'POST', path, b
 { session: fixture.db, auth: fixture.deps, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false,...authority===undefined?{}:{bookingInterpretationAuthority:authority} });
 
 /** Controlled canonical capture proves source provenance, not actual Gmail or booking consent. */
-async function admittedMessage(text: string,outgoing=false,authoredLength=text.length) {
+async function admittedMessage(text: string,outgoing=false,authoredLength=text.length,outgoingTo='casey@example.test') {
   const workspaceId = fixture.alpha.workspaceId, ownerUserId = fixture.alpha.admin.userId;
   const key = randomUUID();
   let mailbox=(await fixture.db.query<{ id: string; owner_user_id: string; email_address: string; provider_account_id: string; generation: number; status: string }>('SELECT * FROM mailboxes WHERE workspace_id=$1 AND owner_user_id=$2',[workspaceId,ownerUserId])).rows[0];
@@ -66,7 +66,7 @@ async function admittedMessage(text: string,outgoing=false,authoredLength=text.l
   const job = (await claimJobs(fixture.db, { owner: 'booking-capture-fixture', kinds: ['crm.mail_capture'], limit: 1, leaseSeconds: 120 }))[0]!;
   const registry = registerHandlers(new HandlerRegistry(), { classifier: undefined, mail: undefined, send: undefined, research: undefined,
     crmMailCapture: { proofVerifier: { verify: async proof => proof.accountBinding === binding && proof.grantReceipt === 'fixture-grant' },
-      provider: { read: async () => ({ providerAccountId: mailbox.provider_account_id, messageId: key, threadId: conversation.provider_thread_id, labels: [outgoing?'SENT':'INBOX'], origin:outgoing?'sent':'unknown', providerAt: outgoing?'2026-10-13T13:00:00.000Z':'2026-10-13T14:00:00.000Z', rawSenderDate: outgoing?'Tue, 13 Oct 2026 09:00:00 -0400':'Tue, 13 Oct 2026 10:00:00 -0400', from: outgoing?mailbox.email_address:'casey@example.test', to: [outgoing?'casey@example.test':mailbox.email_address], cc: [], subject: 'Call', body: text, parserVersion: 'controlled-v1', representation: 'plain_text', completeness: 'complete', ranges: [{ start: 0, end: authoredLength, kind: 'authored' as const },...(authoredLength===text.length?[]:[{start:authoredLength,end:text.length,kind:'quoted' as const}])] }) } } });
+      provider: { read: async () => ({ providerAccountId: mailbox.provider_account_id, messageId: key, threadId: conversation.provider_thread_id, labels: [outgoing?'SENT':'INBOX'], origin:outgoing?'sent':'unknown', providerAt: outgoing?'2026-10-13T13:00:00.000Z':'2026-10-13T14:00:00.000Z', rawSenderDate: outgoing?'Tue, 13 Oct 2026 09:00:00 -0400':'Tue, 13 Oct 2026 10:00:00 -0400', from: outgoing?mailbox.email_address:'casey@example.test', to: [outgoing?outgoingTo:mailbox.email_address], cc: [], subject: 'Call', body: text, parserVersion: 'controlled-v1', representation: 'plain_text', completeness: 'complete', ranges: [{ start: 0, end: authoredLength, kind: 'authored' as const },...(authoredLength===text.length?[]:[{start:authoredLength,end:text.length,kind:'quoted' as const}])] }) } } });
   const handler = registry.get('crm.mail_capture');
   if (!handler) throw new Error('registered capture missing');
   const result = await handler.handle({ session: fixture.db, scope: workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), job });
@@ -93,7 +93,7 @@ it('shows booking interpretation unavailable without booking authority rather th
   expect(JSON.stringify(read.body)).not.toContain('Yes, let us arrange a call.');
 });
 
-async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typeof admittedMessage>>[]=[],sharedRemainingDailyCents=200,authoredLength=text.length,validUntil:()=>string=()=> '2099-01-01T00:00:00Z') {
+async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typeof admittedMessage>>[]=[],sharedRemainingDailyCents=200,authoredLength=text.length,validUntil:()=>string=()=> '2099-01-01T00:00:00Z',modelConsent:()=>boolean=()=>true) {
  const source=await admittedMessage(text,false,authoredLength);
  const original=await post('/crm/business/mail/read',source);
  const binding=(original.body as {source:{accountBinding:string}}).source.accountBinding;
@@ -106,7 +106,7 @@ async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typ
   model:{providerKey:'aws_bedrock',route:'us.anthropic.claude-haiku-4-5-20251001-v1:0',modelVersion:'anthropic.claude-haiku-4-5-20251001-v1:0',accountBinding:'controlled-model-account',consentRevision:'controlled-purpose-consent-v1',purpose:'booking_interpretation',qualityReviewRevision:'controlled-quality-v1',selection:'initial_haiku'},
   budget:{lane:'booking',timeZone:'America/New_York',dailyCeilingCents:200,monthlyCeilingCents:2500}};
  expect((await post('/meetings/booking-policy',command({action:'save',expectedRevision:0,bindings}))).status).toBe(200);
- const runtime:BookingPolicyRuntime={now:()=>new Date().toISOString(),readEvidence:async(_context,observed)=>({evidenceKind:'controlled',binding:observed,verifiedAt:'2026-10-13T00:00:00Z',validUntil:validUntil(),accountAccess:false,calendarFreeBusy:false,eventSettings:false,modelConsent:true,modelAcceptance:true,senderAuthority:false,sourceAuthority:true,providerAdapter:false,releaseReady:false,funding:{status:'verified',sharedRemainingDailyCents,sharedRemainingMonthlyCents:2500}})};
+ const runtime:BookingPolicyRuntime={now:()=>new Date().toISOString(),readEvidence:async(_context,observed)=>({evidenceKind:'controlled',binding:observed,verifiedAt:'2026-10-13T00:00:00Z',validUntil:validUntil(),accountAccess:false,calendarFreeBusy:false,eventSettings:false,modelConsent:modelConsent(),modelAcceptance:true,senderAuthority:false,sourceAuthority:true,providerAdapter:false,releaseReady:false,funding:{status:'verified',sharedRemainingDailyCents,sharedRemainingMonthlyCents:2500}})};
  authority=createBookingInterpretationAuthority(runtime);
  const requested=await post('/crm/booking/interpretation/request',command({source,priorSources}));
  expect(requested.body).toMatchObject({result:{state:'pending',reason:null}});
@@ -266,4 +266,60 @@ it('publishes after conserved settlement removes this requests own last-allowanc
  },false,undefined,fixture.db,35000);
  expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'approved_link',permission:false},financial:{reservedCents:5,settledCents:1}});
  expect((await fixture.db.query("SELECT sum(cost_cents)::int AS cents FROM provider_ledger WHERE provider_key='aws_bedrock.booking'")).rows[0]).toMatchObject({cents:196});
+});
+for(const variant of ['multiple options','another recipient'] as const)it(`clarifies prior ${variant} rather than inventing a selected slot or attendee`,async()=>{
+ const first='2026-10-20 at 14:00 America/New_York';const offer=variant==='multiple options'?`Can you meet on ${first} or 2026-10-21 at 15:00 America/New_York?`:`Can you meet on ${first}?`;
+ const prior=await admittedMessage(offer,true,offer.length,variant==='another recipient'?'bob@example.test':'casey@example.test');
+ const text='Yes, that works for me.';const {source,requestId}=await configuredRequest(text,[prior]);
+ const start=offer.indexOf(first);
+ await executeCandidate({intent:'accept_slot',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York',evidence:{sourceId:prior.sourceId,start,end:start+first.length,quote:first}},substantive:null});
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'clarification',permission:false}});
+});
+it('replays only a current read after canonical source deletion, never private immutable receipt copies',async()=>{
+ const source=await admittedMessage('Can we arrange a call?');const body=command({source,priorSources:[]});
+ const original=await post('/crm/booking/interpretation/request',body);
+ expect(original.body).toMatchObject({result:{provenance:{participant:'casey@example.test'}}});
+ expect((await post('/crm/business/mail/delete',command({sourceId:source.sourceId,expectedRevision:source.sourceRevision}))).status).toBe(200);
+ const replay=await concurrentCommand('/crm/booking/interpretation/request',body);
+ expect(replay.body).toMatchObject({replayed:true,result:{state:'stale',provenance:null,outcome:null}});
+ const stored=(await fixture.db.query('SELECT result FROM command_receipts WHERE command_id=$1',[body.commandId])).rows[0]!;
+ expect(stored['result']).toEqual({requestId:(original.body as {result:{requestId:string}}).result.requestId});
+});
+it('does not launder a fresh model-consent refusal through the booking budget observer',async()=>{
+ let consent=true,calls=0;const text='Can we arrange a call?';const {requestId}=await configuredRequest(text,[],200,text.length,undefined,()=>consent);
+ const canonical=authority!;authority={...canonical,budget:async(context,snapshot)=>{consent=false;return canonical.budget(context,snapshot);}};
+ await executeCandidate(null,async()=>{calls++;});
+ expect(calls).toBe(0);
+ expect((await fixture.db.query('SELECT count(*)::int AS n FROM provider_reservations WHERE subject_id=$1',[requestId])).rows[0]).toMatchObject({n:0});
+});
+it('replays source reassociation as a current stale view instead of old original-context provenance',async()=>{
+ const source=await admittedMessage('Can we arrange a call?');const body=command({source,priorSources:[]});
+ expect((await post('/crm/booking/interpretation/request',body)).status).toBe(200);
+ const firm=(await fixture.db.query<{id:string}>("INSERT INTO firms(workspace_id,name,assigned_user_id) VALUES($1,'Current reviewed firm',$2) RETURNING id",[fixture.alpha.workspaceId,fixture.alpha.admin.userId])).rows[0]!;
+ expect((await post('/crm/business/mail/associate',command({sourceId:source.sourceId,expectedRevision:1,firmId:firm.id}))).status).toBe(200);
+ expect((await concurrentCommand('/crm/booking/interpretation/request',body)).body).toMatchObject({replayed:true,result:{state:'stale',provenance:null,outcome:null}});
+});
+it('refuses private current read after session loss inside canonical authority wait',async()=>{
+ const {requestId}=await configuredRequest('Can we arrange a call?');const canonical=authority!;
+ authority={...canonical,revalidate:async(context,snapshot)=>{
+  const current=await canonical.revalidate(context,snapshot);
+  const other=await fixture.database.appRuntimeSession();
+  await other.query("UPDATE sessions SET status='ended',ended_at=now(),end_reason='signed_out' WHERE workspace_id=$1 AND user_id=$2 AND status='active'",[fixture.alpha.workspaceId,fixture.alpha.admin.userId]);
+  return current;
+ }};
+ const response=await post('/crm/booking/interpretation/read',{requestId});
+ expect(response.status).toBe(404);expect(JSON.stringify(response.body)).not.toContain('casey@example.test');
+});
+it('releases the owned uncalled hold when captured authority expires across the real reserve COMMIT wait',async()=>{
+ const text='Can we arrange a call?';const {requestId}=await configuredRequest(text,[],200,text.length,()=>new Date(Date.now()+500).toISOString());
+ let processing=false,waited=false,calls=0;
+ const session:SessionQueryable={query:async<Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[])=>{
+  const result=await fixture.db.query<Row>(sql,values);
+  if(sql.includes("SET state='processing'"))processing=true;
+  if(processing&&!waited&&sql==='COMMIT'){waited=true;await fixture.db.query('SELECT pg_sleep(0.8)');}
+  return result;
+ }};
+ await executeCandidate(null,async()=>{calls++;},false,undefined,session);
+ expect(waited).toBe(true);expect(calls).toBe(0);
+ expect((await fixture.db.query('SELECT state,settled_cents FROM provider_reservations WHERE subject_id=$1',[requestId])).rows[0]).toMatchObject({state:'released',settled_cents:0});
 });
