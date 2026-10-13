@@ -29,7 +29,11 @@ const roles = 'owner|founder|president|principal|partner|director|property manag
 // Bounded named assertions only: never discard a same-subject denial to salvage support.
 const uncertainAssertion = (text: string, assertion: RegExp) => text.split(/(?:[.!?]\s+|\n)/u).some(sentence => uncertain.test(sentence) && assertion.test(sentence));
 function supportedProfile(text: string, name: string, profile: string): boolean {
-  if (uncertainAssertion(text, new RegExp(`^${escape(name)}['’]s LinkedIn profile\\s+.*${escape(profile)}(?:[.,)]|$)`, 'iu'))) return false;
+  const contradiction = new RegExp(`^${escape(name)}['’]s LinkedIn profile\\s+.*?(https:\\/\\/[^\\s<>"']+)`, 'iu');
+  if (text.split(/(?:[.!?]\s+|\n)/u).some(sentence => {
+    const observed = sentence.match(contradiction)?.[1];
+    return uncertain.test(sentence) && observed !== undefined && normalizeIdentityEndpoint('linkedin', observed.replace(/[.,)]$/u, '')) === profile;
+  })) return false;
   const assertion = new RegExp(`(?:^|[.!?]\\s+)${escape(name)}['’]s LinkedIn profile (?:is\\s+|:\\s*)(https:\\/\\/[^\\s<>"']+)`, 'giu');
   return text.split(/\n/u).filter(line => !uncertain.test(line)).some(line => [...line.matchAll(assertion)].some(match => normalizeIdentityEndpoint('linkedin', (match[1] ?? '').replace(/[.,)]$/u, '')) === profile));
 }
