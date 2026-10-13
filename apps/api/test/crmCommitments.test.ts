@@ -15,6 +15,10 @@ import { issueSessionFor } from "./support/sessionFixture.ts";
 it("projects exactly one internal task from an explicit dated human promise review through the registered worker", async () => {
   const fixture = await createAuthFixture();
   try {
+    // Leave three UTC days of margin for source observation and zone boundaries.
+    const promiseDate = (await fixture.db.query<{date:string}>("SELECT ((clock_timestamp() AT TIME ZONE 'UTC')::date + 3)::text AS date")).rows[0]!.date;
+    const promiseDueAt = (await fixture.db.query<{at:Date}>("SELECT $1::date::timestamp AT TIME ZONE 'America/Chicago' AS at", [promiseDate])).rows[0]!.at.toISOString();
+    const promiseQuote = `I will prepare the repair summary by ${promiseDate}.`;
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -51,7 +55,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
       command({
         personId,
         sourceKey: "human-review",
-        excerpt: "I will prepare the repair summary by October 12.",
+        excerpt:promiseQuote,
         occurredAt: "2026-10-01T14:00:00Z",
       }),
     );
@@ -74,7 +78,9 @@ it("projects exactly one internal task from an explicit dated human promise revi
       contentHash: selected.contentHash,
       locator: null,
     };
-    async function process(modelVersion: string, expectedRevision: number) {
+    async function process(modelVersion: string, expectedRevision: number, historical = false) {
+      const quote = historical ? "I will prepare the repair summary by October 12." : promiseQuote;
+      const locator = historical ? "text:0:48" : `text:0:${quote.length}`;
       expect(
         (
           await post(
@@ -121,8 +127,8 @@ it("projects exactly one internal task from an explicit dated human promise revi
                   kind: "commitment",
                   status: "stated",
                   interpretation: "Promise to prepare summary",
-                  locator: "text:0:48",
-                  quote: "I will prepare the repair summary by October 12.",
+                  locator,
+                  quote,
                 },
               ],
             }),
@@ -143,7 +149,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
     }
 
     const first=await process("fixture-v1",0);
-    const review=command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Prepare the repair summary",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago",expression:"by October 12"}});
+    const review=command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Prepare the repair summary",due:{kind:"date",date:promiseDate,zone:"America/Chicago",expression:`by ${promiseDate}`}});
     const queued=await post("/crm/commitments/review",review);expect(queued.status).toBe(200);
     const receipt=queued.body as {result:{commitmentId:string;revision:number;status:string}};
     expect(receipt.result).toMatchObject({revision:1,status:"queued"});
@@ -153,13 +159,13 @@ it("projects exactly one internal task from an explicit dated human promise revi
     expect(projection).toMatchObject({reviewRevision:1,sourceKind:source.kind,sourceId:source.sourceId,sourceRevision:source.revision,sourceHash:source.contentHash,decisionRevision:0,contextHash:first.generation.contextHash,outcome:"applied",observedAt:expect.any(String),jobId:expect.any(String),fencingToken:expect.any(String)});
     const read=()=>post("/crm/commitments/read",{scope:{kind:"person",personId},limit:50});
     const visible=await read();expect(visible.status).toBe(200);
-    expect(visible.body).toMatchObject({items:[{commitmentId:receipt.result.commitmentId,task:{status:"open"},actionLabel:"Prepare the repair summary",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago",expression:"by October 12"},quote:"I will prepare the repair summary by October 12.",source:{occurredAt:"2026-10-01T14:00:00.000Z"}}]});
+    expect(visible.body).toMatchObject({items:[{commitmentId:receipt.result.commitmentId,task:{status:"open"},actionLabel:"Prepare the repair summary",due:{kind:"date",date:promiseDate,zone:"America/Chicago",expression:`by ${promiseDate}`},quote:promiseQuote,source:{occurredAt:"2026-10-01T14:00:00.000Z"}}]});
     const originalTask=(visible.body as {items:{task:{taskId:string}}[]}).items[0]!.task.taskId;
-    expect((await post('/ask/read',{operation:'tasks',scope:{business:true},limit:20})).body).toMatchObject({count:'1',countBasis:'exact',records:[{key:`internal_task:${originalTask}`,kind:'internal_task',label:'Prepare the repair summary',dueAt:'2026-10-12T05:00:00.000Z'}]});
+    expect((await post('/ask/read',{operation:'tasks',scope:{business:true},limit:20})).body).toMatchObject({count:'1',countBasis:'exact',records:[{key:`internal_task:${originalTask}`,kind:'internal_task',label:'Prepare the repair summary',dueAt:promiseDueAt}]});
     expect((await post('/ask/read',{operation:'tasks',scope:{personId},limit:20})).body).toMatchObject({count:'1',records:[{key:`internal_task:${originalTask}`,personId}]});
     const actionsV1=await get("/today/actions");expect(actionsV1.status).toBe(200);expect(actionsV1.body).toMatchObject({version:1,actions:[]});
     const actionsV2=await get("/today/actions/v2");expect(actionsV2.status).toBe(200);
-    expect(actionsV2.body).toMatchObject({version:2,actions:[{kind:"promise",reason:"dated_promise",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago"},target:{kind:"internal_task",taskId:originalTask,expectedVersion:1,review:{commitmentId:receipt.result.commitmentId,revision:1,projectionVersion:1}}}]});
+    expect(actionsV2.body).toMatchObject({version:2,actions:[{kind:"promise",reason:"dated_promise",due:{kind:"date",date:promiseDate,zone:"America/Chicago"},target:{kind:"internal_task",taskId:originalTask,expectedVersion:1,review:{commitmentId:receipt.result.commitmentId,revision:1,projectionVersion:1}}}]});
     expect((await get("/today/actions")).body).toMatchObject({version:1,actions:[]});
     const promiseAction=(actionsV2.body as {actions:{actionId:string;target:unknown}[]}).actions[0]!;
     expect((await post("/today/actions/open/v2",{actionId:promiseAction.actionId,target:promiseAction.target})).body).toEqual({version:2,target:promiseAction.target});
@@ -201,7 +207,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
       agent:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.internal-task',async runStep(input){
         taskAskSteps++;
         expect(input.transcript[0]).toMatchObject({windows:[]});
-        expect(JSON.stringify(input.transcript)).not.toContain('I will prepare the repair summary by October 12.');
+        expect(JSON.stringify(input.transcript)).not.toContain(promiseQuote);
         expect(JSON.stringify(input.transcript)).not.toContain('taskDependencies');
         if(taskAskSteps===1)return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:10},answer:null,toolCalls:[{id:'read-person-tasks',name:'read_exact',input:{operation:'tasks'}}]};
         expect(input.transcript[1]).toMatchObject({name:'read_exact',result:{count:'1',records:[{key:`internal_task:${changedTask}`,label:'Prepare a revised repair summary'}]}});
@@ -232,12 +238,12 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const firmId=await seedFirm(fixture,{name:"Original promise authority",assignedUserId:fixture.alpha.admin.userId});
     const bridgedId=await seedContact(fixture,{firmId,fullName:"Captured firm promise owner"});
     expect((await post("/crm/people/bridge",command({contactIds:[bridgedId]}))).status).toBe(200);
-    expect((await post("/crm/people/source/add",command({personId:bridgedId,sourceKey:"firm-promise",excerpt:"I will prepare the repair summary by October 12.",occurredAt:"2026-10-01T14:00:00Z"}))).status).toBe(200);
+    expect((await post("/crm/people/source/add",command({personId:bridgedId,sourceKey:"firm-promise",excerpt:promiseQuote,occurredAt:"2026-10-01T14:00:00Z"}))).status).toBe(200);
     const firmPage=await post("/crm/people/read",{personId:bridgedId});
     const firmSource=(firmPage.body as {sources:typeof source[]}).sources[0]!;
     source={workspaceId:firmSource.workspaceId,sourceId:firmSource.sourceId,kind:"selected_note",revision:firmSource.revision,contentHash:firmSource.contentHash,locator:null};
     const second=await process("fixture-v2",1);
-    const secondReview=command({source,claimId:second.claim.claimId,claimRevision:1,claimHash:second.claim.claimHash,contextHash:second.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Prepare the firm summary",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago",expression:"by October 12"}});
+    const secondReview=command({source,claimId:second.claim.claimId,claimRevision:1,claimHash:second.claim.claimHash,contextHash:second.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Prepare the firm summary",due:{kind:"date",date:promiseDate,zone:"America/Chicago",expression:`by ${promiseDate}`}});
     const secondQueued=await post("/crm/commitments/review",secondReview);expect(secondQueued.status).toBe(200);
     const secondId=(secondQueued.body as {result:{commitmentId:string}}).result.commitmentId;
     await runOnce(fixture.db,{registry,owner:"firm-commitment-projector",limit:20});
@@ -264,11 +270,12 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const historicalPage=(await post("/crm/people/read",{personId})).body as {sources:typeof source[]};
     const historicalSource=historicalPage.sources.find(value=>value.sourceId===historicalId)!;
     source={workspaceId:historicalSource.workspaceId,sourceId:historicalId,kind:"selected_note",revision:historicalSource.revision,contentHash:historicalSource.contentHash,locator:null};
-    const historicalClaim=await process("fixture-v3",2);
+    const historicalClaim=await process("fixture-v3",2,true);
     const historicalReview=command({source,claimId:historicalClaim.claim.claimId,claimRevision:1,claimHash:historicalClaim.claim.claimHash,contextHash:historicalClaim.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Historical summary promise",due:{kind:"date",date:"2000-10-12",zone:"America/Chicago",expression:"by October 12"}});
     expect((await post("/crm/commitments/review",historicalReview)).status).toBe(200);
     await runOnce(fixture.db,{registry,owner:"historical-commitment-projector",limit:20});
     expect((await read()).body).toMatchObject({items:[{actionLabel:"Historical summary promise",todayEligibility:"historical",task:{status:"open"}}]});
+    expect((await get("/today/actions/v2")).body).toMatchObject({version:2,actions:[]});
     expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toEqual({items:[],nextAfterId:null});
     expect((await post('/ask/read',{operation:'tasks',scope:{business:true},limit:20})).body).toMatchObject({count:'1',records:[{kind:'internal_task',label:'Historical summary promise'}]});
 
