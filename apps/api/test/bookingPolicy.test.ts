@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {afterEach,beforeEach,describe,expect,it} from 'vitest';
 import {createAuthFixture,type AuthFixture,CURRENT_CLIENT_VERSION} from './support/authFixture.ts';
+import {authenticate,revokeDevice} from '../src/auth/sessions.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {routeBookingPolicy} from '../src/routes/bookingPolicy.ts';
 import type {BookingPolicyBindings,BookingPolicyView} from '../../../packages/contracts/src/bookingPolicy.ts';
@@ -18,8 +19,46 @@ describe('normal authenticated booking policy controls',()=>{
   let f:AuthFixture,token:string;
   beforeEach(async()=>{f=await createAuthFixture();token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;});
   afterEach(async()=>{await f.stop();});
-  const request=async(method:string,body?:unknown,bearer=token,runtime?:BookingPolicyRuntime,query='')=>routeBookingPolicy({method,path:'/meetings/booking-policy',query:new URLSearchParams(query),headers:{authorization:`Bearer ${bearer}`},body},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,suppressionJournal:{append:async()=>{}},sendingEnabled:false,upgradeUrl:'https://example.test/update',...(runtime===undefined?{}:{bookingPolicyRuntime:runtime})});
+  const request=async(method:string,body?:unknown,bearer=token,runtime?:BookingPolicyRuntime,query='',session:AuthFixture['db']=f.db)=>routeBookingPolicy({method,path:'/meetings/booking-policy',query:new URLSearchParams(query),headers:{authorization:`Bearer ${bearer}`},body},{session,auth:{...f.deps,db:session},supportedClientVersions:f.deps.config.supportedClientVersions,suppressionJournal:{append:async()=>{}},sendingEnabled:false,upgradeUrl:'https://example.test/update',...(runtime===undefined?{}:{bookingPolicyRuntime:runtime})});
   const command=(expectedRevision:number,bindings:BookingPolicyBindings)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,action:'save',expectedRevision,bindings});
+  const waitForBlockedBudgetRead=async()=>{
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline){
+      await f.db.query('SELECT pg_stat_clear_snapshot()');
+      const blocked=await f.db.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='relation' AND query LIKE '%WITH spend AS (%'");
+      if(blocked.rows.length>0)return;
+      await new Promise<void>(resolve=>setImmediate(resolve));
+    }
+    throw new Error('Real PostgreSQL budget read did not reach the controlled table lock');
+  };
+  const evidenceFor=(binding:BookingPolicyBindings,validUntil:string):BookingPolicyRuntimeEvidence=>({evidenceKind:'controlled',binding,verifiedAt:'2026-10-01T00:00:00Z',validUntil,accountAccess:true,calendarFreeBusy:true,eventSettings:true,modelConsent:true,modelAcceptance:true,senderAuthority:true,sourceAuthority:true,providerAdapter:true,releaseReady:true,funding:{status:'verified',sharedRemainingDailyCents:200,sharedRemainingMonthlyCents:2500}});
+  it.each(['authenticated GET','current reader'] as const)('%s expires trusted evidence and funding after an observed real PostgreSQL budget wait',async(caller)=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);bindings.model.qualityReviewRevision='controlled-quality-1';
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    let now='2026-10-13T21:00:00Z';
+    const runtime:BookingPolicyRuntime={now:()=>now,readEvidence:async()=>evidenceFor(bindings,'2026-10-13T21:00:30Z')};
+    const session=await f.database.appRuntimeSession();
+    const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),session);
+    await f.db.query('BEGIN');await f.db.query('LOCK TABLE provider_ledger IN ACCESS EXCLUSIVE MODE');
+    const pending=caller==='authenticated GET'?request('GET',undefined,token,runtime,'',session):readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId},runtime);
+    try{await waitForBlockedBudgetRead();now='2026-10-13T21:01:00Z';}finally{await f.db.query('COMMIT');await pending;}
+    const answer=await pending;
+    if(caller==='authenticated GET')expect(answer).toMatchObject({status:200,body:{businessPolicyValid:true,enabled:false,readiness:{ready:false,reasons:['runtime_evidence_expired'],evidenceKind:'unavailable'},budget:{allowance:'unknown',remainingDailyCents:null,remainingMonthlyCents:null}}});
+    else expect(answer).toMatchObject({kind:'available',snapshot:{businessPolicyValid:true,operationalReady:false,enabled:false,evidenceKind:'unavailable'}});
+  });
+  it('authenticated GET recomputes New York day and month allowance after an observed budget wait crosses midnight',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);bindings.model.qualityReviewRevision='controlled-quality-1';
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),f.db);
+    await recordProviderCall(ctx,{providerKey:'aws_bedrock.booking',at:'2026-11-01T04:00:01Z',businessTimeZone:'America/New_York',costCents:200});
+    let now='2026-11-01T03:59:59Z';
+    const runtime:BookingPolicyRuntime={now:()=>now,readEvidence:async()=>evidenceFor(bindings,'2026-11-02T00:00:00Z')};
+    const session=await f.database.appRuntimeSession();
+    await f.db.query('BEGIN');await f.db.query('LOCK TABLE provider_ledger IN ACCESS EXCLUSIVE MODE');
+    const pending=request('GET',undefined,token,runtime,'',session);
+    try{await waitForBlockedBudgetRead();now='2026-11-01T04:00:01Z';}finally{await f.db.query('COMMIT');await pending;}
+    expect(await pending).toMatchObject({status:200,body:{businessPolicyValid:true,enabled:false,readiness:{ready:false,reasons:['booking_budget_blocked']},budget:{businessDate:'2026-11-01',calendarMonth:'2026-11',observedDailyCents:200,observedMonthlyCents:200,allowance:'blocked'}}});
+  });
   it('owner saves and reads a versioned business policy without claiming readiness or Enable',async()=>{
     const bindings=controlledBookingBindings(f.alpha.admin.userId);
     expect((await request('POST',command(0,bindings)))?.status).toBe(200);
@@ -115,12 +154,23 @@ describe('normal authenticated booking policy controls',()=>{
     const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.salesperson.userId,role:'salesperson'}),f.db);
     expect(await readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId})).toEqual({kind:'unavailable',reason:'owner_authority_changed'});
   });
-  it('settings choices are withheld if current owner membership changes during the later policy evidence wait',async()=>{
+  it.each(['','view=settings'])('GET %s withholds all policy fields if owner membership changes during the evidence wait',async(query)=>{
     const bindings=controlledBookingBindings(f.alpha.admin.userId);
     expect((await request('POST',command(0,bindings)))?.status).toBe(200);
     await f.db.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[f.alpha.workspaceId,f.alpha.salesperson.userId]);
     const runtime:BookingPolicyRuntime={now:()=> '2026-10-13T21:00:00Z',readConfiguration:async()=>[bindings],readEvidence:async()=>{await f.db.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[f.alpha.workspaceId,f.alpha.admin.userId]);return null;}};
-    expect((await request('GET',undefined,token,runtime,'view=settings'))?.status).toBe(403);
+    expect(await request('GET',undefined,token,runtime,query)).toEqual({status:403,body:{error:'owner_authority_changed'}});
+  });
+  it.each(['','view=settings'])('GET %s withholds all policy fields if its exact authenticated session is revoked during the wait',async(query)=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    const signedIn=await authenticate(f.deps,`Bearer ${token}`);
+    if(!signedIn.authenticated)throw new Error('normal owner session missing');
+    const runtime:BookingPolicyRuntime={now:()=> '2026-10-13T21:00:00Z',readConfiguration:async()=>[bindings],readEvidence:async()=>{await revokeDevice(f.deps,{workspaceId:f.alpha.workspaceId,deviceId:signedIn.principal.deviceId,reason:'signed_out'});return null;}};
+    const response=await request('GET',undefined,token,runtime,query);
+    expect(response?.status).toBe(401);
+    expect(response?.body).not.toHaveProperty('setting');
+    expect(response?.body).not.toHaveProperty('policy');
   });
   it('normal settings reads offer exact configured choices without turning saved or proposed scope into readiness',async()=>{
     const bindings=controlledBookingBindings(f.alpha.admin.userId);

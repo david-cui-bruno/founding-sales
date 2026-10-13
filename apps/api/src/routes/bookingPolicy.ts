@@ -14,7 +14,14 @@ export async function routeBookingPolicy(request:ApiRequest,options:RoutingOptio
   if(request.method==='GET'){
     const view=request.query.get('view');
     if(view!==null&&view!=='settings')return {status:400,body:{error:'invalid_input'}};
-    try{return {status:200,body:view==='settings'?await readBookingPolicySettings(scoped.context,options.bookingPolicyRuntime):await readBookingPolicy(scoped.context,options.bookingPolicyRuntime)};}
+    try{
+      const body=view==='settings'?await readBookingPolicySettings(scoped.context,options.bookingPolicyRuntime):await readBookingPolicy(scoped.context,options.bookingPolicyRuntime);
+      const current=await requirePrincipal(auth,request);
+      if(!current.ok)return current.result;
+      const before=principal.principal,after=current.principal;
+      if(after.role!=='admin'||after.membershipStatus!=='active'||after.deviceStatus!=='active'||after.workspaceId!==before.workspaceId||after.userId!==before.userId||after.deviceId!==before.deviceId||after.sessionId!==before.sessionId)return {status:403,body:{error:'owner_authority_changed'}};
+      return {status:200,body};
+    }
     catch{return {status:403,body:{error:'owner_authority_changed'}};}
   }
   return runRouteCommand({auth,request,principal:principal.principal},bookingPolicyCommandSchema,'booking_policy',mutateBookingPolicy);
