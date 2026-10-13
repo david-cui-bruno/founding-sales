@@ -1,4 +1,5 @@
 import {askClaimConstructionSchema,constructAskClaim} from '../providers/askAnswerConstruction.ts';
+import {askProviderMetadataSchema} from '@fss/domain/crm/askProviderState.ts';
 import {admitAskTaskDependencies,readAskTaskDependencyLedger} from '@fss/domain/crm/askTaskDependencies.ts';
 import {projectAskOriginalEvidence as modelWindow} from '../providers/askModelEvidence.ts';
 import {recordCrmAuditEvent} from '@fss/domain/crm/audit.ts';
@@ -147,7 +148,7 @@ const agentCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.strin
 // Parse bounded model data first. Constructed facts do not need draft prose or
 // redundant citations; rendered claims still pass the complete legacy guard.
 const agentConstructionCandidate=z.strictObject({claims:z.array(z.strictObject({text:z.string().max(1000),kind:z.enum(['fact','inference','conflict']),construction:askClaimConstructionSchema.optional(),citationWindowIds:z.array(z.string().max(100)).max(10),exactResultToolCallIds:z.array(z.string().max(100)).max(10).optional()})).max(20),abstained:z.boolean()}).refine(value=>!value.abstained||value.claims.length===0);
-const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','browse_history','read_conversation','resolve_records']),input:z.unknown()});
+const toolCall=z.strictObject({id:z.string().min(1).max(100),name:z.enum(['read_exact','read_selected','search_selected','search_history','browse_history','read_conversation','resolve_records']),input:z.unknown(),providerMetadata:askProviderMetadataSchema.optional()});
 /** Internal model evidence authority never changes canonical proof or publication. */
 
 async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition,located:NonNullable<Awaited<ReturnType<typeof locate>>>){
@@ -267,7 +268,7 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
     }
     if(call.name==='read_exact'&&typeof value==='object'&&value!==null&&!Array.isArray(value))value={...value,evidenceAuthority:{kind:'current_exact_crm_state',toolCallId:call.id,citationAuthority:'exact_result_only',conversationCitationAllowed:false}};
     await recordCrmAuditEvent(context,{action:'crm.ask_tool_executed',subjectKind:'crm_ask_request',subjectId:requestId,detail:{requestVersion:version,requestEpoch:epoch,step,name:call.name}});
-    transcript.push({toolCallId:call.id,name:call.name,input:call.input,result:value});
+    transcript.push({toolCallId:call.id,name:call.name,input:call.input,result:value,modelStep:step,...call.providerMetadata===undefined?{}:{providerMetadata:call.providerMetadata}});
    }continue;
   }
   const parsedCandidate=agentConstructionCandidate.safeParse(outcome.answer);

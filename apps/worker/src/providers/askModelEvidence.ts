@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { askProviderMetadataSchema } from '@fss/domain/crm/askProviderState.ts';
 
 interface ModelAnswer {
   readonly claims: readonly {
@@ -17,6 +18,8 @@ const windowSchema = z.object({
 }).passthrough();
 const toolSchema = z.strictObject({
   toolCallId: z.string(), name: z.string(), input: z.unknown(), result: z.json(),
+  providerMetadata: askProviderMetadataSchema.optional(),
+  modelStep: z.number().int().min(1).max(32).optional(),
 });
 const exactSchema = z.object({
   evidenceAuthority: z.object({
