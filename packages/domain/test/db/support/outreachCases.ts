@@ -27,6 +27,10 @@ OUTREACH_CONSTRAINT_CASES.push({constraint:'outreach_fence_authorizations_pkey',
 bad('outreach_answer_blocks',[['workspace_id_fkey',{workspace_id:missing}],['current_version_check',{current_version:0}]],parent);
 OUTREACH_CONSTRAINT_CASES.push({constraint:'outreach_answer_blocks_pkey',run:async f=>{await parent(f);return parent(f);}});
 bad('outreach_answer_block_versions', [['version_check',{version:0}],['kind_check',{kind:'discount'}],['text_check',{text:''}],['workspace_id_block_id_fkey',{block_id:missing}],['workspace_id_created_by_fkey',{created_by:missing}],['workspace_id_approved_by_fkey',{approved_by:missing,approved_at:new Date()}]],block,parent);
+bad('outreach_answer_block_versions',[
+ ['social_input_check',{social_input:'[]'}],
+ ['social_input_check',{social_input:JSON.stringify({text:'x'.repeat(4096)})}],
+],block,parent);
 OUTREACH_CONSTRAINT_CASES.push({constraint:'answer_block_approval_pair',run:async f=>{await parent(f);return block(f,{approved_at:new Date()});}},{constraint:'outreach_answer_block_versions_pkey',run:async f=>{await parent(f);await block(f);return block(f);}});
 bad('outreach_email_sources', [['block_id_check',{block_id:''}],['identity_kind_check',{identity_kind:'guessed'}],['workspace_id_candidate_id_run_id_fkey',{run_id:missing}],['workspace_id_firm_id_fkey',{firm_id:missing}],['workspace_id_contact_id_fkey',{contact_id:missing}],['workspace_id_route_id_fkey',{route_id:missing}]],source,sourceFixture);
 OUTREACH_CONSTRAINT_CASES.push({constraint:'outreach_email_sources_pkey',run:async f=>{await sourceFixture(f);await source(f);return source(f);}});
