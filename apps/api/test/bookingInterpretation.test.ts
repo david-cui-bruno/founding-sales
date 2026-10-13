@@ -74,7 +74,7 @@ it('shows booking interpretation unavailable without booking authority rather th
   expect(JSON.stringify(read.body)).not.toContain('Yes, let us arrange a call.');
 });
 
-async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typeof admittedMessage>>[]=[]) {
+async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typeof admittedMessage>>[]=[],sharedRemainingDailyCents=200) {
  const source=await admittedMessage(text);
  const original=await post('/crm/business/mail/read',source);
  const binding=(original.body as {source:{accountBinding:string}}).source.accountBinding;
@@ -87,7 +87,7 @@ async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typ
   model:{providerKey:'aws_bedrock',route:'us.anthropic.claude-haiku-4-5-20251001-v1:0',modelVersion:'anthropic.claude-haiku-4-5-20251001-v1:0',accountBinding:'controlled-model-account',consentRevision:'controlled-purpose-consent-v1',purpose:'booking_interpretation',qualityReviewRevision:'controlled-quality-v1',selection:'initial_haiku'},
   budget:{lane:'booking',timeZone:'America/New_York',dailyCeilingCents:200,monthlyCeilingCents:2500}};
  expect((await post('/meetings/booking-policy',command({action:'save',expectedRevision:0,bindings}))).status).toBe(200);
- const runtime:BookingPolicyRuntime={now:()=>new Date().toISOString(),readEvidence:async(_context,observed)=>({evidenceKind:'controlled',binding:observed,verifiedAt:'2026-10-13T00:00:00Z',validUntil:'2099-01-01T00:00:00Z',accountAccess:false,calendarFreeBusy:false,eventSettings:false,modelConsent:true,modelAcceptance:true,senderAuthority:false,sourceAuthority:true,providerAdapter:false,releaseReady:false,funding:{status:'verified',sharedRemainingDailyCents:200,sharedRemainingMonthlyCents:2500}})};
+ const runtime:BookingPolicyRuntime={now:()=>new Date().toISOString(),readEvidence:async(_context,observed)=>({evidenceKind:'controlled',binding:observed,verifiedAt:'2026-10-13T00:00:00Z',validUntil:'2099-01-01T00:00:00Z',accountAccess:false,calendarFreeBusy:false,eventSettings:false,modelConsent:true,modelAcceptance:true,senderAuthority:false,sourceAuthority:true,providerAdapter:false,releaseReady:false,funding:{status:'verified',sharedRemainingDailyCents,sharedRemainingMonthlyCents:2500}})};
  authority=createBookingInterpretationAuthority(runtime);
  const requested=await post('/crm/booking/interpretation/request',command({source,priorSources}));
  expect(requested.body).toMatchObject({result:{state:'pending',reason:null}});
@@ -138,4 +138,36 @@ it('conservatively settles unknown model acceptance and refuses a new charge for
  expect(visible.body).toMatchObject({state:'unknown_acceptance',outcome:null,financial:{state:'estimated'}});
  const retry=await post('/crm/booking/interpretation/request',command({source,priorSources:[]}));
  expect(retry.body).toMatchObject({result:{state:'unavailable',reason:'prior_model_acceptance_unresolved'}});
+});
+async function concurrentCommand(path:string,body:unknown){
+ const session=await fixture.database.appRuntimeSession();
+ return dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session,auth:{...fixture.deps,db:session},supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+}
+it('commits model calling before the wait and hides outcomes when the owner revokes policy on another connection',async()=>{
+ const text='Can we arrange a call?';const {source,requestId}=await configuredRequest(text);
+ await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null},async()=>{
+  const receipt=(await fixture.db.query('SELECT state FROM provider_reservations WHERE subject_id=$1',[requestId])).rows[0];expect(receipt).toMatchObject({state:'calling'});
+  expect((await concurrentCommand('/meetings/booking-policy',command({action:'revoke',expectedRevision:1}))).status).toBe(200);
+ });
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'unavailable',reason:'booking_authority_changed',outcome:null,financial:{state:'settled',settledCents:1}});
+});
+it('source deletion during the model wait redacts every derived quote and retains only source-free accounting',async()=>{
+ const text='Can we arrange a call?';const {source,requestId}=await configuredRequest(text);
+ await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null},async()=>{
+  expect((await concurrentCommand('/crm/business/mail/delete',command({sourceId:source.sourceId,expectedRevision:source.sourceRevision}))).status).toBe(200);
+ });
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'stale',outcome:null,provenance:null,financial:{state:'settled',settledCents:1}});
+ const stored=(await fixture.db.query('SELECT outcome,provenance,authority_snapshot FROM crm_booking_interpretations WHERE id=$1',[requestId])).rows[0];expect(stored).toEqual({outcome:null,provenance:null,authority_snapshot:null});
+});
+it('does not call the model when its full maximum reservation exceeds stricter shared allowance',async()=>{
+ const {requestId}=await configuredRequest(`Can we arrange a call? ${'necessary context '.repeat(400)}`,[],1);let calls=0;
+ await executeCandidate(null,async()=>{calls++;});
+ expect(calls).toBe(0);
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'unavailable',reason:'booking_budget_unavailable',financial:null});
+});
+it('does not promote generic interest to agreement just because a model labels it accept_slot',async()=>{
+ const offer='Can you meet on 2026-10-20 at 14:00 America/New_York?';const prior=await admittedMessage(offer,true);
+ const text='I am interested in learning more.';const {source,requestId}=await configuredRequest(text,[prior]);
+ await executeCandidate({intent:'accept_slot',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York',evidence:{sourceId:prior.sourceId,start:0,end:offer.length,quote:offer}},substantive:null});
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'clarification',permission:false}});
 });

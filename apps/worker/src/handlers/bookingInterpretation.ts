@@ -10,10 +10,8 @@ import { settingLockName } from '@fss/domain/settings/store.ts';
 import { reserveAttempt, markCalling, readAttempt, settleAttempt } from '@fss/domain/research/reservations.ts';
 import { centsOf } from '@fss/domain/research/pricing.ts';
 import { BOOKING_MAX_OUTPUT_TOKENS, type BookingInterpretationModel } from '../providers/bookingInterpretationModel.ts';
-import { z } from 'zod';
+import { bookingInterpretationOutcome } from '@fss/domain/crm/bookingInterpretationOutcome.ts';
 export interface BookingInterpretationOptions { authority?: BookingInterpretationAuthorityPort; model?: BookingInterpretationModel }
-const citation = z.strictObject({sourceId:z.string().uuid(),start:z.number().int().nonnegative(),end:z.number().int().positive(),quote:z.string().min(1).max(12000)});
-const candidateSchema = z.strictObject({intent:z.enum(['interest','accept_slot','clarify','conditional','refusal','opt_out','change','handoff']),agreement:citation.nullable(),slot:z.strictObject({localDate:z.string(),localTime:z.string(),timeZone:z.string(),evidence:citation}).nullable(),substantive:citation.nullable()});
 async function policyLock(context:RepositoryContext) {
   await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[settingLockName(context.scope.workspaceId,'booking_policy')]);
 }
@@ -66,27 +64,7 @@ export function bookingInterpretationJobHandler(options: BookingInterpretationOp
    if(!valid){state='stale';reason='source_or_authority_changed';}
    else if(result.acceptance==='unknown'||!validUsage){state='unknown_acceptance';reason='model_acceptance_or_usage_unknown';}
    else if(result.acceptance==='not_accepted'){state='unavailable';reason='model_not_accepted';}
-   else{
-    const parsed=candidateSchema.safeParse(result.candidate);
-    const evidence=parsed.success?parsed.data.agreement:null;
-    const original=loaded.originals[0]!;
-    const ranges=z.array(z.object({kind:z.string(),start:z.number().int(),end:z.number().int()})).safeParse(original.ranges);
-    const supported=evidence!==null&&evidence.sourceId===original.sourceId&&evidence.end>evidence.start&&original.passage?.slice(evidence.start,evidence.end)===evidence.quote&&ranges.success&&ranges.data.some(range=>range.kind==='authored'&&range.start<=evidence.start&&range.end>=evidence.end);
-    const slot=parsed.success?parsed.data.slot:null;
-    const offered=slot===null?null:loaded.originals.find(source=>source.sourceId===slot.evidence.sourceId);
-    const offeredRanges=z.array(z.object({kind:z.string(),start:z.number().int(),end:z.number().int()})).safeParse(offered?.ranges);
-    let zoneValid=false;
-    if(slot!==null){try{zoneValid=slot.timeZone.includes('/')&&new Intl.DateTimeFormat('en-US',{timeZone:slot.timeZone}).resolvedOptions().timeZone.length>0;}catch{zoneValid=false;}}
-    const exactSlot=slot!==null&&offered!==undefined&&offered!==null&&offered.passage?.slice(slot.evidence.start,slot.evidence.end)===slot.evidence.quote&&offeredRanges.success&&offeredRanges.data.some(range=>range.kind==='authored'&&range.start<=slot.evidence.start&&range.end>=slot.evidence.end)&&/^\d{4}-\d{2}-\d{2}$/.test(slot.localDate)&&Number.isFinite(Date.parse(slot.localDate))&&new Date(slot.localDate).toISOString().slice(0,10)===slot.localDate&&/^([01]\d|2[0-3]):[0-5]\d$/.test(slot.localTime)&&zoneValid&&slot.evidence.quote.includes(slot.localDate)&&slot.evidence.quote.includes(slot.localTime)&&slot.evidence.quote.includes(slot.timeZone)&&loaded.originals.length<=2&&slot.localDate>new Date().toISOString().slice(0,10)&&original.envelope.cc.length===0&&original.envelope.to.length===1;
-    const question=parsed.success?parsed.data.substantive:null;
-    const questionSupported=question!==null&&question.sourceId===original.sourceId&&question.end>question.start&&original.passage?.slice(question.start,question.end)===question.quote&&ranges.success&&ranges.data.some(range=>range.kind==='authored'&&range.start<=question.start&&range.end>=question.end);
-    const handoff={ownerUserId:row.requested_by,action:questionSupported?'answer_sales_question':'review_conditional_scheduling',evidence:questionSupported?question:evidence};
-    if(parsed.success&&supported&&(parsed.data.intent==='opt_out'||parsed.data.intent==='refusal'))outcome={kind:'stop',reason:parsed.data.intent,evidence,permission:false};
-    else if(parsed.success&&supported&&(parsed.data.intent==='conditional'||parsed.data.intent==='handoff'))outcome={kind:'david_handoff',schedulingPaused:true,handoff,permission:false};
-    else if(parsed.success&&supported&&parsed.data.intent==='accept_slot'&&exactSlot&&(question===null||questionSupported))outcome={kind:'slot_proposal',slot,agreement:evidence,attendeeAddress:original.envelope.from,permission:false,schedulingPaused:false,...(questionSupported?{handoff}:{}),requires:['current_attendee_route','fresh_freebusy','guarded_create']};
-    else if(parsed.success&&supported&&parsed.data.intent==='interest'&&parsed.data.slot===null&&parsed.data.substantive===null)outcome={kind:'approved_link',bookingUrl:snapshot.bindings.event.bookingUrl,permission:false};
-    else outcome={kind:'clarification',reason:'booking_candidate_requires_review',permission:false};
-   }
+   else outcome=bookingInterpretationOutcome({candidate:result.candidate,originals:loaded.originals,snapshot,now:new Date().toISOString()});
    await input.session.query("UPDATE crm_booking_interpretations SET state=$3,reason=$4,outcome=$5::jsonb WHERE workspace_id=$1 AND id=$2 AND state='processing'",[input.scope.workspaceId,id,state,reason,outcome===null?null:JSON.stringify(outcome)]);
   });
  }};
