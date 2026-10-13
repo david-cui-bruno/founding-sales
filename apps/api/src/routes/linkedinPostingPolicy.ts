@@ -18,7 +18,11 @@ export async function routeLinkedinPostingPolicy(request:ApiRequest,options:Rout
  const deps={auth,request,principal:principal.principal};
  if(request.path.endsWith('/dispatch-current')){
   const parsed=linkedinPostingDispatchCheckSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
-  return {status:200,body:await withTransaction(auth.db,()=>checkLinkedinPostingDispatch(scoped.context,{...parsed.data,deviceId:principal.principal.deviceId}))};
+  return withTransaction(auth.db,async()=>{
+   const answer=await checkLinkedinPostingDispatch(scoped.context,{...parsed.data,deviceId:principal.principal.deviceId});
+   const after=await requirePrincipal(auth,request);if(!after.ok)return after.result;
+   return {status:200,body:answer};
+  });
  }
  if(request.path.endsWith('/bind-candidate'))return runRouteCommand(deps,linkedinPostingCandidateBindCommandSchema,'linkedin_posting_candidate_bind',(ctx,input)=>bindLinkedinPostingCandidate(ctx,input));
  if(request.path==='/social/linkedin-posting-policy/check-current'){

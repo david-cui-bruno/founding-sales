@@ -34,7 +34,7 @@ async function setup(){
  const token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
  const call=caller(f,token,await f.database.appRuntimeSession()),accountId=randomUUID();
  expect((await call('/social/accounts/connect',{accountId,platform:'linkedin',externalId:'david-cui-589a20228',displayName:'David Cui',accountKind:'profile',...command()})).status).toBe(200);
- return {f,call,token,accountId,input:{...command(),expectedRevision:0,accountId,accountRevision:1,approvedRulesVersion:'608-2026-10-13',generation:null}};
+ return {f,call,token,accountId,input:{...command(),expectedRevision:0,accountId,accountRevision:1,approvedRulesVersion:'608-2026-10-13' as const,generation:null}};
 }
 function client(call:ReturnType<typeof caller>,afterBegin?:()=>Promise<void>){return createAuthedClient({baseUrl:'https://fixture.invalid',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:'transport-controlled',generation:0}),send:async(url,init)=>{const path=new URL(url).pathname,r=await call(path,JSON.parse(init.body??'{}'));if(path==='/social/delivery/begin'&&r.status===200)await afterBegin?.();return {status:r.status,body:r.body};}});}
 function barrier(){let release!:()=>void,entered!:()=>void;const wait=new Promise<void>(resolve=>{release=resolve;});const arrived=new Promise<void>(resolve=>{entered=resolve;});return {wait,arrived,release,entered};}
@@ -219,4 +219,71 @@ it('final dispatch freshness is positive before account change, refuses wrong de
  expect((await call('/social/linkedin-posting-policy/dispatch-current',{submissionId})).body).toMatchObject({current:false,reason:'account_changed'});
  expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{postId:p.postId,action:'inspect',submissionId}]});
  }finally{await f.stop();}
+});
+it('account change queued before bind is rechecked after real locks and cannot stage old account authority',async()=>{
+ const {f,call,input,accountId,token}=await setup();const key=`social-accounts:${f.alpha.workspaceId}:${f.alpha.admin.userId}`;
+ let changing:Promise<unknown>|undefined,binding:Promise<unknown>|undefined;
+ try{
+ expect((await call('/social/linkedin-posting-policy/save',input)).status).toBe(200);
+ const p=await approvedPost(call,accountId),changeDb=await f.database.appRuntimeSession(),bindDb=await f.database.appRuntimeSession();
+ const [blockPid,changePid,bindPid]=await Promise.all([pid(f.db),pid(changeDb),pid(bindDb)]);
+ await f.db.query('SELECT pg_advisory_lock(hashtextextended($1,0))',[key]);
+ changing=caller(f,token,changeDb)('/social/accounts/connect',{accountId,platform:'linkedin',externalId:'david-cui-589a20228',displayName:'Revised account',accountKind:'profile',...command()});
+ await blocked(f.db,changePid,blockPid);
+ binding=caller(f,token,bindDb)('/social/linkedin-posting-policy/bind-candidate',{postId:p.postId,postRevision:1,expectedRevision:1,...command()});
+ await blocked(f.db,bindPid,changePid);
+ await f.db.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);
+ expect(await changing).toMatchObject({status:200});expect(await binding).toMatchObject({status:409,body:{reason:'account_changed'}});
+ expect((await call('/social/linkedin-posting-policy/read',{})).body).toMatchObject({candidates:[],holds:expect.arrayContaining(['account_changed'])});
+ }finally{await f.db.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);await Promise.all([changing,binding]);await f.stop();}
+});
+it('ordinary controls reject invented authority increased budget and other owner or workspace scope',async()=>{
+ const {f,call,input,accountId}=await setup();try{
+ const generation={provider:'bedrock',providerKey:'aws_bedrock.social_draft',model:'claude-haiku-4-5',routeVersion:'controlled-route',accessGrantVersion:'controlled-grant',dataHandlingVersion:'controlled-data',dailyUsd:1,calendarMonthUsd:10,budgetZone:'America/New_York'};
+ for(const body of [{...input,enabled:true},{...input,approvedRulesVersion:'other'},{...input,generation:{...generation,dailyUsd:2}},{...input,generation:{...generation,model:'invented-model'}}])expect((await call('/social/linkedin-posting-policy/save',body)).status).toBe(400);
+ expect((await call('/social/linkedin-posting-policy/save',{...input,generation})).body).toMatchObject({result:{enabled:false,technicallyReady:false,holds:expect.arrayContaining(['provider_binding_unverified','configured_budget_unverified','available_allowance_unverified'])}});
+ for(const [workspace,member] of [[f.alpha,f.alpha.salesperson],[f.beta,f.beta.admin]] as const){
+  const token=(await issueSessionFor(f,workspace,member)).accessToken,other=caller(f,token,await f.database.appRuntimeSession());
+  expect((await other('/social/linkedin-posting-policy/read',{})).body).toMatchObject({revision:0,policy:null});
+  expect((await other('/social/linkedin-posting-policy/save',{...input,...command()})).body).toMatchObject({reason:'account_not_found'});
+ }
+ expect((await call('/social/linkedin-posting-policy/check-current',{expectedRevision:1,accountId,accountRevision:1})).body).toMatchObject({current:true,allowed:false});
+ }finally{await f.stop();}
+});
+it('current public bound consumption submits once and subsequent revocation conserves native receipt and inspection',async()=>{
+ const {f,call,input,accountId}=await setup();try{
+ expect((await call('/social/linkedin-posting-policy/save',input)).status).toBe(200);
+ const p=await approvedPost(call,accountId);
+ expect((await call('/social/linkedin-posting-policy/bind-candidate',{postId:p.postId,postRevision:1,expectedRevision:1,...command()})).status).toBe(200);
+ const item=socialDeliveryQueueSchema.parse((await call('/social/delivery/queue',{})).body).items[0]!;
+ const post={deliveryId:item.deliveryId,postId:item.postId,revision:item.revision,account:{platform:item.snapshot.account.platform,externalId:item.snapshot.account.externalId,displayName:'David Cui'},text:item.snapshot.text,images:[],publishAt:item.snapshot.publishAt,zone:item.snapshot.zone,fingerprint:item.fingerprint};
+ const dispatched:string[]=[];
+ const adapter:SocialAdapter={inspectAccount:async()=>post.account,stage:async()=>({ready:true}),submit:async()=>{dispatched.push('submit');return {kind:'scheduled',receiptId:'controlled-native-receipt'};},inspect:async()=>({state:'scheduled',receiptId:'controlled-native-receipt',permalink:null,observedAt:new Date().toISOString(),accountExternalId:post.account.externalId,observedFingerprint:post.fingerprint,complete:true}),cancel:async()=>{throw new Error('No cancellation authorized');}};
+ expect(await submitApprovedSocialPost(post,adapter,createSocialDeliveryPorts({api:client(call),current:()=>true,now:Date.now}))).toEqual({state:'scheduled'});
+ expect(dispatched).toEqual(['submit']);
+ // Confirmed future schedules are not due for immediate inspection.
+ expect((await call('/social/delivery/queue',{})).body).toEqual({items:[]});
+ expect((await call('/social/linkedin-posting-policy/revoke',{expectedRevision:1,...command()})).status).toBe(200);
+ expect((await call('/social/posts/cancel',{postId:p.postId,expectedRevision:1,...command()})).status).toBe(200);
+ expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{action:'cancel',submissionId:expect.any(String),receiptId:'controlled-native-receipt'}]});
+ expect((await call('/social/delivery/claim',{postId:p.postId,expectedRevision:1,...command()})).body).toMatchObject({reason:'inspect_existing_submission'});
+ }finally{await f.stop();}
+});
+it('final pure-read admission reauthenticates after an actual lock wait and owner sign-out',async()=>{
+ const {f,call,input,accountId,token}=await setup();const key=`social-accounts:${f.alpha.workspaceId}:${f.alpha.admin.userId}`;
+ let checking:Promise<unknown>|undefined;
+ try{
+ expect((await call('/social/linkedin-posting-policy/save',input)).status).toBe(200);
+ const p=await approvedPost(call,accountId);
+ expect((await call('/social/linkedin-posting-policy/bind-candidate',{postId:p.postId,postRevision:1,expectedRevision:1,...command()})).status).toBe(200);
+ const claim=await claimPost(call,p),begin=await call('/social/delivery/begin',{...claim,...command()});
+ const {submissionId}=(begin.body as {result:{submissionId:string}}).result;
+ const db=await f.database.appRuntimeSession(),waiting=await pid(db),blocking=await pid(f.db);
+ await f.db.query('SELECT pg_advisory_lock(hashtextextended($1,0))',[key]);
+ checking=caller(f,token,db)('/social/linkedin-posting-policy/dispatch-current',{submissionId});
+ await blocked(f.db,waiting,blocking);
+ expect((await call('/auth/sign-out',{})).status).toBe(200);
+ await f.db.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);
+ expect(await checking).toMatchObject({status:401});
+ }finally{await f.db.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);await checking;await f.stop();}
 });
