@@ -7,6 +7,7 @@ import {firmListResponseSchema} from '@fss/contracts';
 import {relationshipListSchema} from '@fss/contracts';
 import {personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
+import {readBookingPolicySettingsOperation,changeBookingPolicySettingsOperation} from './bookingPolicyBridge.ts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,type NotificationRuntimeStatus} from '@fss/contracts';
 import { todayActionsResponseSchema, todayActionOpenResponseSchema } from '@fss/contracts';
@@ -851,6 +852,8 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
 
     // Meetings (slice M1). Straight through the authenticated client, like Diagnostics.
+    'meetings.bookingPolicy':async()=>readBookingPolicySettingsOperation({api:deps.api,identity:deps.recordings.identity}),
+    'meetings.bookingPolicyChange':async(input:OperationInput<'meetings.bookingPolicyChange'>)=>changeBookingPolicySettingsOperation({api:deps.api,identity:deps.recordings.identity},input),
     'meetings.bookingCapacity':async()=>{
       const generation=deps.recordings.identity.current();
       const answer=await deps.api.read('/meetings/booking-capacity',value=>bookingCapacityResponseSchema.parse(value));

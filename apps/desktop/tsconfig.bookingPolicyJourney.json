@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "paths": {"@fss/contracts": ["../../packages/contracts/src/index.ts"]}
+  },
+  "include": ["test/bookingPolicyJourney.test.mts", "test/support/bookingPolicyDom.mts", "vitest.bookingPolicy.config.ts"]
+}
