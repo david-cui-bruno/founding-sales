@@ -1,0 +1,133 @@
+# #602: discovery to supported property-manager prospects
+
+Research date: October 13, 2026 UTC. Parent: #438, roadmap #441.
+Scope: retained evidence and current source only. No fresh business-page acquisition, provider/model/mailbox/cloud calls, tests, operational changes, GitHub writes or commits.
+Priority: new qualified property-manager conversations through supported discovery and guarded email, not CRM/Ask polishing. A qualified conversation requires substantive two-way maintenance-workflow fit and interest. Replies, bookings and held calls are separate outcomes. [C602]
+
+## Decision in brief
+
+The measured funnel reaches five candidates per ordinary cohort but no supported eligible email routes. Identity mismatch and missing selected evidence are observable losses; complete pages do not establish contact association. Boston exposed real bounded defects that were subsequently shipped. Later Frisco still has identity, geography, contact and completeness barriers under the approved policy, not a demonstrated new safe parser repair. Start with frozen evidence labels and a narrowly discriminating check, not another paid retry or broader identity/domain rule. [B, F, X, C438]
+
+## Evidence register and interpretation rules
+
+References below are primary local paths or dated canonical GitHub receipts. Private receipt pointers are reproducible in this workspace, not necessarily a fresh clone. No raw customer identifiers, addresses, private bodies or tokens are reproduced.
+
+- **C602**: full `gh issue view 602 --repo david-cui-bruno/founding-sales --json number,title,body,comments,state`, read October 13, 2026. Acceptance/bounds and new-conversation priority are canonical.
+- **C438**: full equivalent issue438 read, including every comment. Key receipts: October 8 13:12:39Z (v3 merge), 13:46:33Z (authorized selected extraction), 14:28:14Z (deployed v3 and unsuccessful normal BRG refresh), 17:12:36Z (deployed v4 and exact evaluation), October 11 05:53:52Z and 06:42:43Z (Frisco measurement and later exact-five read).
+- **C425**: canonical issue425 body, read October 13, 2026. Exact deployed evaluation/configuration, sender evidence, conditional activation and ordinary selection/enrollment/dispatch remain required.
+- **B**: `.context/discovery-yield-live-state.json`, checked October 8 02:41:32.405Z, exact Boston attempt selected by its query/attempt association; `.context/discovery-yield-assessments.json` contains the five candidate-specific assessments.
+- **BD**: `.context/436-source-recovery-diagnostic.json` and `.context/436-recorded-replay.json`, sourceCheckedAt October 8 02:41:32.405Z. The former inventories original complete-source alternatives, the latter explicitly hand-selects corrected identity/facts. Neither is ordinary recovery.
+- **F**: `.context/roadmap-completion-20261011/discovery/live-latest/measurement.json`, `live-state.json`, `read-receipt.json`, checked October 11 05:52:12.299Z, schema88/worker116. Counts, original-hit creation attribution and current public assessments.
+- **X**: `.context/roadmap-completion-20261011/discovery/frisco-exact-source/live-state.json`, checked October 11 06:35:46.946Z, and accompanying `read-intent.json`, `read-receipt.json`, `review.md`. Exact candidate payloads, selected facts/blocks, source hashes/times and later public-source interpretation.
+- **H**: `docs/operations/current-state-history-20261011.md:191–222`, historical release, evaluation and Boston ordinary observations. Also C438's dated release comments above.
+- **S**: current inspected source HEAD `a4761a442fba9b5b359b03b7368d4d737c7889ef`, with a pre-existing dirty workspace. Citations describe inspected file contents, not a clean exact-head acceptance result. No unrelated modifications were made. Source citation root is `packages/domain/`: discovery/qualification/recovery/correction files are in `sourcing/`, selection/contactContext/emailAdmission are in `outreach/`, and pageText is in `research/`.
+
+Instructions read first: `AGENTS.md`, `docs/agents/domain.md`, `GLOSSARY.md`, `docs/agents/issue-tracker.md`, current-state and linked roadmap. Applicable ADR0002/0004/0005 preserve versioned evidence and separate acquisition/commercial state from outreach. ADR0009/0010/0011 and their amendments do not grant outreach authority or lift release/sending holds. The October13 priority in C602 supersedes the older CRM-first sequencing in `docs/sourcing/roadmap-20261007.md:22–27`, not its safeguards. [C602; roadmap:7,17,39–41; cited ADR files]
+
+**Important artifact correction:** `live-latest/candidate-evidence-review.json` says exact payloads are missing. That earlier limitation is superseded by X's subsequent exact-five read. However X stores `selectedBlocks`, not all original `blocks`; it does not supply full page adjacency or raw HTML. Its later browser views are not content-hash-bound replacements for retained observations. No fresh pages were acquired for this research. [F companion artifact; X]
+
+## Reconciled ordinary funnel, not combined with diagnostics
+
+| Ordinary cohort / observation | Retained unique URLs | Associated new candidates | Source-page observations / complete first-party with text | Qualification | Supported email routes / eligible |
+| --- | ---: | ---: | ---: | --- | ---: |
+| Boston, attempt October8 02:25:06.739Z, read02:41:32Z | 15 | 5 | 20 / 16 | 5 review, v2/growth-v6; email-fit-v1 assessment | 0 / 0 |
+| Arlington, read October10 01:39:28Z | 15 | 5 | 17 / 8 | 4 review, 1 unavailable, v4/growth-v6 | 0 / 0 |
+| Plano, read October10 03:43:33Z | 6 | 5 | 20 / 17 | 5 review, v4/growth-v6 | 0 / 0 |
+| Frisco, attempt October11 02:26:42.759Z, read05:52:12Z | 14 | 5 | 20 / 15 | 4 review, 1 unavailable, v4/growth-v6 | 0 / 0 |
+
+Boston counts were reconciled directly by joining original attempt hits to candidate qualification observations in B, not by counting B's whole snapshot (which also contains older cohorts/manual staging). Arlington/Plano: C438 October10 01:42:04Z/03:49:36Z and H:134,150. Frisco: F and X. Manual Key/NHS are excluded throughout. These are separate dated cohorts, not repeated trials of the same candidate population. [B; C438; H; F]
+
+Raw provider-result and duplicate counts are unavailable in all four measurements. Do not call 15 or14 the raw search denominator, or infer duplicate rates. The 15→5 and14→5 URL-to-candidate transitions also include a deliberate cap: retrieval limit20, new-candidate limit5, directory exclusions and existing-candidate associations. Exact attribution of each excess retained URL requires its retained hit/decision, not subtraction alone. [B/F; `packages/domain/sourcing/discoveryProvider.ts:1–7`; `discovery.ts:55–74`]
+
+Page counts are observations, not unique URLs or prospect denominators. Green's Frisco receipt includes the same contact URL/hash twice. Complete-source counts attest metadata at the recorded read, not that every page was offered, selected correctly, or contained a usable route. Frisco's recorded3 identity/1 geography/1 evidence refusal reasons are first public blockers, not an exhaustive disjoint census of underlying defects. [X Green observations; F; `outreach/selection.ts:78–86`]
+
+The selected-identity transition resolves only1/5 Boston candidates (Green Ocean, a generic literal name rather than legal canonicalization) and1/5 Frisco candidates (PMI's generic name), by the recorded Boston assessments and current identity predicate applied to X's selected facts. Green Frisco has no usable evidence; three other Frisco names mismatch. These limited identity passes still produce zero supported routes. Residential/geography checks remain candidate-specific below, not invented independent cohort denominators. [B assessments; X; S `qualificationDecision.ts:8–11`]
+
+Supported discovery email yield is zero in these snapshots. They do not establish a reply, booking, held-call or qualified-conversation conversion rate. Shirley's original manually staged relationship/send is not discovery yield, and provider submission is not inbox placement. [C602; B/F; H:198,208]
+
+## Owning boundaries: source → identity → fit → route → admission
+
+1. **Search proposes, does not verify.** Discovery stores original hits, derives a suggestion from title, marks preparation unverified, creates at most five candidates and requests revision1 research in the same transaction. SEO cleanup is explicitly not identity evidence. [S `sourcing/discovery.ts:55–77`; `discoveryIdentity.ts:1–7`]
+2. **Acquisition/representation.** Qualification fetches bounded same-host pages prioritizing contacts, parses visible text, keeps hashes/times and flags omissions as truncation. It retains fetched history but offers only first-party, untruncated observations. All-incomplete input stops before extraction. Paid cost is settled even when returned citations fail validation. [S `qualificationRun.ts:40–70,84–118`; `research/pageText.ts:38–58,73–81,142–155`]
+3. **Selection.** growth-v6 already asks for descriptive residential statements, independent identity/geography kinds, explicit city/state, selected literal email and bounded office association. Therefore another instruction to “select better evidence” is an unmeasured stochastic hypothesis, not a demonstrated missing prompt requirement. [S `qualificationPrompt.ts:13–25`]
+4. **Candidate identity.** Resolution requires selected firm-identity text containing the candidate name on a complete first-party source. A real firm named in another selected kind does not resolve an SEO candidate automatically. [S `qualificationDecision.ts:8–11`]
+5. **Approved deterministic recovery.** One literal legal LLC/Inc/Ltd label must resolve through a supported office card, including inspection for competing published cards. The same model-selected email is required. City/region supplementation is confined to that unique accepted card. Untouched revision1/discovery-transaction provenance, no collisions/holds and all email-fit predicates precede correction. Correction preserves old runs/hits, increments revision and requests new bounded qualification. [S `discoveredIdentityRecovery.ts:13–68,71–95`; `candidateCorrection.ts:19–34`]
+6. **Residential/geography.** Fresh same-host complete selected evidence must establish name, residential management and target city plus region/state in a selected block. Separate city-only and other-city/state selections cannot be stitched into current geography. [S `qualificationPolicy.ts:34–50`]
+7. **Contact eligibility.** Literal selected email requires current first-party same-host evidence, exact same website/email domain, unique route and firm/office association. The compact contact-page grammar requires an email-only block and bounded adjacency, not arbitrary page-wide joins. Office routes do not invent a Person. [S `outreach/selection.ts:19–44`; `contactContext.ts:8–53`; GLOSSARY.md Endpoint/Route/Contact]
+8. **Email is not call-first qualification.** Email fit does not require a public unmet maintenance need or supported phone. Missing pain is not the reason to repair this funnel; contrary need still blocks. Public assessment rechecks revisions, identity, ownership, suppression, active enrollment and association ambiguity. Automatic admission repeats assessment under locks and requires current qualification version plus verifiedFit. [S `selection.ts:50–65,72–99`; `emailAdmission.ts:27–69`]
+
+## Concrete retained causes and limits
+
+### Boston, old v2 cohort
+
+- **BRG:** SEO name cannot bind selected identity. Identity/residential/geography selections included truncated home-page evidence despite complete contact/about alternatives. BD locates contact residential text at b5, about b11, and the published office card b18–b25. An explicit corrected identity plus hand-selected complete evidence isolates the compact parser gap, not ordinary model success. [B BRG run; BD; `docs/sourcing/office-contact-recovery.md:11–15`]
+- **CL Boston:** selected incomplete/unsupported identity, residential and locality evidence plus a published different-domain endpoint. Complete about b13 contains residential context, but selecting it does not remove the domain refusal. [B CL assessment; BD CL row]
+- **Green Ocean:** selected generic residential/county geography leaves fit/locality unsupported; complete contact b19 offers better residential context. The endpoint domain differs from website. Its generic candidate name passed the literal identity predicate, which is not proof of canonical legal identity. [B Green Ocean assessment; BD row; S `qualificationDecision.ts:8–11`]
+- **Boston Property Management:** complete pages did not supply selected name/residential/locality proof and selected email is an obfuscated placeholder, not a usable endpoint. **FirstService:** SEO mismatch and incomplete selected evidence, with no published email fact in the assessment. Missing facts do not prove no endpoint exists anywhere. [B respective rows; BD]
+
+### Frisco, later actual ordinary v4 cohort
+
+All five remain revision1. X facts preserve original retrieval around October11 02:26:45–51Z. The following references use firm/site and block IDs without customer IDs/endpoints. [X]
+
+| Firm | Retained selected evidence and observed loss | Classification / limitation |
+| --- | --- | --- |
+| Navigate | Home b11 identity is a slogan, while residential b12 explicitly names Navigate. Candidate is a generic SEO title. b9 includes Frisco and North Texas, so state text alone is not the obvious missing selected geography element. b79 is a same-domain endpoint, but its selected block lacks firm/city/state association. | Concrete selected-kind/name mismatch; identity blocks later checks. No approved unique legal office recovery proved. Missing contact page in the retained four-page set does not prove a link-prioritization bug without the original links/bytes. [X Navigate; S identity/route rules] |
+| Brubaker | Home b7 selects Brubaker Property Management, not the SEO candidate name. Home b11 establishes single-family management, b78 Frisco/TX. Contact b11 combines email and phone. | Identity mismatch plus a representation incompatible with email-only compact-card intake. Neither legal-suffix identity nor approved card is established. Splitting that block alone cannot justify recovery. This is not a proven defect within the accepted grammar. [X Brubaker; S recovery:18,25; contactContext:13] |
+| PMI Frisco | Home b7 contains the generic candidate name, so identity predicate can resolve. b8 is Frisco without state; contact b9 is Plano/TX. Contact b11 endpoint has another domain. | Correct geography refusal, plus independent domain barrier. Substituting franchise-parent identity, merging offices or inferring domain ownership would change policy. [X PMI; S qualificationPolicy:46–50; selection:37] |
+| RPM Focus | Home b8 names the firm and residential service, b11 explicitly Frisco/TX, but candidate includes an SEO suffix. No business_email fact. | Name mismatch and absent selected email. Later contact browser review found forms/phone, not a published endpoint; that cannot establish exhaustive historical absence. Name repair alone would not demonstrate contactability. [X RPM facts and review] |
+| Green Residential | Four retained observations truncated, zero facts, run unavailable with source_incomplete_or_unverified. Contact URL/hash occurs twice. | Correct acquisition refusal. Cause of truncation could be byte/text/block limits or parser representation; exact cause is not retained here. Later readable browser view does not repair hashes/completeness or establish a Frisco route. [X Green; S qualificationRun:52–65,84–85; pageText bounds] |
+
+X's public-source review shows promising Brubaker human-interpreted context, not a frozen supported route. It reports no currently permissible recovery. Because X exports selectedBlocks only, this research cannot independently prove absence of every legal label/card in all original unselected text. Preserve that distinction and do not promote review prose into a full-page frozen parser reproduction. [X review.md and observation shape]
+
+## What was actually shipped/evaluated?
+
+| Correction / evidence | Established | Not established |
+| --- | --- | --- |
+| PR437 office-card grammar, email-fit-v2 | Source merged and included in October8 verified rolling release. [H:191–210] | Original Boston cohort remains zero routes; hand-selected replay is not extraction/yield. [B/BD] |
+| PR439 v3 complete-page offering and identity recovery, merged e76fd49b | Released October8, schema63, exact gate/images/smoke/readback. Selected disposable real adapter succeeded on one BRG site, 2 cents. [C438 13:46/14:28; H:193,212–216] | Production normal refresh instead failed geography/recovery and left revision1. No new discovery yield, population accuracy or activation. |
+| PR469 v4 unique-office locality supplementation, merged in be846f68 batch | Deployed October8 16:55Z, API113/worker114/schema63. Exact deployed36-case/90-check evaluation, two recorded positives, zero observed false eligible; disabled bindingrevision4. [C438 17:12; H:191,206,220–222] | This was selected/synthetic evaluation. BRG had no fresh live v4 refresh at that checkpoint. Later ordinary v4 Arlington/Plano/Frisco still yield zero. |
+| Later source/operating checkpoint | Current-state records production d49dda37/schema88 and held rollout; Frisco read pins worker116 and immutable image, with qualification-v4/growth-v6. [current-state.md Source/production; F/X receipts] | No October13 live deployment/control refresh performed here. Source HEAD is not production. Historical disabled binding is not a fresh activation receipt for later deployed code. |
+
+Thus “the correction is only source” is false for the bounded v2/v3/v4 work. “It was deployed and evaluated, therefore ordinary recovery passed” is also false. Frozen v4 BRG reconstruction used normalized text/simulated fresh envelopes and retained the original unsupported quote; it is controlled pipeline behavior, not a new actual extraction. [H; `docs/sourcing/discovery-identity-recovery.md:17–21`]
+
+## Ranked blockers and smallest discriminating checks
+
+Ranking is engineering leverage toward the requested milestone, not estimated population prevalence. Multiple barriers can affect one candidate; first-refusal counts cannot quantify marginal repair yield.
+
+1. **Identity/evidence binding before contact. Established in3/5 Frisco public first refusals.** SEO candidate names differ from literal selected identity, and legal-card recovery is narrower than human canonical-name interpretation. Smallest check: obtain only retained complete original arrays for Navigate/Brubaker, independently label literal identity, residential/locality and every competing card, then evaluate unchanged predicates at the original decision clock. If no same-policy supported office card exists, stop calling this a parser bug. [F/X; S recovery]
+2. **Contact association/published endpoint. Established separate barriers, no proved safe expansion.** Brubaker mixed block, Navigate isolated endpoint, PMI cross-domain and RPM missing selected email can survive a name-only repair. Smallest check: full frozen contact blocks/adjacency and source metadata, not a page-wide join. Enumerate direct-associated facts versus accepted compact cards. Refuse ambiguity, placeholders, vendor/franchise-parent and inferred endpoints. [X; S selection/contactContext]
+3. **Complete acquisition/selection. Established Green all-truncated refusal and Boston historical bad-page selections; Green truncation mechanism unproven.** Smallest check: inspect retained original response bytes/normalization receipt if available, plus exact limit reasons and link order. Reparse only those bytes under existing limits. If bytes are absent, report unknown mechanism; never renew freshness or widen limits solely to fabricate a positive. [B/X; S qualificationRun/pageText]
+4. **Geography evidence. Established PMI Frisco city-only/Plano mismatch and earlier BRG service-area selection.** Smallest check: independently label complete original blocks containing target city and state together. Determine whether they were offered/selected or absent. Correct omissions only inside existing unique-card supplementation; otherwise a selection experiment needs exact-version measurement. [X PMI; H:216; S qualificationPolicy/recovery]
+5. **Ordinary guarded delivery remains separately gated.** Even hypothetical eligible evidence cannot satisfy release/evaluation/configuration/sender checks. Smallest later check: normal read-only readiness for the exact deployed implementation and approved controls under #425, after applicable release authority. No CRM/Ask completion gate is needed for this research. [C425; roadmap:17,39; current-state.md]
+
+A broad prompt/model or structured-data rebuild is not supported. The prompt already expresses the missing kinds. JSON-LD is dropped by current visible-text parsing, but retained selected arrays do not show structured objects or their visible corroboration. Structured extraction is only a future hypothesis, not an observed cure. [S qualificationPrompt:23; pageText:55–58; `docs/sourcing/discovery-completion-research-20261011.md`, Current code section]
+
+## PROPOSED follow-up tickets, not published or approved execution
+
+### P1: Frozen source-to-eligibility loss labels and exact-policy replay (#438 child)
+
+- **Vertical scope:** retained original discovery binding → full source arrays → independently labeled expected selected facts → normal candidate/qualification/email assessment, with existing policy and original clock. Start Navigate/Brubaker, retain Boston/PMI/RPM/Green as positive/negative mechanisms where complete artifacts exist.
+- **Dependencies:** #602 discussion; access to already retained full blocks/raw bytes where required. No fresh pages or paid calls required. Use existing database/public-worker seams, not new architecture.
+- **Acceptance:** preserve original hashes/timestamps/revisions/runs; map each expected fact to original source/block; account for every offered/excluded page and competing card; report first and additional blockers; distinguish unsupported input from an accepted-layout failure. Synthetic adapters must be labeled. No manual fixture change counted as discovered yield.
+- **Stopping:** stop when no supported unchanged-policy positive exists or full evidence is unavailable, with an explicit refusal/missing-artifact result. Only a reproducible contract violation creates an implementation child. No endpoint or targeting-rule relaxation.
+
+### P2: One proven acquisition/selection defect through recovery, conditional on P1
+
+- **Vertical scope:** repair only the boundary P1 actually demonstrates, for example an existing accepted card lost by normalization or explicit already-offered complete-page evidence omitted by a bounded selection treatment. Do not preselect either explanation as fact.
+- **Dependencies:** reviewed reproduction/labels from P1. If only an alternative canonical-name/contact rule would succeed, stop and seek a separate explicit policy decision, not this implementation ticket.
+- **Acceptance:** red/green caller-facing qualification→same-candidate correction→new revision-bound research→email assessment; preserve competing-office, stale/incomplete/cross-host, cross-domain, collision, suppression/ownership, paid-settlement and budget refusals. Version changed policy/prompt as applicable and produce exact-source admission evaluation without unresolved false eligible.
+- **Evaluation:** any actual model experiment needs a separately approved frozen scope/model/data/budget, bounded once-only calls and failures retained. Compare independently labeled selections and full downstream verdicts, not just transport success or a hand-picked positive. Report latency/cost and all unrun cases.
+- **Stopping:** no safe reproducible gain, any false eligible, exhausted approved allowance, or evidence change invalidating comparison stops the experiment. Successful controlled proof alone does not close ordinary yield.
+
+### P3: Ordinary discovery → guarded email → reply/booking handoff (#438 + existing #425)
+
+- **Vertical scope:** reuse the released corrected qualification and existing admission/sender/reply/booking path. Measure one completed scheduled cohort and applicable authorized ordinary operation, not forced discovery or a guaranteed customer quota.
+- **Dependencies:** applicable source evaluation/release and #425's exact deployed/configuration/sender conditions. Research/source preparation does not depend on CRM/Ask/native completion. Actual activation remains governed by canonical #425.
+- **Acceptance:** retain URL/candidate/page/route/eligible/enrollment/dispatch counts with raw/duplicate unknowns; exclude manual staging; preserve original attribution and candidate correction history. Read enabled/disabled current bindings truthfully. Verify ordinary selection/deferrals, durable send uncertainty, reply/opt-out/booking interruption and David's substantive handoff. Report replies, bookings, held calls and qualified conversations separately.
+- **Stopping:** missing authority/freshness/evaluation/sender evidence leaves admission off. Wrong association, unresolved false eligible or safety/control failure invokes existing disable/holds, no blind resend or bulk cancellation. A zero-route cohort is a recorded failure requiring diagnosis, not completion or permission to widen targeting.
+
+All proposals preserve cap5/lower caps/ramp, recipient-local weekday mornings, source freshness/completeness, same-domain/contact association, ownership/deduplication/suppression, research budgets, original Shirley provider identity and cancelled follow-up, uncertain-send conservation, routine replies and autonomous calling OFF. No individual-recipient review queue is added. Meaningful targeting/contact-policy changes require an explicit owner decision. [C438/C425; current-state.md Next work and safeguards; roadmap:39]
+
+## Research completion and remaining uncertainty
+
+Acceptance evidence is a ranked source-backed blocker map and bounded ticket proposals, not implemented improvement. Counts were reconciled with local read-only jq inspection; line references and dated canonical comments were reviewed. No tests or provider journeys were run. Only this report was written. The missing full Frisco unselected arrays/raw normalization bytes prevent proving a new parser/selection defect or estimating stochastic accuracy. New external business pages cannot retroactively fill that gap. #438 and #425 remain open for their actual ordinary outcomes. [C602/C438/C425; X]
