@@ -57,7 +57,7 @@ export async function readCurrentBookingPolicy(ctx:RepositoryContext,query:Curre
   const capability=query.capability??'booking';
   const unrelatedToInterpretation=new Set(['account_access_unverified','calendar_freebusy_unverified','event_settings_unverified','sender_authority_unverified','provider_adapter_unavailable','release_unverified']);
   const operationalReady=capability==='booking'?view.readiness.ready:view.readiness.evidenceKind!=='unavailable'&&view.readiness.reasons.every(reason=>unrelatedToInterpretation.has(reason));
-  return {kind:'available',snapshot:{capability,workspaceId:ctx.scope.workspaceId,ownerUserId:bindings.ownerUserId,policyRevision:view.revision,bindingKey,bindings,businessPolicyValid:true,operationalReady,enabled:false,evidenceKind:view.readiness.evidenceKind,authorityVerifiedAt:observed.authorityVerifiedAt,authorityValidUntil:observed.authorityValidUntil}};
+  return {kind:'available',budget:view.budget,snapshot:{capability,workspaceId:ctx.scope.workspaceId,ownerUserId:bindings.ownerUserId,policyRevision:view.revision,bindingKey,bindings,businessPolicyValid:true,operationalReady,enabled:false,evidenceKind:view.readiness.evidenceKind,authorityVerifiedAt:observed.authorityVerifiedAt,authorityValidUntil:observed.authorityValidUntil}};
 }
 /** Technical terminal freshness only. Never an Enable, sending or booking permission grant. */
 export function bookingPolicySnapshotReadyAt(snapshot:BookingPolicySnapshot,now:string):boolean {
