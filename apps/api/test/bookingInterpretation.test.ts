@@ -118,3 +118,9 @@ it('accepts the exact previously offered date time and zone without demanding a 
  await executeCandidate({intent:'accept_slot',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York',evidence:{sourceId:prior.sourceId,start:0,end:offer.length,quote:offer}},substantive:null});
  expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'slot_proposal',permission:false,attendeeAddress:'casey@example.test',slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York'},requires:['current_attendee_route','fresh_freebusy','guarded_create']}});
 });
+it('pauses conditional scheduling and gives David an actionable original sales-question handoff',async()=>{
+ const text='If it costs under $500, we can arrange a call. What does it cost?';const {source,requestId}=await configuredRequest(text);
+ const question='What does it cost?';const start=text.indexOf(question);
+ await executeCandidate({intent:'conditional',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:{sourceId:source.sourceId,start,end:text.length,quote:question}});
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'david_handoff',schedulingPaused:true,permission:false,handoff:{ownerUserId:fixture.alpha.admin.userId,action:'answer_sales_question',evidence:{sourceId:source.sourceId,quote:question}}}});
+});
