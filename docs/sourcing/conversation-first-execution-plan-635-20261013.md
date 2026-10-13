@@ -55,4 +55,8 @@ The to-tickets result is therefore **zero unconditional new source slices**. Pre
 - [Original prospect evidence recovery](prospect-evidence-recovery-research-635-20261013.md)
 - [Contract and native-graph coverage checklist](unattended-execution-coverage-635-20261013.md)
 
-No actual source implementation, live reads, provider requests, private acquisition, paid calls, sends, release or activation occurred in preparing this plan. Research-document commits are not deployment or Enable authority.
+## Subsequent owner resolution
+
+On October 13 at 17:22:04 UTC David chose Alternative A in #636: prepare one exact one-off inspection packet under #552, with #604/#605 retaining consumed evidence. No reusable-tool implementation ticket is created. The final operation and narrow policy exception require separate concrete approval before cloud mutations. All twelve native decision children of #606 are now closed; planning completion does not establish source completion, current control/evidence readiness, release or activation. See [one-off inspection preparation](one-off-inspection-preparation-636-20261013.md) for fresh bounded runtime metadata and remaining exact-packet bindings.
+
+No actual source implementation, provider requests, private acquisition, paid calls, sends, release or activation occurred in preparing the original plan. Subsequent authorized public health and ECS/ECR metadata reads are explicitly dated in the preparation document, not retroactively attributed to this research. Research-document commits are not deployment or Enable authority.
