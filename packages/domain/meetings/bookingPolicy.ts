@@ -22,10 +22,14 @@ export async function readBookingPolicySettings(ctx:RepositoryContext,runtime?:B
     const bindings=parsed.data,id=bookingPolicyBindingKey(bindings);
     if(!choices.some(choice=>choice.id===id))choices.push({id,label:`Cal.com ${bindings.account.email} · Event ${bindings.event.eventTypeId} · ${bindings.model.modelVersion}`.slice(0,500),bindings});
   }
-  return {policy:await readBookingPolicy(ctx,runtime),configuration:{choices,reasons:choices.length===0?['setup_unavailable']:[]}};
+  const policy=await readBookingPolicy(ctx,runtime);
+  if(!await activeOwner(ctx,actor.userId))throw new Error('owner_authority_changed');
+  return {policy,configuration:{choices,reasons:choices.length===0?['setup_unavailable']:[]}};
 }
 
 export async function readCurrentBookingPolicy(ctx:RepositoryContext,query:CurrentBookingPolicyQuery,runtime?:BookingPolicyRuntime):Promise<CurrentBookingPolicy> {
+  const actor=ctx.scope.actor;
+  if(actor.kind==='user'&&(actor.role!=='admin'||actor.userId!==query.ownerUserId||!await activeOwner(ctx,actor.userId)))return {kind:'unavailable',reason:'owner_authority_changed'};
   const view=await readBookingPolicy(ctx,runtime),bindings=view.setting.bindings;
   if(view.setting.status==='revoked')return {kind:'unavailable',reason:'policy_revoked'};
   if(!view.businessPolicyValid||bindings===null)return {kind:'unavailable',reason:'policy_unavailable'};
@@ -97,6 +101,7 @@ export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPo
   if(bindings?.model.qualityReviewRevision===null&&evidence!==null)reasons.push('model_quality_review_missing');
   if(!businessPolicyValid)reasons.push('policy_unavailable');
   const budget=await readBookingBudget(ctx,{at,bindings,...(evidence===null?{}:{funding:evidence.funding})});
+  if((await readSetting(ctx,'booking_policy')).version!==stored.version||(businessPolicyValid&&bindings!==null&&!await activeOwner(ctx,bindings.ownerUserId)))return readBookingPolicy(ctx);
   if(evidence!==null&&budget.allowance!=='available')reasons.push(budget.allowance==='blocked'?'booking_budget_blocked':'booking_budget_unknown');
   return {revision:stored.version,setting,rules:BOOKING_BUSINESS_RULES,businessPolicyValid,enabled:false,readiness:{ready:reasons.length===0,reasons,evidenceKind:evidence?.evidenceKind??'unavailable'},budget};
 }
@@ -108,6 +113,7 @@ export async function mutateBookingPolicy(ctx:RepositoryContext,input:unknown):P
   const command=parsed.data;
   if(command.action==='save'&&command.bindings.ownerUserId!==actor.userId)return {ok:false,reason:'owner_mismatch'};
   await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[settingLockName(ctx.scope.workspaceId,'booking_policy')]);
+  if(!await activeOwner(ctx,actor.userId))return {ok:false,reason:'admin_required'};
   const old=await readSetting(ctx,'booking_policy');if(old.version!==command.expectedRevision)return {ok:false,reason:'stale_revision'};
   const previous=bookingPolicySettingSchema.safeParse(old.value);
   const setting=command.action==='save'?{status:'saved',enabled:false,bindings:command.bindings}:{status:command.action==='revoke'?'revoked':'disabled',enabled:false,bindings:previous.success?previous.data.bindings:null};

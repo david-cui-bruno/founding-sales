@@ -1,3 +1,4 @@
+import {BOOKING_BUSINESS_RULES,DEFAULT_BOOKING_POLICY} from '@fss/contracts';
 import {mailImportHealth} from './mailImportFixture.ts';
 /**
  * Bodies every bridge accepts, for the checks that need a bridge to be *holding*
@@ -247,6 +248,7 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
+ '/meetings/booking-policy':{policy:{revision:0,setting:DEFAULT_BOOKING_POLICY,rules:BOOKING_BUSINESS_RULES,businessPolicyValid:false,enabled:false,readiness:{ready:false,reasons:['policy_unavailable'],evidenceKind:'unavailable'},budget:{lane:'booking',timeZone:'America/New_York',businessDate:'2026-10-13',calendarMonth:'2026-10',dailyCeilingCents:200,monthlyCeilingCents:2500,observedDailyCents:0,observedMonthlyCents:0,allowance:'unknown',remainingDailyCents:null,remainingMonthlyCents:null}},configuration:{choices:[],reasons:['setup_unavailable']}},
  '/crm/attachments/commit':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:1,metadataRevision:1}},
  '/crm/attachments/reselect':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:2,metadataRevision:2}},
  '/crm/attachments/analyze':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:1,generationId:FIXTURE_IDS.firm,state:'pending',reason:'adapter_unavailable'}},

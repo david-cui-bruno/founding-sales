@@ -72,7 +72,7 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
        * that is how `today.expand`'s `/dial/check` and `replies.refresh`'s
        * `/replies/settings` stayed undeclared through the first review.
        */
-      const body = at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
+      const body = at.pathname==='/meetings/booking-policy'&&init.method==='POST'?{status:'accepted',replayed:false,result:{revision:2}}:at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
       return await Promise.resolve({
         status: 200,
         body: body ?? { status: 'accepted', replayed: false, result: {} },
@@ -378,6 +378,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'meetings.saveNotes': { meetingId: UUID, expectedRevision: 0, debrief: '', speakerMappings: [], itemOverrides: [], sufficient: false, commandId: UUID },
   'meetings.changeTask': { taskId: UUID, expectedVersion: 1, action: 'complete', commandId: UUID },
   'meetings.bookingCapacity': {},
+  'meetings.bookingPolicy': {},
+  'meetings.bookingPolicyChange': {commandId:UUID,action:'disable',expectedRevision:1},
   'meetings.brief': { meetingId: UUID },
   'meetings.match': { meetingId: UUID, firmId: UUID },
   'meetings.setAttendance': { meetingId: UUID, attendance: 'attended', commandId: UUID },
@@ -553,6 +555,8 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
         changeTask: async input => await handlers['meetings.changeTask'](input as never),
         brief: async input => await handlers['meetings.brief'](input as never),
         bookingCapacity: async () => await handlers['meetings.bookingCapacity'](undefined as never),
+        bookingPolicy: async () => await handlers['meetings.bookingPolicy']({}),
+        bookingPolicyChange: async input => await handlers['meetings.bookingPolicyChange'](input as never),
       };
     })(),
     // Slice S2: answered by `operationHost.ts` against the client directly, like Meetings.

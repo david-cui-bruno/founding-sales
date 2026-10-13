@@ -4,7 +4,10 @@ import {createAuthFixture,type AuthFixture,CURRENT_CLIENT_VERSION} from './suppo
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {routeBookingPolicy} from '../src/routes/bookingPolicy.ts';
 import type {BookingPolicyBindings,BookingPolicyView} from '../../../packages/contracts/src/bookingPolicy.ts';
-import {readCurrentBookingPolicy,revalidateBookingPolicy} from '@fss/domain/meetings/bookingPolicy.ts';
+import {readCurrentBookingPolicy,revalidateBookingPolicy,readBookingBudget,lockBookingBudget} from '@fss/domain/meetings/bookingPolicy.ts';
+import {recordProviderCall,readCreditSpend} from '@fss/domain/research/ledger.ts';
+import {reserveAttempt} from '@fss/domain/research/reservations.ts';
+import {readSettingHistory} from '@fss/domain/settings/store.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import type {BookingPolicyRuntime,BookingPolicyRuntimeEvidence} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 
@@ -66,6 +69,58 @@ describe('normal authenticated booking policy controls',()=>{
     let now='2026-10-13T21:00:00Z';
     const runtime:BookingPolicyRuntime={now:()=>now,readEvidence:async()=>{await Promise.resolve();now='2026-10-13T21:01:00Z';return {evidenceKind:'controlled',binding:bindings,verifiedAt:'2026-10-13T19:00:00Z',validUntil:'2026-10-13T21:00:30Z',accountAccess:true,calendarFreeBusy:true,eventSettings:true,modelConsent:true,modelAcceptance:true,senderAuthority:true,sourceAuthority:true,providerAdapter:true,releaseReady:true,funding:{status:'verified',sharedRemainingDailyCents:200,sharedRemainingMonthlyCents:2500}};}};
     expect((await request('GET',undefined,token,runtime))?.body).toMatchObject({businessPolicyValid:true,readiness:{ready:false,reasons:['runtime_evidence_expired']},budget:{allowance:'unknown'}});
+  });
+  it('revocation accepted while runtime observation waits prevents returning the former current snapshot',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    const runtime:BookingPolicyRuntime={now:()=> '2026-10-13T21:00:00Z',readEvidence:async()=>{expect((await request('POST',{commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,action:'revoke',expectedRevision:1}))?.status).toBe(200);return null;}};
+    const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),f.db);
+    expect(await readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId},runtime)).toEqual({kind:'unavailable',reason:'policy_revoked'});
+  });
+  it('booking observer uses New York month/day and DST fold, counts open reservations, and preserves shared credit accounting',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),f.db);
+    await recordProviderCall(ctx,{providerKey:'aws_bedrock.booking',at:'2026-11-01T03:59:59Z',businessTimeZone:'America/New_York',costCents:170});
+    await recordProviderCall(ctx,{providerKey:'aws_bedrock.booking',at:'2026-11-01T05:30:00Z',businessTimeZone:'America/New_York',costCents:30});
+    await recordProviderCall(ctx,{providerKey:'aws_bedrock.social_draft',at:'2026-11-01T05:30:00Z',businessTimeZone:'America/New_York',costCents:19});
+    await f.db.query('BEGIN');
+    try{await lockBookingBudget(ctx);await reserveAttempt(ctx,{providerKey:'aws_bedrock.booking',subjectKind:'booking_interpretation',subjectId:randomUUID(),attempt:1,at:'2026-11-01T06:30:00Z',businessTimeZone:'America/New_York',cents:20,modelName:bindings.model.modelVersion,maxInputTokens:100,maxOutputTokens:100});await f.db.query('COMMIT');}catch(error){await f.db.query('ROLLBACK');throw error;}
+    const funding={status:'verified' as const,sharedRemainingDailyCents:40,sharedRemainingMonthlyCents:100};
+    expect(await readBookingBudget(ctx,{at:'2026-11-01T03:59:59Z',bindings,funding})).toMatchObject({businessDate:'2026-10-31',calendarMonth:'2026-10',observedDailyCents:170,observedMonthlyCents:170,remainingDailyCents:30});
+    expect(await readBookingBudget(ctx,{at:'2026-11-01T06:30:00Z',bindings,funding})).toMatchObject({businessDate:'2026-11-01',calendarMonth:'2026-11',observedDailyCents:50,observedMonthlyCents:50,remainingDailyCents:40,remainingMonthlyCents:100,allowance:'available'});
+    expect(await readBookingBudget(ctx,{at:'2026-11-01T06:30:00Z',bindings})).toMatchObject({allowance:'unknown',remainingDailyCents:null,remainingMonthlyCents:null});
+    expect(await readCreditSpend(ctx,{at:'2026-11-01T06:30:00Z',businessTimeZone:'America/New_York'})).toMatchObject({todayCents:69,monthToDateCents:69});
+  });
+  it('independent authenticated sessions serialize competing revisions and retain immutable prior policy history',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),f.db);
+    const before=await readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId});
+    if(before.kind!=='available')throw new Error('saved current candidate missing');
+    const second=await f.database.appRuntimeSession();
+    const secondPost=(body:unknown)=>routeBookingPolicy({method:'POST',path:'/meetings/booking-policy',query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session:second,auth:{...f.deps,db:second},supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update',suppressionJournal:{append:async()=>{}}});
+    const revised={...bindings,budget:{...bindings.budget,dailyCeilingCents:125}};
+    const results=await Promise.all([request('POST',command(1,revised)),secondPost({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,action:'disable',expectedRevision:1})]);
+    expect(results.map(result=>result?.status).sort()).toEqual([200,409]);
+    expect((await request('GET'))?.body).toMatchObject({revision:2,enabled:false});
+    expect((await revalidateBookingPolicy(ctx,before.snapshot)).kind).toBe('unavailable');
+    const history=await readSettingHistory(ctx,'booking_policy');
+    expect(history.map(row=>row.version)).toEqual([2,1]);
+    expect(history[1]?.value).toMatchObject({status:'saved',bindings});
+    expect(history[1]?.supersededAt).not.toBeNull();
+  });
+  it('a non-owner public caller cannot obtain the owner current authority snapshot',async()=>{
+    expect((await request('POST',command(0,controlledBookingBindings(f.alpha.admin.userId))))?.status).toBe(200);
+    const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.salesperson.userId,role:'salesperson'}),f.db);
+    expect(await readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId})).toEqual({kind:'unavailable',reason:'owner_authority_changed'});
+  });
+  it('settings choices are withheld if current owner membership changes during the later policy evidence wait',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    await f.db.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[f.alpha.workspaceId,f.alpha.salesperson.userId]);
+    const runtime:BookingPolicyRuntime={now:()=> '2026-10-13T21:00:00Z',readConfiguration:async()=>[bindings],readEvidence:async()=>{await f.db.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[f.alpha.workspaceId,f.alpha.admin.userId]);return null;}};
+    expect((await request('GET',undefined,token,runtime,'view=settings'))?.status).toBe(403);
   });
   it('normal settings reads offer exact configured choices without turning saved or proposed scope into readiness',async()=>{
     const bindings=controlledBookingBindings(f.alpha.admin.userId);
