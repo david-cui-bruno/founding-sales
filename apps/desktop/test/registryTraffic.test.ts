@@ -555,7 +555,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
         changeTask: async input => await handlers['meetings.changeTask'](input as never),
         brief: async input => await handlers['meetings.brief'](input as never),
         bookingCapacity: async () => await handlers['meetings.bookingCapacity'](undefined as never),
-        bookingPolicy: async () => await handlers['meetings.bookingPolicy']({}),
+        bookingPolicy: async () => await handlers['meetings.bookingPolicy'](undefined as never),
         bookingPolicyChange: async input => await handlers['meetings.bookingPolicyChange'](input as never),
       };
     })(),
