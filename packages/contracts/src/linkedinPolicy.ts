@@ -45,7 +45,9 @@ export interface LinkedinPolicySnapshot {
  acquisitionBinding:LinkedinPolicySave['acquisitionBinding'];generation:LinkedinPolicySave['generation'];rules:typeof LINKEDIN_OUTREACH_RULES;
 }
 export type LinkedinPolicyHold='policy_not_saved'|'policy_rules_changed'|'owner_unavailable'|'owner_approval_required'|'policy_disabled'|'policy_revoked'|'account_changed'|'account_unavailable'|'exact_identity_unverified'|'data_scope_unknown'|'acquisition_binding_unknown'|'acquisition_evidence_unavailable'|'manual_count_coverage_unavailable'|'reply_history_coverage_unavailable'|'generation_not_configured'|'provider_binding_unverified'|'spend_evidence_unavailable'|'voice_calibration_unverified'|'outreach_adapter_unavailable';
+export interface LinkedinPolicyAccount {id:string;externalId:string;displayName:string;revision:number;state:'connected'|'reconnect'|'unsupported'|'disconnected';identityVerified:false}
 export interface LinkedinPolicyView {
+ accounts:LinkedinPolicyAccount[];
  revision:number;state:'not_saved'|'saved'|'disabled'|'revoked';rules:typeof LINKEDIN_OUTREACH_RULES;enabled:false;technicallyReady:boolean;
  approved:boolean;approvedAt:string|null;policy:LinkedinPolicySnapshot|null;holds:LinkedinPolicyHold[];
 }

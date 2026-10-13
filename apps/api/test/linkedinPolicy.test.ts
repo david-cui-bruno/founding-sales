@@ -8,6 +8,7 @@ import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {checkLinkedinPolicyForWork} from '@fss/domain/social/linkedinPolicy.ts';
 import {setTimeout as delay} from 'node:timers/promises';
+import {createServer} from 'node:http';
 
 const approvedRulesVersion='634-2026-10-13';
 const command=()=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
@@ -54,6 +55,15 @@ it('discloses approved rules before first save and requires exact explicit polic
  expect((await call('/social/linkedin-policy/save',{...input,enabled:true})).status).toBe(400);
  expect((await call('/social/linkedin-policy/read',{ownerUserId:f.beta.admin.userId})).status).toBe(400);
  expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({revision:0});
+ }finally{await f.stop();}
+});
+it('exposes selectable current owner account revisions without presenting posting verification as outreach identity',async()=>{
+ const {f,call,input,accountId}=await setup();try{
+ expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({accounts:[{id:accountId,externalId:'controlled-founder',displayName:'Founder',revision:1,state:'connected',identityVerified:false}]});
+ expect((await call('/social/accounts/connect',{accountId,platform:'linkedin',externalId:'controlled-founder',displayName:'Updated Founder',accountKind:'profile',...command()})).status).toBe(200);
+ expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({accounts:[{id:accountId,revision:2,identityVerified:false}]});
+ expect((await call('/social/linkedin-policy/save',{...input,accountRevision:2})).status).toBe(200);
+ expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({policy:{accountRevision:2},accounts:[{id:accountId,revision:2}]});
  }finally{await f.stop();}
 });
 it('holds unknown data, optional configured generation and real evidence independently',async()=>{
@@ -150,6 +160,64 @@ async function waitForBlockedPolicy(observer:SessionQueryable,blockerPid:number)
  }
  throw new Error('Policy caller did not reach controlled PostgreSQL barrier');
 }
+it('serializes concurrent same-command replay and conflicting owner revisions in real application-role sessions',async()=>{
+ const {f,token,call,input}=await setup();try{
+ const a=caller(f,token,await f.database.appRuntimeSession());
+ const b=caller(f,token,await f.database.appRuntimeSession());
+ const results=await Promise.all([a('/social/linkedin-policy/save',input),b('/social/linkedin-policy/save',input)]);
+ expect(results.map(r=>r.status)).toEqual([200,200]);
+ expect(results.map(r=>r.body)).toEqual(expect.arrayContaining([expect.objectContaining({replayed:false,result:expect.objectContaining({revision:1})}),expect.objectContaining({replayed:true,result:expect.objectContaining({revision:1})})]));
+ const changes=await Promise.all([
+  a('/social/linkedin-policy/save',{...input,...command(),expectedRevision:1,generation}),
+  b('/social/linkedin-policy/revoke',{...command(),expectedRevision:1}),
+ ]);
+ expect(changes.map(r=>r.status).sort()).toEqual([200,409]);
+ expect(changes.map(r=>r.body)).toEqual(expect.arrayContaining([expect.objectContaining({reason:'stale_revision'})]));
+ expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({revision:2,enabled:false});
+ // Revoke the resulting revision even if the concurrent save won first.
+ expect((await call('/social/linkedin-policy/revoke',{...command(),expectedRevision:2})).body).toMatchObject({result:{revision:3,state:'revoked',approved:false}});
+ }finally{await f.stop();}
+});
+it('rechecks policy after controlled external account observation waits and preserves accepted unrelated social work',async()=>{
+ const {f,token,call,input,accountId}=await setup();
+ let release!:()=>void,entered!:()=>void;
+ const wait=new Promise<void>(resolve=>{release=resolve;});
+ const observed=new Promise<void>(resolve=>{entered=resolve;});
+ const evidence={accountExternalId:'controlled-founder',observedAt:'2026-10-13T18:00:00Z',receiptId:'controlled-account-observation'};
+ const server=createServer((_request,response)=>{
+  entered();
+  void wait.then(()=>{response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify(evidence));});
+ });
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const address=server.address();
+ if(!address||typeof address==='string')throw new Error('Controlled account server unavailable');
+ try{
+ expect((await call('/social/linkedin-policy/save',input)).status).toBe(200);
+ const savedPost=await call('/social/posts/save',{accountId,text:'Unrelated owner post remains unchanged',images:[],publishAt:null,zone:'America/New_York',...command()});
+ expect(savedPost.status).toBe(200);
+ expect((await call('/social/weekly/save',{expectedRevision:0,enabled:true,...command()})).status).toBe(200);
+ const before=await call('/social',{});
+ const db=await f.database.appRuntimeSession();
+ const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),db);
+ const binding={ownerUserId:f.alpha.admin.userId,expectedRevision:1,accountId,accountRevision:1};
+ expect(await withTransaction(db,()=>checkLinkedinPolicyForWork(ctx,binding))).toMatchObject({current:true,allowed:false});
+ // No production native/provider request and no lock is held across this wait.
+ const observation=fetch(`http://127.0.0.1:${address.port}/account`).then(r=>r.json());
+ await observed;
+ expect((await call('/social/linkedin-policy/revoke',{...command(),expectedRevision:1})).status).toBe(200);
+ release();
+ expect(await observation).toEqual(evidence);
+ expect(await withTransaction(db,()=>checkLinkedinPolicyForWork(ctx,binding))).toMatchObject({current:false,allowed:false,reason:'stale_revision',policy:null});
+ const restarted=caller(f,token,await f.database.appRuntimeSession());
+ expect((await restarted('/social/linkedin-policy/check-current',{expectedRevision:1,accountId,accountRevision:1})).body).toMatchObject({current:false,allowed:false,reason:'stale_revision'});
+ expect((await call('/social',{})).body).toEqual(before.body);
+ expect((await call('/social/weekly',{})).body).toMatchObject({revision:1,enabled:true});
+ }finally{
+ release();
+ await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+ await f.stop();
+ }
+});
 it('checks durable owner binding as a trusted system worker without impersonating the owner',async()=>{
  const {f,call,input,accountId}=await setup();try{
  expect((await call('/social/linkedin-policy/save',input)).status).toBe(200);

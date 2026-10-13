@@ -2,7 +2,7 @@ import {
  LINKEDIN_OUTREACH_RULES, linkedinPolicySaveSchema, linkedinPolicyWorkBindingSchema,
  type LinkedinPolicySave, type LinkedinPolicyView, type LinkedinPolicySnapshot,
  type LinkedinPolicyHold, type LinkedinPolicyCheck, type LinkedinPolicyCurrent,
- type LinkedinPolicyWorkBinding, type LinkedinPolicyWorkCurrent,
+ type LinkedinPolicyWorkBinding, type LinkedinPolicyWorkCurrent, type LinkedinPolicyAccount,
 } from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
@@ -42,11 +42,12 @@ async function account(ctx:RepositoryContext,owner:string,id:string):Promise<Acc
  return (await ctx.db.query<AccountRow>('SELECT revision,external_id,state,platform,account_kind FROM social_accounts WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3 FOR SHARE',[ctx.scope.workspaceId,owner,id])).rows[0]??null;
 }
 function empty(hold:LinkedinPolicyHold='policy_not_saved'):LinkedinPolicyView{
- return {revision:0,state:'not_saved',rules:LINKEDIN_OUTREACH_RULES,enabled:false,technicallyReady:false,approved:false,approvedAt:null,policy:null,holds:[hold]};
+ return {accounts:[],revision:0,state:'not_saved',rules:LINKEDIN_OUTREACH_RULES,enabled:false,technicallyReady:false,approved:false,approvedAt:null,policy:null,holds:[hold]};
 }
 /** Owner membership is already checked and share-locked for this transaction. */
 async function view(ctx:RepositoryContext,owner:string,r:PolicyRow|null):Promise<LinkedinPolicyView>{
- if(!r)return empty();
+ const accounts=(await ctx.db.query<{id:string;external_id:string;display_name:string;revision:number;state:LinkedinPolicyAccount['state']}>("SELECT id,external_id,display_name,revision,state FROM social_accounts WHERE workspace_id=$1 AND owner_user_id=$2 AND platform='linkedin' AND account_kind='profile' ORDER BY id FOR SHARE",[ctx.scope.workspaceId,owner])).rows.map(a=>({id:a.id,externalId:a.external_id,displayName:a.display_name,revision:a.revision,state:a.state,identityVerified:false as const}));
+ if(!r)return {...empty(),accounts};
  const holds:LinkedinPolicyHold[]=[];
  if(r.state==='disabled')holds.push('policy_disabled');
  if(r.state==='revoked')holds.push('policy_revoked');
@@ -62,7 +63,7 @@ async function view(ctx:RepositoryContext,owner:string,r:PolicyRow|null):Promise
  // Posting's connected/verified flag and owner-supplied settings prove neither
  // current native outreach identity/coverage nor real model or voice acceptance.
  holds.push('exact_identity_unverified','acquisition_evidence_unavailable','manual_count_coverage_unavailable','reply_history_coverage_unavailable','voice_calibration_unverified','outreach_adapter_unavailable');
- return {revision:r.revision,state:r.state,rules:LINKEDIN_OUTREACH_RULES,enabled:false,technicallyReady:false,approved:r.approved,approvedAt:r.approved_at?.toISOString()??null,policy:r.policy,holds};
+ return {accounts,revision:r.revision,state:r.state,rules:LINKEDIN_OUTREACH_RULES,enabled:false,technicallyReady:false,approved:r.approved,approvedAt:r.approved_at?.toISOString()??null,policy:r.policy,holds};
 }
 async function readForOwner(ctx:RepositoryContext,owner:string):Promise<LinkedinPolicyView>{
  await lock(ctx,owner);
