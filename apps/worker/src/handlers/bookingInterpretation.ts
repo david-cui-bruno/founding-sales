@@ -72,7 +72,14 @@ export function bookingInterpretationJobHandler(options: BookingInterpretationOp
     const original=loaded.originals[0]!;
     const ranges=z.array(z.object({kind:z.string(),start:z.number().int(),end:z.number().int()})).safeParse(original.ranges);
     const supported=evidence!==null&&evidence.sourceId===original.sourceId&&evidence.end>evidence.start&&original.passage?.slice(evidence.start,evidence.end)===evidence.quote&&ranges.success&&ranges.data.some(range=>range.kind==='authored'&&range.start<=evidence.start&&range.end>=evidence.end);
+    const slot=parsed.success?parsed.data.slot:null;
+    const offered=slot===null?null:loaded.originals.find(source=>source.sourceId===slot.evidence.sourceId);
+    const offeredRanges=z.array(z.object({kind:z.string(),start:z.number().int(),end:z.number().int()})).safeParse(offered?.ranges);
+    let zoneValid=false;
+    if(slot!==null){try{zoneValid=slot.timeZone.includes('/')&&new Intl.DateTimeFormat('en-US',{timeZone:slot.timeZone}).resolvedOptions().timeZone.length>0;}catch{zoneValid=false;}}
+    const exactSlot=slot!==null&&offered!==undefined&&offered!==null&&offered.passage?.slice(slot.evidence.start,slot.evidence.end)===slot.evidence.quote&&offeredRanges.success&&offeredRanges.data.some(range=>range.kind==='authored'&&range.start<=slot.evidence.start&&range.end>=slot.evidence.end)&&/^\d{4}-\d{2}-\d{2}$/.test(slot.localDate)&&Number.isFinite(Date.parse(slot.localDate))&&new Date(slot.localDate).toISOString().slice(0,10)===slot.localDate&&/^([01]\d|2[0-3]):[0-5]\d$/.test(slot.localTime)&&zoneValid&&slot.evidence.quote.includes(slot.localDate)&&slot.evidence.quote.includes(slot.localTime)&&slot.evidence.quote.includes(slot.timeZone)&&loaded.originals.length<=2&&slot.localDate>new Date().toISOString().slice(0,10)&&original.envelope.cc.length===0&&original.envelope.to.length===1;
     if(parsed.success&&supported&&(parsed.data.intent==='opt_out'||parsed.data.intent==='refusal'))outcome={kind:'stop',reason:parsed.data.intent,evidence,permission:false};
+    else if(parsed.success&&supported&&parsed.data.intent==='accept_slot'&&exactSlot&&parsed.data.substantive===null)outcome={kind:'slot_proposal',slot,agreement:evidence,attendeeAddress:original.envelope.from,permission:false,requires:['current_attendee_route','fresh_freebusy','guarded_create']};
     else if(parsed.success&&supported&&parsed.data.intent==='interest'&&parsed.data.slot===null&&parsed.data.substantive===null)outcome={kind:'approved_link',bookingUrl:snapshot.bindings.event.bookingUrl,permission:false};
     else outcome={kind:'clarification',reason:'booking_candidate_requires_review',permission:false};
    }

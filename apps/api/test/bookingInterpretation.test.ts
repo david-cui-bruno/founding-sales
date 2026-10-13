@@ -24,24 +24,30 @@ const post = (path: string, body: unknown) => dispatch({ method: 'POST', path, b
 { session: fixture.db, auth: fixture.deps, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false,...authority===undefined?{}:{bookingInterpretationAuthority:authority} });
 
 /** Controlled canonical capture proves source provenance, not actual Gmail or booking consent. */
-async function admittedMessage(text: string) {
+async function admittedMessage(text: string,outgoing=false) {
   const workspaceId = fixture.alpha.workspaceId, ownerUserId = fixture.alpha.admin.userId;
   const key = randomUUID();
-  const mailbox = (await fixture.db.query<{ id: string; owner_user_id: string; email_address: string; provider_account_id: string; generation: number; status: string }>(
+  let mailbox=(await fixture.db.query<{ id: string; owner_user_id: string; email_address: string; provider_account_id: string; generation: number; status: string }>('SELECT * FROM mailboxes WHERE workspace_id=$1 AND owner_user_id=$2',[workspaceId,ownerUserId])).rows[0];
+  const fresh=mailbox===undefined;
+  mailbox??=(await fixture.db.query<{ id: string; owner_user_id: string; email_address: string; provider_account_id: string; generation: number; status: string }>(
     "INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,$3,$4,'connected') RETURNING *",
     [workspaceId, ownerUserId, `${key}@example.test`, key])).rows[0]!;
   const binding = businessAccountBinding(workspaceId, mailbox)!;
+  if(fresh){
   await fixture.db.query("INSERT INTO crm_business_policies(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled) VALUES($1,$2,$3,$4,$5,1,1,false)", [workspaceId, mailbox.id, ownerUserId, key, binding]);
-  const conversationId = (await fixture.db.query<{ id: string }>(
+  await fixture.db.query<{ id: string }>(
     "INSERT INTO crm_business_conversations(workspace_id,mailbox_id,owner_user_id,account_binding,provider_thread_id,subject,participants,latest_provider_at,category,reason,classifier_version,metadata_hash) VALUES($1,$2,$3,$4,$5,'Business','[]',now(),'business','fixture','fixture',$6) RETURNING id",
-    [workspaceId, mailbox.id, ownerUserId, binding, key, 'a'.repeat(64)])).rows[0]!.id;
+    [workspaceId, mailbox.id, ownerUserId, binding, key, 'a'.repeat(64)]);
   await fixture.db.query("INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,$4,$5,1,1,true,1,'controlled-capture',$6,'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')", [workspaceId, mailbox.id, ownerUserId, key, binding, 'b'.repeat(64)]);
+  }
+  const conversation=(await fixture.db.query<{id:string;provider_thread_id:string}>('SELECT id,provider_thread_id FROM crm_business_conversations WHERE workspace_id=$1 AND mailbox_id=$2',[workspaceId,mailbox.id])).rows[0]!;
+  const conversationId=conversation.id;
   await enqueueJob(fixture.db, { workspaceId, kind: 'crm.mail_capture', idempotencyKey: key,
-    payload: { mailboxId: mailbox.id, providerMessageId: key, providerAccountId: key, generation: 1, conversationId, controlsRevision: 1, policyRevision: 1, decisionRevision: 0 } });
+    payload: { mailboxId: mailbox.id, providerMessageId: key, providerAccountId: mailbox.provider_account_id, generation: 1, conversationId, controlsRevision: 1, policyRevision: 1, decisionRevision: 0 } });
   const job = (await claimJobs(fixture.db, { owner: 'booking-capture-fixture', kinds: ['crm.mail_capture'], limit: 1, leaseSeconds: 120 }))[0]!;
   const registry = registerHandlers(new HandlerRegistry(), { classifier: undefined, mail: undefined, send: undefined, research: undefined,
     crmMailCapture: { proofVerifier: { verify: async proof => proof.accountBinding === binding && proof.grantReceipt === 'fixture-grant' },
-      provider: { read: async () => ({ providerAccountId: key, messageId: key, threadId: key, labels: ['INBOX'], providerAt: '2026-10-13T14:00:00.000Z', rawSenderDate: 'Tue, 13 Oct 2026 10:00:00 -0400', from: 'casey@example.test', to: [mailbox.email_address], cc: [], subject: 'Call', body: text, parserVersion: 'controlled-v1', representation: 'plain_text', completeness: 'complete', ranges: [{ start: 0, end: text.length, kind: 'authored' }] }) } } });
+      provider: { read: async () => ({ providerAccountId: mailbox.provider_account_id, messageId: key, threadId: conversation.provider_thread_id, labels: [outgoing?'SENT':'INBOX'], origin:outgoing?'sent':'unknown', providerAt: outgoing?'2026-10-13T13:00:00.000Z':'2026-10-13T14:00:00.000Z', rawSenderDate: outgoing?'Tue, 13 Oct 2026 09:00:00 -0400':'Tue, 13 Oct 2026 10:00:00 -0400', from: outgoing?mailbox.email_address:'casey@example.test', to: [outgoing?'casey@example.test':mailbox.email_address], cc: [], subject: 'Call', body: text, parserVersion: 'controlled-v1', representation: 'plain_text', completeness: 'complete', ranges: [{ start: 0, end: text.length, kind: 'authored' }] }) } } });
   const handler = registry.get('crm.mail_capture');
   if (!handler) throw new Error('registered capture missing');
   const result = await handler.handle({ session: fixture.db, scope: workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), job });
@@ -104,4 +110,11 @@ it('preserves an authored opt-out as a stop outcome instead of a scheduling prop
  const text='Please do not contact me again.';const {source,requestId}=await configuredRequest(text);
  await executeCandidate({intent:'opt_out',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null});
  expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'stop',reason:'opt_out',permission:false,evidence:{sourceId:source.sourceId,quote:text}}});
+});
+it('accepts the exact previously offered date time and zone without demanding a literal restatement',async()=>{
+ const offer='Can you meet on 2026-10-20 at 14:00 America/New_York?';
+ const prior=await admittedMessage(offer,true);
+ const text='Yes, that works for me.';const {source,requestId}=await configuredRequest(text,[prior]);
+ await executeCandidate({intent:'accept_slot',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York',evidence:{sourceId:prior.sourceId,start:0,end:offer.length,quote:offer}},substantive:null});
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'slot_proposal',permission:false,attendeeAddress:'casey@example.test',slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York'},requires:['current_attendee_route','fresh_freebusy','guarded_create']}});
 });
