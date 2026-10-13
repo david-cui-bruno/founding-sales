@@ -34,6 +34,32 @@ describe('booking change durable concurrency and terminal waits',()=>{
    await f.run();expect(f.writes).toHaveLength(phase==='inspection'?1:0);expect(f.inspections).toHaveLength(0);expect(targetReads).toBe(phase==='dispatch'?1:0);
   }finally{await f.stop();}
  });
+ it.each((['initial','dispatch','inspection'] as const).flatMap(phase=>(['account_access','provider_adapter','cost'] as const).map(authority=>({phase,authority}))))('a real receipt-row wait reobserves $authority before $phase provider work',async({phase,authority})=>{
+  const f=await setupBookingChange(),blocker=await f.fixture.database.appRuntimeSession();let locked=false,running:Promise<unknown>|undefined;
+  try{
+   const agreement=await f.capture('Please move our appointment to October 15 at 11 AM America/New_York.');
+   const payload={...f.payload,action:'reschedule',confirmation:'owner_confirmed_attendee_unconditional_exact_slot',agreement,agreedSlot:{startsAt:'2026-10-15T15:00:00Z',timeZone:'America/New_York'}};
+   const admitted=await f.request('POST','/meetings/booking-change',f.command(payload));expect(admitted.status).toBe(200);const id=idOf(admitted.body);
+   if(phase==='inspection'){f.controls.dropResponse=true;await f.run();expect((await f.request('POST','/meetings/booking-change/inspect',f.command({submissionId:id}))).status).toBe(200);}
+   let revoked=false,targetReads=0,availabilityReads=0;
+   const observations:string[]=[],evidence=f.runtime.policy.readEvidence,cost=f.runtime.readCostContract;
+   f.runtime.policy.readEvidence=async(context,binding)=>{if(revoked)observations.push('readiness');const result=await evidence(context,binding);return result===null?null:{...result,accountAccess:!(revoked&&authority==='account_access'),providerAdapter:!(revoked&&authority==='provider_adapter')};};
+   f.runtime.readCostContract=async snapshot=>{if(revoked)observations.push('cost');return revoked&&authority==='cost'?null:cost(snapshot);};
+   const lockReceipt=async()=>{await blocker.query('BEGIN');locked=true;await blocker.query('SELECT id FROM booking_change_submissions WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[f.fixture.alpha.workspaceId,id]);};
+   f.controls.targetWait=async()=>{targetReads++;if(phase==='dispatch')await lockReceipt();};
+   f.controls.wait=async()=>{availabilityReads++;};
+   if(phase!=='dispatch')await lockReceipt();
+   const pid=Number((await f.fixture.db.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid),blockerPid=Number((await blocker.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid);
+   running=f.run();void running.catch(()=>undefined);
+   await vi.waitFor(async()=>{expect((await f.db.query<{blockers:number[]}>('SELECT pg_blocking_pids($1) AS blockers',[pid])).rows[0]?.blockers).toContain(blockerPid);},{timeout:5000,interval:10});
+   // Mutable authority changes while exact binding and all deadlines remain valid.
+   revoked=true;await blocker.query('COMMIT');locked=false;await running;
+   expect(f.writes).toHaveLength(phase==='inspection'?1:0);expect(f.inspections).toHaveLength(0);
+   expect(targetReads).toBe(phase==='dispatch'?1:0);expect(availabilityReads).toBe(phase==='dispatch'?1:0);
+   expect(observations.slice(0,2)).toEqual(['cost','readiness']);
+   expect((await f.request('GET',`/meetings/booking-change?submissionId=${id}`)).body).toMatchObject({state:phase==='inspection'?'unknown':'failed',dispatchStartedAt:phase==='inspection'?expect.any(String):null,reason:authority==='cost'?'unknown_cost':'booking_readiness_unavailable'});
+  }finally{if(locked)await blocker.query('ROLLBACK');await running?.catch(()=>undefined);await f.stop();}
+ });
  it.each(['evidence_expiry','lease_expiry','target_expiry','invalid_clock'] as const)('a real receipt-row wait rechecks %s at the last provider-write marker',async expiry=>{
   const f=await setupBookingChange();const blocker=await f.fixture.database.appRuntimeSession();let locked=false;let running:Promise<unknown>|undefined;
   try{
