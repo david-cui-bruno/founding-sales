@@ -1,9 +1,11 @@
 import {askClaimConstructionSchema} from './askAnswerConstruction.ts';
 import {projectAskModelEvidence} from './askModelEvidence.ts';
 import { generateText, stepCountIs, wrapLanguageModel, ToolChoiceViolationError, type ModelMessage, type LanguageModelUsage } from 'ai';
+import {createVertex, type GoogleVertexProviderSettings} from '@ai-sdk/google-vertex';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import {defaultProvider} from '@aws-sdk/credential-provider-node';
 import { z } from 'zod';
+import {askProviderMetadataSchema} from '@fss/domain/crm/askProviderState.ts';
 import type { AskAgentStepAdapter } from '@fss/domain/crm/askAnswerPorts.ts';
 
 export const askAgentTools = {
@@ -31,22 +33,38 @@ const structuredOutputOptions = {bedrock: {reasoningConfig:{type:'disabled' as c
 function composeStep(request:{question:string;transcript:readonly unknown[];remainingSteps?:number}){
  if (request.remainingSteps !== undefined && (!Number.isInteger(request.remainingSteps) || request.remainingSteps < 1 || request.remainingSteps > 32)) throw new Error('ask_remaining_steps_invalid');
  const handles=projectAskModelEvidence(request.transcript);
-   const messages:ModelMessage[]=[];const original:unknown[]=[];
-   for(const entry of handles.transcript){const result=z.strictObject({toolCallId:z.string(),name:z.string(),input:z.unknown(),result:z.json()}).safeParse(entry);if(!result.success){original.push(entry);continue;}if(messages.length===0)messages.push({role:'user',content:JSON.stringify({question:request.question,context:original})});messages.push({role:'assistant',content:[{type:'tool-call',toolCallId:result.data.toolCallId,toolName:result.data.name,input:result.data.input}]},{role:'tool',content:[{type:'tool-result',toolCallId:result.data.toolCallId,toolName:result.data.name,output:{type:'json',value:result.data.result}}]});}
-   if(messages.length===0)messages.push({role:'user',content:JSON.stringify({question:request.question,context:original})});
+ const messages:ModelMessage[]=[];const original:unknown[]=[];
+ const toolEntry=z.strictObject({toolCallId:z.string(),name:z.string(),input:z.unknown(),result:z.json(),providerMetadata:askProviderMetadataSchema.optional(),modelStep:z.number().int().min(1).max(32).optional()});
+ type ToolEntry=z.infer<typeof toolEntry>;
+ let batch:ToolEntry[]=[];
+ function flush(){
+  if(batch.length===0)return;
+  if(messages.length===0)messages.push({role:'user',content:JSON.stringify({question:request.question,context:original})});
+  messages.push({role:'assistant',content:batch.map(entry=>({type:'tool-call',toolCallId:entry.toolCallId,toolName:entry.name,input:entry.input,...(entry.providerMetadata?{providerOptions:entry.providerMetadata}:{})}))},
+   {role:'tool',content:batch.map(entry=>({type:'tool-result',toolCallId:entry.toolCallId,toolName:entry.name,output:{type:'json',value:entry.result}}))});
+  batch=[];
+ }
+ for(const entry of handles.transcript){
+  const result=toolEntry.safeParse(entry);
+  if(!result.success){flush();original.push(entry);continue;}
+  if(batch.length>0&&(result.data.modelStep===undefined||batch[0]!.modelStep!==result.data.modelStep))flush();
+  batch.push(result.data);
+ }
+ flush();
+ if(messages.length===0)messages.push({role:'user',content:JSON.stringify({question:request.question,context:original})});
  const system = request.remainingSteps === 1 ? ASK_AGENT_SYSTEM + ' This is the last permitted model generation. Do not request readonly tools. Emit the final cited JSON answer using emit_answer using evidence already returned by tools, or {"claims":[],"abstained":true} if it is insufficient. Exact tool state is also attached separately by the server; cite its supplied exact handles for a supported exact-only answer, never invent citations.' : ASK_AGENT_SYSTEM;
  const outputTool={description:'Emit the final cited answer as structured data. This output tool never executes an action. Use an actual claims array and top-level abstained boolean.',inputSchema:finalAnswerSchema,strict:true};
  const tools: Record<string,{description:string;inputSchema:z.ZodType;strict?:boolean}> = request.remainingSteps === 1 ? {emit_answer:outputTool} : {...askAgentTools,emit_answer:outputTool};
  const toolChoice=request.remainingSteps===1?{type:'tool' as const,toolName:'emit_answer'}:'required' as const;
  return {system,messages,tools,toolChoice,decodeAnswer:handles.decodeAnswer,decodeInput:handles.decodeInput};
 }
-function inputBound(request:{question:string;transcript:readonly unknown[];maxOutputTokens:number;remainingSteps?:number}){
+function inputBound(providerOptions:Parameters<typeof generateText>[0]['providerOptions'],request:{question:string;transcript:readonly unknown[];maxOutputTokens:number;remainingSteps?:number}){
  try{
   const composed=composeStep(request);
   const tools=Object.entries(composed.tools).map(([name,tool])=>({type:'function',name,description:tool.description,inputSchema:z.toJSONSchema(tool.inputSchema),...tool.strict===undefined?{}:{strict:tool.strict}}));
   // These requests contain text/JSON only. One token per UTF-8 byte plus bounded
   // provider protocol overhead is conservative; this is not measured model usage.
-  const inputBytes=Buffer.byteLength(JSON.stringify({system:composed.system,messages:composed.messages,tools,toolChoice:composed.toolChoice,providerOptions:structuredOutputOptions}),'utf8')+2048;
+  const inputBytes=Buffer.byteLength(JSON.stringify({system:composed.system,messages:composed.messages,tools,toolChoice:composed.toolChoice,providerOptions}),'utf8')+2048;
   return {inputBytes,maxInputTokens:inputBytes};
  }catch{return null;}
 }
@@ -72,7 +90,23 @@ function parseFinalText(text:string){
 export function createAskSdkStepAdapter(input:{region:'us-east-1';endpointId:string;modelVersion:string;providerKey:string;fetch?:NonNullable<Parameters<typeof createAmazonBedrock>[0]>['fetch'];model?:Parameters<typeof generateText>[0]['model']}):AskAgentStepAdapter{
  if(input.endpointId!==`bedrock-runtime.${input.region}.amazonaws.com`)throw new Error('ask_agent_endpoint_mismatch');
  const model=input.model??createBedrockAskSdkModel({region:input.region,modelVersion:input.modelVersion,...(input.fetch?{fetch:input.fetch}:{})});
- return Object.freeze({endpointId:input.endpointId,modelVersion:input.modelVersion,providerKey:input.providerKey,inputBound,async runStep(request:Parameters<AskAgentStepAdapter['runStep']>[0]):ReturnType<AskAgentStepAdapter['runStep']>{
+ return createSdkStepAdapter({...input,model,providerOptions:structuredOutputOptions});
+}
+
+export function createVertexAskSdkModel(input:{projectId:string;fetch?:GoogleVertexProviderSettings['fetch']}){
+ if(!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u.test(input.projectId))throw new Error('ask_agent_endpoint_mismatch');
+ return createVertex({project:input.projectId,location:'us',headers:{'x-goog-user-project':input.projectId},baseURL:`https://aiplatform.us.rep.googleapis.com/v1/projects/${input.projectId}/locations/us/publishers/google`,...(input.fetch?{fetch:input.fetch}:{})})('gemini-3.8-flash');
+}
+/** Explicit US jurisdiction and model binding; authentication uses runtime ADC. */
+export function createVertexAskSdkStepAdapter(input:{region:'us';projectId:string;endpointId:string;modelVersion:'gemini-3.8-flash';providerKey:string;fetch?:GoogleVertexProviderSettings['fetch'];model?:Parameters<typeof generateText>[0]['model']}):AskAgentStepAdapter{
+ if(!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u.test(input.projectId)||input.region!=='us'||input.modelVersion!=='gemini-3.8-flash'||input.endpointId!==`vertex.us/${input.projectId}`)throw new Error('ask_agent_endpoint_mismatch');
+ const model=input.model??createVertexAskSdkModel(input);
+ return createSdkStepAdapter({...input,model,providerOptions:{vertex:{thinkingConfig:{thinkingLevel:'low',includeThoughts:false}}}});
+}
+
+function createSdkStepAdapter(input:{endpointId:string;modelVersion:string;providerKey:string;model:Parameters<typeof generateText>[0]['model'];providerOptions:NonNullable<Parameters<typeof generateText>[0]['providerOptions']>}):AskAgentStepAdapter{
+ const {model}=input;
+ return Object.freeze({endpointId:input.endpointId,modelVersion:input.modelVersion,providerKey:input.providerKey,inputBound:(request:Parameters<NonNullable<AskAgentStepAdapter['inputBound']>>[0])=>inputBound(input.providerOptions,request),async runStep(request:Parameters<AskAgentStepAdapter['runStep']>[0]):ReturnType<AskAgentStepAdapter['runStep']>{
   if(request.remainingSteps !== undefined && (!Number.isInteger(request.remainingSteps) || request.remainingSteps < 1 || request.remainingSteps > 32)) return {acceptance:'not_accepted',usage:{inputTokens:0,outputTokens:0},answer:null,toolCalls:[]};
   if(request.signal.aborted)return {acceptance:'not_accepted',usage:{inputTokens:0,outputTokens:0},answer:null,toolCalls:[]};
   const prepared=composeStep(request);
@@ -83,7 +117,7 @@ export function createAskSdkStepAdapter(input:{region:'us-east-1';endpointId:str
   const observedModel=typeof model!=='string'&&model.specificationVersion==='v3'?wrapLanguageModel({model,middleware:{specificationVersion:'v3',wrapGenerate:async({doGenerate})=>{const result=await doGenerate();returnedFinishReason=result.finishReason.unified;returnedUsage={inputTokens:result.usage.inputTokens.total,outputTokens:result.usage.outputTokens.total,inputTokenDetails:{noCacheTokens:result.usage.inputTokens.noCache,cacheReadTokens:result.usage.inputTokens.cacheRead,cacheWriteTokens:result.usage.inputTokens.cacheWrite}};return result;}}}):model;
   try{
    const result=await generateText({model:observedModel,maxRetries:0,stopWhen:stepCountIs(1),abortSignal:request.signal,maxOutputTokens:request.maxOutputTokens,
-    system:prepared.system,messages:prepared.messages,tools:prepared.tools,toolChoice:prepared.toolChoice,providerOptions:structuredOutputOptions});
+    system:prepared.system,messages:prepared.messages,tools:prepared.tools,toolChoice:prepared.toolChoice,providerOptions:input.providerOptions});
    const usage=observedUsage(result.usage);
    if(usage===null)return {acceptance:'unknown',usage:null,answer:null,toolCalls:[]};
    // Syntactically complete JSON can still be a truncated or filtered generation.
@@ -98,7 +132,13 @@ export function createAskSdkStepAdapter(input:{region:'us-east-1';endpointId:str
    // accepted only as one entire JSON object or one entire single JSON fence.
    let answer:unknown=null;
    if(result.toolCalls.length===0)answer=prepared.decodeAnswer(parseFinalText(result.text));
-   return {acceptance:'accepted',usage,answer,toolCalls:result.toolCalls.map(call=>({id:call.toolCallId,name:call.toolName,input:prepared.decodeInput(call.toolName,call.input)}))};
+   const toolCalls=[];
+   for(const call of result.toolCalls){
+    const metadata=call.providerMetadata===undefined?null:askProviderMetadataSchema.safeParse(call.providerMetadata);
+    if(metadata!==null&&!metadata.success)return {acceptance:'accepted',usage,answer:null,toolCalls:[]};
+    toolCalls.push({id:call.toolCallId,name:call.toolName,input:prepared.decodeInput(call.toolName,call.input),...(metadata?.success?{providerMetadata:metadata.data}:{})});
+   }
+   return {acceptance:'accepted',usage,answer,toolCalls};
   }catch(error){
    const usage=observedUsage(returnedUsage);
    if(ToolChoiceViolationError.isInstance(error)&&usage!==null){

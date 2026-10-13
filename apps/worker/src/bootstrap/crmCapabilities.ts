@@ -3,6 +3,8 @@ import {createCrmCapabilityVerifiers,type CrmAuthoritySessions} from '@fss/domai
 import {createNativeCrmMailEvidence} from '@fss/domain/crm/nativeMailEvidence.ts';
 import {createApprovedBusinessMailObserver} from '@fss/domain/mail/crmSources.ts';
 import {composeCrmGmail,createServerCrmGmailAccessResolver} from './crmGmail.ts';
+import {createVertexAskSdkStepAdapter} from '../providers/askAgentSdk.ts';
+import {createAskTitanAdapter} from '../providers/askTitan.ts';
 import {composeCrmBedrock} from './crmBedrock.ts';
 import {loadCrmBedrockSurface,type CrmBedrockSurface} from '../providers/crmBedrock.ts';
 import type {HandlerComposition} from './main.ts';
@@ -11,7 +13,10 @@ export async function composeCrmCapabilities(input:CrmAuthoritySessions & {confi
  const verifiers=createCrmCapabilityVerifiers(input);const mailEvidence=createNativeCrmMailEvidence(verifiers.captureVerifier);
  const observer=createApprovedBusinessMailObserver({revalidateAuthority:verifiers.revalidateMetadata});
  const gmail=input.configuration.capture&&input.gmail?composeCrmGmail({gmail:input.gmail.gmail,resolveAccess:createServerCrmGmailAccessResolver({...input.gmail,openSession:input.openSession}),proofVerifier:verifiers.captureVerifier,allocationVerifier:verifiers.allocationVerifier,observer}):{};
- const region=input.configuration.extraction?.region??input.configuration.answer?.region??input.configuration.embedding?.region;
- const bedrock=region?composeCrmBedrock({...input.answerModel===undefined?{}:{answerModel:input.answerModel},surface:await(input.loadSurface?.(region)??loadCrmBedrockSurface({region})),...input.configuration.extraction?{extraction:input.configuration.extraction}:{},...input.configuration.answer?{answer:input.configuration.answer}:{},...input.configuration.embedding?{embedding:input.configuration.embedding}:{},mailEvidence,verifyExtraction:verifiers.verifyExtraction,revalidateExtraction:verifiers.revalidateExtraction,verifyPurpose:verifiers.verifyAskPurpose,revalidateAskPurpose:verifiers.revalidateAskPurpose}):{};
- return {handlers:{...gmail,...bedrock},observer,mailEvidence,verifiers};
+ const answer=input.configuration.answer;
+ const bedrockAnswer=answer?.provider==='google_vertex'?undefined:answer;
+ const region=input.configuration.extraction?.region??bedrockAnswer?.region??input.configuration.embedding?.region;
+ const bedrock=region?composeCrmBedrock({...input.answerModel===undefined?{}:{answerModel:input.answerModel},surface:await(input.loadSurface?.(region)??loadCrmBedrockSurface({region})),...input.configuration.extraction?{extraction:input.configuration.extraction}:{},...bedrockAnswer?{answer:bedrockAnswer}:{},...input.configuration.embedding?{embedding:input.configuration.embedding}:{},mailEvidence,verifyExtraction:verifiers.verifyExtraction,revalidateExtraction:verifiers.revalidateExtraction,verifyPurpose:verifiers.verifyAskPurpose,revalidateAskPurpose:verifiers.revalidateAskPurpose}):{};
+ const vertex:Pick<HandlerComposition,'crmAskAnswers'>=answer?.provider==='google_vertex'?{crmAskAnswers:{agent:createVertexAskSdkStepAdapter({...answer,...input.answerModel===undefined?{}:{model:input.answerModel}}),agentLimits:answer.agentLimits,verifyPurpose:verifiers.verifyAskPurpose,revalidatePurpose:verifiers.revalidateAskPurpose,...input.configuration.embedding?{embedding:createAskTitanAdapter(input.configuration.embedding)}:{}}}:{};
+ return {handlers:{...gmail,...bedrock,...vertex},observer,mailEvidence,verifiers};
 }

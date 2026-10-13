@@ -1,4 +1,5 @@
 import type { RepositoryContext } from "../db/workspaceScope.ts";
+import type { AskProviderMetadata } from './askProviderState.ts';
 import type {
   AskAgentScope,
   CanonicalSourceReference,
@@ -167,6 +168,7 @@ export interface AskAgentStepAdapter extends AskAdapterRoute {
       readonly id: string;
       readonly name: string;
       readonly input: unknown;
+      readonly providerMetadata?: AskProviderMetadata;
     }[];
   }>;
 }

@@ -77,6 +77,10 @@ async function approveCaptureFixture(
 it("keeps Today usable with eleven independently captured permitted mail promises", async () => {
   const fixture = await createAuthFixture();
   try {
+    // Coverage/access is under test; keep deadlines current across UTC rollover.
+    const promiseDate = (await fixture.db.query<{date:string}>(
+      "SELECT (CURRENT_DATE + 1)::text AS date",
+    )).rows[0]!.date;
     const {
       workspaceId,
       mailbox,
@@ -203,7 +207,7 @@ it("keeps Today usable with eleven independently captured permitted mail promise
     for (let index = 0; index < 11; index++) {
       const providerMessageId =
         index === 0 ? "approved-message" : `approved-message-${index}`;
-      const quote = `I will prepare summary item ${index + 1} by October 12.`;
+      const quote = `I will prepare summary item ${index + 1} by ${promiseDate}.`;
       const message = (
         await fixture.db.query<{ id: string }>(
           "INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,matched) VALUES($1,$2,$3,'approved-thread','outgoing','2026-10-08T15:00:00Z',true) RETURNING id",
@@ -324,9 +328,9 @@ it("keeps Today usable with eleven independently captured permitted mail promise
               actionLabel: `Prepare summary item ${index + 1}`,
               due: {
                 kind: "date",
-                date: "2026-10-12",
+                date: promiseDate,
                 zone: "UTC",
-                expression: "by October 12",
+                expression: `by ${promiseDate}`,
               },
             }),
           )
