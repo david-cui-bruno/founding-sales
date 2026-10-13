@@ -3,6 +3,7 @@ import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.t
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingCapacityDeps} from './bookingCapacity.ts';
+import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import type {SocialMediaStore} from '../social/mediaStore.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
@@ -61,6 +62,7 @@ export interface RoutingOptions {
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
   readonly crmAcquisitionDiagnosticRuntime?: CrmAcquisitionDiagnosticRuntime;
   readonly bookingCapacity?:BookingCapacityDeps;
+  readonly bookingPolicyRuntime?:BookingPolicyRuntime;
   readonly replyComposer?:HumanReplyDraftPort|null;
   readonly session: SessionQueryable;
   /** The policy (lane g78). A route that answers with versions publishes `publishedClientVersions` of it. */

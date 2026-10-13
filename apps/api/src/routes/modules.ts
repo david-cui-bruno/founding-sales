@@ -19,6 +19,7 @@ import { IDENTITY_PATHS,routePeopleRelationships } from './peopleRelationships.t
 import { LINKEDIN_ROUTE_PATHS, routeLinkedinRoutes } from './linkedinRoutes.ts';
 import { PEOPLE_PATHS, routePeople } from './people.ts';
 import {BOOKING_CAPACITY_PATHS,routeBookingCapacity} from './bookingCapacity.ts';
+import {BOOKING_POLICY_PATHS,routeBookingPolicy} from './bookingPolicy.ts';
 import {SOCIAL_PATHS,routeSocial} from './social.ts';
 import {SOURCING_LEARNING_PATHS,routeSourcingLearning} from './sourcingLearning.ts';
 import {OUTREACH_PATHS,routeOutreach} from './outreach.ts';
@@ -241,6 +242,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // paths; none reaches Cal.com.
     moduleOf('meetings', { paths: MEETING_PATHS }, routeMeetings, routing),
     moduleOf('booking-capacity', {paths:BOOKING_CAPACITY_PATHS},routeBookingCapacity,routing),
+    moduleOf('booking-policy', {paths:BOOKING_POLICY_PATHS},routeBookingPolicy,routing),
     // Lane M4: exact paths under /meetings/recordings, beside M1's exact /meetings paths.
     moduleOf('meeting-auto-recording', {paths:MEETING_AUTO_RECORDING_PATHS}, routeMeetingAutoRecording,routing),
     moduleOf('meeting-follow-through', { paths: MEETING_FOLLOW_THROUGH_PATHS }, routeMeetingFollowThrough, routing),

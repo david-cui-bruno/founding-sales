@@ -7,6 +7,23 @@ import type {BookingPolicyRuntime,BookingPolicyRuntimeEvidence,CurrentBookingPol
 import {lockMonthlySpend,readSpend,workspaceBusinessZone} from '../research/ledger.ts';
 import {readMonthlyCashCeiling} from '../settings/cashCeiling.ts';
 import {providerFunding} from '../settings/funding.ts';
+import {bookingPolicyBindingsSchema,type BookingPolicySettingsView} from '@fss/contracts';
+
+export async function readBookingPolicySettings(ctx:RepositoryContext,runtime?:BookingPolicyRuntime):Promise<BookingPolicySettingsView> {
+  const actor=ctx.scope.actor;
+  if(actor.kind!=='user'||actor.role!=='admin'||!await activeOwner(ctx,actor.userId))throw new Error('owner_authority_changed');
+  let configured:readonly BookingPolicyBindings[]=[];
+  try{configured=await runtime?.readConfiguration?.(ctx,actor.userId)??[];}catch{configured=[];}
+  if(!await activeOwner(ctx,actor.userId))throw new Error('owner_authority_changed');
+  const choices:BookingPolicySettingsView['configuration']['choices']=[];
+  if(configured.length<=20)for(const candidate of configured){
+    const parsed=bookingPolicyBindingsSchema.safeParse(candidate);
+    if(!parsed.success||parsed.data.ownerUserId!==actor.userId)continue;
+    const bindings=parsed.data,id=bookingPolicyBindingKey(bindings);
+    if(!choices.some(choice=>choice.id===id))choices.push({id,label:`Cal.com ${bindings.account.email} · Event ${bindings.event.eventTypeId} · ${bindings.model.modelVersion}`.slice(0,500),bindings});
+  }
+  return {policy:await readBookingPolicy(ctx,runtime),configuration:{choices,reasons:choices.length===0?['setup_unavailable']:[]}};
+}
 
 export async function readCurrentBookingPolicy(ctx:RepositoryContext,query:CurrentBookingPolicyQuery,runtime?:BookingPolicyRuntime):Promise<CurrentBookingPolicy> {
   const view=await readBookingPolicy(ctx,runtime),bindings=view.setting.bindings;
@@ -66,11 +83,12 @@ export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPo
   const setting=parsed.success?parsed.data:DEFAULT_BOOKING_POLICY,bindings=setting.bindings;
   const audit=(await ctx.db.query<{changed_by_user_id:string|null}>('SELECT changed_by_user_id FROM workspace_settings WHERE workspace_id=$1 AND setting_key=$2 AND superseded_at IS NULL',[ctx.scope.workspaceId,'booking_policy'])).rows[0];
   const businessPolicyValid=setting.status==='saved'&&bindings!==null&&audit?.changed_by_user_id===bindings.ownerUserId&&await activeOwner(ctx,bindings.ownerUserId);
-  const at=runtime?.now()??new Date().toISOString();
+  let at=runtime?.now()??new Date().toISOString();
   let evidence:BookingPolicyRuntimeEvidence|null=null;
-  if(businessPolicyValid&&bindings!==null&&runtime!==undefined){try{evidence=await runtime.readEvidence(ctx,bindings);}catch{evidence=null;}}
+  if(businessPolicyValid&&bindings!==null&&runtime!==undefined){try{evidence=await runtime.readEvidence(ctx,structuredClone(bindings));}catch{evidence=null;}}
   // The trusted evidence read may have waited. Saved revisions and membership are checked again, not cached.
   if((await readSetting(ctx,'booking_policy')).version!==stored.version||(businessPolicyValid&&bindings!==null&&!await activeOwner(ctx,bindings.ownerUserId)))return readBookingPolicy(ctx);
+  at=runtime?.now()??new Date().toISOString();
   const requirements={accountAccess:'account_access_unverified',calendarFreeBusy:'calendar_freebusy_unverified',eventSettings:'event_settings_unverified',modelConsent:'model_consent_unverified',modelAcceptance:'model_acceptance_unverified',senderAuthority:'sender_authority_unverified',sourceAuthority:'source_authority_unverified',providerAdapter:'provider_adapter_unavailable',releaseReady:'release_unverified'} as const;
   let reasons:string[]=[];
   if(evidence!==null&&bindings!==null&&bookingPolicyBindingKey(evidence.binding)!==bookingPolicyBindingKey(bindings)){reasons=['runtime_binding_changed'];evidence=null;}

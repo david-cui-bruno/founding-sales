@@ -13,7 +13,11 @@ export const bookingPolicyBindingsSchema = z.strictObject({
   sender: z.strictObject({ channel: z.enum(['email','linkedin']), accountId: identifier, authorityRevision: identifier }),
   model: z.strictObject({ providerKey: z.enum(['aws_bedrock','google_vertex']), route: identifier, modelVersion: identifier, accountBinding: identifier, consentRevision: identifier, purpose: z.literal('booking_interpretation'), qualityReviewRevision: identifier.nullable(), selection: z.enum(['initial_haiku','reviewed_candidate']) }).superRefine((v,ctx) => {
     if (v.selection === 'initial_haiku' && (v.providerKey !== 'aws_bedrock' || v.route !== 'us.anthropic.claude-haiku-4-5-20251001-v1:0' || v.modelVersion !== 'anthropic.claude-haiku-4-5-20251001-v1:0')) ctx.addIssue({code:'custom',message:'The initial route is the exact existing Bedrock Haiku4.5 route.'});
-    if (v.selection === 'reviewed_candidate' && (v.qualityReviewRevision === null || !/sonnet|gemini/i.test(v.modelVersion))) ctx.addIssue({code:'custom',message:'An exact consented Sonnet/Gemini candidate requires quality review.'});
+    if (v.selection === 'reviewed_candidate') {
+      const knownSonnet = v.providerKey === 'aws_bedrock' && ['us.anthropic.claude-sonnet-4-6','us.anthropic.claude-sonnet-5-5'].includes(v.modelVersion) && v.route === v.modelVersion;
+      const knownGemini = v.providerKey === 'google_vertex' && v.modelVersion === 'gemini-3.8-flash' && /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u.test(v.accountBinding) && v.route === `vertex.us/${v.accountBinding}`;
+      if (v.qualityReviewRevision === null || (!knownSonnet && !knownGemini)) ctx.addIssue({code:'custom',message:'A configured exact Sonnet/Gemini route and quality revision are required. Actual consent and acceptance are checked separately.'});
+    }
   }),
   budget: z.strictObject({ lane: z.literal('booking'), timeZone: z.literal('America/New_York'), dailyCeilingCents: z.number().int().min(0).max(200), monthlyCeilingCents: z.number().int().min(0).max(2500) }),
 });
@@ -39,3 +43,15 @@ export interface BookingPolicyView {
   readiness:{ready:boolean;reasons:string[];evidenceKind:'unavailable'|'controlled'|'actual'};
   budget:{lane:'booking';timeZone:'America/New_York';businessDate:string;calendarMonth:string;dailyCeilingCents:number;monthlyCeilingCents:number;observedDailyCents:number;observedMonthlyCents:number;allowance:'unknown'|'blocked'|'available';remainingDailyCents:number|null;remainingMonthlyCents:number|null};
 }
+export const bookingPolicyViewSchema = z.strictObject({
+  revision:z.number().int().nonnegative(),setting:bookingPolicySettingSchema,
+  rules:z.custom<typeof BOOKING_BUSINESS_RULES>(value=>JSON.stringify(value)===JSON.stringify(BOOKING_BUSINESS_RULES)),
+  businessPolicyValid:z.boolean(),enabled:z.literal(false),
+  readiness:z.strictObject({ready:z.boolean(),reasons:z.array(identifier).max(30),evidenceKind:z.enum(['unavailable','controlled','actual'])}),
+  budget:z.strictObject({lane:z.literal('booking'),timeZone:z.literal('America/New_York'),businessDate:z.iso.date(),calendarMonth:z.string().regex(/^\d{4}-\d{2}$/u),dailyCeilingCents:z.number().int().min(0).max(200),monthlyCeilingCents:z.number().int().min(0).max(2500),observedDailyCents:z.number().int().nonnegative(),observedMonthlyCents:z.number().int().nonnegative(),allowance:z.enum(['unknown','blocked','available']),remainingDailyCents:z.number().int().nonnegative().nullable(),remainingMonthlyCents:z.number().int().nonnegative().nullable()}),
+});
+export const bookingPolicySettingsViewSchema=z.strictObject({policy:bookingPolicyViewSchema,configuration:z.strictObject({choices:z.array(z.strictObject({id:z.string().regex(/^[a-f0-9]{64}$/u),label:z.string().min(1).max(500),bindings:bookingPolicyBindingsSchema})).max(20),reasons:z.array(identifier).max(10)})});
+export type BookingPolicySettingsView=z.infer<typeof bookingPolicySettingsViewSchema>;
+export const bookingPolicyChangeSchema=z.discriminatedUnion('action',[bookingPolicyCommandSchema.options[0].omit({clientVersion:true}),bookingPolicyCommandSchema.options[1].omit({clientVersion:true})]);
+export type BookingPolicyChange=z.infer<typeof bookingPolicyChangeSchema>;
+export const bookingPolicyChangedSchema=z.strictObject({revision:z.number().int().positive()});

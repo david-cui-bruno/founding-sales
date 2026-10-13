@@ -1,7 +1,7 @@
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
 import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import {bookingPolicyCommandSchema} from '@fss/contracts';
-import {mutateBookingPolicy,readBookingPolicy} from '@fss/domain/meetings/bookingPolicy.ts';
+import {mutateBookingPolicy,readBookingPolicy,readBookingPolicySettings} from '@fss/domain/meetings/bookingPolicy.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 export const BOOKING_POLICY_PATHS:readonly string[]=['/meetings/booking-policy'];
 export async function routeBookingPolicy(request:ApiRequest,options:RoutingOptions&{bookingPolicyRuntime?:BookingPolicyRuntime}):Promise<RouteResult|null> {
@@ -11,6 +11,11 @@ export async function routeBookingPolicy(request:ApiRequest,options:RoutingOptio
   const principal=await requirePrincipal(auth,request);if(!principal.ok)return principal.result;
   const scoped=contextForPrincipal(auth,principal.principal);if(!scoped.ok)return scoped.result;
   if(scoped.context.scope.actor.kind!=='user'||scoped.context.scope.actor.role!=='admin')return {status:403,body:{error:'admin_required'}};
-  if(request.method==='GET')return {status:200,body:await readBookingPolicy(scoped.context,options.bookingPolicyRuntime)};
+  if(request.method==='GET'){
+    const view=request.query.get('view');
+    if(view!==null&&view!=='settings')return {status:400,body:{error:'invalid_input'}};
+    try{return {status:200,body:view==='settings'?await readBookingPolicySettings(scoped.context,options.bookingPolicyRuntime):await readBookingPolicy(scoped.context,options.bookingPolicyRuntime)};}
+    catch{return {status:403,body:{error:'owner_authority_changed'}};}
+  }
   return runRouteCommand({auth,request,principal:principal.principal},bookingPolicyCommandSchema,'booking_policy',mutateBookingPolicy);
 }
