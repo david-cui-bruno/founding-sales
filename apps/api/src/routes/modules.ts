@@ -191,6 +191,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // not an invitation.
     moduleOf('crm-mail-import', {paths: CRM_MAIL_IMPORT_PATHS}, routeCrmMailImport, routing),
     moduleOf('business-mail', { paths: BUSINESS_MAIL_PATHS }, routeBusinessMail, routing),
+    moduleOf('booking-interpretation', {paths:BOOKING_INTERPRETATION_PATHS}, routeBookingInterpretation, routing),
     moduleOf('business-acquisition', { paths: BUSINESS_PATHS }, routeBusinessAcquisition, routing),
     moduleOf('people-relationships', { paths: IDENTITY_PATHS }, routePeopleRelationships, routing),
     moduleOf('selected-imports', { paths: SELECTED_IMPORT_PATHS }, routeSelectedImports, routing),
@@ -318,3 +319,4 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('attachments', { paths: ATTACHMENT_PATHS }, routeAttachments, routing),
   ];
 }
+import {BOOKING_INTERPRETATION_PATHS,routeBookingInterpretation} from './bookingInterpretation.ts';
