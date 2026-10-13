@@ -9,13 +9,16 @@ import {issueSessionFor} from './support/sessionFixture.ts';
 import {dispatch} from '../src/server.ts';
 it('keeps a bounded 50-promise Today page and unrelated unanswered work with truthful overflow',async()=>{
  const fixture=await createAuthFixture();try{
+  // Keep volume/coverage evidence current across calendar rollover. Historical
+  // promise eligibility has separate explicit regressions.
+  const promiseDate=(await fixture.db.query<{date:string}>("SELECT (CURRENT_DATE + 1)::text AS date")).rows[0]!.date;
   const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
   const options={session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false};
   const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},options);
   const get=(path:string)=>dispatch({method:'GET',path,body:null,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},options);
   const command=(fields:object)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...fields});
   const personId=((await post('/crm/people/create',command({fullName:'Bounded promises'}))).body as {result:{personId:string}}).result.personId;
-  const quotes=Array.from({length:51},(_,index)=>`I will prepare item ${index+1} by October 12.`);
+  const quotes=Array.from({length:51},(_,index)=>`I will prepare item ${index+1} by ${promiseDate}.`);
   const batches=[quotes.slice(0,50),quotes.slice(50)];
   for(const [index,batch] of batches.entries())expect((await post('/crm/people/source/add',command({personId,sourceKey:`bounded-${index}`,excerpt:batch.join('\n'),occurredAt:'2026-10-01T14:00:00Z'}))).status).toBe(200);
   const sources=((await post('/crm/people/read',{personId})).body as {sources:{sourceId:string;workspaceId:string;revision:number;contentHash:string;excerpt:string}[]}).sources;
@@ -27,7 +30,7 @@ it('keeps a bounded 50-promise Today page and unrelated unanswered work with tru
    expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
    await runOnce(fixture.db,{registry,owner:'bounded-extract',limit:20});
    const processed=crmProcessingResultSchema.parse((await post('/crm/processing/read',{source})).body);if(!('generationId' in processed)||processed.state!=='complete')throw new Error('controlled extraction missing');
-   for(const claim of processed.claims)expect((await post('/crm/commitments/review',command({source,claimId:claim.claimId,claimRevision:1,claimHash:claim.claimHash,contextHash:processed.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:'internal_promise',actor:'self',actionLabel:claim.quote,due:{kind:'date',date:'2026-10-12',zone:'UTC',expression:'by October 12'}}))).status).toBe(200);
+   for(const claim of processed.claims)expect((await post('/crm/commitments/review',command({source,claimId:claim.claimId,claimRevision:1,claimHash:claim.claimHash,contextHash:processed.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:'internal_promise',actor:'self',actionLabel:claim.quote,due:{kind:'date',date:promiseDate,zone:'UTC',expression:`by ${promiseDate}`}}))).status).toBe(200);
    for(let pass=0;pass<3;pass++)await runOnce(fixture.db,{registry,owner:'bounded-project',limit:20});
   }
   const ws=fixture.alpha.workspaceId,owner=fixture.alpha.admin.userId;
