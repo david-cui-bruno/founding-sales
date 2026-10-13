@@ -458,6 +458,39 @@ async function seedRelationshipConstraintRows(f: Fixture) {
      SELECT workspace_id,id,revision,endpoint_id,person_id,shared,status,source_id,source_revision,source_hash,$3 FROM crm_endpoint_claims WHERE workspace_id=$1 AND id=$2`,
     [workspace(f), claimId, admin(f)],
   );
+  return { personId, sourceId, relationshipId, endpointId, claimId };
+}
+
+/** Every new refusal constraint gets a failing insert; the inventory guard is unchanged. */
+const linkedinRefusalConstraintCases: readonly Case[] = [
+  ...([
+    ['linkedin_route_refusals_claim_revision_check', { claim_revision: 0 }],
+    ['linkedin_route_refusals_relationship_revision_check', { relationship_revision: 0 }],
+    ['linkedin_route_refusals_scope_check', { scope: 'guessed' }],
+    ['linkedin_route_refusals_workspace_id_fkey', { workspace_id: '00000000-0000-4000-8000-000000000000' }],
+    ['linkedin_route_refusals_workspace_id_person_id_fkey', { person_id: '00000000-0000-4000-8000-000000000000' }],
+    ['linkedin_route_refusals_workspace_id_firm_id_fkey', { firm_id: '00000000-0000-4000-8000-000000000000' }],
+    ['linkedin_route_refusals_workspace_id_endpoint_id_fkey', { endpoint_id: '00000000-0000-4000-8000-000000000000' }],
+    ['linkedin_route_refusals_workspace_id_claim_id_claim_revisi_fkey', { claim_revision: 2 }],
+    ['linkedin_route_refusals_workspace_id_relationship_id_relat_fkey', { relationship_revision: 2 }],
+    ['linkedin_route_refusals_workspace_id_actor_user_id_fkey', { actor_user_id: '00000000-0000-4000-8000-000000000000' }],
+  ] as const).map(([constraint, patch]) => ({
+    constraint,
+    run: async (f: Fixture) => insertLinkedinRefusal(f, await linkedinRefusalRow(f), patch),
+  })),
+  { constraint: 'linkedin_route_refusals_pkey', run: async (f: Fixture) => {
+    const row = await linkedinRefusalRow(f);
+    await insertLinkedinRefusal(f, row);
+    return insertLinkedinRefusal(f, row);
+  } },
+];
+async function linkedinRefusalRow(f: Fixture): Promise<Record<string, unknown>> {
+  const rows = await seedRelationshipConstraintRows(f);
+  return { workspace_id: workspace(f), id: rows.claimId, person_id: rows.personId, firm_id: f.crm.alpha.firmId, endpoint_id: rows.endpointId, claim_id: rows.claimId, claim_revision: 1, relationship_id: rows.relationshipId, relationship_revision: 1, scope: 'person', actor_user_id: admin(f) };
+}
+function insertLinkedinRefusal(f: Fixture, row: Record<string, unknown>, patch: Record<string, unknown> = {}) {
+  const input = { ...row, ...patch };
+  return f.session.query(`INSERT INTO linkedin_route_refusals(${Object.keys(input).join(',')}) VALUES(${Object.keys(input).map((_, index) => `$${index + 1}`).join(',')})`, Object.values(input));
 }
 
 const relationshipConstraintCases: readonly Case[] = [
@@ -2196,6 +2229,7 @@ const cases: readonly Case[] = [
   ...CRM_PROGRESS_CONSTRAINT_CASES,
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
+  ...linkedinRefusalConstraintCases,
   ...SOURCING_CONSTRAINT_CASES,
   ...OUTREACH_CONSTRAINT_CASES,
   ...ROADMAP_ACTIVATION_CONSTRAINT_CASES,
@@ -2343,7 +2377,7 @@ describe("foundation constraints", () => {
 
   it.each(
     (
-      ["crm_relationship_revisions", "crm_endpoint_claim_revisions"] as const
+      ["crm_relationship_revisions", "crm_endpoint_claim_revisions", "linkedin_route_refusals"] as const
     ).flatMap((table) =>
       (["app_runtime", "migration"] as const).flatMap((role) =>
         (["UPDATE", "DELETE", "TRUNCATE"] as const).map((operation) => ({
@@ -2358,11 +2392,12 @@ describe("foundation constraints", () => {
     async ({ table, role, operation }) => {
       await fixture.session.query("BEGIN");
       try {
-        await seedRelationshipConstraintRows(fixture);
+        if (table === "linkedin_route_refusals") await insertLinkedinRefusal(fixture, await linkedinRefusalRow(fixture));
+        else await seedRelationshipConstraintRows(fixture);
         await fixture.session.query(`SET LOCAL ROLE ${role}`);
         const statement =
           operation === "UPDATE"
-            ? `UPDATE ${table} SET status='historical'`
+            ? `UPDATE ${table} SET ${table === "linkedin_route_refusals" ? "scope='firm'" : "status='historical'"}`
             : operation === "DELETE"
               ? `DELETE FROM ${table}`
               : `TRUNCATE ${table} CASCADE`;
