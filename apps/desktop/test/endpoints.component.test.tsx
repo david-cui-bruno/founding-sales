@@ -127,9 +127,14 @@ it("requires an identity check and exact source before explicitly recording an e
   expect(saved).toBe(true);
 });
 
-it.each(["person", "firm"] as const)(
-  "explicitly corrects endpoint ownership to another %s with exact evidence and expected revision",
-  async (targetKind) => {
+it.each([
+  { targetKind: "person", kind: "email" },
+  { targetKind: "firm", kind: "email" },
+  { targetKind: "person", kind: "linkedin" },
+  { targetKind: "firm", kind: "linkedin" },
+] as const)(
+  "explicitly corrects $kind endpoint ownership to another $targetKind with exact evidence and expected revision",
+  async ({ targetKind, kind }) => {
     const targetId = "22222222-2222-4222-8222-222222222222";
     const evidence = {
       sourceId: ID,
@@ -140,8 +145,8 @@ it.each(["person", "firm"] as const)(
     const claim = {
       claimId: ID,
       endpointId: ID,
-      kind: "email" as const,
-      value: "alex@example.test",
+      kind,
+      value: kind === "linkedin" ? "https://www.linkedin.com/in/alex-example" : "alex@example.test",
       personId: ID,
       personName: "Alex",
       firmId: null,
@@ -173,12 +178,14 @@ it.each(["person", "firm"] as const)(
       ],
       claim: async () => {},
       correct: async (input: {
+        kind: "email" | "phone" | "linkedin";
         personId: string | null;
         firmId: string | null;
         shared: boolean;
         expectedRevision: number;
         evidence: typeof evidence;
       }) => {
+        expect(input.kind).toBe(kind);
         expect(input.personId).toBe(targetKind === "person" ? targetId : null);
         expect(input.firmId).toBe(targetKind === "firm" ? targetId : null);
         expect(input.shared).toBe(targetKind === "firm");
@@ -220,9 +227,12 @@ it.each(["person", "firm"] as const)(
       await screen.findByLabelText("Correct endpoint owner"),
       `${targetKind}:${targetId}`,
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Check existing identity" }),
-    );
+    if (kind === "linkedin") {
+      expect(screen.getAllByText("LinkedIn profile").length).toBeGreaterThan(0);
+      expect((screen.getByRole("button", { name: "Check existing identity" }) as HTMLButtonElement).disabled).toBe(true);
+    } else {
+      await userEvent.click(screen.getByRole("button", { name: "Check existing identity" }));
+    }
     await userEvent.click(
       screen.getByRole("button", { name: "Save address correction" }),
     );

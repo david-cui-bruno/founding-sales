@@ -419,6 +419,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       ["retained", "deletion_stops"],
       "Original source/relationship revisions and firm snapshots remain body-free history. Deleting the copied source requires review without rebinding original context.",
     ),
+    linkedin_route_refusals: coverage(
+      ['retained'],
+      'Immutable confirmed human stop facts retain only opaque Person/firm scope, actor and date after source deletion, disconnect or departure. No profile, name, excerpt or inferred refusal text is retained, and no reimport or referral clears the stop.',
+    ),
     crm_identity_endpoints: coverage(
       ["retained", "deletion_redacts"],
       "Shared endpoint identity is not person ownership. Deletion clears its literal value when no other current retained claim supports it; a hash remains for deduplication.",
