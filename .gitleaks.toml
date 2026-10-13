@@ -3244,3 +3244,13 @@ condition = "AND"
 paths = ['''\Aapps/api/test/integrationsSettings\.test\.ts\z''']
 regexTarget = "secret"
 regexes = ['''\ASENTINEL-api-key-secret-0123456789\z''']
+
+# Public HTTP failure prose from the Gemini integration report's retained commit.
+# Both the exact report path and the exact noncredential phrase must match.
+[[allowlists]]
+description = "Exact historical Gemini report HTTP failure phrase only"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''\Adocs/sourcing/ask-gemini-integration-20261012\.md\z''']
+regexTarget = "secret"
+regexes = ['''\Aambiguous503/no\z''']

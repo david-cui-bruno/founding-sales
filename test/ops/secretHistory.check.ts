@@ -70,6 +70,7 @@ it.skipIf(!scannerAvailable)('the verification entry point scans the deduplicate
 it.skipIf(!scannerAvailable)('fixture exceptions cover only the exact fake values at their exact test paths',()=>{
  const {root,repo}=fixture();
  const nonce='b6bacf0c-28b2-4290-8eaa-c8647020c3c8',other='9b40c38a-ed43-43d0-b227-177c08724fc6',sentinel=['SENTINEL','api-key-secret','0123456789'].join('-');
+ const publicFailurePhrase=['ambiguous503','/no'].join('');
  const files:Record<string,string>={
   'apps/desktop/test/linkedinSubmit.test.ts':`token: '${nonce}'\ntoken: '${other}'\ntoken: '${nonce.replace(/^b/,'c')}'`,
   'apps/desktop/test/linkedinDetailNavigation.test.ts':`token: '${nonce}'`,
@@ -79,11 +80,12 @@ it.skipIf(!scannerAvailable)('fixture exceptions cover only the exact fake value
   'apps/desktop/test/host/support/socialImageStageProbe.ts':`token: '${nonce}'`,
   'apps/desktop/test/host/support/socialTextSubmitProbe.ts':`token: '${nonce}'\ntoken: '${other}'`,
   'apps/api/test/integrationsSettings.test.ts':`api_key_secret: '${sentinel}'\napi_key_secret: '${sentinel}x'`,
-  'outside.ts':`token: '${nonce}'\napi_key_secret: '${sentinel}'`,
+  'docs/sourcing/ask-gemini-integration-20261012.md':`Token accounting, '${publicFailurePhrase}'\nToken accounting, '${publicFailurePhrase}x'`,
+  'outside.ts':`token: '${nonce}'\napi_key_secret: '${sentinel}'\ntoken: '${publicFailurePhrase}'`,
  };
  for(const [path,body] of Object.entries(files)){const parent=join(repo,path,'..');mkdirSync(parent,{recursive:true});writeFileSync(join(repo,path),body);}
  command(repo,['add','.']);command(repo,['commit','-qm','fixtures']);const report=join(root,'findings.json');
  const result=spawnSync('gitleaks',['git','--redact=100','--no-banner','--no-color','--config',join(import.meta.dirname,'../../.gitleaks.toml'),'--report-format','json','--report-path',report,'--log-opts=--all --full-history -m',repo],{encoding:'utf8',timeout:30_000});
  expect(result.status).toBe(1);const findings=JSON.parse(readFileSync(report,'utf8')) as {File:string;StartLine:number}[];
- expect(findings.map(f=>`${f.File}:${f.StartLine}`).sort()).toEqual(['apps/api/test/integrationsSettings.test.ts:2','apps/desktop/test/linkedinSubmit.test.ts:3','outside.ts:1','outside.ts:2']);
+ expect(findings.map(f=>`${f.File}:${f.StartLine}`).sort()).toEqual(['apps/api/test/integrationsSettings.test.ts:2','apps/desktop/test/linkedinSubmit.test.ts:3','docs/sourcing/ask-gemini-integration-20261012.md:2','outside.ts:1','outside.ts:2','outside.ts:3']);
 });
