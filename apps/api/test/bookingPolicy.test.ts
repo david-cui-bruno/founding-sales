@@ -15,7 +15,7 @@ describe('normal authenticated booking policy controls',()=>{
   let f:AuthFixture,token:string;
   beforeEach(async()=>{f=await createAuthFixture();token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;});
   afterEach(async()=>{await f.stop();});
-  const request=async(method:string,body?:unknown,bearer=token,runtime?:BookingPolicyRuntime)=>routeBookingPolicy({method,path:'/meetings/booking-policy',query:new URLSearchParams(),headers:{authorization:`Bearer ${bearer}`},body},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,suppressionJournal:{append:async()=>{}},sendingEnabled:false,upgradeUrl:'https://example.test/update',...(runtime===undefined?{}:{bookingPolicyRuntime:runtime})});
+  const request=async(method:string,body?:unknown,bearer=token,runtime?:BookingPolicyRuntime,query='')=>routeBookingPolicy({method,path:'/meetings/booking-policy',query:new URLSearchParams(query),headers:{authorization:`Bearer ${bearer}`},body},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,suppressionJournal:{append:async()=>{}},sendingEnabled:false,upgradeUrl:'https://example.test/update',...(runtime===undefined?{}:{bookingPolicyRuntime:runtime})});
   const command=(expectedRevision:number,bindings:BookingPolicyBindings)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,action:'save',expectedRevision,bindings});
   it('owner saves and reads a versioned business policy without claiming readiness or Enable',async()=>{
     const bindings=controlledBookingBindings(f.alpha.admin.userId);
@@ -53,5 +53,24 @@ describe('normal authenticated booking policy controls',()=>{
     const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),f.db);
     expect(await readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId,capability:'interpretation'},runtime)).toMatchObject({kind:'available',snapshot:{capability:'interpretation',businessPolicyValid:true,operationalReady:true,enabled:false,evidenceKind:'controlled'}});
     expect(await readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId},runtime)).toMatchObject({kind:'available',snapshot:{capability:'booking',operationalReady:false,enabled:false}});
+  });
+  it('a family name and alleged quality revision cannot select an arbitrary model or provider route',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);
+    bindings.model={...bindings.model,selection:'reviewed_candidate',qualityReviewRevision:'claimed-review',route:'arbitrary-provider-route',modelVersion:'sonnet-arbitrary-version'};
+    expect((await request('POST',command(0,bindings)))?.status).toBe(400);
+    expect((await request('GET'))?.body).toMatchObject({revision:0,businessPolicyValid:false,enabled:false});
+  });
+  it('evidence expiry during an awaited current read is checked at completion, not the earlier request time',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);bindings.model.qualityReviewRevision='controlled-quality-1';
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    let now='2026-10-13T21:00:00Z';
+    const runtime:BookingPolicyRuntime={now:()=>now,readEvidence:async()=>{await Promise.resolve();now='2026-10-13T21:01:00Z';return {evidenceKind:'controlled',binding:bindings,verifiedAt:'2026-10-13T19:00:00Z',validUntil:'2026-10-13T21:00:30Z',accountAccess:true,calendarFreeBusy:true,eventSettings:true,modelConsent:true,modelAcceptance:true,senderAuthority:true,sourceAuthority:true,providerAdapter:true,releaseReady:true,funding:{status:'verified',sharedRemainingDailyCents:200,sharedRemainingMonthlyCents:2500}};}};
+    expect((await request('GET',undefined,token,runtime))?.body).toMatchObject({businessPolicyValid:true,readiness:{ready:false,reasons:['runtime_evidence_expired']},budget:{allowance:'unknown'}});
+  });
+  it('normal settings reads offer exact configured choices without turning saved or proposed scope into readiness',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);
+    const runtime:BookingPolicyRuntime={now:()=> '2026-10-13T21:00:00Z',readEvidence:async()=>null,readConfiguration:async()=>[bindings]};
+    const response=await request('GET',undefined,token,runtime,'view=settings');
+    expect(response?.body).toMatchObject({policy:{revision:0,businessPolicyValid:false,enabled:false,readiness:{ready:false}},configuration:{choices:[{bindings}],reasons:[]}});
   });
 });

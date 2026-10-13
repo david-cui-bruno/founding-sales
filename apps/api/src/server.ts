@@ -3,6 +3,7 @@ import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.t
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingCapacityDeps} from './routes/bookingCapacity.ts';
+import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import type {SocialMediaStore} from './social/mediaStore.ts';
 import type { CallAudioRemover } from './integrations/callAudio.ts';
 import type { MeetingAudioStore } from './integrations/meetingAudio.ts';
@@ -95,6 +96,7 @@ export interface ApiOptions {
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
   readonly crmAcquisitionDiagnosticRuntime?: CrmAcquisitionDiagnosticRuntime;
   readonly bookingCapacity?:BookingCapacityDeps;
+  readonly bookingPolicyRuntime?:BookingPolicyRuntime;
   readonly replyComposer?:HumanReplyDraftPort|null;
   /** One backend for this call and nobody else's: transactions and locks are opened on it. */
   readonly session: SessionQueryable;
@@ -178,6 +180,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     ...(options.crmCapabilityRuntime===undefined?{}:{crmCapabilityRuntime:options.crmCapabilityRuntime}),
     ...(options.crmAcquisitionDiagnosticRuntime===undefined?{}:{crmAcquisitionDiagnosticRuntime:options.crmAcquisitionDiagnosticRuntime}),
     ...(options.bookingCapacity===undefined?{}:{bookingCapacity:options.bookingCapacity}),
+    ...(options.bookingPolicyRuntime===undefined?{}:{bookingPolicyRuntime:options.bookingPolicyRuntime}),
     ...(options.replyComposer===undefined?{}:{replyComposer:options.replyComposer}),
     session: options.session,
     supportedClientVersions: options.supportedClientVersions,
