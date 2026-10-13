@@ -10,6 +10,7 @@ import {enqueueJob} from '../jobs/jobStore.ts';
 import {jobIdempotencyKey} from '../jobs/jobKinds.ts';
 import {bookingCreateCostReason,type BookingCreateRuntime} from './bookingCreateRuntime.ts';
 import type {BookingPolicySnapshot} from './bookingPolicyTypes.ts';
+function canonicalBookingJson(value:unknown):string{if(Array.isArray(value))return `[${value.map(canonicalBookingJson).join(',')}]`;if(value!==null&&typeof value==='object')return `{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonicalBookingJson((value as Record<string,unknown>)[key])}`).join(',')}}`;return JSON.stringify(value);}
 export type BookingCreateResult={ok:true;value:BookingCreateReceipt}|{ok:false;reason:string};
 export interface BookingCreateRow extends Record<string,unknown>{id:string;owner_user_id:string;policy_revision:number;binding_key:string;payload:BookingCreatePayload;request_hash:string;state:BookingCreateReceipt['state'];provider_booking_uid:string|null;meeting_id:string|null;reason:string|null;dispatch_started_at:Date|null;starts_at:Date;provider_account_id:string;event_type_id:string}
 export function bookingCreateReceipt(row:BookingCreateRow):BookingCreateReceipt{return {submissionId:row.id,state:row.state,providerBookingUid:row.provider_booking_uid,meetingId:row.meeting_id,reason:row.reason,dispatchStartedAt:row.dispatch_started_at?.toISOString()??null};}
@@ -20,7 +21,7 @@ export function bookingSlotReason(startsAt:string,now:string):string|null{
  const minute=Number(get('hour'))*60+Number(get('minute'));if(['Sat','Sun'].includes(get('weekday')??'')||minute<540||minute+20>1080||get('second')!=='00'||start%1000!==0)return 'outside_business_hours';return null;
 }
 /** Re-read exact originals and immutable contexts under their existing authority lock closure. No second copy of mail. */
-export async function validateBookingCreate(context:RepositoryContext,input:BookingCreatePayload,runtime:BookingCreateRuntime,expectedBindingKey?:string):Promise<{ok:true;snapshot:BookingPolicySnapshot;attendee:{name:string;email:string;timeZone:string};fingerprint:string}|{ok:false;reason:string}>{
+export async function validateBookingCreate(context:RepositoryContext,input:BookingCreatePayload,runtime:BookingCreateRuntime,expectedBindingKey?:string,inspectionOnly=false):Promise<{ok:true;snapshot:BookingPolicySnapshot;attendee:{name:string;email:string;timeZone:string};fingerprint:string}|{ok:false;reason:string}>{
  const actor=context.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'owner_required'};
  const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];if(member?.role!=='admin'||member.status!=='active')return {ok:false,reason:'owner_required'};
  await lockSettingForRead(context,'booking_policy');
@@ -28,7 +29,7 @@ export async function validateBookingCreate(context:RepositoryContext,input:Book
  if(policy.kind!=='available')return {ok:false,reason:policy.reason};const snapshot=policy.snapshot;
  if(!snapshot.operationalReady)return {ok:false,reason:'booking_readiness_unavailable'};
  const cost=await bookingCreateCostReason(runtime,snapshot);if(cost!==null)return {ok:false,reason:cost};
- const slot=bookingSlotReason(input.agreedSlot.startsAt,runtime.policy.now());if(slot!==null)return {ok:false,reason:slot};
+ const slot=inspectionOnly?null:bookingSlotReason(input.agreedSlot.startsAt,runtime.policy.now());if(slot!==null)return {ok:false,reason:slot};
  if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false,reason:'unsupported_provider_account'};
  const sources=[input.agreement,...(input.offeredContext===undefined?[]:[input.offeredContext])];
  const closure=await snapshotMailCopyAuthorityBatch(context,sources);if(closure===null||!await lockIdentityContext(context,{firmIds:closure.firmIds,personIds:closure.personIds})||!await lockMailCopyAuthorityBatch(context,closure,{firmIds:closure.firmIds,personIds:closure.personIds,lockMode:'read'}))return {ok:false,reason:'source_unavailable'};
@@ -43,7 +44,7 @@ export async function validateBookingCreate(context:RepositoryContext,input:Book
  if(input.offeredContext!==undefined){const prior=await readMailConversationV2(context,input.offeredContext);if(prior.state!=='available'||!('originalObservation' in prior.source))return {ok:false,reason:'offered_context_unavailable'};const offer=prior.source;
  const priorThread=(await context.db.query<{provider_thread_id:string}>('SELECT provider_thread_id FROM mail_messages WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,offer.sourceId])).rows[0]?.provider_thread_id;
  if(offer.ownerUserId!==actor.userId||offer.direction!=='outgoing'||!offer.sentProof||offer.originalObservation.connectionState!=='current'||['trashed','confirmed_missing','transient_unavailable'].includes(offer.originalObservation.state)||offer.mailboxId!==source.mailboxId||offer.accountBinding!==source.accountBinding||offer.acquiredGeneration!==source.acquiredGeneration||priorThread!==thread||Date.parse(offer.occurredAt)>=Date.parse(source.occurredAt)||!offer.envelope.to.some(email=>email.toLowerCase()===route.address.toLowerCase()))return {ok:false,reason:'offered_context_unsupported'};}
- return {ok:true,snapshot,attendee:{name:route.full_name,email:route.address.toLowerCase(),timeZone:input.agreedSlot.timeZone},fingerprint:createHash('sha256').update(JSON.stringify({closure,route,thread,original:source.originalObservation,account:source.accountBinding,generation:source.acquiredGeneration})).digest('hex')};
+ return {ok:true,snapshot,attendee:{name:route.full_name,email:route.address.toLowerCase(),timeZone:input.agreedSlot.timeZone},fingerprint:createHash('sha256').update(canonicalBookingJson({closure,route,thread,original:source.originalObservation,account:source.accountBinding,generation:source.acquiredGeneration})).digest('hex')};
 }
 /** Ordinary command transaction owns the durable reservation and job atomically. */
 export async function requestBookingCreate(context:RepositoryContext,raw:BookingCreatePayload,runtime?:BookingCreateRuntime):Promise<BookingCreateResult>{
@@ -52,7 +53,7 @@ export async function requestBookingCreate(context:RepositoryContext,raw:Booking
  const valid=await validateBookingCreate(context,input,runtime);if(!valid.ok)return valid;
  const owner=context.scope.actor;if(owner.kind!=='user')return {ok:false,reason:'owner_required'};
  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${context.scope.workspaceId}:booking_create:${valid.snapshot.bindings.account.accountId}`]);
- const hash=createHash('sha256').update(JSON.stringify(input)).digest('hex');
+ const hash=createHash('sha256').update(canonicalBookingJson(input)).digest('hex');
  const duplicate=(await context.db.query<BookingCreateRow>('SELECT * FROM booking_create_submissions WHERE workspace_id=$1 AND owner_user_id=$2 AND request_hash=$3',[context.scope.workspaceId,owner.userId,hash])).rows[0];if(duplicate)return {ok:true,value:bookingCreateReceipt(duplicate)};
  if((await context.db.query(`SELECT id FROM booking_create_submissions WHERE workspace_id=$1 AND provider_account_id=$2 AND state IN ('pending','accepted','unknown') AND starts_at<$3::timestamptz+interval '30 minutes' AND buffer_ends_at>$3::timestamptz`,[context.scope.workspaceId,valid.snapshot.bindings.account.accountId,input.agreedSlot.startsAt])).rows.length)return {ok:false,reason:'slot_unavailable'};
  const row=(await context.db.query<BookingCreateRow>(`INSERT INTO booking_create_submissions(workspace_id,owner_user_id,policy_revision,binding_key,provider_account_id,event_type_id,request_hash,payload,starts_at,buffer_ends_at,source_fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9::timestamptz+interval '30 minutes',$10) RETURNING *`,[context.scope.workspaceId,owner.userId,valid.snapshot.policyRevision,valid.snapshot.bindingKey,valid.snapshot.bindings.account.accountId,valid.snapshot.bindings.event.eventTypeId,hash,JSON.stringify(input),input.agreedSlot.startsAt,valid.fingerprint])).rows[0]!;
