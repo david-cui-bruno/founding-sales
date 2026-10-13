@@ -323,3 +323,17 @@ it('releases the owned uncalled hold when captured authority expires across the 
  expect(waited).toBe(true);expect(calls).toBe(0);
  expect((await fixture.db.query('SELECT state,settled_cents FROM provider_reservations WHERE subject_id=$1',[requestId])).rows[0]).toMatchObject({state:'released',settled_cents:0});
 });
+it('does not queue a request using a captured authority deadline expired during the canonical read wait',async()=>{
+ const text='Can we arrange a call?';const {source}=await configuredRequest(text,[],200,text.length,()=>new Date(Date.now()+500).toISOString());
+ const canonical=authority!;authority={...canonical,read:async(context,query)=>{const current=await canonical.read(context,query);await fixture.db.query('SELECT pg_sleep(0.8)');return current;}};
+ const response=await post('/crm/booking/interpretation/request',command({source,priorSources:[]}));
+ expect(response.body).toMatchObject({result:{state:'unavailable'}});
+ const requestId=(response.body as {result:{requestId:string}}).result.requestId;
+ expect((await fixture.db.query("SELECT count(*)::int AS n FROM jobs WHERE kind='crm.booking_interpretation' AND payload->>'requestId'=$1",[requestId])).rows[0]).toMatchObject({n:0});
+});
+it('hides a current candidate when captured authority expires during the final canonical read wait',async()=>{
+ const text='Can we arrange a call?';const {source,requestId}=await configuredRequest(text,[],200,text.length,()=>new Date(Date.now()+500).toISOString());
+ await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null});
+ const canonical=authority!;authority={...canonical,revalidate:async(context,snapshot)=>{const current=await canonical.revalidate(context,snapshot);await fixture.db.query('SELECT pg_sleep(0.8)');return current;}};
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'unavailable',outcome:null,reason:'booking_authority_changed'});
+});
