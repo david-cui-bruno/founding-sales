@@ -1,3 +1,5 @@
+import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
+import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import {createHash,randomUUID} from 'node:crypto';
 import {expect} from 'vitest';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
@@ -16,7 +18,7 @@ export async function bookingCreateSourceFixture(){
  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
  const db=await fixture.database.appRuntimeSession();
  const command=(body:object)=>({...body,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
- const runtimeOptions:{bookingCreate?:import('@fss/domain/meetings/bookingCreateRuntime.ts').BookingCreateRuntime;bookingPolicyRuntime?:import('@fss/domain/meetings/bookingPolicyTypes.ts').BookingPolicyRuntime}={};
+ const runtimeOptions:{bookingCreate?:BookingCreateRuntime;bookingPolicyRuntime?:BookingPolicyRuntime}={};
  const request=async(method:string,path:string,body?:unknown,session=db)=>{const url=new URL(path,'https://fixture.test');return dispatch({method,path:url.pathname,query:url.searchParams,body,headers:{authorization:`Bearer ${token}`}},{...runtimeOptions,session,auth:{...fixture.deps,db:session},supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});};
  const firmId=await seedFirm(fixture,{name:'Booking-only source fixture',assignedUserId:fixture.alpha.admin.userId});
  const contactId=await seedContact(fixture,{firmId,fullName:'Agreed prospect'});

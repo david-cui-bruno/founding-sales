@@ -1,3 +1,4 @@
+import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {
   ASK_CANONICAL_INDEX_CONSTRAINT_CASES,
   seedCurrentCanonicalWindow,
@@ -871,6 +872,7 @@ const relationshipConstraintCases: readonly Case[] = [
 ];
 
 const cases: readonly Case[] = [
+  ...BOOKING_CREATE_CONSTRAINT_CASES,
   ...ASK_CANONICAL_INDEX_CONSTRAINT_CASES,
   ...ASK_ANSWER_CONSTRAINT_CASES,
   ...ASK_SESSION_CONSTRAINT_CASES,
