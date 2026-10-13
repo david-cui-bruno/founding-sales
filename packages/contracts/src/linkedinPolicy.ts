@@ -6,7 +6,7 @@ import {semanticVersionSchema} from './clientVersion.ts';
 /** #634 approvals are policy ceilings, not claims of provider/platform safety. */
 export const LINKEDIN_OUTREACH_RULES = {
  version: '634-2026-10-13',
- invitations: {rolling24Hours:20,rolling7Days:140,includeManual:true,clock:'elapsed_rolling',window:{zone:'prospect_local',startHour:9,endHourExclusive:17,weekends:true,unknownTimezone:'postpone'},notes:'never'},
+ invitations: {rolling24Hours:20,rolling7Days:140,includeManual:true,clock:'elapsed_rolling',window:{zone:'prospect_local',startHour:9,endHourExclusive:17,weekends:true,unknownTimezone:'postpone'},notes:'never',unknownRemainingAllowance:'hold'},
  directMessages: {rolling24Hours:20,includeManual:true,clock:'elapsed_rolling',window:{zone:'prospect_local',startHour:9,endHourExclusive:17,weekends:false,unknownTimezone:'postpone'},unknownRemainingAllowance:'hold'},
  cadence: {scope:'person_email_and_linkedin',maximumMessages:4,days:[0,3,7,14],includeManualProspecting:true,weekdayShift:'next_permitted_weekday',catchUpBurst:false,stricterEmailLimits:'independent'},
  firms: {activePeople:1,unansweredCooldownDays:30,cooldownStarts:'final_sequence_message',referral:'supported_only_without_contradicting_refusal'},
@@ -28,8 +28,8 @@ export const linkedinGenerationBindingSchema=z.strictObject({
 });
 export const linkedinPolicySaveSchema=z.strictObject({
  expectedRevision:z.number().int().nonnegative(),accountId:uuid,accountRevision:z.number().int().positive(),
- approved:z.literal(true),dataScope:z.literal('founder_sales_business').nullable(),
- acquisitionBinding:z.strictObject({configurationId:uuid,revision:z.number().int().positive()}).nullable().default(null),
+ approved:z.literal(true),approvedRulesVersion:z.literal(LINKEDIN_OUTREACH_RULES.version),dataScope:z.literal('founder_sales_business').nullable(),
+ acquisitionBinding:z.strictObject({configurationId:uuid,revision:z.number().int().positive()}).nullable(),
  generation:linkedinGenerationBindingSchema.nullable(),
 });
 export type LinkedinPolicySave=z.infer<typeof linkedinPolicySaveSchema>;
@@ -38,13 +38,16 @@ export const linkedinPolicySaveCommandSchema=linkedinPolicySaveSchema.extend(env
 export const linkedinPolicyStopCommandSchema=z.strictObject({expectedRevision:z.number().int().positive(),...envelope});
 export const linkedinPolicyCheckSchema=z.strictObject({expectedRevision:z.number().int().positive(),accountId:uuid,accountRevision:z.number().int().positive()});
 export type LinkedinPolicyCheck=z.infer<typeof linkedinPolicyCheckSchema>;
+export const linkedinPolicyWorkBindingSchema=linkedinPolicyCheckSchema.extend({ownerUserId:uuid});
+export type LinkedinPolicyWorkBinding=z.infer<typeof linkedinPolicyWorkBindingSchema>;
 export interface LinkedinPolicySnapshot {
  accountId:string;accountRevision:number;accountExternalId:string;dataScope:LinkedinPolicySave['dataScope'];
  acquisitionBinding:LinkedinPolicySave['acquisitionBinding'];generation:LinkedinPolicySave['generation'];rules:typeof LINKEDIN_OUTREACH_RULES;
 }
-export type LinkedinPolicyHold='policy_not_saved'|'owner_unavailable'|'owner_approval_required'|'policy_disabled'|'policy_revoked'|'account_changed'|'account_unavailable'|'exact_identity_unverified'|'data_scope_unknown'|'acquisition_binding_unknown'|'acquisition_evidence_unavailable'|'manual_count_coverage_unavailable'|'reply_history_coverage_unavailable'|'generation_not_configured'|'provider_binding_unverified'|'spend_evidence_unavailable'|'voice_calibration_unverified'|'outreach_adapter_unavailable';
+export type LinkedinPolicyHold='policy_not_saved'|'policy_rules_changed'|'owner_unavailable'|'owner_approval_required'|'policy_disabled'|'policy_revoked'|'account_changed'|'account_unavailable'|'exact_identity_unverified'|'data_scope_unknown'|'acquisition_binding_unknown'|'acquisition_evidence_unavailable'|'manual_count_coverage_unavailable'|'reply_history_coverage_unavailable'|'generation_not_configured'|'provider_binding_unverified'|'spend_evidence_unavailable'|'voice_calibration_unverified'|'outreach_adapter_unavailable';
 export interface LinkedinPolicyView {
- revision:number;state:'not_saved'|'saved'|'disabled'|'revoked';enabled:false;technicallyReady:boolean;
+ revision:number;state:'not_saved'|'saved'|'disabled'|'revoked';rules:typeof LINKEDIN_OUTREACH_RULES;enabled:false;technicallyReady:boolean;
  approved:boolean;approvedAt:string|null;policy:LinkedinPolicySnapshot|null;holds:LinkedinPolicyHold[];
 }
 export interface LinkedinPolicyCurrent {current:boolean;allowed:false;revision:number;reason:string;holds:LinkedinPolicyHold[]}
+export interface LinkedinPolicyWorkCurrent extends LinkedinPolicyCurrent {policy:LinkedinPolicySnapshot|null}
