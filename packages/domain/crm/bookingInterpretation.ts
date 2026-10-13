@@ -41,7 +41,8 @@ export async function readBookingInterpretation(context: RepositoryContext, inpu
   const row = (await context.db.query<BookingInterpretationRow>('SELECT * FROM crm_booking_interpretations WHERE workspace_id=$1 AND id=$2 AND requested_by=$3',
     [context.scope.workspaceId, input.requestId, context.scope.actor.userId])).rows[0];
   if (!row) return null;
-  const financial=await readAttempt(context,{subjectKind:'booking_interpretation',subjectId:row.id,attempt:1});
+  const receipt=await readAttempt(context,{subjectKind:'booking_interpretation',subjectId:row.id,attempt:1});
+  const financial=receipt===null?null:{state:receipt.state,reservedCents:receipt.cents,settledCents:receipt.settledCents};
   const loaded = await loadBookingInterpretationSources(context, row.source_refs);
   if (!loaded || loaded.fingerprint !== row.source_fingerprint) return { requestId: row.id, state: 'stale', reason: 'source_or_access_changed', outcome: null, provenance: null, financial, limitations: BOOKING_INTERPRETATION_LIMITATIONS };
   if(row.authority_snapshot!==null){const current=await authority.revalidate(context,row.authority_snapshot as BookingPolicySnapshot);if(current.kind!=='available'||!current.snapshot.operationalReady)return {...view(row),state:'unavailable',reason:'booking_authority_changed',outcome:null,financial};}

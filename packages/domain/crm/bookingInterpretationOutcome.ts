@@ -6,6 +6,15 @@ const slotSchema = z.strictObject({localDate:z.string().max(10),localTime:z.stri
 const candidateSchema = z.strictObject({intent:z.enum(['interest','accept_slot','clarify','conditional','refusal','opt_out','change','handoff']),agreement:citation.nullable(),slot:slotSchema.nullable(),substantive:citation.nullable()});
 type Citation=z.infer<typeof citation>;
 type Original=NonNullable<Awaited<ReturnType<typeof loadBookingInterpretationSources>>>['originals'][number];
+export function bookingInterpretationModelInput(originals:readonly Original[]):string|null {
+ const messages=[];
+ for(const source of originals){
+  const ranges=z.array(z.object({kind:z.string(),start:z.number().int().nonnegative(),end:z.number().int().nonnegative()})).safeParse(source.ranges);
+  if(!ranges.success||source.passage===null||ranges.data.some(range=>range.end<range.start||range.end>source.passage!.length))return null;
+  messages.push({sourceId:source.sourceId,direction:source.direction,occurredAt:source.occurredAt,rawSenderDate:source.rawSenderDate,authored:ranges.data.filter(range=>range.kind==='authored').map(range=>({start:range.start,end:range.end,text:source.passage!.slice(range.start,range.end)}))});
+ }
+ return JSON.stringify(messages);
+}
 function authored(source:Original,evidence:Citation|null):boolean {
  const ranges=z.array(z.object({kind:z.string(),start:z.number().int().nonnegative(),end:z.number().int().nonnegative()})).safeParse(source.ranges);
  return evidence!==null&&evidence.sourceId===source.sourceId&&evidence.end>evidence.start&&source.passage?.slice(evidence.start,evidence.end)===evidence.quote&&ranges.success&&ranges.data.some(range=>range.kind==='authored'&&range.start<=evidence.start&&range.end>=evidence.end);
@@ -25,6 +34,7 @@ export function bookingInterpretationOutcome(input:{candidate:unknown;originals:
  const parsed=candidateSchema.safeParse(input.candidate);
  if(!parsed.success)return clarification;
  const candidate=parsed.data,original=input.originals[0]!;
+ if(original.completeness!=='complete'||original.envelope.from===null)return clarification;
  if(!authored(original,candidate.agreement))return clarification;
  const questionSupported=authored(original,candidate.substantive);
  if(candidate.substantive!==null&&!questionSupported)return clarification;

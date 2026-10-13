@@ -10,7 +10,7 @@ import { settingLockName } from '@fss/domain/settings/store.ts';
 import { reserveAttempt, markCalling, readAttempt, settleAttempt } from '@fss/domain/research/reservations.ts';
 import { centsOf } from '@fss/domain/research/pricing.ts';
 import { BOOKING_MAX_OUTPUT_TOKENS, type BookingInterpretationModel } from '../providers/bookingInterpretationModel.ts';
-import { bookingInterpretationOutcome } from '@fss/domain/crm/bookingInterpretationOutcome.ts';
+import { bookingInterpretationOutcome,bookingInterpretationModelInput } from '@fss/domain/crm/bookingInterpretationOutcome.ts';
 export interface BookingInterpretationOptions { authority?: BookingInterpretationAuthorityPort; model?: BookingInterpretationModel }
 async function policyLock(context:RepositoryContext) {
   await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[settingLockName(context.scope.workspaceId,'booking_policy')]);
@@ -40,8 +40,8 @@ export function bookingInterpretationJobHandler(options: BookingInterpretationOp
    const ready=loaded!==null&&loaded.fingerprint===row.source_fingerprint&&loaded.originals[0]!.ownerUserId===row.requested_by&&current?.kind==='available'&&current.snapshot.operationalReady&&current.snapshot.capability==='interpretation';
    if(!ready||!model||current?.kind!=='available'||model.providerKey!==current.snapshot.bindings.model.providerKey||model.route!==current.snapshot.bindings.model.route||model.modelVersion!==current.snapshot.bindings.model.modelVersion||model.accountBinding!==current.snapshot.bindings.model.accountBinding||Date.parse(model.fundingVerifiedUntil)<=Date.now()||loaded?.originals[0]!.accountBinding!==current.snapshot.bindings.sender.accountId){
     await input.session.query("UPDATE crm_booking_interpretations SET state='unavailable',reason='booking_source_model_or_authority_unavailable',outcome=NULL WHERE workspace_id=$1 AND id=$2 AND state='pending'",[input.scope.workspaceId,id]);return null;}
-   const text=JSON.stringify(loaded.originals.map(source=>({sourceId:source.sourceId,direction:source.direction,occurredAt:source.occurredAt,rawSenderDate:source.rawSenderDate,text:source.passage,ranges:source.ranges})));
-   const maxInput=model.inputBound(text);if(maxInput===null)return null;
+   const text=bookingInterpretationModelInput(loaded.originals);
+   const maxInput=text===null?null:model.inputBound(text);if(maxInput===null||text===null){await input.session.query("UPDATE crm_booking_interpretations SET state='unavailable',reason='booking_model_input_unavailable' WHERE workspace_id=$1 AND id=$2 AND state='pending'",[input.scope.workspaceId,id]);return null;}
    const cents=centsOf('claude-haiku-4-5',{inputTokens:maxInput,outputTokens:BOOKING_MAX_OUTPUT_TOKENS},'bedrock');
    await lockBookingBudget(context);const budget=await authority.budget(context,current.snapshot);
    if(budget?.allowance!=='available'||(budget.remainingDailyCents??0)<cents||(budget.remainingMonthlyCents??0)<cents){

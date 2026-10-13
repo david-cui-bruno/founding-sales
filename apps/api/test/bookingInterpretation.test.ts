@@ -1,5 +1,22 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import {createElement} from 'react';
+import {cleanup,render,screen} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {EmailTimeline,type EmailTimelinePorts} from '../../desktop/src/renderer/firms/EmailTimeline.tsx';
+import {createAuthedClient} from '../../desktop/src/main/authedClient.ts';
+import {answerOperation,operationHandlers,type OperationHostDeps} from '../../desktop/src/main/operationHost.ts';
+import { afterAll, afterEach, beforeEach, expect, it,vi } from 'vitest';
+import {mailSourceListSchema,mailConversationSchema,mailConversationV2Schema,bookingInterpretationViewSchema} from '@fss/contracts';
+const domEnvironment=vi.hoisted(async()=>{
+ const {createRequire}=await import('node:module');
+ const {JSDOM}:{JSDOM:new(html:string,options:{url:string})=>{window:Window&typeof globalThis}}=createRequire(import.meta.url)('jsdom');
+ const dom=new JSDOM('<!doctype html><html><body></body></html>',{url:'http://localhost'});
+ const values={window:dom.window,document:dom.window.document,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,MutationObserver:dom.window.MutationObserver,getComputedStyle:dom.window.getComputedStyle};
+ const descriptors=new Map(Object.keys(values).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ for(const [key,value] of Object.entries(values))Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
+ return {restore:()=>{for(const [key,descriptor] of descriptors){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}dom.window.close();}};
+});
+afterAll(async()=>{(await domEnvironment).restore();});
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { enqueueJob, claimJobs } from '@fss/domain/jobs/jobStore.ts';
 import { businessAccountBinding } from '@fss/domain/business/acquisition.ts';
@@ -24,7 +41,7 @@ const post = (path: string, body: unknown) => dispatch({ method: 'POST', path, b
 { session: fixture.db, auth: fixture.deps, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false,...authority===undefined?{}:{bookingInterpretationAuthority:authority} });
 
 /** Controlled canonical capture proves source provenance, not actual Gmail or booking consent. */
-async function admittedMessage(text: string,outgoing=false) {
+async function admittedMessage(text: string,outgoing=false,authoredLength=text.length) {
   const workspaceId = fixture.alpha.workspaceId, ownerUserId = fixture.alpha.admin.userId;
   const key = randomUUID();
   let mailbox=(await fixture.db.query<{ id: string; owner_user_id: string; email_address: string; provider_account_id: string; generation: number; status: string }>('SELECT * FROM mailboxes WHERE workspace_id=$1 AND owner_user_id=$2',[workspaceId,ownerUserId])).rows[0];
@@ -47,7 +64,7 @@ async function admittedMessage(text: string,outgoing=false) {
   const job = (await claimJobs(fixture.db, { owner: 'booking-capture-fixture', kinds: ['crm.mail_capture'], limit: 1, leaseSeconds: 120 }))[0]!;
   const registry = registerHandlers(new HandlerRegistry(), { classifier: undefined, mail: undefined, send: undefined, research: undefined,
     crmMailCapture: { proofVerifier: { verify: async proof => proof.accountBinding === binding && proof.grantReceipt === 'fixture-grant' },
-      provider: { read: async () => ({ providerAccountId: mailbox.provider_account_id, messageId: key, threadId: conversation.provider_thread_id, labels: [outgoing?'SENT':'INBOX'], origin:outgoing?'sent':'unknown', providerAt: outgoing?'2026-10-13T13:00:00.000Z':'2026-10-13T14:00:00.000Z', rawSenderDate: outgoing?'Tue, 13 Oct 2026 09:00:00 -0400':'Tue, 13 Oct 2026 10:00:00 -0400', from: outgoing?mailbox.email_address:'casey@example.test', to: [outgoing?'casey@example.test':mailbox.email_address], cc: [], subject: 'Call', body: text, parserVersion: 'controlled-v1', representation: 'plain_text', completeness: 'complete', ranges: [{ start: 0, end: text.length, kind: 'authored' }] }) } } });
+      provider: { read: async () => ({ providerAccountId: mailbox.provider_account_id, messageId: key, threadId: conversation.provider_thread_id, labels: [outgoing?'SENT':'INBOX'], origin:outgoing?'sent':'unknown', providerAt: outgoing?'2026-10-13T13:00:00.000Z':'2026-10-13T14:00:00.000Z', rawSenderDate: outgoing?'Tue, 13 Oct 2026 09:00:00 -0400':'Tue, 13 Oct 2026 10:00:00 -0400', from: outgoing?mailbox.email_address:'casey@example.test', to: [outgoing?'casey@example.test':mailbox.email_address], cc: [], subject: 'Call', body: text, parserVersion: 'controlled-v1', representation: 'plain_text', completeness: 'complete', ranges: [{ start: 0, end: authoredLength, kind: 'authored' as const },...(authoredLength===text.length?[]:[{start:authoredLength,end:text.length,kind:'quoted' as const}])] }) } } });
   const handler = registry.get('crm.mail_capture');
   if (!handler) throw new Error('registered capture missing');
   const result = await handler.handle({ session: fixture.db, scope: workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), job });
@@ -57,7 +74,7 @@ async function admittedMessage(text: string,outgoing=false) {
 }
 
 beforeEach(async () => { authority=undefined;fixture = await createAuthFixture(); token = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken; });
-afterEach(async () => { await fixture.stop(); });
+afterEach(async () => { cleanup();await fixture.stop(); });
 
 it('shows booking interpretation unavailable without booking authority rather than borrowing capture or extraction grants', async () => {
   const source = await admittedMessage('Yes, let us arrange a call.');
@@ -74,8 +91,8 @@ it('shows booking interpretation unavailable without booking authority rather th
   expect(JSON.stringify(read.body)).not.toContain('Yes, let us arrange a call.');
 });
 
-async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typeof admittedMessage>>[]=[],sharedRemainingDailyCents=200) {
- const source=await admittedMessage(text);
+async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typeof admittedMessage>>[]=[],sharedRemainingDailyCents=200,authoredLength=text.length) {
+ const source=await admittedMessage(text,false,authoredLength);
  const original=await post('/crm/business/mail/read',source);
  const binding=(original.body as {source:{accountBinding:string}}).source.accountBinding;
  const bindings:BookingPolicyBindings={ownerUserId:fixture.alpha.admin.userId,
@@ -94,9 +111,9 @@ async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typ
  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
  return {source,requestId};
 }
-async function executeCandidate(candidate:unknown,afterWait?:()=>Promise<void>,unknown=false) {
- const model=createBookingInterpretationModel({accountBinding:'controlled-model-account',fundingVerifiedUntil:'2099-01-01T00:00:00Z',surface:{endpointId:'bedrock-runtime.us-east-1.amazonaws.com',converse:async()=>{await afterWait?.();return unknown?{}:{stopReason:'end_turn',usage:{inputTokens:40,outputTokens:20},output:{message:{role:'assistant',content:[{text:JSON.stringify(candidate)}]}}};}}});
- const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingInterpretation:{authority,model}});
+async function executeCandidate(candidate:unknown,afterWait?:()=>Promise<void>,unknown=false,observeWire?:(wire:unknown)=>void) {
+ const model=createBookingInterpretationModel({accountBinding:'controlled-model-account',fundingVerifiedUntil:'2099-01-01T00:00:00Z',surface:{endpointId:'bedrock-runtime.us-east-1.amazonaws.com',converse:async wire=>{observeWire?.(wire);await afterWait?.();return unknown?{}:{stopReason:'end_turn',usage:{inputTokens:40,outputTokens:20},output:{message:{role:'assistant',content:[{text:JSON.stringify(candidate)}]}}};}}});
+ const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingInterpretation:{...(authority===undefined?{}:{authority}),model}});
  await runOnce(fixture.db,{registry,owner:'controlled-booking-interpreter',limit:20});
 }
 it('normal owner policy save and registered controlled Haiku worker show an approved-link proposal with original provenance and conserved spend',async()=>{
@@ -178,4 +195,49 @@ it('revalidates unresolved acceptance when a second request was queued before th
  await executeCandidate(null,async()=>{calls++;},true);
  expect(calls).toBe(1);
  expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'unavailable',reason:'prior_model_acceptance_unresolved',financial:null});
+});
+it('recovers a lost calling lease with maximum settlement and never replays the provider attempt',async()=>{
+ const text='Can we arrange a call?';const {source,requestId}=await configuredRequest(text);
+ let entered!:()=>void,release!:()=>void,calls=0;const started=new Promise<void>(resolve=>{entered=resolve;});const held=new Promise<void>(resolve=>{release=resolve;});
+ const model=createBookingInterpretationModel({accountBinding:'controlled-model-account',fundingVerifiedUntil:'2099-01-01T00:00:00Z',surface:{endpointId:'bedrock-runtime.us-east-1.amazonaws.com',converse:async()=>{calls++;entered();await held;return {stopReason:'end_turn',usage:{inputTokens:40,outputTokens:20},output:{message:{role:'assistant',content:[{text:JSON.stringify({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null})}]}}};}}});
+ const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingInterpretation:{...(authority===undefined?{}:{authority}),model}});
+ const original=runOnce(fixture.db,{registry,owner:'lost-interpreter',limit:20});await started;
+ const second=await fixture.database.appRuntimeSession();
+ await second.query("UPDATE jobs SET lease_expires_at=now()-interval '1 second' WHERE kind='crm.booking_interpretation' AND state='running'");
+ await runOnce(second,{registry,owner:'recovering-interpreter',limit:20});release();await original;
+ expect(calls).toBe(1);
+ const visible=(await post('/crm/booking/interpretation/read',{requestId})).body;
+ expect(visible).toMatchObject({state:'unknown_acceptance',reason:'model_call_not_replayed',outcome:null,financial:{state:'estimated'}});
+ const financial=(visible as {financial:{reservedCents:number;settledCents:number}}).financial;expect(financial.settledCents).toBe(financial.reservedCents);
+});
+it('normal closed desktop host, authenticated API and registered worker render a current proposal in the mounted admitted-message timeline',async()=>{
+ const text='Can we arrange a call?';const {source}=await configuredRequest(text);
+ const paths:string[]=[];
+ const api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token,generation:1}),send:async(url,init)=>{
+  const path=new URL(url).pathname;paths.push(path);
+  return dispatch({method:init.method as 'POST',path,headers:init.headers,body:JSON.parse(init.body??'{}') as unknown,query:new URLSearchParams()},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,bookingInterpretationAuthority:authority!});
+ }});
+ // Unrelated operation-host capabilities are absent. The real client, closed descriptors and identity fence are used.
+ const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
+ const ports:EmailTimelinePorts={
+  list:async input=>mailSourceListSchema.parse(await answerOperation(handlers,'read','crm.businessMailList',input)),
+  read:async input=>mailConversationSchema.parse(await answerOperation(handlers,'read','crm.businessMailRead',input)),
+  readV2:async input=>mailConversationV2Schema.parse(await answerOperation(handlers,'read','crm.businessMailReadV2',input)),
+  booking:{request:async input=>{const queued=bookingInterpretationViewSchema.parse(await answerOperation(handlers,'command','crm.bookingInterpretationRequest',input));await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null});return queued;},read:async input=>bookingInterpretationViewSchema.parse(await answerOperation(handlers,'read','crm.bookingInterpretationRead',input))},
+ };
+ const mounted=render(createElement(EmailTimeline,{enabled:true,ports,privacyKey:'current-owner',sourceVersion:1}));
+ await userEvent.setup().click(await screen.findByRole('button',{name:'Open email 1'}));
+ await userEvent.setup().click(await screen.findByRole('button',{name:'Interpret booking request'}));
+ expect(await screen.findByText('Approved-link proposal: https://cal.com/controlled/demo')).toBeTruthy();
+ expect(screen.getByText('Proposals only. This cannot send a message or create an appointment.')).toBeTruthy();
+ expect(paths).toContain('/crm/booking/interpretation/request');expect(paths).toContain('/crm/booking/interpretation/read');expect(paths.some(path=>/send|create/.test(path))).toBe(false);
+ mounted.rerender(createElement(EmailTimeline,{enabled:false,ports,privacyKey:'revoked-owner',sourceVersion:2}));
+ expect(screen.queryByText('Approved-link proposal: https://cal.com/controlled/demo')).toBeNull();
+});
+it('does not disclose quoted third-party content or unrelated identity data to the booking model',async()=>{
+ const authored='Can we arrange a call?';const quoted=' PRIVATE THIRD PARTY INFORMATION';const text=authored+quoted;
+ const {source,requestId}=await configuredRequest(text,[],200,authored.length);let wire='';
+ await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:authored.length,quote:authored},slot:null,substantive:null},undefined,false,value=>{wire=JSON.stringify(value);});
+ expect(wire).not.toContain('PRIVATE THIRD PARTY INFORMATION');expect(wire).not.toContain('casey@example.test');expect(wire).not.toContain('originalContexts');
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'approved_link',permission:false}});
 });

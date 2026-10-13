@@ -8,6 +8,7 @@ function api() {
 }
 
 export const emailTimelinePorts: EmailTimelinePorts = {
+  booking:{request:async input=>api().command('crm.bookingInterpretationRequest',input),read:async input=>api().read('crm.bookingInterpretationRead',input)},
   list: async (input) => api().read("crm.businessMailList", input),
   read: async (input) => api().read("crm.businessMailRead", input),
   readV2: async (input) => api().read("crm.businessMailReadV2", input),
