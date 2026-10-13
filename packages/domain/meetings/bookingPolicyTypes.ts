@@ -36,6 +36,9 @@ export interface BookingPolicySnapshot {
   readonly operationalReady:boolean;
   readonly enabled:false;
   readonly evidenceKind:BookingPolicyView['readiness']['evidenceKind'];
+  /** From the exact validated canonical observation, not client policy settings. */
+  readonly authorityVerifiedAt:string|null;
+  readonly authorityValidUntil:string|null;
 }
 export type CurrentBookingPolicy = {readonly kind:'unavailable';readonly reason:string}|{readonly kind:'available';readonly snapshot:BookingPolicySnapshot};
 export interface CurrentBookingPolicyQuery {readonly ownerUserId:string;readonly expectedRevision?:number;readonly expectedBindingKey?:string;readonly capability?:'interpretation'|'booking'}
