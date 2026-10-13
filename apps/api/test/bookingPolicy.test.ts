@@ -21,17 +21,39 @@ describe('normal authenticated booking policy controls',()=>{
   afterEach(async()=>{await f.stop();});
   const request=async(method:string,body?:unknown,bearer=token,runtime?:BookingPolicyRuntime,query='',session:AuthFixture['db']=f.db)=>routeBookingPolicy({method,path:'/meetings/booking-policy',query:new URLSearchParams(query),headers:{authorization:`Bearer ${bearer}`},body},{session,auth:{...f.deps,db:session},supportedClientVersions:f.deps.config.supportedClientVersions,suppressionJournal:{append:async()=>{}},sendingEnabled:false,upgradeUrl:'https://example.test/update',...(runtime===undefined?{}:{bookingPolicyRuntime:runtime})});
   const command=(expectedRevision:number,bindings:BookingPolicyBindings)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,action:'save',expectedRevision,bindings});
-  const waitForBlockedBudgetRead=async()=>{
+  const waitForBlockedPolicyRead=async(pattern='%WITH spend AS (%')=>{
     const deadline=Date.now()+5000;
     while(Date.now()<deadline){
       await f.db.query('SELECT pg_stat_clear_snapshot()');
-      const blocked=await f.db.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='relation' AND query LIKE '%WITH spend AS (%'");
+      const blocked=await f.db.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='relation' AND query LIKE $1",[pattern]);
       if(blocked.rows.length>0)return;
       await new Promise<void>(resolve=>setImmediate(resolve));
     }
-    throw new Error('Real PostgreSQL budget read did not reach the controlled table lock');
+    throw new Error('Real PostgreSQL policy read did not reach the controlled table lock');
   };
   const evidenceFor=(binding:BookingPolicyBindings,validUntil:string):BookingPolicyRuntimeEvidence=>({evidenceKind:'controlled',binding,verifiedAt:'2026-10-01T00:00:00Z',validUntil,accountAccess:true,calendarFreeBusy:true,eventSettings:true,modelConsent:true,modelAcceptance:true,senderAuthority:true,sourceAuthority:true,providerAdapter:true,releaseReady:true,funding:{status:'verified',sharedRemainingDailyCents:200,sharedRemainingMonthlyCents:2500}});
+  it.each(['','view=settings'].flatMap(query=>['expiry','NY period','session revocation'].map(change=>({query,change}))))('GET $query refuses stale disclosure after real PostgreSQL final-auth wait: $change',async({query,change})=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);bindings.model.qualityReviewRevision='controlled-quality-1';
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    const signedIn=await authenticate(f.deps,`Bearer ${token}`);
+    if(!signedIn.authenticated)throw new Error('normal owner session missing');
+    let now=change==='NY period'?'2026-11-01T03:59:59Z':'2026-10-13T21:00:00Z',observations=0;
+    const runtime:BookingPolicyRuntime={now:()=>now,readConfiguration:async()=>[bindings],readEvidence:async()=>{
+      observations++;await f.db.query('BEGIN');await f.db.query('LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE');
+      return evidenceFor(bindings,change==='NY period'?'2026-11-02T00:00:00Z':'2026-10-13T21:00:30Z');
+    }};
+    const session=await f.database.appRuntimeSession(),pending=request('GET',undefined,token,runtime,query,session);
+    try{
+      await waitForBlockedPolicyRead('%FROM sessions s%');
+      if(change==='session revocation')await revokeDevice(f.deps,{workspaceId:f.alpha.workspaceId,deviceId:signedIn.principal.deviceId,reason:'signed_out'});
+      else now=change==='NY period'?'2026-11-01T04:00:01Z':'2026-10-13T21:00:30Z';
+    }finally{await f.db.query('COMMIT');await pending;}
+    const response=await pending;
+    if(change==='session revocation')expect(response?.status).toBe(401);
+    else expect(response).toEqual({status:409,body:{error:'booking_policy_observation_stale',message:'Current booking readiness and allowance are unknown. Refresh booking policy.'}});
+    expect(response?.body).not.toHaveProperty('setting');expect(response?.body).not.toHaveProperty('policy');
+    expect(observations).toBe(1);
+  });
   it('captured current authority expires during a downstream controlled cost wait without a second policy observation',async()=>{
     const bindings=controlledBookingBindings(f.alpha.admin.userId);bindings.model.qualityReviewRevision='controlled-quality-1';
     expect((await request('POST',command(0,bindings)))?.status).toBe(200);
@@ -63,7 +85,7 @@ describe('normal authenticated booking policy controls',()=>{
     const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),session);
     await f.db.query('BEGIN');await f.db.query('LOCK TABLE provider_ledger IN ACCESS EXCLUSIVE MODE');
     const pending=caller==='authenticated GET'?request('GET',undefined,token,runtime,'',session):readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId},runtime);
-    try{await waitForBlockedBudgetRead();now='2026-10-13T21:01:00Z';}finally{await f.db.query('COMMIT');await pending;}
+    try{await waitForBlockedPolicyRead();now='2026-10-13T21:01:00Z';}finally{await f.db.query('COMMIT');await pending;}
     const answer=await pending;
     if(caller==='authenticated GET')expect(answer).toMatchObject({status:200,body:{businessPolicyValid:true,enabled:false,readiness:{ready:false,reasons:['runtime_evidence_expired'],evidenceKind:'unavailable'},budget:{allowance:'unknown',remainingDailyCents:null,remainingMonthlyCents:null}}});
     else expect(answer).toMatchObject({kind:'available',snapshot:{businessPolicyValid:true,operationalReady:false,enabled:false,evidenceKind:'unavailable'}});
@@ -78,7 +100,7 @@ describe('normal authenticated booking policy controls',()=>{
     const session=await f.database.appRuntimeSession();
     await f.db.query('BEGIN');await f.db.query('LOCK TABLE provider_ledger IN ACCESS EXCLUSIVE MODE');
     const pending=request('GET',undefined,token,runtime,'',session);
-    try{await waitForBlockedBudgetRead();now='2026-11-01T04:00:01Z';}finally{await f.db.query('COMMIT');await pending;}
+    try{await waitForBlockedPolicyRead();now='2026-11-01T04:00:01Z';}finally{await f.db.query('COMMIT');await pending;}
     expect(await pending).toMatchObject({status:200,body:{businessPolicyValid:true,enabled:false,readiness:{ready:false,reasons:['booking_budget_blocked']},budget:{businessDate:'2026-11-01',calendarMonth:'2026-11',observedDailyCents:200,observedMonthlyCents:200,allowance:'blocked'}}});
   });
   it('owner saves and reads a versioned business policy without claiming readiness or Enable',async()=>{
