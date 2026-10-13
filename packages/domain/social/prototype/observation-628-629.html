@@ -15,8 +15,9 @@ const ObservationModel = (() => {
   const START = Date.parse('2026-10-13T14:00:00Z');
   const initial = () => ({now:START,accountRevision:1,authorized:true,acceptedRevision:null,countReceipt:null,replyReceipt:null,events:[],replyStopped:false,handoff:false,deleted:false,bodyRetained:true,lastManual:null,last:'Reset synthetic state',next:1});
   const current = (s,r) => Boolean(r && r.revision===s.accountRevision && r.status==='complete' && r.from<=s.now-7*DAY && r.through>=s.now);
-  const unique = s => [...new Map(s.events.map(e=>[e.id,e])).values()];
-  const counts = s => { const events=unique(s);return {daily:events.filter(e=>e.channel==='linkedin' && (e.time===null || e.time>s.now-DAY)).length,person:events.filter(e=>e.person==='prospect-fixture').length,unknown:events.some(e=>e.time===null || e.outcome==='unknown')}; };
+  const unique = s => {const seen=new Map();for(const event of s.events)if(!seen.has(event.id))seen.set(event.id,event);return [...seen.values()];};
+  const collision = s => {const seen=new Map();for(const event of s.events){const signature=JSON.stringify([event.person,event.channel,event.time,event.outcome]);if(seen.has(event.id) && seen.get(event.id)!==signature)return true;seen.set(event.id,signature);}return false;};
+  const counts = s => { const events=unique(s);return {daily:events.filter(e=>e.channel==='linkedin' && (e.time===null || e.time>s.now-DAY)).length,person:events.filter(e=>e.person==='prospect-fixture').length,collision:collision(s),unknown:collision(s) || events.some(e=>e.time===null || e.outcome==='unknown')}; };
   const decision = s => {
     const c=counts(s);
     if(s.replyStopped)return 'STOP: observed reply, David handoff retained';
@@ -25,6 +26,7 @@ const ObservationModel = (() => {
     if(s.acceptedRevision!==s.accountRevision)return 'HOLD: accepted connection not evidenced for this account revision';
     if(!current(s,s.countReceipt))return 'HOLD: count interval incomplete or not current';
     if(!current(s,s.replyReceipt))return 'HOLD: selected-thread reply interval incomplete or not current';
+    if(c.collision)return 'HOLD: same event identity has conflicting evidence';
     if(c.unknown)return 'HOLD: unresolved external action, inspect rather than replay';
     if(c.daily>=20)return 'HOLD: account-wide 20-DM rolling-day ceiling';
     if(c.person>=4)return 'HOLD: four combined prospecting touches reached';
@@ -41,6 +43,7 @@ const ObservationModel = (() => {
     if(action==='manual'){s.lastManual='manual-touch-'+s.next++;s.events.push(event(s.lastManual));s.last='Distinct manual touch fixture added';}
     if(action==='email'){s.events.push(event('email-touch-'+s.next++,'prospect-fixture','accepted',s.now,'email'));s.last='Accepted email fixture consumes shared Person total, not the LinkedIn DM counter';}
     if(action==='duplicate'){const original=s.events.find(e=>e.id===s.lastManual);if(original){s.events.push(structuredClone(original));s.last='Same confirmed stable event identity observed again, counted once';}else{s.last='No recorded manual event exists to duplicate';}}
+    if(action==='collision'){const original=s.events.find(e=>e.id===s.lastManual);if(original){s.events.push({...original,channel:'email',person:'conflicting-person'});s.last='Conflicting evidence for same ID retained, prior counts not silently overwritten';}else{s.last='Record a manual event first to create a collision fixture';}}
     if(action==='unknown'){s.events.push(event('uncertain-touch','prospect-fixture','unknown',null));s.last='Uncertain external fixture conserved, no timestamp invented';}
     if(action==='cancelUnknown'){s.last='Cancellation request does not prove original non-dispatch, uncertain event retained';}
     if(action==='reply'){s.replyStopped=true;s.handoff=true;s.last='Observed reply stops future work and creates durable handoff';}
@@ -57,10 +60,11 @@ const ObservationModel = (() => {
 </script>
 <script>
 // Thin UI shell. No network, storage, account integration or executable dispatch.
-const labels={reset:'Reset demo',accepted:'Observe accepted connection',complete:'Assume complete fixture coverage',partial:'Observe a reply-history gap',manual:'Record manual LinkedIn touch',email:'Record accepted email touch',duplicate:'Observe same manual receipt again',unknown:'Record uncertain action',cancelUnknown:'Request cancellation of uncertain action',reply:'Observe reply',delete:'Delete copied source',revoke:'Revoke toy policy',account:'Change account revision',advance:'Advance simulated clock',fill:'Add 20 account-wide manual DMs',reserve:'Try toy reservation'};
+const labels={reset:'Reset demo',accepted:'Observe accepted connection',complete:'Assume complete fixture coverage',partial:'Observe a reply-history gap',manual:'Record manual LinkedIn touch',email:'Record accepted email touch',duplicate:'Observe same manual receipt again',collision:'Observe conflicting evidence for same event',unknown:'Record uncertain action',cancelUnknown:'Request cancellation of uncertain action',reply:'Observe reply',delete:'Delete copied source',revoke:'Revoke toy policy',account:'Change account revision',advance:'Advance simulated clock',fill:'Add 20 account-wide manual DMs',reserve:'Try toy reservation'};
 const scenarios=[
   {title:'Synthetic positive',description:'Assume explicit accepted identity and complete receipts, then try a toy reservation. This does not prove a native evidence source.',steps:['accepted','complete','reserve']},
   {title:'Manual duplicate',description:'One known stable event appears twice. It counts once. Partial history still prevents continuation.',steps:['accepted','complete','manual','duplicate','partial','reserve']},
+  {title:'Conflicting identity',description:'The same event identity arrives with conflicting person/channel details. Preserve prior counts and hold instead of replacing it.',steps:['accepted','complete','manual','collision','reserve']},
   {title:'Reply and deletion',description:'A reply stops the lane. Deleting copied body keeps the confirmed stop and handoff.',steps:['accepted','complete','reply','delete','complete','reserve']},
   {title:'Unknown outcome',description:'A cancellation request is not proof of non-dispatch. Preserve the uncertain event and hold.',steps:['accepted','complete','unknown','cancelUnknown','reserve']},
   {title:'Changed evidence',description:'An account change invalidates old receipts. Advancing beyond the fixture watermark also holds, without specifying a production age threshold.',steps:['accepted','complete','account','reserve','accepted','complete','advance','reserve']},
@@ -75,7 +79,7 @@ function render(){
   const c=ObservationModel.counts(state);
   row('Simulated time',new Date(state.now).toISOString());row('Account revision',state.accountRevision);row('Toy policy active',state.authorized);row('Accepted evidence revision',state.acceptedRevision??'Unknown');
   for(const [name,r] of [['Count coverage',state.countReceipt],['Reply coverage',state.replyReceipt]])row(name,r?`${r.status}, account revision ${r.revision}, ${new Date(r.from).toISOString()} through ${new Date(r.through).toISOString()}, source ${r.source}`:'Unknown');
-  row('Unique DM events in day',c.daily);row('Combined person touches',c.person);row('Unknown external actions',c.unknown);row('Reply stop / David handoff',`${state.replyStopped} / ${state.handoff}`);row('Deletion barrier / copied body',`${state.deleted} / ${state.bodyRetained}`);
+  row('Unique DM events in day',c.daily);row('Combined person touches',c.person);row('Conflicting event identity',c.collision);row('Unknown external actions',c.unknown);row('Reply stop / David handoff',`${state.replyStopped} / ${state.handoff}`);row('Deletion barrier / copied body',`${state.deleted} / ${state.bodyRetained}`);
   row('Full retained event ledger',state.events.length?state.events.map(e=>`${e.id}: ${e.channel}, ${e.person}, ${e.outcome}, ${e.time===null?'time unknown':new Date(e.time).toISOString()}, ${e.source}`).join(' | '):'Empty synthetic ledger');
   row('Last manual event identity',state.lastManual??'None');row('Next toy event ID',state.next);document.querySelector('#change').textContent=state.last;
 }
