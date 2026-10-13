@@ -3,7 +3,7 @@ import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { workspaceScope, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { unavailableBookingInterpretationAuthority, type BookingInterpretationAuthorityPort } from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 import { loadBookingInterpretationSources } from '@fss/domain/crm/bookingInterpretationSources.ts';
-import type { BookingInterpretationRow } from '@fss/domain/crm/bookingInterpretation.ts';
+import {unresolvedBookingModelAttempt,type BookingInterpretationRow} from '@fss/domain/crm/bookingInterpretation.ts';
 import type { BookingPolicySnapshot } from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import { lockBookingBudget } from '@fss/domain/meetings/bookingPolicy.ts';
 import { settingLockName } from '@fss/domain/settings/store.ts';
@@ -30,6 +30,9 @@ export function bookingInterpretationJobHandler(options: BookingInterpretationOp
      await input.session.query("UPDATE crm_booking_interpretations SET state='unknown_acceptance',reason='model_call_not_replayed',outcome=NULL WHERE workspace_id=$1 AND id=$2 AND state<>'stale'",[input.scope.workspaceId,id]);}return null;}
    if(row.state!=='pending')return null;
    const loaded=await loadBookingInterpretationSources(context,row.source_refs);
+   if(await unresolvedBookingModelAttempt(context,row.source_refs[0]!.sourceId,id)){
+    await input.session.query("UPDATE crm_booking_interpretations SET state='unavailable',reason='prior_model_acceptance_unresolved' WHERE workspace_id=$1 AND id=$2 AND state='pending'",[input.scope.workspaceId,id]);return null;
+   }
    await policyLock(context);
    const snapshot=row.authority_snapshot as BookingPolicySnapshot|null;
    const current=snapshot===null?null:await authority.revalidate(context,snapshot);

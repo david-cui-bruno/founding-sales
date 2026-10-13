@@ -171,3 +171,11 @@ it('does not promote generic interest to agreement just because a model labels i
  await executeCandidate({intent:'accept_slot',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York',evidence:{sourceId:prior.sourceId,start:0,end:offer.length,quote:offer}},substantive:null});
  expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'clarification',permission:false}});
 });
+it('revalidates unresolved acceptance when a second request was queued before the first model wait',async()=>{
+ const {source}=await configuredRequest('Can we arrange a call?');
+ const queued=await post('/crm/booking/interpretation/request',command({source,priorSources:[]}));
+ const requestId=(queued.body as {result:{requestId:string}}).result.requestId;let calls=0;
+ await executeCandidate(null,async()=>{calls++;},true);
+ expect(calls).toBe(1);
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'unavailable',reason:'prior_model_acceptance_unresolved',financial:null});
+});

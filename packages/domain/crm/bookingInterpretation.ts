@@ -16,13 +16,16 @@ function view(row: BookingInterpretationRow) {
   return { requestId: row.id, state: row.state, reason: row.reason, outcome: row.outcome,
     provenance: row.provenance, limitations: BOOKING_INTERPRETATION_LIMITATIONS };
 }
+export async function unresolvedBookingModelAttempt(context:RepositoryContext,sourceId:string,exceptRequestId?:string) {
+ return (await context.db.query(`SELECT 1 FROM crm_booking_interpretations i JOIN provider_reservations r ON r.workspace_id=i.workspace_id AND r.id=i.reservation_id WHERE i.workspace_id=$1 AND i.source_refs @> $2::jsonb AND ($3::uuid IS NULL OR i.id<>$3) AND r.state IN ('calling','estimated') LIMIT 1`,[context.scope.workspaceId,JSON.stringify([{sourceId}]),exceptRequestId??null])).rows.length>0;
+}
 export async function requestBookingInterpretation(context: RepositoryContext, input: BookingInterpretationRequest, authority:BookingInterpretationAuthorityPort=unavailableBookingInterpretationAuthority) {
   if (context.scope.actor.kind !== 'user') return { ok: false as const, reason: 'booking_access_denied' };
   const sources = [input.source, ...input.priorSources];
   const loaded = await loadBookingInterpretationSources(context, sources);
   if (!loaded || loaded.originals[0]!.ownerUserId !== context.scope.actor.userId) return { ok: false as const, reason: 'booking_source_unavailable' };
   const current=await authority.read(context,{ownerUserId:context.scope.actor.userId});
-  const unresolved=(await context.db.query(`SELECT 1 FROM crm_booking_interpretations i JOIN provider_reservations r ON r.workspace_id=i.workspace_id AND r.id=i.reservation_id WHERE i.workspace_id=$1 AND i.source_refs @> $2::jsonb AND r.state IN ('calling','estimated') LIMIT 1`,[context.scope.workspaceId,JSON.stringify([{sourceId:input.source.sourceId}])])).rows.length>0;
+  const unresolved=await unresolvedBookingModelAttempt(context,input.source.sourceId);
   const snapshot=!unresolved&&current.kind==='available'&&current.snapshot.operationalReady&&'capability' in current.snapshot&&current.snapshot.capability==='interpretation'?current.snapshot:null;
   const state=snapshot===null?'unavailable':'pending';
   const reason=unresolved?'prior_model_acceptance_unresolved':current.kind==='unavailable'?current.reason:snapshot===null?'booking_interpretation_not_ready':null;
