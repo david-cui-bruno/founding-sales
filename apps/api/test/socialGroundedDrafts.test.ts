@@ -163,10 +163,11 @@ it.each(['founder','technical','build'] as const)('accepts owner-supported shipp
 
 it.each(['day','month'] as const)('reserves a maximum only within the posting %s ceiling, even with larger shared settings',async boundary=>{
  const h=await fixture();try{
+ await h.f.db.query("SET TIME ZONE 'UTC'");
  const ref=await h.save(fact),id=await h.request(ref);let calls=0;
  await h.f.db.query('INSERT INTO research_settings(workspace_id,daily_cost_ceiling_cents,monthly_cost_ceiling_cents) VALUES($1,10000,100000)',[h.f.alpha.workspaceId]);
- // Existing paid work setup, not a substitute for caller-visible state assertions.
- await h.f.db.query(`INSERT INTO provider_reservations(workspace_id,provider_key,subject_kind,subject_id,attempt,business_date,business_time_zone,cents,model_name,max_input_tokens,max_output_tokens,state,settled_cents,settled_at,created_at) VALUES($1,'aws_bedrock.social_draft','social_draft',$2,1,current_date,'America/New_York',$3,'claude-haiku-4-5',100,4096,'settled',$3,now(),CASE WHEN $4='month' THEN date_trunc('month',now()) ELSE now() END)`,[h.f.alpha.workspaceId,randomUUID(),boundary==='day'?98:998,boundary]);
+ // Existing paid work setup uses the posting lane's NY calendar, independent of the DB session zone.
+ await h.f.db.query(`INSERT INTO provider_reservations(workspace_id,provider_key,subject_kind,subject_id,attempt,business_date,business_time_zone,cents,model_name,max_input_tokens,max_output_tokens,state,settled_cents,settled_at,created_at) VALUES($1,'aws_bedrock.social_draft','social_draft',$2,1,(now() AT TIME ZONE 'America/New_York')::date,'America/New_York',$3,'claude-haiku-4-5',100,4096,'settled',$3,now(),CASE WHEN $4='month' THEN date_trunc('month',now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York' ELSE now() END)`,[h.f.alpha.workspaceId,randomUUID(),boundary==='day'?98:998,boundary]);
  await h.run(socialDraftHandler(h.generate(ref,text,{before:async()=>{calls++;}})));
  expect(calls).toBe(0);expect(await h.read(id)).toMatchObject({request:{state:'review',concepts:null,reason:'posting_budget_exhausted'}});
  }finally{await h.f.stop();}
