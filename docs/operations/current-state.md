@@ -1,8 +1,20 @@
 # Current operating state
 
-## Current completion focus — October 12, 2026
+## Current execution priority — October 13, 2026
 
-The approved [operating roadmap](../sourcing/roadmap-20261007.md) has eight open outcomes: core capture #549, progress #550, Ask #551, setup/deployment #552; independent outreach #425/#438 and native #460/#466. Four parents track them. Closed foundations stay closed. David-only provisional operation does not require thirty real threads; actual provider/usefulness, configuration, scoped consent and deployment evidence still apply.
+The approved destination is **new qualified property-manager conversations**, through supported discovery and coordinated guarded email/LinkedIn. David handles substantive sales replies and calls. Posting builds credibility, booking reduces agreed-call friction, and CRM/Today/Ask support the funnel. Accepted connections, replies, qualified conversations, bookings and attended calls remain separate outcomes.
+
+The [operating roadmap](../sourcing/roadmap-20261007.md) now reflects that priority. Canonical contracts are the existing execution tickets: discovery/email preparation #604/#605 and outcomes #438/#425; LinkedIn source slices #626–#632 and actual activation #633; posting #615–#618; booking #620–#625. Core #549–#552 and native #460/#466 remain independently scoped. The approved decisions on #606/#608/#609/#634 are settled; planning-map closure is not source, provider, release or Enable completion.
+
+Work the unblocked source frontier with bounded caller/registered-worker TDD and independent Spec/Standards review. Complete demoable ticket outcomes rather than adding speculative frameworks, broad research or repeated policy interviews. One integrator owns shared contracts/schema/access and final composition. No blanket Gmail/Ask/native prerequisite is introduced for unrelated source work.
+
+Actual LinkedIn count/reply observation feasibility remains to be demonstrated under #628/#629. The separately prepared read-only plan has no executable account/profile/thread binding yet; do not guess it or inspect an account merely to complete a fixture. Missing evidence stops only the affected step, not independent engineering. Source-only success does not authorize live acquisition, outreach, paid calls, release or Enable. Preserve all safeguards below.
+
+This is a documentation-only priority correction under #552. It changes no deployed version, source-readiness claim, account settings or release/sending controls. The retained source/provider/production observations below remain dated evidence, not newly verified state.
+
+## Retained completion focus — October 12, 2026
+
+The October 12 checkpoint tracked eight open outcomes: core capture #549, progress #550, Ask #551, setup/deployment #552; independent outreach #425/#438 and native #460/#466. Four parents track those outcomes. Closed foundations stay closed. David-only provisional operation does not require thirty real threads; actual provider/usefulness, configuration, scoped consent and deployment evidence still apply. The current conversation-first execution priority is above.
 
 ## Source, production and release
 
