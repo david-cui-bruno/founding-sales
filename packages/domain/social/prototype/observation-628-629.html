@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PROTOTYPE: LinkedIn observation decisions</title>
+<style>body{font:16px system-ui;max-width:960px;margin:40px auto;padding:0 20px;color:#192e36;background:#f5f7f7}h1{font-size:28px}section{background:white;padding:20px;margin:18px 0;border:1px solid #dbe3e4;border-radius:12px}button{font:inherit;padding:8px 12px;margin:5px;border:1px solid #aac2c8;border-radius:8px;background:#f5fafb;cursor:pointer}button[aria-selected=true]{background:#17586b;color:white}dl{display:grid;grid-template-columns:230px 1fr;gap:9px}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}.note{color:#53666d}#decision{font-size:20px;font-weight:650}li{margin:8px 0}</style>
+<h1>PROTOTYPE: When is an observation enough?</h1>
+<p>Can count and selected-thread coverage support a synthetic positive, while missing evidence, duplicate manual receipts, replies and deletion still stop the toy workflow?</p>
+<p class="note">Tickets #628/#629. Throwaway in-memory logic only. Every identity, event and complete receipt below is invented fixture data, not a documented LinkedIn field or real account observation. Nothing is sent, captured, stored or fetched. This is not native feasibility or production acceptance, and deliberately omits other real dispatch gates such as windows, content, spend and invitations.</p>
+<section aria-live="polite"><h2>Current decision</h2><p id="decision"></p><dl id="state"></dl><p id="change" class="note"></p></section>
+<section><h2>Try any action</h2><div id="actions"></div></section>
+<section><h2>Guided walkthroughs</h2><div id="tabs" role="tablist"></div><p id="description"></p><div id="steps"></div></section>
+<script>
+// Pure toy model. Complete synthetic coverage is an explicit assumption, never an adapter claim.
+const ObservationModel = (() => {
+  const DAY = 86400000;
+  const START = Date.parse('2026-10-13T14:00:00Z');
+  const initial = () => ({now:START,accountRevision:1,authorized:true,acceptedRevision:null,countReceipt:null,replyReceipt:null,events:[],replyStopped:false,handoff:false,deleted:false,bodyRetained:true,lastManual:null,last:'Reset synthetic state',next:1});
+  const current = (s,r) => Boolean(r && r.revision===s.accountRevision && r.status==='complete' && r.from<=s.now-7*DAY && r.through>=s.now);
+  const unique = s => [...new Map(s.events.map(e=>[e.id,e])).values()];
+  const counts = s => { const events=unique(s);return {daily:events.filter(e=>e.channel==='linkedin' && (e.time===null || e.time>s.now-DAY)).length,person:events.filter(e=>e.person==='prospect-fixture').length,unknown:events.some(e=>e.time===null || e.outcome==='unknown')}; };
+  const decision = s => {
+    const c=counts(s);
+    if(s.replyStopped)return 'STOP: observed reply, David handoff retained';
+    if(s.deleted)return 'HOLD: source deleted, recapture barrier retained';
+    if(!s.authorized)return 'HOLD: synthetic policy revoked';
+    if(s.acceptedRevision!==s.accountRevision)return 'HOLD: accepted connection not evidenced for this account revision';
+    if(!current(s,s.countReceipt))return 'HOLD: count interval incomplete or not current';
+    if(!current(s,s.replyReceipt))return 'HOLD: selected-thread reply interval incomplete or not current';
+    if(c.unknown)return 'HOLD: unresolved external action, inspect rather than replay';
+    if(c.daily>=20)return 'HOLD: account-wide 20-DM rolling-day ceiling';
+    if(c.person>=4)return 'HOLD: four combined prospecting touches reached';
+    return 'TOY ALLOW: observation gates only, not sending authority';
+  };
+  const reduce = (state,action) => {
+    if(action==='reset')return initial();
+    const s=structuredClone(state);
+    const receipt=status=>({revision:s.accountRevision,status,from:s.now-7*DAY,through:s.now,source:'invented fixture'});
+    const event=(id,person='prospect-fixture',outcome='accepted',time=s.now,channel='linkedin')=>({id,person,outcome,time,channel,source:'invented fixture'});
+    if(action==='accepted'){s.acceptedRevision=s.accountRevision;s.last='Explicit accepted connection fixture observed';}
+    if(action==='complete'){s.countReceipt=receipt('complete');s.replyReceipt=receipt('complete');s.last='ASSUMPTION: both seven-day fixture intervals complete through simulated now';}
+    if(action==='partial'){s.replyReceipt=receipt('partial');s.last='Relevant reply interval has a gap, not proof of no reply';}
+    if(action==='manual'){s.lastManual='manual-touch-'+s.next++;s.events.push(event(s.lastManual));s.last='Distinct manual touch fixture added';}
+    if(action==='email'){s.events.push(event('email-touch-'+s.next++,'prospect-fixture','accepted',s.now,'email'));s.last='Accepted email fixture consumes shared Person total, not the LinkedIn DM counter';}
+    if(action==='duplicate'){const original=s.events.find(e=>e.id===s.lastManual);if(original){s.events.push(structuredClone(original));s.last='Same confirmed stable event identity observed again, counted once';}else{s.last='No recorded manual event exists to duplicate';}}
+    if(action==='unknown'){s.events.push(event('uncertain-touch','prospect-fixture','unknown',null));s.last='Uncertain external fixture conserved, no timestamp invented';}
+    if(action==='cancelUnknown'){s.last='Cancellation request does not prove original non-dispatch, uncertain event retained';}
+    if(action==='reply'){s.replyStopped=true;s.handoff=true;s.last='Observed reply stops future work and creates durable handoff';}
+    if(action==='delete'){s.deleted=true;s.bodyRetained=false;s.last='Body removed, stop facts and deletion barrier retained';}
+    if(action==='revoke'){s.authorized=false;s.last='Synthetic authority revoked';}
+    if(action==='account'){s.accountRevision+=1;s.last='Account revision changed, prior receipts no longer support this account';}
+    if(action==='advance'){s.now+=60000;s.last='Clock advanced beyond receipt watermark, no production freshness SLA implied';}
+    if(action==='fill'){for(let i=0;i<20;i++)s.events.push(event('account-touch-'+i,'other-prospect-'+i));s.last='20 distinct account-wide manual DM fixtures added';}
+    if(action==='reserve'){if(decision(s).startsWith('TOY ALLOW')){s.events.push(event('demo-touch-'+s.next++));s.last='Toy touch reserved, no external action';}else{s.last='Toy reservation refused: '+decision(s);}}
+    return s;
+  };
+  return {initial,reduce,decision,counts,unique};
+})();
+</script>
+<script>
+// Thin UI shell. No network, storage, account integration or executable dispatch.
+const labels={reset:'Reset demo',accepted:'Observe accepted connection',complete:'Assume complete fixture coverage',partial:'Observe a reply-history gap',manual:'Record manual LinkedIn touch',email:'Record accepted email touch',duplicate:'Observe same manual receipt again',unknown:'Record uncertain action',cancelUnknown:'Request cancellation of uncertain action',reply:'Observe reply',delete:'Delete copied source',revoke:'Revoke toy policy',account:'Change account revision',advance:'Advance simulated clock',fill:'Add 20 account-wide manual DMs',reserve:'Try toy reservation'};
+const scenarios=[
+  {title:'Synthetic positive',description:'Assume explicit accepted identity and complete receipts, then try a toy reservation. This does not prove a native evidence source.',steps:['accepted','complete','reserve']},
+  {title:'Manual duplicate',description:'One known stable event appears twice. It counts once. Partial history still prevents continuation.',steps:['accepted','complete','manual','duplicate','partial','reserve']},
+  {title:'Reply and deletion',description:'A reply stops the lane. Deleting copied body keeps the confirmed stop and handoff.',steps:['accepted','complete','reply','delete','complete','reserve']},
+  {title:'Unknown outcome',description:'A cancellation request is not proof of non-dispatch. Preserve the uncertain event and hold.',steps:['accepted','complete','unknown','cancelUnknown','reserve']},
+  {title:'Changed evidence',description:'An account change invalidates old receipts. Advancing beyond the fixture watermark also holds, without specifying a production age threshold.',steps:['accepted','complete','account','reserve','accepted','complete','advance','reserve']},
+  {title:'Combined touch ceiling',description:'Email and LinkedIn share four Person touches. Email fixtures do not consume the LinkedIn DM account counter.',steps:['accepted','complete','email','manual','email','manual','reserve']},
+  {title:'Account ceiling',description:'Other prospects and manual actions share the account-wide ceiling.',steps:['accepted','complete','fill','reserve']}
+];
+let state=ObservationModel.initial();let selected=0;let step=0;
+function row(key,value){const dt=document.createElement('dt');dt.textContent=key;const dd=document.createElement('dd');dd.textContent=value;document.querySelector('#state').append(dt,dd);}
+function render(){
+  document.querySelector('#decision').textContent=ObservationModel.decision(state);
+  document.querySelector('#state').replaceChildren();
+  const c=ObservationModel.counts(state);
+  row('Simulated time',new Date(state.now).toISOString());row('Account revision',state.accountRevision);row('Toy policy active',state.authorized);row('Accepted evidence revision',state.acceptedRevision??'Unknown');
+  for(const [name,r] of [['Count coverage',state.countReceipt],['Reply coverage',state.replyReceipt]])row(name,r?`${r.status}, account revision ${r.revision}, ${new Date(r.from).toISOString()} through ${new Date(r.through).toISOString()}, source ${r.source}`:'Unknown');
+  row('Unique DM events in day',c.daily);row('Combined person touches',c.person);row('Unknown external actions',c.unknown);row('Reply stop / David handoff',`${state.replyStopped} / ${state.handoff}`);row('Deletion barrier / copied body',`${state.deleted} / ${state.bodyRetained}`);
+  row('Full retained event ledger',state.events.length?state.events.map(e=>`${e.id}: ${e.channel}, ${e.person}, ${e.outcome}, ${e.time===null?'time unknown':new Date(e.time).toISOString()}, ${e.source}`).join(' | '):'Empty synthetic ledger');
+  row('Last manual event identity',state.lastManual??'None');row('Next toy event ID',state.next);document.querySelector('#change').textContent=state.last;
+}
+function act(action){state=ObservationModel.reduce(state,action);render();}
+for(const [action,label]of Object.entries(labels)){const b=document.createElement('button');b.textContent=label;b.onclick=()=>act(action);document.querySelector('#actions').append(b);}
+function select(index){selected=index;step=0;state=ObservationModel.initial();document.querySelector('#description').textContent=scenarios[index].description;document.querySelector('#steps').replaceChildren();
+  document.querySelectorAll('#tabs button').forEach((b,i)=>b.setAttribute('aria-selected',String(i===index)));
+  for(const [i,action]of scenarios[index].steps.entries()){const b=document.createElement('button');b.textContent=`${i+1}. ${labels[action]}`;b.disabled=i!==0;b.onclick=()=>{act(action);step=i+1;document.querySelectorAll('#steps button').forEach((x,j)=>x.disabled=j!==step);};document.querySelector('#steps').append(b);}render();}
+scenarios.forEach((scenario,i)=>{const b=document.createElement('button');b.textContent=scenario.title;b.setAttribute('role','tab');b.onclick=()=>select(i);document.querySelector('#tabs').append(b);});select(0);
+</script></html>
