@@ -287,3 +287,35 @@ it('final pure-read admission reauthenticates after an actual lock wait and owne
  expect(await checking).toMatchObject({status:401});
  }finally{await f.db.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);await checking;await f.stop();}
 });
+it('retry after a lost save response shows current revoked policy rather than immutable old command receipt',async()=>{
+ const {f,call,input,token}=await setup();try{
+ let lose=true;
+ const host=linkedinPostingPolicyOperations({api:createAuthedClient({baseUrl:'https://fixture.invalid',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:'controlled',generation:0}),send:async(url,init)=>{
+  const path=new URL(url).pathname,response=await call(path,JSON.parse(init.body??'{}'));
+  if(path.endsWith('/save')&&lose){lose=false;throw new Error('Committed response lost');}return response;
+ }}),generation:()=>0});
+ const {clientVersion:_version,...save}=input;
+ expect(await host['social.savePostingPolicy'](save)).toMatchObject({view:null});
+ const other=caller(f,token,await f.database.appRuntimeSession());
+ expect((await other('/social/linkedin-posting-policy/revoke',{expectedRevision:1,...command()})).status).toBe(200);
+ expect(await host['social.savePostingPolicy'](save)).toMatchObject({view:{revision:2,state:'revoked',holds:expect.arrayContaining(['policy_revoked'])},reason:null});
+ expect((await call('/social/linkedin-posting-policy/save',input)).body).toMatchObject({replayed:true,result:{revision:1,state:'saved'}});
+ }finally{await f.stop();}
+});
+it('confirmed policy changes return no stale receipt when fresh read fails or session changes during readback',async()=>{
+ const {f,call,input}=await setup();try{
+ let generation=0;const b=barrier();
+ const host=linkedinPostingPolicyOperations({api:createAuthedClient({baseUrl:'https://fixture.invalid',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:'controlled',generation}),send:async(url,init)=>{
+  const path=new URL(url).pathname,response=await call(path,JSON.parse(init.body??'{}'));
+  if(path.endsWith('/read')){b.entered();await b.wait;}return response;
+ }}),generation:()=>generation});
+ const {clientVersion:_version,...save}=input;
+ const saving=host['social.savePostingPolicy'](save);await b.arrived;generation++;b.release();
+ expect(await saving).toEqual({view:null,reason:'session_changed'});
+ const offline=linkedinPostingPolicyOperations({api:createAuthedClient({baseUrl:'https://fixture.invalid',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:'controlled',generation}),send:async(url,init)=>{
+  const path=new URL(url).pathname;if(path.endsWith('/read'))throw new Error('Current read offline');return call(path,JSON.parse(init.body??'{}'));
+ }}),generation:()=>generation});
+ expect(await offline['social.revokePostingPolicy']({commandId:randomUUID(),expectedRevision:1})).toEqual({view:null,reason:'current_read_unavailable'});
+ expect((await call('/social/linkedin-posting-policy/read',{})).body).toMatchObject({revision:2,state:'revoked'});
+ }finally{await f.stop();}
+});

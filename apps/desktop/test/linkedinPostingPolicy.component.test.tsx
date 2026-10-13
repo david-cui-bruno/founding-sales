@@ -4,6 +4,8 @@ import {render,screen,fireEvent,cleanup,waitFor} from '@testing-library/react';
 import {LINKEDIN_POSTING_RULES,type LinkedinPostingPolicyView} from '@fss/contracts';
 import {LinkedinPostingPolicy} from '../src/renderer/social/LinkedinPostingPolicy.tsx';
 import {LinkedinPostingCandidate} from '../src/renderer/social/LinkedinPostingCandidate.tsx';
+import {createAuthedClient} from '../src/main/authedClient.ts';
+import {linkedinPostingPolicyOperations} from '../src/main/social/linkedinPostingPolicyOperations.ts';
 const id='11111111-1111-4111-8111-111111111111';
 afterEach(cleanup);
 const initial:LinkedinPostingPolicyView={accounts:[{id,externalId:'david-cui-589a20228',displayName:'David Cui',revision:3,state:'connected'}],revision:0,state:'not_saved',enabled:false,technicallyReady:false,policy:null,rules:LINKEDIN_POSTING_RULES,holds:['policy_not_saved'],history:[],candidates:[]};
@@ -42,4 +44,34 @@ it('owner stages a manually approved post against read current policy and sees s
  await screen.findByText(/Binding refused: stale revision/);
  expect(bind).toHaveBeenCalledWith({postId:id,postRevision:4,expectedRevision:2,commandId:expect.any(String)});
  expect(screen.queryByText(/Owner-staged policy binding revision/)).toBeNull();
+});
+it('confirmed command with unavailable current readback clears stale saved scope and offers refresh not command replay',async()=>{
+ const saved={...initial,revision:1,state:'saved' as const};
+ render(<LinkedinPostingPolicy ports={{read:async()=>({view:saved,reason:null}),save:async()=>({view:null,reason:'current_read_unavailable'}),stop:async()=>({view:null,reason:'current_read_unavailable'})}}/>);
+ fireEvent.click(await screen.findByRole('button',{name:'Revoke posting policy'}));
+ await screen.findByText(/Current posting policy is unavailable/);
+ expect(screen.queryByText('Saved policy revision 1. Publication is not enabled.')).toBeNull();
+ expect(screen.queryByRole('button',{name:'Retry same policy change'})).toBeNull();
+ expect(screen.getByRole('button',{name:'Refresh posting policy'})).toBeTruthy();
+});
+it('visible same-command retry reads current revoked scope rather than lost-save receipt',async()=>{
+ const saved:LinkedinPostingPolicyView={...initial,revision:1,state:'saved',policy:{accountId:id,accountRevision:3,accountExternalId:'david-cui-589a20228',generation:null,rules:LINKEDIN_POSTING_RULES}};
+ let current=initial,lose=true;const commands:string[]=[];
+ const host=linkedinPostingPolicyOperations({api:createAuthedClient({baseUrl:'https://fixture.invalid',clientVersion:'1.0.0',accessToken:async()=>({token:'controlled',generation:0}),send:async(url,init)=>{
+  if(new URL(url).pathname.endsWith('/read'))return {status:200,body:current};
+  commands.push(JSON.parse(init.body??'{}').commandId);
+  if(lose){lose=false;current=saved;throw new Error('Committed save response lost');}
+  return {status:200,body:{status:'accepted',replayed:true,result:saved}};
+ }}),generation:()=>0});
+ render(<LinkedinPostingPolicy ports={{read:host['social.postingPolicy'],save:host['social.savePostingPolicy'],stop:(state,input)=>host[state==='revoked'?'social.revokePostingPolicy':'social.disablePostingPolicy'](input)}}/>);
+ await screen.findByRole('button',{name:'Save standing posting policy'});
+ fireEvent.click(screen.getByRole('checkbox',{name:/I approve this exact posting scope/}));
+ fireEvent.click(screen.getByRole('button',{name:'Save standing posting policy'}));
+ await screen.findByRole('button',{name:'Retry same policy change'});
+ current={...saved,revision:2,state:'revoked',holds:['policy_revoked','publication_not_enabled']};
+ fireEvent.click(screen.getByRole('button',{name:'Retry same policy change'}));
+ await screen.findByText('Revoked policy revision 2. Publication is not enabled.');
+ expect(screen.getByText('policy revoked')).toBeTruthy();
+ expect(screen.queryByText('Saved policy revision 1. Publication is not enabled.')).toBeNull();
+ expect(commands).toHaveLength(2);expect(commands[1]).toBe(commands[0]);
 });
