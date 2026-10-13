@@ -55,6 +55,7 @@ export function ApprovedFactsEditor({blocks,draft,blocked,refreshRequired,onChan
   <ul className="space-y-3">{blocks.map(block=><li key={block.id} className="rounded-md border border-border p-3 space-y-2">
    <p className="whitespace-pre-wrap text-sm">{block.text}</p>
    <p className="text-xs text-muted-foreground">Current · {status(block)} · version {block.version}</p>
+   {block.socialInput&&<p className="text-xs">Sanitized LinkedIn input · {block.socialInput.topic} · {block.socialInput.status}{block.socialInput.sourceRef&&<> · {block.socialInput.sourceRef.url} · source version {block.socialInput.sourceRef.revision} · checked {block.socialInput.sourceRef.checkedAt}</>}</p>}
    <div className="flex gap-2">
     <Button size="sm" variant="quiet" disabled={blocked} onClick={()=>onBegin({id:block.id,expectedVersion:block.version,kind:block.kind,text:block.text,...(block.socialInput?{socialInput:block.socialInput}:{})})}>Edit fact</Button>
     {!block.approvedAt&&!block.retiredAt?<Button size="sm" disabled={blocked} onClick={()=>onMutate({action:'fact_approve',id:block.id,version:block.version,commandId:crypto.randomUUID()})}>Approve exact text</Button>:null}

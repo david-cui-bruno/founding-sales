@@ -10,6 +10,7 @@ import {HandlerRegistry,type JobHandler} from '@fss/domain/jobs/handlerRegistry.
 import {enqueueJob,claimJobs} from '@fss/domain/jobs/jobStore.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {runClaimedJob} from '../../worker/src/runner/jobRunner.ts';
+import {socialDraftModel} from '../../worker/src/social/draftModel.ts';
 import type {SocialDraftPort} from '@fss/domain/social/draftRun.ts';
 
 async function fixture(){
@@ -39,7 +40,12 @@ it('generates a LinkedIn build draft through governed intake, ordinary registere
  const h=await fixture();try{
  const ref=await h.save(fact),id=await h.request(ref);
  expect((await h.call('/outreach/answer-blocks',{})).body).toMatchObject({blocks:[{...ref,socialInput:{topic:'build',status:'planned',sanitized:true}}]});
- await h.run(socialDraftHandler(h.generate(ref,text)));
+ let calls=0;
+ await h.run(socialDraftHandler(socialDraftModel({kind:'bedrock',countTokens:async request=>{expect(request.max_tokens).toBe(4096);expect(JSON.stringify(request.messages)).toContain('planned');return 100;},create:async request=>{
+  calls++;expect(request.model).toBe('claude-haiku-4-5');expect(JSON.stringify(request.output_config)).toContain('technical');expect(JSON.stringify(request.system)).toContain('Style is NOT factual authority');
+  return {stop_reason:'end_turn',content:[{type:'text',text:JSON.stringify({concepts:[{theme:'build',factRefs:[ref],variants:[{platform:'linkedin',text}]}]})}],usage:{input_tokens:100,output_tokens:20}};
+ }})));
+ expect(calls).toBe(1);
  expect(await h.read(id)).toMatchObject({request:{state:'ready',mode:'linkedin_grounded',factBlocks:[ref],concepts:[{variants:[{platform:'linkedin',text}]}]}});
  expect((await h.call('/social/drafts',{})).body).toMatchObject({facts:[{...ref,socialInput:{status:'planned'}}],requests:[{id,state:'ready'}]});
  expect((await h.call('/social',{})).body).toMatchObject({posts:[]});
@@ -83,25 +89,49 @@ it.each(['I shipped the worker.','We saved forty hours.','I believe everyone sho
  }finally{await h.f.stop();}
 });
 
-it('reuses a real normal public-source check for news and refuses deletion across generation',async()=>{
+it.each(['good','stale','unsupported','second_party','missing_link'] as const)('reuses a normal public-source news check with %s support',async scenario=>{
  const h=await fixture();try{
  const claim='The engineering team published an explanation of bounded queues.',url='https://example.test/engineering';
  const saved=await h.call('/sourcing/candidates/save',h.command({firmName:'Example technology',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:claim,sourceUrl:url,observedOn:new Date().toISOString().slice(0,10),preparedBy:'Owner reviewed public original'}));expect(saved.status).toBe(200);
  const candidateId=(saved.body as {result:{id:string}}).result.id;
  expect((await h.call('/sourcing/candidates/check',h.command({id:candidateId,expectedRevision:1}))).status).toBe(200);
- await h.run(sourcingCheckHandler({providerKey:'controlled-public',fetchPages:async()=>({ok:true,costCents:0,value:{pages:[{url,contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode('<p>'+claim+'</p>'),retrievedAt:new Date().toISOString(),firstParty:true}],skipped:{}}})}));
+ await h.run(sourcingCheckHandler({providerKey:'controlled-public',fetchPages:async()=>({ok:true,costCents:0,value:{pages:[{url,contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode('<p>'+(scenario==='unsupported'?'Different unsupported source prose.':claim)+'</p>'),retrievedAt:new Date(Date.now()-(scenario==='stale'?48*60*60*1000:0)).toISOString(),firstParty:scenario!=='second_party'}],skipped:{}}})}));
  const listed=await h.call('/sourcing/candidates/list',{status:'needs_review',offset:0});expect(listed.status).toBe(200);
  const candidate=(listed.body as {candidates:SourcingCandidate[]}).candidates.find(c=>c.id===candidateId)!;
- expect(candidate.sourceCheck).toMatchObject({state:'checked',lastSuccess:{quoteMatched:true,firstParty:true,excerpt:claim}});
+ expect(candidate.sourceCheck).toMatchObject({state:'checked'});
  const checkedAt=(candidate.sourceCheck as CandidateSourceCheck).checkedAt!;
  const ref=await h.save(claim,{topic:'news',status:'observation',sanitized:true,sourceRef:{kind:'public',id:candidateId,revision:candidate.revision,url,checkedAt}});
+ if(['stale','unsupported','second_party'].includes(scenario)){
+  const refused=await h.call('/social/drafts/request',h.command({mode:'linkedin_grounded',sourceRefs:[],factBlocks:[ref]}));expect(refused.status).toBe(409);return;
+ }
  const id=await h.request(ref),news=claim+'\n\nThe explanation focuses on how work stays bounded. It is useful context for reviewing a queue design rather than a personal product endorsement.\n\nOriginal source: '+url;
- await h.run(socialDraftHandler(h.generate(ref,news,{theme:'news'})));
+ await h.run(socialDraftHandler(h.generate(ref,scenario==='missing_link'?news.replace(url,''):news,{theme:'news'})));
+ if(scenario==='missing_link'){expect(await h.read(id)).toMatchObject({request:{state:'review',concepts:null}});return;}
  expect(await h.read(id)).toMatchObject({request:{state:'ready',concepts:[{theme:'news',variants:[{platform:'linkedin',text:news}]}]}});
  const next=await h.request(ref);
  await h.run(socialDraftHandler(h.generate(ref,news,{theme:'news',before:async()=>{expect((await h.call('/sourcing/candidates/delete',h.command({id:candidateId,expectedRevision:candidate.revision}))).status).toBe(200);}})));
  expect(await h.read(next)).toMatchObject({request:{state:'review',concepts:null}});
  expect(await h.read(id)).toMatchObject({request:{state:'review',concepts:null}});
+ }finally{await h.f.stop();}
+});
+
+it.each(['founder','technical','build'] as const)('accepts owner-supported shipped %s inputs without inventing work',async topic=>{
+ const h=await fixture();try{
+ const shipped='I shipped a bounded maintenance intake worker.',ref=await h.save(shipped,{topic,status:'shipped',sanitized:true}),id=await h.request(ref);
+ const output=shipped+'\n\nThe useful part of this design is keeping the scope bounded. It gives the workflow a clear boundary and makes the behavior easier to inspect.\n\nThat boundary is the point of the update.';
+ await h.run(socialDraftHandler(h.generate(ref,output,{theme:topic})));
+ expect(await h.read(id)).toMatchObject({request:{state:'ready',concepts:[{theme:topic,variants:[{text:output}]}]}});
+ }finally{await h.f.stop();}
+});
+
+it.each(['day','month'] as const)('reserves a maximum only within the posting %s ceiling, even with larger shared settings',async boundary=>{
+ const h=await fixture();try{
+ const ref=await h.save(fact),id=await h.request(ref);let calls=0;
+ await h.f.db.query('INSERT INTO research_settings(workspace_id,daily_cost_ceiling_cents,monthly_cost_ceiling_cents) VALUES($1,10000,100000)',[h.f.alpha.workspaceId]);
+ // Existing paid work setup, not a substitute for caller-visible state assertions.
+ await h.f.db.query(`INSERT INTO provider_reservations(workspace_id,provider_key,subject_kind,subject_id,attempt,business_date,business_time_zone,cents,model_name,max_input_tokens,max_output_tokens,state,settled_cents,settled_at,created_at) VALUES($1,'aws_bedrock.social_draft','social_draft',$2,1,current_date,'America/New_York',$3,'claude-haiku-4-5',100,4096,'settled',$3,now(),CASE WHEN $4='month' THEN date_trunc('month',now()) ELSE now() END)`,[h.f.alpha.workspaceId,randomUUID(),boundary==='day'?98:998,boundary]);
+ await h.run(socialDraftHandler(h.generate(ref,text,{before:async()=>{calls++;}})));
+ expect(calls).toBe(0);expect(await h.read(id)).toMatchObject({request:{state:'review',concepts:null,reason:'posting_budget_exhausted'}});
  }finally{await h.f.stop();}
 });
 
