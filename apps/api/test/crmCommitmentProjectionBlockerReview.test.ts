@@ -15,6 +15,9 @@ it("shows a persistent source-bound Today problem only after promise projection 
   const fixture = await createAuthFixture();
   let faultInstalled = false;
   try {
+    // Leave three UTC days of margin for source observation and zone boundaries.
+    const promiseDate = (await fixture.db.query<{date:string}>("SELECT ((clock_timestamp() AT TIME ZONE 'UTC')::date + 3)::text AS date")).rows[0]!.date;
+    const promiseQuote = `I will prepare the repair summary by ${promiseDate}.`;
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -66,7 +69,7 @@ it("shows a persistent source-bound Today problem only after promise projection 
       command({
         personId,
         sourceKey: "human-review",
-        excerpt: "I will prepare the repair summary by October 12.",
+        excerpt:promiseQuote,
         occurredAt: "2026-10-01T14:00:00Z",
       }),
     );
@@ -139,8 +142,8 @@ it("shows a persistent source-bound Today problem only after promise projection 
                     kind: "commitment",
                     status: "stated",
                     interpretation: "Promise to prepare summary",
-                    locator: "text:0:48",
-                    quote: "I will prepare the repair summary by October 12.",
+                    locator: `text:0:${promiseQuote.length}`,
+                    quote:promiseQuote,
                   },
                 ],
               };
@@ -175,9 +178,9 @@ it("shows a persistent source-bound Today problem only after promise projection 
       actionLabel: "Prepare the repair summary",
       due: {
         kind: "date",
-        date: "2026-10-12",
+        date: promiseDate,
         zone: "America/Chicago",
-        expression: "by October 12",
+        expression: `by ${promiseDate}`,
       },
     });
     const queued = await post("/crm/commitments/review", review);
@@ -252,7 +255,7 @@ it("shows a persistent source-bound Today problem only after promise projection 
           commitmentId: receipt.result.commitmentId,
           revision: 1,
           state: "pending",
-          quote: "I will prepare the repair summary by October 12.",
+          quote:promiseQuote,
           task: null,
         },
       ],
