@@ -62,6 +62,8 @@ describe('normal authenticated booking policy controls',()=>{
     const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),f.db);
     const current=await readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId},runtime);
     if(current.kind!=='available')throw new Error('normal owner positive authority missing');
+    const capturedBudget:BookingPolicyView['budget']=current.budget;
+    expect(capturedBudget).toMatchObject({businessDate:'2026-10-13',allowance:'available',remainingDailyCents:200,remainingMonthlyCents:2500});
     expect(bookingPolicySnapshotReadyAt(current.snapshot,now)).toBe(true);
     expect(current.snapshot).toMatchObject({authorityVerifiedAt:'2026-10-01T00:00:00Z',authorityValidUntil:'2026-10-13T21:00:30Z'});
     expect(bookingPolicySnapshotReadyAt(current.snapshot,'2026-10-01T00:00:00Z')).toBe(true);
