@@ -60,7 +60,7 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  if(request.path==='/social/posts/save')return runRouteCommand(deps,socialPostSaveCommandSchema,'social_post_save',(c,input)=>{const {commandId:_id,clientVersion:_client,...post}=input;return saveSocialPost(c,post);});
  if(request.path==='/social/posts/approve')return runRouteCommand(deps,socialPostActionCommandSchema,'social_post_approve',approveSocialPost);
  if(request.path==='/social/posts/cancel')return runRouteCommand(deps,socialPostActionCommandSchema,'social_post_cancel',requestSocialCancellation);
- if(request.path==='/social/delivery/queue'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialDeliveryQueue(ctx,principal.principal.deviceId)};}
+ if(request.path==='/social/delivery/queue'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await withTransaction(auth.db,()=>readSocialDeliveryQueue(ctx,principal.principal.deviceId))};}
  if(request.path==='/social/delivery/hold')return runRouteCommand(deps,socialDeliveryHoldCommandSchema,'social_delivery_hold',(c,input)=>holdSocialDelivery(c,{...input,deviceId:principal.principal.deviceId}));
  if(request.path==='/social/delivery/claim')return runRouteCommand(deps,socialPostActionCommandSchema,'social_delivery_claim',(c,input)=>claimSocialDelivery(c,{...input,deviceId:principal.principal.deviceId}));
  if(request.path==='/social/delivery/begin'){

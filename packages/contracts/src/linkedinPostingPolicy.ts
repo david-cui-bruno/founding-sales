@@ -33,4 +33,23 @@ export interface LinkedinPostingPolicyView{
  accounts:{id:string;externalId:string;displayName:string;revision:number;state:string}[];
  revision:number;state:'not_saved'|'saved'|'disabled'|'revoked';enabled:false;technicallyReady:false;
  policy:LinkedinPostingPolicySnapshot|null;rules:typeof LINKEDIN_POSTING_RULES;holds:string[];
+ history:{revision:number;state:string;accountId:string;accountRevision:number;recordedAt:string}[];
+ candidates:{postId:string;postRevision:number;policyRevision:number;current:boolean;reason:string;submissionState:string}[];
 }
+function sameRules(value:unknown,expected:unknown):boolean{
+ if(expected===null||typeof expected!=='object')return value===expected;
+ if(value===null||typeof value!=='object'||Array.isArray(value)!==Array.isArray(expected))return false;
+ const a=value as Record<string,unknown>,b=expected as Record<string,unknown>;
+ return Object.keys(a).length===Object.keys(b).length&&Object.keys(b).every(key=>sameRules(a[key],b[key]));
+}
+const rulesSchema=z.custom<typeof LINKEDIN_POSTING_RULES>(value=>sameRules(value,LINKEDIN_POSTING_RULES));
+export const linkedinPostingPolicyViewSchema=z.strictObject({
+ accounts:z.array(z.strictObject({id:uuid,externalId:z.string(),displayName:z.string(),revision:z.number().int().positive(),state:z.enum(['connected','disconnected','reconnect','unsupported'])})),
+ revision:z.number().int().nonnegative(),state:z.enum(['not_saved','saved','disabled','revoked']),enabled:z.literal(false),technicallyReady:z.literal(false),rules:rulesSchema,
+ policy:z.strictObject({accountId:uuid,accountRevision:z.number().int().positive(),accountExternalId:z.string(),generation:linkedinPostingGenerationSchema.nullable(),rules:rulesSchema}).nullable(),holds:z.array(z.string()),
+ history:z.array(z.strictObject({revision:z.number().int().positive(),state:z.enum(['saved','disabled','revoked']),accountId:uuid,accountRevision:z.number().int().positive(),recordedAt:z.string().datetime()})),
+ candidates:z.array(z.strictObject({postId:uuid,postRevision:z.number().int().positive(),policyRevision:z.number().int().positive(),current:z.boolean(),reason:z.string(),submissionState:z.string()})),
+});
+export const linkedinPostingCandidateBindingSchema=z.strictObject({postId:uuid,postRevision:z.number().int().positive(),policyRevision:z.number().int().positive(),current:z.literal(true),publicationReady:z.literal(false)});
+export const linkedinPostingDispatchCheckSchema=z.strictObject({submissionId:uuid});
+export const linkedinPostingDispatchCurrentSchema=z.strictObject({current:z.boolean(),reason:z.string()});

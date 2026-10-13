@@ -360,6 +360,7 @@ describe('what the API mounts', () => {
       '/social/linkedin-posting-policy/bind-candidate',
       '/social/linkedin-posting-policy/check-current',
       '/social/linkedin-posting-policy/disable',
+      '/social/linkedin-posting-policy/dispatch-current',
       '/social/linkedin-posting-policy/read',
       '/social/linkedin-posting-policy/revoke',
       '/social/linkedin-posting-policy/save',
