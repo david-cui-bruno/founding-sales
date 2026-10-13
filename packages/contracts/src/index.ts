@@ -93,4 +93,5 @@ export * from './askSessions.ts';
 export * from './askAgentScope.ts';
 export * from './linkedinPolicy.ts';
 export * from './bookingInterpretation.ts';
+export * from './linkedinPostingPolicy.ts';
 export * from './bookingPolicy.ts';

@@ -1,5 +1,7 @@
 import {BOOKING_BUSINESS_RULES,DEFAULT_BOOKING_POLICY} from '@fss/contracts';
 import {mailImportHealth} from './mailImportFixture.ts';
+import {LINKEDIN_POSTING_RULES} from '@fss/contracts';
+const postingPolicy={accounts:[],revision:1,state:'saved',enabled:false,technicallyReady:false,policy:{accountId:'11111111-1111-4111-8111-111111111111',accountRevision:1,accountExternalId:'controlled-owner',generation:null,rules:LINKEDIN_POSTING_RULES},rules:LINKEDIN_POSTING_RULES,holds:['runtime_acceptance_pending','publication_not_enabled'],history:[],candidates:[]};
 /**
  * Bodies every bridge accepts, for the checks that need a bridge to be *holding*
  * something (1.0.13).
@@ -248,6 +250,11 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
+  '/social/linkedin-posting-policy/read':postingPolicy,
+  '/social/linkedin-posting-policy/save':{status:'accepted',replayed:false,result:postingPolicy},
+  '/social/linkedin-posting-policy/disable':{status:'accepted',replayed:false,result:{...postingPolicy,revision:2,state:'disabled',holds:['policy_disabled']}},
+  '/social/linkedin-posting-policy/revoke':{status:'accepted',replayed:false,result:{...postingPolicy,revision:2,state:'revoked',holds:['policy_revoked']}},
+  '/social/linkedin-posting-policy/bind-candidate':{status:'accepted',replayed:false,result:{postId:'11111111-1111-4111-8111-111111111111',postRevision:1,policyRevision:1,current:true,publicationReady:false}},
  '/meetings/booking-policy':{policy:{revision:0,setting:DEFAULT_BOOKING_POLICY,rules:BOOKING_BUSINESS_RULES,businessPolicyValid:false,enabled:false,readiness:{ready:false,reasons:['policy_unavailable'],evidenceKind:'unavailable'},budget:{lane:'booking',timeZone:'America/New_York',businessDate:'2026-10-13',calendarMonth:'2026-10',dailyCeilingCents:200,monthlyCeilingCents:2500,observedDailyCents:0,observedMonthlyCents:0,allowance:'unknown',remainingDailyCents:null,remainingMonthlyCents:null}},configuration:{choices:[],reasons:['setup_unavailable']}},
  '/crm/attachments/commit':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:1,metadataRevision:1}},
  '/crm/attachments/reselect':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:2,metadataRevision:2}},

@@ -82,3 +82,7 @@ Observed genuine behavioral RED followed by minimum GREEN:
 The expanded owned real-PG suite also verifies captured-deadline expiry for request and current read. Normal owner policy save, registered controlled worker, current authenticated read and actual mounted timeline/closed host journey remain covered. No live calls, sends, creates, activation, pushes or full gate were performed in the repair WT.
 
 Final repair checks: 52 API real-PG tests (27 owned interpretation plus 25 canonical policy), one exact model adapter test, 86 desktop closed operation/timeline/component/policy-bridge/traffic tests, all five workspace typechecks, scoped zero-warning ESLint and diff whitespace checks passed. The traffic harness's missing owned fixture methods were a setup-coverage failure, not claimed as behavioral RED. The owned repair adds no schema-range or reservation-DDL difference from immutable e047. The only migration difference is the approved canonical policy0109 whitespace inventory fix described above.
+
+## Ordered source integration
+
+The isolated proof above is retained as dated evidence. Final source composition places unchanged policy SQL at migration0110 and unchanged interpretation SQL at migration0111, following posting policy0109, with exact schema111. Both SQL files were byte-compared against the frozen reviewed originals. Shared exports, route/module inventories and closed desktop operations retain both parents additively. This ordering is not an executed upgrade, deployment, provider-quality or activation claim.

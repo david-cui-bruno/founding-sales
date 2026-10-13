@@ -10,7 +10,7 @@ The Calendar section in `apps/desktop/src/renderer/settings/SettingsView.tsx` al
 - `main/bookingPolicyBridge.ts`, approved `shared/operations.ts` and `main/operationHost.ts` additions: strict authenticated read/change operations with generation checks before and after waits.
 - `apps/api/src/routes/bookingPolicy.ts`: existing authenticated owner GET/POST endpoint. `?view=settings` wraps the current policy with bounded already-observed configuration choices. Plain GET remains the canonical view.
 - `contracts/src/bookingPolicy.ts`, `domain/meetings/bookingPolicyTypes.ts` and `bookingPolicy.ts`: the single saved policy and current reader/fence consumed by #620/#621.
-- `db/migrations/0109_booking_policy.sql`: existing versioned settings key and BOTH existing reservation subject/priced-shape CHECK additions. No new consent, money, authority or scheduler tables. Root renumbers this to final110 after #616 final109, before #620111/#621112.
+- `db/migrations/0110_booking_policy.sql`: existing versioned settings key and BOTH existing reservation subject/priced-shape CHECK additions. No new consent, money, authority or scheduler tables. Ordered after #616 migration109, before #620111/#621112. SQL is byte-identical to the reviewed isolated0109 migration; only its filename and exact schema pin advance.
 
 ## Authority and money semantics
 

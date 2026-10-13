@@ -138,6 +138,18 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       ["retained"],
       "Current owner/account-identifying standing-policy metadata, including approved action/data/model/budget bindings; no copied prospect conversations, private message bodies or credentials. Retained through disable/revoke, account disconnect, source deletion and departure. Current membership, policy revision and exact account binding are rechecked before use, so retained settings cannot restore authority; no automatic retention sweep or prospect-content deletion applies to this configuration.",
     ),
+    linkedin_posting_settings: coverage(
+      ["retained"],
+      "Separate owner/account posting configuration and fixed content/voice/provider/data/spend scope. No private factual input bodies or credentials. Disable, revoke, account change and membership loss invalidate work without erasing documentary configuration.",
+    ),
+    linkedin_posting_candidate_bindings: coverage(
+      ["retained"],
+      "Immutable opaque delivery-to-owner policy revision fence. No draft body or credentials. Current membership, account and policy gate unattempted work. Retained submitted markers remain inspection-only after invalidation and cannot authorize replay.",
+    ),
+    linkedin_posting_policy_revisions: coverage(
+      ["retained"],
+      "Immutable posting approval and stop revision history, without private factual inputs or credentials. Retained through source deletion, disconnect and departure. Historical revisions cannot restore current posting authority.",
+    ),
     linkedin_outreach_policy_revisions: coverage(
       ["retained"],
       "Immutable body-free owner-approval and disable/revoke history with exact account-identifying configuration metadata, policy rules, acquisition/model/grant versions and spending ceilings. No copied or derived prospect message content or credentials. Retained independently of source deletion, account disconnect and departure to preserve dated consent/stop audit. Old revisions are documentary only and cannot authorize work after a current revision, account or membership change.",
