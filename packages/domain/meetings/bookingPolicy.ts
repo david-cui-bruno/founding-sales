@@ -10,6 +10,9 @@ import {providerFunding} from '../settings/funding.ts';
 import {bookingPolicyBindingsSchema,type BookingPolicySettingsView} from '@fss/contracts';
 
 export async function readBookingPolicySettings(ctx:RepositoryContext,runtime?:BookingPolicyRuntime):Promise<BookingPolicySettingsView> {
+  return (await readObservedBookingPolicySettings(ctx,runtime)).view;
+}
+async function readObservedBookingPolicySettings(ctx:RepositoryContext,runtime?:BookingPolicyRuntime):Promise<{view:BookingPolicySettingsView;authorityVerifiedAt:string|null;authorityValidUntil:string|null}> {
   const actor=ctx.scope.actor;
   if(actor.kind!=='user'||actor.role!=='admin'||!await activeOwner(ctx,actor.userId))throw new Error('owner_authority_changed');
   let configured:readonly BookingPolicyBindings[]=[];
@@ -22,9 +25,23 @@ export async function readBookingPolicySettings(ctx:RepositoryContext,runtime?:B
     const bindings=parsed.data,id=bookingPolicyBindingKey(bindings);
     if(!choices.some(choice=>choice.id===id))choices.push({id,label:`Cal.com ${bindings.account.email} · Event ${bindings.event.eventTypeId} · ${bindings.model.modelVersion}`.slice(0,500),bindings});
   }
-  const policy=await readBookingPolicy(ctx,runtime);
+  const observed=await readObservedBookingPolicy(ctx,runtime);
   if(!await activeOwner(ctx,actor.userId))throw new Error('owner_authority_changed');
-  return {policy,configuration:{choices,reasons:choices.length===0?['setup_unavailable']:[]}};
+  return {view:{policy:observed.view,configuration:{choices,reasons:choices.length===0?['setup_unavailable']:[]}},authorityVerifiedAt:observed.authorityVerifiedAt,authorityValidUntil:observed.authorityValidUntil};
+}
+
+/** Server-only response observation. Its metadata is never serialized onto the public success wire. */
+export async function readBookingPolicyResponseObservation(ctx:RepositoryContext,view:'settings'|null,runtime?:BookingPolicyRuntime):Promise<{readonly body:BookingPolicyView|BookingPolicySettingsView;readonly authorityVerifiedAt:string|null;readonly authorityValidUntil:string|null;readonly observedBusinessDate:string}> {
+  const observed=view==='settings'?await readObservedBookingPolicySettings(ctx,runtime):await readObservedBookingPolicy(ctx,runtime);
+  const policy='policy' in observed.view?observed.view.policy:observed.view;
+  return {body:observed.view,authorityVerifiedAt:observed.authorityVerifiedAt,authorityValidUntil:observed.authorityValidUntil,observedBusinessDate:policy.budget.businessDate};
+}
+/** Pure terminal response freshness. It performs no reads and grants no operational authority. */
+export function bookingPolicyResponseObservationCurrentAt(observed:Awaited<ReturnType<typeof readBookingPolicyResponseObservation>>,now:string):boolean {
+  if(!Number.isFinite(Date.parse(now))||localDate(now,'America/New_York')!==observed.observedBusinessDate)return false;
+  if(observed.authorityVerifiedAt===null&&observed.authorityValidUntil===null)return true;
+  if(typeof observed.authorityVerifiedAt!=='string'||typeof observed.authorityValidUntil!=='string')return false;
+  return !expiredRuntimeEvidence({verifiedAt:observed.authorityVerifiedAt,validUntil:observed.authorityValidUntil},now);
 }
 
 export async function readCurrentBookingPolicy(ctx:RepositoryContext,query:CurrentBookingPolicyQuery,runtime?:BookingPolicyRuntime):Promise<CurrentBookingPolicy> {
@@ -40,7 +57,7 @@ export async function readCurrentBookingPolicy(ctx:RepositoryContext,query:Curre
   const capability=query.capability??'booking';
   const unrelatedToInterpretation=new Set(['account_access_unverified','calendar_freebusy_unverified','event_settings_unverified','sender_authority_unverified','provider_adapter_unavailable','release_unverified']);
   const operationalReady=capability==='booking'?view.readiness.ready:view.readiness.evidenceKind!=='unavailable'&&view.readiness.reasons.every(reason=>unrelatedToInterpretation.has(reason));
-  return {kind:'available',snapshot:{capability,workspaceId:ctx.scope.workspaceId,ownerUserId:bindings.ownerUserId,policyRevision:view.revision,bindingKey,bindings,businessPolicyValid:true,operationalReady,enabled:false,evidenceKind:view.readiness.evidenceKind,authorityVerifiedAt:observed.authorityVerifiedAt,authorityValidUntil:observed.authorityValidUntil}};
+  return {kind:'available',budget:view.budget,snapshot:{capability,workspaceId:ctx.scope.workspaceId,ownerUserId:bindings.ownerUserId,policyRevision:view.revision,bindingKey,bindings,businessPolicyValid:true,operationalReady,enabled:false,evidenceKind:view.readiness.evidenceKind,authorityVerifiedAt:observed.authorityVerifiedAt,authorityValidUntil:observed.authorityValidUntil}};
 }
 /** Technical terminal freshness only. Never an Enable, sending or booking permission grant. */
 export function bookingPolicySnapshotReadyAt(snapshot:BookingPolicySnapshot,now:string):boolean {
@@ -87,7 +104,7 @@ export async function readBookingBudget(ctx:RepositoryContext,input:{at:string;b
   }
   return {lane:'booking',timeZone:'America/New_York',businessDate:date,calendarMonth:month,dailyCeilingCents,monthlyCeilingCents,observedDailyCents,observedMonthlyCents,allowance,remainingDailyCents,remainingMonthlyCents};
 }
-function expiredRuntimeEvidence(evidence:BookingPolicyRuntimeEvidence,at:string):boolean {
+function expiredRuntimeEvidence(evidence:Pick<BookingPolicyRuntimeEvidence,'verifiedAt'|'validUntil'>,at:string):boolean {
   return !Number.isFinite(Date.parse(evidence.verifiedAt))||!Number.isFinite(Date.parse(evidence.validUntil))||Date.parse(evidence.verifiedAt)>Date.parse(at)||Date.parse(evidence.validUntil)<=Date.parse(at);
 }
 export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPolicyRuntime):Promise<BookingPolicyView> {

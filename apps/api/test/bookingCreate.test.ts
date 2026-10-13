@@ -1,3 +1,5 @@
+import {seedFirm,seedContact} from './support/crmSeed.ts';
+import type {SessionQueryable,QueryResultRowLike} from '@fss/domain/db/queryable.ts';
 import {describe,it,expect} from 'vitest';
 import {calcomBookingCreateClient} from '../src/integrations/calcomBookingCreateClient.ts';
 import {claimJobs} from '@fss/domain/jobs/jobStore.ts';
@@ -29,6 +31,38 @@ export async function setupBooking(){
  return {...f,runtime,bindings,payload,requests,controls,runBooking,replayBooking};
 }
 describe('ordinary owner-confirmed agreed booking admission',()=>{
+ it.each(['unchanged','firm','contact','address','version'] as const)('exact durable Route hint %s is rechecked without appending a changed firm lock',async change=>{
+  const f=await setupBooking();try{const otherFirm=await seedFirm(f.fixture,{name:'Controlled moved Route',assignedUserId:f.fixture.alpha.admin.userId});const otherContact=await seedContact(f.fixture,{firmId:otherFirm,fullName:'Changed prospect'});const sameFirmContact=await seedContact(f.fixture,{firmId:f.firmId,fullName:'Same firm changed prospect'});
+   let hinted=false;const firmLocks:string[]=[];
+   const observed:SessionQueryable={query:async<Row extends QueryResultRowLike>(text:string,values?:readonly unknown[])=>{const result=await f.db.query<Row>(text,values);
+    if(text.includes('FROM firms')&&(text.includes('FOR UPDATE')||text.includes('FOR SHARE')))firmLocks.push(String(values?.[1]));
+    if(!hinted&&text==='SELECT firm_id,contact_id,address,version FROM email_addresses WHERE workspace_id=$1 AND id=$2'){hinted=true;
+     if(change==='firm')await f.fixture.db.query('UPDATE email_addresses SET firm_id=$2,contact_id=$3,version=version+1 WHERE id=$1',[f.attendeeRouteId,otherFirm,otherContact]);
+     if(change==='contact')await f.fixture.db.query('UPDATE email_addresses SET contact_id=$2 WHERE id=$1',[f.attendeeRouteId,sameFirmContact]);
+     if(change==='address')await f.fixture.db.query("UPDATE email_addresses SET address='changed@booking.example' WHERE id=$1",[f.attendeeRouteId]);
+     if(change==='version')await f.fixture.db.query('UPDATE email_addresses SET version=version+1 WHERE id=$1',[f.attendeeRouteId]);
+    }return result;}};
+   const response=await f.request('POST','/meetings/booking-create',f.command(f.payload),observed);expect(hinted).toBe(true);expect(response.status).toBe(change==='unchanged'?200:409);
+   if(change!=='unchanged')expect(response.body).toMatchObject({reason:'attendee_authority_changed'});expect(firmLocks).toContain(f.firmId);expect(firmLocks).not.toContain(otherFirm);expect(f.requests).toHaveLength(0);
+  }finally{await f.fixture.stop();}
+ });
+ it('normal contact update and booking admission serialize firm-before-contact with an observed real lock wait',async()=>{
+  const f=await setupBooking();const updates=await f.fixture.database.appRuntimeSession();
+  const gate=()=>{let resolve=()=>{};const wait=new Promise<void>(r=>{resolve=r;});return {wait,resolve};};
+  const firstLock=gate(),resumeBooking=gate(),resumeUpdate=gate();let bookingPaused=false,updateFirmLocked=false;
+  const booking:SessionQueryable={query:async<Row extends QueryResultRowLike>(text:string,values?:readonly unknown[])=>{const result=await f.db.query<Row>(text,values);if(!bookingPaused&&(text.includes('FOR SHARE OF e,c')||(text.includes('FROM firms')&&text.includes('FOR UPDATE')))){bookingPaused=true;firstLock.resolve();await resumeBooking.wait;}return result;}};
+  const update:SessionQueryable={query:async<Row extends QueryResultRowLike>(text:string,values?:readonly unknown[])=>{const result=await updates.query<Row>(text,values);if(text.includes('FROM firms')&&text.includes('FOR UPDATE')){updateFirmLocked=true;await resumeUpdate.wait;}return result;}};
+  try{await f.fixture.db.query('DELETE FROM crm_mail_source_contexts WHERE workspace_id=$1 AND source_id=ANY($2::uuid[])',[f.fixture.alpha.workspaceId,[f.payload.agreement.sourceId,f.payload.offeredContext.sourceId]]);
+   const bookingPid=(await f.db.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+   const updatePid=(await updates.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+   const creating=f.request('POST','/meetings/booking-create',f.command(f.payload),booking);await firstLock.wait;
+   const changing=f.request('POST','/contacts/update',f.command({contactId:f.contactId,patch:{title:'Normal concurrent correction'}}),update);
+   let observed=false;
+   for(let attempt=0;attempt<400;attempt++){if(updateFirmLocked){resumeUpdate.resolve();}const waits=await f.fixture.db.query<{pid:number}>('SELECT pid FROM pg_stat_activity WHERE pid=$1 AND $2::int=ANY(pg_blocking_pids(pid))',[updatePid,bookingPid]);if(waits.rows.length){observed=true;break;}await new Promise(resolve=>setTimeout(resolve,5));}
+   expect(observed,'normal contact command must actually wait on booking-held firm or contact').toBe(true);resumeUpdate.resolve();resumeBooking.resolve();
+   const results=await Promise.all([creating,changing]);expect(results.map(r=>r.status)).toEqual([200,200]);expect(f.requests).toHaveLength(0);
+  }finally{resumeBooking.resolve();resumeUpdate.resolve();await f.fixture.stop();}
+ });
  it.each(['source_notice','receipt_notice','receipt_cost','receipt_runtime','receipt_lease','receipt_cost_after_read','receipt_runtime_after_cost','receipt_scope_after_cost','initial_notice','initial_cost','initial_runtime','initial_lease'] as const)('final dispatch refuses %s expiry across an observed PostgreSQL lock wait',async change=>{
   const f=await setupBooking();const blocker=await f.fixture.database.appRuntimeSession();let locked=false;
   try{const response=await f.request('POST','/meetings/booking-create',f.command(f.payload));expect(response.status).toBe(200);const id=(response.body as {result:{submissionId:string}}).result.submissionId;

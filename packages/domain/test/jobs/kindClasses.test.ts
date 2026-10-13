@@ -35,6 +35,8 @@ describe('job kind classes', () => {
 
   it('puts the work a person waits on in urgent and the rest in bulk', () => {
     expect(kindsOfClass('urgent')).toEqual([
+      'meeting.booking_create',
+      'meeting.booking_change',
       'mail.sync',
       'mail.reconcile',
       'mail.recover',
@@ -50,6 +52,7 @@ describe('job kind classes', () => {
       'telephony.sweep',
     ]);
     expect(kindsOfClass('bulk')).toEqual([
+      'crm.booking_interpretation',
       'crm.ask_answer',
       'crm.ask_index',
       'crm.commitments_project',
@@ -71,6 +74,7 @@ describe('job kind classes', () => {
       'outreach.email_admit',
       // Social drafts and media cleanup run off the interactive call/reply lane.
       'social.draft',
+      'social.linkedin_recurring',
       'social.assets_cleanup',
       'sourcing.monitor',
       'sourcing.discover',

@@ -23,7 +23,18 @@ export async function saveSocialPost(ctx:RepositoryContext,raw:SaveSocialPost):P
  await recordCrmAuditEvent(ctx,{action:'social.post_saved',subjectKind:'social_post',subjectId:id,detail:{revision}});return {ok:true,value:(await readSocialPost(ctx,id))!};
 }
 export async function socialApprovalSnapshot(ctx:RepositoryContext,post:PostRevision):Promise<SocialResult<{account:SocialAccount;fingerprint:string;snapshot:Record<string,unknown>}>>{
- const account=await readSocialAccount(ctx,post.accountId);if(!account)return {ok:false,reason:'account_not_found'};
+ return snapshotForOwner(ctx,post,owner(ctx));
+}
+/** Trusted worker admission shares the exact manual snapshot algorithm, never a human approval. */
+export async function socialApprovalSnapshotForWorker(ctx:RepositoryContext,post:PostRevision,ownerUserId:string):Promise<SocialResult<{account:SocialAccount;fingerprint:string;snapshot:Record<string,unknown>}>>{
+ if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')return {ok:false,reason:'worker_required'};
+ if(!(await ctx.db.query('SELECT 1 FROM social_posts WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3',[ctx.scope.workspaceId,post.postId,ownerUserId])).rows.length)return {ok:false,reason:'post_owner_mismatch'};
+ if(post.images.length)return {ok:false,reason:'posting_scope_mismatch'};
+ const result=await snapshotForOwner(ctx,post,ownerUserId);
+ return result.ok&&(result.value.account.platform!=='linkedin'||result.value.account.account_kind!=='profile'||result.value.account.external_id!=='david-cui-589a20228')?{ok:false,reason:'posting_scope_mismatch'}:result;
+}
+async function snapshotForOwner(ctx:RepositoryContext,post:PostRevision,ownerUserId:string|null):Promise<SocialResult<{account:SocialAccount;fingerprint:string;snapshot:Record<string,unknown>}>>{
+ const account=(await ctx.db.query<SocialAccount>('SELECT * FROM social_accounts WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR SHARE',[ctx.scope.workspaceId,post.accountId,ownerUserId])).rows[0];if(!account)return {ok:false,reason:'account_not_found'};
  if(account.platform==='facebook'&&account.account_kind!=='page')return {ok:false,reason:'facebook_page_required'};
  if(account.state!=='connected'||!account.adapter_version||!account.verified_at||!account.max_schedule_days)return {ok:false,reason:'destination_unverified'};
  const now=Date.now(),at=post.publishAt===null?NaN:Date.parse(post.publishAt);if(!Number.isFinite(at))return {ok:false,reason:'schedule_required'};if(at<=now)return {ok:false,reason:'schedule_in_past'};if(at>now+account.max_schedule_days*86400_000)return {ok:false,reason:'schedule_out_of_range'};

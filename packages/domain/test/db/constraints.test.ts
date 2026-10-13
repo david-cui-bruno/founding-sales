@@ -20,7 +20,10 @@ import { CRM_PROGRESS_CONSTRAINT_CASES } from "./support/crmProgressCases.ts";
 import { MAIL_CAPTURE_CONSTRAINT_CASES } from "./support/mailCaptureCases.ts";
 import { BUSINESS_ACQUISITION_CONSTRAINT_CASES } from "./support/businessAcquisitionCases.ts";
 import { CRM_EXTRACTION_CONSTRAINT_CASES } from "./support/crmExtractionCases.ts";
+import { BOOKING_INTERPRETATION_CONSTRAINT_CASES } from "./support/bookingInterpretationCases.ts";
 import { LINKEDIN_POLICY_CONSTRAINT_CASES } from "./support/linkedinPolicyCases.ts";
+import { LINKEDIN_RECURRING_CONSTRAINT_CASES } from "./support/linkedinRecurringCases.ts";
+import { LINKEDIN_POSTING_POLICY_CONSTRAINT_CASES } from "./support/linkedinPostingPolicyCases.ts";
 import { SOCIAL_CONSTRAINT_CASES } from "./support/socialCases.ts";
 import { OUTREACH_CONSTRAINT_CASES } from "./support/outreachCases.ts";
 import { SOURCING_CONSTRAINT_CASES } from "./support/sourcingCases.ts";
@@ -2231,6 +2234,7 @@ const cases: readonly Case[] = [
   ...MAIL_CAPTURE_CONSTRAINT_CASES,
   ...CRM_BACKFILL_CONSTRAINT_CASES,
   ...CRM_EXTRACTION_CONSTRAINT_CASES,
+  ...BOOKING_INTERPRETATION_CONSTRAINT_CASES,
   ...CRM_PROGRESS_CONSTRAINT_CASES,
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
@@ -2242,6 +2246,8 @@ const cases: readonly Case[] = [
   ...CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES,
   ...SOCIAL_CONSTRAINT_CASES,
   ...LINKEDIN_POLICY_CONSTRAINT_CASES,
+  ...LINKEDIN_POSTING_POLICY_CONSTRAINT_CASES,
+  ...LINKEDIN_RECURRING_CONSTRAINT_CASES,
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
   ...POLICY_CONSTRAINT_CASES,

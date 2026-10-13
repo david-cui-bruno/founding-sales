@@ -56,6 +56,7 @@ const coverage = (
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   Object.freeze({
+  linkedin_recurring_slots:coverage(['retained'],'Body-free account/target uniqueness and exact owner/policy/source/draft/admission references conserve cadence and prevent replay after revision, revocation, source deletion or departure. No copied input text or credentials. Current membership, account, policy, source and runtime fences stop future publication without removing historical submission evidence.'),
   crm_capability_owner_approvals:coverage(['retained'],'Immutable body-free owner approval audit retains configuration fingerprints, attested checks, quality tier and acknowledged limitations. Current owner membership and configuration are rechecked before use; no conversation content or credentials.'),
   crm_acquisition_diagnostic_authorizations:coverage(['retained'],'Immutable body-free acquisition diagnostic owner consent and revocation audit; exact current owner/account/expiry/environment binding prevents reuse; no copied content or tokens.'),
   crm_acquisition_diagnostic_reads:coverage(['retained'],'Body-free exact scoped provider read accounting survives source deletion and revocation; no original content or tokens.'),
@@ -139,6 +140,18 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     linkedin_outreach_settings: coverage(
       ["retained"],
       "Current owner/account-identifying standing-policy metadata, including approved action/data/model/budget bindings; no copied prospect conversations, private message bodies or credentials. Retained through disable/revoke, account disconnect, source deletion and departure. Current membership, policy revision and exact account binding are rechecked before use, so retained settings cannot restore authority; no automatic retention sweep or prospect-content deletion applies to this configuration.",
+    ),
+    linkedin_posting_settings: coverage(
+      ["retained"],
+      "Separate owner/account posting configuration and fixed content/voice/provider/data/spend scope. No private factual input bodies or credentials. Disable, revoke, account change and membership loss invalidate work without erasing documentary configuration.",
+    ),
+    linkedin_posting_candidate_bindings: coverage(
+      ["retained"],
+      "Immutable opaque delivery-to-owner policy revision fence. No draft body or credentials. Current membership, account and policy gate unattempted work. Retained submitted markers remain inspection-only after invalidation and cannot authorize replay.",
+    ),
+    linkedin_posting_policy_revisions: coverage(
+      ["retained"],
+      "Immutable posting approval and stop revision history, without private factual inputs or credentials. Retained through source deletion, disconnect and departure. Historical revisions cannot restore current posting authority.",
     ),
     linkedin_outreach_policy_revisions: coverage(
       ["retained"],
@@ -891,6 +904,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     meeting_recordings: coverage(
       ["deletion_removes"],
       "One uploaded audio file of a demo: its Zoom file name, size, digest and object key; removed with the meeting (ON DELETE CASCADE); the object expires a day after upload.",
+    ),
+    crm_booking_interpretations: coverage(
+      ["retained", "deletion_redacts", "departure_revokes"],
+      "Native source UPDATE/DELETE erases private provenance and proposals while source-free financial linkage survives. Every read and worker stage revalidates original access and owner membership; departure refuses further processing.",
     ),
   });
 

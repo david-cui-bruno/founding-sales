@@ -15,6 +15,7 @@ import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
 import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
 import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
 import {crmCaptureExtractionJobHandler} from '../handlers/crmCaptureExtraction.ts';
+import {bookingInterpretationJobHandler} from '../handlers/bookingInterpretation.ts';
 import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts';
 import { crmExtractJobHandler } from '../handlers/crmExtract.ts';
 import {askIndexJobHandler} from '../handlers/askIndex.ts';
@@ -22,6 +23,7 @@ import {askAnswerJobHandler} from '../handlers/askAnswer.ts';
 import {automaticEmailHandler,automaticEmailSource} from '../handlers/emailAdmission.ts';
 import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
+import {linkedinRecurringHandler,linkedinRecurringSource} from '../social/linkedinRecurringJobs.ts';
 import {socialDraftModel} from '../social/draftModel.ts';
 import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
 import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts';
@@ -134,8 +136,10 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly linkedinRecurring?:Parameters<typeof linkedinRecurringHandler>[0];
   readonly bookingCreate?:Parameters<typeof bookingCreateJobHandler>[0];
   readonly bookingChange?:Parameters<typeof bookingChangeJobHandler>[0];
+  readonly bookingInterpretation?: Parameters<typeof bookingInterpretationJobHandler>[0];
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
   readonly crmAskIndex?: Parameters<typeof askIndexJobHandler>[0];
@@ -255,6 +259,7 @@ export function registerHandlers(
   );
   registry.register(retentionBatchJobHandler());
   registry.register(crmExtractJobHandler(composition.crmExtraction??{}));
+  registry.register(bookingInterpretationJobHandler(composition.bookingInterpretation??{}));
   registry.register(askIndexJobHandler(composition.crmAskIndex??{}));
   registry.register(askAnswerJobHandler(composition.crmAskAnswers??{}));
   registry.register(crmCaptureExtractionJobHandler(composition.crmExtraction?.mailEvidence));
@@ -292,6 +297,7 @@ export function registerHandlers(
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
+  registry.register(linkedinRecurringHandler(composition.linkedinRecurring));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
   registry.register(automaticEmailHandler({implementationCommit:buildCommit(process.env),imageDigest:composition.send?.workerImageDigest??null,side:'worker',deploymentSendingEnabled:composition.send?.deploymentSendingEnabled??false,production:composition.send?.production??true,schemaVersion:REQUIRED_SCHEMA}));
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
@@ -529,6 +535,7 @@ export function workerDueWorkSources(
     readonly crmMailProcessing?:CrmMailEvidencePort;
     readonly crmMailBackfill?:boolean;
     readonly socialDraft?: boolean;
+    readonly linkedinRecurring?:Parameters<typeof linkedinRecurringSource>[0];
     readonly qualification?: boolean;
     readonly discovery?: boolean;
     readonly sourcing?: boolean;
@@ -550,6 +557,7 @@ export function workerDueWorkSources(
     crmMailBackfillSource(options.crmMailBackfill===true),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
+    linkedinRecurringSource(options.linkedinRecurring),
     outreachReplySource(),
     meetingAnalysesSource(options.meetingAnalysis === true),
     meetingFollowThroughSource(),

@@ -21,6 +21,7 @@ export type IdempotencyProtection = (typeof IDEMPOTENCY_PROTECTIONS)[number];
 export const JOB_KINDS = [
   'meeting.booking_create',
   'meeting.booking_change',
+  'crm.booking_interpretation',
   'crm.ask_answer',
   'crm.ask_index',
   'crm.commitments_project',
@@ -50,6 +51,7 @@ export const JOB_KINDS = [
   'reply.human_send',
   'outreach.email_admit',
   'social.draft',
+  'social.linkedin_recurring',
   'social.assets_cleanup',
   'sourcing.monitor',
   'sourcing.discover',
@@ -78,6 +80,7 @@ export function isJobKind(value: string): value is JobKind {
 export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection>> = Object.freeze({
   'meeting.booking_create': 'outbound_fence',
   'meeting.booking_change': 'outbound_fence',
+  'crm.booking_interpretation':'outbound_fence',
   'crm.ask_answer': 'outbound_fence',
   'crm.ask_index': 'outbound_fence',
   'crm.commitments_project': 'outbound_fence',
@@ -146,6 +149,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'reply.human_send': 'outbound_fence',
   'outreach.email_admit': 'outbound_fence',
   'social.draft': 'outbound_fence',
+  'social.linkedin_recurring': 'outbound_fence',
   'social.assets_cleanup': 'business_uniqueness',
   'sourcing.discover': 'outbound_fence',
   'sourcing.monitor': 'business_uniqueness',
@@ -199,6 +203,7 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 export const jobIdempotencyKey = Object.freeze({
   bookingCreate: (submissionId: string): string => `booking-create:${submissionId}`,
   bookingChange: (submissionId: string): string => `booking-change:${submissionId}`,
+  bookingInterpretation:(requestId:string):string=>`booking-interpretation:${requestId}`,
   automaticEmail: (revision:number,at:string):string => `automatic-email:${String(revision)}:${hourOf(at)}`,
   sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
@@ -341,6 +346,7 @@ export type JobClass = (typeof JOB_CLASSES)[number];
 export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze({
   'meeting.booking_create': 'urgent',
   'meeting.booking_change': 'urgent',
+  'crm.booking_interpretation':'bulk',
   'crm.ask_answer': 'bulk',
   'crm.ask_index': 'bulk',
   'crm.commitments_project': 'bulk',
@@ -380,6 +386,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'reply.human_send': 'urgent',
   'outreach.email_admit': 'bulk',
   'social.draft': 'bulk',
+  'social.linkedin_recurring': 'bulk',
   'social.assets_cleanup': 'bulk',
   'sourcing.monitor': 'bulk',
   'sourcing.discover': 'bulk',

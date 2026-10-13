@@ -1,4 +1,5 @@
 import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
+import type {LinkedinRecurringComposition} from '@fss/domain/social/linkedinRecurringAuthority.ts';
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
@@ -90,7 +91,10 @@ import {
  * (`docs/decisions/g75-one-connection-per-request.md`).
  */
 
+import type {BookingInterpretationAuthorityPort} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 export interface ApiOptions {
+  readonly linkedinRecurring?:LinkedinRecurringComposition|null;
+  readonly bookingInterpretationAuthority?:BookingInterpretationAuthorityPort;
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
@@ -176,10 +180,12 @@ export type { ApiRequest, RouteResult } from './routes/types.ts';
 
 function routingOptions(options: ApiOptions): RoutingOptions {
   return {
+    ...(options.bookingInterpretationAuthority===undefined?{}:{bookingInterpretationAuthority:options.bookingInterpretationAuthority}),
     ...(options.crmMailEvidence===undefined?{}:{crmMailEvidence:options.crmMailEvidence}),
     ...(options.crmMailCaptureReadiness===undefined?{}:{crmMailCaptureReadiness:options.crmMailCaptureReadiness}),
     ...(options.crmCapabilityRuntime===undefined?{}:{crmCapabilityRuntime:options.crmCapabilityRuntime}),
     ...(options.crmAcquisitionDiagnosticRuntime===undefined?{}:{crmAcquisitionDiagnosticRuntime:options.crmAcquisitionDiagnosticRuntime}),
+    ...(options.linkedinRecurring===undefined?{}:{linkedinRecurring:options.linkedinRecurring}),
     ...(options.bookingCapacity===undefined?{}:{bookingCapacity:options.bookingCapacity}),
     ...(options.bookingCreate===undefined?{}:{bookingCreate:options.bookingCreate}),
     ...(options.bookingChange===undefined?{}:{bookingChange:options.bookingChange}),

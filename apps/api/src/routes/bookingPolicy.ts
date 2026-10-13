@@ -1,7 +1,7 @@
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
 import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import {bookingPolicyCommandSchema} from '@fss/contracts';
-import {mutateBookingPolicy,readBookingPolicy,readBookingPolicySettings} from '@fss/domain/meetings/bookingPolicy.ts';
+import {mutateBookingPolicy,readBookingPolicyResponseObservation,bookingPolicyResponseObservationCurrentAt} from '@fss/domain/meetings/bookingPolicy.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 export const BOOKING_POLICY_PATHS:readonly string[]=['/meetings/booking-policy'];
 export async function routeBookingPolicy(request:ApiRequest,options:RoutingOptions&{bookingPolicyRuntime?:BookingPolicyRuntime}):Promise<RouteResult|null> {
@@ -15,12 +15,14 @@ export async function routeBookingPolicy(request:ApiRequest,options:RoutingOptio
     const view=request.query.get('view');
     if(view!==null&&view!=='settings')return {status:400,body:{error:'invalid_input'}};
     try{
-      const body=view==='settings'?await readBookingPolicySettings(scoped.context,options.bookingPolicyRuntime):await readBookingPolicy(scoped.context,options.bookingPolicyRuntime);
+      const observed=await readBookingPolicyResponseObservation(scoped.context,view,options.bookingPolicyRuntime);
       const current=await requirePrincipal(auth,request);
       if(!current.ok)return current.result;
       const before=principal.principal,after=current.principal;
       if(after.role!=='admin'||after.membershipStatus!=='active'||after.deviceStatus!=='active'||after.workspaceId!==before.workspaceId||after.userId!==before.userId||after.deviceId!==before.deviceId||after.sessionId!==before.sessionId)return {status:403,body:{error:'owner_authority_changed'}};
-      return {status:200,body};
+      const now=options.bookingPolicyRuntime?.now()??new Date().toISOString();
+      if(!bookingPolicyResponseObservationCurrentAt(observed,now))return {status:409,body:{error:'booking_policy_observation_stale',message:'Current booking readiness and allowance are unknown. Refresh booking policy.'}};
+      return {status:200,body:observed.body};
     }
     catch{return {status:403,body:{error:'owner_authority_changed'}};}
   }

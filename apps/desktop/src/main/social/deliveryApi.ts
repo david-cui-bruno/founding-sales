@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {socialInspectionSchema,socialPostRevisionSchema} from '@fss/contracts';
+import {socialInspectionSchema,socialPostRevisionSchema,linkedinPostingDispatchCurrentSchema} from '@fss/contracts';
 import type {AuthedClient} from '../authedClient.ts';
 import type {DeliveryPorts} from './deliveryLoop.ts';
 const claimSchema=z.strictObject({claimId:z.string().uuid(),approvalId:z.string().uuid(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),expiresAt:z.string().datetime()});
@@ -18,10 +18,15 @@ export function createSocialDeliveryPorts(deps:{api:AuthedClient;current():boole
   if(began)return {ok:false,reason:'inspect_existing_submission'};
   if(!deps.current())return {ok:false,reason:'session_changed'};
   began=true;
-  const result=await deps.api.command('/social/delivery/begin',input,v=>z.strictObject({submissionId:z.string().uuid()}).parse(v));
+  const result=await deps.api.command('/social/delivery/begin',input,v=>z.strictObject({submissionId:z.string().uuid(),postingPolicyBound:z.literal(true).optional()}).parse(v));
   // The durable marker might already exist; the next queue read must inspect it.
   if(!deps.current()||(!result.ok&&(result.offline||result.reason==='unreadable_answer')))throw new Error('submission_uncertain');
-  return result.ok?{ok:true,...result.value}:{ok:false,reason:result.reason};
+  return result.ok?{ok:true,submissionId:result.value.submissionId,...(result.value.postingPolicyBound===true?{postingPolicyBound:true as const}:{})}:{ok:false,reason:result.reason};
+ },
+ async dispatchCurrent(submissionId){
+  if(!deps.current())return false;
+  const result=await deps.api.read('/social/linkedin-posting-policy/dispatch-current',v=>linkedinPostingDispatchCurrentSchema.parse(v),{submissionId});
+  return deps.current()&&result.ok&&result.value.current;
  },
  async observe(submissionId,observation){
   if(!deps.current())return false;
