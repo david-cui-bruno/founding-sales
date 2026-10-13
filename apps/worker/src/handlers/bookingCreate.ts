@@ -3,7 +3,9 @@ import {createHash} from 'node:crypto';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
-import {validateBookingCreate,type BookingCreateRow} from '@fss/domain/meetings/bookingCreate.ts';
+import {validateBookingCreate,bookingSlotReason,type BookingCreateRow} from '@fss/domain/meetings/bookingCreate.ts';
+import {revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from '@fss/domain/meetings/bookingPolicy.ts';
+import {bookingCreateCostContractReason} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingCreateCall,BookingCreateObservation} from '@fss/domain/meetings/bookingCreateProvider.ts';
 import {receiveSynthesizedCalcomEvent} from '@fss/domain/meetings/calcom.ts';
@@ -37,10 +39,20 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingCreateRuntim
    await input.session.query(`UPDATE booking_create_submissions SET state=CASE WHEN dispatch_started_at IS NULL THEN 'failed' ELSE state END,reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,id,reason]);return null;
   }
   row=(await input.session.query<BookingCreateRow>('SELECT * FROM booking_create_submissions WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[input.scope.workspaceId,id])).rows[0];if(!row||['accepted','failed'].includes(row.state)||row['provenance_state']!=='current'||valid.fingerprint!==row['source_fingerprint'])return null;
+  // Source and receipt waits are complete. Retain cost before the final canonical
+  // observation, so changed scoped readiness during that await cannot authorize HTTP.
+  const cost=await runtime.readCostContract(valid.snapshot);
+  const policy=await revalidateBookingPolicy(context,valid.snapshot,runtime.policy);
+  if(!await liveLease(input))return null;
+  const at=runtime.policy.now();
+  const reason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,at)?'booking_readiness_unavailable':bookingCreateCostContractReason(cost,policy.snapshot,at)??(row.dispatch_started_at===null?bookingSlotReason(row.starts_at.toISOString(),at):null);
+  if(reason!==null){await input.session.query("UPDATE booking_create_submissions SET state=CASE WHEN dispatch_started_at IS NULL THEN 'failed' ELSE state END,reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,reason]);return null;}
   const call:BookingCreateCall={submissionId:id,eventTypeId:valid.snapshot.bindings.event.eventTypeId,accountId:Number(valid.snapshot.bindings.account.accountId),organizerEmail:valid.snapshot.bindings.account.email,startsAt:row.starts_at.toISOString(),attendee:valid.attendee};
   if(dispatch&&row.dispatch_started_at===null){
    if(availability?.available!==true){await input.session.query("UPDATE booking_create_submissions SET state='failed',reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,availability?.reason??'availability_unknown']);return null;}
-   await input.session.query("UPDATE booking_create_submissions SET state='unknown',dispatch_started_at=clock_timestamp(),reason='provider_acceptance_unknown',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND dispatch_started_at IS NULL",[input.scope.workspaceId,id]);
+   // This exact statement must still hold the matching owner/token and wall-clock lease.
+   const marker=await input.session.query("UPDATE booking_create_submissions SET state='unknown',dispatch_started_at=clock_timestamp(),reason='provider_acceptance_unknown',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND dispatch_started_at IS NULL AND EXISTS(SELECT 1 FROM jobs WHERE workspace_id=$1 AND id=$3 AND state='running' AND lease_owner=$4 AND fencing_token=$5::bigint AND lease_expires_at>clock_timestamp()) RETURNING id",[input.scope.workspaceId,id,input.job.id,input.job.leaseOwner,input.job.fencingToken]);
+   if(marker.rows.length!==1)return null;
    return {row,snapshot:valid.snapshot,call,dispatchClaimed:true};
   }
   return {row,snapshot:valid.snapshot,call,dispatchClaimed:false};

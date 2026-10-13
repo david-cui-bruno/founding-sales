@@ -29,6 +29,33 @@ export async function setupBooking(){
  return {...f,runtime,bindings,payload,requests,controls,runBooking,replayBooking};
 }
 describe('ordinary owner-confirmed agreed booking admission',()=>{
+ it.each(['source_notice','receipt_notice','receipt_cost','receipt_runtime','receipt_lease','receipt_cost_after_read','receipt_runtime_after_cost','receipt_scope_after_cost','initial_notice','initial_cost','initial_runtime','initial_lease'] as const)('final dispatch refuses %s expiry across an observed PostgreSQL lock wait',async change=>{
+  const f=await setupBooking();const blocker=await f.fixture.database.appRuntimeSession();let locked=false;
+  try{const response=await f.request('POST','/meetings/booking-create',f.command(f.payload));expect(response.status).toBe(200);const id=(response.body as {result:{submissionId:string}}).result.submissionId;
+   const blockerPid=(await blocker.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+   let now='2026-10-13T17:00:00Z';f.runtime.policy.now=()=>now;
+   if(change.startsWith('receipt_cost')||change==='initial_cost'){const read=f.runtime.readCostContract;f.runtime.readCostContract=async snapshot=>{const contract=await read(snapshot);return contract===null?null:{...contract,validUntil:'2026-10-14T10:00:00Z'};};}
+   if(change.startsWith('receipt_runtime')||change==='initial_runtime'){const read=f.runtime.policy.readEvidence;f.runtime.policy.readEvidence=async(context,binding)=>{const evidence=await read(context,binding);return evidence===null?null:{...evidence,validUntil:'2026-10-14T11:00:00Z'};};}
+   const job=(await claimJobs(f.fixture.db,{owner:'final-wait-worker',kinds:['meeting.booking_create'],limit:1,leaseSeconds:120}))[0]!;
+   if(change.endsWith('_lease'))await f.fixture.db.query("UPDATE jobs SET lease_expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1",[job.id]);
+   let accountAccess=true;const evidenceRead=f.runtime.policy.readEvidence;f.runtime.policy.readEvidence=async(context,binding)=>{const evidence=await evidenceRead(context,binding);return evidence===null?null:{...evidence,accountAccess};};
+   let availabilityRead=false,postAvailabilityCostReads=0;
+   if(change.endsWith('_after_read')||change.endsWith('_after_cost')){const read=f.runtime.readCostContract;f.runtime.readCostContract=async snapshot=>{const contract=await read(snapshot);if(availabilityRead&&++postAvailabilityCostReads===2){await Promise.resolve();if(change==='receipt_scope_after_cost')accountAccess=false;else now=change==='receipt_cost_after_read'?'2026-10-14T10:01:00Z':'2026-10-14T11:01:00Z';}return contract;};}
+   if(change.startsWith('initial_')){await blocker.query('BEGIN');locked=true;await blocker.query('SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 FOR UPDATE',[f.fixture.alpha.workspaceId,f.payload.agreement.sourceId]);}
+   f.controls.onHttp=async url=>{if(url.pathname!=='/v2/calendars/busy-times'||change.startsWith('initial_'))return;availabilityRead=true;await blocker.query('BEGIN');locked=true;
+    if(change==='source_notice')await blocker.query('SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2 FOR UPDATE',[f.fixture.alpha.workspaceId,f.payload.agreement.sourceId]);
+    else await blocker.query('SELECT id FROM booking_create_submissions WHERE id=$1 FOR UPDATE',[id]);
+   };
+   const running=f.replayBooking(job);let observed=false;
+   for(let attempt=0;attempt<400;attempt++){const waits=await blocker.query('SELECT pid FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))',[blockerPid]);if(waits.rows.length){observed=true;break;}await new Promise(resolve=>setTimeout(resolve,5));}
+   expect(observed,'registered worker must actually wait on the real held source/receipt row').toBe(true);
+   if(change.endsWith('_lease')){while((await blocker.query('SELECT id FROM jobs WHERE id=$1 AND lease_expires_at<=clock_timestamp()',[job.id])).rows.length===0)await new Promise(resolve=>setTimeout(resolve,10));}
+   else if(!change.endsWith('_after_read')&&!change.endsWith('_after_cost'))now=change.endsWith('notice')?'2026-10-14T12:01:00Z':change.endsWith('_cost')?'2026-10-14T10:01:00Z':'2026-10-14T11:01:00Z';
+   await blocker.query('COMMIT');locked=false;await running;
+   expect(f.requests.filter(r=>r.init.method==='POST')).toHaveLength(0);if(change.startsWith('initial_'))expect(f.requests).toHaveLength(0);
+   expect((await f.fixture.db.query('SELECT state,reason,dispatch_started_at FROM booking_create_submissions WHERE id=$1',[id])).rows[0]).toEqual({state:change.endsWith('_lease')?'pending':'failed',reason:change.endsWith('_lease')?null:change.endsWith('notice')?'notice_too_short':change.startsWith('receipt_cost')||change==='initial_cost'?'unknown_cost':'booking_readiness_unavailable',dispatch_started_at:null});
+  }finally{if(locked)await blocker.query('ROLLBACK');await f.fixture.stop();}
+ });
  it.each(['physical_source_delete','source_context_association'] as const)('the actual %s trigger closure removes private provenance and stops creation',async change=>{
   const f=await setupBooking();try{const response=await f.request('POST','/meetings/booking-create',f.command(f.payload));const id=(response.body as {result:{submissionId:string}}).result.submissionId;
    if(change==='physical_source_delete')await f.fixture.db.query('DELETE FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2',[f.fixture.alpha.workspaceId,f.payload.agreement.sourceId]);else expect((await f.request('POST','/crm/business/mail/associate',f.command({sourceId:f.payload.agreement.sourceId,expectedRevision:1,firmId:f.firmId}))).status).toBe(200);
