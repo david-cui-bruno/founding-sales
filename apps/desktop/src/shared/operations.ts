@@ -45,6 +45,7 @@ import {relationshipSaveSchema,relationshipCorrectSchema,firmListResponseSchema}
 import {relationshipReadSchema,relationshipListSchema} from '@fss/contracts';
 import {personCreateSchema,personReadSchema,personListSchema,personSourceAddSchema,personSourceChangeSchema,personSourceRecaptureSchema,personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
+import {bookingPolicySettingsViewSchema,bookingPolicyChangeSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,notificationRuntimeStatusSchema} from '@fss/contracts';
 import { todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOpenResponseSchema } from '@fss/contracts';
@@ -1997,6 +1998,14 @@ export const OPERATIONS = {
     kind:'read',calls:[{method:'GET',path:'/meetings/booking-capacity'}],input:nothing,
     output:z.strictObject({capacity:bookingCapacityResponseSchema.nullable()}),
     transform:'Read-only Cal.com event configuration and scoped retained booking evidence; no available-slot inference',
+  },
+  'meetings.bookingPolicy': {
+    kind:'read',calls:[{method:'GET',path:'/meetings/booking-policy?view=settings'}],input:nothing,
+    output:z.strictObject({view:bookingPolicySettingsViewSchema.nullable()}),transform:'Current owner booking scope and exact configured choices, never automatic Enable',
+  },
+  'meetings.bookingPolicyChange': {
+    kind:'command',calls:[{method:'POST',path:'/meetings/booking-policy'}],input:bookingPolicyChangeSchema,
+    output:z.strictObject({revision:z.number().int().positive().nullable(),reason:z.string().max(80).nullable()}),transform:'Version-fenced explicit owner save, Disable or Revoke without provider writes',
   },
   'meetings.brief': {
     kind: 'read',
