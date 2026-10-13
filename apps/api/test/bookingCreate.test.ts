@@ -29,6 +29,19 @@ export async function setupBooking(){
  return {...f,runtime,bindings,payload,requests,controls,runBooking,replayBooking};
 }
 describe('ordinary owner-confirmed agreed booking admission',()=>{
+ it.each([['2026-10-13T18:59:00Z','notice_too_short'],['2026-10-28T14:00:00Z','outside_booking_horizon'],['2026-10-17T14:00:00Z','outside_business_hours'],['2026-10-14T12:59:00Z','outside_business_hours'],['2026-10-14T21:41:00Z','outside_business_hours']] as const)('ordinary owner command refuses invalid business slot %s',async(startsAt,reason)=>{
+  const f=await setupBooking();try{expect((await f.request('POST','/meetings/booking-create',f.command({...f.payload,agreedSlot:{startsAt,timeZone:'America/New_York'}}))).body).toMatchObject({reason});expect(f.requests).toHaveLength(0);}finally{await f.fixture.stop();}
+ });
+ it('the default live composition is unavailable and cannot authorize creation',async()=>{
+  const f=await setupBooking();try{delete f.runtimeOptions.bookingCreate;expect((await f.request('POST','/meetings/booking-create',f.command(f.payload))).body).toMatchObject({reason:'booking_runtime_unavailable'});expect(f.requests).toHaveLength(0);}finally{await f.fixture.stop();}
+ });
+ it('normal directly named agreements can reserve more than four calls without an invented call-count cap',async()=>{
+  const f=await setupBooking();try{for(let index=0;index<5;index++){const startsAt=new Date(Date.parse('2026-10-14T14:00:00Z')+index*30*60_000).toISOString();const local=index%2===0?`${10+Math.floor(index/2)}:00`:`${10+Math.floor(index/2)}:30`;const agreement=await f.capture(`Yes, please book Wednesday October 14, 2026 at ${local} ${index<4?'AM':'PM'} America/New_York for our 20 minute call.`);
+  expect((await f.request('POST','/meetings/booking-create',f.command({expectedPolicyRevision:1,attendeeRouteId:f.attendeeRouteId,agreement,agreedSlot:{startsAt,timeZone:'America/New_York'},confirmation:'owner_confirmed_unconditional_exact_slot'}))).status).toBe(200);}
+  expect((await f.fixture.db.query('SELECT id FROM booking_create_submissions WHERE workspace_id=$1',[f.fixture.alpha.workspaceId])).rows).toHaveLength(5);expect(f.requests).toHaveLength(0);
+  }finally{await f.fixture.stop();}
+ });
+
  it.each(['availability','accepted_write','unknown_write'] as const)('normal source deletion during %s erases provenance without replay or pretend cancellation',async phase=>{
   const f=await setupBooking();try{const response=await f.request('POST','/meetings/booking-create',f.command(f.payload));const id=(response.body as {result:{submissionId:string}}).result.submissionId;
    f.controls.dropResponse=phase==='unknown_write';let deleted=false;
@@ -53,6 +66,8 @@ describe('ordinary owner-confirmed agreed booking admission',()=>{
    await callback('BOOKING_CREATED',f.payload.agreedSlot.startsAt,'2026-10-14T14:20:00Z','2026-10-13T17:00:00Z');await callback('BOOKING_CREATED',f.payload.agreedSlot.startsAt,'2026-10-14T14:20:00Z','2026-10-13T17:00:00Z');
    expect((await f.request('GET',`/meetings/outcomes?meetingId=${meetingId}`)).body).toMatchObject({attendance:'attended',notes:{revision:1,debrief:'Human correction retained'}});
    expect((await f.fixture.db.query('SELECT id FROM meetings WHERE workspace_id=$1',[f.fixture.alpha.workspaceId])).rows).toHaveLength(1);expect(f.requests.filter(r=>r.init.method==='POST')).toHaveLength(1);
+   const agreement=await f.capture('Yes, please book Wednesday October 14, 2026 at 10:00 AM America/New_York for a 20 minute call.');
+   expect((await f.request('POST','/meetings/booking-create',f.command({...f.payload,agreement}))).status).toBe(200);
   }finally{await server.close();await f.fixture.stop();}
  });
 
