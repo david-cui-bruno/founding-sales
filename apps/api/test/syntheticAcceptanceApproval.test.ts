@@ -3,7 +3,7 @@ import {mkdtempSync,mkdirSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {expect,it} from 'vitest';
-import {validateSyntheticAcceptance,claimSyntheticAcceptanceDirectory,SYNTHETIC_ACCEPTANCE_CRITICAL_SOURCES} from './support/syntheticAcceptanceApproval.ts';
+import {validateSyntheticAcceptance,claimSyntheticAcceptanceDirectory,SYNTHETIC_ACCEPTANCE_CRITICAL_SOURCES,SYNTHETIC_VERTEX_ACCEPTANCE_CRITICAL_SOURCES} from './support/syntheticAcceptanceApproval.ts';
 const bytes=(value:unknown)=>Buffer.from(JSON.stringify(value));const sha=(value:Buffer)=>createHash('sha256').update(value).digest('hex');
 function input(changes:Record<string,unknown>={}){const source=Buffer.from('frozen source');const labelsBytes=bytes({cases:['dev_01','dev_02','dev_05','dev_06','dev_08','dev_10','dev_11'].map(caseId=>({caseId,syntheticText:'Frozen text',expectedOutcome:'Frozen expected',forbiddenOutcome:'Frozen forbidden',eventAt:'2026-10-12T14:00:00Z'}))});const scopeBytes=bytes({scopeVersion:2,maxRequestInputBytes:30000,maxNativeOutputTokens:4096,maxProbeOutputTokens:32,runId:randomUUID(),modelVersion:'us.anthropic.claude-sonnet-5-5',labelsSha256:sha(labelsBytes),extractionIds:['dev_01','dev_02','dev_05','dev_08'],askIds:['dev_01','dev_05','dev_06','dev_08','dev_10','dev_11'],maxSteps:41,maxCents:500,maxAskSteps:6,maxAskInputBytes:25000,maxAskOutputTokens:1000,askQuestions:Object.fromEntries(['dev_01','dev_05','dev_06','dev_08','dev_10','dev_11'].map(id=>[id,'Frozen question'])),sourceSha256:Object.fromEntries(SYNTHETIC_ACCEPTANCE_CRITICAL_SOURCES.map(path=>[path,sha(source)])),stage:'history_investigation',thinking:'disabled',pricing:{inputTokenPriceMicros:3.3,outputTokenPriceMicros:16.5,basis:'conservative_upper_bound_not_invoice'},...changes});return {scopeBytes,labelsBytes,approvalBytes:bytes({approved:true,approvedBy:'David Cui',scopeSha256:sha(scopeBytes),humanLabelsReviewed:true,reference:'Exact synthetic run approval'}),readSource:()=>source};}
 it('accepts independently approved stronger-model stage without changing labels or claiming quality',()=>{expect(validateSyntheticAcceptance(input()).scope).toMatchObject({modelVersion:'us.anthropic.claude-sonnet-5-5',stage:'history_investigation',thinking:'disabled',maxAskSteps:6});});
@@ -58,4 +58,35 @@ it('binds five history/session questions and their combined six-generation ceili
 });
 it.each([{maxSteps:30},{maxAskSteps:4},{askIds:['history_01']},{askQuestions:{}},{extractionIds:['history_01']},{labelsPath:'tools/ask-evaluation/fixtures/ask-contract-v4.json'},{sourceSha256:{}},{sourceCommit:undefined},{sourceTreeSha256:undefined}])('refuses an incomplete or expanded history/session grant before dispatch (%j)',changes=>{
  expect(()=>validateSyntheticAcceptance(historyInput(changes))).toThrow();
+});
+
+function vertexHistoryInput(changes:Record<string,unknown>={}){
+ return historyInput({scopeVersion:6,captureNative:undefined,maxNativeOutputTokens:undefined,maxProbeOutputTokens:256,sourceSha256:Object.fromEntries(SYNTHETIC_VERTEX_ACCEPTANCE_CRITICAL_SOURCES.map(path=>[path,sha(Buffer.from('frozen source'))])),provider:'google_vertex',projectId:'colormyworld-prod-dc824',region:'us',endpointId:'vertex.us/colormyworld-prod-dc824',modelVersion:'gemini-3.8-flash',thinking:'low',operatorAccount:'davidcui824@gmail.com',authMode:'in_memory_operator',maxAskOutputTokens:4096,...changes});
+}
+it('admits a separately approved Vertex US history-only allowance without extending former Bedrock receipts',()=>{
+ expect(validateSyntheticAcceptance(vertexHistoryInput()).scope).toMatchObject({scopeVersion:6,provider:'google_vertex',modelVersion:'gemini-3.8-flash',thinking:'low',maxAskOutputTokens:4096});
+});
+it.each([
+ {provider:'bedrock'},{projectId:'Other_Project'},{region:'global'},{endpointId:'vertex.us/another-project'},
+ {operatorAccount:'david@framewisehealth.com'},{authMode:'runtime_adc'},{modelVersion:'gemini-3.1-pro-preview'},{thinking:'high'},
+ {captureNative:true},{maxNativeOutputTokens:4096},{token:'must-not-be-in-scope'},
+ {maxAskInputBytes:25000},{maxAskOutputTokens:1000},{maxRequestInputBytes:30001},{maxProbeOutputTokens:32},{maxAskSteps:7},{maxSteps:30},{maxSteps:51},{maxCents:1001},
+ {stage:'gold_context'},{extractionIds:['dev_01']},{askIds:['history_01']},{askQuestions:{}},
+ {labelsPath:'tools/ask-evaluation/fixtures/ask-contract-v4.json'},{sourceCommit:undefined},{sourceTreeSha256:undefined},{sourceSha256:{}},
+ {pricing:{inputTokenPriceMicros:3.3,outputTokenPriceMicros:16.5,basis:'conservative_upper_bound_not_invoice'}}
+])('rejects mismatched Vertex authority before credentials, marker or dispatch (%j)',changes=>{
+ expect(()=>validateSyntheticAcceptance(vertexHistoryInput(changes))).toThrow();
+});
+it('checks exact Vertex labels, owner approval and source snapshot before reading executable sources',()=>{
+ const value=vertexHistoryInput();
+ let reads=0;const readSource=()=>{reads++;return Buffer.from('frozen source');};
+ expect(()=>validateSyntheticAcceptance({...value,readSource,sourceTree:{commit:'a'.repeat(40),sha256:'c'.repeat(64)}})).toThrow('approved_runner_changed');
+ expect(()=>validateSyntheticAcceptance({...value,readSource,labelsBytes:Buffer.from('changed')})).toThrow('frozen_scope_changed');
+ expect(()=>validateSyntheticAcceptance({...value,readSource,scopeBytes:Buffer.concat([value.scopeBytes,Buffer.from(' ')])})).toThrow('exact_paid_scope_approval_required');
+ expect(reads).toBe(0);
+ expect(()=>validateSyntheticAcceptance({...value,readSource:()=>Buffer.from('changed')})).toThrow('approved_runner_changed');
+ expect(validateSyntheticAcceptance(vertexHistoryInput({maxSteps:50})).scope.maxSteps).toBe(50);
+});
+it.each([undefined,2,3,4,5])('does not silently admit Vertex authority fields into historical version %s',scopeVersion=>{
+ expect(()=>validateSyntheticAcceptance(historyInput({scopeVersion,provider:'google_vertex'}))).toThrow('frozen_scope_changed');
 });

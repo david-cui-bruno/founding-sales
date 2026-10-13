@@ -6,6 +6,8 @@ The approved [operating roadmap](../sourcing/roadmap-20261007.md) has eight open
 
 ## Source, production and release
 
+PR598 merged as8286aebf after all required CI and independent reviews, adding explicit Gemini3.8FlashUS answering and transient signed tool replay. Source remains schema105. Its two CI repairs were a narrowly classified public-prose scanner false positive and calendar-relative Today coverage fixtures; production behavior and historical-promise guards were unchanged. No rollout or Enable is implied.
+
 PR590 merged as `67089b6b`; source targets schema105. PR591 merged as `3a919179` after all required CI passed, repairing source-only answers with explicit empty exact references and selected-firm admission without a person. PR592 merged as `0a761e9f` after required CI passed, integrating reviewed scoped-search/temporal guidance. PR593 merged as `1bb79fc4` after all required CI and two-axis review, repairing question-only continuity after exact-state changes. No causal ablation or representative-quality claim is made.
 
 Read-only production inspection at 18:13Z confirms backend `d49dda37dfb6d95cb7c5aa077da2f32b2724dc79`, schema88, stable API2/worker1, and present/tagged immutable images. Mailbox controls and release smoke/record were not inspected. Signed desktop1.0.51 remains dated evidence, not a fresh installed observation.
@@ -34,7 +36,9 @@ The earlier two immutable comparison grants are consumed:25calls/202c conserved 
 
 ## Next work and safeguards
 
-Complete scope-specific readiness and the remaining evidence/presentation work. The [contextual guidance source change](../sourcing/ask-evidence-precision-source-20261012.md) places anonymous-speaker, current-versus-historical state and per-claim mixed-reference guidance at the existing SDK seam. Actual review above still finds two failure classes; stop treating repeated prompt-only tuning as a completion strategy. Keep affected hosted acceptance pending and make an explicit limited model/policy decision using measured evidence. PR594 merged as `7c7f0eca`, preserving the actual history/session report.
+The [Vertex ordinary-worker acceptance preparation](../sourcing/ask-vertex-worker-acceptance-20261012.md) reuses the existing reviewed history/session fixtures and public worker journey. Complete its frozen source/manifest review, then obtain genuine approval for the fresh additional allowance before dispatch. Earlier generation-only scopes and unused ceilings do not authorize this run. No actual call or activation is claimed by this preparation. Google project billing/Vertex enablement and explicit operator prediction/quota permission were refreshed read-only; production ADC and credit eligibility remain unverified.
+
+Complete scope-specific readiness and the remaining evidence/presentation work. The [contextual guidance source change](../sourcing/ask-evidence-precision-source-20261012.md) places anonymous-speaker, current-versus-historical state and per-claim mixed-reference guidance at the existing SDK seam. Its actual Sonnet review retains two failure classes. David subsequently chose Gemini from the stated fixed-context evidence; evaluate its real worker integration rather than continuing prompt-only tuning or inferring activation. PR594 merged as `7c7f0eca`, preserving the actual history/session report.
 
 The merged continuity repair retains only the still-authorized dated question for exact-observation freshness changes; public stale reads, deleted originals and narrowed scopes still erase or exclude private content. The [history/session preparation](../sourcing/ask-history-continuity-preparation-20261012.md) preserves the earlier controlled evidence/proposal; its actual approved outcome is now recorded above.
 
