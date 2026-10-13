@@ -92,3 +92,4 @@ export * from './crmAcquisitionDiagnostic.ts';
 export * from './askSessions.ts';
 export * from './askAgentScope.ts';
 export * from './linkedinPolicy.ts';
+export * from './linkedinPostingPolicy.ts';
