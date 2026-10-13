@@ -19,6 +19,8 @@ export interface BookingPolicyRuntimeEvidence {
   readonly funding:{readonly status:'verified'|'unknown'|'held';readonly sharedRemainingDailyCents:number|null;readonly sharedRemainingMonthlyCents:number|null};
 }
 export interface BookingPolicyRuntime {
+  /** Already observed normal configured choices, not a provider read or readiness grant. */
+  readConfiguration?(context:RepositoryContext,ownerUserId:string):Promise<readonly BookingPolicyBindings[]>;
   /** No provider call is permitted here. Read already observed exact configured evidence. */
   readEvidence(context:RepositoryContext,binding:BookingPolicyBindings):Promise<BookingPolicyRuntimeEvidence|null>;
   now():string;
