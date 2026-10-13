@@ -1,3 +1,4 @@
+import {BOOKING_CHANGE_PATHS,routeBookingChange} from './bookingChange.ts';
 import {BOOKING_CREATE_PATHS,routeBookingCreate} from './bookingCreate.ts';
 import {BOOKING_POLICY_PATHS,routeBookingPolicy} from './bookingPolicy.ts';
 import {ASK_SESSION_PATHS,routeAskSessions} from './askSessions.ts';
@@ -177,6 +178,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
   return [
     healthModule(routing),
     moduleOf('booking-create',{paths:BOOKING_CREATE_PATHS},routeBookingCreate,routing),
+    moduleOf('booking-change',{paths:BOOKING_CHANGE_PATHS},routeBookingChange,routing),
     moduleOf('booking-policy',{paths:BOOKING_POLICY_PATHS},routeBookingPolicy,routing),
     moduleOf('sourcing-learning',{paths:SOURCING_LEARNING_PATHS},routeSourcingLearning,routing),
     moduleOf('sourcing', { paths: SOURCING_PATHS }, routeSourcing, routing),

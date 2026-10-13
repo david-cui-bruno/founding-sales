@@ -38,6 +38,7 @@ import { readZoomMeetingsConfiguration } from '../zoom/meetingsClient.ts';
 import { calcomDemoClient } from '../calcom/bookingClient.ts';
 import { readCalcomSecret } from '@fss/domain/meetings/calcomSecret.ts';
 import {bookingCreateJobHandler} from '../handlers/bookingCreate.ts';
+import {bookingChangeJobHandler} from '../handlers/bookingChange.ts';
 import { meetingFollowThroughJobHandler, meetingFollowThroughSource } from '../handlers/meetingFollowThrough.ts';
 import { meetingAnalyzeJobHandler, meetingAnalysesSource, readMeetingAnalysisComposition, type MeetingAnalyzeOptions } from '../handlers/meetingAnalyze.ts';
 import { meetingTranscribeJobHandler, meetingTranscriptionsSource, type MeetingTranscribeOptions } from '../handlers/meetingTranscribe.ts';
@@ -134,6 +135,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  */
 export interface HandlerComposition {
   readonly bookingCreate?:Parameters<typeof bookingCreateJobHandler>[0];
+  readonly bookingChange?:Parameters<typeof bookingChangeJobHandler>[0];
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
   readonly crmAskIndex?: Parameters<typeof askIndexJobHandler>[0];
@@ -229,6 +231,7 @@ export function registerHandlers(
   registry.register(humanReplySendJobHandler(composition.send));
   registry.register(meetingFollowThroughJobHandler());
   registry.register(bookingCreateJobHandler(composition.bookingCreate));
+  registry.register(bookingChangeJobHandler(composition.bookingChange));
   if(composition.meetingAutoRecording)registry.register(meetingAutoRecordingJobHandler(composition.meetingAutoRecording));
   registry.register(suppressionFinalizeJobHandler());
   // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
