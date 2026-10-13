@@ -1,4 +1,4 @@
-import {askClaimConstructionSchema,constructAskClaim} from '../providers/askAnswerConstruction.ts';
+import {askBoundedClaimConstructionSchema,askClaimConstructionSchema,constructAskClaim} from '../providers/askAnswerConstruction.ts';
 import {askProviderMetadataSchema} from '@fss/domain/crm/askProviderState.ts';
 import {admitAskTaskDependencies,readAskTaskDependencyLedger} from '@fss/domain/crm/askTaskDependencies.ts';
 import {projectAskOriginalEvidence as modelWindow} from '../providers/askModelEvidence.ts';
@@ -155,8 +155,8 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
  const {context,requestId,version,epoch}=located,agent=runtime.agent,limits=runtime.agentLimits;
  const update=async(state:string,reason:string|null)=>withTransaction(input.session,async()=>{await lockAskLifecycle(context);if(await fenced(input))await setState(context,requestId,version,epoch,state,reason);});
  if(!agent||!limits||!Number.isInteger(limits.maxSteps)||limits.maxSteps<1||limits.maxSteps>32||!Number.isInteger(limits.maxInputBytes)||limits.maxInputBytes<1||limits.maxInputBytes>1000000||!Number.isInteger(limits.maxOutputTokens)||limits.maxOutputTokens<1||limits.maxOutputTokens>4096||!Number.isInteger(limits.deadlineMs)||limits.deadlineMs<1||limits.deadlineMs>60000){await update('unavailable','processing_authority_unavailable');return;}
- const originalRun=agent.runStep;const route={endpointId:agent.endpointId,modelVersion:agent.modelVersion,providerKey:agent.providerKey},run=originalRun.bind(Object.freeze({...agent})),originalInputBound=agent.inputBound,started=Date.now();
- const unchanged=()=>runtime.agent===agent&&agent.endpointId===route.endpointId&&agent.modelVersion===route.modelVersion&&agent.providerKey===route.providerKey&&agent.runStep===originalRun&&agent.inputBound===originalInputBound;
+ const originalRun=agent.runStep;const route={endpointId:agent.endpointId,modelVersion:agent.modelVersion,providerKey:agent.providerKey},run=originalRun.bind(Object.freeze({...agent})),originalInputBound=agent.inputBound,outputPolicy=agent.outputPolicy,started=Date.now();
+ const unchanged=()=>runtime.agent===agent&&agent.endpointId===route.endpointId&&agent.modelVersion===route.modelVersion&&agent.providerKey===route.providerKey&&agent.runStep===originalRun&&agent.inputBound===originalInputBound&&agent.outputPolicy===outputPolicy;
  const current=async()=>withTransaction(input.session,async()=>{await lockAskLifecycle(context);if(!await fenced(input))return null;const row=(await context.db.query<{cancelled_at:Date|null}>('SELECT cancelled_at FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,requestId])).rows[0];if(row?.cancelled_at)return null;return readCurrentAskInput(context,requestId,version,epoch,route);});
  const initial=await current();if(!initial)return;if(initial.identityAmbiguous){await update('unavailable','identity_clarification_required');return;}
  const initialAttribution=await readAskConversationAttribution(context,[...new Map(initial.windows.map(window=>[`${window.source.kind}:${window.source.sourceId}`,window.source])).values()]);if(initialAttribution===null){await update('stale','source_changed');return;}
@@ -272,6 +272,9 @@ async function handleAskAgent(input:JobHandlerInput,runtime:AskAnswerComposition
    }continue;
   }
   const parsedCandidate=agentConstructionCandidate.safeParse(outcome.answer);
+  // Provider schema is not the publication boundary. Refuse the entire candidate
+  // rather than silently drop an unsupported clause from an otherwise useful quote.
+  if(outputPolicy==='bounded_construction_v1'&&parsedCandidate.success&&parsedCandidate.data.claims.some(claim=>!askBoundedClaimConstructionSchema.safeParse(claim.construction).success)){await update('unavailable','unsupported_answer');return;}
   const constructed=parsedCandidate.success?parsedCandidate.data.claims.map(claim=>claim.construction?constructAskClaim({construction:claim.construction,windows:live.windows,exactResults,claim}):claim):null;
   if(constructed===null||constructed.some(claim=>claim===null)){await update('unavailable','unsupported_answer');return;}
   const candidate=agentCandidate.safeParse({...parsedCandidate.data,claims:constructed});if(!candidate.success||candidate.data.claims.some(claim=>new Set(claim.citationWindowIds).size!==claim.citationWindowIds.length||claim.citationWindowIds.some(id=>!live.windows.some(window=>window.id===id))||new Set(claim.exactResultToolCallIds??[]).size!==(claim.exactResultToolCallIds??[]).length||(claim.exactResultToolCallIds??[]).some(id=>!exactResults.some(exact=>exact.toolCallId===id)))){await update('unavailable','unsupported_answer');return;}

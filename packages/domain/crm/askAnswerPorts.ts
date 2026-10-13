@@ -145,6 +145,9 @@ export interface AskAnswerComposition {
 
 /** Exactly one externally billed generation; execution owns all subsequent steps. */
 export interface AskAgentStepAdapter extends AskAdapterRoute {
+  /** Trusted composition policy, never a model-declared property. Bounded output
+   * permits host-rendered quotes and exact facts only, not semantic synthesis. */
+  readonly outputPolicy?: 'bounded_construction_v1';
   /** Complete conservative text-only SDK input before dispatch, including system,
    * tool schemas and message encoding. Ordinary SDK composition always supplies
    * this; omission preserves only legacy/custom adapter compatibility. */
