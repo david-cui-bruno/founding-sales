@@ -1,4 +1,5 @@
 import type {SocialDeliveryStatus,SocialPreparationResult} from '../shared/socialDiagnostics.ts';
+import {linkedinRecurringPostingOperations} from './social/linkedinRecurringPostingOperations.ts';
 import {linkedinPostingPolicyOperations} from './social/linkedinPostingPolicyOperations.ts';
 import type {createSocialManualHandoffBridge} from './social/manualHandoffBridge.ts';
 import {experimentsViewSchema,experimentSaveResultSchema,experimentActivateResultSchema,experimentStopResultSchema,experimentEraseResultSchema} from '@fss/contracts';
@@ -246,6 +247,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'social.connectAccount':async(input:OperationInput<'social.connectAccount'>)=>deps.socialAccounts?deps.socialAccounts.connect(input):{accepted:false,reason:'unavailable'},
     'social.disconnectAccount':async(input:OperationInput<'social.disconnectAccount'>)=>deps.socialAccounts?deps.socialAccounts.disconnect(input):{accepted:false,reason:'unavailable'},
     'social.weekly':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social/weekly',v=>socialWeeklySchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
+    ...linkedinRecurringPostingOperations({api:deps.api,generation:()=>deps.recordings.identity.current()}),
     ...linkedinPostingPolicyOperations({api:deps.api,generation:()=>deps.recordings.identity.current()}),
     'social.saveWeekly':async(input:OperationInput<'social.saveWeekly'>)=>{const generation=deps.recordings.identity.current(),{commandId,...setting}=input;const answer=await deps.api.command('/social/weekly/save',setting,v=>socialWeeklySchema.parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
     'social.drafts':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social/drafts',v=>socialDraftWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},

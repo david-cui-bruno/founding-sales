@@ -78,17 +78,19 @@ export async function runLinkedinRecurringSlot(ctx:RepositoryContext,id:string,r
 export async function readLinkedinRecurringPosting(ctx:RepositoryContext,runtime?:LinkedinRecurringComposition|null):Promise<LinkedinRecurringView>{
  if(ctx.scope.actor.kind!=='user')return {holds:['owner_unavailable'],items:[]};
  const owner=ctx.scope.actor.userId;await lockLinkedinRecurringOwner(ctx,owner);
+ if(!(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' AND role='admin' FOR SHARE",[ctx.scope.workspaceId,owner])).rows.length)return {holds:['owner_unavailable'],items:[]};
  const rows=(await ctx.db.query<LinkedinRecurringSlot&{delivery_state:string|null;receipt_id:string|null;submission_id:string|null;approval_kind:'standing_policy'|null;draft_state:string|null;spend:string}>(`SELECT s.*,d.state AS delivery_state,d.receipt_id,d.submission_id,a.approval_kind,r.state AS draft_state,COALESCE((SELECT sum(CASE WHEN v.state IN ('reserved','calling') THEN v.cents ELSE v.settled_cents END) FROM provider_reservations v WHERE v.workspace_id=s.workspace_id AND v.subject_kind='social_draft' AND v.subject_id=s.draft_request_id AND v.state<>'released'),0)::text AS spend FROM linkedin_recurring_slots s LEFT JOIN social_draft_requests r ON r.workspace_id=s.workspace_id AND r.id=s.draft_request_id LEFT JOIN social_deliveries d ON d.workspace_id=s.workspace_id AND d.post_id=s.post_id AND d.revision=1 LEFT JOIN social_post_approvals a ON a.workspace_id=d.workspace_id AND a.id=d.approval_id WHERE s.workspace_id=$1 AND s.owner_user_id=$2 ORDER BY s.target_at DESC LIMIT 25`,[ctx.scope.workspaceId,owner])).rows;
  const items:LinkedinRecurringView['items']=[];
  for(const s of rows){
   const scope=await linkedinRecurringScopeReason(ctx,s,runtime);
+  const freshness=s.state==='queued'&&!s.submission_id&&!['scheduled','published'].includes(s.delivery_state??'')?await linkedinRecurringSlotReason(ctx,s,runtime):scope;
   let state:LinkedinRecurringView['items'][number]['state']=s.state==='review'?'review':s.state==='skipped'?'skipped':s.state==='queued'?'queued':'draft';
   let reason=s.reason;
   if(s.delivery_state==='scheduled'||s.delivery_state==='published')state='receipt';
   else if(s.submission_id||s.draft_state==='calling')state='unknown_paused';
   else if(scope==='policy_revoked'||scope==='policy_disabled')state='revoked';
-  else if(scope&&s.state!=='skipped'&&s.state!=='review'){state='review';reason=scope;}
+  else if(freshness&&s.state!=='skipped'&&s.state!=='review'){state=freshness==='slot_missed_or_not_due'?'skipped':'review';reason=freshness;}
   items.push({id:s.id,targetAt:s.target_at.toISOString(),accountId:s.account_id,accountRevision:s.account_revision,policyRevision:s.policy_revision,state,reason,approvalKind:s.approval_kind,postId:s.post_id,draftRequestId:s.draft_request_id,receiptId:s.receipt_id,submissionId:s.submission_id,spendCents:Number(s.spend)});
  }
- return linkedinRecurringViewSchema.parse({holds:runtime?[]:['runtime_not_configured_publication_not_enabled'],items});
+ return linkedinRecurringViewSchema.parse({holds:!runtime?['runtime_not_configured_publication_not_enabled']:Date.parse(runtime.expiresAt)<=Date.now()?['runtime_unavailable_or_expired']:[],items});
 }
