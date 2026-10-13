@@ -29,6 +29,13 @@ export async function setupBooking(){
  return {...f,runtime,bindings,payload,requests,controls,runBooking,replayBooking};
 }
 describe('ordinary owner-confirmed agreed booking admission',()=>{
+ it.each(['physical_source_delete','source_context_association'] as const)('the actual %s trigger closure removes private provenance and stops creation',async change=>{
+  const f=await setupBooking();try{const response=await f.request('POST','/meetings/booking-create',f.command(f.payload));const id=(response.body as {result:{submissionId:string}}).result.submissionId;
+   if(change==='physical_source_delete')await f.fixture.db.query('DELETE FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2',[f.fixture.alpha.workspaceId,f.payload.agreement.sourceId]);else expect((await f.request('POST','/crm/business/mail/associate',f.command({sourceId:f.payload.agreement.sourceId,expectedRevision:1,firmId:f.firmId}))).status).toBe(200);
+   expect((await f.fixture.db.query('SELECT payload,provenance_state,source_fingerprint,state FROM booking_create_submissions WHERE id=$1',[id])).rows[0]).toEqual({payload:{},provenance_state:'redacted',source_fingerprint:'0'.repeat(64),state:'failed'});await f.runBooking();expect(f.requests).toHaveLength(0);
+  }finally{await f.fixture.stop();}
+ });
+
  it.each([['2026-10-13T18:59:00Z','notice_too_short'],['2026-10-28T14:00:00Z','outside_booking_horizon'],['2026-10-17T14:00:00Z','outside_business_hours'],['2026-10-14T12:59:00Z','outside_business_hours'],['2026-10-14T21:41:00Z','outside_business_hours']] as const)('ordinary owner command refuses invalid business slot %s',async(startsAt,reason)=>{
   const f=await setupBooking();try{expect((await f.request('POST','/meetings/booking-create',f.command({...f.payload,agreedSlot:{startsAt,timeZone:'America/New_York'}}))).body).toMatchObject({reason});expect(f.requests).toHaveLength(0);}finally{await f.fixture.stop();}
  });

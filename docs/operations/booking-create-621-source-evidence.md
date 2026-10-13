@@ -1,0 +1,61 @@
+# #621 source acceptance evidence
+
+Date: October 13, 2026. Source only, independently of #620 interpretation. No native, provider-account, consent, activation or deployment completion is claimed.
+
+## Ordinary public journey
+
+1. Authenticated owner saves `/meetings/booking-policy` through #622's ordinary command. Saved business validity is distinct from readiness and `enabled:false`.
+2. The normal canonical capture/read path supplies the exact incoming source revision/hash and optional earlier outgoing offered context. The owner explicitly confirms the unconditional agreed instant and IANA timezone. This is a human decision, not NLP classification or a caller permission flag. A reply accepting a previously offered exact dated/timezoned slot need not literally restate it.
+3. `POST /meetings/booking-create` checks active owner, canonical source access and immutable context closure, current native connection, source sender account/thread, a supported current person-bearing email Route, exact policy revision/binding, trusted operational readiness and an explicitly verified bounded cost contract. It atomically reserves a durable receipt and registers `meeting.booking_create`.
+4. The ordinary registered worker checks the exact configured event's slots and selected calendars' times-only free/busy. The 20-minute appointment and separate 10-minute after-buffer are checked without a prospect calendar or private descriptions. It rereads source/access/owner/account/event/calendar/cost/notice authority after the wait, then commits the unknown dispatch marker **before** the sole create POST.
+5. Accepted evidence folds through existing `receiveSynthesizedCalcomEvent`, identity aliases, meeting lifecycle and Today. `GET /meetings/booking-create?submissionId=...`, `/meetings/firm`, `/today/actions/v2` and ordinary outcomes/notes/attendance read back the result. No generic calendar platform or parallel meeting model was introduced.
+
+Creation uses weekday New York 09:00–18:00 call hours, at least two hours' notice and a rolling fourteen-day horizon. There is no call-count cap or invented remaining capacity. A durable pending/unknown reservation protects concurrent normal callers. Accepted occupancy follows the existing meeting's current window/cancellation facts rather than its stale original receipt window.
+
+## Acceptance mapping
+
+`apps/api/test/bookingCreate.test.ts` uses disposable real PostgreSQL, ordinary authenticated public command envelopes, canonical controlled native mail acquisition, a real registered runner, existing signed webhook HTTP routes, controlled external HTTP and an injected policy clock.
+
+| Requirement | Observable check |
+| --- | --- |
+| Prior offered exact tuple, not literal restatement | Native outgoing SENT proof names October 14, 2026 at 10:00 AM America/New_York. Incoming source says the Wednesday time works. Normal owner admission returns a durable pending receipt. |
+| Independent ordinary create | No interpretation command or model output is used. Owner policy save/read and source capture/read precede the ordinary create command. |
+| Current scoped provider transport | Slots, selected-calendar busy-times and create HTTP calls pass through the new adapter. Accepted evidence produces the existing meeting and Today readbacks. |
+| Two normal last-slot callers | Separate normal database sessions submit distinct supported agreements concurrently. One is accepted, the other refused with `slot_unavailable`, and at most one provider POST occurs. |
+| Four receipt states | Pending before dispatch, provider-pending with marker/UID but no accepted meeting, accepted with UID/meeting, failed availability, and unknown response loss are distinct. |
+| Unknown means inspect, never retry | Registry restart and the ordinary inspection command issue only scoped GET inspection. Accepted recovery retains the original submission and there is still one create POST. |
+| Post-wait fences | Source revision, native disconnect, owner role, policy revoke, provider account generation, event configuration, calendar binding and unknown cost changes prevent the POST. |
+| No call-count cap | Five directly named supported agreements admit normal pending reservations without a synthetic capacity counter. This test does not claim five real provider bookings. |
+| Time limits | Normal commands refuse insufficient notice, beyond-horizon, weekend, pre-opening and call-end-after-closing slots. |
+| Existing lifecycle and humans | Real runner acceptance, signed duplicate callbacks and a controlled reschedule retain one existing meeting, Today identity, explicit human attendance and saved notes. A moved booking frees its old local window. |
+| Source privacy | Ordinary source deletion, physical canonical deletion and context association changes clear private source/offered UUID/hash, Route references and the source fingerprint. Normal deletion during availability, accepted POST and unknown POST never replays or pretends cancellation. |
+| Fail-closed default/cost | Absent runtime and unknown/nonzero bounded cost contracts stop before provider HTTP. Zero is an explicit controlled contractual fixture, never inferred from Cal pricing. |
+
+`calcomBookingCreateClient.test.ts` and `calcomBookingCreateInspection.test.ts` check exact paths, pinned versions, outgoing minimized payload, selected calendar query shape, buffer conflicts and inspection correlation. Returned private descriptions never enter the receipt or meeting readback.
+
+`packages/domain/test/db/support/bookingCreateConstraints.ts` contributes a failing insert for every new receipt CHECK, FK, UNIQUE and primary-key constraint. The existing complete catalog inventory remains intact. The retention inventory explicitly identifies retained receipt barriers and private-provenance redaction.
+
+Actual behavior RED→minimum GREEN was observed for adapter create, buffered availability, inspection, ordinary pending admission, registered lifecycle acceptance, normal source privacy, concurrent source-lock deadlock and moved-slot occupancy. Setup failures were not counted as RED.
+
+## Privacy and uncertainty semantics
+
+The owned migration triggers canonical source deletion, unavailable/corrected identity or revision/hash transitions, negative original observations and source-context changes. Matching receipt payloads become `{}`, fingerprints become the explicit zero erasure marker and `provenance_state` becomes `redacted`. Undispatched receipts fail. Dispatched states and their at-most-once marker remain, including accepted provider UID/meeting facts. The public receipt reports only the safe source-state distinction, not private provenance. Redaction is not a provider cancellation, refund or permission to retry.
+
+Canonical source locks precede receipt row locks. Accepted settlement uses the existing Cal lifecycle lock closure before locking the receipt. A provider acceptance arriving after source deletion remains an external fact with redacted provenance. If source/authority is unavailable, automated inspection holds rather than bypassing current access. Ordinary authorized receipt readback remains available to its active owner.
+
+## Primary provider contract consulted
+
+Only current primary official public Cal documentation was consulted. No authenticated provider request or credential inspection was performed.
+
+- Create: https://cal.com/docs/api-reference/v2/bookings/create-a-booking, `POST /v2/bookings`, `cal-api-version: 2026-02-25`.
+- Slots: https://cal.com/docs/api-reference/v2/slots/get-available-time-slots-for-an-event-type, `GET /v2/slots`, `cal-api-version: 2024-09-04`.
+- Selected busy-times: https://cal.com/docs/api-reference/v2/calendars/get-busy-times, `GET /v2/calendars/busy-times`, repeated `calendar=credentialId,externalId` and the documented date/timezone query. No undocumented version header is invented.
+- Inspection: https://cal.com/docs/api-reference/v2/bookings/get-all-bookings, `GET /v2/bookings`, `cal-api-version: 2026-05-01`, exact event/attendee/time bounds and bounded cursor pagination. Correlation metadata is necessary evidence, not a claimed provider idempotency guarantee.
+
+## Integration and remaining actual evidence
+
+Frozen #622 foundations `cb93c711` and `728e7224` were root-approved and cherry-picked as `3173fc2b` and `b814d4a7`. No mutable worker files were copied. Isolated migration ordering is policy0109/create0110 for contiguous focused tests. Root owns final renumbering: #6160109, #6220110, #6200111, #6210112, combined gates and independent Spec/Standards review.
+
+Actual activation remains under #621/#625: verify real owner consent and exact current Cal account/event/calendar access, configured 20-minute event/buffer/availability and provider-owned reminder behavior, genuine release readiness, and an attributable contractual cost bound. Known nonzero or unknown creation-operation cost is intentionally unsupported in this source slice, not mislabeled budget exhaustion. No new money framework/table was added. Interpretation's paid work remains under the canonical booking lane and existing ledger owned by #620/#622.
+
+Controlled technical readiness and an explicitly zero-cost contractual fixture prove engineering only. They do not prove actual consent, current live Cal access, free commercial pricing, a real appointment, provider reminder delivery, Enable, packaging, deployment or production acceptance. Default composition remains unavailable. Root owns all secrets, integration, activation and deployment evidence.
