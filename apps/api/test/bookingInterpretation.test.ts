@@ -28,6 +28,8 @@ import {createBookingInterpretationAuthority} from '@fss/domain/crm/bookingInter
 import type {BookingPolicyBindings} from '@fss/contracts';
 import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import type {BookingInterpretationAuthorityPort} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
+import type {SessionQueryable,QueryResultRowLike} from '@fss/domain/db/queryable.ts';
+import {recordProviderCall} from '@fss/domain/research/ledger.ts';
 import { dispatch } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -91,7 +93,7 @@ it('shows booking interpretation unavailable without booking authority rather th
   expect(JSON.stringify(read.body)).not.toContain('Yes, let us arrange a call.');
 });
 
-async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typeof admittedMessage>>[]=[],sharedRemainingDailyCents=200,authoredLength=text.length) {
+async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typeof admittedMessage>>[]=[],sharedRemainingDailyCents=200,authoredLength=text.length,validUntil:()=>string=()=> '2099-01-01T00:00:00Z') {
  const source=await admittedMessage(text,false,authoredLength);
  const original=await post('/crm/business/mail/read',source);
  const binding=(original.body as {source:{accountBinding:string}}).source.accountBinding;
@@ -104,17 +106,17 @@ async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typ
   model:{providerKey:'aws_bedrock',route:'us.anthropic.claude-haiku-4-5-20251001-v1:0',modelVersion:'anthropic.claude-haiku-4-5-20251001-v1:0',accountBinding:'controlled-model-account',consentRevision:'controlled-purpose-consent-v1',purpose:'booking_interpretation',qualityReviewRevision:'controlled-quality-v1',selection:'initial_haiku'},
   budget:{lane:'booking',timeZone:'America/New_York',dailyCeilingCents:200,monthlyCeilingCents:2500}};
  expect((await post('/meetings/booking-policy',command({action:'save',expectedRevision:0,bindings}))).status).toBe(200);
- const runtime:BookingPolicyRuntime={now:()=>new Date().toISOString(),readEvidence:async(_context,observed)=>({evidenceKind:'controlled',binding:observed,verifiedAt:'2026-10-13T00:00:00Z',validUntil:'2099-01-01T00:00:00Z',accountAccess:false,calendarFreeBusy:false,eventSettings:false,modelConsent:true,modelAcceptance:true,senderAuthority:false,sourceAuthority:true,providerAdapter:false,releaseReady:false,funding:{status:'verified',sharedRemainingDailyCents,sharedRemainingMonthlyCents:2500}})};
+ const runtime:BookingPolicyRuntime={now:()=>new Date().toISOString(),readEvidence:async(_context,observed)=>({evidenceKind:'controlled',binding:observed,verifiedAt:'2026-10-13T00:00:00Z',validUntil:validUntil(),accountAccess:false,calendarFreeBusy:false,eventSettings:false,modelConsent:true,modelAcceptance:true,senderAuthority:false,sourceAuthority:true,providerAdapter:false,releaseReady:false,funding:{status:'verified',sharedRemainingDailyCents,sharedRemainingMonthlyCents:2500}})};
  authority=createBookingInterpretationAuthority(runtime);
  const requested=await post('/crm/booking/interpretation/request',command({source,priorSources}));
  expect(requested.body).toMatchObject({result:{state:'pending',reason:null}});
  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
  return {source,requestId};
 }
-async function executeCandidate(candidate:unknown,afterWait?:()=>Promise<void>,unknown=false,observeWire?:(wire:unknown)=>void) {
+async function executeCandidate(candidate:unknown,afterWait?:()=>Promise<void>,unknown=false,observeWire?:(wire:unknown)=>void,session:SessionQueryable=fixture.db,maxInputBound?:number) {
  const model=createBookingInterpretationModel({accountBinding:'controlled-model-account',fundingVerifiedUntil:'2099-01-01T00:00:00Z',surface:{endpointId:'bedrock-runtime.us-east-1.amazonaws.com',converse:async wire=>{observeWire?.(wire);await afterWait?.();return unknown?{}:{stopReason:'end_turn',usage:{inputTokens:40,outputTokens:20},output:{message:{role:'assistant',content:[{text:JSON.stringify(candidate)}]}}};}}});
- const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingInterpretation:{...(authority===undefined?{}:{authority}),model}});
- await runOnce(fixture.db,{registry,owner:'controlled-booking-interpreter',limit:20});
+ const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingInterpretation:{...(authority===undefined?{}:{authority}),model:maxInputBound===undefined?model:{...model,inputBound:()=>maxInputBound}}});
+ await runOnce(session,{registry,owner:'controlled-booking-interpreter',limit:20});
 }
 it('normal owner policy save and registered controlled Haiku worker show an approved-link proposal with original provenance and conserved spend',async()=>{
  const text='Can we arrange a call?';const {source,requestId}=await configuredRequest(text);
@@ -240,4 +242,28 @@ it('does not disclose quoted third-party content or unrelated identity data to t
  await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:authored.length,quote:authored},slot:null,substantive:null},undefined,false,value=>{wire=JSON.stringify(value);});
  expect(wire).not.toContain('PRIVATE THIRD PARTY INFORMATION');expect(wire).not.toContain('casey@example.test');expect(wire).not.toContain('originalContexts');
  expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'approved_link',permission:false}});
+});
+for(const waitAt of ['budget','settlement'] as const)it(`withholds publication when captured authority expires across the real PG ${waitAt} wait`,async()=>{
+ let deadline='2099-01-01T00:00:00Z',publishing=false,waited=false;
+ const text='Can we arrange a call?';const {source,requestId}=await configuredRequest(text,[],200,text.length,()=>deadline);
+ const session:SessionQueryable={query:async<Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[])=>{
+  const target=waitAt==='budget'?sql.includes('pg_advisory_xact_lock')&&values?.[0]===`${fixture.alpha.workspaceId}:monthly_cash_ceiling`:sql.includes('UPDATE provider_reservations')&&sql.includes('settled_cents');
+  if(publishing&&!waited&&target){waited=true;await fixture.db.query('SELECT pg_sleep(0.8)');}
+  return fixture.db.query<Row>(sql,values);
+ }};
+ await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null},async()=>{publishing=true;deadline=new Date(Date.now()+500).toISOString();},false,undefined,session);
+ expect(waited).toBe(true);
+ const row=(await fixture.db.query('SELECT state,outcome FROM crm_booking_interpretations WHERE id=$1',[requestId])).rows[0];
+ expect(row).toMatchObject({state:'stale',outcome:null});
+ expect((await fixture.db.query('SELECT state,settled_cents FROM provider_reservations WHERE subject_id=$1',[requestId])).rows[0]).toMatchObject({state:'settled',settled_cents:1});
+});
+it('publishes after conserved settlement removes this requests own last-allowance maximum hold',async()=>{
+ const text='Can we arrange a call?';const {source,requestId}=await configuredRequest(text);
+ await recordProviderCall({db:fixture.db,scope:workspaceScope(fixture.alpha.workspaceId,{kind:'system',component:'worker'})},{providerKey:'aws_bedrock.booking',at:new Date().toISOString(),businessTimeZone:'America/New_York',costCents:195});
+ // Trusted controlled bound reserves five cents at existing pricing, not a client grant or policy credit.
+ await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null},async()=>{
+  expect((await fixture.db.query('SELECT state,cents FROM provider_reservations WHERE subject_id=$1',[requestId])).rows[0]).toMatchObject({state:'calling',cents:5});
+ },false,undefined,fixture.db,35000);
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'approved_link',permission:false},financial:{reservedCents:5,settledCents:1}});
+ expect((await fixture.db.query("SELECT sum(cost_cents)::int AS cents FROM provider_ledger WHERE provider_key='aws_bedrock.booking'")).rows[0]).toMatchObject({cents:196});
 });

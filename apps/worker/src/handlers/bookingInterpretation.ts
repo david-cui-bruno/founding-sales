@@ -5,7 +5,7 @@ import { unavailableBookingInterpretationAuthority, type BookingInterpretationAu
 import { loadBookingInterpretationSources } from '@fss/domain/crm/bookingInterpretationSources.ts';
 import {unresolvedBookingModelAttempt,type BookingInterpretationRow} from '@fss/domain/crm/bookingInterpretation.ts';
 import type { BookingPolicySnapshot } from '@fss/domain/meetings/bookingPolicyTypes.ts';
-import { lockBookingBudget } from '@fss/domain/meetings/bookingPolicy.ts';
+import { lockBookingBudget,bookingPolicySnapshotReadyAt } from '@fss/domain/meetings/bookingPolicy.ts';
 import { settingLockName } from '@fss/domain/settings/store.ts';
 import { reserveAttempt, markCalling, readAttempt, settleAttempt } from '@fss/domain/research/reservations.ts';
 import { centsOf } from '@fss/domain/research/pricing.ts';
@@ -57,12 +57,13 @@ export function bookingInterpretationJobHandler(options: BookingInterpretationOp
   await withTransaction(input.session,async()=>{
    const {context,row,reservation,snapshot}=prepared;
    const loaded=await loadBookingInterpretationSources(context,row.source_refs);
-   await policyLock(context);const current=await authority.revalidate(context,snapshot);
+   await policyLock(context);
    await lockBookingBudget(context);
    const usage=result.usage;
    const validUsage=usage!==null&&Number.isSafeInteger(usage.inputTokens)&&Number.isSafeInteger(usage.outputTokens)&&usage.inputTokens>=0&&usage.outputTokens>=0&&usage.inputTokens<=reservation.maxInputTokens&&usage.outputTokens<=reservation.maxOutputTokens;
    await settleAttempt(context,{reservationId:reservation.id,at:new Date().toISOString(),outcome:result.acceptance==='not_accepted'?{kind:'released_not_called'}:result.acceptance==='accepted'&&validUsage?{kind:'settled',cents:centsOf('claude-haiku-4-5',usage,'bedrock')}:{kind:'estimated'}});
-   const valid=loaded!==null&&loaded.fingerprint===row.source_fingerprint&&current.kind==='available'&&current.snapshot.operationalReady;
+   const current=await authority.revalidate(context,snapshot);
+   const valid=loaded!==null&&loaded.fingerprint===row.source_fingerprint&&current.kind==='available'&&bookingPolicySnapshotReadyAt(current.snapshot,new Date().toISOString());
    let outcome:unknown=null,reason:string|null=null,state='complete';
    if(!valid){state='stale';reason='source_or_authority_changed';}
    else if(result.acceptance==='unknown'||!validUsage){state='unknown_acceptance';reason='model_acceptance_or_usage_unknown';}
