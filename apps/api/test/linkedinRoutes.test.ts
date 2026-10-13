@@ -177,6 +177,89 @@ it('rechecks relationship correction and source deletion after genuine PostgreSQ
   }
 });
 
+async function privateEvidenceAudit(sourceId: string) {
+  return (await fixture.db.query<{ actor_user_id: string; subject_kind: string; detail: Record<string, unknown> }>('SELECT actor_user_id,subject_kind,detail FROM audit_events WHERE workspace_id=$1 AND action=$2 AND subject_id=$3', [fixture.alpha.workspaceId, 'crm.linkedin_private_evidence_read', sourceId])).rows;
+}
+
+async function heldRoute(variant: string) {
+  const route = await supportedRoute({ excerpt: (name, firm, profile) => {
+    const profileName = variant === 'profile' ? 'Jordan Fields' : name;
+    const roleName = variant === 'role' ? 'Jordan Fields' : name;
+    return `${roleName} is the owner of ${firm}. ${profileName}'s LinkedIn profile is ${profile}.\n${firm} ${variant === 'fit' ? 'offers website design in Providence, Rhode Island' : 'is an independent residential property management firm serving Providence, Rhode Island'}.`;
+  } });
+  if (variant === 'geography') await fixture.database.session.query("UPDATE firms SET region_code='CA',locality='Los Angeles' WHERE workspace_id=$1 AND id=$2", [fixture.alpha.workspaceId, route.firmId]);
+  if (variant === 'stopped') expect((await post('/crm/linkedin/routes/refuse', command({ claimId: route.claimId, expectedRevision: 1, firmId: route.firmId, relationshipId: route.relationshipId, expectedRelationshipRevision: 1, scope: 'person' }))).status).toBe(200);
+  return route;
+}
+
+it.each([
+  ['profile', 'profile_identity_unsupported'], ['role', 'role_or_firm_unsupported'],
+  ['fit', 'firm_fit_unsupported'], ['geography', 'target_geography_unsupported'],
+  ['stopped', 'person_or_firm_stopped'],
+])('audits nonowned admin private evidence before the %s hold, once per original source', async (variant, reason) => {
+  const route = await heldRoute(variant);
+  expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId })).body).toMatchObject({ state: 'held', reason });
+  expect(await privateEvidenceAudit(route.evidence.sourceId)).toEqual([]);
+  const adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
+  expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId }, adminToken)).body).toMatchObject({ state: 'held', reason });
+  const audit = await privateEvidenceAudit(route.evidence.sourceId);
+  expect(audit).toEqual([{ actor_user_id: fixture.alpha.admin.userId, subject_kind: 'selected_source', detail: { claimId: route.claimId, claimRevision: 1, relationshipId: route.relationshipId, relationshipRevision: 1 } }]);
+  for (const content of [route.profile, 'Taylor Park', route.firmName, route.text]) expect(JSON.stringify(audit)).not.toContain(content);
+});
+
+it.each(['eligible', 'fit', 'stopped'])('rechecks current membership after an endpoint lock wait before the %s outcome or private audit', async (variant) => {
+  const route = await heldRoute(variant);
+  await fixture.database.session.query("INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES($1,$2,'admin') ON CONFLICT (workspace_id,user_id) DO NOTHING", [fixture.alpha.workspaceId, fixture.beta.admin.userId]);
+  const adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
+  const holder = await fixture.database.appRuntimeSession();
+  const observer = await fixture.database.appRuntimeSession();
+  const pid = (await holder.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
+  await holder.query('BEGIN');
+  await holder.query('SELECT id FROM crm_identity_endpoints WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [fixture.alpha.workspaceId, route.endpointId]);
+  const pending = post('/crm/linkedin/routes/assess', { claimId: route.claimId }, adminToken);
+  try {
+    await waitForBlock(observer, pid);
+    // Controlled fixture mutation, not the serialized full-departure command.
+    await observer.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2", [fixture.alpha.workspaceId, fixture.alpha.admin.userId]);
+  } finally { await holder.query('COMMIT'); }
+  let read;
+  try { read = await pending; } finally {
+    await observer.query("UPDATE workspace_memberships SET status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2", [fixture.alpha.workspaceId, fixture.alpha.admin.userId]);
+  }
+  expect(read.status).toBe(404);
+  expect(await privateEvidenceAudit(route.evidence.sourceId)).toEqual([]);
+  // The same nonowned evidence is accessible and audited once authority is restored.
+  expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId }, adminToken)).status).toBe(200);
+  expect(await privateEvidenceAudit(route.evidence.sourceId)).toHaveLength(1);
+});
+
+it.each(['profile_denied', 'profile_uncertain', 'role_denied', 'role_uncertain', 'firm_denied', 'firm_uncertain'])('does not salvage positive support from contradictory selected evidence: %s', async (variant) => {
+  const route = await supportedRoute({ excerpt: (name, firm, profile) => {
+    const conflict = variant === 'profile_denied' ? `${name}'s LinkedIn profile is not ${profile}.`
+      : variant === 'profile_uncertain' ? `${name}'s LinkedIn profile might be ${profile}.`
+      : variant === 'role_denied' ? `${name} is not the owner of ${firm}.`
+      : variant === 'role_uncertain' ? `${name} might be the owner of ${firm}.`
+      : variant === 'firm_denied' ? `${firm} is not an independent residential property management firm serving Providence, Rhode Island.`
+      : `${firm} might be an independent residential property management firm serving Providence, Rhode Island.`;
+    return `${name} is the owner of ${firm}. ${name}'s LinkedIn profile is ${profile}.\n${firm} is an independent residential property management firm serving Providence, Rhode Island.\n${conflict}`;
+  } });
+  expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId })).body).toMatchObject({ state: 'held', route: null, reason: variant.startsWith('profile') ? 'profile_identity_unsupported' : variant.startsWith('role') ? 'role_or_firm_unsupported' : 'firm_fit_unsupported' });
+});
+
+it('does not treat unrelated named uncertainty as a contradiction of supported evidence', async () => {
+  const route = await supportedRoute({ excerpt: (name, firm, profile) => `${name} is the owner of ${firm}. ${name}'s LinkedIn profile is ${profile}.\n${firm} is an independent residential property management firm serving Providence, Rhode Island.\nJordan Fields is not the owner of ${firm}. Jordan Fields's LinkedIn profile might be https://www.linkedin.com/in/someone-else.\nOther Management is not an independent residential property management firm.` });
+  expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId })).body).toMatchObject({ state: 'eligible' });
+});
+
+it('does not audit an admin reading their own selected evidence', async () => {
+  const ownerToken = token;
+  const adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
+  let route;
+  try { token = adminToken; route = await heldRoute('fit'); } finally { token = ownerToken; }
+  expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId }, adminToken)).body).toMatchObject({ state: 'held', reason: 'firm_fit_unsupported' });
+  expect(await privateEvidenceAudit(route.evidence.sourceId)).toEqual([]);
+});
+
 it('rechecks current membership after an endpoint lock wait', async () => {
   const route = await supportedRoute();
   const holder = await fixture.database.appRuntimeSession();
