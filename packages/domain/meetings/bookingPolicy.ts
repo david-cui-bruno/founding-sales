@@ -30,7 +30,7 @@ export async function readBookingPolicySettings(ctx:RepositoryContext,runtime?:B
 export async function readCurrentBookingPolicy(ctx:RepositoryContext,query:CurrentBookingPolicyQuery,runtime?:BookingPolicyRuntime):Promise<CurrentBookingPolicy> {
   const actor=ctx.scope.actor;
   if(actor.kind==='user'&&(actor.role!=='admin'||actor.userId!==query.ownerUserId||!await activeOwner(ctx,actor.userId)))return {kind:'unavailable',reason:'owner_authority_changed'};
-  const view=await readBookingPolicy(ctx,runtime),bindings=view.setting.bindings;
+  const observed=await readObservedBookingPolicy(ctx,runtime),view=observed.view,bindings=view.setting.bindings;
   if(view.setting.status==='revoked')return {kind:'unavailable',reason:'policy_revoked'};
   if(!view.businessPolicyValid||bindings===null)return {kind:'unavailable',reason:'policy_unavailable'};
   if(bindings.ownerUserId!==query.ownerUserId)return {kind:'unavailable',reason:'owner_changed'};
@@ -40,7 +40,13 @@ export async function readCurrentBookingPolicy(ctx:RepositoryContext,query:Curre
   const capability=query.capability??'booking';
   const unrelatedToInterpretation=new Set(['account_access_unverified','calendar_freebusy_unverified','event_settings_unverified','sender_authority_unverified','provider_adapter_unavailable','release_unverified']);
   const operationalReady=capability==='booking'?view.readiness.ready:view.readiness.evidenceKind!=='unavailable'&&view.readiness.reasons.every(reason=>unrelatedToInterpretation.has(reason));
-  return {kind:'available',snapshot:{capability,workspaceId:ctx.scope.workspaceId,ownerUserId:bindings.ownerUserId,policyRevision:view.revision,bindingKey,bindings,businessPolicyValid:true,operationalReady,enabled:false,evidenceKind:view.readiness.evidenceKind}};
+  return {kind:'available',snapshot:{capability,workspaceId:ctx.scope.workspaceId,ownerUserId:bindings.ownerUserId,policyRevision:view.revision,bindingKey,bindings,businessPolicyValid:true,operationalReady,enabled:false,evidenceKind:view.readiness.evidenceKind,authorityVerifiedAt:observed.authorityVerifiedAt,authorityValidUntil:observed.authorityValidUntil}};
+}
+/** Technical terminal freshness only. Never an Enable, sending or booking permission grant. */
+export function bookingPolicySnapshotReadyAt(snapshot:BookingPolicySnapshot,now:string):boolean {
+  if(!snapshot.businessPolicyValid||!snapshot.operationalReady||typeof snapshot.authorityVerifiedAt!=='string'||typeof snapshot.authorityValidUntil!=='string')return false;
+  const at=Date.parse(now),verified=Date.parse(snapshot.authorityVerifiedAt),until=Date.parse(snapshot.authorityValidUntil);
+  return Number.isFinite(at)&&Number.isFinite(verified)&&Number.isFinite(until)&&verified<=at&&at<until;
 }
 export async function revalidateBookingPolicy(ctx:RepositoryContext,snapshot:BookingPolicySnapshot,runtime?:BookingPolicyRuntime):Promise<CurrentBookingPolicy> {
   if(ctx.scope.workspaceId!==snapshot.workspaceId)return {kind:'unavailable',reason:'workspace_changed'};
@@ -85,6 +91,9 @@ function expiredRuntimeEvidence(evidence:BookingPolicyRuntimeEvidence,at:string)
   return !Number.isFinite(Date.parse(evidence.verifiedAt))||!Number.isFinite(Date.parse(evidence.validUntil))||Date.parse(evidence.verifiedAt)>Date.parse(at)||Date.parse(evidence.validUntil)<=Date.parse(at);
 }
 export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPolicyRuntime):Promise<BookingPolicyView> {
+  return (await readObservedBookingPolicy(ctx,runtime)).view;
+}
+async function readObservedBookingPolicy(ctx:RepositoryContext,runtime?:BookingPolicyRuntime):Promise<{view:BookingPolicyView;authorityVerifiedAt:string|null;authorityValidUntil:string|null}> {
   const stored=await readSetting(ctx,'booking_policy');
   const parsed=bookingPolicySettingSchema.safeParse(stored.value);
   const setting=parsed.success?parsed.data:DEFAULT_BOOKING_POLICY,bindings=setting.bindings;
@@ -94,7 +103,7 @@ export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPo
   let evidence:BookingPolicyRuntimeEvidence|null=null;
   if(businessPolicyValid&&bindings!==null&&runtime!==undefined){try{evidence=await runtime.readEvidence(ctx,structuredClone(bindings));}catch{evidence=null;}}
   // The trusted evidence read may have waited. Saved revisions and membership are checked again, not cached.
-  if((await readSetting(ctx,'booking_policy')).version!==stored.version||(businessPolicyValid&&bindings!==null&&!await activeOwner(ctx,bindings.ownerUserId)))return readBookingPolicy(ctx);
+  if((await readSetting(ctx,'booking_policy')).version!==stored.version||(businessPolicyValid&&bindings!==null&&!await activeOwner(ctx,bindings.ownerUserId)))return readObservedBookingPolicy(ctx);
   at=runtime?.now()??new Date().toISOString();
   const requirements={accountAccess:'account_access_unverified',calendarFreeBusy:'calendar_freebusy_unverified',eventSettings:'event_settings_unverified',modelConsent:'model_consent_unverified',modelAcceptance:'model_acceptance_unverified',senderAuthority:'sender_authority_unverified',sourceAuthority:'source_authority_unverified',providerAdapter:'provider_adapter_unavailable',releaseReady:'release_unverified'} as const;
   let reasons:string[]=[];
@@ -106,7 +115,7 @@ export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPo
   let budget:BookingPolicyView['budget'];
   for(;;){
     budget=await readBookingBudget(ctx,{at,bindings,...(evidence===null?{}:{funding:evidence.funding})});
-    if((await readSetting(ctx,'booking_policy')).version!==stored.version||(businessPolicyValid&&bindings!==null&&!await activeOwner(ctx,bindings.ownerUserId)))return readBookingPolicy(ctx);
+    if((await readSetting(ctx,'booking_policy')).version!==stored.version||(businessPolicyValid&&bindings!==null&&!await activeOwner(ctx,bindings.ownerUserId)))return readObservedBookingPolicy(ctx);
     const completedAt=runtime?.now()??new Date().toISOString();
     const periodChanged=localDate(completedAt,'America/New_York')!==budget.businessDate;
     const fundingExpired=evidence!==null&&expiredRuntimeEvidence(evidence,completedAt);
@@ -116,7 +125,7 @@ export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPo
     at=completedAt;
   }
   if(evidence!==null&&budget.allowance!=='available')reasons.push(budget.allowance==='blocked'?'booking_budget_blocked':'booking_budget_unknown');
-  return {revision:stored.version,setting,rules:BOOKING_BUSINESS_RULES,businessPolicyValid,enabled:false,readiness:{ready:reasons.length===0,reasons,evidenceKind:evidence?.evidenceKind??'unavailable'},budget};
+  return {view:{revision:stored.version,setting,rules:BOOKING_BUSINESS_RULES,businessPolicyValid,enabled:false,readiness:{ready:reasons.length===0,reasons,evidenceKind:evidence?.evidenceKind??'unavailable'},budget},authorityVerifiedAt:evidence?.verifiedAt??null,authorityValidUntil:evidence?.validUntil??null};
 }
 /** Must run in the ordinary command transaction. The settings lock orders competing revisions. */
 export async function mutateBookingPolicy(ctx:RepositoryContext,input:unknown):Promise<{ok:true;value:{revision:number}}|{ok:false;reason:string}> {

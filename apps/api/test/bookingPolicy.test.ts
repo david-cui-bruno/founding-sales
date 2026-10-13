@@ -5,7 +5,7 @@ import {authenticate,revokeDevice} from '../src/auth/sessions.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {routeBookingPolicy} from '../src/routes/bookingPolicy.ts';
 import type {BookingPolicyBindings,BookingPolicyView} from '../../../packages/contracts/src/bookingPolicy.ts';
-import {readCurrentBookingPolicy,revalidateBookingPolicy,readBookingBudget,lockBookingBudget} from '@fss/domain/meetings/bookingPolicy.ts';
+import {readCurrentBookingPolicy,revalidateBookingPolicy,readBookingBudget,lockBookingBudget,bookingPolicySnapshotReadyAt} from '@fss/domain/meetings/bookingPolicy.ts';
 import {recordProviderCall,readCreditSpend} from '@fss/domain/research/ledger.ts';
 import {reserveAttempt} from '@fss/domain/research/reservations.ts';
 import {readSettingHistory} from '@fss/domain/settings/store.ts';
@@ -32,6 +32,28 @@ describe('normal authenticated booking policy controls',()=>{
     throw new Error('Real PostgreSQL budget read did not reach the controlled table lock');
   };
   const evidenceFor=(binding:BookingPolicyBindings,validUntil:string):BookingPolicyRuntimeEvidence=>({evidenceKind:'controlled',binding,verifiedAt:'2026-10-01T00:00:00Z',validUntil,accountAccess:true,calendarFreeBusy:true,eventSettings:true,modelConsent:true,modelAcceptance:true,senderAuthority:true,sourceAuthority:true,providerAdapter:true,releaseReady:true,funding:{status:'verified',sharedRemainingDailyCents:200,sharedRemainingMonthlyCents:2500}});
+  it('captured current authority expires during a downstream controlled cost wait without a second policy observation',async()=>{
+    const bindings=controlledBookingBindings(f.alpha.admin.userId);bindings.model.qualityReviewRevision='controlled-quality-1';
+    expect((await request('POST',command(0,bindings)))?.status).toBe(200);
+    let now='2026-10-13T21:00:00Z',observations=0;
+    const runtime:BookingPolicyRuntime={now:()=>now,readEvidence:async()=>{observations++;return evidenceFor(bindings,'2026-10-13T21:00:30Z');}};
+    const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'system',component:'worker'}),f.db);
+    const current=await readCurrentBookingPolicy(ctx,{ownerUserId:f.alpha.admin.userId},runtime);
+    if(current.kind!=='available')throw new Error('normal owner positive authority missing');
+    expect(bookingPolicySnapshotReadyAt(current.snapshot,now)).toBe(true);
+    expect(current.snapshot).toMatchObject({authorityVerifiedAt:'2026-10-01T00:00:00Z',authorityValidUntil:'2026-10-13T21:00:30Z'});
+    expect(bookingPolicySnapshotReadyAt(current.snapshot,'2026-10-01T00:00:00Z')).toBe(true);
+    expect(bookingPolicySnapshotReadyAt(current.snapshot,'invalid-clock')).toBe(false);
+    expect(bookingPolicySnapshotReadyAt(current.snapshot,'2026-09-30T23:59:59Z')).toBe(false);
+    for(const change of [{authorityVerifiedAt:null},{authorityValidUntil:null},{authorityVerifiedAt:'invalid-date'},{authorityValidUntil:'invalid-date'},{operationalReady:false}])expect(bookingPolicySnapshotReadyAt({...current.snapshot,...change},now)).toBe(false);
+    let releaseCost:()=>void=()=>undefined;
+    const costWait=new Promise<void>(resolve=>{releaseCost=resolve;});
+    const terminalCheck=costWait.then(()=>bookingPolicySnapshotReadyAt(current.snapshot,now));
+    now='2026-10-13T21:00:30Z';releaseCost();
+    expect(await terminalCheck).toBe(false);
+    expect(observations).toBe(1);
+    expect(current.snapshot.enabled).toBe(false);
+  });
   it.each(['authenticated GET','current reader'] as const)('%s expires trusted evidence and funding after an observed real PostgreSQL budget wait',async(caller)=>{
     const bindings=controlledBookingBindings(f.alpha.admin.userId);bindings.model.qualityReviewRevision='controlled-quality-1';
     expect((await request('POST',command(0,bindings)))?.status).toBe(200);
