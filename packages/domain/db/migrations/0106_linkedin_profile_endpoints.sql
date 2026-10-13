@@ -1,3 +1,4 @@
+-- changes: crm_identity_endpoints, linkedin_route_refusals
 -- Supported profile assertions reuse source-versioned endpoint claims and their deletion closure.
 -- This grants no invitation/DM channel and does not restore removed legacy sequence steps.
 ALTER TABLE crm_identity_endpoints DROP CONSTRAINT crm_identity_endpoints_kind_check;
