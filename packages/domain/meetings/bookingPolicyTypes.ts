@@ -24,6 +24,7 @@ export interface BookingPolicyRuntime {
   now():string;
 }
 export interface BookingPolicySnapshot {
+  readonly capability:'interpretation'|'booking';
   readonly workspaceId:string;
   readonly ownerUserId:string;
   readonly policyRevision:number;
@@ -35,4 +36,4 @@ export interface BookingPolicySnapshot {
   readonly evidenceKind:BookingPolicyView['readiness']['evidenceKind'];
 }
 export type CurrentBookingPolicy = {readonly kind:'unavailable';readonly reason:string}|{readonly kind:'available';readonly snapshot:BookingPolicySnapshot};
-export interface CurrentBookingPolicyQuery {readonly ownerUserId:string;readonly expectedRevision?:number;readonly expectedBindingKey?:string}
+export interface CurrentBookingPolicyQuery {readonly ownerUserId:string;readonly expectedRevision?:number;readonly expectedBindingKey?:string;readonly capability?:'interpretation'|'booking'}
