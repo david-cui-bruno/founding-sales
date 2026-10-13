@@ -6,6 +6,8 @@ The approved [operating roadmap](../sourcing/roadmap-20261007.md) has eight open
 
 ## Source, production and release
 
+PR600 merged as41bae68f after all required CI and independent reviews, preparing the explicit bounded Vertex ordinary-worker runner. No deployment or activation follows.
+
 PR598 merged as8286aebf after all required CI and independent reviews, adding explicit Gemini3.8FlashUS answering and transient signed tool replay. Source remains schema105. Its two CI repairs were a narrowly classified public-prose scanner false positive and calendar-relative Today coverage fixtures; production behavior and historical-promise guards were unchanged. No rollout or Enable is implied.
 
 PR590 merged as `67089b6b`; source targets schema105. PR591 merged as `3a919179` after all required CI passed, repairing source-only answers with explicit empty exact references and selected-firm admission without a person. PR592 merged as `0a761e9f` after required CI passed, integrating reviewed scoped-search/temporal guidance. PR593 merged as `1bb79fc4` after all required CI and two-axis review, repairing question-only continuity after exact-state changes. No causal ablation or representative-quality claim is made.
@@ -36,7 +38,11 @@ The earlier two immutable comparison grants are consumed:25calls/202c conserved 
 
 ## Next work and safeguards
 
-The [Vertex ordinary-worker acceptance preparation](../sourcing/ask-vertex-worker-acceptance-20261012.md) reuses the existing reviewed history/session fixtures and public worker journey. Complete its frozen source/manifest review, then obtain genuine approval for the fresh additional allowance before dispatch. Earlier generation-only scopes and unused ceilings do not authorize this run. No actual call or activation is claimed by this preparation. Google project billing/Vertex enablement and explicit operator prediction/quota permission were refreshed read-only; production ADC and credit eligibility remain unverified.
+The [actual Vertex ordinary-worker evaluations](../sourcing/ask-vertex-worker-results-20261012.md) preserve both once-only runs. First frozen bfbd0ed3:3/5 published/useful,2/5 unavailable at browse limit10 against host max5;10calls/222c. Controlled SDK replay showed numeric bounds stripped from Vertex tool schemas. Source descriptions expose the unchanged bounds without widening validation.
+
+The separately approved repaired run on35307979 published5/5; root/independent review found4 clearly useful and1 material support failure. Juniper discovers and quotes cancellation correctly but changes “I have not agreed to a replacement date” into “no replacement date currently scheduled,” an unsupported current negative. Fir correctly cites both original ambiguity and exact East/West records; Harbor preserves conditionality/anonymous speaker; North refreshes exact New→Qualified. Both observed browse calls use5. Actual16calls/395c conserved allocation, not invoice; no retries. Juniper24.544s misses15s goal. Six originals/all five final private results erased, four empty cleanup failure arrays, unchanged tested source/tree.
+
+Hosted acceptance remains pending for the affected unsupported-negative/temporal inference; publication and valid references do not prove semantic support. Retain both failed and improved outcomes; investigate at existing construction/evidence seams rather than infer full quality or activation. Both grants are consumed; a changed/fresh paid journey requires its frozen scope and genuine approval. Google billing/Vertex enablement and explicit operator prediction/quota permission were refreshed read-only; production ADC and credit eligibility remain unverified.
 
 Complete scope-specific readiness and the remaining evidence/presentation work. The [contextual guidance source change](../sourcing/ask-evidence-precision-source-20261012.md) places anonymous-speaker, current-versus-historical state and per-claim mixed-reference guidance at the existing SDK seam. Its actual Sonnet review retains two failure classes. David subsequently chose Gemini from the stated fixed-context evidence; evaluate its real worker integration rather than continuing prompt-only tuning or inferring activation. PR594 merged as `7c7f0eca`, preserving the actual history/session report.
 
