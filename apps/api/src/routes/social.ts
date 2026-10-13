@@ -46,11 +46,11 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  if(request.path==='/social/manual-handoff/confirm')return runRouteCommand(deps,socialManualHandoffConfirmCommandSchema,'social_manual_handoff_confirm',(c,input)=>confirmSocialManualHandoff(c,input));
  if(request.path==='/social/weekly'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialWeekly(ctx)};}
  if(request.path==='/social/weekly/save')return runRouteCommand(deps,socialWeeklyCommandSchema,'social_weekly_save',(c,input)=>saveSocialWeekly(c,{enabled:input.enabled,expectedRevision:input.expectedRevision}));
- if(request.path==='/social/drafts'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialDraftWorkspace(ctx)};}
+ if(request.path==='/social/drafts'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await withTransaction(auth.db,()=>readSocialDraftWorkspace(ctx))};}
  if(request.path==='/social/drafts/request')return runRouteCommand(deps,socialDraftRequestCommandSchema,'social_drafts_request',(c,input)=>{const {commandId:_id,clientVersion:_client,...selection}=input;return requestSocialDrafts(c,selection);});
  if(request.path==='/social/drafts/read'){
   const parsed=z.strictObject({requestId:uuid}).safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
-  const row=await readSocialDraftRequest(ctx,parsed.data.requestId);if(!row)return {status:404,body:{error:'not_found'}};
+  const row=await withTransaction(auth.db,()=>readSocialDraftRequest(ctx,parsed.data.requestId));if(!row)return {status:404,body:{error:'not_found'}};
   return {status:200,body:{request:socialDraftView(row)}};
  }
  if(request.path==='/social/accounts/manual')return runRouteCommand(deps,socialConnectionCommandSchema,'social_manual_destination',(c,body)=>{const {commandId:_id,clientVersion:_client,...input}=body;return registerSocialManualDestination(c,input);});
