@@ -6,7 +6,20 @@ const positive=(value:unknown):value is number=>typeof value==='number'&&Number.
 /** Current official regular-booking contract. No retry, conflict bypass, fallback or provider idempotency assertion. */
 export function calcomBookingCreateClient(options:{apiKey:string;http?:CalcomBookingCreateHttp}):BookingCreateProvider {
  const http=options.http??fetch;
- return {async availability(input){
+ return {async inspect(input){
+  const found:unknown[]=[];let cursor:string|null=null;
+  try{for(let page=0;page<10;page++){
+   const url=new URL('/v2/bookings','https://api.cal.com');url.searchParams.set('eventTypeId',String(input.eventTypeId));url.searchParams.set('attendeeEmail',input.attendee.email);url.searchParams.set('afterStart',new Date(Date.parse(input.startsAt)-1).toISOString());url.searchParams.set('beforeEnd',new Date(Date.parse(input.startsAt)+20*60_000+1).toISOString());url.searchParams.set('limit','100');if(cursor!==null)url.searchParams.set('cursor',cursor);
+   const response=await http(url.toString(),{method:'GET',headers:{authorization:`Bearer ${options.apiKey}`,accept:'application/json','cal-api-version':'2026-05-01'},redirect:'error',signal:AbortSignal.timeout(10_000)});
+   if(response.status!==200)throw new Error('provider_inspection_unavailable');
+   const body=record(await boundedJson(response)),pagination=record(body['pagination']);
+   if(body['status']!=='success'||!Array.isArray(body['data'])||body['data'].length>100||typeof pagination['hasMore']!=='boolean')throw new Error('provider_invalid_response');
+   found.push(...body['data'].filter(row=>record(record(row)['metadata'])['callieSubmissionId']===input.submissionId));
+   if(pagination['hasMore']===false){if(found.length!==1)return {state:'unknown',reason:found.length===0?'provider_acceptance_unknown':'provider_evidence_ambiguous'};return parseBookingObservation(found[0],input);}
+   if(typeof pagination['nextCursor']!=='string'||pagination['nextCursor'].length>2000||pagination['nextCursor']===cursor)throw new Error('provider_invalid_response');cursor=pagination['nextCursor'];
+  }}catch{return {state:'unknown',reason:'provider_inspection_unavailable'};}
+  return {state:'unknown',reason:'provider_inspection_truncated'};
+ },async availability(input){
   if(input.calendars.length===0||input.calendars.length>20)return {available:false,reason:'availability_unknown'};
   const start=Date.parse(input.startsAt),end=start+20*60_000,bufferEnd=end+10*60_000;
   const read=async(url:URL,version?:string)=>{const response=await http(url.toString(),{method:'GET',headers:{authorization:`Bearer ${options.apiKey}`,accept:'application/json',...(version?{'cal-api-version':version}:{})},redirect:'error',signal:AbortSignal.timeout(10_000)});if(response.status!==200)throw new Error('availability_unknown');const body=record(await boundedJson(response));if(body['status']!=='success')throw new Error('availability_unknown');return body['data'];};

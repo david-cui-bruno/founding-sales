@@ -18,6 +18,7 @@ export interface BookingCreateAvailability {
  readonly calendars:readonly {readonly credentialId:number;readonly externalId:string}[];
 }
 export interface BookingCreateProvider {
+ inspect(input:BookingCreateCall):Promise<BookingCreateObservation>;
  availability(input:BookingCreateAvailability):Promise<{readonly available:boolean;readonly reason:string|null}>;
  create(input:BookingCreateCall):Promise<BookingCreateObservation>;
 }
