@@ -15,9 +15,9 @@ export async function routeBookingInterpretation(request: ApiRequest, options: R
   if (request.method !== 'POST') return { status: 405, body: redactError('method_not_allowed') };
   if (request.path === '/crm/booking/interpretation/request') return runRouteCommand(
     { auth: options.auth, request, principal: verified.principal }, bookingInterpretationRequestSchema,
-    'crm.booking_interpretation_requested', (context, body) => requestBookingInterpretation(context, body));
+    'crm.booking_interpretation_requested', (context, body) => requestBookingInterpretation(context, body,options.bookingInterpretationAuthority));
   const parsed = bookingInterpretationReadSchema.safeParse(request.body);
   if (!parsed.success) return { status: 400, body: redactError('malformed_body') };
-  const result = await withTransaction(options.auth.db, () => readBookingInterpretation(scoped.context, parsed.data));
+  const result = await withTransaction(options.auth.db, () => readBookingInterpretation(scoped.context, parsed.data,options.bookingInterpretationAuthority));
   return result === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: result };
 }

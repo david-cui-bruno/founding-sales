@@ -1,3 +1,4 @@
+import type {BookingInterpretationAuthorityPort} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
@@ -56,6 +57,7 @@ export interface RouteResult {
 }
 
 export interface RoutingOptions {
+  readonly bookingInterpretationAuthority?: BookingInterpretationAuthorityPort;
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
