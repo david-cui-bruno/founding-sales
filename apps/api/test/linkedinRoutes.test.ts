@@ -233,10 +233,11 @@ it.each(['eligible', 'fit', 'stopped'])('rechecks current membership after an en
   expect(await privateEvidenceAudit(route.evidence.sourceId)).toHaveLength(1);
 });
 
-it.each(['profile_denied', 'profile_denied_normalized', 'profile_uncertain', 'role_denied', 'role_uncertain', 'firm_denied', 'firm_uncertain'])('does not salvage positive support from contradictory selected evidence: %s', async (variant) => {
+it.each(['profile_denied', 'profile_denied_normalized', 'profile_conflicting', 'profile_uncertain', 'role_denied', 'role_uncertain', 'firm_denied', 'firm_uncertain'])('does not salvage positive support from contradictory selected evidence: %s', async (variant) => {
   const route = await supportedRoute({ excerpt: (name, firm, profile) => {
     const conflict = variant === 'profile_denied' ? `${name}'s LinkedIn profile is not ${profile}.`
       : variant === 'profile_denied_normalized' ? `${name}'s LinkedIn profile is not ${profile.replace('www.', '')}/.`
+      : variant === 'profile_conflicting' ? `${name}'s LinkedIn profile is ${profile}-other.`
       : variant === 'profile_uncertain' ? `${name}'s LinkedIn profile might be ${profile}.`
       : variant === 'role_denied' ? `${name} is not the owner of ${firm}.`
       : variant === 'role_uncertain' ? `${name} might be the owner of ${firm}.`

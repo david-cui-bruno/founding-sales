@@ -35,7 +35,11 @@ function supportedProfile(text: string, name: string, profile: string): boolean 
     return uncertain.test(sentence) && observed !== undefined && normalizeIdentityEndpoint('linkedin', observed.replace(/[.,)]$/u, '')) === profile;
   })) return false;
   const assertion = new RegExp(`(?:^|[.!?]\\s+)${escape(name)}['’]s LinkedIn profile (?:is\\s+|:\\s*)(https:\\/\\/[^\\s<>"']+)`, 'giu');
-  return text.split(/\n/u).filter(line => !uncertain.test(line)).some(line => [...line.matchAll(assertion)].some(match => normalizeIdentityEndpoint('linkedin', (match[1] ?? '').replace(/[.,)]$/u, '')) === profile));
+  const observed = text.split(/\n/u).filter(line => !uncertain.test(line)).flatMap(line =>
+    [...line.matchAll(assertion)].map(match =>
+      normalizeIdentityEndpoint('linkedin', (match[1] ?? '').replace(/[.,)]$/u, ''))),
+  );
+  return observed.length > 0 && observed.every(value => value === profile);
 }
 function supportedRole(text: string, name: string, firm: string): string | null {
   if (uncertainAssertion(text, new RegExp(`^${escape(name)}\\s+.*\\b(?:${roles}) (?:of|at|for) ${escape(firm)}(?:[.,]|$)`, 'iu'))) return null;
