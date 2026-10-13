@@ -1,8 +1,9 @@
 import {socialDeliveryQueueSchema,type SocialDeliveryQueue} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {checkLinkedinPostingDelivery} from './linkedinPostingPolicy.ts';
+import type {LinkedinRecurringComposition} from './linkedinRecurringAuthority.ts';
 /** Discovery is read-only; claim/begin revalidate approval under the post lock. */
-export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:string):Promise<SocialDeliveryQueue>{
+export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:string,runtime?:LinkedinRecurringComposition|null):Promise<SocialDeliveryQueue>{
  const user=ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;if(!user)return {items:[]};
  const rows=(await ctx.db.query(`SELECT d.id AS "deliveryId",d.post_id AS "postId",d.revision,
  CASE WHEN d.submission_id IS NULL THEN 'submit' WHEN d.state='cancellation_pending' THEN 'cancel' ELSE 'inspect' END AS action,
@@ -20,6 +21,6 @@ export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:str
  OR (d.submission_id IS NOT NULL AND d.device_id=$3 AND s.state<>'disconnected' AND d.state IN ('submitting','scheduled','unknown','cancellation_pending') AND d.next_inspection_at<=now() AND d.inspection_deadline>now()))
  ORDER BY CASE WHEN d.state='cancellation_pending' THEN 0 WHEN d.submission_id IS NOT NULL THEN 1 ELSE 2 END,COALESCE(d.next_inspection_at,r.publish_at),d.id LIMIT 25`,[ctx.scope.workspaceId,user,deviceId])).rows;
  const items=[];
- for(const item of rows){if(item['submissionId']!==null||await checkLinkedinPostingDelivery(ctx,'id',String(item['deliveryId']))===null)items.push(item);}
+ for(const item of rows){if(item['submissionId']!==null||await checkLinkedinPostingDelivery(ctx,'id',String(item['deliveryId']),runtime)===null)items.push(item);}
  return socialDeliveryQueueSchema.parse({items});
 }

@@ -56,6 +56,7 @@ const coverage = (
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   Object.freeze({
+  linkedin_recurring_slots:coverage(['retained'],'Body-free account/target uniqueness and exact owner/policy/source/draft/admission references conserve cadence and prevent replay after revision, revocation, source deletion or departure. No copied input text or credentials. Current membership, account, policy, source and runtime fences stop future publication without removing historical submission evidence.'),
   crm_capability_owner_approvals:coverage(['retained'],'Immutable body-free owner approval audit retains configuration fingerprints, attested checks, quality tier and acknowledged limitations. Current owner membership and configuration are rechecked before use; no conversation content or credentials.'),
   crm_acquisition_diagnostic_authorizations:coverage(['retained'],'Immutable body-free acquisition diagnostic owner consent and revocation audit; exact current owner/account/expiry/environment binding prevents reuse; no copied content or tokens.'),
   crm_acquisition_diagnostic_reads:coverage(['retained'],'Body-free exact scoped provider read accounting survives source deletion and revocation; no original content or tokens.'),

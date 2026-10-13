@@ -19,7 +19,7 @@ export async function routeLinkedinPostingPolicy(request:ApiRequest,options:Rout
  if(request.path.endsWith('/dispatch-current')){
   const parsed=linkedinPostingDispatchCheckSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
   return withTransaction(auth.db,async()=>{
-   const answer=await checkLinkedinPostingDispatch(scoped.context,{...parsed.data,deviceId:principal.principal.deviceId});
+   const answer=await checkLinkedinPostingDispatch(scoped.context,{...parsed.data,deviceId:principal.principal.deviceId},options.linkedinRecurring);
    const after=await requirePrincipal(auth,request);if(!after.ok)return after.result;
    return {status:200,body:answer};
   });

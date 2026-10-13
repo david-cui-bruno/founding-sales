@@ -18,6 +18,7 @@ import { CRM_PROCESSING_PATHS, routeCrmProcessing } from './crmProcessing.ts';
 import { IDENTITY_PATHS,routePeopleRelationships } from './peopleRelationships.ts';
 import { LINKEDIN_ROUTE_PATHS, routeLinkedinRoutes } from './linkedinRoutes.ts';
 import { LINKEDIN_POSTING_POLICY_PATHS, routeLinkedinPostingPolicy } from './linkedinPostingPolicy.ts';
+import {LINKEDIN_RECURRING_PATHS,routeLinkedinRecurring} from './linkedinRecurringPosting.ts';
 import { PEOPLE_PATHS, routePeople } from './people.ts';
 import {BOOKING_CAPACITY_PATHS,routeBookingCapacity} from './bookingCapacity.ts';
 import {SOCIAL_PATHS,routeSocial} from './social.ts';
@@ -198,6 +199,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('selected-attachments', { paths: SELECTED_ATTACHMENT_PATHS }, routeSelectedAttachments, routing),
     moduleOf('linkedin-routes', { paths: LINKEDIN_ROUTE_PATHS }, routeLinkedinRoutes, routing),
     moduleOf('linkedin-posting-policy', { paths: LINKEDIN_POSTING_POLICY_PATHS }, routeLinkedinPostingPolicy, routing),
+    moduleOf('linkedin-recurring',{paths:LINKEDIN_RECURRING_PATHS},routeLinkedinRecurring,routing),
     moduleOf('people', { paths: PEOPLE_PATHS }, routePeople, routing),
     moduleOf('ask-sessions',{paths:ASK_SESSION_PATHS},routeAskSessions,routing),
     moduleOf('ask', {paths:ASK_PATHS}, routeAsk, routing),
