@@ -72,7 +72,8 @@ export function bookingInterpretationJobHandler(options: BookingInterpretationOp
     const original=loaded.originals[0]!;
     const ranges=z.array(z.object({kind:z.string(),start:z.number().int(),end:z.number().int()})).safeParse(original.ranges);
     const supported=evidence!==null&&evidence.sourceId===original.sourceId&&evidence.end>evidence.start&&original.passage?.slice(evidence.start,evidence.end)===evidence.quote&&ranges.success&&ranges.data.some(range=>range.kind==='authored'&&range.start<=evidence.start&&range.end>=evidence.end);
-    if(parsed.success&&supported&&parsed.data.intent==='interest'&&parsed.data.slot===null&&parsed.data.substantive===null)outcome={kind:'approved_link',bookingUrl:snapshot.bindings.event.bookingUrl,permission:false};
+    if(parsed.success&&supported&&(parsed.data.intent==='opt_out'||parsed.data.intent==='refusal'))outcome={kind:'stop',reason:parsed.data.intent,evidence,permission:false};
+    else if(parsed.success&&supported&&parsed.data.intent==='interest'&&parsed.data.slot===null&&parsed.data.substantive===null)outcome={kind:'approved_link',bookingUrl:snapshot.bindings.event.bookingUrl,permission:false};
     else outcome={kind:'clarification',reason:'booking_candidate_requires_review',permission:false};
    }
    await input.session.query("UPDATE crm_booking_interpretations SET state=$3,reason=$4,outcome=$5::jsonb WHERE workspace_id=$1 AND id=$2 AND state='processing'",[input.scope.workspaceId,id,state,reason,outcome===null?null:JSON.stringify(outcome)]);
