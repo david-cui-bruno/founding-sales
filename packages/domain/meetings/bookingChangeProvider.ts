@@ -10,7 +10,7 @@ export interface BookingChangeEvidence extends BookingCreateEvidence {
  readonly previousUid:string;
  readonly action:'reschedule'|'cancel';
  /** Verified provider reminder configuration/transition, not a Callie reminder. */
- readonly reminderState:'replaced'|'stopped';
+ readonly reminderState:'unverified'|'replaced'|'stopped';
 }
 export type BookingChangeObservation={readonly state:'accepted';readonly booking:BookingChangeEvidence}|{readonly state:'failed'|'pending'|'unknown';readonly reason:string};
 export interface BookingChangeTarget extends Omit<BookingCreateEvidence,'submissionId'> {readonly status:'accepted'|'cancelled'|'unsupported'}

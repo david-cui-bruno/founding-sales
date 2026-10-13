@@ -32,4 +32,13 @@ describe('owner-confirmed attendee booking changes',()=>{
    expect(f.writes).toHaveLength(1);expect(f.inspections).toHaveLength(1);
   }finally{await f.stop();}
  });
+ it('provider acceptance for a different participant remains unknown and never rewrites meeting readback',async()=>{
+  const f=await setupBookingChange();try{
+   const existing=f.runtime.provider.change;
+   f.runtime.provider.change=async call=>{const result=await existing(call);return result.state==='accepted'?{...result,booking:{...result.booking,attendeeEmail:'unrelated@private.example'}}:result;};
+   const response=await f.request('POST','/meetings/booking-change',f.command(f.payload));const id=(response.body as {result:{submissionId:string}}).result.submissionId;
+   await f.run();expect((await f.request('GET',`/meetings/booking-change?submissionId=${id}`)).body).toMatchObject({state:'unknown',reason:'provider_evidence_mismatch'});
+   expect((await f.request('GET',`/meetings/firm?firmId=${f.firmId}`)).body).toMatchObject({meetings:[{meetingId:f.meetingId,state:'booked'}]});
+  }finally{await f.stop();}
+ });
 });
