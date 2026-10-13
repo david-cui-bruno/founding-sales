@@ -81,6 +81,9 @@ export async function readBookingBudget(ctx:RepositoryContext,input:{at:string;b
   }
   return {lane:'booking',timeZone:'America/New_York',businessDate:date,calendarMonth:month,dailyCeilingCents,monthlyCeilingCents,observedDailyCents,observedMonthlyCents,allowance,remainingDailyCents,remainingMonthlyCents};
 }
+function expiredRuntimeEvidence(evidence:BookingPolicyRuntimeEvidence,at:string):boolean {
+  return !Number.isFinite(Date.parse(evidence.verifiedAt))||!Number.isFinite(Date.parse(evidence.validUntil))||Date.parse(evidence.verifiedAt)>Date.parse(at)||Date.parse(evidence.validUntil)<=Date.parse(at);
+}
 export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPolicyRuntime):Promise<BookingPolicyView> {
   const stored=await readSetting(ctx,'booking_policy');
   const parsed=bookingPolicySettingSchema.safeParse(stored.value);
@@ -96,12 +99,22 @@ export async function readBookingPolicy(ctx:RepositoryContext,runtime?:BookingPo
   const requirements={accountAccess:'account_access_unverified',calendarFreeBusy:'calendar_freebusy_unverified',eventSettings:'event_settings_unverified',modelConsent:'model_consent_unverified',modelAcceptance:'model_acceptance_unverified',senderAuthority:'sender_authority_unverified',sourceAuthority:'source_authority_unverified',providerAdapter:'provider_adapter_unavailable',releaseReady:'release_unverified'} as const;
   let reasons:string[]=[];
   if(evidence!==null&&bindings!==null&&bookingPolicyBindingKey(evidence.binding)!==bookingPolicyBindingKey(bindings)){reasons=['runtime_binding_changed'];evidence=null;}
-  else if(evidence!==null&&(!Number.isFinite(Date.parse(evidence.verifiedAt))||!Number.isFinite(Date.parse(evidence.validUntil))||Date.parse(evidence.verifiedAt)>Date.parse(at)||Date.parse(evidence.validUntil)<=Date.parse(at))){reasons=['runtime_evidence_expired'];evidence=null;}
+  else if(evidence!==null&&expiredRuntimeEvidence(evidence,at)){reasons=['runtime_evidence_expired'];evidence=null;}
   else reasons=Object.entries(requirements).filter(([key])=>evidence?.[key as keyof typeof requirements]!==true).map(([,reason])=>reason);
   if(bindings?.model.qualityReviewRevision===null&&evidence!==null)reasons.push('model_quality_review_missing');
   if(!businessPolicyValid)reasons.push('policy_unavailable');
-  const budget=await readBookingBudget(ctx,{at,bindings,...(evidence===null?{}:{funding:evidence.funding})});
-  if((await readSetting(ctx,'booking_policy')).version!==stored.version||(businessPolicyValid&&bindings!==null&&!await activeOwner(ctx,bindings.ownerUserId)))return readBookingPolicy(ctx);
+  let budget:BookingPolicyView['budget'];
+  for(;;){
+    budget=await readBookingBudget(ctx,{at,bindings,...(evidence===null?{}:{funding:evidence.funding})});
+    if((await readSetting(ctx,'booking_policy')).version!==stored.version||(businessPolicyValid&&bindings!==null&&!await activeOwner(ctx,bindings.ownerUserId)))return readBookingPolicy(ctx);
+    const completedAt=runtime?.now()??new Date().toISOString();
+    const periodChanged=localDate(completedAt,'America/New_York')!==budget.businessDate;
+    const fundingExpired=evidence!==null&&expiredRuntimeEvidence(evidence,completedAt);
+    if(fundingExpired){reasons=['runtime_evidence_expired'];evidence=null;}
+    if(!periodChanged&&!fundingExpired)break;
+    // Only a changed NY period or expired funding needs another canonical observation.
+    at=completedAt;
+  }
   if(evidence!==null&&budget.allowance!=='available')reasons.push(budget.allowance==='blocked'?'booking_budget_blocked':'booking_budget_unknown');
   return {revision:stored.version,setting,rules:BOOKING_BUSINESS_RULES,businessPolicyValid,enabled:false,readiness:{ready:reasons.length===0,reasons,evidenceKind:evidence?.evidenceKind??'unavailable'},budget};
 }
