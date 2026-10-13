@@ -1,5 +1,6 @@
 import {socialDeliveryQueueSchema,type SocialDeliveryQueue} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
+import {checkLinkedinPostingDelivery} from './linkedinPostingPolicy.ts';
 /** Discovery is read-only; claim/begin revalidate approval under the post lock. */
 export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:string):Promise<SocialDeliveryQueue>{
  const user=ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;if(!user)return {items:[]};
@@ -18,5 +19,7 @@ export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:str
  AND ((d.submission_id IS NULL AND r.state='approved' AND s.state='connected' AND (d.state='pending' OR (d.state='preparing' AND d.claim_expires_at<=now())))
  OR (d.submission_id IS NOT NULL AND d.device_id=$3 AND s.state<>'disconnected' AND d.state IN ('submitting','scheduled','unknown','cancellation_pending') AND d.next_inspection_at<=now() AND d.inspection_deadline>now()))
  ORDER BY CASE WHEN d.state='cancellation_pending' THEN 0 WHEN d.submission_id IS NOT NULL THEN 1 ELSE 2 END,COALESCE(d.next_inspection_at,r.publish_at),d.id LIMIT 25`,[ctx.scope.workspaceId,user,deviceId])).rows;
- return socialDeliveryQueueSchema.parse({items:rows});
+ const items=[];
+ for(const item of rows){if(item['submissionId']!==null||await checkLinkedinPostingDelivery(ctx,'id',String(item['deliveryId']))===null)items.push(item);}
+ return socialDeliveryQueueSchema.parse({items});
 }

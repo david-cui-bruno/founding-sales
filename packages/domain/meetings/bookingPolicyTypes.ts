@@ -40,5 +40,5 @@ export interface BookingPolicySnapshot {
   readonly authorityVerifiedAt:string|null;
   readonly authorityValidUntil:string|null;
 }
-export type CurrentBookingPolicy = {readonly kind:'unavailable';readonly reason:string}|{readonly kind:'available';readonly snapshot:BookingPolicySnapshot};
+export type CurrentBookingPolicy = {readonly kind:'unavailable';readonly reason:string}|{readonly kind:'available';readonly snapshot:BookingPolicySnapshot;readonly budget:BookingPolicyView['budget']};
 export interface CurrentBookingPolicyQuery {readonly ownerUserId:string;readonly expectedRevision?:number;readonly expectedBindingKey?:string;readonly capability?:'interpretation'|'booking'}
