@@ -234,6 +234,8 @@ describe('what the API mounts', () => {
       '/integrations/twilio/voice',
       '/meetings/attendance',
       '/meetings/booking-capacity',
+      '/meetings/booking-create',
+      '/meetings/booking-create/inspect',
       '/meetings/booking-policy',
       '/meetings/brief',
       '/meetings/firm',
@@ -567,6 +569,7 @@ describe('what the API mounts', () => {
     const names = apiRouteModules(routing).map(module => module.name);
     expect(names).toEqual([
       'health',
+      'booking-create',
       'sourcing-learning',
       'sourcing',
       'auth',

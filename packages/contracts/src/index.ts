@@ -95,3 +95,4 @@ export * from './linkedinPolicy.ts';
 export * from './bookingInterpretation.ts';
 export * from './linkedinPostingPolicy.ts';
 export * from './bookingPolicy.ts';
+export * from './bookingCreate.ts';

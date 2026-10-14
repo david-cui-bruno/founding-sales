@@ -35,6 +35,7 @@ describe('job kind classes', () => {
 
   it('puts the work a person waits on in urgent and the rest in bulk', () => {
     expect(kindsOfClass('urgent')).toEqual([
+      'meeting.booking_create',
       'mail.sync',
       'mail.reconcile',
       'mail.recover',
