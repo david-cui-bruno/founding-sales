@@ -1,4 +1,4 @@
-import {bookingMessageEnvelope,consumeBookingMessagePermission} from '../meetings/bookingMessages.ts';
+import {bookingMessageEnvelope,consumeBookingMessagePermission,decideBookingMessagePermission} from '../meetings/bookingMessages.ts';
 import { prospectingRetryAt } from './pacing.ts';
 import {consumeHumanReplyApproval,humanReplyEnvelope,refuseHumanReplyApproval,humanReplyApprovalIsLive} from '../replies/sendAuthority.ts';
 import {recordHumanReplyDelivery} from '../replies/delivery.ts';
@@ -376,6 +376,13 @@ async function recheckAndClaim(
   await context.db.query('BEGIN');
   try {
     await lockSendGateForDispatch(context);
+    const hintedFence = await readFence(context, outboundMessageId);
+    if (hintedFence?.originKind === 'standing_booking') {
+      // Acquire the canonical identity/source closure before the fence, matching
+      // retained-original metadata publication. This hint and ignored decision
+      // grant no authority: the locked fence and complete gate below decide anew.
+      await decideBookingMessagePermission(context, hintedFence, deps.bookingMessageRuntime);
+    }
     const fence = await lockFenceForClaim(context, outboundMessageId);
     if (fence === null || fence.state !== 'prepared') {
       await context.db.query('ROLLBACK');
