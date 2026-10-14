@@ -13,8 +13,77 @@ import type {SocialAdapter} from '../../desktop/src/main/social/adapters.ts';
 import {linkedinPostingPolicyOperations} from '../../desktop/src/main/social/linkedinPostingPolicyOperations.ts';
 
 const command=()=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
-async function approvedPost(call:ReturnType<typeof caller>,accountId:string){
- const answer=await call('/social/posts/save',{accountId,text:'Controlled owner-approved actual work',images:[],publishAt:new Date(Date.now()+86400_000).toISOString(),zone:'America/New_York',...command()});
+it('historical revoked binding does not fence a new unbound manual revision of the same post',async()=>{
+ const {f,call,input,accountId}=await setup();try{
+ expect((await call('/social/linkedin-posting-policy/save',input)).status).toBe(200);
+ const old=await approvedPost(call,accountId);
+ expect((await call('/social/linkedin-posting-policy/bind-candidate',{postId:old.postId,postRevision:1,expectedRevision:1,...command()})).status).toBe(200);
+ expect((await call('/social/linkedin-posting-policy/revoke',{expectedRevision:1,...command()})).status).toBe(200);
+ expect((await call('/social/posts/cancel',{postId:old.postId,expectedRevision:1,...command()})).status).toBe(200);
+ const saved=await call('/social/posts/save',{postId:old.postId,expectedRevision:1,accountId,text:'New independently approved manual work',images:[],publishAt:new Date(Date.now()+172800_000).toISOString(),zone:'America/New_York',...command()});
+ expect(saved).toMatchObject({status:200,body:{result:{postId:old.postId,revision:2}}});
+ expect((await call('/social/posts/approve',{postId:old.postId,expectedRevision:2,...command()})).status).toBe(200);
+ expect((await call('/social/linkedin-posting-policy/read',{})).body).toMatchObject({candidates:[{postId:old.postId,postRevision:1,current:false,reason:'stale_post_revision',submissionState:'cancelled'}]});
+ expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{postId:old.postId,revision:2,action:'submit'}]});
+ const claim=await claimPost(call,{postId:old.postId,revision:2});
+ expect((await call('/social/delivery/begin',{...claim,...command()})).body).toMatchObject({result:{submissionId:expect.any(String)}});
+ expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{postId:old.postId,revision:2,action:'inspect'}]});
+ }finally{await f.stop();}
+});
+it.each([25,50,51])('queue advances beyond %i revoked candidates to later unbound manual work',async(count)=>{
+ const {f,call,input,accountId}=await setup();try{
+ expect((await call('/social/linkedin-posting-policy/save',input)).status).toBe(200);
+ const publishAt=new Date(Date.now()+86400_000).toISOString();
+ for(let n=0;n<count;n++){
+  const p=await approvedPost(call,accountId,publishAt);
+  expect((await call('/social/linkedin-posting-policy/bind-candidate',{postId:p.postId,postRevision:1,expectedRevision:1,...command()})).status).toBe(200);
+ }
+ expect((await call('/social/linkedin-posting-policy/revoke',{expectedRevision:1,...command()})).status).toBe(200);
+ const saved=await call('/social/posts/save',{accountId,text:'Later independent manual post',images:[],publishAt:new Date(Date.now()+172800_000).toISOString(),zone:'America/New_York',...command()});
+ expect(saved.status).toBe(200);
+ const manual=(saved.body as {result:{postId:string;revision:number}}).result;
+ expect((await call('/social/posts/approve',{postId:manual.postId,expectedRevision:manual.revision,...command()})).status).toBe(200);
+ expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{postId:manual.postId,action:'submit'}]});
+ const claim=await claimPost(call,manual);
+ expect((await call('/social/delivery/begin',{...claim,...command()})).status).toBe(200);
+ expect((await call('/social/delivery/queue',{})).body).toMatchObject({items:[{postId:manual.postId,action:'inspect'}]});
+ }finally{await f.stop();}
+});
+it('paged queue fills only 25 eligible rows across ties and preserves cancel inspect and scheduled receipts',async()=>{
+ const {f,call,input,accountId}=await setup();try{
+ expect((await call('/social/linkedin-posting-policy/save',input)).status).toBe(200);
+ const earlier=new Date(Date.now()+86400_000).toISOString(),later=new Date(Date.now()+172800_000).toISOString();
+ for(let n=0;n<10;n++){
+  const p=await approvedPost(call,accountId,earlier);
+  expect((await call('/social/linkedin-posting-policy/bind-candidate',{postId:p.postId,postRevision:1,expectedRevision:1,...command()})).status).toBe(200);
+ }
+ expect((await call('/social/linkedin-posting-policy/revoke',{expectedRevision:1,...command()})).status).toBe(200);
+ const manualIds:string[]=[];
+ for(let n=0;n<28;n++)manualIds.push((await approvedPost(call,accountId,later)).postId);
+ const queued=socialDeliveryQueueSchema.parse((await call('/social/delivery/queue',{})).body).items;
+ expect(queued).toHaveLength(25);
+ expect(new Set(queued.map(p=>p.deliveryId)).size).toBe(25);
+ expect(queued.every(p=>manualIds.includes(p.postId))).toBe(true);
+ expect(queued.map(p=>p.deliveryId)).toEqual(queued.map(p=>p.deliveryId).sort());
+ for(let n=0;n<3;n++){
+  const p=queued[n]!,claim=await claimPost(call,p),begin=await call('/social/delivery/begin',{...claim,...command()});
+  expect(begin.status).toBe(200);
+  if(n===1)continue;
+  const {submissionId}=(begin.body as {result:{submissionId:string}}).result;
+  expect((await call('/social/delivery/observe',{submissionId,observation:{state:'scheduled',receiptId:`controlled-page-receipt-${n}`,permalink:null,observedAt:new Date().toISOString(),accountExternalId:p.snapshot.account.externalId,observedFingerprint:p.fingerprint,complete:true},...command()})).status).toBe(200);
+  if(n===0)expect((await call('/social/posts/cancel',{postId:p.postId,expectedRevision:p.revision,...command()})).status).toBe(200);
+ }
+ const next=socialDeliveryQueueSchema.parse((await call('/social/delivery/queue',{})).body).items;
+ expect(next).toHaveLength(25);
+ expect(next[0]).toMatchObject({postId:queued[0]!.postId,action:'cancel',receiptId:'controlled-page-receipt-0'});
+ expect(next[1]).toMatchObject({postId:queued[1]!.postId,action:'inspect',submissionId:expect.any(String)});
+ expect(next.slice(2).every(p=>p.action==='submit')).toBe(true);
+ expect(next.some(p=>p.postId===queued[2]!.postId)).toBe(false);
+ expect(new Set(next.map(p=>p.deliveryId)).size).toBe(25);
+ }finally{await f.stop();}
+});
+async function approvedPost(call:ReturnType<typeof caller>,accountId:string,publishAt=new Date(Date.now()+86400_000).toISOString()){
+ const answer=await call('/social/posts/save',{accountId,text:'Controlled owner-approved actual work',images:[],publishAt,zone:'America/New_York',...command()});
  expect(answer.status).toBe(200);
  const post=(answer.body as {result:{postId:string;revision:number}}).result;
  expect((await call('/social/posts/approve',{postId:post.postId,expectedRevision:post.revision,...command()})).status).toBe(200);

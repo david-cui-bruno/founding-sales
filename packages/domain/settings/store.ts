@@ -251,6 +251,28 @@ export async function updateSetting(
   context: RepositoryContext,
   input: UpdateSettingInput,
 ): Promise<SettingsResult<{ readonly current: CurrentSetting; readonly previousVersion: number }>> {
+  if (input.settingKey === 'booking_policy') return { ok: false, reason: 'invalid_value' };
+  return writeSetting(context, input);
+}
+
+/** Dedicated booking commands retain the shared store/history, never generic
+ * last-write-wins semantics. The expected revision is checked under its lock. */
+export async function updateBookingPolicySetting(
+  context: RepositoryContext,
+  input: Omit<UpdateSettingInput, 'settingKey'> & { readonly expectedRevision: number },
+): Promise<SettingsResult<{ readonly current: CurrentSetting; readonly previousVersion: number }>> {
+  if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
+  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    settingLockName(context.scope.workspaceId, 'booking_policy'),
+  ]);
+  if ((await readSetting(context, 'booking_policy')).version !== input.expectedRevision) return { ok: false, reason: 'setting_version_conflict' };
+  return writeSetting(context, { ...input, settingKey: 'booking_policy' });
+}
+
+async function writeSetting(
+  context: RepositoryContext,
+  input: UpdateSettingInput,
+): Promise<SettingsResult<{ readonly current: CurrentSetting; readonly previousVersion: number }>> {
   if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return { ok: false, reason: 'admin_only' };
