@@ -27,7 +27,8 @@ export type LinkedinPostingPolicyCheck=z.infer<typeof linkedinPostingPolicyCheck
 export interface LinkedinPostingPolicyCurrent{current:boolean;allowed:false;revision:number;reason:string}
 export const linkedinPostingCandidateBindSchema=z.strictObject({postId:uuid,postRevision:z.number().int().positive(),expectedRevision:z.number().int().positive()});
 export const linkedinPostingCandidateBindCommandSchema=linkedinPostingCandidateBindSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
-export interface LinkedinPostingCandidateBinding{postId:string;postRevision:number;policyRevision:number;current:true;publicationReady:false}
+/** Current readback may invalidate a confirmed immutable binding receipt. */
+export interface LinkedinPostingCandidateBinding{postId:string;postRevision:number;policyRevision:number;current:boolean;publicationReady:false}
 export interface LinkedinPostingPolicySnapshot{accountId:string;accountRevision:number;accountExternalId:string;generation:LinkedinPostingPolicySave['generation'];rules:typeof LINKEDIN_POSTING_RULES}
 export interface LinkedinPostingPolicyView{
  accounts:{id:string;externalId:string;displayName:string;revision:number;state:string}[];
@@ -50,6 +51,6 @@ export const linkedinPostingPolicyViewSchema=z.strictObject({
  history:z.array(z.strictObject({revision:z.number().int().positive(),state:z.enum(['saved','disabled','revoked']),accountId:uuid,accountRevision:z.number().int().positive(),recordedAt:z.string().datetime()})),
  candidates:z.array(z.strictObject({postId:uuid,postRevision:z.number().int().positive(),policyRevision:z.number().int().positive(),current:z.boolean(),reason:z.string(),submissionState:z.string()})),
 });
-export const linkedinPostingCandidateBindingSchema=z.strictObject({postId:uuid,postRevision:z.number().int().positive(),policyRevision:z.number().int().positive(),current:z.literal(true),publicationReady:z.literal(false)});
+export const linkedinPostingCandidateBindingSchema=z.strictObject({postId:uuid,postRevision:z.number().int().positive(),policyRevision:z.number().int().positive(),current:z.boolean(),publicationReady:z.literal(false)});
 export const linkedinPostingDispatchCheckSchema=z.strictObject({submissionId:uuid});
 export const linkedinPostingDispatchCurrentSchema=z.strictObject({current:z.boolean(),reason:z.string()});
