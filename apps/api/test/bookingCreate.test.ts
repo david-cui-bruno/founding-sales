@@ -84,6 +84,33 @@ describe('ordinary owner-confirmed agreed booking admission',()=>{
    const results=await Promise.all([creating,changing]);expect(results.map(r=>r.status)).toEqual([200,200]);expect(f.requests).toHaveLength(0);
   }finally{resumeBooking.resolve();resumeUpdate.resolve();await f.fixture.stop();}
  });
+ it.each(['receipt','cost','unchanged_receipt','unchanged_cost'] as const)('normal disjoint-firm route add during final %s PostgreSQL wait cannot authorize an ambiguous attendee',async phase=>{
+  const f=await setupBooking();const blocker=await f.fixture.database.appRuntimeSession(),worker=await f.fixture.database.appRuntimeSession(),adding=await f.fixture.database.appRuntimeSession();let locked=false;
+  const receiptWait=phase.endsWith('receipt'),unchanged=phase.startsWith('unchanged');const firmLocks:string[]=[];
+  const observedWorker:SessionQueryable={query:async<Row extends QueryResultRowLike>(text:string,values?:readonly unknown[])=>{const result=await worker.query<Row>(text,values);if(text.includes('FROM firms')&&(text.includes('FOR UPDATE')||text.includes('FOR SHARE')))firmLocks.push(String(values?.[1]));return result;}};
+  try{
+   expect((await worker.query<{role:string}>('SELECT current_user AS role')).rows[0]?.role).toBe('app_runtime');
+   expect((await adding.query<{role:string}>('SELECT current_user AS role')).rows[0]?.role).toBe('app_runtime');
+   const otherFirm=await seedFirm(f.fixture,{name:'Disjoint shared endpoint',assignedUserId:f.fixture.alpha.admin.userId}),otherContact=await seedContact(f.fixture,{firmId:otherFirm,fullName:'Different prospect'});
+   const response=await f.request('POST','/meetings/booking-create',f.command(f.payload));expect(response.status).toBe(200);const id=(response.body as {result:{submissionId:string}}).result.submissionId;
+   const blockerPid=(await blocker.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid,workerPid=(await worker.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+   const costLock=`${f.fixture.alpha.workspaceId}:controlled-booking-cost-observation`;let availabilityRead=false,costReads=0;
+   const read=f.runtime.readCostContract;f.runtime.readCostContract=async snapshot=>{const contract=await read(snapshot);if(!receiptWait&&availabilityRead&&++costReads===2)await observedWorker.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[costLock]);return contract;};
+   f.controls.onHttp=async url=>{if(url.pathname!=='/v2/calendars/busy-times')return;availabilityRead=true;await blocker.query('BEGIN');locked=true;if(receiptWait)await blocker.query('SELECT id FROM booking_create_submissions WHERE id=$1 FOR UPDATE',[id]);else await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[costLock]);};
+   const job=(await claimJobs(f.fixture.db,{owner:'normal-address-wait-worker',kinds:['meeting.booking_create'],limit:1,leaseSeconds:120}))[0]!;
+   const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingCreate:f.runtime});
+   const running=registry.get('meeting.booking_create')!.handle({session:observedWorker,scope:workspaceScope(f.fixture.alpha.workspaceId,{kind:'system',component:'worker'}),job});
+   let waiting=false;for(let attempt=0;attempt<400;attempt++){if((await blocker.query('SELECT pid FROM pg_stat_activity WHERE pid=$1 AND $2::int=ANY(pg_blocking_pids(pid))',[workerPid,blockerPid])).rows.length){waiting=true;break;}await new Promise(resolve=>setTimeout(resolve,5));}
+   expect(waiting,'registered app-role worker must actually wait after its first address ambiguity read').toBe(true);
+   const added=await f.request('POST','/contacts/routes/add',f.command({firmId:otherFirm,contactId:otherContact,routeKind:'email',value:unchanged?'different@booking.example':'prospect@booking.example',source:'salesperson',technicalValidation:'passed',associationConfidence:0.95}),adding);
+   expect(added.status,JSON.stringify(added.body)).toBe(200);
+   expect((await blocker.query('SELECT pid FROM pg_stat_activity WHERE pid=$1 AND $2::int=ANY(pg_blocking_pids(pid))',[workerPid,blockerPid])).rows).toHaveLength(1);
+   await blocker.query('COMMIT');locked=false;await running;
+   expect(firmLocks).toContain(f.firmId);expect(firmLocks).not.toContain(otherFirm);
+   expect(f.requests.filter(r=>r.init.method==='POST')).toHaveLength(unchanged?1:0);
+   expect((await f.fixture.db.query('SELECT state,reason,dispatch_started_at FROM booking_create_submissions WHERE id=$1',[id])).rows[0]).toMatchObject(unchanged?{state:'accepted',reason:null,dispatch_started_at:expect.any(Date)}:{state:'failed',reason:'attendee_ambiguous',dispatch_started_at:null});
+  }finally{if(locked)await blocker.query('ROLLBACK');await f.fixture.stop();}
+ });
  it.each(['source_notice','receipt_notice','receipt_cost','receipt_runtime','receipt_lease','receipt_cost_after_read','receipt_runtime_after_cost','receipt_scope_after_cost','initial_notice','initial_cost','initial_runtime','initial_lease'] as const)('final dispatch refuses %s expiry across an observed PostgreSQL lock wait',async change=>{
   const f=await setupBooking();const blocker=await f.fixture.database.appRuntimeSession();let locked=false;
   try{const response=await f.request('POST','/meetings/booking-create',f.command(f.payload));expect(response.status).toBe(200);const id=(response.body as {result:{submissionId:string}}).result.submissionId;
