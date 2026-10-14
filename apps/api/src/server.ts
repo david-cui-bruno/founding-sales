@@ -88,7 +88,9 @@ import {
  * (`docs/decisions/g75-one-connection-per-request.md`).
  */
 
+import type {BookingInterpretationAuthorityPort} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 export interface ApiOptions {
+  readonly bookingInterpretationAuthority?:BookingInterpretationAuthorityPort;
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
@@ -172,6 +174,7 @@ export type { ApiRequest, RouteResult } from './routes/types.ts';
 
 function routingOptions(options: ApiOptions): RoutingOptions {
   return {
+    ...(options.bookingInterpretationAuthority===undefined?{}:{bookingInterpretationAuthority:options.bookingInterpretationAuthority}),
     ...(options.crmMailEvidence===undefined?{}:{crmMailEvidence:options.crmMailEvidence}),
     ...(options.crmMailCaptureReadiness===undefined?{}:{crmMailCaptureReadiness:options.crmMailCaptureReadiness}),
     ...(options.crmCapabilityRuntime===undefined?{}:{crmCapabilityRuntime:options.crmCapabilityRuntime}),

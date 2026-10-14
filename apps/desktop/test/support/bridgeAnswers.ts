@@ -341,6 +341,8 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
  '/crm/business/rules/save':{status:'accepted',replayed:false,result:{revision:1,captureAllowed:false}},
  '/crm/business/review/read':{available:false,reasons:['disclosure_required'],mailboxId:FIXTURE_IDS.firm,accountBinding:'a'.repeat(64),generation:1,policyRevision:0,captureAllowed:false,conversations:[],nextAfter:null},
  '/crm/business/review/decide':{status:'accepted',replayed:false,result:{decisionRevision:1,captureAllowed:false}},
+ '/crm/booking/interpretation/request':{status:'accepted',replayed:false,result:{requestId:FIXTURE_IDS.message,state:'unavailable',reason:'booking_authority_unavailable',outcome:null,provenance:null,financial:null,limitations:['candidate_not_permission','no_sending_or_booking','linkedin_intake_unavailable','actual_model_quality_unverified']}},
+ '/crm/booking/interpretation/read':{requestId:FIXTURE_IDS.message,state:'unavailable',reason:'booking_authority_unavailable',outcome:null,provenance:null,financial:null,limitations:['candidate_not_permission','no_sending_or_booking','linkedin_intake_unavailable','actual_model_quality_unverified']},
  '/crm/business/mail/list':{sources:[],nextAfterId:null},
  '/crm/business/mail/read/v2':{state:'unavailable',reason:'provenance_unavailable',source:null},
  '/crm/business/mail/import/read':mailImportHealth(),

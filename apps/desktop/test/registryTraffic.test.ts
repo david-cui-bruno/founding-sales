@@ -132,6 +132,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'ask.historyList':{limit:20},
   'ask.answerRead':{requestId:UUID},
   'ask.answerSourceRead':{requestId:UUID,expectedVersion:1,windowId:UUID},
+  'crm.bookingInterpretationRequest':{source:{sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},priorSources:[],commandId:UUID},
+  'crm.bookingInterpretationRead':{requestId:UUID},
   'crm.businessMailList': {limit:50},
   'crm.businessMailReadV2': {sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},
   'crm.businessMailImportHealth':{mailboxId:UUID},
@@ -523,6 +525,8 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
         ...
         Object.fromEntries(
           [
+            "bookingInterpretationRequest",
+            "bookingInterpretationRead",
             "capabilityRead",
             "metadataReviewActivate",
             "metadataReviewDisable",

@@ -902,6 +902,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       ["deletion_removes"],
       "One uploaded audio file of a demo: its Zoom file name, size, digest and object key; removed with the meeting (ON DELETE CASCADE); the object expires a day after upload.",
     ),
+    crm_booking_interpretations: coverage(
+      ["retained", "deletion_redacts", "departure_revokes"],
+      "Native source UPDATE/DELETE erases private provenance and proposals while source-free financial linkage survives. Every read and worker stage revalidates original access and owner membership; departure refuses further processing.",
+    ),
   });
 
 /** Tables the coverage registry deliberately does not classify. */

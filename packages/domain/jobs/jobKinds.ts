@@ -19,6 +19,7 @@ export const IDEMPOTENCY_PROTECTIONS = ['business_uniqueness', 'fencing_token', 
 export type IdempotencyProtection = (typeof IDEMPOTENCY_PROTECTIONS)[number];
 
 export const JOB_KINDS = [
+  'crm.booking_interpretation',
   'crm.ask_answer',
   'crm.ask_index',
   'crm.commitments_project',
@@ -74,6 +75,7 @@ export function isJobKind(value: string): value is JobKind {
 
 /** Appendix C, third column: the protection each kind's handler must carry. */
 export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection>> = Object.freeze({
+  'crm.booking_interpretation':'outbound_fence',
   'crm.ask_answer': 'outbound_fence',
   'crm.ask_index': 'outbound_fence',
   'crm.commitments_project': 'outbound_fence',
@@ -193,6 +195,7 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
+  bookingInterpretation:(requestId:string):string=>`booking-interpretation:${requestId}`,
   automaticEmail: (revision:number,at:string):string => `automatic-email:${String(revision)}:${hourOf(at)}`,
   sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
@@ -333,6 +336,7 @@ export type JobClass = (typeof JOB_CLASSES)[number];
  * compiler runs.
  */
 export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze({
+  'crm.booking_interpretation':'bulk',
   'crm.ask_answer': 'bulk',
   'crm.ask_index': 'bulk',
   'crm.commitments_project': 'bulk',
