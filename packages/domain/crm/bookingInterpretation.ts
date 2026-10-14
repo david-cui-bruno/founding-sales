@@ -21,13 +21,19 @@ function view(row: BookingInterpretationRow) {
 export async function unresolvedBookingModelAttempt(context:RepositoryContext,sourceId:string,exceptRequestId?:string) {
  return (await context.db.query(`SELECT 1 FROM crm_booking_interpretations i JOIN provider_reservations r ON r.workspace_id=i.workspace_id AND r.id=i.reservation_id WHERE i.workspace_id=$1 AND i.source_refs @> $2::jsonb AND ($3::uuid IS NULL OR i.id<>$3) AND r.state IN ('calling','estimated') LIMIT 1`,[context.scope.workspaceId,JSON.stringify([{sourceId}]),exceptRequestId??null])).rows.length>0;
 }
-export async function requestBookingInterpretation(context: RepositoryContext, input: BookingInterpretationRequest, authority:BookingInterpretationAuthorityPort=unavailableBookingInterpretationAuthority) {
+export async function requestBookingInterpretation(context: RepositoryContext, input: BookingInterpretationRequest, authority:BookingInterpretationAuthorityPort=unavailableBookingInterpretationAuthority,authorize?:()=>Promise<boolean>) {
   if (context.scope.actor.kind !== 'user') return { ok: false as const, reason: 'booking_access_denied' };
   const sources = [input.source, ...input.priorSources];
   const loaded = await loadBookingInterpretationSources(context, sources);
-  if (!loaded || loaded.originals[0]!.ownerUserId !== context.scope.actor.userId) return { ok: false as const, reason: 'booking_source_unavailable' };
+  if (!loaded || loaded.originals[0]!.ownerUserId !== context.scope.actor.userId) {
+    if(authorize!==undefined&&!await authorize())return {ok:false as const,reason:'booking_access_denied'};
+    return { ok: false as const, reason: 'booking_source_unavailable' };
+  }
   const current=await authority.read(context,{ownerUserId:context.scope.actor.userId});
   const unresolved=await unresolvedBookingModelAttempt(context,input.source.sourceId);
+  // Source and canonical authority reads may wait. Admission must still belong
+  // to the exact caller before any request or job can become durable.
+  if(authorize!==undefined&&!await authorize())return {ok:false as const,reason:'booking_access_denied'};
   const snapshot=!unresolved&&current.kind==='available'&&bookingPolicySnapshotReadyAt(current.snapshot,new Date().toISOString())&&current.snapshot.capability==='interpretation'?current.snapshot:null;
   const state=snapshot===null?'unavailable':'pending';
   const reason=unresolved?'prior_model_acceptance_unresolved':current.kind==='unavailable'?current.reason:snapshot===null?'booking_interpretation_not_ready':null;
@@ -42,20 +48,28 @@ export async function requestBookingInterpretation(context: RepositoryContext, i
   return { ok: true as const, value: {requestId:row.id} };
 }
 export async function readBookingInterpretation(context: RepositoryContext, input: { requestId: string },authority:BookingInterpretationAuthorityPort=unavailableBookingInterpretationAuthority,authorize?:()=>Promise<boolean>) {
-  if (context.scope.actor.kind !== 'user') return null;
+  return (await readBookingInterpretationObservation(context,input,authority,authorize)).value;
+}
+function observation<T>(value:T,snapshot:BookingPolicySnapshot|null=null){return {value,snapshot};}
+/** Server-only captured metadata for terminal response checks after COMMIT.
+ * It is never serialized and never replaces the canonical authority observation. */
+export async function readBookingInterpretationObservation(context: RepositoryContext, input: { requestId: string },authority:BookingInterpretationAuthorityPort=unavailableBookingInterpretationAuthority,authorize?:()=>Promise<boolean>) {
+  if (context.scope.actor.kind !== 'user') return observation(null);
   const row = (await context.db.query<BookingInterpretationRow>('SELECT * FROM crm_booking_interpretations WHERE workspace_id=$1 AND id=$2 AND requested_by=$3',
     [context.scope.workspaceId, input.requestId, context.scope.actor.userId])).rows[0];
-  if (!row) return null;
+  if (!row) return observation(null);
   const receipt=await readAttempt(context,{subjectKind:'booking_interpretation',subjectId:row.id,attempt:1});
   const financial=receipt===null?null:{state:receipt.state,reservedCents:receipt.cents,settledCents:receipt.settledCents};
   const loaded = await loadBookingInterpretationSources(context, row.source_refs);
-  if(authorize!==undefined&&!await authorize())return null;
-  if (!loaded || loaded.fingerprint !== row.source_fingerprint) return { requestId: row.id, state: 'stale', reason: 'source_or_access_changed', outcome: null, provenance: null, financial, limitations: BOOKING_INTERPRETATION_LIMITATIONS };
+  if(authorize!==undefined&&!await authorize())return observation(null);
+  if (!loaded || loaded.fingerprint !== row.source_fingerprint) return observation({ requestId: row.id, state: 'stale', reason: 'source_or_access_changed', outcome: null, provenance: null, financial, limitations: BOOKING_INTERPRETATION_LIMITATIONS });
+  let snapshot:BookingPolicySnapshot|null=null;
   if(row.authority_snapshot!==null){
    await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[settingLockName(context.scope.workspaceId,'booking_policy')]);
    const current=await authority.revalidate(context,row.authority_snapshot as BookingPolicySnapshot);
-   if(authorize!==undefined&&!await authorize())return null;
-   if(current.kind!=='available'||!bookingPolicySnapshotReadyAt(current.snapshot,new Date().toISOString()))return {...view(row),state:'unavailable',reason:'booking_authority_changed',outcome:null,financial};
+   if(authorize!==undefined&&!await authorize())return observation(null);
+   if(current.kind!=='available'||!bookingPolicySnapshotReadyAt(current.snapshot,new Date().toISOString()))return observation({...view(row),state:'unavailable',reason:'booking_authority_changed',outcome:null,financial});
+   snapshot=current.snapshot;
   }
-  return {...view(row),financial};
+  return observation({...view(row),financial},snapshot);
 }
