@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {bookingCreateSourceFixture} from './support/bookingCreateFixture.ts';
-import type {BookingPolicyBindings} from '@fss/contracts';
+import {wireDrift,type BookingPolicyBindings} from '@fss/contracts';
 import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import {dispatch} from '../src/server.ts';
 import {createBookingInterpretationAuthority} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
@@ -171,11 +171,21 @@ describe('standing booking source-native controlled send',()=>{
  it('sends approved link in original thread once through normal registered worker and receipt readback',async()=>{
   const f=await setupMessages();try{
    const requested=await f.send();expect(requested.status,JSON.stringify(requested.body)).toBe(200);expect(requested.body).toMatchObject({result:{state:'queued'}});
+   const requestedView=(requested.body as {result:unknown}).result;
+   expect(wireDrift(bookingMessageViewSchema,requestedView)).toEqual([]);
    const id=idOf(requested.body);await f.run();
-   const read=await f.read(id);expect(read.body).toMatchObject({state:'sent',providerMessageId:expect.any(String),sentAt:expect.any(String)});expect(bookingMessageViewSchema.safeParse(read.body).success).toBe(true);
+   const read=await f.read(id);expect(read.status).toBe(200);expect(read.body).toMatchObject({state:'sent',providerMessageId:expect.any(String),sentAt:expect.any(String)});
+   expect(wireDrift(bookingMessageViewSchema,read.body)).toEqual([]);
+   // Compatible additions remain readable on the desktop, while route tests
+   // independently detect any undeclared fields in the actual server DTO.
+   const extended={...bookingMessageViewSchema.parse(read.body),informational:'future-compatible-field'};
+   expect(bookingMessageViewSchema.safeParse(extended).success).toBe(true);
+   expect(wireDrift(bookingMessageViewSchema,extended)).toContain('informational: not declared by the contract');
    expect(f.gmail.sends).toHaveLength(1);expect(f.gmail.sends[0]).toMatchObject({to:'prospect@booking.example',threadId:'booking-thread',inReplyTo:'<controlled-interest@booking.example>',subject:'Re: Agreed call'});expect(f.gmail.sends[0]!.body).toContain(f.bindings.event.bookingUrl);
    expect(f.gmail.sends[0]!.body).not.toMatch(/pricing|product|objection/iu);
-   expect(idOf((await f.send()).body)).toBe(id);await f.run();expect(f.gmail.sends).toHaveLength(1);
+   const replay=await f.send();expect(replay.status).toBe(200);expect(idOf(replay.body)).toBe(id);
+   expect(wireDrift(bookingMessageViewSchema,(replay.body as {result:unknown}).result)).toEqual([]);
+   await f.run();expect(f.gmail.sends).toHaveLength(1);
   }finally{await f.stop();}
  });
 });
