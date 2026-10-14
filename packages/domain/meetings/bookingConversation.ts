@@ -108,13 +108,16 @@ export async function recordBookingConversationEvent(context:RepositoryContext,i
   await context.db.query("UPDATE booking_conversations SET nudge_count=nudge_count+1,state=CASE WHEN nudge_count=1 THEN 'handoff' ELSE state END,handoff_action=CASE WHEN nudge_count=1 THEN 'review_booking' ELSE handoff_action END,nudges_stopped_at=CASE WHEN nudge_count=1 THEN now() ELSE nudges_stopped_at END,updated_at=now() WHERE workspace_id=$1 AND id=$2",[context.scope.workspaceId,row.id]);
   if(row.nudge_count===0&&runtime.messages!==undefined&&current.kind==='available')await enqueueConversationFollowup(context,row.id,'nudge_7',current.conversation.provenance.occurredAt);
  }else if(input.event==='confirm_no_show'){
-  const booking=row.create_submission_id===null?null:await readBookingCreate(context,row.create_submission_id);
-  if(booking?.state!=='accepted'||row.explicit_no_show_at!==null)return {ok:false as const,reason:'accepted_booking_required'};
-  const confirmation=(await context.db.query<{attendance_confirmed_at:Date}>("SELECT attendance_confirmed_at FROM meetings WHERE workspace_id=$1 AND id=$2 AND state='no_show' AND attendance_source='manual' AND attendance_confirmed_by=$3 AND attendance_confirmed_at IS NOT NULL",[context.scope.workspaceId,booking.meetingId,row.owner_user_id])).rows[0];
+  if(current.kind!=='available'||row.explicit_no_show_at!==null)return {ok:false as const,reason:'accepted_booking_required'};
+  const meeting=await currentNoShowBooking(context,row,current.conversation);
+  if(meeting===null)return {ok:false as const,reason:'accepted_booking_required'};
+  const confirmation=(await context.db.query<{attendance_confirmed_at:Date}>("SELECT attendance_confirmed_at FROM meetings WHERE workspace_id=$1 AND id=$2 AND current_booking_uid=$4 AND state='no_show' AND attendance_source='manual' AND attendance_confirmed_by=$3 AND attendance_confirmed_at IS NOT NULL",[context.scope.workspaceId,meeting.id,row.owner_user_id,meeting.current_booking_uid])).rows[0];
   if(confirmation===undefined)return {ok:false as const,reason:'david_no_show_confirmation_required'};
   // PostgreSQL retains microseconds that JavaScript Date truncates. Keep the
   // authority stamp native, otherwise even unchanged confirmation fails equality.
-  await context.db.query('UPDATE booking_conversations b SET explicit_no_show_at=m.attendance_confirmed_at,updated_at=now() FROM meetings m WHERE b.workspace_id=$1 AND b.id=$2 AND m.workspace_id=b.workspace_id AND m.id=$3',[context.scope.workspaceId,row.id,booking.meetingId]);
+  // A change's target pair is historical command-origin authority. Its accepted
+  // receipt already pins the replacement UID, so never rewrite that old target.
+  await context.db.query('UPDATE booking_conversations b SET explicit_no_show_at=m.attendance_confirmed_at,target_meeting_id=COALESCE(b.target_meeting_id,m.id),target_booking_uid=COALESCE(b.target_booking_uid,m.current_booking_uid),updated_at=now() FROM meetings m WHERE b.workspace_id=$1 AND b.id=$2 AND m.workspace_id=b.workspace_id AND m.id=$3 AND m.current_booking_uid=$4',[context.scope.workspaceId,row.id,meeting.id,meeting.current_booking_uid]);
   if(runtime.messages!==undefined)await enqueueConversationFollowup(context,row.id,'no_show',confirmation.attendance_confirmed_at.toISOString());
  }else await context.db.query("UPDATE booking_conversations SET nudges_stopped_at=COALESCE(nudges_stopped_at,now()),last_reply_at=CASE WHEN $3='reply' THEN now() ELSE last_reply_at END,state=CASE WHEN $3 IN ('refusal','opt_out') THEN 'stopped' WHEN state IN ('pending','booking_pending','awaiting_time') THEN 'handoff' ELSE state END,reason=CASE WHEN $3 IN ('refusal','opt_out') THEN $3 WHEN $3='reply' THEN 'new_reply_requires_interpretation' ELSE reason END,handoff_action=CASE WHEN $3='reply' THEN COALESCE(handoff_action,'review_booking') ELSE handoff_action END,updated_at=now() WHERE workspace_id=$1 AND id=$2",[context.scope.workspaceId,row.id,input.event]);
  return {ok:true as const,value:{conversationId:row.id}};
@@ -144,8 +147,8 @@ export async function bookingConversationMessageEligibility(context:RepositoryCo
  const current=await readCurrentBookingConversationForMessages(context,input.conversationId,runtime);if(current.kind!=='available')return current.reason;
  const row=await loadBookingConversation(context,input.conversationId);if(row===null)return 'booking_conversation_unavailable';
  if(input.kind==='no_show'){
-  const receipt=row.create_submission_id===null?null:await readBookingCreate(context,row.create_submission_id);
-  if(receipt?.state!=='accepted'||!await currentDavidNoShow(context,row,receipt.meetingId))return 'david_no_show_confirmation_required';
+  const meeting=await currentNoShowBooking(context,row,current.conversation);
+  if(meeting===null||!await currentDavidNoShow(context,row,meeting))return 'david_no_show_confirmation_required';
  }
  return scheduledMessageReason(row,current.conversation,input);
 }
@@ -159,8 +162,8 @@ export async function consumeBookingConversationMessage(context:RepositoryContex
  if(afterWait.kind!=='available')return afterWait.reason;
  if(afterWait.conversation.sourceFingerprint!==current.conversation.sourceFingerprint||afterWait.conversation.snapshot.bindingKey!==current.conversation.snapshot.bindingKey)return 'booking_authority_changed_after_wait';
  if(input.kind==='no_show'){
-  const receipt=row.create_submission_id===null?null:await readBookingCreate(context,row.create_submission_id);
-  if(receipt?.state!=='accepted'||!await currentDavidNoShow(context,row,receipt.meetingId))return 'david_no_show_confirmation_required';
+  const meeting=await currentNoShowBooking(context,row,afterWait.conversation);
+  if(meeting===null||!await currentDavidNoShow(context,row,meeting))return 'david_no_show_confirmation_required';
  }
  const reason=scheduledMessageReason(row,afterWait.conversation,input);if(reason!==null)return reason;
  if(input.kind==='no_show')await context.db.query('UPDATE booking_conversations SET no_show_rebooking_used=true,updated_at=now() WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,row.id]);
@@ -175,7 +178,49 @@ async function enqueueConversationFollowup(context:RepositoryContext,id:string,k
  const runAt=bookingConversationSlotInstant({localDate:date.toISOString().slice(0,10),localTime:kind==='no_show'?'10:00':origin.time,timeZone:'America/New_York'});
  if(runAt!==null)await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'meeting.booking_conversation',idempotencyKey:`booking-conversation:${id}:${kind}`,payload:{conversationId:id,messageKind:kind},runAt});
 }
-async function currentDavidNoShow(context:RepositoryContext,row:BookingConversationRow,meetingId:string|null):Promise<boolean>{
+/** Resolve only this admitted source episode through existing operational matching
+ * and applied UID history. Interest alone, a model target, or a historical UID is
+ * not a booking. Accepted create/change receipts narrow the exact meeting; a link
+ * requires one unambiguous signed booking after its original agreement. */
+async function currentNoShowBooking(context:RepositoryContext,row:BookingConversationRow,conversation:BookingConversationMessageContext):Promise<{id:string;current_booking_uid:string}|null>{
+ const sourceId=row.source_refs[0]?.sourceId;if(sourceId===undefined)return null;
+ const match=await directSendTargetOf(context,sourceId);if(match?.contactId==null)return null;
+ const bindings=conversation.snapshot.bindings;
+ const meetings=await context.db.query<{id:string;current_booking_uid:string}>(`SELECT m.id,m.current_booking_uid
+ FROM meetings m JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id
+ JOIN mail_messages original ON original.workspace_id=m.workspace_id AND original.id=$2
+ JOIN crm_mail_sources source ON source.workspace_id=original.workspace_id AND source.source_id=original.id
+ WHERE m.workspace_id=$1 AND m.firm_id=$5 AND m.contact_id=$6 AND f.assigned_user_id=$3 AND f.status='active'
+ AND source.owner_user_id=$3 AND original.direction='incoming' AND original.matched=true
+ AND lower(m.attendee_email)=lower(original.header_from) AND lower(m.organizer_email)=lower($4)
+ AND m.state<>'cancelled' AND m.current_booking_uid IS NOT NULL
+ AND ($10::timestamptz IS NULL OR $13::uuid IS NOT NULL OR (m.id=$11::uuid AND m.current_booking_uid=$12))
+ AND EXISTS(SELECT 1 FROM calcom_events e WHERE e.workspace_id=m.workspace_id AND e.meeting_id=m.id
+  AND e.booking_uid=m.current_booking_uid AND e.trigger_event IN ('BOOKING_CREATED','BOOKING_RESCHEDULED') AND e.outcome='applied')
+ AND NOT EXISTS(SELECT 1 FROM calcom_events e WHERE e.workspace_id=m.workspace_id AND e.meeting_id=m.id
+  AND e.booking_uid=m.current_booking_uid AND e.trigger_event='BOOKING_CANCELLED' AND e.outcome='applied')
+ -- Canonical reschedules preserve human attendance. A delayed callback can
+ -- predate that stamp at the provider while arriving after the human decision.
+ -- Require the current episode to have been observed before manual attendance.
+ AND (m.attendance_confirmed_at IS NULL OR NOT EXISTS(SELECT 1 FROM calcom_events e
+  WHERE e.workspace_id=m.workspace_id AND e.meeting_id=m.id AND e.booking_uid=m.current_booking_uid
+  AND e.trigger_event IN ('BOOKING_CREATED','BOOKING_RESCHEDULED') AND e.outcome='applied'
+  AND (e.payload_created_at IS NULL OR e.payload_created_at>m.attendance_confirmed_at OR e.received_at>m.attendance_confirmed_at)))
+ AND (
+  ($7::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM booking_create_submissions b
+   JOIN meeting_booking_uids u ON u.workspace_id=b.workspace_id AND u.meeting_id=b.meeting_id AND u.booking_uid=b.provider_booking_uid
+   WHERE b.workspace_id=m.workspace_id AND b.id=$7 AND b.meeting_id=m.id AND b.owner_user_id=$3 AND b.state='accepted'
+   AND b.provider_account_id=$8 AND b.event_type_id=$9 AND b.payload->'agreement'->>'sourceId'=$2::text))
+  OR ($13::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM booking_change_submissions b
+   WHERE b.workspace_id=m.workspace_id AND b.id=$13 AND b.meeting_id=m.id AND b.owner_user_id=$3 AND b.state='accepted' AND b.action='reschedule'
+   AND b.provider_booking_uid=m.current_booking_uid AND b.provider_account_id=$8 AND b.event_type_id=$9 AND b.payload->'agreement'->>'sourceId'=$2::text))
+  OR ($7::uuid IS NULL AND $13::uuid IS NULL AND $14::boolean AND m.starts_at>=original.internal_date
+   AND EXISTS(SELECT 1 FROM calcom_events e WHERE e.workspace_id=m.workspace_id AND e.meeting_id=m.id AND e.booking_uid=m.booking_uid
+    AND e.trigger_event='BOOKING_CREATED' AND e.outcome='applied' AND e.payload_created_at>=original.internal_date))
+ )`,[context.scope.workspaceId,sourceId,row.owner_user_id,bindings.account.email,match.firmId,match.contactId,row.create_submission_id,bindings.account.accountId,String(bindings.event.eventTypeId),row.explicit_no_show_at,row.target_meeting_id,row.target_booking_uid,row.change_submission_id,conversation.outcome.kind==='approved_link']);
+ return meetings.rows.length===1?meetings.rows[0]!:null;
+}
+async function currentDavidNoShow(context:RepositoryContext,row:BookingConversationRow,meeting:{id:string;current_booking_uid:string}):Promise<boolean>{
  // Compare the two retained native timestamps, not a millisecond Date round-trip.
- return (await context.db.query("SELECT m.id FROM meetings m JOIN booking_conversations b ON b.workspace_id=m.workspace_id AND b.id=$4 WHERE m.workspace_id=$1 AND m.id=$2 AND m.state='no_show' AND m.attendance_source='manual' AND m.attendance_confirmed_by=$3 AND m.attendance_confirmed_at=b.explicit_no_show_at",[context.scope.workspaceId,meetingId,row.owner_user_id,row.id])).rows.length===1;
+ return (await context.db.query("SELECT m.id FROM meetings m JOIN booking_conversations b ON b.workspace_id=m.workspace_id AND b.id=$4 WHERE m.workspace_id=$1 AND m.id=$2 AND m.current_booking_uid=$5 AND m.state='no_show' AND m.attendance_source='manual' AND m.attendance_confirmed_by=$3 AND m.attendance_confirmed_at=b.explicit_no_show_at",[context.scope.workspaceId,meeting.id,row.owner_user_id,row.id,meeting.current_booking_uid])).rows.length===1;
 }
