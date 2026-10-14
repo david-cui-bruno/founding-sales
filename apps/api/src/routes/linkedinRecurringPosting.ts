@@ -11,5 +11,15 @@ export async function routeLinkedinRecurring(request:ApiRequest,options:RoutingO
  const principal=await requirePrincipal(auth,request);if(!principal.ok)return principal.result;
  const scoped=contextForPrincipal(auth,principal.principal);if(!scoped.ok)return scoped.result;
  if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};
- return {status:200,body:await withTransaction(auth.db,()=>readLinkedinRecurringPosting(scoped.context,options.linkedinRecurring))};
+ const body=await withTransaction(auth.db,()=>readLinkedinRecurringPosting(scoped.context,options.linkedinRecurring));
+ // The owner/policy read can wait. Reauthenticate outside the completed read
+ // transaction so sign-out or device revocation cannot publish private history.
+ const current=await requirePrincipal(auth,request);if(!current.ok)return current.result;
+ const before=principal.principal,after=current.principal;
+ if(after.workspaceId!==before.workspaceId||after.userId!==before.userId
+ ||after.sessionId!==before.sessionId||after.deviceId!==before.deviceId
+ ||after.role!==before.role||after.membershipStatus!==before.membershipStatus
+ ||after.deviceStatus!==before.deviceStatus||after.clientVersion!==before.clientVersion)
+ return {status:401,body:{error:'unauthenticated'}};
+ return {status:200,body};
 }
