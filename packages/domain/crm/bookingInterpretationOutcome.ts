@@ -53,7 +53,15 @@ function exactSlot(slot:z.infer<typeof slotSchema>,originals:readonly Original[]
 }
 /** Withholding only. Callers supply whole authored text from currently authorized canonical originals. */
 export function bookingAuthoredTextHasBookingNegation(text:string):boolean {
- return /\b(?:do\s+not|don['’]t|never)\s+(?:book|schedule|arrange|reserve)\b/i.test(text);
+ // Match bounded booking/attendance phrases, not arbitrary negative sentiment.
+ // Callers exclude canonical quoted/forwarded history. This withholding-only
+ // helper is also used by standing validation against the current source.
+ const bookingInstruction=/\b(?:do\s+not|don['’]t|never)\s+(?:book|schedule|arrange|reserve)\b/i;
+ const attendance=/\b(?:cannot|can\s+not|can['’]t|will\s+not|won['’]t|unable\s+to|not\s+able\s+to)\s+(?:(?:attend|join|meet)\s+(?:then|at\s+that\s+time|(?:our|the|this|that)\s+(?:call|meeting|appointment))\b|(?:attend|join|meet)(?=\s*[.!?,;]|\s*$)|make\s+(?:it|that\s+time|the\s+call)\b|be\s+there\b)/i;
+ const timeDisagreement=/\b(?:(?:that|this)(?:\s+(?:time|slot|date))?|the\s+(?:time|slot|date))\s+(?:does\s+not|doesn['’]t|will\s+not|won['’]t)\s+work\b/i;
+ const negatedAgreement=/\b(?:do\s+not|don['’]t|cannot|can['’]t)\s+(?:agree|accept|confirm)(?:\s+(?:(?:to|with)\s+)?(?:that|this|the)(?:\s+(?:time|slot|date|meeting|call|booking))?\b|(?=\s*[.!?,;]|\s*$))/i;
+ const cancellation=/(?:^|[.!?\n])\s*(?:please\s+|I\s+(?:need|want|have)\s+to\s+)?(?:cancel|call\s+off)\s+(?:our|the|my|this|that)\s+(?:meeting|call|appointment|booking)\b/i;
+ return bookingInstruction.test(text)||attendance.test(text)||timeDisagreement.test(text)||negatedAgreement.test(text)||cancellation.test(text);
 }
 const clarification={kind:'clarification' as const,reason:'booking_candidate_requires_review',permission:false as const};
 /** Candidate validation is not authority, freebusy, a Route, a send or a booking. */
@@ -75,10 +83,35 @@ export function bookingInterpretationOutcome(input:{candidate:unknown;originals:
  if(refusal)return {kind:'stop' as const,reason:'refusal' as const,evidence:candidate.agreement,permission:false as const};
  // Booking negation anywhere in the authored reply vetoes cropped positive evidence.
  // Withhold for review rather than turn a lexical match into action authority.
- if(bookingAuthoredTextHasBookingNegation(text))return {...clarification,...(questionSupported?{handoff}:{})};
+ // Exact change proposals below have their own whole-authored logistics grammar,
+ // which admits an unconditional cancellation but rejects cropped contradictions.
+ if(candidate.intent!=='change'&&bookingAuthoredTextHasBookingNegation(text))return {...clarification,...(questionSupported?{handoff}:{})};
  if(candidate.intent==='conditional'||candidate.intent==='handoff'||conditional)return {kind:'david_handoff' as const,schedulingPaused:true,handoff,permission:false as const};
+ if(candidate.intent==='change'){
+  const review={...clarification,...(questionSupported?{handoff}:{})};
+  // Admit only a whole authored, unconditional logistics phrase. The model's cropped
+  // agreement or sales citation cannot hide negation, alternatives or uncertainty.
+  if(original.direction!=='incoming'||originalsHaveAmbiguousParticipants(input.originals)||
+   /\b(not|never|no|don't|do not|cannot|can't|maybe|might|perhaps|possibly|unsure|uncertain|or|instead|keep|all|both)\b/i.test(text))return review;
+  if(questionSupported&&candidate.substantive!==null&&
+   (candidate.substantive.start<candidate.agreement!.end||
+    !/^(?:what|how|does|is|can|do)\b[^?]*\?$/i.test(candidate.substantive.quote.trim())||
+    /\b(cancel|cancellation|reschedule|rescheduling|move|meeting|appointment|postpone|retain)\b/i.test(candidate.substantive.quote)))return review;
+  const logistics=questionSupported&&candidate.substantive!==null
+   ?text.replace(candidate.substantive.quote,'').trim():text.trim();
+  const cancel=/^(?:please\s+)?cancel\s+(?:our|the|my)\s+(?:meeting|call|appointment)[.!]?$/i;
+  const reschedule=/^(?:please\s+)?(?:reschedule|move)\s+(?:our|the|my)\s+(?:meeting|call|appointment)\s+to\s+(?:that time|\d{4}-\d{2}-\d{2}\s+(?:at\s+)?(?:[01]\d|2[0-3]):[0-5]\d\s+[A-Za-z_]+(?:\/[A-Za-z_+-]+)+)[.!]?$/i;
+  const proposal={kind:'change_proposal' as const,agreement:candidate.agreement!,attendeeAddress:original.envelope.from,permission:false as const,schedulingPaused:false as const,...(questionSupported?{handoff}:{}),requires:['current_attendee_route','unique_current_booking','guarded_change']};
+  if(candidate.slot===null&&cancel.test(logistics)&&cancel.test(candidate.agreement!.quote.trim()))return {...proposal,action:'cancel' as const};
+  if(candidate.slot!==null&&reschedule.test(logistics)&&reschedule.test(candidate.agreement!.quote.trim())&&exactSlot(candidate.slot,input.originals,input.now,candidate.agreement!))return {...proposal,action:'reschedule' as const,slot:candidate.slot};
+  return review;
+ }
  const explicitAgreement=/\b(yes|that works|works for me|agreed|confirmed|book it|schedule it|see you|sounds good|let'?s do it)\b/i.test(candidate.agreement!.quote)&&!/\b(interested|learning more|maybe|sometime)\b/i.test(candidate.agreement!.quote);
  if(candidate.intent==='accept_slot'&&explicitAgreement&&candidate.slot!==null&&exactSlot(candidate.slot,input.originals,input.now,candidate.agreement!))return {kind:'slot_proposal' as const,slot:candidate.slot,agreement:candidate.agreement,attendeeAddress:original.envelope.from,permission:false as const,schedulingPaused:false,...(questionSupported?{handoff}:{}),requires:['current_attendee_route','fresh_freebusy','guarded_create']};
  if(candidate.intent==='interest'&&candidate.slot===null)return {kind:'approved_link' as const,bookingUrl:input.snapshot.bindings.event.bookingUrl,permission:false as const,schedulingPaused:false,...(questionSupported?{handoff}:{})};
  return {...clarification,...(questionSupported?{handoff}:{})};
+}
+function originalsHaveAmbiguousParticipants(originals:readonly Original[]):boolean {
+ const original=originals[0]!;
+ return originals.length>2||original.envelope.cc.length!==0||original.envelope.to.length!==1;
 }

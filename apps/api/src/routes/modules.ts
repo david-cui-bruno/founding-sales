@@ -1,4 +1,6 @@
 import {BOOKING_CHANGE_PATHS,routeBookingChange} from './bookingChange.ts';
+import {BOOKING_CONVERSATION_PATHS,routeBookingConversation} from './bookingConversation.ts';
+import {BOOKING_MESSAGES_PATH,routeBookingMessages} from './bookingMessages.ts';
 import {BOOKING_CREATE_PATHS,routeBookingCreate} from './bookingCreate.ts';
 import {ASK_SESSION_PATHS,routeAskSessions} from './askSessions.ts';
 import {CRM_ACQUISITION_DIAGNOSTIC_PATHS,routeCrmAcquisitionDiagnostic} from './crmAcquisitionDiagnostic.ts';
@@ -181,6 +183,8 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     healthModule(routing),
     moduleOf('booking-create',{paths:BOOKING_CREATE_PATHS},routeBookingCreate,routing),
     moduleOf('booking-change',{paths:BOOKING_CHANGE_PATHS},routeBookingChange,routing),
+    moduleOf('booking-conversation',{paths:BOOKING_CONVERSATION_PATHS},routeBookingConversation,routing),
+    moduleOf('booking-messages',{paths:[BOOKING_MESSAGES_PATH]},routeBookingMessages,routing),
     moduleOf('sourcing-learning',{paths:SOURCING_LEARNING_PATHS},routeSourcingLearning,routing),
     moduleOf('sourcing', { paths: SOURCING_PATHS }, routeSourcing, routing),
     moduleOf('auth', { prefixes: ['/auth'] }, routeAuth, routing),

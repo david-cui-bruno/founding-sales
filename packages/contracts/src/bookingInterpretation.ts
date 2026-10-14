@@ -21,6 +21,10 @@ const guard={permission:z.literal(false),handoff:handoffSchema.optional()};
 export const bookingInterpretationOutcomeSchema=z.discriminatedUnion('kind',[
  z.object({kind:z.literal('approved_link'),bookingUrl:z.string().url().startsWith('https://cal.com/'),schedulingPaused:z.literal(false),...guard}),
  z.object({kind:z.literal('slot_proposal'),slot:z.object({localDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),localTime:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),timeZone:z.string().max(100),evidence:citationSchema}),agreement:citationSchema,attendeeAddress:z.email(),schedulingPaused:z.literal(false),requires:z.tuple([z.literal('current_attendee_route'),z.literal('fresh_freebusy'),z.literal('guarded_create')]),...guard}),
+ z.discriminatedUnion('action',[
+  z.object({kind:z.literal('change_proposal'),action:z.literal('cancel'),slot:z.never().optional(),agreement:citationSchema,attendeeAddress:z.email(),schedulingPaused:z.literal(false),requires:z.tuple([z.literal('current_attendee_route'),z.literal('unique_current_booking'),z.literal('guarded_change')]),...guard}),
+  z.object({kind:z.literal('change_proposal'),action:z.literal('reschedule'),slot:z.object({localDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),localTime:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),timeZone:z.string().max(100),evidence:citationSchema}),agreement:citationSchema,attendeeAddress:z.email(),schedulingPaused:z.literal(false),requires:z.tuple([z.literal('current_attendee_route'),z.literal('unique_current_booking'),z.literal('guarded_change')]),...guard}),
+ ]),
  z.object({kind:z.literal('clarification'),reason:z.literal('booking_candidate_requires_review'),...guard}),
  z.object({kind:z.literal('david_handoff'),schedulingPaused:z.literal(true),permission:z.literal(false),handoff:handoffSchema}),
  z.object({kind:z.literal('stop'),reason:z.enum(['opt_out','refusal']),evidence:citationSchema,permission:z.literal(false)}),

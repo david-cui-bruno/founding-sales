@@ -1,17 +1,33 @@
 import {randomUUID} from 'node:crypto';
 import {bookingChangePayloadSchema,type BookingChangePayload,type BookingChangeReceipt} from '@fss/contracts';
-import type {RepositoryContext} from '../db/workspaceScope.ts';
+import {repositoryContext,workspaceScope,type RepositoryContext} from '../db/workspaceScope.ts';
+import {bookingStandingChangeSchema,type BookingStandingChangeInput} from './bookingConversationChangeAuthority.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
 import {jobIdempotencyKey} from '../jobs/jobKinds.ts';
 import type {BookingChangeRuntime} from './bookingChangeProvider.ts';
 import {bookingChangeHash,validateBookingChange} from './bookingChangeAuthority.ts';
-export interface BookingChangeRow extends Record<string,unknown>{id:string;owner_user_id:string;policy_revision:number;binding_key:string;provider_account_id:string;event_type_id:string;action:'cancel'|'reschedule';target_booking_uid:string;target_fingerprint:string;original_starts_at:Date;original_ends_at:Date;payload:BookingChangePayload;source_fingerprint:string;provenance_state:'current'|'redacted';starts_at:Date|null;state:BookingChangeReceipt['state'];dispatch_started_at:Date|null;provider_booking_uid:string|null;meeting_id:string|null;reminder_state:BookingChangeReceipt['reminderState'];reason:string|null}
+export type BookingChangeInput=BookingChangePayload|BookingStandingChangeInput;
+/** Private durable grammar. Public change commands still require explicit human confirmation. */
+export function parseBookingChangeInput(raw:unknown){return bookingChangePayloadSchema.or(bookingStandingChangeSchema).safeParse(raw);}
+export interface BookingChangeRow extends Record<string,unknown>{id:string;owner_user_id:string;policy_revision:number;binding_key:string;provider_account_id:string;event_type_id:string;action:'cancel'|'reschedule';target_booking_uid:string;target_fingerprint:string;original_starts_at:Date;original_ends_at:Date;payload:BookingChangeInput;source_fingerprint:string;provenance_state:'current'|'redacted';starts_at:Date|null;state:BookingChangeReceipt['state'];dispatch_started_at:Date|null;provider_booking_uid:string|null;meeting_id:string|null;reminder_state:BookingChangeReceipt['reminderState'];reason:string|null}
 export type BookingChangeResult={ok:true;value:BookingChangeReceipt}|{ok:false;reason:string};
 export function bookingChangeReceipt(row:BookingChangeRow):BookingChangeReceipt {return {submissionId:row.id,action:row.action,targetBookingUid:row.target_booking_uid,state:row.state,providerBookingUid:row.provider_booking_uid,meetingId:row.meeting_id,sourceState:row.provenance_state,reason:row.reason,dispatchStartedAt:row.dispatch_started_at?.toISOString()??null,reminderState:row.reminder_state};}
 /** The ordinary command transaction owns reservation and job, not a private worker shortcut. */
 export async function requestBookingChange(context:RepositoryContext,raw:BookingChangePayload,runtime?:BookingChangeRuntime):Promise<BookingChangeResult>{
  const parsed=bookingChangePayloadSchema.safeParse(Object.fromEntries(Object.entries(raw).filter(([key])=>key!=='commandId'&&key!=='clientVersion')));if(!parsed.success)return {ok:false,reason:'invalid_input'};const input=parsed.data;
  if(runtime===undefined)return {ok:false,reason:'booking_runtime_unavailable'};
+ return reserveBookingChange(context,input,runtime);
+}
+/** A registered worker derives owner and authority from durable standing provenance. */
+export async function requestBookingStandingChange(context:RepositoryContext,raw:BookingStandingChangeInput,runtime?:BookingChangeRuntime):Promise<BookingChangeResult>{
+ const actor=context.scope.actor;if(actor.kind!=='system'||actor.component!=='worker')return {ok:false,reason:'worker_required'};
+ const parsed=bookingStandingChangeSchema.safeParse(raw);if(!parsed.success)return {ok:false,reason:'invalid_input'};
+ if(runtime===undefined)return {ok:false,reason:'booking_runtime_unavailable'};
+ const row=(await context.db.query<{owner_user_id:string}>('SELECT owner_user_id FROM booking_conversations WHERE workspace_id=$1 AND id=$2 AND interpretation_request_id=$3',[context.scope.workspaceId,parsed.data.standingOrigin.conversationId,parsed.data.standingOrigin.interpretationRequestId])).rows[0];
+ if(row===undefined)return {ok:false,reason:'standing_origin_unavailable'};
+ return reserveBookingChange(repositoryContext(workspaceScope(context.scope.workspaceId,{kind:'user',userId:row.owner_user_id,role:'admin'}),context.db),parsed.data,runtime);
+}
+async function reserveBookingChange(context:RepositoryContext,input:BookingChangeInput,runtime:BookingChangeRuntime):Promise<BookingChangeResult>{
  const valid=await validateBookingChange(context,input,runtime);if(!valid.ok)return valid;
  const actor=context.scope.actor;if(actor.kind!=='user')return {ok:false,reason:'owner_required'};
  // Existing #621 account reservation lock, not a parallel reservation system.

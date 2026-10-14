@@ -7,6 +7,8 @@ import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingChangeRuntime} from '@fss/domain/meetings/bookingChangeProvider.ts';
+import type {BookingConversationRuntime} from '@fss/domain/meetings/bookingConversation.ts';
+import type {BookingMessageRuntime} from '@fss/domain/meetings/bookingMessagesRuntime.ts';
 import type {BookingCapacityDeps} from './bookingCapacity.ts';
 import type {SocialMediaStore} from '../social/mediaStore.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
@@ -70,6 +72,8 @@ export interface RoutingOptions {
   readonly bookingCapacity?:BookingCapacityDeps;
   readonly bookingCreate?:BookingCreateRuntime;
   readonly bookingChange?:BookingChangeRuntime;
+  readonly bookingConversation?:BookingConversationRuntime;
+  readonly bookingMessages?:BookingMessageRuntime;
   readonly bookingPolicyRuntime?:BookingPolicyRuntime;
   readonly replyComposer?:HumanReplyDraftPort|null;
   readonly session: SessionQueryable;

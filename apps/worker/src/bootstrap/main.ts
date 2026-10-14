@@ -41,6 +41,8 @@ import { calcomDemoClient } from '../calcom/bookingClient.ts';
 import { readCalcomSecret } from '@fss/domain/meetings/calcomSecret.ts';
 import {bookingCreateJobHandler} from '../handlers/bookingCreate.ts';
 import {bookingChangeJobHandler} from '../handlers/bookingChange.ts';
+import {bookingConversationJobHandler} from '../handlers/bookingConversation.ts';
+import {bookingMessageSendJobHandler} from '../handlers/bookingMessages.ts';
 import { meetingFollowThroughJobHandler, meetingFollowThroughSource } from '../handlers/meetingFollowThrough.ts';
 import { meetingAnalyzeJobHandler, meetingAnalysesSource, readMeetingAnalysisComposition, type MeetingAnalyzeOptions } from '../handlers/meetingAnalyze.ts';
 import { meetingTranscribeJobHandler, meetingTranscriptionsSource, type MeetingTranscribeOptions } from '../handlers/meetingTranscribe.ts';
@@ -139,6 +141,8 @@ export interface HandlerComposition {
   readonly linkedinRecurring?:Parameters<typeof linkedinRecurringHandler>[0];
   readonly bookingCreate?:Parameters<typeof bookingCreateJobHandler>[0];
   readonly bookingChange?:Parameters<typeof bookingChangeJobHandler>[0];
+  readonly bookingConversation?:Parameters<typeof bookingConversationJobHandler>[0];
+  readonly bookingMessages?:Parameters<typeof bookingMessageSendJobHandler>[0];
   readonly bookingInterpretation?: Parameters<typeof bookingInterpretationJobHandler>[0];
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
@@ -236,6 +240,8 @@ export function registerHandlers(
   registry.register(meetingFollowThroughJobHandler());
   registry.register(bookingCreateJobHandler(composition.bookingCreate));
   registry.register(bookingChangeJobHandler(composition.bookingChange));
+  registry.register(bookingConversationJobHandler(composition.bookingConversation));
+  registry.register(bookingMessageSendJobHandler(composition.bookingMessages));
   if(composition.meetingAutoRecording)registry.register(meetingAutoRecordingJobHandler(composition.meetingAutoRecording));
   registry.register(suppressionFinalizeJobHandler());
   // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.

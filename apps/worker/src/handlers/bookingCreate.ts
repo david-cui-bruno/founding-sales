@@ -1,9 +1,9 @@
-import {bookingCreatePayloadSchema} from '@fss/contracts';
 import {createHash} from 'node:crypto';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
-import {validateBookingCreate,recheckBookingCreateAttendee,bookingSlotReason,type BookingCreateRow} from '@fss/domain/meetings/bookingCreate.ts';
+import {validateBookingCreate,parseBookingCreateInput,recheckBookingCreateAttendee,bookingSlotReason,type BookingCreateRow} from '@fss/domain/meetings/bookingCreate.ts';
+import {revalidateBookingConversationCreate} from '@fss/domain/meetings/bookingConversationAuthority.ts';
 import {revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from '@fss/domain/meetings/bookingPolicy.ts';
 import {bookingCreateCostContractReason} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
@@ -37,7 +37,7 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingCreateRuntim
   let row=(await input.session.query<BookingCreateRow>('SELECT * FROM booking_create_submissions WHERE workspace_id=$1 AND id=$2',[input.scope.workspaceId,id])).rows[0];if(!row||['accepted','failed'].includes(row.state))return null;
   if(input.job.payload['inspectionOnly']===true&&row.dispatch_started_at===null)return null;
   const context=repositoryContext(workspaceScope(input.scope.workspaceId,{kind:'user',userId:row.owner_user_id,role:'admin'}),input.session);
-  const payload=bookingCreatePayloadSchema.safeParse(row.payload);if(!payload.success||row['provenance_state']!=='current')return null;
+  const payload=parseBookingCreateInput(row.payload);if(!payload.success||row['provenance_state']!=='current')return null;
   const valid=await validateBookingCreate(context,payload.data,runtime,row.binding_key,row.dispatch_started_at!==null);
   if(!valid.ok||valid.fingerprint!==row['source_fingerprint']){
    const reason=valid.ok?'source_authority_changed':valid.reason;
@@ -48,12 +48,13 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingCreateRuntim
   // observation, so changed scoped readiness during that await cannot authorize HTTP.
   const cost=await runtime.readCostContract(valid.snapshot);
   const policy=await revalidateBookingPolicy(context,valid.snapshot,runtime.policy);
+  const standingReason='standingOrigin' in payload.data&&policy.kind==='available'?await revalidateBookingConversationCreate(context,payload.data,runtime.policy,runtime.policy.now(),policy.snapshot):null;
   // A normal Route add on a disjoint firm can commit during receipt/cost waits.
   // Observe ambiguity again without extending the held sorted firm closure.
   const attendeeReason=await recheckBookingCreateAttendee(context,valid.attendeeAuthority,row.dispatch_started_at!==null);
   if(!await liveLease(input))return null;
   const at=runtime.policy.now();
-  const reason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,at)?'booking_readiness_unavailable':bookingCreateCostContractReason(cost,policy.snapshot,at)??attendeeReason??(row.dispatch_started_at===null?bookingSlotReason(row.starts_at.toISOString(),at):null);
+  const reason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,at)?'booking_readiness_unavailable':bookingCreateCostContractReason(cost,policy.snapshot,at)??standingReason??attendeeReason??(row.dispatch_started_at===null?bookingSlotReason(row.starts_at.toISOString(),at):null);
   if(reason!==null){await input.session.query("UPDATE booking_create_submissions SET state=CASE WHEN dispatch_started_at IS NULL THEN 'failed' ELSE state END,reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,reason]);return null;}
   const call:BookingCreateCall={submissionId:id,eventTypeId:valid.snapshot.bindings.event.eventTypeId,accountId:Number(valid.snapshot.bindings.account.accountId),organizerEmail:valid.snapshot.bindings.account.email,startsAt:row.starts_at.toISOString(),attendee:valid.attendee};
   if(dispatch&&row.dispatch_started_at===null){
