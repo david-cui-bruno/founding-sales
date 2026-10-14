@@ -51,9 +51,23 @@ export async function linkedinRecurringSlotReason(ctx:RepositoryContext,slot:Lin
  const source=ctx.scope.actor.kind==='user'?await readSocialDraftSources(ctx,slot.source_selection):await readSocialDraftSourcesForWorker(ctx,slot.owner_user_id,slot.source_selection);
  return !source.ok||source.value.hash!==slot.source_hash?'source_changed_or_unavailable':null;
 }
-export async function checkLinkedinRecurringDraft(ctx:RepositoryContext,id:string,runtime?:LinkedinRecurringComposition|null):Promise<string|null>{
+interface LinkedinRecurringDraftDeadline{readonly targetAt:number;readonly expiresAt:number;readonly clock:LinkedinRecurringComposition['clock']}
+/** A captured deadline is only produced by the same canonical standing observation. */
+export async function observeLinkedinRecurringDraft(ctx:RepositoryContext,id:string,runtime?:LinkedinRecurringComposition|null):Promise<{reason:string|null;deadline:LinkedinRecurringDraftDeadline|null}>{
  const s=(await ctx.db.query<LinkedinRecurringSlot>('SELECT * FROM linkedin_recurring_slots WHERE workspace_id=$1 AND draft_request_id=$2',[ctx.scope.workspaceId,id])).rows[0];
- return s?linkedinRecurringSlotReason(ctx,s,runtime):null;
+ if(!s)return {reason:null,deadline:null};
+ const reason=await linkedinRecurringSlotReason(ctx,s,runtime);
+ return {reason,deadline:reason||!runtime?null:{targetAt:s.target_at.getTime(),expiresAt:Date.parse(runtime.expiresAt),clock:runtime.clock}};
+}
+/** No database/provider wait can follow this check before the paid invocation. */
+export function linkedinRecurringDraftDeadlineReason(deadline:LinkedinRecurringDraftDeadline|null):string|null{
+ if(!deadline)return null; // Unbound manual drafting has no standing slot deadline.
+ if(!Number.isFinite(deadline.expiresAt)||Date.now()>=deadline.expiresAt)return 'runtime_unavailable_or_expired';
+ const at=Date.parse(deadline.clock.now());
+ return !Number.isFinite(at)||at>=deadline.targetAt||at<deadline.targetAt-1800000?'slot_missed_or_not_due':null;
+}
+export async function checkLinkedinRecurringDraft(ctx:RepositoryContext,id:string,runtime?:LinkedinRecurringComposition|null):Promise<string|null>{
+ return (await observeLinkedinRecurringDraft(ctx,id,runtime)).reason;
 }
 export async function checkLinkedinRecurringDelivery(ctx:RepositoryContext,by:'post_id'|'claim_id'|'id'|'submission_id',id:string,runtime?:LinkedinRecurringComposition|null):Promise<string|null>{
  const owner=ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;if(!owner)return 'owner_unavailable';
