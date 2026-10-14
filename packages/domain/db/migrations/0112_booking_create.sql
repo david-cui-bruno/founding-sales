@@ -1,3 +1,4 @@
+-- changes: booking_create_submissions, crm_mail_sources, crm_mail_source_contexts
 -- #621: body-free durable create identity. Unknown dispatches never return to pending.
 CREATE TABLE booking_create_submissions (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

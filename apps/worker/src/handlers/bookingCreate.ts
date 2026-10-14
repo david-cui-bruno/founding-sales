@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
-import {validateBookingCreate,bookingSlotReason,type BookingCreateRow} from '@fss/domain/meetings/bookingCreate.ts';
+import {validateBookingCreate,recheckBookingCreateAttendee,bookingSlotReason,type BookingCreateRow} from '@fss/domain/meetings/bookingCreate.ts';
 import {revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from '@fss/domain/meetings/bookingPolicy.ts';
 import {bookingCreateCostContractReason} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
@@ -43,9 +43,12 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingCreateRuntim
   // observation, so changed scoped readiness during that await cannot authorize HTTP.
   const cost=await runtime.readCostContract(valid.snapshot);
   const policy=await revalidateBookingPolicy(context,valid.snapshot,runtime.policy);
+  // A normal Route add on a disjoint firm can commit during receipt/cost waits.
+  // Observe ambiguity again without extending the held sorted firm closure.
+  const attendeeReason=await recheckBookingCreateAttendee(context,valid.attendeeAuthority);
   if(!await liveLease(input))return null;
   const at=runtime.policy.now();
-  const reason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,at)?'booking_readiness_unavailable':bookingCreateCostContractReason(cost,policy.snapshot,at)??(row.dispatch_started_at===null?bookingSlotReason(row.starts_at.toISOString(),at):null);
+  const reason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,at)?'booking_readiness_unavailable':bookingCreateCostContractReason(cost,policy.snapshot,at)??attendeeReason??(row.dispatch_started_at===null?bookingSlotReason(row.starts_at.toISOString(),at):null);
   if(reason!==null){await input.session.query("UPDATE booking_create_submissions SET state=CASE WHEN dispatch_started_at IS NULL THEN 'failed' ELSE state END,reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,reason]);return null;}
   const call:BookingCreateCall={submissionId:id,eventTypeId:valid.snapshot.bindings.event.eventTypeId,accountId:Number(valid.snapshot.bindings.account.accountId),organizerEmail:valid.snapshot.bindings.account.email,startsAt:row.starts_at.toISOString(),attendee:valid.attendee};
   if(dispatch&&row.dispatch_started_at===null){

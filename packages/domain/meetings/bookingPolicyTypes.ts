@@ -25,8 +25,10 @@ export interface BookingPolicyRuntime {
   readEvidence(context:RepositoryContext,binding:BookingPolicyBindings):Promise<BookingPolicyRuntimeEvidence|null>;
   now():string;
 }
+/** Server-only applicability, never a client permission or an Enable grant. */
+export type BookingPolicyCapability = 'interpretation'|'booking'|'provider_action';
 export interface BookingPolicySnapshot {
-  readonly capability:'interpretation'|'booking';
+  readonly capability:BookingPolicyCapability;
   readonly workspaceId:string;
   readonly ownerUserId:string;
   readonly policyRevision:number;
@@ -41,4 +43,4 @@ export interface BookingPolicySnapshot {
   readonly authorityValidUntil:string|null;
 }
 export type CurrentBookingPolicy = {readonly kind:'unavailable';readonly reason:string}|{readonly kind:'available';readonly snapshot:BookingPolicySnapshot;readonly budget:BookingPolicyView['budget']};
-export interface CurrentBookingPolicyQuery {readonly ownerUserId:string;readonly expectedRevision?:number;readonly expectedBindingKey?:string;readonly capability?:'interpretation'|'booking'}
+export interface CurrentBookingPolicyQuery {readonly ownerUserId:string;readonly expectedRevision?:number;readonly expectedBindingKey?:string;readonly capability?:BookingPolicyCapability}

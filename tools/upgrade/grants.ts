@@ -211,7 +211,7 @@ function replay(directory: string, through: number, start: ReplayStart): ReplayR
       const verb = (grant[1] ?? '').toUpperCase();
       const privileges = privilegeList(grant[2] ?? '');
       const target = (grant[3] ?? '').trim();
-      if (/^SCHEMA\b/iu.test(target) || /^ALL\s+(SEQUENCES|FUNCTIONS|ROUTINES)/iu.test(target)) continue;
+      if (/^(SCHEMA|FUNCTION)\b/iu.test(target) || /^ALL\s+(SEQUENCES|FUNCTIONS|ROUTINES)/iu.test(target)) continue;
       const wholeSchema = /^ALL\s+TABLES/iu.test(target);
       const tables = wholeSchema
         ? [...present]

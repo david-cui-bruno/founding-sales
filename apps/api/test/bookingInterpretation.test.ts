@@ -6,7 +6,7 @@ import {EmailTimeline,type EmailTimelinePorts} from '../../desktop/src/renderer/
 import {createAuthedClient} from '../../desktop/src/main/authedClient.ts';
 import {answerOperation,operationHandlers,type OperationHostDeps} from '../../desktop/src/main/operationHost.ts';
 import { afterAll, afterEach, beforeEach, expect, it,vi } from 'vitest';
-import {mailSourceListSchema,mailConversationSchema,mailConversationV2Schema,bookingInterpretationViewSchema} from '@fss/contracts';
+import {mailSourceListSchema,mailConversationSchema,mailConversationV2Schema,bookingInterpretationViewSchema,wireDrift} from '@fss/contracts';
 const domEnvironment=vi.hoisted(async()=>{
  const {createRequire}=await import('node:module');
  const {JSDOM}:{JSDOM:new(html:string,options:{url:string})=>{window:Window&typeof globalThis}}=createRequire(import.meta.url)('jsdom');
@@ -40,7 +40,13 @@ const command = (body: object) => ({ commandId: randomUUID(), clientVersion: CUR
 let authority:BookingInterpretationAuthorityPort|undefined;
 const post = (path: string, body: unknown) => dispatch({ method: 'POST', path, body,
   query: new URLSearchParams(), headers: { authorization: `Bearer ${token}` } },
-{ session: fixture.db, auth: fixture.deps, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false,...authority===undefined?{}:{bookingInterpretationAuthority:authority} });
+{ session: fixture.db, auth: fixture.deps, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false,...authority===undefined?{}:{bookingInterpretationAuthority:authority} }).then(response=>{
+ if(response.status===200&&path.startsWith('/crm/booking/interpretation/')){
+  const envelope=response.body as {result?:unknown};
+  expect(wireDrift(bookingInterpretationViewSchema,envelope.result??response.body)).toEqual([]);
+ }
+ return response;
+});
 
 /** Controlled canonical capture proves source provenance, not actual Gmail or booking consent. */
 async function admittedMessage(text: string,outgoing=false,authoredLength=text.length,outgoingTo='casey@example.test') {
@@ -212,12 +218,22 @@ it('recovers a lost calling lease with maximum settlement and never replays the 
  expect(visible).toMatchObject({state:'unknown_acceptance',reason:'model_call_not_replayed',outcome:null,financial:{state:'estimated'}});
  const financial=(visible as {financial:{reservedCents:number;settledCents:number}}).financial;expect(financial.settledCents).toBe(financial.reservedCents);
 });
-it('normal closed desktop host, authenticated API and registered worker render a current proposal in the mounted admitted-message timeline',async()=>{
+for(const extraFields of [false,true])it(`normal closed desktop host, authenticated API and registered worker render a current proposal in the mounted admitted-message timeline (informational fields: ${extraFields})`,async()=>{
  const text='Can we arrange a call?';const {source}=await configuredRequest(text);
  const paths:string[]=[];
  const api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token,generation:1}),send:async(url,init)=>{
   const path=new URL(url).pathname;paths.push(path);
-  return dispatch({method:init.method as 'POST',path,headers:init.headers,body:JSON.parse(init.body??'{}') as unknown,query:new URLSearchParams()},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,bookingInterpretationAuthority:authority!});
+  const response=await dispatch({method:init.method as 'POST',path,headers:init.headers,body:JSON.parse(init.body??'{}') as unknown,query:new URLSearchParams()},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,bookingInterpretationAuthority:authority!});
+  if(path.startsWith('/crm/booking/interpretation/')){
+   const envelope=response.body as {result?:unknown};
+   expect(wireDrift(bookingInterpretationViewSchema,envelope.result??response.body)).toEqual([]);
+  }
+  if(!extraFields||!path.startsWith('/crm/booking/interpretation/'))return response;
+  const envelope=response.body as {result?:unknown};
+  const view=bookingInterpretationViewSchema.parse(envelope.result??response.body);
+  const extended={...view,informational:'new server detail',outcome:view.outcome?{...view.outcome,informational:'outcome detail'}:null,provenance:view.provenance?{...view.provenance,informational:'provenance detail',source:{...view.provenance.source,informational:'source detail'}}:null,financial:view.financial?{...view.financial,informational:'finance detail'}:null};
+  expect(wireDrift(bookingInterpretationViewSchema,extended)).toContain('informational: not declared by the contract');
+  return {...response,body:envelope.result?{...envelope,result:extended}:extended};
  }});
  // Unrelated operation-host capabilities are absent. The real client, closed descriptors and identity fence are used.
  const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
@@ -266,6 +282,25 @@ it('publishes after conserved settlement removes this requests own last-allowanc
  },false,undefined,fixture.db,35000);
  expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'approved_link',permission:false},financial:{reservedCents:5,settledCents:1}});
  expect((await fixture.db.query("SELECT sum(cost_cents)::int AS cents FROM provider_ledger WHERE provider_key='aws_bedrock.booking'")).rows[0]).toMatchObject({cents:196});
+});
+for(const variant of ['either option','cropped agreement','single selection','single selection with quoted alternative','direct either option','single prior conflicting selection'] as const)it(`checks whole-authored incoming slot choice: ${variant}`,async()=>{
+ const first='2026-10-20 at 14:00 America/New_York';const second='2026-10-21 at 15:00 America/New_York';
+ const offer=variant==='single prior conflicting selection'?`Can you meet on ${first}?`:`Can you meet on ${first} or ${second}?`;const prior=variant==='direct either option'?undefined:await admittedMessage(offer,true);
+ const selected=`Yes, ${first} works for me.`;
+ const ambiguous=`Yes, either ${first} or ${second} works for me`;
+ const positive=variant==='single selection'||variant==='single selection with quoted alternative';
+ const authored=variant==='single prior conflicting selection'?`Yes, ${second} works for me.`:positive?selected:ambiguous;
+ const text=variant==='single selection with quoted alternative'?`${authored}\n> ${second}`:authored;
+ const {source,requestId}=await configuredRequest(text,prior?[prior]:[],200,authored.length);
+ const agreement=variant==='cropped agreement'?`Yes, either ${first}`:authored;
+ const evidenceSource=prior??source;const evidenceText=prior?offer:text;const start=evidenceText.indexOf(first);
+ await executeCandidate({intent:'accept_slot',agreement:{sourceId:source.sourceId,start:0,end:agreement.length,quote:agreement},slot:{localDate:'2026-10-20',localTime:'14:00',timeZone:'America/New_York',evidence:{sourceId:evidenceSource.sourceId,start,end:start+first.length,quote:first}},substantive:null});
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:positive?'slot_proposal':'clarification',permission:false}});
+});
+it('keeps controlled model candidate inputs strict despite tolerant success response DTOs',async()=>{
+ const text='Can we arrange a call?';const {source,requestId}=await configuredRequest(text);
+ await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null,informational:'unexpected model field'});
+ expect((await post('/crm/booking/interpretation/read',{requestId})).body).toMatchObject({state:'complete',outcome:{kind:'clarification',permission:false}});
 });
 for(const variant of ['multiple options','another recipient'] as const)it(`clarifies prior ${variant} rather than inventing a selected slot or attendee`,async()=>{
  const first='2026-10-20 at 14:00 America/New_York';const offer=variant==='multiple options'?`Can you meet on ${first} or 2026-10-21 at 15:00 America/New_York?`:`Can you meet on ${first}?`;
