@@ -23,6 +23,19 @@ export function linkedinPostingPolicyOperations(deps:{api:AuthedClient;generatio
   'social.savePostingPolicy':(input:OperationInput<'social.savePostingPolicy'>)=>change('/social/linkedin-posting-policy/save',input),
   'social.disablePostingPolicy':(input:OperationInput<'social.disablePostingPolicy'>)=>change('/social/linkedin-posting-policy/disable',input),
   'social.revokePostingPolicy':(input:OperationInput<'social.revokePostingPolicy'>)=>change('/social/linkedin-posting-policy/revoke',input),
-  'social.bindPostingCandidate':async(input:OperationInput<'social.bindPostingCandidate'>):Promise<OperationOutput<'social.bindPostingCandidate'>>=>{const g=deps.generation(),{commandId,...payload}=input;if(g!==deps.generation())return {binding:null,reason:'session_changed'};const result=await deps.api.command('/social/linkedin-posting-policy/bind-candidate',payload,v=>linkedinPostingCandidateBindingSchema.parse(v),{commandId});if(g!==deps.generation())return {binding:null,reason:'session_changed'};return result.ok?{binding:result.value,reason:null}:{binding:null,reason:result.reason};},
+  'social.bindPostingCandidate':async(input:OperationInput<'social.bindPostingCandidate'>):Promise<OperationOutput<'social.bindPostingCandidate'>>=>{
+   const g=deps.generation(),{commandId,...payload}=input;
+   if(g!==deps.generation())return {binding:null,reason:'session_changed'};
+   const result=await deps.api.command('/social/linkedin-posting-policy/bind-candidate',payload,v=>linkedinPostingCandidateBindingSchema.parse(v),{commandId});
+   if(g!==deps.generation())return {binding:null,reason:'session_changed'};
+   if(!result.ok)return {binding:null,reason:result.reason};
+   try{
+    const fresh=await read(g);
+    if(!fresh.view)return {binding:null,reason:fresh.reason==='session_changed'?'session_changed':'current_read_unavailable'};
+    const candidate=fresh.view.candidates.find(c=>c.postId===result.value.postId&&c.postRevision===result.value.postRevision&&c.policyRevision===result.value.policyRevision);
+    if(!candidate)return {binding:null,reason:'current_read_unavailable'};
+    return {binding:{...result.value,current:candidate.current},reason:candidate.current?null:candidate.reason};
+   }catch{return {binding:null,reason:g===deps.generation()?'current_read_unavailable':'session_changed'};}
+  },
  };
 }
