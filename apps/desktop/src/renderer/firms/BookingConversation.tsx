@@ -14,8 +14,11 @@ export interface BookingConversationProps {ports:BookingConversationPorts;interp
 export function BookingConversation({ports,interpretation,privacyKey,sourceVersion,enabled}:BookingConversationProps):JSX.Element {
  const [view,setView]=useState<BookingConversationView|null>(null),[id,setId]=useState<string|null>(null),[message,setMessage]=useState<BookingMessageView|null>(null),[messageId,setMessageId]=useState<string|null>(null),[admissionAttempted,setAdmissionAttempted]=useState(false),[messageAttempted,setMessageAttempted]=useState(false),[eventUncertain,setEventUncertain]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const epoch=useRef(0);
+ // Admission may reuse the original source episode, not the selected model run.
+ // Bind only the authenticated server's canonical identities in this scope.
+ const canonical=useRef<{conversationId:string;interpretationRequestId:string}|null>(null);
  const invalidate=useCallback(()=>++epoch.current,[]);
- useLayoutEffect(()=>{invalidate();setView(null);setId(null);setMessage(null);setMessageId(null);setAdmissionAttempted(false);setMessageAttempted(false);setEventUncertain(false);setBusy(false);setError('');return()=>{invalidate();};},[ports,interpretation,privacyKey,sourceVersion,enabled,invalidate]);
+ useLayoutEffect(()=>{invalidate();canonical.current=null;setView(null);setId(null);setMessage(null);setMessageId(null);setAdmissionAttempted(false);setMessageAttempted(false);setEventUncertain(false);setBusy(false);setError('');return()=>{invalidate();};},[ports,interpretation,privacyKey,sourceVersion,enabled,invalidate]);
  const available=enabled&&interpretation.state==='complete'&&interpretation.outcome!==null;
  async function run(work:(current:()=>boolean)=>Promise<void>){
   if(!available||busy)return;
@@ -24,12 +27,13 @@ export function BookingConversation({ports,interpretation,privacyKey,sourceVersi
   try{await work(current);}catch{if(current())setError('Current booking conversation unavailable. Private outcomes have been cleared. Inspect before any further action.');}
   finally{if(current())setBusy(false);}
  }
- async function read(conversationId:string,current:()=>boolean){const next=await ports.read({conversationId});if(current()){if(next.conversationId!==conversationId||next.interpretationRequestId!==interpretation.requestId)throw Error('changed');setView(next);}}
+ async function read(conversationId:string,current:()=>boolean){const binding=canonical.current;if(binding===null||binding.conversationId!==conversationId)throw Error('unbound');const next=await ports.read({conversationId});if(current()){if(canonical.current!==binding||next.conversationId!==binding.conversationId||next.interpretationRequestId!==binding.interpretationRequestId)throw Error('changed');setView(next);}}
  function admit(){void run(async current=>{
   const policy=await ports.policy();if(!current())return;
   if(policy===null||policy.revision<1||policy.status!=='saved')throw Error('policy_unavailable');
   setAdmissionAttempted(true);
   const queued=await ports.request({interpretationRequestId:interpretation.requestId,expectedPolicyRevision:policy.revision});if(!current())return;
+  canonical.current={conversationId:queued.conversationId,interpretationRequestId:queued.interpretationRequestId};
   setId(queued.conversationId);await read(queued.conversationId,current);
  });}
  function event(event:OperationInput<'meetings.bookingConversationEvent'>['event']){if(view===null)return;const prior=view;void run(async current=>{setEventUncertain(true);await ports.event({conversationId:prior.conversationId,expectedPolicyRevision:prior.policyRevision,event});if(!current())return;setEventUncertain(false);await read(prior.conversationId,current);});}
