@@ -400,7 +400,9 @@ export const updateSettingCommandSchema = z.strictObject({
    * A settings-page key, or one of the call-to-booking switches (0028). Only a new
    * client names the latter; the snapshot below never carries them.
    */
-  settingKey: z.enum([...SETTING_KEYS, ...INTEGRATION_SETTING_KEYS]),
+  // Booking policy remains a stored/readable key, but only its dedicated
+  // expected-revision command may mutate it.
+  settingKey: z.enum([...SETTING_KEYS, ...INTEGRATION_SETTING_KEYS.filter(key => key !== 'booking_policy')]),
   /** Validated by the key's schema on the server, never by a schema the client chose. */
   value: z.unknown(),
   /**
