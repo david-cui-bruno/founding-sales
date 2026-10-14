@@ -252,6 +252,39 @@ for(const extraFields of [false,true])it(`normal closed desktop host, authentica
  mounted.rerender(createElement(EmailTimeline,{enabled:false,ports,privacyKey:'revoked-owner',sourceVersion:2}));
  expect(screen.queryByText('Approved-link proposal: https://cal.com/controlled/demo')).toBeNull();
 });
+for(const loss of ['offline','unreadable'] as const)it(`replays the same mounted booking request after an actual settled commit and ${loss} response`,async()=>{
+ const text='Can we arrange a call?';const {source}=await configuredRequest(text);
+ const candidate={intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null};
+ await executeCandidate(candidate);
+ const before=Number((await fixture.db.query<{count:string}>('SELECT count(*) FROM crm_booking_interpretations')).rows[0]!.count);
+ const commandIds:string[]=[];let calls=0,lost=false;
+ const api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token,generation:1}),send:async(url,init)=>{
+  const path=new URL(url).pathname;const body=JSON.parse(init.body??'{}') as Record<string,unknown>;
+  const response=await dispatch({method:init.method as 'POST',path,headers:init.headers,body,query:new URLSearchParams()},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,bookingInterpretationAuthority:authority!});
+  if(path==='/crm/booking/interpretation/request'){
+   commandIds.push(String(body['commandId']));
+   await executeCandidate(candidate,async()=>{calls++;});
+   if(!lost){lost=true;if(loss==='offline')throw new Error('lost after commit');return {...response,body:{status:'accepted',result:{}}};}
+  }
+  return response;
+ }});
+ const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
+ const ports:EmailTimelinePorts={
+  list:async input=>mailSourceListSchema.parse(await answerOperation(handlers,'read','crm.businessMailList',input)),
+  read:async input=>mailConversationSchema.parse(await answerOperation(handlers,'read','crm.businessMailRead',input)),
+  readV2:async input=>mailConversationV2Schema.parse(await answerOperation(handlers,'read','crm.businessMailReadV2',input)),
+  booking:{request:async input=>bookingInterpretationViewSchema.parse(await answerOperation(handlers,'command','crm.bookingInterpretationRequest',input)),read:async input=>bookingInterpretationViewSchema.parse(await answerOperation(handlers,'read','crm.bookingInterpretationRead',input))},
+ };
+ render(createElement(EmailTimeline,{enabled:true,ports,privacyKey:'current-owner',sourceVersion:1}));
+ await userEvent.setup().click(await screen.findByRole('button',{name:'Open email 1'}));
+ await userEvent.setup().click(await screen.findByRole('button',{name:'Interpret booking request'}));
+ expect(await screen.findByRole('alert')).toBeTruthy();
+ await userEvent.setup().click(screen.getByRole('button',{name:/^(Interpret|Retry) booking request$/}));
+ expect(await screen.findByText('Approved-link proposal: https://cal.com/controlled/demo')).toBeTruthy();
+ expect(commandIds).toHaveLength(2);expect(commandIds[1]).toBe(commandIds[0]);
+ expect(calls).toBe(1);
+ expect(Number((await fixture.db.query<{count:string}>('SELECT count(*) FROM crm_booking_interpretations')).rows[0]!.count)).toBe(before+1);
+});
 it('does not disclose quoted third-party content or unrelated identity data to the booking model',async()=>{
  const authored='Can we arrange a call?';const quoted=' PRIVATE THIRD PARTY INFORMATION';const text=authored+quoted;
  const {source,requestId}=await configuredRequest(text,[],200,authored.length);let wire='';
