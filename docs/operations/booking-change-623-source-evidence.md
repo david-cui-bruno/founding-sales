@@ -118,3 +118,41 @@ Root owns independent Spec/Standards review, final frozen parent successor integ
 ## Ordered source integration
 
 The isolated evidence above is retained. The final new change migration is byte-identical SQL at0114 after posting0109, policy0110, interpretation0111, creation0112 and recurring0113, with exact schema114. The repaired sorted Route closure from825fba2c is preserved in creation; its only child change is the reviewed symmetric pending/unknown reschedule capacity UNION. Current canonical policy and all unrelated parent behavior are retained. Shared registration and closed inventories list all current handlers once. No upgrade, release, provider acceptance or activation is inferred from this source ordering.
+
+## Bounded final-review repair, October 13, 2026 (America/New_York)
+
+Clean isolated starting commit: `26a0363c`. No mutable parent files were borrowed. Owned repair commits are `db4b00c3` (terminal authority), `5573f45f` (mandatory stolen-lease probe), and `2dcc2629` (canonical provider-action consumer and proof). Root-approved immutable canonical-only dependency `8f12343ebe0174f7732b00b3fbdb8e2a67698c88` was cherry-picked without conflicts as `ada8cdaa`, changing only `bookingPolicy.ts` and `bookingPolicyTypes.ts`. Those files were not edited by this worker. Integration should import the canonical dependency once and then the owned commits, not both equivalent copies.
+
+### Receipt-lock authority repair
+
+`bookingChangeConcurrency.test.ts` now covers nine real PostgreSQL receipt-row waits: account-access boolean revocation, provider-adapter boolean revocation and exact cost becoming unknown, each before initial target/availability reads, final change dispatch and unknown-receipt inspection. Each ordinary authenticated command admits its action first. `pg_blocking_pids` proves that the registered runner actually waits on the independently held receipt row. Authority changes during that wait while the binding and evidence/cost deadlines remain valid. Genuine behavioral RED was observed in all nine cases: initial provider reads occurred, final writes occurred, or inspection occurred despite the revoked authority. After the minimum worker repair, all nine pass, and the complete concurrency file passes19 tests.
+
+The worker still locks source/identity authority before the receipt. After the receipt wait it rereads the exact cost contract FIRST, then calls existing `revalidateBookingPolicy` with the captured snapshot AFTER the cost await. It checks the live job owner/fence/wall-clock lease, then performs pure terminal clock/readiness/cost/target/slot checks. The irreversible marker still requires a live exact owner and fencing token and one returned row. No new source lock is acquired after the receipt. Unknown dispatched receipts remain unknown when authority disappears; accepted external facts are not rewritten as failed or undone. Existing evidence-expiry, actual lease-expiry, current-target-expiry and invalid-clock receipt-wait tests remain green.
+
+### Mandatory stolen-lease proof
+
+`bookingChangeStolenLease.test.ts` uses the ordinary authenticated admission and real registered handler/runner with the existing `runTwiceUnderStolenLease` harness required by `docs/greenfield/jobs.md` and Appendix G scenario2. The old owner pauses after claim. The harness expires the actual PostgreSQL lease, reclaims it, lets the fresh fencing token finish, and then resumes the stale owner. Observed: fresh `completed`, stale `lease_lost`, accepted business-effect count0 to1, exactly one provider change call, zero inspection calls, one accepted receipt with stopped provider reminder, one cancelled meeting, and one `done` job under the fresh token. The first valid behavioral result was GREEN. An incorrect test expectation of job state `completed` instead of stored state `done` was corrected and is explicitly not counted as a behavioral RED. No job framework was added and no financial ledger is invented for the exact-zero contractual-cost fixture.
+
+### Provider-only applicability, not model authority
+
+The owned change validator now requests canonical `provider_action` and uses the existing captured-snapshot revalidator for its final observation. The frozen canonical contract excludes ONLY `model_consent_unverified`, `model_acceptance_unverified` and `model_quality_review_missing`. Aggregate/default booking and interpretation applicability are unchanged. Every other exact evidence, binding, owner, source, provider, sender, release and funding barrier remains.
+
+`bookingChangeReadiness.test.ts` proves ordinary owner-confirmed cancellation and rescheduling with model consent/acceptance false and no quality-review revision, while no interpretation/model runtime is composed. Both initially produced genuine public409 `booking_readiness_unavailable` RED before the owned consumer change. Both now complete through the real registered runner, with captured `provider_action` at every cost observation and aggregate readiness still false/Enable still false. Eleven additional tests admit a reschedule under that same no-model setup, change account access, calendar free/busy, event settings, sender authority, source authority, provider adapter, release readiness, unknown funding, held funding, runtime binding or evidence expiry during the provider availability wait, and prove no change/inspection call and a safe undispatched failed receipt. All13 pass.
+
+### Exact focused verification and remaining ownership
+
+Unchanged `npm ci --no-audit --no-fund` used pinned Node24.20.0 at the user-specified runtime path. Combined focused API run passed124 tests in8 files: all76 booking-change tests plus48 inherited booking-create tests. This includes both directions of the existing create/reschedule reservation gate and unknown reschedule conservation. `bookingCreate.ts`, reservations, migrations and schema pins were not modified by this repair.
+
+```sh
+export PATH='/Users/davidcui824/.jcode/scratch/node-runtime-24.20.0/node-v24.20.0-darwin-arm64/bin:'"$PATH"
+# From apps/api, focused source acceptance only:
+npx vitest run test/bookingChange.test.ts test/calcomBookingChange.test.ts test/bookingChangeGuards.test.ts test/bookingChangeConcurrency.test.ts test/bookingChangeReservations.test.ts test/bookingChangeStolenLease.test.ts test/bookingChangeReadiness.test.ts test/bookingCreate.test.ts
+# From root:
+npm run typecheck --workspace packages/domain
+npm run typecheck --workspace apps/api
+npm run typecheck --workspace apps/worker
+npx eslint apps/worker/src/handlers/bookingChange.ts packages/domain/meetings/bookingChangeAuthority.ts apps/api/test/bookingChangeConcurrency.test.ts apps/api/test/bookingChangeStolenLease.test.ts apps/api/test/bookingChangeReadiness.test.ts
+git diff --check
+```
+
+All three scoped typechecks and exact owned TypeScript lint pass. This repair runs no children, live/cloud/provider operations, GitHub mutations, full gates, upgrades or secrets inspection. These are local source/control fixtures only. Root retains independent duck/goat review, final frozen dependency integration and combined gates. Actual provider pricing/access/reminder-transition acceptance, release and Enable remain separate and unclaimed.
