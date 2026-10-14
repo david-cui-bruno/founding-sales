@@ -1,4 +1,4 @@
-# Backend identity and permissions contract before #552 — 14 October 2026
+# Backend identity and permissions contract before #552: 14 October 2026
 
 **Status: research recommendation only; not approved.** Bounded source review for roadmap consolidation. No cloud/account/provider inspection or operation was performed. Source facts below are not live authorization or encryption approval.
 
