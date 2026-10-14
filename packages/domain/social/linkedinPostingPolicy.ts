@@ -3,6 +3,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {lockSocialPost,readSocialPost,socialApprovalSnapshot,type SocialResult} from './posts.ts';
 import type {LinkedinPostingCandidateBinding} from '@fss/contracts';
+import {checkLinkedinRecurringDelivery,type LinkedinRecurringComposition} from './linkedinRecurringAuthority.ts';
 interface PolicyRow{[key:string]:unknown;revision:number;state:'saved'|'disabled'|'revoked';policy:LinkedinPostingPolicySnapshot}
 const user=(ctx:RepositoryContext)=>ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;
 /** All callers use a transaction. Same account lock as connect/disconnect. */
@@ -103,24 +104,25 @@ export async function bindLinkedinPostingCandidate(ctx:RepositoryContext,input:{
  * Only the current pending/preparing revision can need fresh dispatch authority.
  * Historical bindings remain evidence, not fences on new manual revisions.
  * Attempted actions retain inspection. Null preserves unbound manual gates. */
-export async function checkLinkedinPostingDelivery(ctx:RepositoryContext,by:'post_id'|'claim_id'|'id',id:string):Promise<string|null>{
+export async function checkLinkedinPostingDelivery(ctx:RepositoryContext,by:'post_id'|'claim_id'|'id',id:string,runtime?:LinkedinRecurringComposition|null):Promise<string|null>{
  const owner=user(ctx);if(!owner)return 'owner_unavailable';
  await lock(ctx,owner);
  const binding=(await ctx.db.query<{policy_revision:number;accountId:string;accountRevision:number}>(`SELECT b.policy_revision,r.policy->>'accountId' AS "accountId",(r.policy->>'accountRevision')::integer AS "accountRevision" FROM social_deliveries d JOIN social_posts p ON p.workspace_id=d.workspace_id AND p.id=d.post_id JOIN linkedin_posting_candidate_bindings b ON b.workspace_id=d.workspace_id AND b.delivery_id=d.id AND b.owner_user_id=p.owner_user_id JOIN linkedin_posting_policy_revisions r ON r.workspace_id=b.workspace_id AND r.owner_user_id=b.owner_user_id AND r.revision=b.policy_revision WHERE d.workspace_id=$1 AND d.${by}=$2 AND p.owner_user_id=$3 AND d.revision=p.current_revision AND d.state IN ('pending','preparing') AND d.submission_id IS NULL ORDER BY d.revision DESC LIMIT 1`,[ctx.scope.workspaceId,id,owner])).rows[0];
- if(!binding)return null;
+ if(!binding)return checkLinkedinRecurringDelivery(ctx,by,id,runtime);
  const check=await checkLinkedinPostingPolicyCurrent(ctx,{expectedRevision:binding.policy_revision,accountId:binding.accountId,accountRevision:binding.accountRevision});
- return check.current?null:check.reason;
+ return check.current?checkLinkedinRecurringDelivery(ctx,by,id,runtime):check.reason;
 }
 export async function linkedinPostingBindingRequired(ctx:RepositoryContext,deliveryId:string):Promise<boolean>{return (await ctx.db.query('SELECT 1 FROM linkedin_posting_candidate_bindings b JOIN social_deliveries d ON d.workspace_id=b.workspace_id AND d.id=b.delivery_id JOIN social_posts p ON p.workspace_id=d.workspace_id AND p.id=d.post_id WHERE b.workspace_id=$1 AND b.delivery_id=$2 AND b.owner_user_id=$3 AND p.owner_user_id=$3',[ctx.scope.workspaceId,deliveryId,user(ctx)])).rows.length>0;}
 /** Final admission check after begin's network wait. Never mutates its marker.
  * This is not an atomic external-click lease and never authorizes a replay. */
-export async function checkLinkedinPostingDispatch(ctx:RepositoryContext,input:{submissionId:string;deviceId:string}):Promise<{current:boolean;reason:string}>{
+export async function checkLinkedinPostingDispatch(ctx:RepositoryContext,input:{submissionId:string;deviceId:string},runtime?:LinkedinRecurringComposition|null):Promise<{current:boolean;reason:string}>{
  const owner=user(ctx);if(!owner)return {current:false,reason:'owner_unavailable'};
  await lock(ctx,owner);if(!await activeOwner(ctx,owner))return {current:false,reason:'owner_unavailable'};
  const d=(await ctx.db.query<{state:string;revision:number;current_revision:number;receipt_id:string|null;policy_revision:number|null;policy:LinkedinPostingPolicySnapshot|null}>(`SELECT d.state,d.revision,p.current_revision,d.receipt_id,b.policy_revision,r.policy FROM social_deliveries d JOIN social_posts p ON p.workspace_id=d.workspace_id AND p.id=d.post_id JOIN devices v ON v.workspace_id=d.workspace_id AND v.id=d.device_id AND v.user_id=p.owner_user_id AND v.status='active' LEFT JOIN linkedin_posting_candidate_bindings b ON b.workspace_id=d.workspace_id AND b.delivery_id=d.id AND b.owner_user_id=p.owner_user_id LEFT JOIN linkedin_posting_policy_revisions r ON r.workspace_id=b.workspace_id AND r.owner_user_id=b.owner_user_id AND r.revision=b.policy_revision WHERE d.workspace_id=$1 AND d.submission_id=$2 AND d.device_id=$3 AND p.owner_user_id=$4`,[ctx.scope.workspaceId,input.submissionId,input.deviceId,owner])).rows[0];
  if(!d||d.state!=='submitting'||d.receipt_id!==null||d.revision!==d.current_revision)return {current:false,reason:'inspect_existing_submission'};
- if(d.policy_revision===null)return {current:true,reason:'current_existing_manual_submission'};
+ if(d.policy_revision===null){const reason=await checkLinkedinRecurringDelivery(ctx,'submission_id',input.submissionId,runtime);return {current:reason===null,reason:reason??'current_existing_manual_submission'};}
  if(!d.policy)return {current:false,reason:'binding_unavailable'};
  const check=current(await view(ctx,owner,await row(ctx,owner)),{expectedRevision:d.policy_revision,accountId:d.policy.accountId,accountRevision:d.policy.accountRevision});
- return {current:check.current,reason:check.reason};
+ const reason=check.current?await checkLinkedinRecurringDelivery(ctx,'submission_id',input.submissionId,runtime):check.reason;
+ return {current:reason===null,reason:reason??check.reason};
 }

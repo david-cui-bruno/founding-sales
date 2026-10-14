@@ -1,6 +1,7 @@
 import type {SocialDeliveryStatus,SocialPreparationResult} from '../../shared/socialDiagnostics.ts';
 import {ManualHandoffPanel} from './ManualHandoffPanel.tsx';
 import {ManualSocialDestination} from './ManualDestination.tsx';
+import {LinkedinRecurringPosting} from './LinkedinRecurringPosting.tsx';
 import {SocialAccounts} from './SocialAccounts.tsx';
 import {LinkedinPostingCandidate} from './LinkedinPostingCandidate.tsx';
 import {SocialDraftStudio} from './DraftStudio.tsx';
@@ -50,6 +51,7 @@ export function SocialRoute({ports=defaults}:{ports?:SocialPorts}){
   {!!m.deliveryStatus?.diagnostics?.length&&<details className="rounded-md border border-border p-3 text-sm"><summary>Browser delivery checks</summary><p>Checks from this app session. A completed preparation step does not prove platform acceptance. Restart clears these details; saved delivery holds remain.</p>{m.deliveryStatus.diagnostics.filter(a=>m.view?.posts.some(p=>p.postId===a.postId&&p.revision===a.revision)).map(a=><div key={a.postId}><p>Post revision {a.revision}</p><ol>{a.events.map((e,i)=><li key={i}>{e.stage.replaceAll('_',' ')}: {e.outcome}{e.reason?` (${e.reason.replaceAll('_',' ')})`:''}</li>)}</ol></div>)}</details>}
   {m.error&&<div role="status" className="rounded-md border border-border p-3 text-sm">{m.error}{m.pending&&<Button variant="outline" className="ml-3" disabled={m.busy} onClick={()=>void run(m.pending!)}>Retry same action</Button>}</div>}
   <ManualSocialDestination key={m.sessionKey} ports={{register:async input=>{const api=operations();if(!api)throw new Error('unavailable');return api.command('social.registerManualDestination',input);}}} onAdded={()=>{const g=live.current;void port.current.read().then(a=>{if(g===live.current&&a.view){m.view=a.view;touch();}}).catch(()=>{});}}/><SocialAccounts accounts={m.view?.accounts??[]} onChanged={()=>{const g=live.current;void port.current.read().then(a=>{if(g===live.current&&a.view){m.view=a.view;touch();}}).catch(()=>{});}}/>
+  <LinkedinRecurringPosting key={`recurring:${m.sessionKey}`}/>
   {port.current.checkPreparation&&m.view&&<BrowserPreparationChecks key={m.sessionKey} accounts={m.view.accounts} check={port.current.checkPreparation}/>}
   {!m.view?.accounts.length&&<p className="text-sm text-muted-foreground">Connect a social account to choose where your drafts will go.</p>}
   {m.tab==='Drafts'&&!e&&<SocialDraftStudio disabled={m.busy||m.pending!==null||e!==null} onUse={variant=>{if(m.busy||m.pending||m.editor)return;const zone=Intl.DateTimeFormat().resolvedOptions().timeZone;m.editor={accountId:m.view?.accounts.find(a=>a.platform===variant.platform)?.id??'',text:variant.text,images:[],publishAt:null,zone,local:'',instant:''};touch();}}/>}

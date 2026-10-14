@@ -1,4 +1,5 @@
 import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
+import type {LinkedinRecurringComposition} from '@fss/domain/social/linkedinRecurringAuthority.ts';
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
@@ -91,6 +92,7 @@ import {
 
 import type {BookingInterpretationAuthorityPort} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 export interface ApiOptions {
+  readonly linkedinRecurring?:LinkedinRecurringComposition|null;
   readonly bookingInterpretationAuthority?:BookingInterpretationAuthorityPort;
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
@@ -181,6 +183,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     ...(options.crmMailCaptureReadiness===undefined?{}:{crmMailCaptureReadiness:options.crmMailCaptureReadiness}),
     ...(options.crmCapabilityRuntime===undefined?{}:{crmCapabilityRuntime:options.crmCapabilityRuntime}),
     ...(options.crmAcquisitionDiagnosticRuntime===undefined?{}:{crmAcquisitionDiagnosticRuntime:options.crmAcquisitionDiagnosticRuntime}),
+    ...(options.linkedinRecurring===undefined?{}:{linkedinRecurring:options.linkedinRecurring}),
     ...(options.bookingCapacity===undefined?{}:{bookingCapacity:options.bookingCapacity}),
     ...(options.bookingCreate===undefined?{}:{bookingCreate:options.bookingCreate}),
     ...(options.bookingPolicyRuntime===undefined?{}:{bookingPolicyRuntime:options.bookingPolicyRuntime}),

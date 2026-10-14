@@ -1,9 +1,10 @@
 import {socialDeliveryQueueSchema,type SocialDeliveryQueue} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {checkLinkedinPostingDelivery} from './linkedinPostingPolicy.ts';
+import type {LinkedinRecurringComposition} from './linkedinRecurringAuthority.ts';
 type QueueRow=SocialDeliveryQueue['items'][number]&{queuePriority:number;queueTime:string};
 /** Discovery is read-only; claim/begin revalidate approval under the post lock. */
-export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:string):Promise<SocialDeliveryQueue>{
+export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:string,runtime?:LinkedinRecurringComposition|null):Promise<SocialDeliveryQueue>{
  const user=ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;if(!user)return {items:[]};
  const items:SocialDeliveryQueue['items']=[];
  let cursor:QueueRow|null=null;
@@ -32,7 +33,7 @@ export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:str
  ORDER BY "queuePriority","queueAt","deliveryId" LIMIT 25`,[ctx.scope.workspaceId,user,deviceId,cursor?.queuePriority??null,cursor?.queueTime??null,cursor?.deliveryId??null])).rows;
  for(const row of rows){
   const {queuePriority:_priority,queueTime:_time,...item}=row;
-  if(item.submissionId!==null||await checkLinkedinPostingDelivery(ctx,'id',item.deliveryId)===null)items.push(item);
+  if(item.submissionId!==null||await checkLinkedinPostingDelivery(ctx,'id',item.deliveryId,runtime)===null)items.push(item);
   if(items.length===25)break;
  }
  if(rows.length<25)break;

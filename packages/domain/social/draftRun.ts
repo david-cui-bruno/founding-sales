@@ -1,4 +1,5 @@
 import {socialWeeklyRequestAllowed} from './weekly.ts';
+import {checkLinkedinRecurringDraft,observeLinkedinRecurringDraft,linkedinRecurringDraftDeadlineReason,type LinkedinRecurringComposition} from './linkedinRecurringAuthority.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import {databaseNow} from '../policy/clock.ts';
@@ -9,7 +10,7 @@ import {readCreditSpend,workspaceBusinessZone} from '../research/ledger.ts';
 import {reserveAttempt,markCalling,settleAttempt} from '../research/reservations.ts';
 import {centsOf} from '../research/pricing.ts';
 /** All social drafting is conservatively charged to this lane, never shifted to research. */
-async function postingSpend(ctx:RepositoryContext,at:string):Promise<{today:number;month:number}>{
+export async function postingSpend(ctx:RepositoryContext,at:string):Promise<{today:number;month:number}>{
  const row=(await ctx.db.query<{today:string;month:string}>(`WITH spend AS (SELECT (created_at AT TIME ZONE 'America/New_York')::date AS day,CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END AS cost FROM provider_reservations WHERE workspace_id=$1 AND subject_kind='social_draft' AND state<>'released') SELECT COALESCE(sum(cost) FILTER(WHERE day=($2::timestamptz AT TIME ZONE 'America/New_York')::date),0)::text AS today,COALESCE(sum(cost) FILTER(WHERE day>=date_trunc('month',$2::timestamptz AT TIME ZONE 'America/New_York')::date AND day<=($2::timestamptz AT TIME ZONE 'America/New_York')::date),0)::text AS month FROM spend`,[ctx.scope.workspaceId,at])).rows[0]!;
  return {today:Number(row.today),month:Number(row.month)};
 }
@@ -22,23 +23,28 @@ export interface SocialDraftPort {
  generate(input:SocialDraftInput):Promise<{raw:string;costCents:number;costEstimated:boolean}>;
 }
 /** No user impersonation, external call in a transaction, or automatic approval. */
-export async function runSocialDraft(ctx:RepositoryContext,id:string,port:SocialDraftPort|null):Promise<void>{
+export async function runSocialDraft(ctx:RepositoryContext,id:string,port:SocialDraftPort|null,runtime?:LinkedinRecurringComposition|null):Promise<void>{
  if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')throw new Error('worker_required');
  if(!port||port.providerKey!=='aws_bedrock.social_draft')return;
  const db=ctx.db as SessionQueryable;
  const read=async(lock=false)=>(await db.query<SocialDraftRow>(`SELECT * FROM social_draft_requests WHERE workspace_id=$1 AND id=$2${lock?' FOR UPDATE':''}`,[ctx.scope.workspaceId,id])).rows[0];
  const initial=await read();if(!initial||initial.state!=='queued')return;
  const review=async(reason:string)=>{await db.query("UPDATE social_draft_requests SET state='review',reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state IN ('queued','calling')",[ctx.scope.workspaceId,id,reason]);};
+ const standing=async()=>{const reason=await checkLinkedinRecurringDraft(ctx,id,runtime);if(reason)await review(reason);return reason===null;};
+ if(!await withTransaction(db,standing))return;
  if(!await socialWeeklyRequestAllowed(ctx,initial.owner_user_id,initial.weekly_revision)){await review('weekly_setting_changed');return;}
  const source=await readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection);
  if(!source.ok||source.value.hash!==initial.source_hash){await review('source_changed_or_unavailable');return;}
  let tokens:number;try{tokens=await port.countInputTokens(source.value.input);}catch{await review('token_count_unavailable');return;}
+ if(!await withTransaction(db,standing))return;
  if(!Number.isSafeInteger(tokens)||tokens<=0||tokens>100000){await review('input_over_budget');return;}
  let cents:number;try{cents=centsOf(SOCIAL_DRAFT_MODEL,{inputTokens:tokens,outputTokens:SOCIAL_DRAFT_LIMITS.maxOutputTokens},'bedrock');}catch{await review('cost_bound_unavailable');return;}
  if(!Number.isSafeInteger(cents)||cents<=0){await review('cost_bound_unavailable');return;}
  const claim=await withTransaction(db,async()=>{
+  if(!await standing())return null;
   await lockResearchBudget(ctx);
   const row=await read(true),at=await databaseNow(ctx);
+  if(!await standing())return null;
   if(!row||row.state!=='queued'||row.paid_attempts>=SOCIAL_DRAFT_LIMITS.maxAttempts||row.deadline_at.getTime()<=Date.parse(at)||row.model_name!==SOCIAL_DRAFT_MODEL||row.prompt_version!==socialDraftPromptVersion(row.source_selection.mode))return null;
   if(!await socialWeeklyRequestAllowed(ctx,row.owner_user_id,row.weekly_revision)){await review('weekly_setting_changed');return null;}
   const settings=await readResearchSettings(ctx);
@@ -51,13 +57,31 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
   const reserved=await reserveAttempt(ctx,{subjectKind:'social_draft',subjectId:id,attempt:row.paid_attempts+1,providerKey:port.providerKey,at,businessTimeZone:zone,cents,modelName:SOCIAL_DRAFT_MODEL,maxInputTokens:tokens,maxOutputTokens:SOCIAL_DRAFT_LIMITS.maxOutputTokens});
   if(!await markCalling(ctx,reserved.id))return null;
   await db.query("UPDATE social_draft_requests SET state='calling',paid_attempts=paid_attempts+1,updated_at=now() WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,id]);
-  return reserved;
+  // Reservation/row writes may wait too. Preserve this full canonical observation
+  // through COMMIT, then check only its time boundary immediately before calling.
+  const observation=await observeLinkedinRecurringDraft(ctx,id,runtime);
+  if(observation.reason){
+   await settleAttempt(ctx,{reservationId:reserved.id,at:await databaseNow(ctx),outcome:{kind:'released_not_called'}});
+   await review(observation.reason);return null;
+  }
+  return {...reserved,deadline:observation.deadline};
  });
  if(!claim)return;
+ const terminalReason=linkedinRecurringDraftDeadlineReason(claim.deadline);
+ if(terminalReason){
+  await withTransaction(db,async()=>{
+   await lockResearchBudget(ctx);await read(true);
+   // This invocation owns the calling claim and has not invoked the provider.
+   await settleAttempt(ctx,{reservationId:claim.id,at:await databaseNow(ctx),outcome:{kind:'released_not_called'}});
+   await review(terminalReason);
+  });
+  return;
+ }
  let outcome:{raw:string;costCents:number;costEstimated:boolean};
  try{outcome=await port.generate(source.value.input);}catch{outcome={raw:'',costCents:claim.cents,costEstimated:true};}
  await withTransaction(db,async()=>{await settleAttempt(ctx,{reservationId:claim.id,at:await databaseNow(ctx),outcome:outcome.costEstimated||!Number.isSafeInteger(outcome.costCents)||outcome.costCents<0?{kind:'estimated'}:{kind:'settled',cents:outcome.costCents}});});
  await withTransaction(db,async()=>{
+  if(!await standing())return;
   await lockResearchBudget(ctx);
   const row=await read(true);if(!row||row.state!=='calling')return;
   if(row.source_selection.mode){
