@@ -6,6 +6,9 @@ CREATE TABLE booking_conversations (
  id uuid NOT NULL DEFAULT gen_random_uuid(),
  owner_user_id uuid NOT NULL,
  interpretation_request_id uuid NOT NULL,
+ -- Stable opaque source episode identity survives provenance erasure, preserving
+ -- counters and stops without retaining a copied passage or raw source reference.
+ episode_key text NOT NULL CONSTRAINT booking_conversations_episode_key_check CHECK(episode_key ~ '^[a-f0-9]{64}$'),
  source_conversation_id uuid,
  policy_revision integer NOT NULL CHECK(policy_revision>0),
  binding_key text NOT NULL,
@@ -27,6 +30,7 @@ CREATE TABLE booking_conversations (
  updated_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY(workspace_id,id),
  CONSTRAINT booking_conversation_owner_interpretation UNIQUE(workspace_id,owner_user_id,interpretation_request_id),
+ CONSTRAINT booking_conversation_owner_source_episode UNIQUE(workspace_id,owner_user_id,episode_key),
  FOREIGN KEY(workspace_id,owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
  CONSTRAINT booking_conversation_interpretation FOREIGN KEY(workspace_id,interpretation_request_id) REFERENCES crm_booking_interpretations(workspace_id,id),
  FOREIGN KEY(workspace_id,source_conversation_id) REFERENCES crm_business_conversations(workspace_id,id),
@@ -36,8 +40,6 @@ CREATE TABLE booking_conversations (
  ,CONSTRAINT booking_conversation_target_pair CHECK((target_meeting_id IS NULL)=(target_booking_uid IS NULL))
 );
 CREATE INDEX booking_conversations_sources ON booking_conversations USING gin(source_refs);
-CREATE UNIQUE INDEX booking_conversation_owner_source_episode ON booking_conversations
- (workspace_id,owner_user_id,(source_refs->0->>'sourceId')) WHERE jsonb_array_length(source_refs)>0;
 GRANT SELECT,INSERT,UPDATE ON booking_conversations TO app_runtime,migration;
 CREATE FUNCTION redact_booking_conversation_provenance(target_workspace uuid,target_source uuid) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN

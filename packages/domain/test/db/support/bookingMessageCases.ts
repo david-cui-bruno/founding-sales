@@ -1,11 +1,11 @@
-import {randomUUID} from 'node:crypto';
+import {randomBytes,randomUUID} from 'node:crypto';
 import type {OutboundCaseFixture} from './outboundCases.ts';
 type Fixture=OutboundCaseFixture;
 interface Case {constraint:string;run:(fixture:Fixture)=>Promise<unknown>}
 const table='booking_message_requests';
 async function conversation(f:Fixture,workspaceId=f.seeded.alpha.workspaceId,owner=f.seeded.alpha.admin.userId){
  const interpretation=(await f.session.query<{id:string}>(`INSERT INTO crm_booking_interpretations(workspace_id,requested_by,source_refs,source_fingerprint,state) VALUES($1,$2,$3::jsonb,$4,'unavailable') RETURNING id`,[workspaceId,owner,JSON.stringify([{sourceId:randomUUID(),sourceRevision:1,contentHash:'a'.repeat(64)}]),'a'.repeat(64)])).rows[0]!;
- return (await f.session.query<{id:string}>(`INSERT INTO booking_conversations(workspace_id,owner_user_id,interpretation_request_id,policy_revision,binding_key,source_fingerprint,source_refs,state) VALUES($1,$2,$3,1,$4,$4,$5::jsonb,'awaiting_time') RETURNING id`,[workspaceId,owner,interpretation.id,'a'.repeat(64),JSON.stringify([{sourceId:randomUUID(),sourceRevision:1,contentHash:'a'.repeat(64)}])])).rows[0]!.id;
+ return (await f.session.query<{id:string}>(`INSERT INTO booking_conversations(workspace_id,owner_user_id,interpretation_request_id,policy_revision,binding_key,source_fingerprint,source_refs,state,episode_key) VALUES($1,$2,$3,1,$4,$4,$5::jsonb,'awaiting_time',$6) RETURNING id`,[workspaceId,owner,interpretation.id,'a'.repeat(64),JSON.stringify([{sourceId:randomUUID(),sourceRevision:1,contentHash:'a'.repeat(64)}]),randomBytes(32).toString('hex')])).rows[0]!.id;
 }
 async function insert(f:Fixture,patch:Record<string,unknown>={}){
  const row:Record<string,unknown>={id:randomUUID(),workspace_id:f.seeded.alpha.workspaceId,conversation_id:await conversation(f),owner_user_id:f.seeded.alpha.admin.userId,kind:'approved_link',policy_revision:1,source_fingerprint:'a'.repeat(64),...patch},keys=Object.keys(row);
