@@ -7,7 +7,7 @@ import {validateBookingChange} from '@fss/domain/meetings/bookingChangeAuthority
 import type {BookingChangeRow} from '@fss/domain/meetings/bookingChange.ts';
 import {revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from '@fss/domain/meetings/bookingPolicy.ts';
 import {bookingChangeCostReason,type BookingChangeRuntime,type BookingChangeCall,type BookingChangeObservation,type BookingChangeTarget} from '@fss/domain/meetings/bookingChangeProvider.ts';
-import {bookingSlotReason} from '@fss/domain/meetings/bookingCreate.ts';
+import {bookingSlotReason,recheckBookingCreateAttendee} from '@fss/domain/meetings/bookingCreate.ts';
 import {receiveSynthesizedCalcomEvent} from '@fss/domain/meetings/calcom.ts';
 import {attendeeTombstoned} from '@fss/domain/meetings/reconcile.ts';
 import {lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
@@ -47,9 +47,12 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingChangeRuntim
  // cost FIRST and canonical captured readiness AFTER that await, not cached flags.
  const cost=await runtime.readCostContract(valid.snapshot);
  const policy=Number.isFinite(Date.parse(runtime.policy.now()))?await revalidateBookingPolicy(context,valid.snapshot,runtime.policy):{kind:'unavailable' as const,reason:'booking_readiness_unavailable'};
+ // Re-observe the selected Route and global uniqueness after all authority waits,
+ // without extending the held sorted identity closure to another firm.
+ const attendeeReason=await recheckBookingCreateAttendee(context,valid.attendeeAuthority,row.dispatch_started_at!==null);
  if(!await liveLease(input))return null;
  const finalNow=runtime.policy.now(),finalAt=Date.parse(finalNow);
- const terminalReason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,finalNow)?'booking_readiness_unavailable':bookingChangeCostReason(cost,policy.snapshot,finalNow)??(row.dispatch_started_at===null&&row.original_starts_at.getTime()<=finalAt?'meeting_not_changeable':row.dispatch_started_at===null&&row.action==='reschedule'?bookingSlotReason(row.starts_at!.toISOString(),finalNow):null);
+ const terminalReason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,finalNow)?'booking_readiness_unavailable':bookingChangeCostReason(cost,policy.snapshot,finalNow)??attendeeReason??(row.dispatch_started_at===null&&row.original_starts_at.getTime()<=finalAt?'meeting_not_changeable':row.dispatch_started_at===null&&row.action==='reschedule'?bookingSlotReason(row.starts_at!.toISOString(),finalNow):null);
  if(terminalReason!==null||policy.kind!=='available'){await input.session.query("UPDATE booking_change_submissions SET state=CASE WHEN dispatch_started_at IS NULL THEN 'failed' ELSE state END,reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,terminalReason]);return null;}
  const snapshot=policy.snapshot,validUntil=Math.min(Date.parse(snapshot.authorityValidUntil!),Date.parse(cost!.validUntil));
  const call:BookingChangeCall={submissionId:id,action:row.action,bookingUid:row.target_booking_uid,accountId:Number(row.provider_account_id),eventTypeId:Number(row.event_type_id),organizerEmail:snapshot.bindings.account.email,attendeeEmail:valid.attendeeEmail,originalStartsAt:row.original_starts_at.toISOString(),originalEndsAt:row.original_ends_at.toISOString(),startsAt:row.starts_at?.toISOString()??null,timeZone:parsed.data.action==='reschedule'?parsed.data.agreedSlot.timeZone:null};
