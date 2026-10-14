@@ -1,3 +1,4 @@
+-- changes: booking_change_submissions, crm_mail_sources, crm_mail_source_contexts
 -- #623 isolated durable change receipt. No content, new funding or reminder platform.
 CREATE TABLE booking_change_submissions (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
