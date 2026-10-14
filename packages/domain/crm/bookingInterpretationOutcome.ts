@@ -51,6 +51,10 @@ function exactSlot(slot:z.infer<typeof slotSchema>,originals:readonly Original[]
  // Only explicitly represented dates and zones are admitted. Relative or abbreviated evidence clarifies.
  return slot.evidence.quote.includes(slot.localDate)&&slot.evidence.quote.includes(slot.localTime)&&slot.evidence.quote.includes(slot.timeZone);
 }
+/** Withholding only. Callers supply whole authored text from currently authorized canonical originals. */
+export function bookingAuthoredTextHasBookingNegation(text:string):boolean {
+ return /\b(?:do\s+not|don['’]t|never)\s+(?:book|schedule|arrange|reserve)\b/i.test(text);
+}
 const clarification={kind:'clarification' as const,reason:'booking_candidate_requires_review',permission:false as const};
 /** Candidate validation is not authority, freebusy, a Route, a send or a booking. */
 export function bookingInterpretationOutcome(input:{candidate:unknown;originals:readonly Original[];snapshot:BookingPolicySnapshot;now:string}) {
@@ -69,6 +73,9 @@ export function bookingInterpretationOutcome(input:{candidate:unknown;originals:
  const conditional=/\b(if|unless|provided|assuming|subject to|only after)\b/i.test(text);
  const refusal=/\b(no thanks|not interested|do not contact|don't contact|stop contacting|unsubscribe)\b/i.test(text);
  if(refusal)return {kind:'stop' as const,reason:'refusal' as const,evidence:candidate.agreement,permission:false as const};
+ // Booking negation anywhere in the authored reply vetoes cropped positive evidence.
+ // Withhold for review rather than turn a lexical match into action authority.
+ if(bookingAuthoredTextHasBookingNegation(text))return {...clarification,...(questionSupported?{handoff}:{})};
  if(candidate.intent==='conditional'||candidate.intent==='handoff'||conditional)return {kind:'david_handoff' as const,schedulingPaused:true,handoff,permission:false as const};
  if(candidate.intent==='change'){
   const review={...clarification,...(questionSupported?{handoff}:{})};
