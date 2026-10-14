@@ -1,0 +1,52 @@
+import {expect,it} from 'vitest';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
+import {runOnce} from '../../worker/src/runner/jobRunner.ts';
+import {createBookingInterpretationModel} from '../../worker/src/providers/bookingInterpretationModel.ts';
+import {createBookingInterpretationAuthority} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
+import type {BookingPolicyBindings} from '@fss/contracts';
+import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
+import {bookingCreateSourceFixture} from './support/bookingCreateFixture.ts';
+
+it('accepted prior offer books through standing origin and retains an actionable sales handoff without human confirmation',async()=>{
+ const f=await bookingCreateSourceFixture();
+ try{
+  const bindings:BookingPolicyBindings={ownerUserId:f.fixture.alpha.admin.userId,account:{provider:'calcom',accountId:'9',email:'owner@booking.example',generation:1},event:{eventTypeId:7,bookingUrl:'https://cal.com/controlled/booking',configurationRevision:'controlled-event-1'},calendars:[{credentialId:3,externalId:'controlled-calendar'}],source:{scopeRevision:'controlled-source-1',dataScope:'necessary_booking_context_attendee_selected_freebusy',dataHandlingVersion:'minimized-1'},sender:{channel:'email',accountId:f.binding,authorityRevision:'controlled-sender-1'},model:{providerKey:'aws_bedrock',route:'us.anthropic.claude-haiku-4-5-20251001-v1:0',modelVersion:'anthropic.claude-haiku-4-5-20251001-v1:0',accountBinding:'controlled-bedrock',consentRevision:'controlled-consent',purpose:'booking_interpretation',qualityReviewRevision:'controlled-quality',selection:'initial_haiku'},budget:{lane:'booking',timeZone:'America/New_York',dailyCeilingCents:200,monthlyCeilingCents:2500}};
+  const now=new Date().toISOString(),verifiedAt=new Date(Date.now()-60_000).toISOString(),validUntil=new Date(Date.now()+7*86400_000).toISOString();
+  const target=new Date();target.setUTCDate(target.getUTCDate()+2);target.setUTCHours(15,0,0,0);while([0,6].includes(target.getUTCDay()))target.setUTCDate(target.getUTCDate()+1);
+  const startsAt=target.toISOString(),endsAt=new Date(target.getTime()+20*60_000).toISOString();
+  const localDate=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(target),localTime=new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(target);
+  const providerCalls:{submissionId:string;startsAt:string}[]=[];
+  const runtime:BookingCreateRuntime={policy:{now:()=> new Date().toISOString(),readEvidence:async()=>({evidenceKind:'controlled',binding:bindings,verifiedAt,validUntil,accountAccess:true,calendarFreeBusy:true,eventSettings:true,modelConsent:true,modelAcceptance:true,senderAuthority:true,sourceAuthority:true,providerAdapter:true,releaseReady:true,funding:{status:'verified',sharedRemainingDailyCents:200,sharedRemainingMonthlyCents:2500}})},readCostContract:async()=>({accountId:'9',eventTypeId:7,operationScope:'availability_create_inspection',maximumCents:0,verifiedAt,validUntil,reference:'controlled-zero-cost-contract'}),provider:{availability:async()=>({available:true,reason:null}),create:async call=>{providerCalls.push({submissionId:call.submissionId,startsAt:call.startsAt});return {state:'accepted',booking:{uid:'standing-booking',id:31,startsAt:call.startsAt,endsAt,attendeeEmail:call.attendee.email,attendeeName:call.attendee.name,eventTypeId:7,accountId:9,organizerEmail:'owner@booking.example',updatedAt:now,submissionId:call.submissionId}};},inspect:async()=>({state:'unknown',reason:'not_found'})}};
+  f.runtimeOptions.bookingCreate=runtime;f.runtimeOptions.bookingPolicyRuntime=runtime.policy;
+  const authority=createBookingInterpretationAuthority(runtime.policy);
+  const conversation={policy:runtime.policy,interpretationAuthority:authority,create:runtime};
+  Object.assign(f.runtimeOptions,{bookingInterpretationAuthority:authority,bookingConversation:conversation});
+  expect((await f.request('POST','/meetings/booking-policy',f.command({action:'save',expectedRevision:0,bindings}))).status).toBe(200);
+  expect((await f.request('POST','/settings/update',f.command({settingKey:'calendar_integration',value:{integration:'calcom'}}))).status).toBe(200);
+  const offerText=`Can you join ${localDate} at ${localTime} America/New_York for a 20 minute call?`;
+  const incomingText='Yes, that works. What does Callie cost?';
+  const offer=await f.capture(offerText,'outgoing'),source=await f.capture(incomingText);
+  const interpreted=await f.request('POST','/crm/booking/interpretation/request',f.command({source,priorSources:[offer]}));
+  expect(interpreted.status).toBe(200);
+  const requestId=(interpreted.body as {result:{requestId:string}}).result.requestId;
+  const evidence=(sourceId:string,quote:string,start=0)=>({sourceId,start,end:start+quote.length,quote});
+  const candidate={intent:'accept_slot',agreement:evidence(source.sourceId,'Yes, that works.'),slot:{localDate,localTime,timeZone:'America/New_York',evidence:evidence(offer.sourceId,offerText)},substantive:evidence(source.sourceId,'What does Callie cost?',17)};
+  const model=createBookingInterpretationModel({accountBinding:'controlled-bedrock',fundingVerifiedUntil:validUntil,surface:{endpointId:'bedrock-runtime.us-east-1.amazonaws.com',converse:async()=>({stopReason:'end_turn',usage:{inputTokens:40,outputTokens:20},output:{message:{role:'assistant',content:[{text:JSON.stringify(candidate)}]}}})}});
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingInterpretation:{authority,model},bookingCreate:runtime,bookingConversation:conversation});
+  await runOnce(f.db,{registry,owner:'conversation-interpreter',limit:20});
+  const admitted=await f.request('POST','/meetings/booking-conversation',f.command({interpretationRequestId:requestId,expectedPolicyRevision:1}));
+  expect(admitted.status,JSON.stringify(admitted.body)).toBe(200);
+  const conversationId=(admitted.body as {result:{conversationId:string}}).result.conversationId;
+  await runOnce(f.db,{registry,owner:'conversation-lifecycle',limit:20});
+  await runOnce(f.db,{registry,owner:'conversation-create',limit:20});
+  const read=await f.request('GET',`/meetings/booking-conversation?conversationId=${conversationId}`);
+  expect(read.status).toBe(200);
+  expect(read.body).toMatchObject({conversationId,state:'booked',origin:'standing_policy',enabled:false,booking:{state:'accepted',providerBookingUid:'standing-booking',meetingId:expect.any(String)},handoff:{action:'answer_sales_question',evidence:{quote:'What does Callie cost?'}}});
+  expect(providerCalls[0]).toMatchObject({startsAt});
+  const meetingId=(read.body as {booking:{meetingId:string}}).booking.meetingId;
+  expect(JSON.stringify((await f.request('GET','/today/actions/v2')).body)).toContain(meetingId);
+  expect(providerCalls).toHaveLength(1);
+  expect(JSON.stringify(read.body)).not.toContain('owner_confirmed_unconditional_exact_slot');
+ }finally{await f.fixture.stop();}
+});
