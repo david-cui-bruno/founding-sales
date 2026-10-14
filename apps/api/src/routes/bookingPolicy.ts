@@ -3,6 +3,7 @@ import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes
 import {bookingPolicyCommandSchema} from '@fss/contracts';
 import {mutateBookingPolicy,readBookingPolicyResponseObservation,bookingPolicyResponseObservationCurrentAt} from '@fss/domain/meetings/bookingPolicy.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
+import {settingLockName} from '@fss/domain/settings/store.ts';
 export const BOOKING_POLICY_PATHS:readonly string[]=['/meetings/booking-policy'];
 export async function routeBookingPolicy(request:ApiRequest,options:RoutingOptions&{bookingPolicyRuntime?:BookingPolicyRuntime}):Promise<RouteResult|null> {
   if(!BOOKING_POLICY_PATHS.includes(request.path))return null;
@@ -26,5 +27,15 @@ export async function routeBookingPolicy(request:ApiRequest,options:RoutingOptio
     }
     catch{return {status:403,body:{error:'owner_authority_changed'}};}
   }
-  return runRouteCommand({auth,request,principal:principal.principal},bookingPolicyCommandSchema,'booking_policy',mutateBookingPolicy);
+  return runRouteCommand({auth,request,principal:principal.principal},bookingPolicyCommandSchema,'booking_policy',async(ctx,input)=>{
+    // Authenticate the exact caller after the policy serialization wait, inside
+    // the command transaction. Active membership alone does not preserve a
+    // signed-out session or a revoked device's mutation authority.
+    await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[settingLockName(ctx.scope.workspaceId,'booking_policy')]);
+    const current=await requirePrincipal(auth,request);
+    if(!current.ok)return {ok:false,reason:'owner_authority_changed'};
+    const before=principal.principal,after=current.principal;
+    if(after.role!=='admin'||after.membershipStatus!=='active'||after.deviceStatus!=='active'||after.workspaceId!==before.workspaceId||after.userId!==before.userId||after.deviceId!==before.deviceId||after.sessionId!==before.sessionId)return {ok:false,reason:'owner_authority_changed'};
+    return mutateBookingPolicy(ctx,input);
+  });
 }

@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {BOOKING_BUSINESS_RULES,DEFAULT_BOOKING_POLICY,bookingPolicyCommandSchema,bookingPolicySettingSchema,type BookingPolicyBindings,type BookingPolicyView} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {readSetting,updateSetting,settingLockName} from '../settings/store.ts';
+import {readSetting,updateBookingPolicySetting,settingLockName} from '../settings/store.ts';
 import {localDate} from '../src/rules/localClock.ts';
 import type {BookingPolicyRuntime,BookingPolicyRuntimeEvidence,CurrentBookingPolicy,CurrentBookingPolicyQuery,BookingPolicySnapshot} from './bookingPolicyTypes.ts';
 import {lockMonthlySpend,readSpend,workspaceBusinessZone} from '../research/ledger.ts';
@@ -159,6 +159,6 @@ export async function mutateBookingPolicy(ctx:RepositoryContext,input:unknown):P
   const old=await readSetting(ctx,'booking_policy');if(old.version!==command.expectedRevision)return {ok:false,reason:'stale_revision'};
   const previous=bookingPolicySettingSchema.safeParse(old.value);
   const setting=command.action==='save'?{status:'saved',enabled:false,bindings:command.bindings}:{status:command.action==='revoke'?'revoked':'disabled',enabled:false,bindings:previous.success?previous.data.bindings:null};
-  const result=await updateSetting(ctx,{settingKey:'booking_policy',value:setting,commandId:command.commandId,changeNote:`Booking policy ${command.action}`});
+  const result=await updateBookingPolicySetting(ctx,{expectedRevision:command.expectedRevision,value:setting,commandId:command.commandId,changeNote:`Booking policy ${command.action}`});
   return result.ok?{ok:true,value:{revision:result.value.current.version}}:result;
 }

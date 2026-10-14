@@ -7,6 +7,7 @@ export interface BookingPolicySettingsPorts {
   read():Promise<BookingPolicySettingsView|null>;
   change(input:BookingPolicyChange):Promise<{revision:number|null;reason:string|null}>;
 }
+const commandResultUnknown=(reason:string|null)=>reason==='offline'||reason==='unreadable_answer'||reason==='session_changed';
 export function BookingPolicySettings({ports,mayMutate}:{ports:BookingPolicySettingsPorts|null;mayMutate:boolean}):JSX.Element {
   const [view,setView]=useState<BookingPolicySettingsView|null|undefined>(),[selected,setSelected]=useState(''),[approved,setApproved]=useState(false),[busy,setBusy]=useState(false),[notice,setNotice]=useState<string|null>(null),sequence=useRef(0);
   const [dailyDraft,setDailyDraft]=useState<string|null>(null),[monthlyDraft,setMonthlyDraft]=useState<string|null>(null);
@@ -25,13 +26,13 @@ export function BookingPolicySettings({ports,mayMutate}:{ports:BookingPolicySett
   const save=async()=>{
     if(!mayMutate||!approved||busy||policy===undefined||!bindings||!budgetValid||ports===null)return;
     setBusy(true);const n=sequence.current;
-    try{const answer=await ports.change({commandId:crypto.randomUUID(),action:'save',expectedRevision:policy.revision,bindings:{...bindings,budget:{...bindings.budget,dailyCeilingCents:daily,monthlyCeilingCents:monthly}}});if(n!==sequence.current)return;setNotice(answer.reason===null?'Policy saved. Automation remains off.':`Policy not saved: ${answer.reason}`);await load();}
+    try{const answer=await ports.change({commandId:crypto.randomUUID(),action:'save',expectedRevision:policy.revision,bindings:{...bindings,budget:{...bindings.budget,dailyCeilingCents:daily,monthlyCeilingCents:monthly}}});if(n!==sequence.current)return;if(commandResultUnknown(answer.reason))throw new Error('Policy command result unavailable');setNotice(answer.reason===null?'Policy saved. Automation remains off.':`Policy not saved: ${answer.reason}`);await load();}
     catch{if(n===sequence.current){setNotice('The save result is unknown. Refresh before trying again.');setView(null);setBusy(false);}}
   };
   const stop=async(action:'disable'|'revoke')=>{
     if(!mayMutate||busy||policy===undefined||policy.revision===0||ports===null)return;
     setBusy(true);const n=sequence.current;
-    try{const answer=await ports.change({commandId:crypto.randomUUID(),action,expectedRevision:policy.revision});if(n!==sequence.current)return;setNotice(answer.reason===null?'Future booking work is stopped. Accepted appointments are unchanged.':`Policy not stopped: ${answer.reason}`);await load();}
+    try{const answer=await ports.change({commandId:crypto.randomUUID(),action,expectedRevision:policy.revision});if(n!==sequence.current)return;if(commandResultUnknown(answer.reason))throw new Error('Policy command result unavailable');setNotice(answer.reason===null?'Future booking work is stopped. Accepted appointments are unchanged.':`Policy not stopped: ${answer.reason}`);await load();}
     catch{if(n===sequence.current){setNotice('The stop result is unknown. Refresh before trying again.');setView(null);setBusy(false);}}
   };
   return <Section title="Standing booking policy" data-testid="booking-policy-settings" actions={<Button variant="quiet" size="sm" disabled={busy||ports===null} onClick={()=>{void load();}}>Refresh booking policy</Button>}>
