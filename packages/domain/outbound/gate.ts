@@ -1,3 +1,5 @@
+import {decideBookingMessagePermission} from '../meetings/bookingMessages.ts';
+import type {BookingMessageRuntime} from '../meetings/bookingMessagesRuntime.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { attestedReleaseBinding, type ReleaseAdmission } from '../release/records.ts';
 import { effectiveSendingEnabled } from '../settings/effective.ts';
@@ -49,6 +51,7 @@ import {currentHolidayCalendar} from '../sequences/calendars.ts';
  */
 
 export interface SendGateDeps {
+  readonly bookingMessageRuntime?: BookingMessageRuntime | undefined;
   /** An explicit queued human approval, never a sequence setting or sending override. */
   readonly humanReplyRevision?: number | undefined;
   /** Database time, so the window agrees with the fence's timestamps. */
@@ -172,7 +175,9 @@ export async function decideSend(
   // flag, and the approval of the template the bytes came from.
   const humanPermission=fence.originKind==='draft'?await decideHumanReplyPermission(context,fence,deps.humanReplyRevision):null;
   if(humanPermission&&!humanPermission.ok)return humanPermission;
-  const permission = fence.originKind==='draft'?null:await decideStepPermission(
+  const bookingPermission=fence.originKind==='standing_booking'?await decideBookingMessagePermission(context,fence,deps.bookingMessageRuntime):null;
+  if(bookingPermission&&!bookingPermission.ok)return bookingPermission;
+  const permission = fence.originKind!=='step_execution'?null:await decideStepPermission(
     context,
     fence,
     // The kind only names the mailbox in a cold-outreach refusal's detail; it never
