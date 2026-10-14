@@ -86,3 +86,43 @@ Final repair checks: 52 API real-PG tests (27 owned interpretation plus 25 canon
 ## Ordered source integration
 
 The isolated proof above is retained as dated evidence. Final source composition places unchanged policy SQL at migration0110 and unchanged interpretation SQL at migration0111, following posting policy0109, with exact schema111. Both SQL files were byte-compared against the frozen reviewed originals. Shared exports, route/module inventories and closed desktop operations retain both parents additively. This ordering is not an executed upgrade, deployment, provider-quality or activation claim.
+
+## Bounded final-review repairs, October 13, 2026
+
+New isolated worktree: `founding-sales-620-final-review-repair-20261013`, branch `codex/booking-620-final-review-repair`, initially clean at `26a0363c25f8b23ac2f1ed805384cb4cc0eeb950`. Required AGENTS/domain/glossary, relevant source/authority ADRs, g78 wire decision and complete #620/#609/#607 bodies/comments were read before source work. No workers were spawned. Original worktrees and their running gates were untouched.
+
+Frozen source commits, in order:
+
+- `687aaf1fe4da54695bdd103efba7efc271226c7d`: root-approved exact additive Today test inventory names `crm.bookingInterpretationRequest` and `crm.bookingInterpretationRead` after `crm.processingRecordHealth`. No existing assertion was relaxed.
+- `af84a57f761b8fad7b72cc2a44a2658a77dd7ae4`: bounded outcome/contracts repairs, focused API and desktop response tests. This section is a subsequent documentation-only receipt for that tested source.
+
+### Observed RED and GREEN
+
+Before either production repair, the normal authenticated API, canonical admitted-message capture and registered controlled model worker reproduced three unsafe slot proposals: an incoming reply accepting either of two exact offered slots, a model agreement citation cropped to the first alternative, and a directly authored two-slot reply without a prior offer. Each expected clarification but received `slot_proposal`. The incoming example was `Yes, either 2026-10-20 at 14:00 America/New_York or 2026-10-21 at 15:00 America/New_York works for me`. Explicit single selection and single selection with a quoted alternative already passed, as did the unextended mounted caller journey. These seven selected tests observed four failures and three passes, not an invented test-first claim.
+
+The fourth behavioral RED was the real closed desktop host/authenticated client/API/registered worker/mounted `EmailTimeline` journey with added informational response fields. It cleared the proposal and displayed unavailable rather than rendering the approved-link proposal. Only controlled transport response extensions were injected, not a live server change.
+
+Outcome validation now counts the existing bounded ISO date, 24-hour time and IANA-zone representations across the whole incoming authored text. Multiple or contradictory components withhold a proposal, including when the model crops its citation. Selection from a multi-option prior offer requires one whole-authored incoming tuple matching the chosen slot plus explicit cited selection. Ordinary generic `Yes` to one unique prior offer still passes. Quoted alternatives do not become authored choices. This is a conservative withholding guard, not a general NLP framework or appointment authority.
+
+Success response objects now strip undeclared keys, including nested outcome, slot, citation, handoff, provenance, prior/current source reference, context and financial objects. Request/read commands, nested command source references and the separate controlled model candidate schema remain strict. Invalid types, vocabularies and `permission:true` still refuse parsing. Actual API responses are checked separately with `wireDrift`; injected informational additions are demonstrated to cause drift while installed-client parsing strips them. Five normal desktop host/client outcome branches exercise request and read with recursively extended response objects and exact retained-value assertions.
+
+The Today inventory mismatch also reproduced locally before the approved two-name correction. Additional desktop fixture syntax/envelope setup failures were fixed and are not claimed as behavioral RED evidence. The inherited root test-inventory fixes were not re-added or edited.
+
+### Final focused validation
+
+Pinned official Node `v24.20.0` and normal unchanged `npm ci` succeeded. Final fail-fast validation on the frozen source passed:
+
+```sh
+npm run test --workspace apps/api -- test/bookingInterpretation.test.ts
+npm run test --workspace apps/desktop -- test/bookingInterpretationResponse.test.ts test/today.test.ts test/bookingInterpretation.component.test.tsx test/operations.test.ts test/registryTraffic.test.ts
+npm run typecheck --workspace packages/contracts
+npm run typecheck --workspace packages/domain
+npm run typecheck --workspace apps/api
+npm run typecheck --workspace apps/desktop
+npx eslint --max-warnings 0 packages/domain/crm/bookingInterpretationOutcome.ts packages/contracts/src/bookingInterpretation.ts apps/api/test/bookingInterpretation.test.ts apps/desktop/test/bookingInterpretationResponse.test.ts apps/desktop/test/today.test.ts
+git diff --check
+```
+
+Observed totals: 35 real disposable-PostgreSQL API interpretation tests and 116 focused desktop tests (6 response, 49 Today, 1 unavailable component, 56 closed operations, 4 registry traffic). Four changed-workspace typechecks, scoped zero-warning ESLint and whitespace checks passed. Supplemental strict-model and conflicting-single-prior cases are regression coverage, not separately claimed RED cycles.
+
+Only the five source/test files named above and this acceptance document differ from the clean base. Canonical bookingPolicy, bookingCreate/Change, migrations, lockfile and provider composition are unchanged. No full gate, upgrade, secret scan, live/cloud/provider/account operation, paid call, GitHub mutation, push, release or activation occurred. Independent lion/frog review and root integrated exact-head gates remain separate follow-through. Controlled model answers do not prove actual language quality.
