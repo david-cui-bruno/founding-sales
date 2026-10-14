@@ -8,6 +8,7 @@ import {revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from '@fss/domain/
 import {bookingCreateCostContractReason} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingCreateCall,BookingCreateObservation} from '@fss/domain/meetings/bookingCreateProvider.ts';
+import {lockSendGateForDispatch} from '@fss/domain/policy/sendGate.ts';
 import {receiveSynthesizedCalcomEvent} from '@fss/domain/meetings/calcom.ts';
 
 /** Outbound at-most-once: commit unknown before HTTP. A restart or second handler inspects, never creates. */
@@ -28,6 +29,9 @@ export function bookingCreateJobHandler(runtime?:BookingCreateRuntime):JobHandle
 async function liveLease(input:JobHandlerInput):Promise<boolean>{return (await input.session.query(`SELECT id FROM jobs WHERE workspace_id=$1 AND id=$2 AND state='running' AND lease_owner=$3 AND fencing_token=$4::bigint AND lease_expires_at>clock_timestamp() FOR UPDATE`,[input.scope.workspaceId,input.job.id,input.job.leaseOwner,input.job.fencingToken])).rows.length===1;}
 async function stage(input:JobHandlerInput,id:string,runtime:BookingCreateRuntime,dispatch:boolean,availability?:{available:boolean;reason:string|null}){
  return withTransaction(input.session,async()=>{
+  // Stop facts take this gate before their rows. Acquire it before lease,
+  // settings and identity locks, and release it before every provider wait.
+  await lockSendGateForDispatch(repositoryContext(input.scope,input.session));
   if(!await liveLease(input))return null;
   let row=(await input.session.query<BookingCreateRow>('SELECT * FROM booking_create_submissions WHERE workspace_id=$1 AND id=$2',[input.scope.workspaceId,id])).rows[0];if(!row||['accepted','failed'].includes(row.state))return null;
   if(input.job.payload['inspectionOnly']===true&&row.dispatch_started_at===null)return null;
@@ -46,7 +50,7 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingCreateRuntim
   const standingReason='standingOrigin' in payload.data&&policy.kind==='available'?await revalidateBookingConversationCreate(context,payload.data,runtime.policy,runtime.policy.now(),policy.snapshot):null;
   // A normal Route add on a disjoint firm can commit during receipt/cost waits.
   // Observe ambiguity again without extending the held sorted firm closure.
-  const attendeeReason=await recheckBookingCreateAttendee(context,valid.attendeeAuthority);
+  const attendeeReason=await recheckBookingCreateAttendee(context,valid.attendeeAuthority,row.dispatch_started_at!==null);
   if(!await liveLease(input))return null;
   const at=runtime.policy.now();
   const reason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,at)?'booking_readiness_unavailable':bookingCreateCostContractReason(cost,policy.snapshot,at)??standingReason??attendeeReason??(row.dispatch_started_at===null?bookingSlotReason(row.starts_at.toISOString(),at):null);

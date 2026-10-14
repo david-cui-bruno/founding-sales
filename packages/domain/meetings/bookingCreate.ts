@@ -2,6 +2,8 @@ import {createHash,randomUUID} from 'node:crypto';
 import {bookingCreatePayloadSchema,bookingInterpretationSourceSchema,type BookingCreatePayload,type BookingCreateReceipt} from '@fss/contracts';
 import {repositoryContext,workspaceScope,type RepositoryContext} from '../db/workspaceScope.ts';
 import {bookingStandingCreateSchema,revalidateBookingConversationCreate,type BookingStandingCreateInput} from './bookingConversationAuthority.ts';
+import {firstSuppressed} from '../suppression/effective.ts';
+import {lockSendGateForDispatch} from '../policy/sendGate.ts';
 import {readCurrentBookingPolicy} from './bookingPolicy.ts';
 import {lockSettingForRead} from '../settings/store.ts';
 import {readMailConversationV2} from '../mail/crmMailOriginals.ts';
@@ -27,10 +29,17 @@ export function bookingSlotReason(startsAt:string,now:string):string|null{
 }
 /** Terminal observation under the validator's held Route/contact/firm locks.
  * Never acquire an added association's firm out of the original sorted closure. */
-export async function recheckBookingCreateAttendee(context:RepositoryContext,authority:BookingCreateAttendeeAuthority):Promise<string|null>{
+export async function recheckBookingCreateAttendee(context:RepositoryContext,authority:BookingCreateAttendeeAuthority,inspectionOnly=false):Promise<string|null>{
  const route=(await context.db.query<{address:string;version:number;firm_id:string;contact_id:string}>(`SELECT e.address,e.version,e.firm_id,e.contact_id FROM email_addresses e JOIN contacts c ON c.workspace_id=e.workspace_id AND c.id=e.contact_id WHERE e.workspace_id=$1 AND e.id=$2 AND e.retired_at IS NULL AND e.technical_validation='passed' AND e.association_confidence>=0.8 AND c.firm_id=e.firm_id`,[context.scope.workspaceId,authority.routeId])).rows[0];
  if(route===undefined||route.firm_id!==authority.firmId||route.contact_id!==authority.contactId||route.address!==authority.address||route.version!==authority.version)return 'attendee_authority_changed';
- return (await context.db.query('SELECT id FROM email_addresses WHERE workspace_id=$1 AND lower(address)=lower($2) AND retired_at IS NULL AND (contact_id IS DISTINCT FROM $3 OR firm_id IS DISTINCT FROM $4)',[context.scope.workspaceId,authority.address,authority.contactId,authority.firmId])).rows.length?'attendee_ambiguous':null;
+ if((await context.db.query('SELECT id FROM email_addresses WHERE workspace_id=$1 AND lower(address)=lower($2) AND retired_at IS NULL AND (contact_id IS DISTINCT FROM $3 OR firm_id IS DISTINCT FROM $4)',[context.scope.workspaceId,authority.address,authority.contactId,authority.firmId])).rows.length)return 'attendee_ambiguous';
+ return inspectionOnly?null:bookingCreateSuppressionReason(context,authority);
+}
+/** Provider creation sends booking confirmation/reminder email, so Route reachability
+ * is not permission. Reuse the canonical email stop reader under the send gate. */
+async function bookingCreateSuppressionReason(context:RepositoryContext,authority:{firmId:string;address:string}):Promise<string|null>{
+ const stop=await firstSuppressed(context,[{scope:'firm',canonicalKey:authority.firmId},{scope:'handle',canonicalKey:authority.address}],'email');
+ return stop===null?null:stop.scope==='firm'?'firm_suppressed':'handle_suppressed';
 }
 /** Re-read exact originals and immutable contexts under their existing authority lock closure. No second copy of mail. */
 export async function validateBookingCreate(context:RepositoryContext,input:BookingCreateInput,runtime:BookingCreateRuntime,expectedBindingKey?:string,inspectionOnly=false):Promise<{ok:true;snapshot:BookingPolicySnapshot;attendee:{name:string;email:string;timeZone:string};attendeeAuthority:BookingCreateAttendeeAuthority;fingerprint:string}|{ok:false;reason:string}>{
@@ -70,6 +79,7 @@ export async function validateBookingCreate(context:RepositoryContext,input:Book
  if(offer.ownerUserId!==actor.userId||offer.direction!=='outgoing'||!offer.sentProof||offer.originalObservation.connectionState!=='current'||['trashed','confirmed_missing','transient_unavailable'].includes(offer.originalObservation.state)||offer.mailboxId!==source.mailboxId||offer.accountBinding!==source.accountBinding||offer.acquiredGeneration!==source.acquiredGeneration||priorThread!==thread||Date.parse(offer.occurredAt)>=Date.parse(source.occurredAt)||!offer.envelope.to.some(email=>email.toLowerCase()===route.address.toLowerCase()))return {ok:false,reason:'offered_context_unsupported'};}
  const standingReason='standingOrigin' in input?await revalidateBookingConversationCreate(context,input,runtime.policy,runtime.policy.now(),snapshot):null;
  if(standingReason!==null)return {ok:false,reason:standingReason};
+ const suppressionReason=inspectionOnly?null:await bookingCreateSuppressionReason(context,{firmId:route.firm_id,address:route.address});if(suppressionReason!==null)return {ok:false,reason:suppressionReason};
  return {ok:true,snapshot,attendee:{name:route.full_name,email:route.address.toLowerCase(),timeZone:input.agreedSlot.timeZone},attendeeAuthority:{routeId:input.attendeeRouteId,firmId:route.firm_id,contactId:route.contact_id,address:route.address,version:route.version},fingerprint:createHash('sha256').update(canonicalBookingJson({closure,route,thread,original:source.originalObservation,account:source.accountBinding,generation:source.acquiredGeneration})).digest('hex')};
 }
 /** Ordinary command transaction owns the durable reservation and job atomically. */
@@ -90,6 +100,8 @@ export async function requestBookingStandingCreate(context:RepositoryContext,raw
  return reserveBookingCreate(ownerContext,parsed.data,runtime);
 }
 async function reserveBookingCreate(context:RepositoryContext,input:BookingCreateInput,runtime:BookingCreateRuntime):Promise<BookingCreateResult>{
+ // Same gate as stop writers, before setting, identity, Route or reservation locks.
+ await lockSendGateForDispatch(context);
  const valid=await validateBookingCreate(context,input,runtime);if(!valid.ok)return valid;
  const owner=context.scope.actor;if(owner.kind!=='user')return {ok:false,reason:'owner_required'};
  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${context.scope.workspaceId}:booking_create:${valid.snapshot.bindings.account.accountId}`]);
