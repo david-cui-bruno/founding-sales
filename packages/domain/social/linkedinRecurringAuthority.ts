@@ -38,22 +38,40 @@ export async function linkedinRecurringScopeReason(ctx:RepositoryContext,slot:Pi
 }
 export async function linkedinRecurringSlotReason(ctx:RepositoryContext,slot:LinkedinRecurringSlot,runtime?:LinkedinRecurringComposition|null):Promise<string|null>{
  const scope=await linkedinRecurringScopeReason(ctx,slot,runtime);if(scope)return scope;
- const at=await databaseNow(ctx),settings=await readResearchSettings(ctx);
- if(!(await ctx.db.query('SELECT 1 FROM research_settings WHERE workspace_id=$1',[ctx.scope.workspaceId])).rows.length)return 'funding_not_configured';
- if(!settings.enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)return 'drafting_held';
- const shared=await readCreditSpend(ctx,{at,businessTimeZone:await workspaceBusinessZone(ctx)}),lane=await postingSpend(ctx,at);
- if(shared.todayCents>settings.dailyCostCeilingCents||shared.monthToDateCents>settings.monthlyCostCeilingCents||lane.today>100||lane.month>1000)return 'posting_or_shared_budget_changed';
  const uncertain=(await ctx.db.query(`SELECT 1 FROM social_deliveries d JOIN social_post_revisions p ON p.workspace_id=d.workspace_id AND p.post_id=d.post_id AND p.revision=d.revision WHERE d.workspace_id=$1 AND p.account_id=$2 AND ($3::uuid IS NULL OR d.post_id<>$3) AND d.state IN ('submitting','unknown','cancellation_pending') LIMIT 1`,[ctx.scope.workspaceId,slot.account_id,slot.post_id])).rows.length;
  if(uncertain)return 'existing_submission_uncertain';
  if(!runtime||Date.parse(runtime.clock.now())>=slot.target_at.getTime()||Date.parse(runtime.clock.now())<slot.target_at.getTime()-1800000||!Number.isFinite(Date.parse(runtime.clock.now())))return 'slot_missed_or_not_due';
  if(!slot.source_selection||!slot.source_hash)return 'no_ready_input';
  // Actor stays worker. Owner is derived from the persisted slot, never a candidate or renderer.
  const source=ctx.scope.actor.kind==='user'?await readSocialDraftSources(ctx,slot.source_selection):await readSocialDraftSourcesForWorker(ctx,slot.owner_user_id,slot.source_selection);
- return !source.ok||source.value.hash!==slot.source_hash?'source_changed_or_unavailable':null;
+ if(!source.ok||source.value.hash!==slot.source_hash)return 'source_changed_or_unavailable';
+ // Fact/source share locks can wait. Observe funding only after those waits,
+ // retaining the current settings row against ordinary settings updates.
+ if(!(await ctx.db.query('SELECT 1 FROM research_settings WHERE workspace_id=$1 FOR SHARE',[ctx.scope.workspaceId])).rows.length)return 'funding_not_configured';
+ const at=await databaseNow(ctx),settings=await readResearchSettings(ctx);
+ if(!settings.enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)return 'drafting_held';
+ const shared=await readCreditSpend(ctx,{at,businessTimeZone:await workspaceBusinessZone(ctx)}),lane=await postingSpend(ctx,at);
+ if(shared.todayCents>settings.dailyCostCeilingCents||shared.monthToDateCents>settings.monthlyCostCeilingCents||lane.today>100||lane.month>1000)return 'posting_or_shared_budget_changed';
+ // No awaited read follows this same-observation time check.
+ return runtime?linkedinRecurringDraftDeadlineReason({targetAt:slot.target_at.getTime(),expiresAt:Date.parse(runtime.expiresAt),clock:runtime.clock}):'runtime_unavailable_or_expired';
+}
+interface LinkedinRecurringDraftDeadline{readonly targetAt:number;readonly expiresAt:number;readonly clock:LinkedinRecurringComposition['clock']}
+/** A captured deadline is only produced by the same canonical standing observation. */
+export async function observeLinkedinRecurringDraft(ctx:RepositoryContext,id:string,runtime?:LinkedinRecurringComposition|null):Promise<{reason:string|null;deadline:LinkedinRecurringDraftDeadline|null}>{
+ const s=(await ctx.db.query<LinkedinRecurringSlot>('SELECT * FROM linkedin_recurring_slots WHERE workspace_id=$1 AND draft_request_id=$2',[ctx.scope.workspaceId,id])).rows[0];
+ if(!s)return {reason:null,deadline:null};
+ const reason=await linkedinRecurringSlotReason(ctx,s,runtime);
+ return {reason,deadline:reason||!runtime?null:{targetAt:s.target_at.getTime(),expiresAt:Date.parse(runtime.expiresAt),clock:runtime.clock}};
+}
+/** No database/provider wait can follow this check before the paid invocation. */
+export function linkedinRecurringDraftDeadlineReason(deadline:LinkedinRecurringDraftDeadline|null):string|null{
+ if(!deadline)return null; // Unbound manual drafting has no standing slot deadline.
+ if(!Number.isFinite(deadline.expiresAt)||Date.now()>=deadline.expiresAt)return 'runtime_unavailable_or_expired';
+ const at=Date.parse(deadline.clock.now());
+ return !Number.isFinite(at)||at>=deadline.targetAt||at<deadline.targetAt-1800000?'slot_missed_or_not_due':null;
 }
 export async function checkLinkedinRecurringDraft(ctx:RepositoryContext,id:string,runtime?:LinkedinRecurringComposition|null):Promise<string|null>{
- const s=(await ctx.db.query<LinkedinRecurringSlot>('SELECT * FROM linkedin_recurring_slots WHERE workspace_id=$1 AND draft_request_id=$2',[ctx.scope.workspaceId,id])).rows[0];
- return s?linkedinRecurringSlotReason(ctx,s,runtime):null;
+ return (await observeLinkedinRecurringDraft(ctx,id,runtime)).reason;
 }
 export async function checkLinkedinRecurringDelivery(ctx:RepositoryContext,by:'post_id'|'claim_id'|'id'|'submission_id',id:string,runtime?:LinkedinRecurringComposition|null):Promise<string|null>{
  const owner=ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;if(!owner)return 'owner_unavailable';
