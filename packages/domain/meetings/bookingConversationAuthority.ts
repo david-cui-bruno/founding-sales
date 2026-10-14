@@ -2,6 +2,7 @@ import {z} from 'zod';
 import {bookingCreatePayloadSchema,bookingInterpretationOutcomeSchema} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {loadBookingInterpretationSources} from '../crm/bookingInterpretationSources.ts';
+import {bookingAuthoredTextHasBookingNegation} from '../crm/bookingInterpretationOutcome.ts';
 import type {BookingInterpretationRow} from '../crm/bookingInterpretation.ts';
 import {readCurrentBookingPolicy,bookingPolicySnapshotReadyAt} from './bookingPolicy.ts';
 import type {BookingPolicyRuntime,BookingPolicySnapshot} from './bookingPolicyTypes.ts';
@@ -46,6 +47,10 @@ export async function revalidateBookingConversationCreate(context:RepositoryCont
  const supported=outcome.data;
  const sources=await loadBookingInterpretationSources(context,interpretation.source_refs);
  if(sources===null||sources.fingerprint!==row.source_fingerprint||sources.originals[0]!.ownerUserId!==row.owner_user_id)return 'standing_source_changed';
+ const original=sources.originals[0]!,passage=original.passage;
+ const ranges=z.array(z.object({kind:z.string(),start:z.number().int().nonnegative(),end:z.number().int().nonnegative()})).safeParse(original.ranges);
+ if(passage===null||!ranges.success||ranges.data.some(range=>range.end<range.start||range.end>passage.length))return 'standing_source_changed';
+ if(bookingAuthoredTextHasBookingNegation(ranges.data.filter(range=>range.kind==='authored').map(range=>passage.slice(range.start,range.end)).join('\n')))return 'standing_agreement_requires_review';
  const source=interpretation.source_refs[0]!,offer=interpretation.source_refs.find(ref=>ref.sourceId===supported.slot.evidence.sourceId&&ref.sourceId!==source.sourceId);
  const exactRef=(a:{sourceId:string;sourceRevision:number;contentHash:string|null}|undefined,b:typeof source|undefined)=>a===undefined||b===undefined?a===b:a.sourceId===b.sourceId&&a.sourceRevision===b.sourceRevision&&a.contentHash===b.contentHash;
  if(!exactRef(input.agreement,source)||!exactRef(input.offeredContext,offer)||input.agreedSlot.timeZone!==supported.slot.timeZone||Date.parse(input.agreedSlot.startsAt)!==Date.parse(bookingConversationSlotInstant(supported.slot)??'')||sources.originals[0]!.envelope.from?.toLowerCase()!==outcome.data.attendeeAddress.toLowerCase())return 'standing_action_changed';
