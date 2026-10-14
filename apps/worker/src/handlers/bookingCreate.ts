@@ -8,7 +8,8 @@ import {revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from '@fss/domain/
 import {bookingCreateCostContractReason} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
 import type {BookingCreateCall,BookingCreateObservation} from '@fss/domain/meetings/bookingCreateProvider.ts';
-import {lockSendGateForDispatch} from '@fss/domain/policy/sendGate.ts';
+import {lockSendGateForDispatch,lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
+import {attendeeTombstoned} from '@fss/domain/meetings/reconcile.ts';
 import {receiveSynthesizedCalcomEvent} from '@fss/domain/meetings/calcom.ts';
 
 /** Outbound at-most-once: commit unknown before HTTP. A restart or second handler inspects, never creates. */
@@ -68,17 +69,22 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingCreateRuntim
 }
 async function settle(input:JobHandlerInput,id:string,observation:BookingCreateObservation):Promise<void>{
  await withTransaction(input.session,async()=>{
+  // Accepted evidence survives deletion, but private lifecycle publication does not.
+  // Retention takes this same gate before any subject/meeting/submission rows.
+  const context=repositoryContext(input.scope,input.session);
+  await lockSendGateForStopFact(context);
   let row=(await input.session.query<BookingCreateRow>('SELECT * FROM booking_create_submissions WHERE workspace_id=$1 AND id=$2',[input.scope.workspaceId,id])).rows[0];if(!row||row.dispatch_started_at===null||row.state==='accepted'||row.state==='failed')return;
   // Accepted external facts must not vanish on lease expiry or source revocation during POST.
   if(!('booking' in observation)){row=(await input.session.query<BookingCreateRow>('SELECT * FROM booking_create_submissions WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[input.scope.workspaceId,id])).rows[0];if(!row||['accepted','failed'].includes(row.state))return;await input.session.query("UPDATE booking_create_submissions SET state=$3,reason=CASE WHEN provenance_state='redacted' THEN reason ELSE $4 END,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,observation.state,observation.reason]);return;}
   const b=observation.booking;
   if(b.submissionId!==id||b.accountId!==Number(row.provider_account_id)||b.eventTypeId!==Number(row.event_type_id)||Date.parse(b.startsAt)!==row.starts_at.getTime()||Date.parse(b.endsAt)-Date.parse(b.startsAt)!==20*60_000){await input.session.query("UPDATE booking_create_submissions SET state='unknown',reason='provider_evidence_mismatch',updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id]);return;}
+  const tombstoned=observation.state==='accepted'&&await attendeeTombstoned(context,b.attendeeEmail);
   let meetingId:string|null=null;
-  if(observation.state==='accepted'){
+  if(observation.state==='accepted'&&!tombstoned){
    await receiveSynthesizedCalcomEvent(input.session,{workspaceId:input.scope.workspaceId,eventId:createHash('sha256').update(`booking_create:${id}:${b.uid}:${b.updatedAt}`).digest('hex'),event:{trigger:'BOOKING_CREATED',createdAt:b.updatedAt,uid:b.uid,rescheduleUid:null,startsAt:b.startsAt,endsAt:b.endsAt,organizerEmail:b.organizerEmail,attendeeEmail:b.attendeeEmail,noShow:null}});
    meetingId=(await input.session.query<{id:string}>(`SELECT m.id FROM meetings m WHERE m.workspace_id=$1 AND (m.booking_uid=$2 OR m.current_booking_uid=$2 OR EXISTS(SELECT 1 FROM meeting_booking_uids a WHERE a.workspace_id=m.workspace_id AND a.meeting_id=m.id AND a.booking_uid=$2)) ORDER BY m.created_at,m.id LIMIT 1`,[input.scope.workspaceId,b.uid])).rows[0]?.id??null;
   }
   row=(await input.session.query<BookingCreateRow>('SELECT * FROM booking_create_submissions WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[input.scope.workspaceId,id])).rows[0];if(!row||['accepted','failed'].includes(row.state))return;
-  await input.session.query("UPDATE booking_create_submissions SET state=$3,provider_booking_uid=$4,meeting_id=$5,reason=CASE WHEN provenance_state='redacted' THEN reason ELSE NULL END,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,observation.state,b.uid,meetingId]);
+  await input.session.query("UPDATE booking_create_submissions SET state=$3,provider_booking_uid=$4,meeting_id=$5,reason=CASE WHEN $6 THEN 'subject_deleted' WHEN provenance_state='redacted' THEN reason ELSE NULL END,payload=CASE WHEN $6 THEN '{}'::jsonb ELSE payload END,provenance_state=CASE WHEN $6 THEN 'redacted' ELSE provenance_state END,source_fingerprint=CASE WHEN $6 THEN repeat('0',64) ELSE source_fingerprint END,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,observation.state,b.uid,meetingId,tombstoned]);
  });
 }
