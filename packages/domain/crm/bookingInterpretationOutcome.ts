@@ -69,6 +69,10 @@ export function bookingInterpretationOutcome(input:{candidate:unknown;originals:
  const conditional=/\b(if|unless|provided|assuming|subject to|only after)\b/i.test(text);
  const refusal=/\b(no thanks|not interested|do not contact|don't contact|stop contacting|unsubscribe)\b/i.test(text);
  if(refusal)return {kind:'stop' as const,reason:'refusal' as const,evidence:candidate.agreement,permission:false as const};
+ // Booking negation anywhere in the authored reply vetoes cropped positive evidence.
+ // Withhold for review rather than turn a lexical match into action authority.
+ const bookingNegation=/\b(?:do\s+not|don['’]t|never)\s+(?:book|schedule|arrange|reserve)\b/i.test(text);
+ if(bookingNegation)return {...clarification,...(questionSupported?{handoff}:{})};
  if(candidate.intent==='conditional'||candidate.intent==='handoff'||conditional)return {kind:'david_handoff' as const,schedulingPaused:true,handoff,permission:false as const};
  const explicitAgreement=/\b(yes|that works|works for me|agreed|confirmed|book it|schedule it|see you|sounds good|let'?s do it)\b/i.test(candidate.agreement!.quote)&&!/\b(interested|learning more|maybe|sometime)\b/i.test(candidate.agreement!.quote);
  if(candidate.intent==='accept_slot'&&explicitAgreement&&candidate.slot!==null&&exactSlot(candidate.slot,input.originals,input.now,candidate.agreement!))return {kind:'slot_proposal' as const,slot:candidate.slot,agreement:candidate.agreement,attendeeAddress:original.envelope.from,permission:false as const,schedulingPaused:false,...(questionSupported?{handoff}:{}),requires:['current_attendee_route','fresh_freebusy','guarded_create']};
