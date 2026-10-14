@@ -5,11 +5,11 @@ ALTER TABLE outbound_messages ADD CONSTRAINT outbound_messages_origin_kind_known
 CREATE TABLE booking_message_requests (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),workspace_id uuid NOT NULL REFERENCES workspaces(id),
  conversation_id uuid NOT NULL,owner_user_id uuid NOT NULL REFERENCES users(id),
- kind text NOT NULL CHECK(kind='approved_link'),policy_revision integer NOT NULL CHECK(policy_revision>0),
+ kind text NOT NULL CHECK(kind IN('approved_link','clarification','nudge_3','nudge_7','no_show')),policy_revision integer NOT NULL CHECK(policy_revision>0),
  source_fingerprint text NOT NULL CHECK(source_fingerprint ~ '^[a-f0-9]{64}$'),
  outbound_message_id uuid,consumed_at timestamptz,reason text,
  created_at timestamptz NOT NULL DEFAULT now(),
- UNIQUE(workspace_id,id),UNIQUE(workspace_id,conversation_id,source_fingerprint,kind),
+ UNIQUE(workspace_id,id),CONSTRAINT booking_message_source_kind UNIQUE(workspace_id,conversation_id,source_fingerprint,kind),
  FOREIGN KEY(workspace_id,conversation_id) REFERENCES booking_conversations(workspace_id,id),
  FOREIGN KEY(workspace_id,outbound_message_id) REFERENCES outbound_messages(workspace_id,id),
  CHECK(consumed_at IS NULL OR outbound_message_id IS NOT NULL)

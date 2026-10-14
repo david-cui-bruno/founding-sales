@@ -2,6 +2,7 @@ import {z} from 'zod';
 import type {JobHandler} from '@fss/domain/jobs/handlerRegistry.ts';
 import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {dispatchOutboundMessage} from '@fss/domain/outbound/send.ts';
+import {holdFence} from '@fss/domain/outbound/fence.ts';
 import {bookingMessageFenceId,refuseBookingMessage} from '@fss/domain/meetings/bookingMessages.ts';
 import type {BookingMessageRuntime} from '@fss/domain/meetings/bookingMessagesRuntime.ts';
 const payload=z.strictObject({messageId:z.uuid()});
@@ -12,6 +13,7 @@ export function bookingMessageSendJobHandler(runtime?:BookingMessageRuntime):Job
   if(!runtime){await refuseBookingMessage(ctx,id,'booking_sender_unavailable');return;}
   const outboundMessageId=await bookingMessageFenceId(ctx,id);if(!outboundMessageId)return;
   const result=await dispatchOutboundMessage(ctx,{...runtime.send,bookingMessageRuntime:runtime},{outboundMessageId});
+  if(result.outcome==='not_ready'&&result.detail==='booking_permission_changed')await holdFence(ctx,{outboundMessageId,reason:'booking_permission_changed'});
   if(!['sent','already_terminal'].includes(result.outcome))await refuseBookingMessage(ctx,id,result.detail??result.refusal??result.outcome);
  }};
 }
