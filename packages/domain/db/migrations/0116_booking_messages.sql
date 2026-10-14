@@ -25,3 +25,19 @@ BEGIN
  RETURN NEW;
 END $$;
 CREATE TRIGGER booking_message_identity_guard BEFORE UPDATE ON booking_message_requests FOR EACH ROW EXECUTE FUNCTION booking_message_identity_guard();
+
+-- Only an unattempted dependent draft contains erasable copied source subject.
+-- Attempted/unknown/sent envelopes remain immutable provider-attempt evidence.
+-- Replace the earlier function after the durable message/fence link exists.
+CREATE OR REPLACE FUNCTION redact_booking_conversation_provenance(target_workspace uuid,target_source uuid) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+ UPDATE outbound_messages o SET subject='Re: Our call',updated_at=now()
+ FROM booking_message_requests r JOIN booking_conversations c
+ ON c.workspace_id=r.workspace_id AND c.id=r.conversation_id
+ WHERE o.workspace_id=target_workspace AND r.workspace_id=o.workspace_id
+ AND r.outbound_message_id=o.id AND o.origin_kind='standing_booking'
+ AND o.attempt_token IS NULL AND o.dispatch_started_at IS NULL
+ AND c.source_refs @> jsonb_build_array(jsonb_build_object('sourceId',target_source));
+ UPDATE booking_conversations SET state='stale',reason='source_changed',source_refs='[]',source_fingerprint=repeat('0',64),source_conversation_id=NULL,handoff_action=NULL,target_meeting_id=NULL,target_booking_uid=NULL,nudges_stopped_at=COALESCE(nudges_stopped_at,now()),updated_at=now()
+ WHERE workspace_id=target_workspace AND source_refs @> jsonb_build_array(jsonb_build_object('sourceId',target_source));
+END $$;

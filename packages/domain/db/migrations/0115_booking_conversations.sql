@@ -1,4 +1,4 @@
--- changes: booking_conversations, crm_mail_sources, crm_mail_source_contexts
+-- changes: booking_conversations, crm_mail_sources, crm_mail_source_contexts, meetings
 -- This aggregate retains IDs, hashes and bounded operational counters only.
 -- Interpretation evidence and copied provenance stay in the canonical interpretation.
 CREATE TABLE booking_conversations (
@@ -36,12 +36,24 @@ CREATE TABLE booking_conversations (
  ,CONSTRAINT booking_conversation_target_pair CHECK((target_meeting_id IS NULL)=(target_booking_uid IS NULL))
 );
 CREATE INDEX booking_conversations_sources ON booking_conversations USING gin(source_refs);
+CREATE UNIQUE INDEX booking_conversation_owner_source_episode ON booking_conversations
+ (workspace_id,owner_user_id,(source_refs->0->>'sourceId')) WHERE jsonb_array_length(source_refs)>0;
 GRANT SELECT,INSERT,UPDATE ON booking_conversations TO app_runtime,migration;
 CREATE FUNCTION redact_booking_conversation_provenance(target_workspace uuid,target_source uuid) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
- UPDATE booking_conversations SET state='stale',reason='source_changed',source_refs='[]',source_fingerprint=repeat('0',64),source_conversation_id=NULL,handoff_action=NULL,nudges_stopped_at=COALESCE(nudges_stopped_at,now()),updated_at=now()
+ UPDATE booking_conversations SET state='stale',reason='source_changed',source_refs='[]',source_fingerprint=repeat('0',64),source_conversation_id=NULL,handoff_action=NULL,target_meeting_id=NULL,target_booking_uid=NULL,nudges_stopped_at=COALESCE(nudges_stopped_at,now()),updated_at=now()
  WHERE workspace_id=target_workspace AND source_refs @> jsonb_build_array(jsonb_build_object('sourceId',target_source));
 END $$;
+-- Subject deletion removes a meeting, not its irreversible orchestration receipts.
+-- Detach the paired live identifiers together before the retained FK is checked.
+CREATE FUNCTION detach_booking_conversation_target() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ UPDATE booking_conversations SET target_meeting_id=NULL,target_booking_uid=NULL,updated_at=now()
+ WHERE workspace_id=OLD.workspace_id AND target_meeting_id=OLD.id;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER booking_conversation_target_deleted BEFORE DELETE ON meetings
+ FOR EACH ROW EXECUTE FUNCTION detach_booking_conversation_target();
 CREATE FUNCTION invalidate_booking_conversation_source() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF TG_OP='DELETE' THEN PERFORM redact_booking_conversation_provenance(OLD.workspace_id,OLD.source_id);RETURN OLD;END IF;

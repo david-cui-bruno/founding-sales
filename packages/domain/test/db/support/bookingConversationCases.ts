@@ -18,4 +18,6 @@ export const BOOKING_CONVERSATION_CONSTRAINT_CASES:readonly Case[]=[
  {constraint:'booking_conversation_interpretation',run:async f=>insert(f,{interpretation_request_id:await interpretation(f,f.seeded.beta.workspaceId,f.seeded.beta.admin.userId)})},
  {constraint:`${table}_pkey`,run:async f=>{const id=randomUUID();await insert(f,{id});return insert(f,{id});}},
  {constraint:'booking_conversation_owner_interpretation',run:async f=>{const interpretation_request_id=await interpretation(f);await insert(f,{interpretation_request_id});return insert(f,{interpretation_request_id});}},
+ {constraint:'booking_conversation_owner_source_episode',run:async f=>{const source_refs=JSON.stringify([{sourceId:randomUUID(),sourceRevision:1,contentHash:'a'.repeat(64)}]);await insert(f,{source_refs});return insert(f,{source_refs});}},
+ {constraint:'booking_conversation_target_pair',run:f=>insert(f,{target_meeting_id:randomUUID()})},
 ];
