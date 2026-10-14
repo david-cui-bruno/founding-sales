@@ -32,7 +32,7 @@ for(const outcome of outcomes)it(`normal desktop host/client strips informationa
   return {status:200,body:path.endsWith('/request')?{status:'accepted',result:extended,replayed:false}:extended};
  }});
  const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
- expect(await answerOperation(handlers,'command','crm.bookingInterpretationRequest',{source,priorSources:[]})).toEqual(expected);
+ expect(await answerOperation(handlers,'command','crm.bookingInterpretationRequest',{source,priorSources:[],commandId:ID})).toEqual(expected);
  expect(await answerOperation(handlers,'read','crm.bookingInterpretationRead',{requestId:ID})).toEqual(expected);
  expect(paths).toEqual(['/crm/booking/interpretation/request','/crm/booking/interpretation/read']);
 });

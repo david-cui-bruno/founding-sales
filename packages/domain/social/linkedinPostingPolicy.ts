@@ -101,11 +101,13 @@ export async function bindLinkedinPostingCandidate(ctx:RepositoryContext,input:{
 }
 /** Account/policy serialization precedes binding discovery and post locks, so
  * a concurrent owner bind cannot slip between discovery and delivery admission.
+ * Only the current pending/preparing revision can need fresh dispatch authority.
+ * Historical bindings remain evidence, not fences on new manual revisions.
  * Attempted actions retain inspection. Null preserves unbound manual gates. */
 export async function checkLinkedinPostingDelivery(ctx:RepositoryContext,by:'post_id'|'claim_id'|'id',id:string,runtime?:LinkedinRecurringComposition|null):Promise<string|null>{
  const owner=user(ctx);if(!owner)return 'owner_unavailable';
  await lock(ctx,owner);
- const binding=(await ctx.db.query<{policy_revision:number;accountId:string;accountRevision:number}>(`SELECT b.policy_revision,r.policy->>'accountId' AS "accountId",(r.policy->>'accountRevision')::integer AS "accountRevision" FROM social_deliveries d JOIN social_posts p ON p.workspace_id=d.workspace_id AND p.id=d.post_id JOIN linkedin_posting_candidate_bindings b ON b.workspace_id=d.workspace_id AND b.delivery_id=d.id AND b.owner_user_id=p.owner_user_id JOIN linkedin_posting_policy_revisions r ON r.workspace_id=b.workspace_id AND r.owner_user_id=b.owner_user_id AND r.revision=b.policy_revision WHERE d.workspace_id=$1 AND d.${by}=$2 AND p.owner_user_id=$3 AND d.submission_id IS NULL ORDER BY d.revision DESC LIMIT 1`,[ctx.scope.workspaceId,id,owner])).rows[0];
+ const binding=(await ctx.db.query<{policy_revision:number;accountId:string;accountRevision:number}>(`SELECT b.policy_revision,r.policy->>'accountId' AS "accountId",(r.policy->>'accountRevision')::integer AS "accountRevision" FROM social_deliveries d JOIN social_posts p ON p.workspace_id=d.workspace_id AND p.id=d.post_id JOIN linkedin_posting_candidate_bindings b ON b.workspace_id=d.workspace_id AND b.delivery_id=d.id AND b.owner_user_id=p.owner_user_id JOIN linkedin_posting_policy_revisions r ON r.workspace_id=b.workspace_id AND r.owner_user_id=b.owner_user_id AND r.revision=b.policy_revision WHERE d.workspace_id=$1 AND d.${by}=$2 AND p.owner_user_id=$3 AND d.revision=p.current_revision AND d.state IN ('pending','preparing') AND d.submission_id IS NULL ORDER BY d.revision DESC LIMIT 1`,[ctx.scope.workspaceId,id,owner])).rows[0];
  if(!binding)return checkLinkedinRecurringDelivery(ctx,by,id,runtime);
  const check=await checkLinkedinPostingPolicyCurrent(ctx,{expectedRevision:binding.policy_revision,accountId:binding.accountId,accountRevision:binding.accountRevision});
  return check.current?checkLinkedinRecurringDelivery(ctx,by,id,runtime):check.reason;

@@ -15,6 +15,6 @@ export const bookingCreatePayloadSchema=z.strictObject({
 });
 export const bookingCreateCommandSchema=bookingCreatePayloadSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const bookingCreateInspectCommandSchema=z.strictObject({submissionId:uuid,commandId:commandIdSchema,clientVersion:semanticVersionSchema});
-export const bookingCreateReceiptSchema=z.strictObject({submissionId:uuid,state:z.enum(['pending','accepted','failed','unknown']),providerBookingUid:z.string().nullable(),meetingId:uuid.nullable(),sourceState:z.enum(['current','redacted']),reason:z.string().nullable(),dispatchStartedAt:z.string().nullable()});
+export const bookingCreateReceiptSchema=z.object({submissionId:uuid,state:z.enum(['pending','accepted','failed','unknown']),providerBookingUid:z.string().nullable(),meetingId:uuid.nullable(),sourceState:z.enum(['current','redacted']),reason:z.string().nullable(),dispatchStartedAt:z.string().nullable()});
 export type BookingCreatePayload=z.infer<typeof bookingCreatePayloadSchema>;
 export type BookingCreateReceipt=z.infer<typeof bookingCreateReceiptSchema>;
