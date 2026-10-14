@@ -137,7 +137,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'meetings.bookingConversationEvent':{conversationId:UUID,expectedPolicyRevision:1,event:'reply'},
   'meetings.bookingMessageRequest':{conversationId:UUID,kind:'approved_link'},
   'meetings.bookingMessageRead':{messageId:UUID},
-  'crm.bookingInterpretationRequest':{source:{sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},priorSources:[]},
+  'crm.bookingInterpretationRequest':{source:{sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},priorSources:[],commandId:UUID},
   'crm.bookingInterpretationRead':{requestId:UUID},
   'crm.businessMailList': {limit:50},
   'crm.businessMailReadV2': {sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},
