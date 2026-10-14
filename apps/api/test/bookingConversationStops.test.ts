@@ -44,9 +44,9 @@ it.each(['before_eligibility','after_queue','wrong_attendee','wrong_organizer','
    expect((await f.request('GET',`/meetings/booking-messages?messageId=${queuedId}`)).body).toMatchObject({state:'held'});
   }else{
    const request=await f.request('POST','/meetings/booking-messages',f.command({conversationId:f.conversationId,kind:'nudge_3'}));
-   if(mode==='before_eligibility')expect(request).toMatchObject({status:409,body:{reason:'booking_nudges_stopped'}});
+   if(mode==='before_eligibility'||mode==='cancelled')expect(request).toMatchObject({status:409,body:{reason:'booking_nudges_stopped'}});
    else{expect(request.status,JSON.stringify(request.body)).toBe(200);await f.run();expect(f.gmail.sends).toHaveLength(1);}
   }
-  expect((await f.request('GET',`/meetings/booking-conversation?conversationId=${f.conversationId}`)).body).toMatchObject({nudgeCount:mode==='before_eligibility'||mode==='after_queue'?0:1});
+  expect((await f.request('GET',`/meetings/booking-conversation?conversationId=${f.conversationId}`)).body).toMatchObject({nudgeCount:mode==='before_eligibility'||mode==='after_queue'||mode==='cancelled'?0:1});
  }finally{await server.close();await f.stop();}
 });
