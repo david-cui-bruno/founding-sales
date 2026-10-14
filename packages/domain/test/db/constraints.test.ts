@@ -1,6 +1,6 @@
 import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {BOOKING_CHANGE_CONSTRAINT_CASES} from './support/bookingChangeConstraints.ts';
-import {BOOKING_MESSAGE_CONSTRAINT_CASES} from './support/bookingMessageCases.ts';
+import {BOOKING_MESSAGE_CONSTRAINT_CASES,BOOKING_MESSAGE_GUARD_CASES} from './support/bookingMessageCases.ts';
 import {BOOKING_CONVERSATION_CONSTRAINT_CASES} from './support/bookingConversationCases.ts';
 import {
   ASK_CANONICAL_INDEX_CONSTRAINT_CASES,
@@ -2351,6 +2351,18 @@ describe("foundation constraints", () => {
         ),
       ).rejects.toMatchObject({
         constraint: "crm_ask_canonical_window_immutable",
+      });
+    } finally {
+      await fixture.session.query("ROLLBACK");
+    }
+  });
+
+  it.each(BOOKING_MESSAGE_GUARD_CASES)("refuses the booking message mutation guarded by $constraint", async testCase => {
+    await fixture.session.query("BEGIN");
+    try {
+      await expect(testCase.run(fixture)).rejects.toMatchObject({
+        code: "23514",
+        constraint: testCase.constraint,
       });
     } finally {
       await fixture.session.query("ROLLBACK");

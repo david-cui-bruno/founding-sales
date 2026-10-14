@@ -27,10 +27,14 @@ export const BOOKING_MESSAGE_CONSTRAINT_CASES:readonly Case[]=[
  {constraint:`${table}_pkey`,run:async f=>{const id=randomUUID();await insert(f,{id});return insert(f,{id});}},
  {constraint:`${table}_workspace_id_id_key`,run:async f=>{const id=randomUUID();await insert(f,{id});await f.session.query(`ALTER TABLE ${table} DROP CONSTRAINT ${table}_pkey`);return insert(f,{id});}},
  {constraint:'booking_message_source_kind',run:async f=>{const conversation_id=await conversation(f);await insert(f,{conversation_id});return insert(f,{conversation_id});}},
- ...['kind','policy_revision','source_fingerprint','owner_user_id','conversation_id','created_at','id'].map(column=>({constraint:'booking_message_identity_immutable',run:async(f:Fixture)=>{const id=await insert(f),values:Record<string,unknown>={kind:'nudge_3',policy_revision:2,source_fingerprint:'b'.repeat(64),owner_user_id:f.seeded.beta.admin.userId,conversation_id:await conversation(f),created_at:'2026-01-01T00:00:00Z',id:randomUUID()};return f.session.query(`UPDATE ${table} SET ${column}=$3 WHERE workspace_id=$1 AND id=$2`,[f.seeded.alpha.workspaceId,id,values[column]]);}})),
- {constraint:'booking_message_identity_immutable',run:async f=>{const id=await insert(f,{outbound_message_id:f.outbound.alpha.preparedFenceId,consumed_at:new Date()});return f.session.query(`UPDATE ${table} SET consumed_at=NULL WHERE workspace_id=$1 AND id=$2`,[f.seeded.alpha.workspaceId,id]);}},
- {constraint:'booking_message_identity_immutable',run:async f=>{const id=await insert(f,{outbound_message_id:f.outbound.alpha.preparedFenceId});return f.session.query(`UPDATE ${table} SET outbound_message_id=NULL WHERE workspace_id=$1 AND id=$2`,[f.seeded.alpha.workspaceId,id]);}},
  {constraint:'outbound_messages_origin_kind_known',run:f=>cloneFence(f,{origin_kind:'generic_automatic_reply'})},
  {constraint:'outbound_messages_exactly_one_origin',run:f=>cloneFence(f,{draft_id:null})},
  {constraint:'outbound_messages_origin_kind_matches',run:f=>cloneFence(f,{origin_kind:'step_execution'})},
+];
+// These named errors come from a BEFORE UPDATE trigger, not pg_constraint.
+// Preserve every mutation proof without inventing a catalogued constraint.
+export const BOOKING_MESSAGE_GUARD_CASES:readonly Case[]=[
+ ...['kind','policy_revision','source_fingerprint','owner_user_id','conversation_id','created_at','id'].map(column=>({constraint:'booking_message_identity_immutable',run:async(f:Fixture)=>{const id=await insert(f),values:Record<string,unknown>={kind:'nudge_3',policy_revision:2,source_fingerprint:'b'.repeat(64),owner_user_id:f.seeded.beta.admin.userId,conversation_id:await conversation(f),created_at:'2026-01-01T00:00:00Z',id:randomUUID()};return f.session.query(`UPDATE ${table} SET ${column}=$3 WHERE workspace_id=$1 AND id=$2`,[f.seeded.alpha.workspaceId,id,values[column]]);}})),
+ {constraint:'booking_message_identity_immutable',run:async f=>{const id=await insert(f,{outbound_message_id:f.outbound.alpha.preparedFenceId,consumed_at:new Date()});return f.session.query(`UPDATE ${table} SET consumed_at=NULL WHERE workspace_id=$1 AND id=$2`,[f.seeded.alpha.workspaceId,id]);}},
+ {constraint:'booking_message_identity_immutable',run:async f=>{const id=await insert(f,{outbound_message_id:f.outbound.alpha.preparedFenceId});return f.session.query(`UPDATE ${table} SET outbound_message_id=NULL WHERE workspace_id=$1 AND id=$2`,[f.seeded.alpha.workspaceId,id]);}},
 ];
