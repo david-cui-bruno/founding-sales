@@ -147,6 +147,8 @@ it('owner access lost after authenticated read begins cannot expose historical p
  reading=h.call('/social/linkedin-recurring/read',{},session);await b.arrived;
  await h.f.db.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[h.f.alpha.workspaceId,h.f.alpha.salesperson.userId]);
  await h.f.db.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2",[h.f.alpha.workspaceId,h.f.alpha.admin.userId]);b.release();
- expect(await reading).toMatchObject({status:200,body:{holds:['owner_unavailable'],items:[]}});
+ const answer=await reading;
+ expect(answer).toMatchObject({status:401,body:{error:'membership_inactive'}});
+ expect(answer).not.toHaveProperty('body.items');
  }finally{b.release();await reading;await h.f.stop();}
 });
