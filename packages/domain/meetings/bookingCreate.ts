@@ -41,13 +41,6 @@ async function bookingCreateSuppressionReason(context:RepositoryContext,authorit
 export async function validateBookingCreate(context:RepositoryContext,input:BookingCreatePayload,runtime:BookingCreateRuntime,expectedBindingKey?:string,inspectionOnly=false):Promise<{ok:true;snapshot:BookingPolicySnapshot;attendee:{name:string;email:string;timeZone:string};attendeeAuthority:BookingCreateAttendeeAuthority;fingerprint:string}|{ok:false;reason:string}>{
  const actor=context.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'owner_required'};
  const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];if(member?.role!=='admin'||member.status!=='active')return {ok:false,reason:'owner_required'};
- await lockSettingForRead(context,'booking_policy');
- const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,capability:'provider_action',...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
- if(policy.kind!=='available')return {ok:false,reason:policy.reason};const snapshot=policy.snapshot;
- if(!snapshot.operationalReady)return {ok:false,reason:'booking_readiness_unavailable'};
- const cost=await bookingCreateCostReason(runtime,snapshot);if(cost!==null)return {ok:false,reason:cost};
- const slot=inspectionOnly?null:bookingSlotReason(input.agreedSlot.startsAt,runtime.policy.now());if(slot!==null)return {ok:false,reason:slot};
- if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false,reason:'unsupported_provider_account'};
  const hint=(await context.db.query<{firm_id:string;contact_id:string|null;address:string;version:number}>('SELECT firm_id,contact_id,address,version FROM email_addresses WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.attendeeRouteId])).rows[0];
  if(hint===undefined||hint.contact_id===null)return {ok:false,reason:'attendee_unsupported'};
  const sources=[input.agreement,...(input.offeredContext===undefined?[]:[input.offeredContext])];
@@ -55,6 +48,15 @@ export async function validateBookingCreate(context:RepositoryContext,input:Book
  // The durable Route hint contributes to the existing sorted firm closure before
  // any person/Route lock. A later changed dependency is refused, never appended.
  if(closure===null||!await lockIdentityContext(context,{firmIds:[...closure.firmIds,hint.firm_id],personIds:closure.personIds})||!await lockMailCopyAuthorityBatch(context,closure,{firmIds:closure.firmIds,personIds:closure.personIds,lockMode:'write'}))return {ok:false,reason:'source_unavailable'};
+ // Canonical original readers lock identity/grant/copy/source before policy.
+ // Match that order, never hold policy while waiting for their source closure.
+ await lockSettingForRead(context,'booking_policy');
+ const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,capability:'provider_action',...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
+ if(policy.kind!=='available')return {ok:false,reason:policy.reason};const snapshot=policy.snapshot;
+ if(!snapshot.operationalReady)return {ok:false,reason:'booking_readiness_unavailable'};
+ const cost=await bookingCreateCostReason(runtime,snapshot);if(cost!==null)return {ok:false,reason:cost};
+ const slot=inspectionOnly?null:bookingSlotReason(input.agreedSlot.startsAt,runtime.policy.now());if(slot!==null)return {ok:false,reason:slot};
+ if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false,reason:'unsupported_provider_account'};
  const agreement=await readMailConversationV2(context,input.agreement);if(agreement.state!=='available'||!('originalObservation' in agreement.source))return {ok:false,reason:'source_unavailable'};
  const source=agreement.source;
  if(source.ownerUserId!==actor.userId||source.direction!=='incoming'||source.accountBinding!==snapshot.bindings.sender.accountId||source.originalObservation.connectionState!=='current'||['trashed','confirmed_missing','transient_unavailable'].includes(source.originalObservation.state)||source.completeness!=='complete'||(!Array.isArray(source.ranges)||!source.ranges.some((r:unknown)=>typeof r==='object'&&r!==null&&'kind' in r&&r.kind==='authored')))return {ok:false,reason:'source_authority_changed'};
