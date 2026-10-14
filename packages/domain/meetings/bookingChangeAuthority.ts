@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import type {BookingChangePayload} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {readCurrentBookingPolicy,bookingPolicySnapshotReadyAt} from './bookingPolicy.ts';
+import {readCurrentBookingPolicy,revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from './bookingPolicy.ts';
 import {lockSettingForRead} from '../settings/store.ts';
 import {readMailConversationV2} from '../mail/crmMailOriginals.ts';
 import {snapshotMailCopyAuthorityBatch,lockMailCopyAuthorityBatch} from '../mail/crmSources.ts';
@@ -21,7 +21,7 @@ export async function validateBookingChange(context:RepositoryContext,input:Book
  await lockSendGateForStopFact(context);
  const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];if(member?.role!=='admin'||member.status!=='active')return {ok:false as const,reason:'owner_required'};
  await lockSettingForRead(context,'booking_policy');
- const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
+ const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,capability:'provider_action',expectedRevision:input.expectedPolicyRevision,...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
  if(policy.kind!=='available')return {ok:false as const,reason:policy.reason};const snapshot=policy.snapshot;
  if(!snapshot.operationalReady)return {ok:false as const,reason:'booking_readiness_unavailable'};
  if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false as const,reason:'unsupported_provider_account'};
@@ -48,7 +48,7 @@ export async function validateBookingChange(context:RepositoryContext,input:Book
  if(!inspectionOnly&&(!['booked','rescheduled'].includes(meeting.state)||meeting.ends_at.getTime()-meeting.starts_at.getTime()!==20*60_000||meeting.starts_at.getTime()<=Date.parse(runtime.policy.now())))return {ok:false as const,reason:'meeting_not_changeable'};
  // Re-read canonical policy and exact change cost after source/identity/meeting waits.
  const cost=await runtime.readCostContract(snapshot);
- const current=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,expectedBindingKey:snapshot.bindingKey},runtime.policy);
+ const current=await revalidateBookingPolicy(context,snapshot,runtime.policy);
  if(current.kind!=='available')return {ok:false as const,reason:current.reason};if(!current.snapshot.operationalReady)return {ok:false as const,reason:'booking_readiness_unavailable'};
  const now=runtime.policy.now();
  if(!bookingPolicySnapshotReadyAt(current.snapshot,now))return {ok:false as const,reason:'booking_readiness_unavailable'};
