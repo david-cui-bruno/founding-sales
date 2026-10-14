@@ -21,6 +21,8 @@ export type IdempotencyProtection = (typeof IDEMPOTENCY_PROTECTIONS)[number];
 export const JOB_KINDS = [
   'meeting.booking_create',
   'meeting.booking_change',
+  'meeting.booking_conversation',
+  'booking.message_send',
   'crm.booking_interpretation',
   'crm.ask_answer',
   'crm.ask_index',
@@ -80,6 +82,8 @@ export function isJobKind(value: string): value is JobKind {
 export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection>> = Object.freeze({
   'meeting.booking_create': 'outbound_fence',
   'meeting.booking_change': 'outbound_fence',
+  'meeting.booking_conversation': 'outbound_fence',
+  'booking.message_send': 'outbound_fence',
   'crm.booking_interpretation':'outbound_fence',
   'crm.ask_answer': 'outbound_fence',
   'crm.ask_index': 'outbound_fence',
@@ -203,6 +207,8 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 export const jobIdempotencyKey = Object.freeze({
   bookingCreate: (submissionId: string): string => `booking-create:${submissionId}`,
   bookingChange: (submissionId: string): string => `booking-change:${submissionId}`,
+  bookingConversation: (conversationId: string): string => `booking-conversation:${conversationId}`,
+  bookingMessage: (messageId: string): string => `booking-message:${messageId}`,
   bookingInterpretation:(requestId:string):string=>`booking-interpretation:${requestId}`,
   automaticEmail: (revision:number,at:string):string => `automatic-email:${String(revision)}:${hourOf(at)}`,
   sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
@@ -346,6 +352,8 @@ export type JobClass = (typeof JOB_CLASSES)[number];
 export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze({
   'meeting.booking_create': 'urgent',
   'meeting.booking_change': 'urgent',
+  'meeting.booking_conversation': 'urgent',
+  'booking.message_send': 'urgent',
   'crm.booking_interpretation':'bulk',
   'crm.ask_answer': 'bulk',
   'crm.ask_index': 'bulk',

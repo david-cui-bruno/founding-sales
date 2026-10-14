@@ -37,6 +37,8 @@ describe('job kind classes', () => {
     expect(kindsOfClass('urgent')).toEqual([
       'meeting.booking_create',
       'meeting.booking_change',
+      'meeting.booking_conversation',
+      'booking.message_send',
       'mail.sync',
       'mail.reconcile',
       'mail.recover',

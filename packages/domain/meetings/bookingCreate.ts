@@ -1,6 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {bookingCreatePayloadSchema,type BookingCreatePayload,type BookingCreateReceipt} from '@fss/contracts';
-import type {RepositoryContext} from '../db/workspaceScope.ts';
+import {bookingCreatePayloadSchema,bookingInterpretationSourceSchema,type BookingCreatePayload,type BookingCreateReceipt} from '@fss/contracts';
+import {repositoryContext,workspaceScope,type RepositoryContext} from '../db/workspaceScope.ts';
+import {bookingStandingCreateSchema,revalidateBookingConversationCreate,type BookingStandingCreateInput} from './bookingConversationAuthority.ts';
 import {readCurrentBookingPolicy} from './bookingPolicy.ts';
 import {lockSettingForRead} from '../settings/store.ts';
 import {readMailConversationV2} from '../mail/crmMailOriginals.ts';
@@ -11,9 +12,12 @@ import {jobIdempotencyKey} from '../jobs/jobKinds.ts';
 import {bookingCreateCostReason,type BookingCreateRuntime} from './bookingCreateRuntime.ts';
 import type {BookingPolicySnapshot} from './bookingPolicyTypes.ts';
 function canonicalBookingJson(value:unknown):string{if(Array.isArray(value))return `[${value.map(canonicalBookingJson).join(',')}]`;if(value!==null&&typeof value==='object')return `{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonicalBookingJson((value as Record<string,unknown>)[key])}`).join(',')}}`;return JSON.stringify(value);}
+export type BookingCreateInput=BookingCreatePayload|BookingStandingCreateInput;
+/** Private durable payload grammar. The public command remains human-confirmation-only. */
+export function parseBookingCreateInput(raw:unknown){return bookingCreatePayloadSchema.or(bookingStandingCreateSchema).safeParse(raw);}
 export type BookingCreateResult={ok:true;value:BookingCreateReceipt}|{ok:false;reason:string};
 export interface BookingCreateAttendeeAuthority {readonly routeId:string;readonly firmId:string;readonly contactId:string;readonly address:string;readonly version:number}
-export interface BookingCreateRow extends Record<string,unknown>{id:string;owner_user_id:string;policy_revision:number;binding_key:string;payload:BookingCreatePayload;request_hash:string;state:BookingCreateReceipt['state'];provenance_state:'current'|'redacted';provider_booking_uid:string|null;meeting_id:string|null;reason:string|null;dispatch_started_at:Date|null;starts_at:Date;provider_account_id:string;event_type_id:string}
+export interface BookingCreateRow extends Record<string,unknown>{id:string;owner_user_id:string;policy_revision:number;binding_key:string;payload:BookingCreateInput;request_hash:string;state:BookingCreateReceipt['state'];provenance_state:'current'|'redacted';provider_booking_uid:string|null;meeting_id:string|null;reason:string|null;dispatch_started_at:Date|null;starts_at:Date;provider_account_id:string;event_type_id:string}
 export function bookingCreateReceipt(row:BookingCreateRow):BookingCreateReceipt{return {submissionId:row.id,state:row.state,providerBookingUid:row.provider_booking_uid,meetingId:row.meeting_id,sourceState:row.provenance_state,reason:row.reason,dispatchStartedAt:row.dispatch_started_at?.toISOString()??null};}
 export function bookingSlotReason(startsAt:string,now:string):string|null{
  const start=Date.parse(startsAt),current=Date.parse(now);if(!Number.isFinite(start)||!Number.isFinite(current))return 'invalid_slot';
@@ -29,23 +33,29 @@ export async function recheckBookingCreateAttendee(context:RepositoryContext,aut
  return (await context.db.query('SELECT id FROM email_addresses WHERE workspace_id=$1 AND lower(address)=lower($2) AND retired_at IS NULL AND (contact_id IS DISTINCT FROM $3 OR firm_id IS DISTINCT FROM $4)',[context.scope.workspaceId,authority.address,authority.contactId,authority.firmId])).rows.length?'attendee_ambiguous':null;
 }
 /** Re-read exact originals and immutable contexts under their existing authority lock closure. No second copy of mail. */
-export async function validateBookingCreate(context:RepositoryContext,input:BookingCreatePayload,runtime:BookingCreateRuntime,expectedBindingKey?:string,inspectionOnly=false):Promise<{ok:true;snapshot:BookingPolicySnapshot;attendee:{name:string;email:string;timeZone:string};attendeeAuthority:BookingCreateAttendeeAuthority;fingerprint:string}|{ok:false;reason:string}>{
+export async function validateBookingCreate(context:RepositoryContext,input:BookingCreateInput,runtime:BookingCreateRuntime,expectedBindingKey?:string,inspectionOnly=false):Promise<{ok:true;snapshot:BookingPolicySnapshot;attendee:{name:string;email:string;timeZone:string};attendeeAuthority:BookingCreateAttendeeAuthority;fingerprint:string}|{ok:false;reason:string}>{
  const actor=context.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'owner_required'};
  const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];if(member?.role!=='admin'||member.status!=='active')return {ok:false,reason:'owner_required'};
+ const hint=(await context.db.query<{firm_id:string;contact_id:string|null;address:string;version:number}>('SELECT firm_id,contact_id,address,version FROM email_addresses WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.attendeeRouteId])).rows[0];
+ if(hint===undefined||hint.contact_id===null)return {ok:false,reason:'attendee_unsupported'};
+ const sources=[input.agreement,...(input.offeredContext===undefined?[]:[input.offeredContext])];
+ if('standingOrigin' in input){
+  const interpretation=(await context.db.query<{source_refs:unknown}>('SELECT source_refs FROM crm_booking_interpretations WHERE workspace_id=$1 AND id=$2 AND requested_by=$3',[context.scope.workspaceId,input.standingOrigin.interpretationRequestId,actor.userId])).rows[0];
+  const refs=bookingInterpretationSourceSchema.array().min(1).max(4).safeParse(interpretation?.source_refs);
+  if(!refs.success)return {ok:false,reason:'standing_source_unavailable'};
+  for(const ref of refs.data)if(!sources.some(existing=>existing.sourceId===ref.sourceId&&existing.sourceRevision===ref.sourceRevision&&existing.contentHash===ref.contentHash))sources.push(ref);
+ }
+ const closure=await snapshotMailCopyAuthorityBatch(context,sources);
+ // Collect every standing source and the Route firm before any source/contact lock.
+ // Source authority precedes policy authority, as in interpretation and conversation reads.
+ if(closure===null||!await lockIdentityContext(context,{firmIds:[...closure.firmIds,hint.firm_id],personIds:closure.personIds})||!await lockMailCopyAuthorityBatch(context,closure,{firmIds:closure.firmIds,personIds:closure.personIds,lockMode:'write'}))return {ok:false,reason:'source_unavailable'};
  await lockSettingForRead(context,'booking_policy');
- const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,capability:'provider_action',...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
+ const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,capability:'standingOrigin' in input?'booking':'provider_action',...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
  if(policy.kind!=='available')return {ok:false,reason:policy.reason};const snapshot=policy.snapshot;
  if(!snapshot.operationalReady)return {ok:false,reason:'booking_readiness_unavailable'};
  const cost=await bookingCreateCostReason(runtime,snapshot);if(cost!==null)return {ok:false,reason:cost};
  const slot=inspectionOnly?null:bookingSlotReason(input.agreedSlot.startsAt,runtime.policy.now());if(slot!==null)return {ok:false,reason:slot};
  if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false,reason:'unsupported_provider_account'};
- const hint=(await context.db.query<{firm_id:string;contact_id:string|null;address:string;version:number}>('SELECT firm_id,contact_id,address,version FROM email_addresses WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.attendeeRouteId])).rows[0];
- if(hint===undefined||hint.contact_id===null)return {ok:false,reason:'attendee_unsupported'};
- const sources=[input.agreement,...(input.offeredContext===undefined?[]:[input.offeredContext])];
- const closure=await snapshotMailCopyAuthorityBatch(context,sources);
- // The durable Route hint contributes to the existing sorted firm closure before
- // any person/Route lock. A later changed dependency is refused, never appended.
- if(closure===null||!await lockIdentityContext(context,{firmIds:[...closure.firmIds,hint.firm_id],personIds:closure.personIds})||!await lockMailCopyAuthorityBatch(context,closure,{firmIds:closure.firmIds,personIds:closure.personIds,lockMode:'write'}))return {ok:false,reason:'source_unavailable'};
  const agreement=await readMailConversationV2(context,input.agreement);if(agreement.state!=='available'||!('originalObservation' in agreement.source))return {ok:false,reason:'source_unavailable'};
  const source=agreement.source;
  if(source.ownerUserId!==actor.userId||source.direction!=='incoming'||source.accountBinding!==snapshot.bindings.sender.accountId||source.originalObservation.connectionState!=='current'||['trashed','confirmed_missing','transient_unavailable'].includes(source.originalObservation.state)||source.completeness!=='complete'||(!Array.isArray(source.ranges)||!source.ranges.some((r:unknown)=>typeof r==='object'&&r!==null&&'kind' in r&&r.kind==='authored')))return {ok:false,reason:'source_authority_changed'};
@@ -58,12 +68,28 @@ export async function validateBookingCreate(context:RepositoryContext,input:Book
  if(input.offeredContext!==undefined){const prior=await readMailConversationV2(context,input.offeredContext);if(prior.state!=='available'||!('originalObservation' in prior.source))return {ok:false,reason:'offered_context_unavailable'};const offer=prior.source;
  const priorThread=(await context.db.query<{provider_thread_id:string}>('SELECT provider_thread_id FROM mail_messages WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,offer.sourceId])).rows[0]?.provider_thread_id;
  if(offer.ownerUserId!==actor.userId||offer.direction!=='outgoing'||!offer.sentProof||offer.originalObservation.connectionState!=='current'||['trashed','confirmed_missing','transient_unavailable'].includes(offer.originalObservation.state)||offer.mailboxId!==source.mailboxId||offer.accountBinding!==source.accountBinding||offer.acquiredGeneration!==source.acquiredGeneration||priorThread!==thread||Date.parse(offer.occurredAt)>=Date.parse(source.occurredAt)||!offer.envelope.to.some(email=>email.toLowerCase()===route.address.toLowerCase()))return {ok:false,reason:'offered_context_unsupported'};}
+ const standingReason='standingOrigin' in input?await revalidateBookingConversationCreate(context,input,runtime.policy,runtime.policy.now(),snapshot):null;
+ if(standingReason!==null)return {ok:false,reason:standingReason};
  return {ok:true,snapshot,attendee:{name:route.full_name,email:route.address.toLowerCase(),timeZone:input.agreedSlot.timeZone},attendeeAuthority:{routeId:input.attendeeRouteId,firmId:route.firm_id,contactId:route.contact_id,address:route.address,version:route.version},fingerprint:createHash('sha256').update(canonicalBookingJson({closure,route,thread,original:source.originalObservation,account:source.accountBinding,generation:source.acquiredGeneration})).digest('hex')};
 }
 /** Ordinary command transaction owns the durable reservation and job atomically. */
 export async function requestBookingCreate(context:RepositoryContext,raw:BookingCreatePayload,runtime?:BookingCreateRuntime):Promise<BookingCreateResult>{
  const parsed=bookingCreatePayloadSchema.safeParse(Object.fromEntries(Object.entries(raw).filter(([key])=>key!=='commandId'&&key!=='clientVersion')));if(!parsed.success)return {ok:false,reason:'invalid_input'};const input=parsed.data;
  if(runtime===undefined)return {ok:false,reason:'booking_runtime_unavailable'};
+ return reserveBookingCreate(context,input,runtime);
+}
+/** A registered worker derives the owner from durable standing provenance, never a human approval. */
+export async function requestBookingStandingCreate(context:RepositoryContext,raw:BookingStandingCreateInput,runtime?:BookingCreateRuntime):Promise<BookingCreateResult>{
+ const actor=context.scope.actor;
+ if(actor.kind!=='system'||actor.component!=='worker')return {ok:false,reason:'worker_required'};
+ const parsed=bookingStandingCreateSchema.safeParse(raw);if(!parsed.success)return {ok:false,reason:'invalid_input'};
+ if(runtime===undefined)return {ok:false,reason:'booking_runtime_unavailable'};
+ const row=(await context.db.query<{owner_user_id:string}>('SELECT owner_user_id FROM booking_conversations WHERE workspace_id=$1 AND id=$2 AND interpretation_request_id=$3',[context.scope.workspaceId,parsed.data.standingOrigin.conversationId,parsed.data.standingOrigin.interpretationRequestId])).rows[0];
+ if(row===undefined)return {ok:false,reason:'standing_origin_unavailable'};
+ const ownerContext=repositoryContext(workspaceScope(context.scope.workspaceId,{kind:'user',userId:row.owner_user_id,role:'admin'}),context.db);
+ return reserveBookingCreate(ownerContext,parsed.data,runtime);
+}
+async function reserveBookingCreate(context:RepositoryContext,input:BookingCreateInput,runtime:BookingCreateRuntime):Promise<BookingCreateResult>{
  const valid=await validateBookingCreate(context,input,runtime);if(!valid.ok)return valid;
  const owner=context.scope.actor;if(owner.kind!=='user')return {ok:false,reason:'owner_required'};
  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${context.scope.workspaceId}:booking_create:${valid.snapshot.bindings.account.accountId}`]);
