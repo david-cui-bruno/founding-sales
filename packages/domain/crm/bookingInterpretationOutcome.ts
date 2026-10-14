@@ -53,7 +53,15 @@ function exactSlot(slot:z.infer<typeof slotSchema>,originals:readonly Original[]
 }
 /** Withholding only. Callers supply whole authored text from currently authorized canonical originals. */
 export function bookingAuthoredTextHasBookingNegation(text:string):boolean {
- return /\b(?:do\s+not|don['’]t|never)\s+(?:book|schedule|arrange|reserve)\b/i.test(text);
+ // Match bounded booking/attendance phrases, not arbitrary negative sentiment.
+ // Callers exclude canonical quoted/forwarded history. This withholding-only
+ // helper is also used by standing validation against the current source.
+ const bookingInstruction=/\b(?:do\s+not|don['’]t|never)\s+(?:book|schedule|arrange|reserve)\b/i;
+ const attendance=/\b(?:cannot|can\s+not|can['’]t|will\s+not|won['’]t|unable\s+to|not\s+able\s+to)\s+(?:(?:attend|join|meet)\s+(?:then|at\s+that\s+time|(?:our|the|this|that)\s+(?:call|meeting|appointment))\b|(?:attend|join|meet)(?=\s*[.!?,;]|\s*$)|make\s+(?:it|that\s+time|the\s+call)\b|be\s+there\b)/i;
+ const timeDisagreement=/\b(?:(?:that|this)(?:\s+(?:time|slot|date))?|the\s+(?:time|slot|date))\s+(?:does\s+not|doesn['’]t|will\s+not|won['’]t)\s+work\b/i;
+ const negatedAgreement=/\b(?:do\s+not|don['’]t|cannot|can['’]t)\s+(?:agree|accept|confirm)(?:\s+(?:(?:to|with)\s+)?(?:that|this|the)(?:\s+(?:time|slot|date|meeting|call|booking))?\b|(?=\s*[.!?,;]|\s*$))/i;
+ const cancellation=/(?:^|[.!?\n])\s*(?:please\s+|I\s+(?:need|want|have)\s+to\s+)?(?:cancel|call\s+off)\s+(?:our|the|my|this|that)\s+(?:meeting|call|appointment|booking)\b/i;
+ return bookingInstruction.test(text)||attendance.test(text)||timeDisagreement.test(text)||negatedAgreement.test(text)||cancellation.test(text);
 }
 const clarification={kind:'clarification' as const,reason:'booking_candidate_requires_review',permission:false as const};
 /** Candidate validation is not authority, freebusy, a Route, a send or a booking. */
@@ -75,7 +83,9 @@ export function bookingInterpretationOutcome(input:{candidate:unknown;originals:
  if(refusal)return {kind:'stop' as const,reason:'refusal' as const,evidence:candidate.agreement,permission:false as const};
  // Booking negation anywhere in the authored reply vetoes cropped positive evidence.
  // Withhold for review rather than turn a lexical match into action authority.
- if(bookingAuthoredTextHasBookingNegation(text))return {...clarification,...(questionSupported?{handoff}:{})};
+ // Exact change proposals below have their own whole-authored logistics grammar,
+ // which admits an unconditional cancellation but rejects cropped contradictions.
+ if(candidate.intent!=='change'&&bookingAuthoredTextHasBookingNegation(text))return {...clarification,...(questionSupported?{handoff}:{})};
  if(candidate.intent==='conditional'||candidate.intent==='handoff'||conditional)return {kind:'david_handoff' as const,schedulingPaused:true,handoff,permission:false as const};
  if(candidate.intent==='change'){
   const review={...clarification,...(questionSupported?{handoff}:{})};
