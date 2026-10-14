@@ -34,6 +34,7 @@ import { crmDecisionHistoryReadSchema, crmDecisionHistoryPageSchema } from "@fss
 import { crmDecisionHistoryListSchema, crmDecisionHistoryListPageSchema } from "@fss/contracts";
 import { crmEvidenceReadSchema, crmEvidencePageSchema, crmEvidenceDecidePayloadSchema, crmEvidenceDecidedSchema } from "@fss/contracts";
 import {crmMailImportReadSchema,crmMailImportAcknowledgmentSchema,crmMailImportHealthSchema} from "@fss/contracts";
+import {bookingConversationInputSchema,bookingConversationEventCommandSchema,bookingConversationViewSchema,bookingMessageCommandSchema,bookingMessageViewSchema} from '@fss/contracts';
 import {bookingInterpretationRequestSchema,bookingInterpretationReadSchema,bookingInterpretationViewSchema} from '@fss/contracts';
 import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSchema,explicitOpportunityResultSchema} from '@fss/contracts';
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
@@ -1955,6 +1956,11 @@ export const OPERATIONS = {
 
   // --- Meetings (slice M1) ------------------------------------------------
   // Straight through the authenticated client, like Diagnostics: no state is kept.
+  'meetings.bookingConversationRequest':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-conversation'}],input:bookingConversationInputSchema,output:bookingConversationViewSchema,transform:'current interpretation admission under standing policy, not human confirmation or live Enable'},
+  'meetings.bookingConversationRead':{kind:'read',calls:[{method:'GET',path:'/meetings/booking-conversation?conversationId={uuid}'}],input:z.strictObject({conversationId:z.uuid()}),output:bookingConversationViewSchema,transform:'current authorized conversation, durable handoff and booking receipt'},
+  'meetings.bookingConversationEvent':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-conversation/event'}],input:bookingConversationEventCommandSchema.omit({commandId:true,clientVersion:true}),output:bookingConversationViewSchema,transform:'shared manual nudge, stop or explicit David no-show event'},
+  'meetings.bookingMessageRequest':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-messages'}],input:bookingMessageCommandSchema.omit({commandId:true,clientVersion:true}),output:bookingMessageViewSchema,transform:'booking-only message request from current conversation, not per-message approval'},
+  'meetings.bookingMessageRead':{kind:'read',calls:[{method:'GET',path:'/meetings/booking-messages?messageId={uuid}'}],input:z.strictObject({messageId:z.uuid()}),output:bookingMessageViewSchema,transform:'current booking-only message receipt, inspect uncertain acceptance without replay'},
   'meetings.forFirm': {
     kind: 'read',
     calls: [{ method: 'GET', path: '/meetings/firm?firmId={uuid}' }],

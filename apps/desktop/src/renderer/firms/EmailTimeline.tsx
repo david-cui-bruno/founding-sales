@@ -1,4 +1,5 @@
 import {ProcessingHealth,type ProcessingPorts} from './ProcessingHealth.tsx';
+import type {BookingConversationPorts} from './BookingConversation.tsx';
 import {BookingInterpretation,type BookingInterpretationPorts} from './BookingInterpretation.tsx';
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import type {
@@ -25,6 +26,7 @@ export interface EmailTimelineFilter {
 }
 export interface EmailTimelinePorts {
   booking?:BookingInterpretationPorts;
+  bookingConversation?:BookingConversationPorts;
   list(
     input: EmailTimelineFilter & { afterId?: string; limit: number },
   ): Promise<MailSourceList>;
@@ -612,7 +614,7 @@ export function EmailTimeline({
               ))}
             </ul>
           )}
-          {ports.booking&&source.direction==='incoming'&&source.passage!==null?<BookingInterpretation key={`${privacyKey}:${sourceVersion}:${source.sourceId}:${source.sourceRevision}:${source.contentHash}:${source.accountBinding}:${source.acquiredGeneration}`} ports={ports.booking} enabled={enabled&&!mutating} privacyKey={privacyKey} sourceVersion={sourceVersion} source={{sourceId:source.sourceId,sourceRevision:source.sourceRevision,contentHash:source.contentHash}} priorChoices={(page?.sources??[]).filter(prior=>prior.sourceId!==source.sourceId&&prior.availability==='available'&&prior.occurredAt!==null&&prior.occurredAt<source.occurredAt).map(prior=>({sourceId:prior.sourceId,sourceRevision:prior.sourceRevision,contentHash:prior.contentHash}))}/>:null}
+          {ports.booking&&source.direction==='incoming'&&source.passage!==null?<BookingInterpretation key={`${privacyKey}:${sourceVersion}:${source.sourceId}:${source.sourceRevision}:${source.contentHash}:${source.accountBinding}:${source.acquiredGeneration}`} ports={ports.booking} {...(ports.bookingConversation?{conversationPorts:ports.bookingConversation}:{})} enabled={enabled&&!mutating} privacyKey={privacyKey} sourceVersion={sourceVersion} source={{sourceId:source.sourceId,sourceRevision:source.sourceRevision,contentHash:source.contentHash}} priorChoices={(page?.sources??[]).filter(prior=>prior.sourceId!==source.sourceId&&prior.availability==='available'&&prior.occurredAt!==null&&prior.occurredAt<source.occurredAt).map(prior=>({sourceId:prior.sourceId,sourceRevision:prior.sourceRevision,contentHash:prior.contentHash}))}/>:null}
           {ports.remove ? (
             <Button disabled={mutating} onClick={() => void remove(source)}>
               Delete copied email

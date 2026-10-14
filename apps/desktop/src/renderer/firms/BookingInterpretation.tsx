@@ -1,12 +1,13 @@
 import {useCallback,useLayoutEffect,useRef,useState,type JSX} from 'react';
 import type {BookingInterpretationSource,BookingInterpretationView} from '@fss/contracts';
+import {BookingConversation,type BookingConversationPorts} from './BookingConversation.tsx';
 import {Button} from '../ui/button.tsx';
 export interface BookingInterpretationPorts {
  request(input:{source:BookingInterpretationSource;priorSources:BookingInterpretationSource[]}):Promise<BookingInterpretationView>;
  read(input:{requestId:string}):Promise<BookingInterpretationView>;
 }
-export interface BookingInterpretationProps {ports:BookingInterpretationPorts;source:BookingInterpretationSource;privacyKey:string;sourceVersion:number;enabled:boolean;priorChoices?:BookingInterpretationSource[]}
-export function BookingInterpretation({ports,source,privacyKey,sourceVersion,enabled,priorChoices=[]}:BookingInterpretationProps):JSX.Element {
+export interface BookingInterpretationProps {conversationPorts?:BookingConversationPorts;ports:BookingInterpretationPorts;source:BookingInterpretationSource;privacyKey:string;sourceVersion:number;enabled:boolean;priorChoices?:BookingInterpretationSource[]}
+export function BookingInterpretation({ports,conversationPorts,source,privacyKey,sourceVersion,enabled,priorChoices=[]}:BookingInterpretationProps):JSX.Element {
  const [view,setView]=useState<BookingInterpretationView|null>(null),[requestId,setRequestId]=useState<string|null>(null),[priorId,setPriorId]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const epoch=useRef(0);
  const invalidate=useCallback(()=>++epoch.current,[]);
@@ -37,10 +38,12 @@ export function BookingInterpretation({ports,source,privacyKey,sourceVersion,ena
    {view.provenance?<section aria-label="Booking original provenance"><p>Original participant: {view.provenance.participant??'Unknown'}</p><p>Original date: {view.provenance.rawSenderDate??view.provenance.occurredAt}</p><p>Original source: {view.provenance.source.sourceId}, revision {view.provenance.source.sourceRevision}, account generation {view.provenance.generation}</p></section>:null}
    {outcome?.kind==='approved_link'?<><p>Approved-link proposal: {outcome.bookingUrl}</p><p>Generic interest is not agreement to a slot.</p></>:null}
    {outcome?.kind==='slot_proposal'?<><p>Slot proposal: {outcome.slot.localDate} at {outcome.slot.localTime} {outcome.slot.timeZone}</p><p>Original attendee address: {outcome.attendeeAddress}</p><p>Requires current attendee Route, fresh free/busy and a separate guarded create. Availability is not established here.</p></>:null}
+   {outcome?.kind==='change_proposal'?<><p>Attendee-requested {outcome.action} proposal. This is not permission or provider acceptance.</p>{outcome.action==='reschedule'?<p>Requested slot: {outcome.slot.localDate} at {outcome.slot.localTime} {outcome.slot.timeZone}</p>:null}<p>Requires the current attendee Route, a unique current booking and guarded change. An ambiguous target is handed to David.</p></>:null}
    {outcome?.kind==='clarification'?<p>Clarification needed. Check participant, meeting, date, time, zone and agreement in the original.</p>:null}
    {outcome?.kind==='stop'?<p>Stop: {outcome.reason.replaceAll('_',' ')}. No scheduling proposal.</p>:null}
    {outcome&&'schedulingPaused' in outcome&&outcome.schedulingPaused?<p>Scheduling paused for David.</p>:null}
    {outcome&&'handoff' in outcome&&outcome.handoff?<section aria-label="David handoff"><h5>David handoff</h5><p>{outcome.handoff.action.replaceAll('_',' ')} for owner {outcome.handoff.ownerUserId}</p><blockquote>{outcome.handoff.evidence.quote}</blockquote><p>Original source {outcome.handoff.evidence.sourceId}. No substantive answer has been generated or sent.</p></section>:null}
+   {conversationPorts&&view.state==='complete'&&outcome?<BookingConversation key={view.requestId} ports={conversationPorts} interpretation={view} privacyKey={privacyKey} sourceVersion={sourceVersion} enabled={enabled}/>:null}
    {view.financial?<p>Model accounting: {view.financial.state}. Maximum reserved {view.financial.reservedCents} cents; settled or conservatively estimated {view.financial.settledCents} cents. Unknown acceptance is not silently retried.</p>:null}
   </>:null}
   <p>Actual model quality and native workflow acceptance remain unverified. LinkedIn intake is unavailable.</p>

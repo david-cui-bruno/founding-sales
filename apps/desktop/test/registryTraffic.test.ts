@@ -72,7 +72,7 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
        * that is how `today.expand`'s `/dial/check` and `replies.refresh`'s
        * `/replies/settings` stayed undeclared through the first review.
        */
-      const body = at.pathname==='/meetings/booking-policy'&&init.method==='POST'?{status:'accepted',replayed:false,result:{revision:2}}:at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
+      const body = ['/meetings/booking-conversation','/meetings/booking-messages'].includes(at.pathname)&&init.method==='POST'?{status:'accepted',replayed:false,result:BRIDGE_ANSWERS[at.pathname]}:at.pathname==='/meetings/booking-policy'&&init.method==='POST'?{status:'accepted',replayed:false,result:{revision:2}}:at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
       return await Promise.resolve({
         status: 200,
         body: body ?? { status: 'accepted', replayed: false, result: {} },
@@ -132,6 +132,11 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'ask.historyList':{limit:20},
   'ask.answerRead':{requestId:UUID},
   'ask.answerSourceRead':{requestId:UUID,expectedVersion:1,windowId:UUID},
+  'meetings.bookingConversationRequest':{interpretationRequestId:UUID,expectedPolicyRevision:1},
+  'meetings.bookingConversationRead':{conversationId:UUID},
+  'meetings.bookingConversationEvent':{conversationId:UUID,expectedPolicyRevision:1,event:'reply'},
+  'meetings.bookingMessageRequest':{conversationId:UUID,kind:'approved_link'},
+  'meetings.bookingMessageRead':{messageId:UUID},
   'crm.bookingInterpretationRequest':{source:{sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},priorSources:[]},
   'crm.bookingInterpretationRead':{requestId:UUID},
   'crm.businessMailList': {limit:50},
@@ -564,6 +569,11 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
         saveNotes: async input => await handlers['meetings.saveNotes'](input as never),
         changeTask: async input => await handlers['meetings.changeTask'](input as never),
         brief: async input => await handlers['meetings.brief'](input as never),
+        bookingConversationRequest:async input=>await handlers['meetings.bookingConversationRequest'](input as never),
+        bookingConversationRead:async input=>await handlers['meetings.bookingConversationRead'](input as never),
+        bookingConversationEvent:async input=>await handlers['meetings.bookingConversationEvent'](input as never),
+        bookingMessageRequest:async input=>await handlers['meetings.bookingMessageRequest'](input as never),
+        bookingMessageRead:async input=>await handlers['meetings.bookingMessageRead'](input as never),
         bookingCapacity: async () => await handlers['meetings.bookingCapacity'](undefined as never),
         bookingPolicy: async () => await handlers['meetings.bookingPolicy'](undefined as never),
         bookingPolicyChange: async input => await handlers['meetings.bookingPolicyChange'](input as never),
