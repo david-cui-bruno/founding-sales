@@ -38,7 +38,8 @@ for(const [name,input,path] of cases){
  });
  it(`${name} rejects malformed server authority and extra caller authority`,async()=>{
   const kind=OPERATIONS[name].kind,expected=name.includes('Message')?message:conversation;
-  const api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:'1.0.49',accessToken:async()=>({token:'fixture',generation:0}),send:async()=>({status:200,body:kind==='command'?{status:'accepted',replayed:false,result:{...expected,enabled:true}}:{...expected,enabled:true}})});
+  const malformed=name.includes('Message')?{...expected,state:'invented_acceptance'}:{...expected,enabled:true};
+  const api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:'1.0.49',accessToken:async()=>({token:'fixture',generation:0}),send:async()=>({status:200,body:kind==='command'?{status:'accepted',replayed:false,result:malformed}:malformed})});
   const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
   await expect(answerOperation(handlers,kind,name,input)).rejects.toThrow();
   await expect(answerOperation(handlers,kind,name,{...input as object,confirmation:'owner_confirmed_unconditional_exact_slot'})).rejects.toThrow();
