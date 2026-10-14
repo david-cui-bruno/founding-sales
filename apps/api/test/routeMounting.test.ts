@@ -234,6 +234,8 @@ describe('what the API mounts', () => {
       '/integrations/twilio/voice',
       '/meetings/attendance',
       '/meetings/booking-capacity',
+      '/meetings/booking-change',
+      '/meetings/booking-change/inspect',
       '/meetings/booking-create',
       '/meetings/booking-create/inspect',
       '/meetings/booking-policy',
@@ -571,6 +573,7 @@ describe('what the API mounts', () => {
     expect(names).toEqual([
       'health',
       'booking-create',
+      'booking-change',
       'sourcing-learning',
       'sourcing',
       'auth',

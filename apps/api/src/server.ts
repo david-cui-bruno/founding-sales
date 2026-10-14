@@ -5,6 +5,7 @@ import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
 import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
+import type {BookingChangeRuntime} from '@fss/domain/meetings/bookingChangeProvider.ts';
 import type {BookingCapacityDeps} from './routes/bookingCapacity.ts';
 import type {SocialMediaStore} from './social/mediaStore.ts';
 import type { CallAudioRemover } from './integrations/callAudio.ts';
@@ -100,6 +101,7 @@ export interface ApiOptions {
   readonly crmAcquisitionDiagnosticRuntime?: CrmAcquisitionDiagnosticRuntime;
   readonly bookingCapacity?:BookingCapacityDeps;
   readonly bookingCreate?:BookingCreateRuntime;
+  readonly bookingChange?:BookingChangeRuntime;
   readonly bookingPolicyRuntime?:BookingPolicyRuntime;
   readonly replyComposer?:HumanReplyDraftPort|null;
   /** One backend for this call and nobody else's: transactions and locks are opened on it. */
@@ -186,6 +188,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     ...(options.linkedinRecurring===undefined?{}:{linkedinRecurring:options.linkedinRecurring}),
     ...(options.bookingCapacity===undefined?{}:{bookingCapacity:options.bookingCapacity}),
     ...(options.bookingCreate===undefined?{}:{bookingCreate:options.bookingCreate}),
+    ...(options.bookingChange===undefined?{}:{bookingChange:options.bookingChange}),
     ...(options.bookingPolicyRuntime===undefined?{}:{bookingPolicyRuntime:options.bookingPolicyRuntime}),
     ...(options.replyComposer===undefined?{}:{replyComposer:options.replyComposer}),
     session: options.session,

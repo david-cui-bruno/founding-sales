@@ -97,3 +97,4 @@ export * from './linkedinPostingPolicy.ts';
 export * from './linkedinRecurringPosting.ts';
 export * from './bookingPolicy.ts';
 export * from './bookingCreate.ts';
+export * from './bookingChange.ts';
