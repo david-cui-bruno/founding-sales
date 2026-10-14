@@ -3,7 +3,10 @@ import {createElement} from 'react';
 import {cleanup,render,screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {EmailTimeline,type EmailTimelinePorts} from '../../desktop/src/renderer/firms/EmailTimeline.tsx';
+import {bookingConversationViewSchema,bookingPolicySettingsViewSchema} from '@fss/contracts';
+import type {BookingConversationRuntime} from '@fss/domain/meetings/bookingConversation.ts';
 import {createAuthedClient} from '../../desktop/src/main/authedClient.ts';
+import {OPERATIONS} from '../../desktop/src/shared/operations.ts';
 import {answerOperation,operationHandlers,type OperationHostDeps} from '../../desktop/src/main/operationHost.ts';
 import { afterAll, afterEach, beforeEach, expect, it,vi } from 'vitest';
 import {mailSourceListSchema,mailConversationSchema,mailConversationV2Schema,bookingInterpretationViewSchema,wireDrift} from '@fss/contracts';
@@ -117,7 +120,7 @@ async function configuredRequest(text:string,priorSources:Awaited<ReturnType<typ
  const requested=await post('/crm/booking/interpretation/request',command({source,priorSources}));
  expect(requested.body).toMatchObject({result:{state:'pending',reason:null}});
  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
- return {source,requestId};
+ return {source,requestId,runtime,bindings};
 }
 async function executeCandidate(candidate:unknown,afterWait?:()=>Promise<void>,unknown=false,observeWire?:(wire:unknown)=>void,session:SessionQueryable=fixture.db,maxInputBound?:number) {
  const model=createBookingInterpretationModel({accountBinding:'controlled-model-account',fundingVerifiedUntil:'2099-01-01T00:00:00Z',surface:{endpointId:'bedrock-runtime.us-east-1.amazonaws.com',converse:async wire=>{observeWire?.(wire);await afterWait?.();return unknown?{}:{stopReason:'end_turn',usage:{inputTokens:40,outputTokens:20},output:{message:{role:'assistant',content:[{text:JSON.stringify(candidate)}]}}};}}});
@@ -251,6 +254,37 @@ for(const extraFields of [false,true])it(`normal closed desktop host, authentica
  expect(paths).toContain('/crm/booking/interpretation/request');expect(paths).toContain('/crm/booking/interpretation/read');expect(paths.some(path=>/send|create/.test(path))).toBe(false);
  mounted.rerender(createElement(EmailTimeline,{enabled:false,ports,privacyKey:'revoked-owner',sourceVersion:2}));
  expect(screen.queryByText('Approved-link proposal: https://cal.com/controlled/demo')).toBeNull();
+});
+it('normal mounted timeline admits a current standing conversation and records a durable reply stop through the closed desktop host',async()=>{
+ const text='Can we arrange a call?';const {source,runtime}=await configuredRequest(text);
+ const policy:BookingPolicyRuntime={...runtime,readEvidence:async(context,bindings)=>{const observed=await runtime.readEvidence(context,bindings);return observed===null?null:{...observed,accountAccess:true,calendarFreeBusy:true,eventSettings:true,senderAuthority:true,providerAdapter:true,releaseReady:true};}};
+ const conversation:BookingConversationRuntime={policy,interpretationAuthority:authority!};
+ const paths:string[]=[];
+ const api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token,generation:1}),send:async(url,init)=>{
+  const target=new URL(url);paths.push(target.pathname);
+  const response=await dispatch({method:init.method,path:target.pathname,query:target.searchParams,headers:init.headers,body:init.body===undefined?undefined:JSON.parse(init.body) as unknown},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,bookingInterpretationAuthority:authority!,bookingConversation:conversation,bookingPolicyRuntime:policy});
+  if(response.status===200&&target.pathname.startsWith('/meetings/booking-conversation')){const body=response.body as {result?:unknown};expect(wireDrift(bookingConversationViewSchema,body.result??body)).toEqual([]);}
+  if(response.status===200&&target.pathname==='/meetings/booking-policy')expect(wireDrift(bookingPolicySettingsViewSchema,response.body)).toEqual([]);
+  return response;
+ }});
+ const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
+ const ports:EmailTimelinePorts={
+  list:async input=>mailSourceListSchema.parse(await answerOperation(handlers,'read','crm.businessMailList',input)),
+  read:async input=>mailConversationSchema.parse(await answerOperation(handlers,'read','crm.businessMailRead',input)),
+  readV2:async input=>mailConversationV2Schema.parse(await answerOperation(handlers,'read','crm.businessMailReadV2',input)),
+  booking:{request:async input=>{const queued=bookingInterpretationViewSchema.parse(await answerOperation(handlers,'command','crm.bookingInterpretationRequest',input));await executeCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null});return queued;},read:async input=>bookingInterpretationViewSchema.parse(await answerOperation(handlers,'read','crm.bookingInterpretationRead',input))},
+  bookingConversation:{policy:async()=>{const result=OPERATIONS['meetings.bookingPolicy'].output.parse(await answerOperation(handlers,'read','meetings.bookingPolicy',{}));return result.view===null?null:{revision:result.view.policy.revision,status:result.view.policy.setting.status};},request:async input=>OPERATIONS['meetings.bookingConversationRequest'].output.parse(await answerOperation(handlers,'command','meetings.bookingConversationRequest',input)),read:async input=>OPERATIONS['meetings.bookingConversationRead'].output.parse(await answerOperation(handlers,'read','meetings.bookingConversationRead',input)),event:async input=>OPERATIONS['meetings.bookingConversationEvent'].output.parse(await answerOperation(handlers,'command','meetings.bookingConversationEvent',input)),messageRequest:async input=>OPERATIONS['meetings.bookingMessageRequest'].output.parse(await answerOperation(handlers,'command','meetings.bookingMessageRequest',input)),messageRead:async input=>OPERATIONS['meetings.bookingMessageRead'].output.parse(await answerOperation(handlers,'read','meetings.bookingMessageRead',input))},
+ };
+ const mounted=render(createElement(EmailTimeline,{enabled:true,ports,privacyKey:'current-owner',sourceVersion:1}));
+ const user=userEvent.setup();await user.click(await screen.findByRole('button',{name:'Open email 1'}));await user.click(await screen.findByRole('button',{name:'Interpret booking request'}));
+ await user.click(await screen.findByRole('button',{name:'Manage booking conversation'}));
+ expect(await screen.findByText('Conversation state: awaiting time')).toBeTruthy();
+ expect(screen.getByText('Live booking automation held: enabled:false. Controlled source support is not provider, sender or model acceptance.')).toBeTruthy();
+ await user.click(await screen.findByRole('button',{name:'Record reply and stop nudges'}));
+ expect(await screen.findByText(/Nudges stopped at/)).toBeTruthy();
+ expect((await fixture.db.query('SELECT nudge_count,last_reply_at,nudges_stopped_at FROM booking_conversations WHERE workspace_id=$1',[fixture.alpha.workspaceId])).rows).toEqual([{nudge_count:0,last_reply_at:expect.any(Date),nudges_stopped_at:expect.any(Date)}]);
+ expect(paths).toContain('/meetings/booking-conversation');expect(paths).toContain('/meetings/booking-conversation/event');expect(paths).not.toContain('/meetings/booking-create');expect(paths).not.toContain('/meetings/booking-messages');
+ mounted.rerender(createElement(EmailTimeline,{enabled:false,ports,privacyKey:'revoked-owner',sourceVersion:2}));expect(screen.queryByText('Conversation state: awaiting time')).toBeNull();
 });
 it('does not disclose quoted third-party content or unrelated identity data to the booking model',async()=>{
  const authored='Can we arrange a call?';const quoted=' PRIVATE THIRD PARTY INFORMATION';const text=authored+quoted;

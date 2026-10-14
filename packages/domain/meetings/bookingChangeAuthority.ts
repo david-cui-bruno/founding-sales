@@ -1,5 +1,7 @@
 import {createHash} from 'node:crypto';
-import type {BookingChangePayload} from '@fss/contracts';
+import {bookingInterpretationSourceSchema} from '@fss/contracts';
+import type {BookingChangeInput} from './bookingChange.ts';
+import {revalidateBookingConversationChange} from './bookingConversationChangeAuthority.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readCurrentBookingPolicy,revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from './bookingPolicy.ts';
 import {lockSettingForRead} from '../settings/store.ts';
@@ -15,21 +17,27 @@ export function bookingChangeHash(value:unknown):string {
  return createHash('sha256').update(canonical(value)).digest('hex');
 }
 /** Source/read/access ports are shared, but a cancellation is never forged into a create agreement. */
-export async function validateBookingChange(context:RepositoryContext,input:BookingChangePayload,runtime:BookingChangeRuntime,expectedBindingKey?:string,inspectionOnly=false){
+export async function validateBookingChange(context:RepositoryContext,input:BookingChangeInput,runtime:BookingChangeRuntime,expectedBindingKey?:string,inspectionOnly=false){
  const actor=context.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false as const,reason:'owner_required'};
  // Same workspace send gate as opt-out and Cal lifecycle writers, before any rows.
  await lockSendGateForStopFact(context);
  const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];if(member?.role!=='admin'||member.status!=='active')return {ok:false as const,reason:'owner_required'};
- await lockSettingForRead(context,'booking_policy');
- const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,capability:'provider_action',expectedRevision:input.expectedPolicyRevision,...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
- if(policy.kind!=='available')return {ok:false as const,reason:policy.reason};const snapshot=policy.snapshot;
- if(!snapshot.operationalReady)return {ok:false as const,reason:'booking_readiness_unavailable'};
- if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false as const,reason:'unsupported_provider_account'};
  const sources=[input.agreement,...(input.action==='reschedule'&&input.offeredContext!==undefined?[input.offeredContext]:[])];
+ if('standingOrigin' in input){
+  const interpretation=(await context.db.query<{source_refs:unknown}>('SELECT source_refs FROM crm_booking_interpretations WHERE workspace_id=$1 AND id=$2 AND requested_by=$3',[context.scope.workspaceId,input.standingOrigin.interpretationRequestId,actor.userId])).rows[0];
+  const refs=bookingInterpretationSourceSchema.array().min(1).max(4).safeParse(interpretation?.source_refs);
+  if(!refs.success)return {ok:false as const,reason:'standing_source_unavailable'};
+  for(const ref of refs.data)if(!sources.some(existing=>existing.sourceId===ref.sourceId&&existing.sourceRevision===ref.sourceRevision&&existing.contentHash===ref.contentHash))sources.push(ref);
+ }
  const routeIdentity=(await context.db.query<{firm_id:string;contact_id:string}>('SELECT firm_id,contact_id FROM email_addresses WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.attendeeRouteId])).rows[0];
  if(!routeIdentity)return {ok:false as const,reason:'attendee_unsupported'};
  const closure=await snapshotMailCopyAuthorityBatch(context,sources);
  if(closure===null||!await lockIdentityContext(context,{firmIds:[...closure.firmIds,routeIdentity.firm_id],personIds:closure.personIds})||!await lockMailCopyAuthorityBatch(context,closure,{firmIds:closure.firmIds,personIds:closure.personIds,lockMode:'write'}))return {ok:false as const,reason:'source_unavailable'};
+ await lockSettingForRead(context,'booking_policy');
+ const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,capability:'standingOrigin' in input?'booking':'provider_action',expectedRevision:input.expectedPolicyRevision,...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
+ if(policy.kind!=='available')return {ok:false as const,reason:policy.reason};const snapshot=policy.snapshot;
+ if(!snapshot.operationalReady)return {ok:false as const,reason:'booking_readiness_unavailable'};
+ if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false as const,reason:'unsupported_provider_account'};
  const agreement=await readMailConversationV2(context,input.agreement);
  if(agreement.state!=='available'||!('originalObservation' in agreement.source))return {ok:false as const,reason:'source_unavailable'};const source=agreement.source;
  if(source.ownerUserId!==actor.userId||source.direction!=='incoming'||source.accountBinding!==snapshot.bindings.sender.accountId||source.originalObservation.connectionState!=='current'||['trashed','confirmed_missing','transient_unavailable'].includes(source.originalObservation.state)||source.completeness!=='complete'||(!Array.isArray(source.ranges)||!source.ranges.some((r:unknown)=>typeof r==='object'&&r!==null&&'kind' in r&&r.kind==='authored')))return {ok:false as const,reason:'source_authority_changed'};
@@ -50,6 +58,8 @@ export async function validateBookingChange(context:RepositoryContext,input:Book
  const cost=await runtime.readCostContract(snapshot);
  const current=await revalidateBookingPolicy(context,snapshot,runtime.policy);
  if(current.kind!=='available')return {ok:false as const,reason:current.reason};if(!current.snapshot.operationalReady)return {ok:false as const,reason:'booking_readiness_unavailable'};
+ const standingReason='standingOrigin' in input?await revalidateBookingConversationChange(context,input,runtime.policy,runtime.policy.now(),current.snapshot,inspectionOnly):null;
+ if(standingReason!==null)return {ok:false as const,reason:standingReason};
  const now=runtime.policy.now();
  if(!bookingPolicySnapshotReadyAt(current.snapshot,now))return {ok:false as const,reason:'booking_readiness_unavailable'};
  const costReason=bookingChangeCostReason(cost,snapshot,now);if(costReason!==null)return {ok:false as const,reason:costReason};

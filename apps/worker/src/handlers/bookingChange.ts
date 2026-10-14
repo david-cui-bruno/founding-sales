@@ -1,10 +1,10 @@
-import {bookingChangePayloadSchema} from '@fss/contracts';
 import {createHash} from 'node:crypto';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {validateBookingChange} from '@fss/domain/meetings/bookingChangeAuthority.ts';
-import type {BookingChangeRow} from '@fss/domain/meetings/bookingChange.ts';
+import {parseBookingChangeInput,type BookingChangeRow} from '@fss/domain/meetings/bookingChange.ts';
+import {revalidateBookingConversationChange} from '@fss/domain/meetings/bookingConversationChangeAuthority.ts';
 import {revalidateBookingPolicy,bookingPolicySnapshotReadyAt} from '@fss/domain/meetings/bookingPolicy.ts';
 import {bookingChangeCostReason,type BookingChangeRuntime,type BookingChangeCall,type BookingChangeObservation,type BookingChangeTarget} from '@fss/domain/meetings/bookingChangeProvider.ts';
 import {bookingSlotReason} from '@fss/domain/meetings/bookingCreate.ts';
@@ -34,7 +34,7 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingChangeRuntim
  if(!await liveLease(input))return null;
  let row=(await input.session.query<BookingChangeRow>('SELECT * FROM booking_change_submissions WHERE workspace_id=$1 AND id=$2',[input.scope.workspaceId,id])).rows[0];if(!row||['accepted','failed'].includes(row.state)||row.provenance_state!=='current')return null;
  if(input.job.payload['inspectionOnly']===true&&row.dispatch_started_at===null)return null;
- const parsed=bookingChangePayloadSchema.safeParse(row.payload);if(!parsed.success)return null;
+ const parsed=parseBookingChangeInput(row.payload);if(!parsed.success)return null;
  const context=repositoryContext(workspaceScope(input.scope.workspaceId,{kind:'user',userId:row.owner_user_id,role:'admin'}),input.session);
  const valid=await validateBookingChange(context,parsed.data,runtime,row.binding_key,row.dispatch_started_at!==null);
  const reason=!valid.ok?valid.reason:valid.fingerprint!==row.source_fingerprint?'source_authority_changed':row.dispatch_started_at===null&&valid.targetFingerprint!==row.target_fingerprint?'meeting_changed':null;
@@ -44,9 +44,10 @@ async function stage(input:JobHandlerInput,id:string,runtime:BookingChangeRuntim
  // cost FIRST and canonical captured readiness AFTER that await, not cached flags.
  const cost=await runtime.readCostContract(valid.snapshot);
  const policy=Number.isFinite(Date.parse(runtime.policy.now()))?await revalidateBookingPolicy(context,valid.snapshot,runtime.policy):{kind:'unavailable' as const,reason:'booking_readiness_unavailable'};
+ const standingReason='standingOrigin' in parsed.data&&policy.kind==='available'?await revalidateBookingConversationChange(context,parsed.data,runtime.policy,runtime.policy.now(),policy.snapshot,row.dispatch_started_at!==null):null;
  if(!await liveLease(input))return null;
  const finalNow=runtime.policy.now(),finalAt=Date.parse(finalNow);
- const terminalReason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,finalNow)?'booking_readiness_unavailable':bookingChangeCostReason(cost,policy.snapshot,finalNow)??(row.dispatch_started_at===null&&row.original_starts_at.getTime()<=finalAt?'meeting_not_changeable':row.dispatch_started_at===null&&row.action==='reschedule'?bookingSlotReason(row.starts_at!.toISOString(),finalNow):null);
+ const terminalReason=policy.kind!=='available'?policy.reason:!bookingPolicySnapshotReadyAt(policy.snapshot,finalNow)?'booking_readiness_unavailable':bookingChangeCostReason(cost,policy.snapshot,finalNow)??standingReason??(row.dispatch_started_at===null&&row.original_starts_at.getTime()<=finalAt?'meeting_not_changeable':row.dispatch_started_at===null&&row.action==='reschedule'?bookingSlotReason(row.starts_at!.toISOString(),finalNow):null);
  if(terminalReason!==null||policy.kind!=='available'){await input.session.query("UPDATE booking_change_submissions SET state=CASE WHEN dispatch_started_at IS NULL THEN 'failed' ELSE state END,reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id,terminalReason]);return null;}
  const snapshot=policy.snapshot,validUntil=Math.min(Date.parse(snapshot.authorityValidUntil!),Date.parse(cost!.validUntil));
  const call:BookingChangeCall={submissionId:id,action:row.action,bookingUid:row.target_booking_uid,accountId:Number(row.provider_account_id),eventTypeId:Number(row.event_type_id),organizerEmail:snapshot.bindings.account.email,attendeeEmail:valid.attendeeEmail,originalStartsAt:row.original_starts_at.toISOString(),originalEndsAt:row.original_ends_at.toISOString(),startsAt:row.starts_at?.toISOString()??null,timeZone:parsed.data.action==='reschedule'?parsed.data.agreedSlot.timeZone:null};
