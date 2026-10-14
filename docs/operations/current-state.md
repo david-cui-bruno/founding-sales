@@ -1,5 +1,15 @@
 # Current operating state
 
+## Source integration checkpoint, October 14, 2026
+
+PRs #642–#648 are merged in dependency order. The final lifecycle merge is `2f6b6cfe543f875d7928a4b79fa934d594ed8947`. Merged source now targets schema116. These changes integrate standing posting policy and recurring preparation, canonical booking policy, source-bound interpretation, guarded create/change and the booking-only conversation/message lifecycle. Independent Spec and Standards reviews, with authorization/privacy/money review for risky changes, are clean. Required CI was renewed after stacked base changes and passed before each merge.
+
+The final integrated source tree passed complete local types/lint and contracts/domain/API/worker/desktop/operations/Ask suites, dedicated mounted PostgreSQL journeys, retained-schema88→116 upgrade checks and unchanged full-history/context secret scans. Controlled model, Gmail and Cal.com adapters establish engineering behavior, not actual provider quality, real delivery or appointment acceptance. See the [booking lifecycle source evidence](../sourcing/booking-lifecycle-source-624-20261014.md) for the ordinary seams, repairs and dated validation checkpoints.
+
+No release, deployment, Enable, real send/booking/post or paid provider run followed from these merges. The source checkpoint above supersedes earlier source-version statements only. It does not refresh the dated production, installed-build or account observations retained below. Production rollout and its current build/schema remain unverified since those observations, and the release hold is unchanged.
+
+The next posting/booking operational checkpoints remain #618/#625: applicable reviewed release/setup, current concrete owner/account/calendar/sender/model bindings, separately approved bounded actual acceptance, normal scoped Enable/readback and Disable. Prepare those checkpoints without treating ticket publication, settings, source tests or a merge as live authority. Keep independent unblocked source work moving, and preserve the specific missing-original/observation boundaries on discovery and LinkedIn outreach rather than fabricating evidence.
+
 ## Current execution priority — October 13, 2026
 
 The approved destination is **new qualified property-manager conversations**, through supported discovery and coordinated guarded email/LinkedIn. David handles substantive sales replies and calls. Posting builds credibility, booking reduces agreed-call friction, and CRM/Today/Ask support the funnel. Accepted connections, replies, qualified conversations, bookings and attended calls remain separate outcomes.
