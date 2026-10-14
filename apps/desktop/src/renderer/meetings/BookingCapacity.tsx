@@ -34,7 +34,7 @@ export function BookingCapacity({ports,onOpenFirm}:{readonly ports:BookingCapaci
   const invalidatePendingRead=useCallback(()=>{readNo.current++;},[]);
   useEffect(()=>{void load();return invalidatePendingRead;},[load,invalidatePendingRead]);
   return <Section title="Booking capacity" data-testid="booking-capacity" actions={<Button variant="quiet" size="sm" aria-label="Refresh booking evidence" disabled={busy||ports===null} onClick={()=>{void load();}}>Refresh</Button>}>
-    <p className="text-sm" data-testid="booking-capacity-preference">Three introductory calls per week is a preference; enforcement is not verified.</p>
+    <p className="text-sm" data-testid="booking-capacity-preference">Historical three introductory calls per week is an unenforced legacy preference. Its enforcement is not verified. The standing booking policy has no daily or weekly call-count ceiling. Provider availability and configuration require separate verification.</p>
     <p className="text-sm text-muted-foreground" data-testid="booking-capacity-provider">{capacity===undefined?'Reading booking evidence…':capacity===null?'Callie could not read booking evidence.':capacity.provider.status==='observed'?capacity.provider.weeklyLimit===null?'No weekly limit was verified for this booking link.':`Cal.com currently limits this booking link to ${capacity.provider.weeklyLimit} bookings per week. Other event types aren’t covered by this setting.`:capacity.provider.reason===null?'Cal.com configuration is not verified.':MISSING_EVIDENCE[capacity.provider.reason]}</p>
     {capacity===undefined||capacity===null?null:<>
       <p className="mt-3 text-xs text-muted-foreground">Saved booking records. Cal.com owns available times and appointment changes.</p>
