@@ -1,5 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {bookingCreatePayloadSchema,type BookingCreatePayload,type BookingCreateReceipt} from '@fss/contracts';
+import {firstSuppressed} from '../suppression/effective.ts';
+import {lockSendGateForDispatch} from '../policy/sendGate.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readCurrentBookingPolicy} from './bookingPolicy.ts';
 import {lockSettingForRead} from '../settings/store.ts';
@@ -23,22 +25,22 @@ export function bookingSlotReason(startsAt:string,now:string):string|null{
 }
 /** Terminal observation under the validator's held Route/contact/firm locks.
  * Never acquire an added association's firm out of the original sorted closure. */
-export async function recheckBookingCreateAttendee(context:RepositoryContext,authority:BookingCreateAttendeeAuthority):Promise<string|null>{
+export async function recheckBookingCreateAttendee(context:RepositoryContext,authority:BookingCreateAttendeeAuthority,inspectionOnly=false):Promise<string|null>{
  const route=(await context.db.query<{address:string;version:number;firm_id:string;contact_id:string}>(`SELECT e.address,e.version,e.firm_id,e.contact_id FROM email_addresses e JOIN contacts c ON c.workspace_id=e.workspace_id AND c.id=e.contact_id WHERE e.workspace_id=$1 AND e.id=$2 AND e.retired_at IS NULL AND e.technical_validation='passed' AND e.association_confidence>=0.8 AND c.firm_id=e.firm_id`,[context.scope.workspaceId,authority.routeId])).rows[0];
  if(route===undefined||route.firm_id!==authority.firmId||route.contact_id!==authority.contactId||route.address!==authority.address||route.version!==authority.version)return 'attendee_authority_changed';
- return (await context.db.query('SELECT id FROM email_addresses WHERE workspace_id=$1 AND lower(address)=lower($2) AND retired_at IS NULL AND (contact_id IS DISTINCT FROM $3 OR firm_id IS DISTINCT FROM $4)',[context.scope.workspaceId,authority.address,authority.contactId,authority.firmId])).rows.length?'attendee_ambiguous':null;
+ if((await context.db.query('SELECT id FROM email_addresses WHERE workspace_id=$1 AND lower(address)=lower($2) AND retired_at IS NULL AND (contact_id IS DISTINCT FROM $3 OR firm_id IS DISTINCT FROM $4)',[context.scope.workspaceId,authority.address,authority.contactId,authority.firmId])).rows.length)return 'attendee_ambiguous';
+ return inspectionOnly?null:bookingCreateSuppressionReason(context,authority);
+}
+/** Provider creation sends booking confirmation/reminder email, so Route reachability
+ * is not permission. Reuse the canonical email stop reader under the send gate. */
+async function bookingCreateSuppressionReason(context:RepositoryContext,authority:{firmId:string;address:string}):Promise<string|null>{
+ const stop=await firstSuppressed(context,[{scope:'firm',canonicalKey:authority.firmId},{scope:'handle',canonicalKey:authority.address}],'email');
+ return stop===null?null:stop.scope==='firm'?'firm_suppressed':'handle_suppressed';
 }
 /** Re-read exact originals and immutable contexts under their existing authority lock closure. No second copy of mail. */
 export async function validateBookingCreate(context:RepositoryContext,input:BookingCreatePayload,runtime:BookingCreateRuntime,expectedBindingKey?:string,inspectionOnly=false):Promise<{ok:true;snapshot:BookingPolicySnapshot;attendee:{name:string;email:string;timeZone:string};attendeeAuthority:BookingCreateAttendeeAuthority;fingerprint:string}|{ok:false;reason:string}>{
  const actor=context.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'owner_required'};
  const member=(await context.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.scope.workspaceId,actor.userId])).rows[0];if(member?.role!=='admin'||member.status!=='active')return {ok:false,reason:'owner_required'};
- await lockSettingForRead(context,'booking_policy');
- const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,capability:'provider_action',...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
- if(policy.kind!=='available')return {ok:false,reason:policy.reason};const snapshot=policy.snapshot;
- if(!snapshot.operationalReady)return {ok:false,reason:'booking_readiness_unavailable'};
- const cost=await bookingCreateCostReason(runtime,snapshot);if(cost!==null)return {ok:false,reason:cost};
- const slot=inspectionOnly?null:bookingSlotReason(input.agreedSlot.startsAt,runtime.policy.now());if(slot!==null)return {ok:false,reason:slot};
- if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false,reason:'unsupported_provider_account'};
  const hint=(await context.db.query<{firm_id:string;contact_id:string|null;address:string;version:number}>('SELECT firm_id,contact_id,address,version FROM email_addresses WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.attendeeRouteId])).rows[0];
  if(hint===undefined||hint.contact_id===null)return {ok:false,reason:'attendee_unsupported'};
  const sources=[input.agreement,...(input.offeredContext===undefined?[]:[input.offeredContext])];
@@ -46,6 +48,15 @@ export async function validateBookingCreate(context:RepositoryContext,input:Book
  // The durable Route hint contributes to the existing sorted firm closure before
  // any person/Route lock. A later changed dependency is refused, never appended.
  if(closure===null||!await lockIdentityContext(context,{firmIds:[...closure.firmIds,hint.firm_id],personIds:closure.personIds})||!await lockMailCopyAuthorityBatch(context,closure,{firmIds:closure.firmIds,personIds:closure.personIds,lockMode:'write'}))return {ok:false,reason:'source_unavailable'};
+ // Canonical original readers lock identity/grant/copy/source before policy.
+ // Match that order, never hold policy while waiting for their source closure.
+ await lockSettingForRead(context,'booking_policy');
+ const policy=await readCurrentBookingPolicy(context,{ownerUserId:actor.userId,expectedRevision:input.expectedPolicyRevision,capability:'provider_action',...(expectedBindingKey===undefined?{}:{expectedBindingKey})},runtime.policy);
+ if(policy.kind!=='available')return {ok:false,reason:policy.reason};const snapshot=policy.snapshot;
+ if(!snapshot.operationalReady)return {ok:false,reason:'booking_readiness_unavailable'};
+ const cost=await bookingCreateCostReason(runtime,snapshot);if(cost!==null)return {ok:false,reason:cost};
+ const slot=inspectionOnly?null:bookingSlotReason(input.agreedSlot.startsAt,runtime.policy.now());if(slot!==null)return {ok:false,reason:slot};
+ if(!/^\d+$/.test(snapshot.bindings.account.accountId)||!Number.isSafeInteger(Number(snapshot.bindings.account.accountId))||Number(snapshot.bindings.account.accountId)<1)return {ok:false,reason:'unsupported_provider_account'};
  const agreement=await readMailConversationV2(context,input.agreement);if(agreement.state!=='available'||!('originalObservation' in agreement.source))return {ok:false,reason:'source_unavailable'};
  const source=agreement.source;
  if(source.ownerUserId!==actor.userId||source.direction!=='incoming'||source.accountBinding!==snapshot.bindings.sender.accountId||source.originalObservation.connectionState!=='current'||['trashed','confirmed_missing','transient_unavailable'].includes(source.originalObservation.state)||source.completeness!=='complete'||(!Array.isArray(source.ranges)||!source.ranges.some((r:unknown)=>typeof r==='object'&&r!==null&&'kind' in r&&r.kind==='authored')))return {ok:false,reason:'source_authority_changed'};
@@ -58,12 +69,15 @@ export async function validateBookingCreate(context:RepositoryContext,input:Book
  if(input.offeredContext!==undefined){const prior=await readMailConversationV2(context,input.offeredContext);if(prior.state!=='available'||!('originalObservation' in prior.source))return {ok:false,reason:'offered_context_unavailable'};const offer=prior.source;
  const priorThread=(await context.db.query<{provider_thread_id:string}>('SELECT provider_thread_id FROM mail_messages WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,offer.sourceId])).rows[0]?.provider_thread_id;
  if(offer.ownerUserId!==actor.userId||offer.direction!=='outgoing'||!offer.sentProof||offer.originalObservation.connectionState!=='current'||['trashed','confirmed_missing','transient_unavailable'].includes(offer.originalObservation.state)||offer.mailboxId!==source.mailboxId||offer.accountBinding!==source.accountBinding||offer.acquiredGeneration!==source.acquiredGeneration||priorThread!==thread||Date.parse(offer.occurredAt)>=Date.parse(source.occurredAt)||!offer.envelope.to.some(email=>email.toLowerCase()===route.address.toLowerCase()))return {ok:false,reason:'offered_context_unsupported'};}
+ const suppressionReason=inspectionOnly?null:await bookingCreateSuppressionReason(context,{firmId:route.firm_id,address:route.address});if(suppressionReason!==null)return {ok:false,reason:suppressionReason};
  return {ok:true,snapshot,attendee:{name:route.full_name,email:route.address.toLowerCase(),timeZone:input.agreedSlot.timeZone},attendeeAuthority:{routeId:input.attendeeRouteId,firmId:route.firm_id,contactId:route.contact_id,address:route.address,version:route.version},fingerprint:createHash('sha256').update(canonicalBookingJson({closure,route,thread,original:source.originalObservation,account:source.accountBinding,generation:source.acquiredGeneration})).digest('hex')};
 }
 /** Ordinary command transaction owns the durable reservation and job atomically. */
 export async function requestBookingCreate(context:RepositoryContext,raw:BookingCreatePayload,runtime?:BookingCreateRuntime):Promise<BookingCreateResult>{
  const parsed=bookingCreatePayloadSchema.safeParse(Object.fromEntries(Object.entries(raw).filter(([key])=>key!=='commandId'&&key!=='clientVersion')));if(!parsed.success)return {ok:false,reason:'invalid_input'};const input=parsed.data;
  if(runtime===undefined)return {ok:false,reason:'booking_runtime_unavailable'};
+ // Same gate as stop writers, before setting, identity, Route or reservation locks.
+ await lockSendGateForDispatch(context);
  const valid=await validateBookingCreate(context,input,runtime);if(!valid.ok)return valid;
  const owner=context.scope.actor;if(owner.kind!=='user')return {ok:false,reason:'owner_required'};
  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${context.scope.workspaceId}:booking_create:${valid.snapshot.bindings.account.accountId}`]);

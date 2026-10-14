@@ -507,7 +507,7 @@ export function reconcileEventId(event: PlannedEvent): string {
  * every address it removes, a meeting attendee's included. Any tombstone, whatever
  * else has been recorded for the handle since: the deletion is terminal.
  */
-async function attendeeTombstoned(context: RepositoryContext, attendeeEmail: string | null): Promise<boolean> {
+export async function attendeeTombstoned(context: RepositoryContext, attendeeEmail: string | null): Promise<boolean> {
   if (attendeeEmail === null) return false;
   // The key the deletion wrote (`meetings/attendee.ts`): the canonical handle, or for an
   // address the canonicalizer refuses, its fallback key. Never "not suppressed" for want
