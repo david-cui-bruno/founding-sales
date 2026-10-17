@@ -15,6 +15,9 @@ import { issueSessionFor } from "./support/sessionFixture.ts";
 it("retains unrelated Today work after a moved copy loses its current firm authority", async () => {
   const fixture = await createAuthFixture();
   try {
+    // Leave three UTC days of margin for source observation and zone boundaries.
+    const promiseDate = (await fixture.db.query<{date:string}>("SELECT ((clock_timestamp() AT TIME ZONE 'UTC')::date + 3)::text AS date")).rows[0]!.date;
+    const promiseQuote = `I will prepare the repair summary by ${promiseDate}.`;
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)
     ).accessToken;
@@ -95,7 +98,7 @@ it("retains unrelated Today work after a moved copy loses its current firm autho
       command({
         personId,
         sourceKey: "human-review",
-        excerpt: "I will prepare the repair summary by October 12.",
+        excerpt:promiseQuote,
         occurredAt: "2026-10-01T14:00:00Z",
       }),
     );
@@ -164,8 +167,8 @@ it("retains unrelated Today work after a moved copy loses its current firm autho
                   kind: "commitment",
                   status: "stated",
                   interpretation: "Promise to prepare summary",
-                  locator: "text:0:48",
-                  quote: "I will prepare the repair summary by October 12.",
+                  locator: `text:0:${promiseQuote.length}`,
+                  quote:promiseQuote,
                 },
               ],
             }),
@@ -199,9 +202,9 @@ it("retains unrelated Today work after a moved copy loses its current firm autho
       actionLabel: "Prepare the repair summary",
       due: {
         kind: "date",
-        date: "2026-10-12",
+        date: promiseDate,
         zone: "America/Chicago",
-        expression: "by October 12",
+        expression: `by ${promiseDate}`,
       },
     });
     const queued = await post("/crm/commitments/review", review);
@@ -246,7 +249,7 @@ it("retains unrelated Today work after a moved copy loses its current firm autho
           command({
             personId,
             sourceKey: "independent-B",
-            excerpt: "I will prepare the repair summary by October 12.",
+            excerpt:promiseQuote,
             occurredAt: "2026-10-01T14:00:00Z",
           }),
         )
@@ -283,9 +286,9 @@ it("retains unrelated Today work after a moved copy loses its current firm autho
       actionLabel: "Prepare permitted B summary",
       due: {
         kind: "date",
-        date: "2026-10-12",
+        date: promiseDate,
         zone: "America/Chicago",
-        expression: "by October 12",
+        expression: `by ${promiseDate}`,
       },
     });
     expect((await post("/crm/commitments/review", bReview)).status).toBe(200);

@@ -56,9 +56,14 @@ const coverage = (
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   Object.freeze({
+  linkedin_recurring_slots:coverage(['retained'],'Body-free account/target uniqueness and exact owner/policy/source/draft/admission references conserve cadence and prevent replay after revision, revocation, source deletion or departure. No copied input text or credentials. Current membership, account, policy, source and runtime fences stop future publication without removing historical submission evidence.'),
   crm_capability_owner_approvals:coverage(['retained'],'Immutable body-free owner approval audit retains configuration fingerprints, attested checks, quality tier and acknowledged limitations. Current owner membership and configuration are rechecked before use; no conversation content or credentials.'),
   crm_acquisition_diagnostic_authorizations:coverage(['retained'],'Immutable body-free acquisition diagnostic owner consent and revocation audit; exact current owner/account/expiry/environment binding prevents reuse; no copied content or tokens.'),
   crm_acquisition_diagnostic_reads:coverage(['retained'],'Body-free exact scoped provider read accounting survives source deletion and revocation; no original content or tokens.'),
+  booking_conversations: coverage(['retained','deletion_redacts'], 'Owner-scoped standing booking orchestration retains opaque interpretation/submission links and bounded operational counters, not copied message bodies. Canonical source or context invalidation erases private source references and fingerprints and stops pending work and nudges. Current owner, source, policy and adapter observations govern each action; unknown external writes retain inspection-only barriers rather than replay authority.'),
+  booking_message_requests: coverage(['retained'], 'Body-free standing booking message identities retain opaque conversation/fence links, policy and source-version dedupe barriers and irreversible consumption. They contain no copied original bodies, participant envelopes or generated public copy. Canonical source/context invalidation stops the aggregate and current source/sender/policy checks refuse new dispatch. Existing outbound retention owns sent/uncertain provider evidence; a retained identity does not restore deleted source authority.'),
+  booking_change_submissions: coverage(['retained','deletion_redacts'], 'Targeted owner-confirmed reschedule/cancel receipts retain opaque dedupe identity, account/event/booking facts and irreversible dispatch markers. Canonical source deletion/correction/context changes, policy replacement/revocation and attendee opt-out atomically erase private request payload and source/target fingerprints, preventing fresh dispatch without pretending accepted external changes were undone. Existing Cal lifecycle owns meeting/Today/reminders and preserves human corrections. Current membership/source/access/account/policy and exact scoped cost rechecks gate every provider operation; unknown dispatch only inspects while still authorized. Meeting deletion clears its link through the existing FK.'),
+  booking_create_submissions: coverage(['retained','deletion_redacts'], 'Durable owner-scoped pending/accepted/failed/unknown booking receipts and at-most-once markers. Private agreement/offered-source UUID/hash, attendee Route and source fingerprint provenance atomically redact on canonical source deletion, correction, unavailable transition or source-context changes. Only opaque dedupe barriers, owner/account/event identity, slot reservation and accepted external UID/meeting facts remain as business history, not renewed source authority. Current source/access/owner/policy/adapter scope rechecks gate every new external operation; a redacted uncertain write never replays or pretends cancellation. Meeting deletion clears the meeting link through its existing FK.'),
   crm_capability_authority_receipts: coverage(
     ['retained'],
     'Immutable body-free reviewed capability configuration, evidence/release hashes and opaque review references, with one recorded revocation. Retained as authorization audit history after expiry, source deletion, disconnect and departure; never a copied body or token store. Active membership, exact owner/account/generation, current configuration, release, expiry and revocation are rechecked before use; retained history cannot restore authority.',
@@ -133,6 +138,26 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     mailbox_provider_incidents: coverage(
       ["operational", "retained"],
       "Coded mailbox safety history and hold identities; retained after prospect deletion/departure and with the whole database restore. Deadlines do not authorize fresh external action.",
+    ),
+    linkedin_outreach_settings: coverage(
+      ["retained"],
+      "Current owner/account-identifying standing-policy metadata, including approved action/data/model/budget bindings; no copied prospect conversations, private message bodies or credentials. Retained through disable/revoke, account disconnect, source deletion and departure. Current membership, policy revision and exact account binding are rechecked before use, so retained settings cannot restore authority; no automatic retention sweep or prospect-content deletion applies to this configuration.",
+    ),
+    linkedin_posting_settings: coverage(
+      ["retained"],
+      "Separate owner/account posting configuration and fixed content/voice/provider/data/spend scope. No private factual input bodies or credentials. Disable, revoke, account change and membership loss invalidate work without erasing documentary configuration.",
+    ),
+    linkedin_posting_candidate_bindings: coverage(
+      ["retained"],
+      "Immutable opaque delivery-to-owner policy revision fence. No draft body or credentials. Current membership, account and policy gate unattempted work. Retained submitted markers remain inspection-only after invalidation and cannot authorize replay.",
+    ),
+    linkedin_posting_policy_revisions: coverage(
+      ["retained"],
+      "Immutable posting approval and stop revision history, without private factual inputs or credentials. Retained through source deletion, disconnect and departure. Historical revisions cannot restore current posting authority.",
+    ),
+    linkedin_outreach_policy_revisions: coverage(
+      ["retained"],
+      "Immutable body-free owner-approval and disable/revoke history with exact account-identifying configuration metadata, policy rules, acquisition/model/grant versions and spending ceilings. No copied or derived prospect message content or credentials. Retained independently of source deletion, account disconnect and departure to preserve dated consent/stop audit. Old revisions are documentary only and cannot authorize work after a current revision, account or membership change.",
     ),
     social_weekly_settings: coverage(
       ["operational"],
@@ -418,6 +443,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     crm_source_relationship_contexts: coverage(
       ["retained", "deletion_stops"],
       "Original source/relationship revisions and firm snapshots remain body-free history. Deleting the copied source requires review without rebinding original context.",
+    ),
+    linkedin_route_refusals: coverage(
+      ['retained'],
+      'Immutable confirmed human stop facts retain only opaque Person/firm scope, actor and date after source deletion, disconnect or departure. No profile, name, excerpt or inferred refusal text is retained, and no reimport or referral clears the stop.',
     ),
     crm_identity_endpoints: coverage(
       ["retained", "deletion_redacts"],
@@ -877,6 +906,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     meeting_recordings: coverage(
       ["deletion_removes"],
       "One uploaded audio file of a demo: its Zoom file name, size, digest and object key; removed with the meeting (ON DELETE CASCADE); the object expires a day after upload.",
+    ),
+    crm_booking_interpretations: coverage(
+      ["retained", "deletion_redacts", "departure_revokes"],
+      "Native source UPDATE/DELETE erases private provenance and proposals while source-free financial linkage survives. Every read and worker stage revalidates original access and owner membership; departure refuses further processing.",
     ),
   });
 

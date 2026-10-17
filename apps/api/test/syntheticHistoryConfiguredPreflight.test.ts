@@ -12,11 +12,11 @@ const windowSchema=z.object({windows:z.array(z.object({id:z.string(),text:z.stri
 
 // Fake external SDK outputs prove host orchestration and lifecycle contracts.
 // They do not score hosted model usefulness or representative customer quality.
-async function preflight(itemIndex:0|1|2|3,unknownAcceptance=false,cleanupFailure=false){
+async function preflight(itemIndex:0|1|2|3,unknownAcceptance=false,cleanupFailure=false,provider:'bedrock'|'vertex'='bedrock'){
  const fixture=await createAuthFixture();try{
   const item=fixtureCases.cases[itemIndex];
   const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-sonnet-4-6' as const,providerKey:'controlled.ask_sdk',accessGrantVersion:'controlled-access',dataHandlingVersion:'controlled-handling',fundingVerifiedUntil:'2099-01-01T00:00:00Z',agentLimits:{maxSteps:6,maxInputBytes:30000,maxOutputTokens:1000,deadlineMs:60000}};
-  const {db,post,command,saveDisabledPurpose,composeWorker}=await configuredAskFixture(fixture,route);
+  const {db,post,command,saveDisabledPurpose,composeWorker}=await configuredAskFixture(fixture,provider==='bedrock'?route:{...route,provider:'google_vertex',region:'us',projectId:'synthetic-history-project',endpointId:'vertex.us/synthetic-history-project',modelVersion:'gemini-3.8-flash',agentLimits:{...route.agentLimits,maxOutputTokens:4096}});
   expect((await saveDisabledPurpose('d'.repeat(64))).status).toBe(200);
   expect((await post('/ask/purpose/activate',command({capability:'ask_answer',purpose:'answer',expectedRevision:1,approval:{consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,reviewedEvaluationReference:'controlled-history-preflight-not-hosted-quality',limitations:['representative_quality_unverified']}}))).body).toMatchObject({status:'accepted'});
   let calls=0;let maxFramedBytes=0;let modelFailure:unknown;
@@ -24,6 +24,7 @@ async function preflight(itemIndex:0|1|2|3,unknownAcceptance=false,cleanupFailur
   const model=new MockLanguageModelV3({doGenerate:async input=>{
    try{
     calls++;
+    if(provider==='vertex')expect(input.providerOptions).toMatchObject({vertex:{thinkingConfig:{thinkingLevel:'low',includeThoughts:false}}});
     const framedBytes=Buffer.byteLength(JSON.stringify(input),'utf8')+2048;
     maxFramedBytes=Math.max(maxFramedBytes,framedBytes);
     expect(framedBytes).toBeLessThanOrEqual(30000);
@@ -141,3 +142,9 @@ it('preflights fresh exact state after a human stage change and deletes the two-
 it('retains the ambiguous first result and stops before the second turn while deleting the disposable session',()=>preflight(3,true),90000);
 it('captures failed original deletion and fails acceptance even when explicit history deletion succeeds',()=>preflight(0,false,true),90000);
 it('preserves the unknown provider stop when original cleanup also fails',()=>preflight(0,true,true),90000);
+
+it('preflights Vertex synthetic history journey 0 through ordinary configured workers',()=>preflight(0,false,false,'vertex'),90000);
+it('preflights Vertex synthetic history journey 1 through ordinary configured workers',()=>preflight(1,false,false,'vertex'),90000);
+it('preflights Vertex synthetic history journey 2 through ordinary configured workers',()=>preflight(2,false,false,'vertex'),90000);
+it('preflights Vertex synthetic history journey 3 through ordinary configured workers',()=>preflight(3,false,false,'vertex'),90000);
+it('stops the Vertex unknown turn and retains session cleanup',()=>preflight(3,true,false,'vertex'),90000);

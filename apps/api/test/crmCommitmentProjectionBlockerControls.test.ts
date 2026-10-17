@@ -17,6 +17,10 @@ it.each(["deleted", "ambiguous", "historical"] as const)(
     const fixture = await createAuthFixture();
     let faultInstalled = false;
     try {
+      // Leave three UTC days of margin, without changing the historical control.
+      const promiseDate = (await fixture.db.query<{date:string}>("SELECT ((clock_timestamp() AT TIME ZONE 'UTC')::date + 3)::text AS date")).rows[0]!.date;
+      const promiseQuote = scenario === "historical" ? "I will prepare the repair summary by October 12." : `I will prepare the repair summary by ${promiseDate}.`;
+      const promiseExpression = scenario === "historical" ? "by October 12" : `by ${promiseDate}`;
       const token = (
         await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
       ).accessToken;
@@ -70,7 +74,7 @@ it.each(["deleted", "ambiguous", "historical"] as const)(
         command({
           personId,
           sourceKey: "human-review",
-          excerpt: "I will prepare the repair summary by October 12.",
+          excerpt:promiseQuote,
           occurredAt: "2026-10-01T14:00:00Z",
         }),
       );
@@ -143,8 +147,8 @@ it.each(["deleted", "ambiguous", "historical"] as const)(
                       kind: "commitment",
                       status: "stated",
                       interpretation: "Promise to prepare summary",
-                      locator: "text:0:48",
-                      quote: "I will prepare the repair summary by October 12.",
+                      locator: scenario === "historical" ? "text:0:48" : `text:0:${promiseQuote.length}`,
+                      quote:promiseQuote,
                     },
                   ],
                 };
@@ -179,9 +183,9 @@ it.each(["deleted", "ambiguous", "historical"] as const)(
         actionLabel: "Prepare the repair summary",
         due: {
           kind: "date",
-          date: scenario === "historical" ? "2000-10-12" : "2026-10-12",
+          date: scenario === "historical" ? "2000-10-12" : promiseDate,
           zone: "America/Chicago",
-          expression: "by October 12",
+          expression: promiseExpression,
         },
       });
       const queued = await post("/crm/commitments/review", review);
@@ -256,7 +260,7 @@ it.each(["deleted", "ambiguous", "historical"] as const)(
             commitmentId: receipt.result.commitmentId,
             revision: 1,
             state: "pending",
-            quote: "I will prepare the repair summary by October 12.",
+            quote:promiseQuote,
             task: null,
           },
         ],

@@ -1,3 +1,4 @@
+import {bookingMessageEnvelope,consumeBookingMessagePermission,decideBookingMessagePermission} from '../meetings/bookingMessages.ts';
 import { prospectingRetryAt } from './pacing.ts';
 import {consumeHumanReplyApproval,humanReplyEnvelope,refuseHumanReplyApproval,humanReplyApprovalIsLive} from '../replies/sendAuthority.ts';
 import {recordHumanReplyDelivery} from '../replies/delivery.ts';
@@ -375,6 +376,13 @@ async function recheckAndClaim(
   await context.db.query('BEGIN');
   try {
     await lockSendGateForDispatch(context);
+    const hintedFence = await readFence(context, outboundMessageId);
+    if (hintedFence?.originKind === 'standing_booking') {
+      // Acquire the canonical identity/source closure before the fence, matching
+      // retained-original metadata publication. This hint and ignored decision
+      // grant no authority: the locked fence and complete gate below decide anew.
+      await decideBookingMessagePermission(context, hintedFence, deps.bookingMessageRuntime);
+    }
     const fence = await lockFenceForClaim(context, outboundMessageId);
     if (fence === null || fence.state !== 'prepared') {
       await context.db.query('ROLLBACK');
@@ -559,7 +567,11 @@ async function recheckAndClaim(
       await context.db.query('ROLLBACK');
       return {kind:'not_ready',refusal:'step_ineligible',detail:'human_reply:fresh_approval_required'};
     }
-    const threading = fence.originKind==='draft'?await humanReplyEnvelope(context,fence.id):await routineReplyThreading(context, fence.id);
+    const threading = fence.originKind==='standing_booking'?await bookingMessageEnvelope(context,fence,deps.bookingMessageRuntime):fence.originKind==='draft'?await humanReplyEnvelope(context,fence.id):await routineReplyThreading(context, fence.id);
+    if(fence.originKind==='standing_booking'&&(!threading||!await consumeBookingMessagePermission(context,fence,deps.bookingMessageRuntime))){
+      await context.db.query('ROLLBACK');
+      return {kind:'not_ready',refusal:'step_ineligible',detail:'booking_permission_changed'};
+    }
     await context.db.query('COMMIT');
     return { kind: 'claimed', plan, claim: claim.value, threading };
   } catch (error) {

@@ -9,7 +9,7 @@ export type EndpointInput = z.infer<typeof endpointClaimSchema>;
 interface Claim extends QueryResultRowLike {
   id: string;
   endpoint_id: string;
-  kind: 'email' | 'phone';
+  kind: 'email' | 'phone' | 'linkedin';
   value: string | null;
   value_hash: string;
   person_id: string | null;
@@ -26,8 +26,15 @@ interface Claim extends QueryResultRowLike {
   source_invalidated: boolean;
 }
 const columns = `c.id,c.endpoint_id,e.kind,e.value,e.value_hash,c.person_id,c.firm_id,f.name AS firm_name,c.shared,c.status,c.start_date::text,c.end_date::text,c.revision,c.source_id,c.source_revision,c.source_hash,c.source_invalidated`;
-export function normalizeIdentityEndpoint(kind: 'email' | 'phone', value: string): string | null {
+export function normalizeIdentityEndpoint(kind: 'email' | 'phone' | 'linkedin', value: string): string | null {
   const trimmed = value.trim();
+  if (kind === 'linkedin') {
+    try {
+      const url = new URL(trimmed);
+      if (url.protocol !== 'https:' || !['linkedin.com', 'www.linkedin.com'].includes(url.hostname) || url.username || url.password || url.port || url.search || url.hash || !/^\/in\/[a-zA-Z0-9_-]{3,100}\/?$/u.test(url.pathname)) return null;
+      return `https://www.linkedin.com${url.pathname.replace(/\/$/u, '').toLowerCase()}`;
+    } catch { return null; }
+  }
   if (kind === 'phone')
     return /^\+[1-9]\d{6,14}$/u.test(trimmed) ? trimmed : null;
   const split = trimmed.lastIndexOf('@');

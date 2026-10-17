@@ -463,10 +463,14 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PLAN_RUN" =~ ^[1-9][0-9]{0,19}$ && "$MANIFEST_HASH" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${GITHUB_REF:-}" = refs/heads/main ]
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN" \
-            --jq '{path,event,conclusion,head_sha,repository:.head_repository.full_name}' > "$RUNNER_TEMP/prepared-run.json"
-          jq -e --arg commit "$COMMIT" --arg repository "$GITHUB_REPOSITORY" \
-            '.path == ".github/workflows/greenfield-deploy.yml" and .event == "workflow_dispatch" and .conclusion == "success" and .head_sha == $commit and .repository == $repository' "$RUNNER_TEMP/prepared-run.json"
+            --jq '{path,event,status,conclusion,head_sha,head_branch,repository:.head_repository.full_name}' > "$RUNNER_TEMP/prepared-run.json"
+          # The preparation and application must use the same main dispatch definition.
+          # Its SHA can differ from the images commit after a docs/workflow-only update.
+          # The approved manifest and downloaded images remain bound to COMMIT below.
+          jq -e --arg dispatch "$GITHUB_SHA" --arg repository "$GITHUB_REPOSITORY" \
+            '.path == ".github/workflows/greenfield-deploy.yml" and .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .head_branch == "main" and .head_sha == $dispatch and .repository == $repository' "$RUNNER_TEMP/prepared-run.json"
           gh run download "$PLAN_RUN" --repo "$GITHUB_REPOSITORY" --name reviewed-production-plan --dir "$RUNNER_TEMP/reviewed-packet"
           node infra/scripts/reviewed-release.mjs validate "$RUNNER_TEMP/reviewed-packet/manifest.json" "$MANIFEST_HASH"
           infra/scripts/deploy.sh ci download --run-id "$RUN_ID" --commit "$COMMIT" --out "$RUNNER_TEMP/image-digests.json"
@@ -476,7 +480,8 @@ jobs:
           role-to-assume: ${{ secrets.FSS_PRODUCTION_REVIEWED_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: fss-prod-reviewed-${{ github.run_id }}
-          role-duration-seconds: 7200
+          # Keep the existing deployment role's one-hour maximum unchanged.
+          role-duration-seconds: 3600
       - name: Decrypt, stop if needed, apply exact saved bytes, migrate, restart and verify
         env:
           MANIFEST_HASH: ${{ inputs.reviewed_manifest_sha256 }}

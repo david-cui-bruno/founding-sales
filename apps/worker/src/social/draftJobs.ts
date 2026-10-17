@@ -18,7 +18,7 @@ export function socialDraftSource(enabled:boolean):DueWorkSource{return {name:'s
   await expireSocialDraftRequests(ctx);
   if(!enabled)continue;
   await queueWeeklySocialDrafts(ctx);
-  const rows=(await session.query<{id:string;paid_attempts:number}>("SELECT id,paid_attempts FROM social_draft_requests WHERE workspace_id=$1 AND state='queued' AND deadline_at>now() AND paid_attempts<2 ORDER BY created_at,id LIMIT 25",[workspace])).rows;
+  const rows=(await session.query<{id:string;paid_attempts:number}>("SELECT id,paid_attempts FROM social_draft_requests WHERE workspace_id=$1 AND state='queued' AND deadline_at>now() AND paid_attempts<2 AND NOT EXISTS(SELECT 1 FROM linkedin_recurring_slots s WHERE s.workspace_id=social_draft_requests.workspace_id AND s.draft_request_id=social_draft_requests.id) ORDER BY created_at,id LIMIT 25",[workspace])).rows;
   for(const row of rows)jobs.push({workspaceId:workspace,kind:'social.draft',idempotencyKey:`social-draft:${row.id}:${row.paid_attempts}:${at.slice(0,16)}`,payload:{requestId:row.id},maxAttempts:1});
  }
  return jobs;

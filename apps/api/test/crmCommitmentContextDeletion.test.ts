@@ -67,8 +67,14 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
       (await post("/crm/people/bridge", command({ contactIds: [personId] })))
         .status,
     ).toBe(200);
-    const quoteA = "I will prepare the repair summary by October 12.";
-    const quoteB = "I will prepare the invoice by October 13.";
+    // Keep both promises current at capture, with distinct future due dates.
+    // Today eligibility uses the real source observation clock, not the auth clock.
+    const dates = (await fixture.db.query<{ due_a: string; due_b: string }>(
+      `SELECT to_char((clock_timestamp() AT TIME ZONE 'America/New_York')::date + 1, 'YYYY-MM-DD') AS due_a,
+              to_char((clock_timestamp() AT TIME ZONE 'America/New_York')::date + 2, 'YYYY-MM-DD') AS due_b`,
+    )).rows[0]!;
+    const quoteA = `I will prepare the repair summary by ${dates.due_a}.`;
+    const quoteB = `I will prepare the invoice by ${dates.due_b}.`;
     const excerpt = quoteA + " " + quoteB;
     expect(
       (
@@ -213,7 +219,7 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
             kind: "date",
             date,
             zone: "America/Chicago",
-            expression: "by October",
+            expression: `by ${date}`,
           },
         }),
       );
@@ -232,7 +238,7 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
       quoteA,
       0,
       "Prepare repair summary",
-      "2026-10-12",
+      dates.due_a,
     );
     // Controlled canonical correction fixture: old A context is revision-bound,
     // while immutable original capture authority remains genuinely B.
@@ -278,14 +284,14 @@ it("redacts initial A promise proof after a B re-review without erasing a B-only
     ).toBe(200);
     const next = await process("fixture-v2", 1);
     expect(
-      await review(next, quoteA, 1, "Prepare repair summary", "2026-10-12"),
+      await review(next, quoteA, 1, "Prepare repair summary", dates.due_a),
     ).toBe(historicalId);
     const independentId = await review(
       next,
       quoteB,
       0,
       "Prepare independent invoice",
-      "2026-10-13",
+      dates.due_b,
     );
     const read = () =>
       post("/crm/commitments/read", {
