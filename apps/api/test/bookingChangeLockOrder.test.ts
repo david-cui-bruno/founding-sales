@@ -1,9 +1,11 @@
 import {describe,it,expect} from 'vitest';
+import {fixedFixtureDate} from './support/fixedFixtureDate.ts';
 import type {BookingChangePayload} from '@fss/contracts';
 import type {QueryResultRowLike,SessionQueryable} from '@fss/domain/db/queryable.ts';
 import {createBookingInterpretationAuthority} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 import {dispatch} from '../src/server.ts';
 import {setupBookingChange} from './support/bookingChangeFixture.ts';
+fixedFixtureDate();
 function barrier(){let resolve=()=>{};const wait=new Promise<void>(done=>{resolve=done;});return {wait,resolve};}
 describe('ordinary booking change canonical source/policy lock order',()=>{
  it.each(['cancel','reschedule'] as const)('normal interpretation read and %s serialize without PostgreSQL deadlock',async action=>{

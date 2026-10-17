@@ -1,6 +1,6 @@
 # Roadmap decision history retained October 11, 2026
 
-For the current completion lane use [operating roadmap](roadmap-20261007.md). Preserve decisions not superseded by later approved amendments; dated counts and pending statuses are historical evidence.
+For the current completion lane use [operating roadmap](../../sourcing/roadmap-20261007.md). Preserve decisions not superseded by later approved amendments; dated counts and pending statuses are historical evidence.
 
 ## Current ticket reconciliation — October 11, after PR582
 
@@ -23,7 +23,7 @@ David does not review proposed recipients. He handles substantive replies within
 
 ## Priorities and acceptance
 
-1. Strengthen sender ramp and delivery controls. Sender mailbox is new or barely used. Existing five/day allowance is the first stage of a healthy-day ramp, not a permanent cap or a required daily quota. Base advancement on actual volume and delivery evidence, inspect inter-message pacing, and define reduction/hold/recovery behavior. Unknown reputation data is not positive evidence. Verify actual received-message authentication. Do not add a synthetic warm-up service by default. See [primary-source research](mailbox-warmup-research.md). Exact revised thresholds require an evidence-backed design; no cap override is authorized by this record.
+1. Strengthen sender ramp and delivery controls. Sender mailbox is new or barely used. Existing five/day allowance is the first stage of a healthy-day ramp, not a permanent cap or a required daily quota. Base advancement on actual volume and delivery evidence, inspect inter-message pacing, and define reduction/hold/recovery behavior. Unknown reputation data is not positive evidence. Verify actual received-message authentication. Do not add a synthetic warm-up service by default. See [primary-source research](../../sourcing/mailbox-warmup-research.md). Exact revised thresholds require an evidence-backed design; no cap override is authorized by this record.
 2. Improve supported prospect inflow. Preserve current geography and residential-management criteria. Verify identity, first-party contact association and freshness. Public evidence of maintenance pain is optional for email-first outreach; never fabricate pain. Existing teams/software are context, not automatic exclusions. Improve sources/contact recovery before proposing broader targeting. Research ambiguous prospects within existing budgets, then defer them without a recipient-review queue for David.
 3. Implement and evaluate autonomous verified-fit admission. Update the current manual-review-dependent path and evaluate the exact policy/prompt versions before activation. Preserve deduplication, stops, ownership, route validation, timezone and other settled protections. Connect existing lead-ranking logic. After evaluation and sending-path verification, David authorizes selecting and contacting policy-matching prospects without another individual approval. Meaningful targeting-policy changes still require his approval. This authorization is conditional; it is not evidence that automatic admission is already live.
 4. Verify real sending, replies and booking. Preserve Shirley's original approved message/enrollment and morning schedule. Verify durable provider submission, subsequent cadence, reply/booking interruption and reliable visibility for David. Submission is not proof of inbox placement. Preserve five-email cadence and coordinated channel rules; no new autonomous calling authorization.
@@ -36,15 +36,15 @@ The same target end state now includes [conversational Ask #554](https://github.
 
 - Ask: #555 establishes the bounded agent and per-step contracts; #556 and #559 follow independently; #556 unlocks #557/#558/#560; #561 integrates source. Final conversational acceptance #551 depends on #548/#549/#561.
 - Gmail: #563 establishes qualification/continuity contracts; #564/#565/#566 follow independently; #567 follows #564; #568 integrates source. Final ordinary capture acceptance #549 depends on #547/#568.
-- Complete source implementation is recorded in [PR570](https://github.com/david-cui-bruno/founding-sales/pull/570) for all thirteen children (runtime `fd6c63cbda305717f8f7a9f1bf97ac9625d9e66b`, schema98), with one shared schema/contracts integrator and parallel Ask/Gmail work. Use its exact review/check/upgrade/merge receipts and the [readiness inventory](../operations/ask-gmail-source-readiness.md); implementation order above is retained dependency history. Provider/evaluation/activation acceptance remains separate.
+- Complete source implementation is recorded in [PR570](https://github.com/david-cui-bruno/founding-sales/pull/570) for all thirteen children (runtime `fd6c63cbda305717f8f7a9f1bf97ac9625d9e66b`, schema98), with one shared schema/contracts integrator and parallel Ask/Gmail work. Use its exact review/check/upgrade/merge receipts and the [readiness inventory](../../operations/ask-gmail-source-readiness.md); implementation order above is retained dependency history. Provider/evaluation/activation acceptance remains separate.
 - Prepare #548 evaluations in parallel, distinguishing synthetic/public regression, actual provider integration and representative quality. Missing real examples do not block implementation or preparation, but no passing quality evidence is invented.
 - #552 retains capability-specific activation: capture need not wait on Ask; applicable purpose/provider/evaluation/release receipts still apply. Discovery #438, conditional admission #425 and native acceptance #460/#466 remain separate roadmap work.
 
-Use the [focused interface design](ask-gmail-interface-design-20261011.md) for module ownership, preparation and existing test seams; the [deep architecture research](ask-architecture-deep-research-20261010.md) supports the architecture choice. One integration owner controls shared schema/contracts/canonical access/deletion before parallel flow work. No new provider reads, paid calls, grants, release or sending is authorized by these pointers.
+Use the [focused interface design](../../sourcing/ask-gmail-interface-design-20261011.md) for module ownership, preparation and existing test seams; the [deep architecture research](../../sourcing/ask-architecture-deep-research-20261010.md) supports the architecture choice. One integration owner controls shared schema/contracts/canonical access/deletion before parallel flow work. No new provider reads, paid calls, grants, release or sending is authorized by these pointers.
 
 ## Current release and operational boundaries
 
-Use [current operating state](../operations/current-state.md) for the dated verified release/sending snapshot, evidence and refresh procedure. This roadmap records decisions and priorities, not a second copy of production status.
+Use [current operating state](../../operations/current-state.md) for the dated verified release/sending snapshot, evidence and refresh procedure. This roadmap records decisions and priorities, not a second copy of production status.
 
 ## October11 parallel completion follow-up
 

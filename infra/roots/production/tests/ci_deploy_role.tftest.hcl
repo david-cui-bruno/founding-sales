@@ -376,8 +376,11 @@ run "saved_plan_preparation_is_read_only_except_existing_backend_locks" {
       && jsondecode(aws_iam_role.ci_plan.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-plan"
       && length(local.ci_plan_metadata) == 1
       && alltrue([for statement in local.ci_plan_policy.Statement : alltrue([for action in statement.Action : !contains(["secretsmanager:GetSecretValue", "iam:PutRolePolicy", "iam:CreateRole", "ecs:RunTask", "ecs:UpdateService", "rds:ModifyDBInstance"], action)])])
-      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "OnlyExistingBackendLockObject"] == [["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate.tflock"]]
-      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "ReadOnlyProductionState"] == [["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "BackendNativeLock"] == [["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate.tflock"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "BackendState"] == [["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "BackendChecksum"] == [["dynamodb:GetItem"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "BackendLockRow"] == [["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]]
+      && alltrue([for statement in local.ci_plan_policy.Statement : alltrue([for action in statement.Action : !contains(["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"], action)])])
     )
     error_message = "The planner can refresh metadata and read the single existing state; only its existing backend lock writes are authorized."
   }

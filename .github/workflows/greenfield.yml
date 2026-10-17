@@ -49,6 +49,17 @@ jobs:
         # job never runs. Most database tests use the service container; local diagnostic
         # lifecycle acceptance deliberately starts its own embedded cluster.
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Workflow documentation and code-size fast gate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          node --test scripts/checkWorkflowBudget.test.mjs
+          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            node scripts/checkWorkflowBudget.mjs "$BASE_SHA"
+          else
+            node scripts/checkWorkflowBudget.mjs
+          fi
       - name: Hydrate only the pinned embedded PostgreSQL native library links
         # This exact dependency postinstall restores required .so symlinks omitted
         # by ignore-scripts. It does not run the root Electron download or other scripts.

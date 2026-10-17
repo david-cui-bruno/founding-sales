@@ -1,8 +1,10 @@
 import { expect, it } from 'vitest';
+import {fixedFixtureDate} from './support/fixedFixtureDate.ts';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { createBookingInterpretationAuthority } from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 import { dispatch } from '../src/server.ts';
 import { bookingCreateLockOrderFixture } from './support/bookingCreateLockOrderFixture.ts';
+fixedFixtureDate();
 
 function barrier() {
   let resolve = () => {};

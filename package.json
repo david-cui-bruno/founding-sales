@@ -23,7 +23,8 @@
     "test:desktop:host": "FSS_HOST_TESTS=1 npm run test:host --workspace apps/desktop",
     "package:desktop": "npm run package --workspace apps/desktop --",
     "verify:desktop:package": "npm run verify:package --workspace apps/desktop --",
-    "gate:greenfield": "npm run typecheck:greenfield && npm run lint && npm run test:greenfield && npm run test:ops && npm run test:ask-evaluation",
+    "gate:workflow": "node --test scripts/checkWorkflowBudget.test.mjs && node scripts/checkWorkflowBudget.mjs",
+    "gate:greenfield": "npm run gate:workflow && npm run typecheck:greenfield && npm run lint && npm run test:greenfield && npm run test:ops && npm run test:ask-evaluation",
     "verify:secrets": "node scripts/verifySecrets.mjs",
     "evaluate:email-admission": "node scripts/evaluateEmailAdmission.mjs",
     "test:ask-evaluation": "vitest run --root tools/ask-evaluation --config vitest.config.ts"

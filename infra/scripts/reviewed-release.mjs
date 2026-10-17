@@ -4,6 +4,7 @@ import { createHash, createPublicKey } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { validateConfiguration, backendPolicy, validatePolicy, proposeExistingPolicy, stageMapping } from './release-backend-contract.mjs';
 const [mode, ...args] = process.argv.slice(2);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
@@ -63,8 +64,23 @@ function imageDocument(file) {
   return value;
 }
 try {
-  if (mode === 'validate') { validate(args[0], args[1]); process.stdout.write('Reviewed manifest verified; no cloud or deployment operations.\n'); }
+  if (mode === 'backend-proposal') {
+    if (args.length !== 1) throw new Error('backend_baseline_required');
+    const bytes = readFileSync(args[0]);
+    const proposal = proposeExistingPolicy(JSON.parse(bytes));
+    process.stdout.write(JSON.stringify({ ...proposal, baselineSha256: hash(bytes), proposedPolicySha256: hash(JSON.stringify(proposal.proposed.policy)) }, null, 2) + '\n');
+  } else if (mode === 'backend-policy-check') {
+    if (args.length !== 2) throw new Error('backend_policy_required');
+    validatePolicy(read(args[1]), args[0]);
+    process.stdout.write('Source policy contract verified, not effective live authorization.\n');
+  } else if (mode === 'backend-contract') {
+    if (args.length !== 1) throw new Error('backend_stage_required');
+    const mapping = ['prepare', 'execute', 'local-plan'].includes(args[0]) ? validateConfiguration(args[0]) : stageMapping(args[0]);
+    process.stdout.write(JSON.stringify({ ...mapping, policy: mapping.backend ? backendPolicy(args[0]) : null, operationalApproval: false }, null, 2) + '\n');
+  } else if (mode === 'validate') { validate(args[0], args[1]); process.stdout.write('Reviewed manifest verified; no cloud or deployment operations.\n'); }
   else if (mode === 'prepare') {
+    if (args.length !== 5) throw new Error('backend_unexpected_arguments');
+    validateConfiguration('prepare');
     const [digestsFile, publicKeyFile, evidenceFile, bindingFile, directory] = args;
     preparationDirectory = directory;
     mkdirSync(join(directory, 'public'), { recursive: true, mode: 0o700 }); mkdirSync(join(directory, 'private'), { recursive: true, mode: 0o700 });
@@ -94,10 +110,12 @@ try {
     process.stdout.write(`Reviewed plan prepared: manifest ${fingerprint}; ${changes.length} changed resources; schema ${baseline.fromSchema} → ${toSchema}. No resource apply or activation.\n`);
     rmSync(join(directory, 'private'), { recursive: true, force: true });
   } else if (mode === 'execute') {
+    if (args.length !== 6) throw new Error('backend_unexpected_arguments');
     const [manifestFile, fingerprint, envelopeFile, privateKeyFile, digestsFile, directory] = args;
     mkdirSync(directory, { recursive: true, mode: 0o700 }); statusPath = join(directory, 'status.json');
     status = { phase: 'readiness', outcome: 'pending', writesStarted: false, schema: 'unobserved', recovery: 'Inspect actual state and committed schema before forward repair. No automatic schema rollback or blind replay.' }; save();
     if (process.env.FSS_RELEASE_HOLD !== 'false') throw new Error('release_held');
+    validateConfiguration('execute');
     if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_WORKFLOW_REF !== 'david-cui-bruno/founding-sales/.github/workflows/greenfield-deploy.yml@refs/heads/main' || process.env.FSS_REHEARSAL_AWS_COMMAND || process.env.FSS_REHEARSAL_DRY_RUN === '1' || process.env.FSS_PROD_FORCE_IDLE === '1' || Object.keys(process.env).some(key => key.startsWith('FSS_RELEASE_OUTPUT_'))) throw new Error('reviewed_workflow_required');
     const manifest = validate(manifestFile, fingerprint); identity('execute'); gate();
     const images = imageDocument(digestsFile);
@@ -111,6 +129,7 @@ try {
     const state = JSON.parse(terraform(['state', 'pull'], 'reviewed_state_read_failed'));
     if (state.lineage !== manifest.stateLineage || state.serial !== manifest.stateSerial) throw new Error('reviewed_state_changed');
     const planJson = JSON.parse(terraform(['show', '-json', plan], 'reviewed_plan_read_failed'));
+    if (planJson.variables?.assume_deployment_role?.value !== false) throw new Error('backend_provider_mapping_changed');
     if (planJson.variables?.api_image?.value !== `${process.env.FSS_PRODUCTION_ACCOUNT_ID || '326255650484'}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@${manifest.digests.api}` || planJson.variables?.worker_image?.value !== `${process.env.FSS_PRODUCTION_ACCOUNT_ID || '326255650484'}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${manifest.digests.worker}`) throw new Error('reviewed_plan_images_changed');
     process.env.FSS_REHEARSAL_REPORTS = resolve(directory);
     const record = resolve(directory, 'release-record.json');
