@@ -15,7 +15,8 @@ terraform {
   }
 
   # Intentionally unconfigured here. Initialize with
-  #   terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
+  #   terraform init -backend-config=backend.hcl
+  # Existing SSE-S3 only. No optional KMS override or encryption migration.
   # The state key in backend.hcl is the production key and nothing else may use it.
   backend "s3" {}
 }
