@@ -14,6 +14,8 @@ Release classification starts from observed production builds, not a copied GitH
 
 ## Reviewed infrastructure or protected changes
 
+The [backend identity/encryption contract](release-backend-contract.md) defines exact state versus lock/checksum rights, explicit existing SSE-S3 configuration, source guard refusals and the offline proposal from a supplied actual older policy. Source choices are not permission to change IAM or perform a backend transaction.
+
 Use the same workflow's `review_prepare` mode with the exact green main images run. It can prepare while release is held. The separate read-only planner refreshes the existing production root and writes only its existing Terraform backend locks. It saves a plan, verifies stable live build/service bindings, and uploads a values-free manifest plus encrypted saved plan for one day. The manifest names changed resource addresses/actions, source/image/gate bindings, observed schema, state lineage/serial, PITR inventory and saved-plan checksum. Plaintext plan/state/provider values are not published as artifacts.
 
 Review those concrete resource actions and the manifest fingerprint. One protected `production-release-review` environment approval authorizes the `reviewed` mode with preparation run ID and exact manifest SHA-256. It uses the existing deployment role with explicitly reviewed exact OIDC trust, validates immutable images and unchanged live/state bindings, decrypts the saved bytes, stores the record, stops when required, applies that exact plan, migrates/verifies/restarts and reads back. It never silently regenerates a plan. Changed state/source/configuration requires a new preparation and review.

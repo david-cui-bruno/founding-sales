@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "BackendState", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate"] },
+    { "Sid": "BackendNativeLock", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], "Resource": ["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate.tflock"] },
+    { "Sid": "BackendList", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::callie-sourcing-tfstate-326255650484"], "Condition": { "StringEquals": { "s3:prefix": ["fss/greenfield/production/terraform.tfstate", "fss/greenfield/production/terraform.tfstate.tflock"] } } },
+    { "Sid": "BackendTable", "Effect": "Allow", "Action": ["dynamodb:DescribeTable"], "Resource": ["arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock"] },
+    { "Sid": "BackendLockRow", "Effect": "Allow", "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"], "Resource": ["arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock"], "Condition": { "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate"] } } },
+    { "Sid": "BackendChecksum", "Effect": "Allow", "Action": ["dynamodb:GetItem"], "Resource": ["arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock"], "Condition": { "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate-md5"] } } }
+  ]
+}

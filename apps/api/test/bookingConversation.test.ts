@@ -1,4 +1,6 @@
-import {expect,it} from 'vitest';
+import {expect,it,vi} from 'vitest';
+import * as policyClock from '@fss/domain/policy/clock.ts';
+import {fixedFixtureDate} from './support/fixedFixtureDate.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
@@ -11,6 +13,12 @@ import {startIntegrationServer} from './support/integrationServer.ts';
 import {setupBookingMessageSender} from './support/bookingMessageFixture.ts';
 
 import {captureAt,setupConversation} from './support/bookingConversationFixture.ts';
+fixedFixtureDate();
+// Logical fixture dates need not agree with the real PostgreSQL queue clock.
+// Preserve run_at as scheduling evidence and release each follow-up explicitly.
+async function holdFollowups(f:Awaited<ReturnType<typeof setupConversation>>,id:string){
+ await f.fixture.db.query("UPDATE jobs SET not_before='infinity' WHERE workspace_id=$1 AND kind='meeting.booking_conversation' AND payload->>'conversationId'=$2 AND payload ? 'messageKind' AND state='queued'",[f.fixture.alpha.workspaceId,id]);
+}
 it('accepted prior offer books through standing origin and retains an actionable sales handoff without human confirmation',async()=>{
  const f=await setupConversation();
  const {registry,conversationId,startsAt,providerCalls}=f;
@@ -22,7 +30,9 @@ it('accepted prior offer books through standing origin and retains an actionable
   expect(read.body).toMatchObject({conversationId,state:'booked',origin:'standing_policy',enabled:false,booking:{state:'accepted',providerBookingUid:'standing-booking',meetingId:expect.any(String)},handoff:{action:'answer_sales_question',evidence:{quote:'What does Callie cost?'}}});
   expect(providerCalls[0]).toMatchObject({startsAt});
   const meetingId=(read.body as {booking:{meetingId:string}}).booking.meetingId;
-  expect(JSON.stringify((await f.request('GET','/today/actions/v2')).body)).toContain(meetingId);
+  const todayClock=vi.spyOn(policyClock,'databaseNow').mockResolvedValue('2026-10-15T14:00:00Z');
+  try{expect(JSON.stringify((await f.request('GET','/today/actions/v2')).body)).toContain(meetingId);}
+  finally{todayClock.mockRestore();}
   expect(providerCalls).toHaveLength(1);
   expect(JSON.stringify(read.body)).not.toContain('owner_confirmed_unconditional_exact_slot');
  }finally{await f.fixture.stop();}
@@ -113,7 +123,7 @@ it.each(['automatic','manual_first','later_reply'] as const)('admitted call inte
   const sender=await setupBookingMessageSender(f,f.runtime.policy,f.bindings,f.conversation);
   Object.assign(f.conversation,{messages:sender.runtime});Object.assign(f.runtimeOptions,{bookingMessages:sender.runtime});
   const text='Yes, let us arrange our call.';
-  const {source}=await captureAt(f,text,'2026-10-13T17:00:00.000Z');
+  const {source}=await captureAt(f,text,'2026-10-13T16:30:00.000Z');
   f.setCandidate({intent:'interest',agreement:{sourceId:source.sourceId,start:0,end:text.length,quote:text},slot:null,substantive:null});
   const request=await f.request('POST','/crm/booking/interpretation/request',f.command({source,priorSources:[]}));
   expect(request.status,JSON.stringify(request.body)).toBe(200);
@@ -122,9 +132,9 @@ it.each(['automatic','manual_first','later_reply'] as const)('admitted call inte
   const admitted=await f.request('POST','/meetings/booking-conversation',f.command({interpretationRequestId:requestId,expectedPolicyRevision:1}));
   expect(admitted.status,JSON.stringify(admitted.body)).toBe(200);
   const id=(admitted.body as {result:{conversationId:string}}).result.conversationId;
+  await holdFollowups(f,id);
   const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingConversation:f.conversation,bookingMessages:sender.runtime});
-  const daytime=new Date();daytime.setUTCDate(daytime.getUTCDate()+1);daytime.setUTCHours(16,0,0,0);while([0,6].includes(daytime.getUTCDay()))daytime.setUTCDate(daytime.getUTCDate()+1);
-  f.runtime.policy.now=()=>daytime.toISOString();
+  f.runtime.policy.now=()=> '2026-10-14T16:00:00Z';
   await runOnce(f.db,{registry,owner:'link-lifecycle',limit:20});
   await runOnce(f.db,{registry,owner:'link-sender',limit:20});
   const messages=(await f.fixture.db.query<{id:string}>('SELECT id FROM booking_message_requests WHERE workspace_id=$1 AND conversation_id=$2',[f.fixture.alpha.workspaceId,id])).rows;
@@ -134,17 +144,21 @@ it.each(['automatic','manual_first','later_reply'] as const)('admitted call inte
   expect(sender.gmail.sends[0]).toMatchObject({threadId:'booking-thread',to:'prospect@booking.example',inReplyTo:expect.stringMatching(/^<.+@booking\.example>$/u)});
   const due=(await f.fixture.db.query<{payload:{messageKind:string};run_at:Date}>("SELECT payload,run_at FROM jobs WHERE workspace_id=$1 AND kind='meeting.booking_conversation' AND payload->>'conversationId'=$2 AND payload->>'messageKind'='nudge_3'",[f.fixture.alpha.workspaceId,id])).rows;
   expect(due).toHaveLength(1);expect(due[0]!.run_at.getTime()).toBeGreaterThan(Date.now());
+  expect(due[0]!.run_at.toISOString()).toBe('2026-10-16T16:30:00.000Z');
   expect((await f.request('GET',`/meetings/booking-conversation?conversationId=${id}`)).body).toMatchObject({state:'awaiting_time',nudgeCount:0,enabled:false});
   if(mode==='manual_first')expect((await f.request('POST','/meetings/booking-conversation/event',f.command({conversationId:id,expectedPolicyRevision:1,event:'manual_nudge'}))).status).toBe(200);
+  await holdFollowups(f,id);
   if(mode==='later_reply')await captureAt(f,'Wait, I need to check our schedule.','2026-10-13T18:00:00.000Z');
   for(const [kind,count] of [['nudge_3',1],['nudge_7',2]] as const){
    const scheduled=(await f.fixture.db.query<{id:string;run_at:Date}>("SELECT id,run_at FROM jobs WHERE workspace_id=$1 AND kind='meeting.booking_conversation' AND payload->>'conversationId'=$2 AND payload->>'messageKind'=$3",[f.fixture.alpha.workspaceId,id,kind])).rows;
    expect(scheduled).toHaveLength(1);
+   expect(scheduled[0]!.run_at.toISOString()).toBe(kind==='nudge_3'?'2026-10-16T16:30:00.000Z':'2026-10-20T16:30:00.000Z');
    f.runtime.policy.now=()=>scheduled[0]!.run_at.toISOString();
    // Advance only the controlled queue timer. Eligibility, source, sender window,
    // aggregate counters, reservation and irreversible marker remain real guards.
-   await f.fixture.db.query('UPDATE jobs SET run_at=now() WHERE workspace_id=$1 AND id=$2',[f.fixture.alpha.workspaceId,scheduled[0]!.id]);
+   await f.fixture.db.query('UPDATE jobs SET run_at=now(),not_before=now() WHERE workspace_id=$1 AND id=$2',[f.fixture.alpha.workspaceId,scheduled[0]!.id]);
    await runOnce(f.db,{registry,owner:`automatic-${kind}-lifecycle`,limit:20});
+   await holdFollowups(f,id);
    await runOnce(f.db,{registry,owner:`automatic-${kind}-sender`,limit:20});
    const receipt=(await f.fixture.db.query<{id:string}>('SELECT id FROM booking_message_requests WHERE workspace_id=$1 AND conversation_id=$2 AND kind=$3',[f.fixture.alpha.workspaceId,id,kind])).rows;
    if(mode==='later_reply'||mode==='manual_first'&&kind==='nudge_3'){
@@ -186,6 +200,9 @@ it('readback clears private handoff when captured readiness expires during final
 });
 
 it.each(['deliver','attendance_corrected'] as const)('normal manual attendance governs exactly one next-New-York-business-day rebooking job: %s',async mode=>{
+ // Attendance is timestamped by PostgreSQL. Keep this existing native-clock
+ // scenario aligned with it rather than mixing a fixed policy date with it.
+ vi.useRealTimers();
  const f=await setupConversation();const server=await startIntegrationServer(f.fixture);try{
   await runOnce(f.db,{registry:f.registry,owner:'attendance-create-admission',limit:20});await runOnce(f.db,{registry:f.registry,owner:'attendance-create',limit:20});
   const sender=await setupBookingMessageSender(f,f.runtime.policy,f.bindings,f.conversation);Object.assign(f.conversation,{messages:sender.runtime});Object.assign(f.runtimeOptions,{bookingMessages:sender.runtime});
