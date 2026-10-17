@@ -48,7 +48,7 @@ export async function queueWeeklySocialDrafts(ctx:RepositoryContext):Promise<num
    if((await readSocialDraftSourcesForWorker(ctx,owner,{sourceRefs:[ref],factBlocks:[]})).ok)refs.push(ref);
   }
   if(refs.length){
-   const selection={sourceRefs:refs,factBlocks:catalog.facts.map(({id,version})=>({id,version}))};
+   const selection={sourceRefs:refs,factBlocks:catalog.facts.filter(f=>!f.socialInput).map(({id,version})=>({id,version}))};
    const prepared=await readSocialDraftSourcesForWorker(ctx,owner,selection);
    const count=(await ctx.db.query<{n:number}>("SELECT count(*)::integer AS n FROM social_draft_requests WHERE workspace_id=$1 AND owner_user_id=$2 AND state IN ('queued','calling')",[w,owner])).rows[0]!.n;
    if(count>=3)result='requests_pending';else if(!prepared.ok)result='sources_unavailable';else{

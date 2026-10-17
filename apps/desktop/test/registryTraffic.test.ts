@@ -72,7 +72,7 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
        * that is how `today.expand`'s `/dial/check` and `replies.refresh`'s
        * `/replies/settings` stayed undeclared through the first review.
        */
-      const body = at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
+      const body = ['/meetings/booking-conversation','/meetings/booking-messages'].includes(at.pathname)&&init.method==='POST'?{status:'accepted',replayed:false,result:BRIDGE_ANSWERS[at.pathname]}:at.pathname==='/meetings/booking-policy'&&init.method==='POST'?{status:'accepted',replayed:false,result:{revision:2}}:at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
       return await Promise.resolve({
         status: 200,
         body: body ?? { status: 'accepted', replayed: false, result: {} },
@@ -132,6 +132,13 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'ask.historyList':{limit:20},
   'ask.answerRead':{requestId:UUID},
   'ask.answerSourceRead':{requestId:UUID,expectedVersion:1,windowId:UUID},
+  'meetings.bookingConversationRequest':{interpretationRequestId:UUID,expectedPolicyRevision:1},
+  'meetings.bookingConversationRead':{conversationId:UUID},
+  'meetings.bookingConversationEvent':{conversationId:UUID,expectedPolicyRevision:1,event:'reply'},
+  'meetings.bookingMessageRequest':{conversationId:UUID,kind:'approved_link'},
+  'meetings.bookingMessageRead':{messageId:UUID},
+  'crm.bookingInterpretationRequest':{source:{sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},priorSources:[],commandId:UUID},
+  'crm.bookingInterpretationRead':{requestId:UUID},
   'crm.businessMailList': {limit:50},
   'crm.businessMailReadV2': {sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},
   'crm.businessMailImportHealth':{mailboxId:UUID},
@@ -157,6 +164,12 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'social.workspace':{},
   'social.drafts':{},
   'social.weekly':{},
+  'social.recurringPosting':{},
+  'social.postingPolicy':{},
+  'social.savePostingPolicy':{accountId:UUID,accountRevision:1,expectedRevision:0,approvedRulesVersion:'608-2026-10-13',generation:null,commandId:UUID},
+  'social.disablePostingPolicy':{expectedRevision:1,commandId:UUID},
+  'social.revokePostingPolicy':{expectedRevision:1,commandId:UUID},
+  'social.bindPostingCandidate':{postId:UUID,postRevision:1,expectedRevision:1,commandId:UUID},
   'social.saveWeekly':{enabled:true,expectedRevision:0,commandId:UUID},
   'social.requestDrafts':{sourceRefs:[{kind:'public',id:UUID,revision:1}],factBlocks:[],commandId:UUID},
   'social.mutate':{action:'approve',postId:UUID,expectedRevision:1,commandId:UUID},
@@ -378,6 +391,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'meetings.saveNotes': { meetingId: UUID, expectedRevision: 0, debrief: '', speakerMappings: [], itemOverrides: [], sufficient: false, commandId: UUID },
   'meetings.changeTask': { taskId: UUID, expectedVersion: 1, action: 'complete', commandId: UUID },
   'meetings.bookingCapacity': {},
+  'meetings.bookingPolicy': {},
+  'meetings.bookingPolicyChange': {commandId:UUID,action:'disable',expectedRevision:1},
   'meetings.brief': { meetingId: UUID },
   'meetings.match': { meetingId: UUID, firmId: UUID },
   'meetings.setAttendance': { meetingId: UUID, attendance: 'attended', commandId: UUID },
@@ -495,7 +510,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
     replies: createReplyBridge({ api, session }) as unknown as Host,
     notifications:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['read','runtime'].map(method=>[method,async(input:unknown)=>await handlers[`notifications.${method}` as OperationName](input as never)])) as Host;})(),
     replyComposer:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['context','generate','preview','sendStatus','send'].map(method=>[method,async(input:unknown)=>await handlers[`replyComposer.${method}` as OperationName](input as never)])) as Host;})(),
-    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const socialHandoff=createSocialManualHandoffBridge({api,generation:()=>0,copy:async()=>{},open:async()=>{},chooseDestination:async()=>null,write:async()=>{}});const handlers=operationHandlers({api,socialAccounts,socialHandoff,socialDelivery:createSocialDeliveryRunner({api,root:'/unused',identity:async()=>({workspaceId:UUID,userId:UUID}),now:()=>0,adapters:{}}),recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['manualHandoff','confirmHandoff','useHandoff','registerManualDestination','deliveryStatus','checkPreparation','connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
+    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const socialHandoff=createSocialManualHandoffBridge({api,generation:()=>0,copy:async()=>{},open:async()=>{},chooseDestination:async()=>null,write:async()=>{}});const handlers=operationHandlers({api,socialAccounts,socialHandoff,socialDelivery:createSocialDeliveryRunner({api,root:'/unused',identity:async()=>({workspaceId:UUID,userId:UUID}),now:()=>0,adapters:{}}),recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['recurringPosting','postingPolicy','savePostingPolicy','disablePostingPolicy','revokePostingPolicy','bindPostingCandidate','manualHandoff','confirmHandoff','useHandoff','registerManualDestination','deliveryStatus','checkPreparation','connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
       const directory=await mkdtemp(join(tmpdir(),'social-traffic-'));
       try{const image=join(directory,'source.png');await sharp({create:{width:4,height:4,channels:3,background:'red'}}).png().toFile(image);
         const host=createSocialImageImport({directory,api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,chooseFile:async()=>({canceled:false,filePaths:[image]})});
@@ -516,6 +531,8 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
         ...
         Object.fromEntries(
           [
+            "bookingInterpretationRequest",
+            "bookingInterpretationRead",
             "capabilityRead",
             "metadataReviewActivate",
             "metadataReviewDisable",
@@ -552,7 +569,14 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
         saveNotes: async input => await handlers['meetings.saveNotes'](input as never),
         changeTask: async input => await handlers['meetings.changeTask'](input as never),
         brief: async input => await handlers['meetings.brief'](input as never),
+        bookingConversationRequest:async input=>await handlers['meetings.bookingConversationRequest'](input as never),
+        bookingConversationRead:async input=>await handlers['meetings.bookingConversationRead'](input as never),
+        bookingConversationEvent:async input=>await handlers['meetings.bookingConversationEvent'](input as never),
+        bookingMessageRequest:async input=>await handlers['meetings.bookingMessageRequest'](input as never),
+        bookingMessageRead:async input=>await handlers['meetings.bookingMessageRead'](input as never),
         bookingCapacity: async () => await handlers['meetings.bookingCapacity'](undefined as never),
+        bookingPolicy: async () => await handlers['meetings.bookingPolicy'](undefined as never),
+        bookingPolicyChange: async input => await handlers['meetings.bookingPolicyChange'](input as never),
       };
     })(),
     // Slice S2: answered by `operationHost.ts` against the client directly, like Meetings.

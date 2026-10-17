@@ -5,6 +5,7 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {readSocialWeekly,saveSocialWeekly,queueWeeklySocialDrafts} from '../../social/weekly.ts';
+import {saveAnswerBlock,approveAnswerBlock} from '../../outreach/facts.ts';
 let db:TestDatabase,seed:TwoWorkspaces;
 const user=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),db.session);
 const scheduler=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'scheduler'}),db.session);
@@ -13,8 +14,14 @@ it('defaults off, queues one batch after explicit enablement and does not backfi
  expect(await readSocialWeekly(user())).toMatchObject({enabled:false,revision:0,nextAt:null});
  expect(await withTransaction(db.session,()=>queueWeeklySocialDrafts(scheduler()))).toBe(0);
  const id=randomUUID();await db.session.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload) VALUES($1,$2,$3,$4::jsonb)',[seed.alpha.workspaceId,id,'e'.repeat(64),JSON.stringify({firmName:'Example PM',brief:'After-hours maintenance support'})]);
+ const refs=[];
+ for(const socialInput of [undefined,{topic:'build' as const,status:'planned' as const,sanitized:true as const}]){
+  const saved=await withTransaction(db.session,()=>saveAnswerBlock(user(),{kind:'product',text:'Bounded maintenance intake.',...(socialInput?{socialInput}:{})}));if(!saved.ok)throw new Error(saved.reason);
+  expect((await withTransaction(db.session,()=>approveAnswerBlock(user(),saved.value))).ok).toBe(true);refs.push({id:saved.value.id,version:saved.value.version});
+ }
  expect((await withTransaction(db.session,()=>saveSocialWeekly(user(),{enabled:true,expectedRevision:0}))).ok).toBe(true);
  expect(await withTransaction(db.session,()=>queueWeeklySocialDrafts(scheduler()))).toBe(1);
+ expect((await db.session.query('SELECT source_selection FROM social_draft_requests WHERE workspace_id=$1',[seed.alpha.workspaceId])).rows).toEqual([{source_selection:{sourceRefs:[{kind:'public',id,revision:1}],factBlocks:[refs[0]]}}]);
  expect(await withTransaction(db.session,()=>queueWeeklySocialDrafts(scheduler()))).toBe(0);
  expect((await db.session.query('SELECT state,weekly_revision FROM social_draft_requests WHERE workspace_id=$1',[seed.alpha.workspaceId])).rows).toEqual([{state:'queued',weekly_revision:1}]);
  await db.session.query("UPDATE social_weekly_settings SET next_at=now()-interval '30 days' WHERE workspace_id=$1",[seed.alpha.workspaceId]);

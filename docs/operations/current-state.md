@@ -1,10 +1,40 @@
 # Current operating state
 
-## Current completion focus — October 12, 2026
+## Consolidated execution roadmap, October 14, 2026
 
-The approved [operating roadmap](../sourcing/roadmap-20261007.md) has eight open outcomes: core capture #549, progress #550, Ask #551, setup/deployment #552; independent outreach #425/#438 and native #460/#466. Four parents track them. Closed foundations stay closed. David-only provisional operation does not require thirty real threads; actual provider/usefulness, configuration, scoped consent and deployment evidence still apply.
+The [single operating roadmap](../sourcing/roadmap-20261007.md) maps every remaining outcome to its canonical execution ticket, native dependencies, completion evidence and approval gate. The October14 16:06UTC inventory has twenty execution/evidence issues and four tracking parents. Settled policies and closed source foundations are reused. Two source-integrated slices still have open issue state; reconcile their acceptance without duplicating implementation or closing actual operation from source success.
+
+This is planning, not renewed runtime authority. Source at the audit checkpoint is `7343e956`, schema116, including the merged release-workflow source repair. Dated October14 13:09UTC production readback remains `d49dda37`, schema88, stable API2/worker1. Protected bootstrap preparation produced a private saved plan and separate trust proposal, neither applied. The demonstrated backend-access/encryption prerequisite is researched separately; proposed backend-contract, bootstrap and held-rollout child packaging awaits ticket-granularity approval. No application, release, Enable, real send/booking/post or paid provider action is authorized by consolidation.
+
+## Source integration checkpoint, October 14, 2026
+
+PRs #642–#648 are merged in dependency order. The final lifecycle merge is `2f6b6cfe543f875d7928a4b79fa934d594ed8947`. Merged source now targets schema116. These changes integrate standing posting policy and recurring preparation, canonical booking policy, source-bound interpretation, guarded create/change and the booking-only conversation/message lifecycle. Independent Spec and Standards reviews, with authorization/privacy/money review for risky changes, are clean. Required CI was renewed after stacked base changes and passed before each merge.
+
+The final integrated source tree passed complete local types/lint and contracts/domain/API/worker/desktop/operations/Ask suites, dedicated mounted PostgreSQL journeys, retained-schema88→116 upgrade checks and unchanged full-history/context secret scans. Controlled model, Gmail and Cal.com adapters establish engineering behavior, not actual provider quality, real delivery or appointment acceptance. See the [booking lifecycle source evidence](../sourcing/booking-lifecycle-source-624-20261014.md) for the ordinary seams, repairs and dated validation checkpoints.
+
+No release, deployment, Enable, real send/booking/post or paid provider run followed from these merges. The source checkpoint above supersedes earlier source-version statements only. It does not refresh the dated production, installed-build or account observations retained below. Production rollout and its current build/schema remain unverified since those observations, and the release hold is unchanged.
+
+The next posting/booking operational checkpoints remain #618/#625: applicable reviewed release/setup, current concrete owner/account/calendar/sender/model bindings, separately approved bounded actual acceptance, normal scoped Enable/readback and Disable. Prepare those checkpoints without treating ticket publication, settings, source tests or a merge as live authority. Keep independent unblocked source work moving, and preserve the specific missing-original/observation boundaries on discovery and LinkedIn outreach rather than fabricating evidence.
+
+## Current execution priority — October 13, 2026
+
+The approved destination is **new qualified property-manager conversations**, through supported discovery and coordinated guarded email/LinkedIn. David handles substantive sales replies and calls. Posting builds credibility, booking reduces agreed-call friction, and CRM/Today/Ask support the funnel. Accepted connections, replies, qualified conversations, bookings and attended calls remain separate outcomes.
+
+The [operating roadmap](../sourcing/roadmap-20261007.md) now reflects that priority. Canonical contracts are the existing execution tickets: discovery/email preparation #604/#605 and outcomes #438/#425; LinkedIn source slices #626–#632 and actual activation #633; posting #615–#618; booking #620–#625. Core #549–#552 and native #460/#466 remain independently scoped. The approved decisions on #606/#608/#609/#634 are settled; planning-map closure is not source, provider, release or Enable completion.
+
+Work the unblocked source frontier with bounded caller/registered-worker TDD and independent Spec/Standards review. Complete demoable ticket outcomes rather than adding speculative frameworks, broad research or repeated policy interviews. One integrator owns shared contracts/schema/access and final composition. No blanket Gmail/Ask/native prerequisite is introduced for unrelated source work.
+
+Actual LinkedIn count/reply observation feasibility remains to be demonstrated under #628/#629. The separately prepared read-only plan has no executable account/profile/thread binding yet; do not guess it or inspect an account merely to complete a fixture. Missing evidence stops only the affected step, not independent engineering. Source-only success does not authorize live acquisition, outreach, paid calls, release or Enable. Preserve all safeguards below.
+
+This is a documentation-only priority correction under #552. It changes no deployed version, source-readiness claim, account settings or release/sending controls. The retained source/provider/production observations below remain dated evidence, not newly verified state.
+
+## Retained completion focus — October 12, 2026
+
+The October 12 checkpoint tracked eight open outcomes: core capture #549, progress #550, Ask #551, setup/deployment #552; independent outreach #425/#438 and native #460/#466. Four parents track those outcomes. Closed foundations stay closed. David-only provisional operation does not require thirty real threads; actual provider/usefulness, configuration, scoped consent and deployment evidence still apply. The current conversation-first execution priority is above.
 
 ## Source, production and release
+
+PR598 merged as8286aebf after all required CI and independent reviews, adding explicit Gemini3.8FlashUS answering and transient signed tool replay. Source remains schema105. Its two CI repairs were a narrowly classified public-prose scanner false positive and calendar-relative Today coverage fixtures; production behavior and historical-promise guards were unchanged. No rollout or Enable is implied.
 
 PR590 merged as `67089b6b`; source targets schema105. PR591 merged as `3a919179` after all required CI passed, repairing source-only answers with explicit empty exact references and selected-firm admission without a person. PR592 merged as `0a761e9f` after required CI passed, integrating reviewed scoped-search/temporal guidance. PR593 merged as `1bb79fc4` after all required CI and two-axis review, repairing question-only continuity after exact-state changes. No causal ablation or representative-quality claim is made.
 
@@ -34,7 +64,9 @@ The earlier two immutable comparison grants are consumed:25calls/202c conserved 
 
 ## Next work and safeguards
 
-Complete scope-specific readiness and the remaining evidence/presentation work. The [contextual guidance source change](../sourcing/ask-evidence-precision-source-20261012.md) places anonymous-speaker, current-versus-historical state and per-claim mixed-reference guidance at the existing SDK seam. Actual review above still finds two failure classes; stop treating repeated prompt-only tuning as a completion strategy. Keep affected hosted acceptance pending and make an explicit limited model/policy decision using measured evidence. PR594 merged as `7c7f0eca`, preserving the actual history/session report.
+The [Vertex ordinary-worker acceptance preparation](../sourcing/ask-vertex-worker-acceptance-20261012.md) reuses the existing reviewed history/session fixtures and public worker journey. Complete its frozen source/manifest review, then obtain genuine approval for the fresh additional allowance before dispatch. Earlier generation-only scopes and unused ceilings do not authorize this run. No actual call or activation is claimed by this preparation. Google project billing/Vertex enablement and explicit operator prediction/quota permission were refreshed read-only; production ADC and credit eligibility remain unverified.
+
+Complete scope-specific readiness and the remaining evidence/presentation work. The [contextual guidance source change](../sourcing/ask-evidence-precision-source-20261012.md) places anonymous-speaker, current-versus-historical state and per-claim mixed-reference guidance at the existing SDK seam. Its actual Sonnet review retains two failure classes. David subsequently chose Gemini from the stated fixed-context evidence; evaluate its real worker integration rather than continuing prompt-only tuning or inferring activation. PR594 merged as `7c7f0eca`, preserving the actual history/session report.
 
 The merged continuity repair retains only the still-authorized dated question for exact-observation freshness changes; public stale reads, deleted originals and narrowed scopes still erase or exclude private content. The [history/session preparation](../sourcing/ask-history-continuity-preparation-20261012.md) preserves the earlier controlled evidence/proposal; its actual approved outcome is now recorded above.
 

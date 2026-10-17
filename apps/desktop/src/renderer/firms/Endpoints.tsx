@@ -59,7 +59,7 @@ export function Endpoints({
   );
   const [page, setPage] = useState<Page | null>(null);
   const [match, setMatch] = useState<Match | null>(null);
-  const [kind, setKind] = useState<"email" | "phone">("email");
+  const [kind, setKind] = useState<Claim["kind"]>("email");
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -142,7 +142,9 @@ export function Endpoints({
                 ? "Shared firm address"
                 : claim.kind === "email"
                   ? "Email address"
-                  : "Phone number"}
+                  : claim.kind === "linkedin"
+                    ? "LinkedIn profile"
+                    : "Phone number"}
             </p>
             <p>{claim.personName ?? "Unknown human speaker"}</p>
             {claim.firmName ? <p>{claim.firmName}</p> : null}
@@ -205,12 +207,14 @@ export function Endpoints({
           aria-label="Address type"
           value={kind}
           onChange={(event) => {
-            setKind(event.target.value === "phone" ? "phone" : "email");
+            const nextKind = event.target.value;
+            if (nextKind === "phone" || nextKind === "email" || nextKind === "linkedin") setKind(nextKind);
             setMatch(null);
           }}
         >
           <option value="email">Email</option>
           <option value="phone">Phone</option>
+          <option value="linkedin">LinkedIn profile</option>
         </Select>
       </label>
       <label>
@@ -226,9 +230,9 @@ export function Endpoints({
         />
       </label>
       <Button
-        disabled={busy || !value.trim()}
+        disabled={busy || !value.trim() || kind === "linkedin"}
         onClick={() =>
-          void run(async () => setMatch(await ports.match({ kind, value })))
+          void run(async () => { if (kind !== "linkedin") setMatch(await ports.match({ kind, value })); })
         }
       >
         Check existing identity
@@ -352,7 +356,7 @@ export function Endpoints({
           </label>
           <Button
             disabled={
-              !enabled || busy || match === null || source === undefined || (correcting !== null && editing.owners !== undefined && owner === "")
+              !enabled || busy || (match === null && kind !== "linkedin") || source === undefined || (correcting !== null && editing.owners !== undefined && owner === "")
             }
             onClick={() =>
               void run(async () => {

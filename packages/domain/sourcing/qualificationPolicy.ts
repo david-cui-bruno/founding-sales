@@ -12,6 +12,13 @@ const unmet=/\b(?:we|our team|our staff|our property managers)\b.{0,50}\b(?:need
 const help=/\b(?:we|our team|our staff)\b.{0,30}\b(?:need|seeking|looking for)\b.{0,60}\b(?:help|support|assistance|solution|provider|service)\b/iu;
 const workload=/\b(?:our team|our staff|we|our property managers)\b.{0,60}\b(?:overwhelmed|overloaded|struggling|backlog|spend too much|cannot keep up|can't keep up)\b/iu;
 const targetAreas:Record<string,readonly string[]>={RI:['providence','warwick','cranston','pawtucket','east providence','north providence','johnston'],MA:['boston','cambridge','somerville','quincy','brookline','newton','medford','malden','everett','revere','chelsea','waltham','watertown']};
+export function isTargetGeography(region: string, locality: string): boolean {
+ const state=region.toUpperCase(),city=fold(locality);
+ return state==='TX'||targetAreas[state]?.includes(city)===true;
+}
+export function supportsResidentialManagement(text: string): boolean {
+ return /\b(?:residential|single.family|homes|houses|apartments)\b/iu.test(text)&&/\b(?:property manag|manage)/iu.test(text);
+}
 const stateNames:Record<string,string>={TX:'texas',RI:'rhode island',MA:'massachusetts'};
 export function supportedBusinessPhone(facts:readonly QualificationFact[],identity:SourcingIdentity):string|null {
  const numbers=new Set<string>();
@@ -44,9 +51,9 @@ export function qualifyCandidate(input:{facts:readonly QualificationFact[];obser
  if(current.length<input.facts.length)unknowns.push('source_incomplete_or_unverified');
  const any=(kind:QualificationFact['kind'],test:(text:string)=>boolean)=>current.some(f=>f.kind===kind&&test(fold(f.value)));
  if(!any('firm_identity',text=>text.includes(fold(input.identity.name))))unknowns.push('firm_identity_unsupported');
- if(!any('residential_management',text=>/\b(?:residential|single.family|homes|houses|apartments)\b/u.test(text)&&/\b(?:property manag|manage)/u.test(text)))unknowns.push('residential_fit_unknown');
+ if(!any('residential_management',supportsResidentialManagement))unknowns.push('residential_fit_unknown');
  const region=input.identity.region.toUpperCase(),city=fold(input.identity.locality);
- const target=region==='TX'||targetAreas[region]?.includes(city)===true;
+ const target=isTargetGeography(region,city);
  if(!target||!any('service_area',text=>text.includes(city)&&(text.includes(stateNames[region]??'__unknown__')||new RegExp(`\\b${region.toLowerCase()}\\b`,'u').test(text))))unknowns.push('target_geography_unsupported');
  if(!supportedBusinessPhone(current,input.identity))unknowns.push('business_phone_unresolved');
  const credible=(fact:QualificationFact)=>{

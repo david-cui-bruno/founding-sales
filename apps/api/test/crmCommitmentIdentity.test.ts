@@ -14,6 +14,11 @@ import { issueSessionFor } from "./support/sessionFixture.ts";
 it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict", "equivalent_open", "identical_open", "open_action", "open_due", "open_overflow"] as const)("preserves completed action identity across %s", async scenario => {
   const fixture = await createAuthFixture();
   try {
+    // Real PostgreSQL observation time, with margin across every tested zone.
+    const dates = (await fixture.db.query<{date:string;changed_date:string}>("SELECT ((clock_timestamp() AT TIME ZONE 'UTC')::date + 3)::text AS date, ((clock_timestamp() AT TIME ZONE 'UTC')::date + 4)::text AS changed_date")).rows[0]!;
+    const promiseDate = dates.date;
+    const changedDate = dates.changed_date;
+    const promiseQuote = `I will prepare the repair summary by ${promiseDate}.`;
     let token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -49,7 +54,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       command({
         personId,
         sourceKey: "human-review",
-        excerpt: "I will prepare the repair summary by October 12.",
+        excerpt:promiseQuote,
         occurredAt: "2026-10-01T14:00:00Z",
       }),
     );
@@ -119,10 +124,10 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
                   kind: "commitment",
                   status: "stated",
                   interpretation: modelVersion === "fixture-v1" || scenario === "identical_open" ? "Promise to prepare summary" : "Commitment to prepare the repair summary",
-                  locator: "text:0:48",
-                  quote: "I will prepare the repair summary by October 12.",
+                  locator: `text:0:${promiseQuote.length}`,
+                  quote:promiseQuote,
                 },
-                ...(scenario==='conflict'?[{kind:'need' as const,status:'inferred' as const,interpretation:'Timing may remain unsettled',locator:'text:0:48',quote:'I will prepare the repair summary by October 12.'}]:[]),
+                ...(scenario==='conflict'?[{kind:'need' as const,status:'inferred' as const,interpretation:'Timing may remain unsettled',locator:`text:0:${promiseQuote.length}`,quote:promiseQuote}]:[]),
               ],
             }),
           },
@@ -142,10 +147,10 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
     }
 
     const first=await process("fixture-v1",0);
-    const review:CrmCommitmentReview=command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Prepare the repair summary",due:{kind:"date",date:"2026-10-12",zone:"America/Chicago",expression:"by October 12"}});
-    if(scenario==="instant_zone")review.due={kind:"instant",at:"2026-10-12T14:00:00.123Z",zone:"UTC",expression:"at 2pm UTC"};
+    const review:CrmCommitmentReview=command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:"internal_promise",actor:"self",actionLabel:"Prepare the repair summary",due:{kind:"date",date:promiseDate,zone:"America/Chicago",expression:`by ${promiseDate}`}});
+    if(scenario==="instant_zone")review.due={kind:"instant",at:`${promiseDate}T14:00:00.123Z`,zone:"UTC",expression:"at 2pm UTC"};
     if(scenario==="precision") {
-      const result=await post("/crm/commitments/review",{...review,due:{kind:"instant",at:"2026-10-12T14:00:00.000001Z",zone:"UTC",expression:"at 2pm UTC"}});
+      const result=await post("/crm/commitments/review",{...review,due:{kind:"instant",at:`${promiseDate}T14:00:00.000001Z`,zone:"UTC",expression:"at 2pm UTC"}});
       expect(result.status).toBe(400);return;
     }
     if(scenario==='ambiguous'||scenario==='commercial')review.classification=scenario;
@@ -183,7 +188,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       return;
     }
     if(scenario==='open_action'||scenario==='open_due'){
-      const changed=command({...review,commandId:randomUUID(),expectedCommitmentRevision:1,...(scenario==='open_action'?{actionLabel:'Review the repair summary'}:{due:{kind:'date' as const,date:'2026-10-13',zone:'America/Chicago',expression:'by October 13'}})});
+      const changed=command({...review,commandId:randomUUID(),expectedCommitmentRevision:1,...(scenario==='open_action'?{actionLabel:'Review the repair summary'}:{due:{kind:'date' as const,date:changedDate,zone:'America/Chicago',expression:`by ${changedDate}`}})});
       expect((await post('/crm/commitments/review',changed)).status).toBe(200);
       await runOnce(fixture.db,{registry,owner:'changed-open-projector',limit:20});
       const currentPage=await read();expect(currentPage.status).toBe(200);
@@ -201,7 +206,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
     }
     if(scenario==='equivalent_open'||scenario==='identical_open'){
       await process('fixture-v2',1);
-      expect((await read()).body).toMatchObject({items:[{state:'applied',actionLabel:'Prepare the repair summary',quote:'I will prepare the repair summary by October 12.',task:{taskId:task.taskId,status:'open',version:1}}]});
+      expect((await read()).body).toMatchObject({items:[{state:'applied',actionLabel:'Prepare the repair summary',quote:promiseQuote,task:{taskId:task.taskId,status:'open',version:1}}]});
       expect((await post('/crm/commitments/read',{scope:{kind:'today'},limit:50})).body).toMatchObject({items:[{task:{taskId:task.taskId,status:'open'}}]});
       expect((await post('/crm/commitments/complete',command({taskId:task.taskId,expectedVersion:1}))).status).toBe(200);return;
     }
@@ -221,10 +226,10 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
     const completedAt=(done.body as {result:{completedAt:string}}).result.completedAt;
     let next:CrmCommitmentReview={...review,commandId:randomUUID(),expectedCommitmentRevision:1};
     if(scenario==="action")next={...next,actionLabel:"Prepare a revised repair summary"};
-    if(scenario==="due")next={...next,due:{kind:"date",date:"2026-10-13",zone:"America/Chicago",expression:"by October 13"}};
-    if(scenario==="date_zone")next={...next,due:{kind:"date",date:"2026-10-12",zone:"UTC",expression:"by October 12"}};
-    if(scenario==="instant_zone")next={...next,due:{kind:"instant",at:"2026-10-12T14:00:00.123Z",zone:"America/Chicago",expression:"9am Chicago"}};
-    if(scenario==="expression")next={...next,due:{...review.due!,expression:"October twelfth"},actionLabel:"Prepare   the repair summary"};
+    if(scenario==="due")next={...next,due:{kind:"date",date:changedDate,zone:"America/Chicago",expression:`by ${changedDate}`}};
+    if(scenario==="date_zone")next={...next,due:{kind:"date",date:promiseDate,zone:"UTC",expression:`by ${promiseDate}`}};
+    if(scenario==="instant_zone")next={...next,due:{kind:"instant",at:`${promiseDate}T14:00:00.123Z`,zone:"America/Chicago",expression:"9am Chicago"}};
+    if(scenario==="expression")next={...next,due:{...review.due!,expression:`on ${promiseDate}`},actionLabel:"Prepare   the repair summary"};
     const originalToken=token;
     if(scenario==="owner"){
       await fixture.db.query("INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES($1,$2,'admin')",[source.workspaceId,fixture.beta.admin.userId]);
@@ -236,7 +241,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
       if(scenario==="restore"){
         expect((await post("/crm/people/source/delete",command({personId,sourceId:source.sourceId,expectedRevision:source.revision}))).status).toBe(200);
         const restored=await post("/crm/people/source/restore",command({personId,sourceId:source.sourceId,expectedRevision:source.revision+1}));expect(restored.status).toBe(200);
-        expect((await post("/crm/people/source/recapture",command({personId,sourceId:source.sourceId,expectedRevision:source.revision+2,excerpt:"I will prepare the repair summary by October 12.",occurredAt:"2026-10-01T14:00:00Z"}))).status).toBe(200);
+        expect((await post("/crm/people/source/recapture",command({personId,sourceId:source.sourceId,expectedRevision:source.revision+2,excerpt:promiseQuote,occurredAt:"2026-10-01T14:00:00Z"}))).status).toBe(200);
         const page=(await post("/crm/people/read",{personId})).body as {sources:typeof source[]};
         const fresh=page.sources.find(value=>value.sourceId===source.sourceId)!;
         source={...source,revision:fresh.revision,contentHash:fresh.contentHash};

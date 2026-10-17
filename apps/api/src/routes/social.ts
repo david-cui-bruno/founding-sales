@@ -1,3 +1,5 @@
+import {linkedinPolicySaveCommandSchema,linkedinPolicyStopCommandSchema,linkedinPolicyCheckSchema} from '@fss/contracts';
+import {readLinkedinPolicy,saveLinkedinPolicy,stopLinkedinPolicy,checkLinkedinPolicyCurrent} from '@fss/domain/social/linkedinPolicy.ts';
 import {registerSocialManualDestination} from '@fss/domain/social/manualDestination.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {socialManualHandoffInputSchema,socialManualHandoffViewSchema,socialManualHandoffConfirmCommandSchema} from '@fss/contracts';
@@ -20,12 +22,23 @@ import {uuid,socialAssetRegisterCommandSchema,socialAssetCompleteCommandSchema,s
 import {readSocialAsset,registerSocialAsset,completeSocialAsset,deleteSocialAsset,listSocialAssets,socialAssetObject} from '@fss/domain/social/assets.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOCIAL_PATHS=['/social/accounts/manual','/social/manual-handoff/read','/social/manual-handoff/confirm','/social/delivery/hold','/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
+export const SOCIAL_PATHS=['/social/linkedin-policy/read','/social/linkedin-policy/save','/social/linkedin-policy/disable','/social/linkedin-policy/revoke','/social/linkedin-policy/check-current','/social/accounts/manual','/social/manual-handoff/read','/social/manual-handoff/confirm','/social/delivery/hold','/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
 export async function routeSocial(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOCIAL_PATHS.includes(request.path))return null;if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
  const principal=await requirePrincipal(auth,request);if(!principal.ok)return principal.result;const scoped=contextForPrincipal(auth,principal.principal);if(!scoped.ok)return scoped.result;
  const ctx=scoped.context,deps={auth,request,principal:principal.principal};
+ if(request.path==='/social/linkedin-policy/read'){
+  if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};
+  return {status:200,body:await withTransaction(auth.db,()=>readLinkedinPolicy(ctx))};
+ }
+ if(request.path==='/social/linkedin-policy/save')return runRouteCommand(deps,linkedinPolicySaveCommandSchema,'linkedin_policy_save',(c,body)=>{const {commandId:_id,clientVersion:_client,...input}=body;return saveLinkedinPolicy(c,input);});
+ if(request.path==='/social/linkedin-policy/disable')return runRouteCommand(deps,linkedinPolicyStopCommandSchema,'linkedin_policy_disable',(c,input)=>stopLinkedinPolicy(c,input,'disabled'));
+ if(request.path==='/social/linkedin-policy/revoke')return runRouteCommand(deps,linkedinPolicyStopCommandSchema,'linkedin_policy_revoke',(c,input)=>stopLinkedinPolicy(c,input,'revoked'));
+ if(request.path==='/social/linkedin-policy/check-current'){
+  const parsed=linkedinPolicyCheckSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
+  return {status:200,body:await withTransaction(auth.db,()=>checkLinkedinPolicyCurrent(ctx,parsed.data))};
+ }
  if(request.path==='/social/manual-handoff/read'){
   const parsed=socialManualHandoffInputSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
   const answer=await withTransaction(auth.db,()=>readSocialManualHandoff(ctx,parsed.data));return answer.ok?{status:200,body:{view:socialManualHandoffViewSchema.parse(answer.value)}}:{status:409,body:{error:answer.reason}};
@@ -33,11 +46,11 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  if(request.path==='/social/manual-handoff/confirm')return runRouteCommand(deps,socialManualHandoffConfirmCommandSchema,'social_manual_handoff_confirm',(c,input)=>confirmSocialManualHandoff(c,input));
  if(request.path==='/social/weekly'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialWeekly(ctx)};}
  if(request.path==='/social/weekly/save')return runRouteCommand(deps,socialWeeklyCommandSchema,'social_weekly_save',(c,input)=>saveSocialWeekly(c,{enabled:input.enabled,expectedRevision:input.expectedRevision}));
- if(request.path==='/social/drafts'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialDraftWorkspace(ctx)};}
+ if(request.path==='/social/drafts'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await withTransaction(auth.db,()=>readSocialDraftWorkspace(ctx))};}
  if(request.path==='/social/drafts/request')return runRouteCommand(deps,socialDraftRequestCommandSchema,'social_drafts_request',(c,input)=>{const {commandId:_id,clientVersion:_client,...selection}=input;return requestSocialDrafts(c,selection);});
  if(request.path==='/social/drafts/read'){
   const parsed=z.strictObject({requestId:uuid}).safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
-  const row=await readSocialDraftRequest(ctx,parsed.data.requestId);if(!row)return {status:404,body:{error:'not_found'}};
+  const row=await withTransaction(auth.db,()=>readSocialDraftRequest(ctx,parsed.data.requestId));if(!row)return {status:404,body:{error:'not_found'}};
   return {status:200,body:{request:socialDraftView(row)}};
  }
  if(request.path==='/social/accounts/manual')return runRouteCommand(deps,socialConnectionCommandSchema,'social_manual_destination',(c,body)=>{const {commandId:_id,clientVersion:_client,...input}=body;return registerSocialManualDestination(c,input);});
@@ -47,11 +60,11 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  if(request.path==='/social/posts/save')return runRouteCommand(deps,socialPostSaveCommandSchema,'social_post_save',(c,input)=>{const {commandId:_id,clientVersion:_client,...post}=input;return saveSocialPost(c,post);});
  if(request.path==='/social/posts/approve')return runRouteCommand(deps,socialPostActionCommandSchema,'social_post_approve',approveSocialPost);
  if(request.path==='/social/posts/cancel')return runRouteCommand(deps,socialPostActionCommandSchema,'social_post_cancel',requestSocialCancellation);
- if(request.path==='/social/delivery/queue'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialDeliveryQueue(ctx,principal.principal.deviceId)};}
+ if(request.path==='/social/delivery/queue'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await withTransaction(auth.db,()=>readSocialDeliveryQueue(ctx,principal.principal.deviceId,options.linkedinRecurring))};}
  if(request.path==='/social/delivery/hold')return runRouteCommand(deps,socialDeliveryHoldCommandSchema,'social_delivery_hold',(c,input)=>holdSocialDelivery(c,{...input,deviceId:principal.principal.deviceId}));
- if(request.path==='/social/delivery/claim')return runRouteCommand(deps,socialPostActionCommandSchema,'social_delivery_claim',(c,input)=>claimSocialDelivery(c,{...input,deviceId:principal.principal.deviceId}));
+ if(request.path==='/social/delivery/claim')return runRouteCommand(deps,socialPostActionCommandSchema,'social_delivery_claim',(c,input)=>claimSocialDelivery(c,{...input,deviceId:principal.principal.deviceId},options.linkedinRecurring));
  if(request.path==='/social/delivery/begin'){
-  const answer=await runRouteCommand(deps,socialBeginCommandSchema,'social_delivery_begin',(c,input)=>beginSocialSubmission(c,{...input,deviceId:principal.principal.deviceId}));
+  const answer=await runRouteCommand(deps,socialBeginCommandSchema,'social_delivery_begin',(c,input)=>beginSocialSubmission(c,{...input,deviceId:principal.principal.deviceId},options.linkedinRecurring));
   // A durable submission marker is not a reusable authorization to click again.
   if(answer.status===200&&(answer.body as {replayed?:boolean}).replayed)return {status:409,body:{error:'inspect_existing_submission'}};
   return answer;

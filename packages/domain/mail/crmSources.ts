@@ -1,3 +1,4 @@
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import {qualifyBusinessMailMetadata} from './businessQualification.ts';
 import {redactBackfillMetadataForSources} from './crmBackfillMetadata.ts';
 import { businessMetadataObservationSchema, mailConversationSchema } from '@fss/contracts';
@@ -1190,6 +1191,7 @@ export async function changeMailSource(
   const actor = context.scope.actor;
   if (actor.kind !== 'user' || !(await activeBusinessActor(context)))
     return { ok: false as const, reason: 'source_access_denied' };
+  await lockSendGateForStopFact(context);
   if ((await lockMailCopyContext(context, input.sourceId)) === null)
     return { ok: false as const, reason: 'source_access_denied' };
   const source = (

@@ -1,3 +1,4 @@
+import { bookingPolicySettingSchema, DEFAULT_BOOKING_POLICY } from './bookingPolicy.ts';
 import { DEFAULT_MEETING_AUTO_RECORDING, meetingAutoRecordingSettingSchema } from './meetingAutoRecording.ts';
 import { z } from 'zod';
 import { DEFAULT_MEETING_TRANSCRIPTION, meetingTranscriptionSettingSchema } from './meetingTranscription.ts';
@@ -217,6 +218,7 @@ export const INTEGRATION_SETTING_KEYS = [
   'meeting_analysis',
   'meeting_follow_through',
   'meeting_auto_recording',
+  'booking_policy',
 ] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
@@ -286,6 +288,7 @@ export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   meeting_analysis: meetingAnalysisSettingSchema,
   meeting_follow_through: meetingFollowThroughSettingSchema,
   meeting_auto_recording: meetingAutoRecordingSettingSchema,
+  booking_policy: bookingPolicySettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
@@ -299,6 +302,7 @@ export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSett
   meeting_analysis: DEFAULT_MEETING_ANALYSIS,
   meeting_follow_through: DEFAULT_MEETING_FOLLOW_THROUGH,
   meeting_auto_recording: DEFAULT_MEETING_AUTO_RECORDING,
+  booking_policy: DEFAULT_BOOKING_POLICY,
 });
 
 /** The schema and default for any stored key. */
@@ -396,7 +400,9 @@ export const updateSettingCommandSchema = z.strictObject({
    * A settings-page key, or one of the call-to-booking switches (0028). Only a new
    * client names the latter; the snapshot below never carries them.
    */
-  settingKey: z.enum([...SETTING_KEYS, ...INTEGRATION_SETTING_KEYS]),
+  // Booking policy remains a stored/readable key, but only its dedicated
+  // expected-revision command may mutate it.
+  settingKey: z.enum([...SETTING_KEYS, ...INTEGRATION_SETTING_KEYS.filter(key => key !== 'booking_policy')]),
   /** Validated by the key's schema on the server, never by a schema the client chose. */
   value: z.unknown(),
   /**

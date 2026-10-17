@@ -126,7 +126,7 @@ export function parseDeepgramAnswer(body: unknown): { readonly durationSeconds: 
 
 export function deepgramTranscription(options: { readonly apiKey: string; readonly http?: DeepgramHttp; readonly timeoutMs?: number }): TranscriptionProvider {
   const { apiKey } = options;
-  const http: DeepgramHttp = options.http ?? (async (url, init) => await fetch(url, init));
+  const http: DeepgramHttp = options.http ?? (async (url, init) => await fetch(url, {...init,body:new Uint8Array(init.body)}));
   const timeoutMs = options.timeoutMs ?? DEEPGRAM_REQUEST_TIMEOUT_MS;
   return {
     providerKey: DEEPGRAM_PROVIDER_KEY,
