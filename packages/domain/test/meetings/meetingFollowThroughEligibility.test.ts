@@ -50,9 +50,9 @@ describe('meeting-backed follow-through authority', () => {
   });
   it('preserves a single explicitly promised reminder with its evidence', async () => {
     const r = await f.ready();
-    const quote = 'I will send one reminder on October 12.';
+    const quote = 'I will send one reminder on October 12, 2026.';
     await f.save(r.meetingId, quote, 1);
-    const item: MeetingNoteItem = { id: 'reminder', kind: 'next_step', text: quote, owner: 'you', provenance: 'stated', deadline: { precision: 'date', localDate: '2026-10-12', zone: 'America/New_York' }, deadlineText: 'October 12', reviewReasons: [], evidence: [{ kind: 'debrief', revision: 2, quote, startOffset: 0, endOffset: quote.length }] };
+    const item: MeetingNoteItem = { id: 'reminder', kind: 'next_step', text: quote, owner: 'you', provenance: 'stated', deadline: { precision: 'date', localDate: '2026-10-12', zone: 'America/New_York' }, deadlineText: 'October 12, 2026', reviewReasons: [], evidence: [{ kind: 'debrief', revision: 2, quote, startOffset: 0, endOffset: quote.length }] };
     const a = await f.publish(r.meetingId, [item]);
     expect(await scope({ ...r, ...a })).toMatchObject({ ok: true, value: { maxMessages: 1, purposes: ['reminder'], agreedReminder: item.deadline } });
   });

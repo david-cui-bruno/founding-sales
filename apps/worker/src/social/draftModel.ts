@@ -2,7 +2,7 @@ import type {AnthropicMessagesTransport} from '@fss/domain/classification/anthro
 import type {ClassifierRequest} from '@fss/domain/classification/prompt.ts';
 import {routeOfTransport} from '@fss/domain/classification/routedTransport.ts';
 import {centsOf} from '@fss/domain/research/pricing.ts';
-import {buildSocialDraftRequest,SOCIAL_DRAFT_MODEL,SOCIAL_DRAFT_LIMITS,SOCIAL_DRAFT_OUTPUT_SCHEMA,type SocialDraftInput} from '@fss/domain/social/draftPolicy.ts';
+import {buildSocialDraftRequest,SOCIAL_DRAFT_MODEL,SOCIAL_DRAFT_LIMITS,SOCIAL_DRAFT_OUTPUT_SCHEMA,GROUNDED_SOCIAL_DRAFT_OUTPUT_SCHEMA,type SocialDraftInput} from '@fss/domain/social/draftPolicy.ts';
 export interface SocialDraftModel {
  readonly providerKey:'aws_bedrock.social_draft';
  countInputTokens(input:SocialDraftInput):Promise<number>;
@@ -13,7 +13,7 @@ export function socialDraftModel(transport:AnthropicMessagesTransport):SocialDra
  const request=(input:SocialDraftInput):ClassifierRequest=>{
   if(routeOfTransport(transport)(SOCIAL_DRAFT_MODEL)!=='bedrock')throw new Error('credit_route_unavailable');
   const built=buildSocialDraftRequest(input);if(!built)throw new Error('input_over_budget');
-  return {model:SOCIAL_DRAFT_MODEL,max_tokens:SOCIAL_DRAFT_LIMITS.maxOutputTokens,system:[{type:'text',text:built.system}],messages:built.messages,output_config:{format:{type:'json_schema',schema:SOCIAL_DRAFT_OUTPUT_SCHEMA}}};
+  return {model:SOCIAL_DRAFT_MODEL,max_tokens:SOCIAL_DRAFT_LIMITS.maxOutputTokens,system:[{type:'text',text:built.system}],messages:built.messages,output_config:{format:{type:'json_schema',schema:input.mode==='linkedin_grounded'?GROUNDED_SOCIAL_DRAFT_OUTPUT_SCHEMA:SOCIAL_DRAFT_OUTPUT_SCHEMA}}};
  };
  return {providerKey:'aws_bedrock.social_draft',countInputTokens:input=>transport.countTokens(request(input)),generate:async input=>{
   const answer=await transport.create(request(input)),u=answer.usage;

@@ -4,7 +4,9 @@ type Refused={ok:false;reason:string};
 export interface DeliveryPorts {
  current():boolean;now():number;
  claim(post:ApprovedPost):Promise<Refused|{ok:true;claimId:string;approvalId:string;fingerprint:string;expiresAt:string}>;
- begin(input:{claimId:string;approvalId:string;fingerprint:string}):Promise<Refused|{ok:true;submissionId:string}>;
+ begin(input:{claimId:string;approvalId:string;fingerprint:string}):Promise<Refused|{ok:true;submissionId:string;postingPolicyBound?:true}>;
+ /** Mandatory when begin's trusted response identifies a policy-bound candidate. */
+ dispatchCurrent?(submissionId:string):Promise<boolean>;
  observe(submissionId:string,observation:InspectionResult):Promise<boolean>;
 }
 export type DeliveryAttempt={state:'not_submitted';reason:string}|{state:'scheduled'|'published'|'unknown'};
@@ -34,6 +36,7 @@ export async function submitApprovedSocialPost(input:ApprovedPost,adapter:Social
   if(!began.ok)return held(began.reason);
   submissionId=began.submissionId;diagnostic?.('marker','succeeded');
   if(!port.current()||!future())return {state:'unknown'};
+  if(began.postingPolicyBound===true&&(!port.dispatchCurrent||!await port.dispatchCurrent(submissionId)||!port.current()||!future()))return {state:'unknown'};
   enter('submit');try{const sent=await adapter.submit(post);if(sent.kind==='scheduled')receiptId=sent.receiptId;}catch{/* The platform might have accepted it. Inspect; never click again. */}
   if(!port.current())return {state:'unknown'};
   let observation:InspectionResult;

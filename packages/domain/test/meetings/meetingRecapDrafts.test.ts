@@ -128,9 +128,9 @@ describe('recap drafts preserve the review window and exact content', () => {
   it('prepares a single agreed reminder without inventing a new promise or recap', async () => {
     const { prepareMeetingRecap } = await import('../../meetings/followThrough.ts');
     const p = await f.ready({ body: 'Following up as agreed.\n\n{meeting_recap}\n\nSam Example\nCallie' });
-    const quote = 'I will send one reminder on October 12.';
+    const quote = 'I will send one reminder on October 12, 2026.';
     await f.save(p.meetingId, quote, 1);
-    const item = meetingNoteItemSchema.parse({ id: 'reminder', kind: 'next_step', text: quote, owner: 'you', provenance: 'stated', deadline: { precision: 'date', localDate: '2026-10-12', zone: 'America/New_York' }, deadlineText: 'October 12', reviewReasons: [], evidence: [{ kind: 'debrief', revision: 2, quote, startOffset: 0, endOffset: quote.length }] });
+    const item = meetingNoteItemSchema.parse({ id: 'reminder', kind: 'next_step', text: quote, owner: 'you', provenance: 'stated', deadline: { precision: 'date', localDate: '2026-10-12', zone: 'America/New_York' }, deadlineText: 'October 12, 2026', reviewReasons: [], evidence: [{ kind: 'debrief', revision: 2, quote, startOffset: 0, endOffset: quote.length }] });
     const current = await f.publish(p.meetingId, [item]);
     expect(await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...current, at: RECAP_AT }))).toMatchObject({ ok: true, value: { blockers: expect.not.arrayContaining(['unsupported_commitment','recap_context_missing']), currentDraft: { body: expect.stringContaining('Following up as agreed.') } } });
   });

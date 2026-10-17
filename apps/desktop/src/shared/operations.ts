@@ -1,5 +1,7 @@
 import {askAnswerCancelPayloadSchema,askAnswerCancelledSchema,askAnswerInvestigationPreviewSchema,askAnswerInvestigationPreviewResultSchema,askAnswerInvestigationCommitSchema} from '@fss/contracts';
 import {businessSelectionReadSchema,businessSelectionStatusSchema} from '@fss/contracts';
+import {linkedinRecurringViewSchema} from '@fss/contracts';
+import {linkedinPostingPolicyViewSchema,linkedinPostingPolicySaveSchema,linkedinPostingCandidateBindSchema,linkedinPostingCandidateBindingSchema} from '@fss/contracts';
 import {businessSelectionPayloadSchema} from '@fss/contracts';
 import {askSessionCreatePayloadSchema,askSessionIdentitySchema,askSessionTurnPayloadSchema,askSessionTurnAcknowledgmentSchema,askSessionChangePayloadSchema,askSessionReadSchema,askSessionViewSchema,askSessionListSchema,askSessionPageSchema} from '@fss/contracts';
 import {businessRuleReadSchema,businessRulePayloadSchema,businessRulesSchema} from '@fss/contracts';
@@ -32,6 +34,8 @@ import { crmDecisionHistoryReadSchema, crmDecisionHistoryPageSchema } from "@fss
 import { crmDecisionHistoryListSchema, crmDecisionHistoryListPageSchema } from "@fss/contracts";
 import { crmEvidenceReadSchema, crmEvidencePageSchema, crmEvidenceDecidePayloadSchema, crmEvidenceDecidedSchema } from "@fss/contracts";
 import {crmMailImportReadSchema,crmMailImportAcknowledgmentSchema,crmMailImportHealthSchema} from "@fss/contracts";
+import {bookingConversationInputSchema,bookingConversationEventCommandSchema,bookingConversationViewSchema,bookingMessageCommandSchema,bookingMessageViewSchema} from '@fss/contracts';
+import {bookingInterpretationRequestSchema,bookingInterpretationReadSchema,bookingInterpretationViewSchema} from '@fss/contracts';
 import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSchema,explicitOpportunityResultSchema} from '@fss/contracts';
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
 import {mailSourcesListSchema,mailSourceListSchema,mailSourceReadSchema,mailConversationSchema,mailConversationV2Schema,mailSourceChangePayloadSchema,mailSourceChangedSchema,mailControlsReadSchema,mailCaptureControlsSchema,mailSourceStateReadSchema,mailSourceStateSchema,mailSourceRecaptureQueuedSchema,mailSourceAssociatePayloadSchema} from '@fss/contracts';
@@ -44,6 +48,7 @@ import {relationshipSaveSchema,relationshipCorrectSchema,firmListResponseSchema}
 import {relationshipReadSchema,relationshipListSchema} from '@fss/contracts';
 import {personCreateSchema,personReadSchema,personListSchema,personSourceAddSchema,personSourceChangeSchema,personSourceRecaptureSchema,personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
+import {bookingPolicySettingsViewSchema,bookingPolicyChangeSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,notificationRuntimeStatusSchema} from '@fss/contracts';
 import { todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOpenResponseSchema } from '@fss/contracts';
@@ -920,6 +925,12 @@ export const OPERATIONS = {
   'social.connectAccount': {kind:'command',calls:[{method:'POST',path:'/social'},{method:'POST',path:'/social/accounts/connect'}],input:z.strictObject({accountId:uuid,commandId:uuid}),output:z.strictObject({accepted:z.boolean(),reason:z.string().nullable()}),transform:'User-initiated isolated LinkedIn login; identity observed in main'},
   'social.disconnectAccount': {kind:'command',calls:[{method:'POST',path:'/social'},{method:'POST',path:'/social/accounts/disconnect'}],input:z.strictObject({accountId:uuid,commandId:uuid}),output:z.strictObject({accepted:z.boolean(),reason:z.string().nullable()}),transform:'Disable server destination before clearing its local login'},
   'social.weekly': {kind:'read',calls:[{method:'POST',path:'/social/weekly'}],input:z.strictObject({}),output:z.strictObject({view:socialWeeklySchema.nullable(),reason:z.string().nullable()}),transform:'Owner weekly drafting setting'},
+  'social.recurringPosting': {kind:'read',calls:[{method:'POST',path:'/social/linkedin-recurring/read'}],input:z.strictObject({}),output:z.strictObject({view:linkedinRecurringViewSchema.nullable(),reason:z.string().nullable()}),transform:'Read current guarded recurring outcomes, never grant publication permission'},
+  'social.postingPolicy': {kind:'read',calls:[{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:z.strictObject({}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Separate owner posting scope and pending readiness'},
+  'social.savePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/save'},{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:linkedinPostingPolicySaveSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Save or revise disclosed posting scope, never Enable'},
+  'social.disablePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/disable'},{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:z.strictObject({expectedRevision:z.number().int().positive(),commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Disable posting policy and invalidate bound candidates'},
+  'social.revokePostingPolicy': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/revoke'},{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:z.strictObject({expectedRevision:z.number().int().positive(),commandId:z.string().uuid()}),output:z.strictObject({view:linkedinPostingPolicyViewSchema.nullable(),reason:z.string().nullable()}),transform:'Revoke posting scope without erasing submission evidence'},
+  'social.bindPostingCandidate': {kind:'command',calls:[{method:'POST',path:'/social/linkedin-posting-policy/bind-candidate'},{method:'POST',path:'/social/linkedin-posting-policy/read'}],input:linkedinPostingCandidateBindSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({binding:linkedinPostingCandidateBindingSchema.nullable(),reason:z.string().nullable()}),transform:'Owner-stage existing manually approved text delivery and read current policy stop fence'},
   'social.saveWeekly': {kind:'command',calls:[{method:'POST',path:'/social/weekly/save'}],input:socialWeeklySaveSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({view:socialWeeklySchema.nullable(),reason:z.string().nullable()}),transform:'Explicit weekly draft opt-in, never publication'},
   'social.drafts': {kind:'read',calls:[{method:'POST',path:'/social/drafts'}],input:z.strictObject({}),output:z.strictObject({view:socialDraftWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Owner sources, approved facts and draft suggestions'},
   'social.requestDrafts': {kind:'command',calls:[{method:'POST',path:'/social/drafts/request'}],input:socialDraftRequestSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({requestId:z.string().uuid().nullable(),reason:z.string().nullable()}),transform:'Request bounded generation without approval'},
@@ -1335,6 +1346,8 @@ export const OPERATIONS = {
   'crm.processingPurposeSave':{kind:'command',calls:[{method:'POST',path:'/crm/processing/purpose/save'}],input:crmExtractionPurposeSaveSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({revision:z.number().int().positive(),enabled:z.literal(false)}),transform:'disabled-only purpose configuration; main owns envelope'},
   'crm.processingHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/health/read'}],input:crmProcessingHealthReadSchema,output:crmProcessingHealthSchema,transform:'body-free status survives deletion; no blind paid retry'},
   'crm.processingRecordHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/record/read'}],input:crmProcessingRecordReadSchema,output:crmProcessingRecordHealthSchema,transform:'bounded owner-private body-free native record status survives transcript deletion'},
+  'crm.bookingInterpretationRequest':{kind:'command',calls:[{method:'POST',path:'/crm/booking/interpretation/request'}],input:bookingInterpretationRequestSchema.omit({clientVersion:true}),output:bookingInterpretationViewSchema,transform:'exact admitted-message booking candidate request with stable retry identity, never permission to send or create'},
+  'crm.bookingInterpretationRead':{kind:'read',calls:[{method:'POST',path:'/crm/booking/interpretation/read'}],input:bookingInterpretationReadSchema,output:bookingInterpretationViewSchema,transform:'current authorized booking proposal, clarification, stop or David handoff'},
   'crm.businessMailList': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/list'}],input:mailSourcesListSchema,output:mailSourceListSchema,transform:'bounded copied-email identity page with current source access'},
   'crm.businessMailRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read'}],input:mailSourceReadSchema,output:mailConversationSchema,transform:'exact permitted copied source revision and provenance'},
   'crm.businessMailReadV2': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read/v2'}],input:mailSourceReadSchema,output:mailConversationV2Schema,transform:'exact permitted copied source revision and provenance'},
@@ -1943,6 +1956,11 @@ export const OPERATIONS = {
 
   // --- Meetings (slice M1) ------------------------------------------------
   // Straight through the authenticated client, like Diagnostics: no state is kept.
+  'meetings.bookingConversationRequest':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-conversation'}],input:bookingConversationInputSchema,output:bookingConversationViewSchema,transform:'current interpretation admission under standing policy, not human confirmation or live Enable'},
+  'meetings.bookingConversationRead':{kind:'read',calls:[{method:'GET',path:'/meetings/booking-conversation?conversationId={uuid}'}],input:z.strictObject({conversationId:z.uuid()}),output:bookingConversationViewSchema,transform:'current authorized conversation, durable handoff and booking receipt'},
+  'meetings.bookingConversationEvent':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-conversation/event'}],input:bookingConversationEventCommandSchema.omit({commandId:true,clientVersion:true}),output:bookingConversationViewSchema,transform:'shared manual nudge, stop or explicit David no-show event'},
+  'meetings.bookingMessageRequest':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-messages'}],input:bookingMessageCommandSchema.omit({commandId:true,clientVersion:true}),output:bookingMessageViewSchema,transform:'booking-only message request from current conversation, not per-message approval'},
+  'meetings.bookingMessageRead':{kind:'read',calls:[{method:'GET',path:'/meetings/booking-messages?messageId={uuid}'}],input:z.strictObject({messageId:z.uuid()}),output:bookingMessageViewSchema,transform:'current booking-only message receipt, inspect uncertain acceptance without replay'},
   'meetings.forFirm': {
     kind: 'read',
     calls: [{ method: 'GET', path: '/meetings/firm?firmId={uuid}' }],
@@ -1994,6 +2012,14 @@ export const OPERATIONS = {
     kind:'read',calls:[{method:'GET',path:'/meetings/booking-capacity'}],input:nothing,
     output:z.strictObject({capacity:bookingCapacityResponseSchema.nullable()}),
     transform:'Read-only Cal.com event configuration and scoped retained booking evidence; no available-slot inference',
+  },
+  'meetings.bookingPolicy': {
+    kind:'read',calls:[{method:'GET',path:'/meetings/booking-policy?view=settings'}],input:nothing,
+    output:z.strictObject({view:bookingPolicySettingsViewSchema.nullable()}),transform:'Current owner booking scope and exact configured choices, never automatic Enable',
+  },
+  'meetings.bookingPolicyChange': {
+    kind:'command',calls:[{method:'POST',path:'/meetings/booking-policy'}],input:bookingPolicyChangeSchema,
+    output:z.strictObject({revision:z.number().int().positive().nullable(),reason:z.string().max(80).nullable()}),transform:'Version-fenced explicit owner save, Disable or Revoke without provider writes',
   },
   'meetings.brief': {
     kind: 'read',

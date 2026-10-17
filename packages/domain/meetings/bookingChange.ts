@@ -1,0 +1,46 @@
+import {randomUUID} from 'node:crypto';
+import {bookingChangePayloadSchema,type BookingChangePayload,type BookingChangeReceipt} from '@fss/contracts';
+import {repositoryContext,workspaceScope,type RepositoryContext} from '../db/workspaceScope.ts';
+import {bookingStandingChangeSchema,type BookingStandingChangeInput} from './bookingConversationChangeAuthority.ts';
+import {enqueueJob} from '../jobs/jobStore.ts';
+import {jobIdempotencyKey} from '../jobs/jobKinds.ts';
+import type {BookingChangeRuntime} from './bookingChangeProvider.ts';
+import {bookingChangeHash,validateBookingChange} from './bookingChangeAuthority.ts';
+export type BookingChangeInput=BookingChangePayload|BookingStandingChangeInput;
+/** Private durable grammar. Public change commands still require explicit human confirmation. */
+export function parseBookingChangeInput(raw:unknown){return bookingChangePayloadSchema.or(bookingStandingChangeSchema).safeParse(raw);}
+export interface BookingChangeRow extends Record<string,unknown>{id:string;owner_user_id:string;policy_revision:number;binding_key:string;provider_account_id:string;event_type_id:string;action:'cancel'|'reschedule';target_booking_uid:string;target_fingerprint:string;original_starts_at:Date;original_ends_at:Date;payload:BookingChangeInput;source_fingerprint:string;provenance_state:'current'|'redacted';starts_at:Date|null;state:BookingChangeReceipt['state'];dispatch_started_at:Date|null;provider_booking_uid:string|null;meeting_id:string|null;reminder_state:BookingChangeReceipt['reminderState'];reason:string|null}
+export type BookingChangeResult={ok:true;value:BookingChangeReceipt}|{ok:false;reason:string};
+export function bookingChangeReceipt(row:BookingChangeRow):BookingChangeReceipt {return {submissionId:row.id,action:row.action,targetBookingUid:row.target_booking_uid,state:row.state,providerBookingUid:row.provider_booking_uid,meetingId:row.meeting_id,sourceState:row.provenance_state,reason:row.reason,dispatchStartedAt:row.dispatch_started_at?.toISOString()??null,reminderState:row.reminder_state};}
+/** The ordinary command transaction owns reservation and job, not a private worker shortcut. */
+export async function requestBookingChange(context:RepositoryContext,raw:BookingChangePayload,runtime?:BookingChangeRuntime):Promise<BookingChangeResult>{
+ const parsed=bookingChangePayloadSchema.safeParse(Object.fromEntries(Object.entries(raw).filter(([key])=>key!=='commandId'&&key!=='clientVersion')));if(!parsed.success)return {ok:false,reason:'invalid_input'};const input=parsed.data;
+ if(runtime===undefined)return {ok:false,reason:'booking_runtime_unavailable'};
+ return reserveBookingChange(context,input,runtime);
+}
+/** A registered worker derives owner and authority from durable standing provenance. */
+export async function requestBookingStandingChange(context:RepositoryContext,raw:BookingStandingChangeInput,runtime?:BookingChangeRuntime):Promise<BookingChangeResult>{
+ const actor=context.scope.actor;if(actor.kind!=='system'||actor.component!=='worker')return {ok:false,reason:'worker_required'};
+ const parsed=bookingStandingChangeSchema.safeParse(raw);if(!parsed.success)return {ok:false,reason:'invalid_input'};
+ if(runtime===undefined)return {ok:false,reason:'booking_runtime_unavailable'};
+ const row=(await context.db.query<{owner_user_id:string}>('SELECT owner_user_id FROM booking_conversations WHERE workspace_id=$1 AND id=$2 AND interpretation_request_id=$3',[context.scope.workspaceId,parsed.data.standingOrigin.conversationId,parsed.data.standingOrigin.interpretationRequestId])).rows[0];
+ if(row===undefined)return {ok:false,reason:'standing_origin_unavailable'};
+ return reserveBookingChange(repositoryContext(workspaceScope(context.scope.workspaceId,{kind:'user',userId:row.owner_user_id,role:'admin'}),context.db),parsed.data,runtime);
+}
+async function reserveBookingChange(context:RepositoryContext,input:BookingChangeInput,runtime:BookingChangeRuntime):Promise<BookingChangeResult>{
+ const valid=await validateBookingChange(context,input,runtime);if(!valid.ok)return valid;
+ const actor=context.scope.actor;if(actor.kind!=='user')return {ok:false,reason:'owner_required'};
+ // Existing #621 account reservation lock, not a parallel reservation system.
+ await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${context.scope.workspaceId}:booking_create:${valid.snapshot.bindings.account.accountId}`]);
+ const hash=bookingChangeHash(input);
+ const duplicate=(await context.db.query<BookingChangeRow>('SELECT * FROM booking_change_submissions WHERE workspace_id=$1 AND owner_user_id=$2 AND request_hash=$3',[context.scope.workspaceId,actor.userId,hash])).rows[0];if(duplicate)return {ok:true,value:bookingChangeReceipt(duplicate)};
+ if((await context.db.query("SELECT id FROM booking_change_submissions WHERE workspace_id=$1 AND provider_account_id=$2 AND target_booking_uid=$3 AND state IN ('pending','unknown')",[context.scope.workspaceId,valid.snapshot.bindings.account.accountId,input.expectedBookingUid])).rows.length)return {ok:false,reason:'booking_change_in_progress'};
+ if(input.action==='reschedule'&&(await context.db.query(`SELECT id FROM booking_change_submissions WHERE workspace_id=$1 AND provider_account_id=$2 AND action='reschedule' AND state IN ('pending','unknown') AND starts_at<$3::timestamptz+interval '30 minutes' AND starts_at+interval '30 minutes'>$3::timestamptz
+ UNION ALL SELECT b.id FROM booking_create_submissions b LEFT JOIN meetings m ON m.workspace_id=b.workspace_id AND m.id=b.meeting_id WHERE b.workspace_id=$1 AND b.provider_account_id=$2 AND b.state IN ('pending','accepted','unknown') AND (b.meeting_id IS DISTINCT FROM $4::uuid) AND (b.state<>'accepted' OR m.id IS NULL OR m.state<>'cancelled') AND CASE WHEN b.state='accepted' AND m.id IS NOT NULL THEN m.starts_at ELSE b.starts_at END<$3::timestamptz+interval '30 minutes' AND CASE WHEN b.state='accepted' AND m.id IS NOT NULL THEN m.ends_at+interval '10 minutes' ELSE b.buffer_ends_at END>$3::timestamptz`,[context.scope.workspaceId,valid.snapshot.bindings.account.accountId,input.agreedSlot.startsAt,input.meetingId])).rows.length)return {ok:false,reason:'slot_unavailable'};
+ if(Date.parse(runtime.policy.now())>=valid.validUntil)return {ok:false,reason:'booking_readiness_unavailable'};
+ const row=(await context.db.query<BookingChangeRow>(`INSERT INTO booking_change_submissions(workspace_id,owner_user_id,policy_revision,binding_key,provider_account_id,event_type_id,action,target_booking_uid,target_fingerprint,original_starts_at,original_ends_at,request_hash,source_fingerprint,payload,starts_at,meeting_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,[context.scope.workspaceId,actor.userId,valid.snapshot.policyRevision,valid.snapshot.bindingKey,valid.snapshot.bindings.account.accountId,valid.snapshot.bindings.event.eventTypeId,input.action,input.expectedBookingUid,valid.targetFingerprint,valid.meeting.starts_at.toISOString(),valid.meeting.ends_at.toISOString(),hash,valid.fingerprint,JSON.stringify(input),input.action==='reschedule'?input.agreedSlot.startsAt:null,input.meetingId])).rows[0]!;
+ await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'meeting.booking_change',idempotencyKey:jobIdempotencyKey.bookingChange(row.id),payload:{submissionId:row.id}});
+ return {ok:true,value:bookingChangeReceipt(row)};
+}
+export async function readBookingChange(context:RepositoryContext,id:string):Promise<BookingChangeReceipt|null>{const actor=context.scope.actor;if(actor.kind!=='user')return null;const row=(await context.db.query<BookingChangeRow>(`SELECT b.* FROM booking_change_submissions b JOIN workspace_memberships m ON m.workspace_id=b.workspace_id AND m.user_id=b.owner_user_id WHERE b.workspace_id=$1 AND b.id=$2 AND b.owner_user_id=$3 AND m.status='active' AND m.role='admin'`,[context.scope.workspaceId,id,actor.userId])).rows[0];return row?bookingChangeReceipt(row):null;}
+export async function requestBookingChangeInspection(context:RepositoryContext,id:string):Promise<BookingChangeResult>{const receipt=await readBookingChange(context,id);if(receipt===null)return {ok:false,reason:'booking_unknown'};if(receipt.dispatchStartedAt!==null&&['unknown','pending'].includes(receipt.state))await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'meeting.booking_change',idempotencyKey:`${jobIdempotencyKey.bookingChange(id)}:inspect:${randomUUID()}`,payload:{submissionId:id,inspectionOnly:true}});return {ok:true,value:receipt};}

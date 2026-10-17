@@ -1,0 +1,56 @@
+import {randomUUID} from 'node:crypto';
+import {expect} from 'vitest';
+import {createAuthFixture,CURRENT_CLIENT_VERSION} from './authFixture.ts';
+import {issueSessionFor} from './sessionFixture.ts';
+import {dispatch} from '../../src/server.ts';
+import {registerHandlers,workerDueWorkSources} from '../../../worker/src/bootstrap/main.ts';
+import {createLinkedinRecurringComposition} from '../../../worker/src/social/linkedinRecurringJobs.ts';
+import {socialDraftSource} from '../../../worker/src/social/draftJobs.ts';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {enqueueJob,claimJobs} from '@fss/domain/jobs/jobStore.ts';
+import {withTransaction,type SessionQueryable} from '@fss/domain/db/queryable.ts';
+import {runClaimedJob} from '../../../worker/src/runner/jobRunner.ts';
+import type {LinkedinRecurringComposition} from '@fss/domain/social/linkedinRecurringAuthority.ts';
+import {linkedinRecurringDay} from '@fss/domain/social/linkedinRecurringCalendar.ts';
+import {createAuthedClient} from '../../../desktop/src/main/authedClient.ts';
+import {createSocialDeliveryPorts} from '../../../desktop/src/main/social/deliveryApi.ts';
+import {submitApprovedSocialPost,reconcileSocialPost} from '../../../desktop/src/main/social/deliveryLoop.ts';
+import {socialDeliveryQueueSchema,linkedinRecurringViewSchema} from '@fss/contracts';
+import type {SocialAdapter,ApprovedPost} from '../../../desktop/src/main/social/adapters.ts';
+export const recurringFact='I am planning a bounded worker for maintenance intake.';
+export const recurringText=recurringFact+'\n\nThe scope matters here. Keeping the input bounded makes the work easier to inspect.\n\nThis is a plan, not shipped behavior.';
+export const recurringGeneration={provider:'bedrock' as const,providerKey:'aws_bedrock.social_draft' as const,model:'claude-haiku-4-5' as const,routeVersion:'controlled-bedrock-v1',accessGrantVersion:'controlled-access-v1',dataHandlingVersion:'sanitized-v1',dailyUsd:1 as const,calendarMonthUsd:10 as const,budgetZone:'America/New_York' as const};
+export const recurringCommand=(input:object)=>({...input,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
+export async function recurringFixture(options:{noInput?:boolean;noFunding?:boolean;generationWait?:()=>Promise<void>;countWait?:()=>Promise<void>;text?:string;output?:string|undefined;estimated?:boolean;cost?:number;count?:number}={}){
+ const f=await createAuthFixture(),token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ const api=await f.database.appRuntimeSession(),worker=await f.database.appRuntimeSession(),accountId=randomUUID();
+ let runtime:LinkedinRecurringComposition|null=null,generations=0,submissions=0,fingerprint='';
+ const next=Array.from({length:8},(_,i)=>linkedinRecurringDay(new Date(Date.now()+(i+1)*86400000).toISOString())).find(d=>d&&Date.parse(d.targetAt)>Date.now());if(!next)throw new Error('future_target_missing');
+ const target=next.targetAt;let controlledTime=new Date(Date.parse(target)-1800000).toISOString();
+ const call=(path:string,body:unknown,session:SessionQueryable=api)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session,auth:{...f.deps,db:session},supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://fixture.invalid/update',linkedinRecurring:runtime});
+ expect((await call('/social/accounts/connect',recurringCommand({accountId,platform:'linkedin',externalId:'david-cui-589a20228',displayName:'David Cui',accountKind:'profile'}))).status).toBe(200);
+ const saveFact=async(value=recurringFact)=>{const saved=await call('/outreach/answer-blocks/save',recurringCommand({kind:'product',text:value,socialInput:{topic:'build',status:'planned',sanitized:true}}));expect(saved.status).toBe(200);const ref=(saved.body as {result:{id:string;version:number}}).result;expect((await call('/outreach/answer-blocks/approve',recurringCommand(ref))).status).toBe(200);return ref;};
+ const ref=options.noInput?null:await saveFact();
+ if(!options.noFunding)expect((await call('/research/settings',recurringCommand({enabled:true,dailyCostCeilingCents:50,monthlyCostCeilingCents:1000}))).status).toBe(200);
+ const policy={expectedRevision:0,accountId,accountRevision:1,approvedRulesVersion:'608-2026-10-13' as const,generation:recurringGeneration};
+ expect((await call('/social/linkedin-posting-policy/save',recurringCommand(policy))).status).toBe(200);
+ const identity=async()=>({platform:'linkedin' as const,externalId:'david-cui-589a20228',displayName:'David Cui'});
+ runtime=await createLinkedinRecurringComposition({session:worker,workspaceId:f.alpha.workspaceId,ownerUserId:f.alpha.admin.userId,accountId,policyRevision:1,generation:recurringGeneration,expiresAt:new Date(Date.now()+300000).toISOString(),clock:{now:()=>controlledTime},inspectAccount:identity,model:{providerKey:'aws_bedrock.social_draft',countInputTokens:async()=>{await options.countWait?.();return options.count??100;},generate:async()=>{generations++;await options.generationWait?.();return {raw:options.output??JSON.stringify({concepts:[{theme:'build',factRefs:ref?[ref]:[],variants:[{platform:'linkedin',text:options.text??recurringText}]}]}),costCents:options.cost??1,costEstimated:options.estimated??false};}}});expect(runtime).not.toBeNull();
+ const source=()=>workerDueWorkSources({linkedinRecurring:runtime}).find(s=>s.name==='linkedin-recurring')!;
+ const prepare=async(session:SessionQueryable=worker)=>withTransaction(session,async()=>{const jobs=await source().find(session,controlledTime);for(const job of jobs)await enqueueJob(session,job);return jobs;});
+ const run=async(session:SessionQueryable=worker)=>{const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,linkedinRecurring:runtime});const jobs=await claimJobs(session,{owner:`recurring-${randomUUID()}`,kinds:['social.linkedin_recurring'],limit:1,leaseSeconds:180});for(const job of jobs)expect(await runClaimedJob(session,{registry,job})).toBe('completed');return jobs;};
+ const read=async()=>linkedinRecurringViewSchema.parse((await call('/social/linkedin-recurring/read',{})).body);
+ const queue=async()=>socialDeliveryQueueSchema.parse((await call('/social/delivery/queue',{})).body);
+ const generic=async()=>withTransaction(worker,()=>socialDraftSource(true).find(worker,controlledTime));
+ const submit=async(hooks:{stage?:()=>Promise<void>;begin?:()=>Promise<void>;unknown?:boolean}={})=>{
+  const item=(await queue()).items.find(i=>i.action==='submit');if(!item)throw new Error('eligible_item_missing');
+  const post:ApprovedPost={deliveryId:item.deliveryId,postId:item.postId,revision:item.revision,account:{platform:item.snapshot.account.platform,externalId:item.snapshot.account.externalId,displayName:'David Cui'},text:item.snapshot.text,images:[],publishAt:item.snapshot.publishAt,zone:item.snapshot.zone,fingerprint:item.fingerprint};
+  const client=createAuthedClient({baseUrl:'https://fixture.invalid',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:'controlled',generation:0}),send:async(url,init)=>{const path=new URL(url).pathname,r=await call(path,JSON.parse(init.body??'{}'));if(path==='/social/delivery/begin'&&r.status===200)await hooks.begin?.();return {status:r.status,body:r.body};}});
+  const ports=createSocialDeliveryPorts({api:client,current:()=>true,now:()=>Date.now()});
+  const adapter:SocialAdapter={inspectAccount:identity,stage:async()=>{await hooks.stage?.();return {ready:true};},submit:async p=>{expect(p.account.platform).toBe('linkedin');expect(p.publishAt).toBe(target);expect(p.images).toEqual([]);submissions++;fingerprint=p.fingerprint;return hooks.unknown?{kind:'unknown'}:{kind:'scheduled',receiptId:'controlled-receipt'};},inspect:async()=>({state:hooks.unknown?'unknown':'scheduled',receiptId:hooks.unknown?null:'controlled-receipt',permalink:null,observedAt:new Date().toISOString(),accountExternalId:hooks.unknown?null:'david-cui-589a20228',observedFingerprint:hooks.unknown?null:fingerprint,complete:!hooks.unknown}),cancel:async()=>{throw new Error('unused');}};
+  const outcome=await submitApprovedSocialPost(post,adapter,ports);return {outcome,post,ports,adapter};
+ };
+ const inspect=async(attempt:Awaited<ReturnType<typeof submit>>)=>{const row=(await read()).items[0]!;const adapter={...attempt.adapter,inspect:async()=>({state:'scheduled' as const,receiptId:'controlled-inspected-receipt',permalink:null,observedAt:new Date().toISOString(),accountExternalId:'david-cui-589a20228',observedFingerprint:attempt.post.fingerprint,complete:true})};return reconcileSocialPost(attempt.post,{submissionId:row.submissionId!,receiptId:row.receiptId,cancel:false},adapter,attempt.ports);};
+ return {f,api,worker,call,ref,accountId,policy,target,prepare,run,read,queue,generic,submit,inspect,saveFact,get runtime(){return runtime;},setRuntime(value:LinkedinRecurringComposition|null){runtime=value;},setClock(value:string){controlledTime=value;},get counts(){return {generations,submissions};}};
+}
+export function recurringBarrier(){let release!:()=>void,entered!:()=>void;const wait=new Promise<void>(r=>{release=r;});const arrived=new Promise<void>(r=>{entered=r;});return {wait,arrived,release,entered};}

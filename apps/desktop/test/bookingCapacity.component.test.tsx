@@ -12,6 +12,8 @@ const value=(extra:Partial<BookingCapacityResponse['provider']>={}):BookingCapac
 it('shows missing calendar access and the unverified three-call preference without claiming free slots',async()=>{
   render(<BookingCapacity ports={{async read(){return {capacity:value()};}}}/>);
   expect((await screen.findByTestId('booking-capacity-preference')).textContent).toContain('enforcement is not verified');
+  expect(screen.getByTestId('booking-capacity-preference').textContent).toContain('unenforced legacy preference');
+  expect(screen.getByTestId('booking-capacity-preference').textContent).toContain('no daily or weekly call-count ceiling');
   expect(await screen.findByText(/Calendar access is missing/)).toBeTruthy();
   expect(screen.queryByText(/slots? (left|available)/i)).toBeNull();
 });
