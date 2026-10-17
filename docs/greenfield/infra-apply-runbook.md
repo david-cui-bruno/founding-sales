@@ -4,6 +4,8 @@
 
 Production was first applied on 23 September 2026 and has run since 24 September, in account 326255650484. This runbook is how the stack was built the first time, and what rebuilding it from zero would follow; the procedure for a release to the running stack is `docs/greenfield/release.md`. The plan commands below are those of the current roots.
 
+Production uses the [current backend identity/encryption contract](../operations/release-backend-contract.md): explicit existing SSE-S3 (`encrypt=true`), only `-backend-config=backend.hcl`, and no `kms_key_id` override. Provider-role assumption does not supply backend credentials. The production examples below are not operational approval or a bypass of the [supported reviewed release workflow](../operations/lean-release-workflow.md), current hold or serialization. Any local human preparation/bootstrap exception, credential/production inspection, role change or apply needs its own explicit approval and current readback. Rehearsal encryption below is unchanged.
+
 Read section 1 in full before running anything in section 3. The order matters: several resources cannot be created until something outside Terraform exists first, and two of them (the ACM certificate and the Google OAuth consent screen) involve waiting on external validation.
 
 ## 0. Tooling
@@ -276,7 +278,7 @@ Unlike 2.1, this one **is** a local command. `fss-prod-deploy` is trusted by you
 ```bash
 # First apply: create the registries only.
 cd infra/roots/production
-terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
+terraform init -backend-config=backend.hcl
 terraform apply -target=module.stack.module.registry
 ```
 
@@ -315,7 +317,7 @@ The reason is arithmetic rather than caution. Three credentialed runs have now b
 
 ```bash
 cd infra/roots/production
-terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
+terraform init -backend-config=backend.hcl
 
 terraform plan -out=production.tfplan \
   -var="api_image=<api digest>" \
@@ -385,7 +387,7 @@ Teardown caveat: the rehearsal journal bucket uses **GOVERNANCE** object lock wi
 
 ```bash
 cd infra/roots/production
-terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
+terraform init -backend-config=backend.hcl
 
 terraform plan -out=production.tfplan \
   -var="api_image=<api digest>" \

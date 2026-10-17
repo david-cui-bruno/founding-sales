@@ -159,4 +159,4 @@ Limit additional research to checks that could change the build:
 
 Further generic cold-email, lead-generation or social-growth blog research is not a prerequisite. No study can establish which signal converts for Callie without its own observed outcomes. Keep proposed cadence and ranking choices testable and changeable.
 
-Detailed interview answers and source limits are in [planning notes](../../sourcing/roadmap-planning-20261005.md). No product code, account settings, sending controls or social posts were changed for this draft.
+Detailed interview answers and source limits are in [planning notes](../../archive/sourcing/roadmap-planning-20261005.md). No product code, account settings, sending controls or social posts were changed for this draft.

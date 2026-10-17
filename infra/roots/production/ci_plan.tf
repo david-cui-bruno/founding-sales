@@ -66,46 +66,8 @@ locals {
         Effect   = "Allow"
         Action   = ["sns:GetTopicAttributes", "sns:GetSubscriptionAttributes", "sns:ListTagsForResource"]
         Resource = ["arn:aws:sns:${local.aws_region}:${local.aws_account_id}:${local.name_prefix}-*", "arn:aws:sns:${local.aws_region}:${local.aws_account_id}:${local.name_prefix}-*:*"]
-      },
-      {
-        Sid      = "ReadOnlyProductionState"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject"]
-        Resource = [local.ci_plan_state_arn]
-      },
-      {
-        Sid      = "OnlyExistingBackendLockObject"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = ["${local.ci_plan_state_arn}.tflock"]
-      },
-      {
-        Sid       = "ListOnlyExistingStatePrefix"
-        Effect    = "Allow"
-        Action    = ["s3:ListBucket"]
-        Resource  = ["arn:aws:s3:::${local.ci_plan_state_bucket}"]
-        Condition = { StringLike = { "s3:prefix" = [local.ci_plan_state_key, "${local.ci_plan_state_key}.tflock"] } }
-      },
-      {
-        Sid      = "DescribeExistingLockTable"
-        Effect   = "Allow"
-        Action   = ["dynamodb:DescribeTable"]
-        Resource = ["arn:aws:dynamodb:${local.aws_region}:${local.aws_account_id}:table/callie-sourcing-tflock"]
-      },
-      {
-        Sid       = "OnlyExistingStateBackendLockRows"
-        Effect    = "Allow"
-        Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
-        Resource  = ["arn:aws:dynamodb:${local.aws_region}:${local.aws_account_id}:table/callie-sourcing-tflock"]
-        Condition = { "ForAllValues:StringEquals" = { "dynamodb:LeadingKeys" = ["${local.ci_plan_state_bucket}/${local.ci_plan_state_key}", "${local.ci_plan_state_bucket}/${local.ci_plan_state_key}-md5"] } }
-      },
-      {
-        Sid      = "DecryptOnlyExistingState"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = [local.ci_google_state_kms_key]
       }
-    ])
+    ], jsondecode(file("${path.module}/../../policies/production-backend-plan.json")).Statement)
   }
 }
 resource "aws_iam_role" "ci_plan" {

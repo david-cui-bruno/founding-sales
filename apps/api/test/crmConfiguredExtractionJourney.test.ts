@@ -15,9 +15,13 @@ import {seedFirm,seedContact} from './support/crmSeed.ts';
 // Frozen controlled expectations, authored independently of any provider output:
 // a selected outgoing copy is NOT verified sent; a clear quoted promise is a
 // suggestion until explicit human review; deletion removes its evidence/Today.
-const passage='I will prepare the repair summary by October 16.';
-const expectedClaim={kind:'commitment',status:'stated',interpretation:'Promise to prepare the repair summary',locator:`text:0:${passage.length}`,quote:passage};
-it('runs selected input through configured extraction, explicit promise review, Today, correction and deletion with only the SDK surface faked',async()=>{
+it.each([
+ {observedAt:'2026-10-13T17:00:00Z',dueDate:'2026-10-16'},
+ {observedAt:'2026-10-17T17:00:00Z',dueDate:'2026-10-20'},
+ {observedAt:'2026-11-01T05:30:00Z',dueDate:'2026-11-03'},
+])('runs selected input through configured extraction, promise review, Today, correction and deletion at $observedAt',async({observedAt,dueDate})=>{
+ const passage=`I will prepare the repair summary by ${dueDate}.`;
+ const expectedClaim={kind:'commitment',status:'stated',interpretation:'Promise to prepare the repair summary',locator:`text:0:${passage.length}`,quote:passage};
  const fixture=await createAuthFixture();
  try{
   const db=await fixture.database.appRuntimeSession();
@@ -33,11 +37,14 @@ it('runs selected input through configured extraction, explicit promise review, 
   expect((await post('/crm/people/bridge',command({contactIds:[personId]}))).status).toBe(200);
   const opened=await post('/opportunities/open',command({firmId}));expect(opened.status).toBe(200);
   const opportunityId=(opened.body as {result:{id:string}}).result.id;
-  const selection={text:passage,subtype:'pasted_text',label:'Controlled selected promise',direction:'outgoing',participants:[],occurredAt:new Date().toISOString(),attachments:[]};
+  const selection={text:passage,subtype:'pasted_text',label:'Controlled selected promise',direction:'outgoing',participants:[],occurredAt:observedAt,attachments:[]};
   const preview=await post('/crm/imports/preview',selection);expect(preview.status).toBe(200);
   const committed=await post('/crm/imports/commit',command({...selection,personId,firmId:null,opportunityId,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash,parserVersion:'selected-v1'}));
   expect(committed.status).toBe(200);
   const imported=selectedImportPageSchema.parse((await post('/crm/imports/read',{personId,limit:10})).body).imports[0]!;
+  // Only the synthetic original's observation time is fixture data. Keep all
+  // processing, review, projection, correction and deletion on their real paths.
+  await fixture.db.query('UPDATE crm_selected_sources SET observed_at=$3 WHERE workspace_id=$1 AND id=$2',[fixture.alpha.workspaceId,imported.source.sourceId,observedAt]);
   expect(imported.metadata.directionVerified).toBe(false);
   expect(imported.metadata.opportunityId).toBe(opportunityId);
   const source={workspaceId:imported.source.workspaceId,sourceId:imported.source.sourceId,kind:'selected_note' as const,revision:imported.source.revision,contentHash:imported.source.contentHash,locator:null};
@@ -55,7 +62,7 @@ it('runs selected input through configured extraction, explicit promise review, 
   if(!('generationId' in processed)||!processed.claims[0])throw new Error('Controlled claim missing');
   const claim=processed.claims[0];
   expect((await request('GET','/today/actions/v2',null)).body).toMatchObject({actions:[]});
-  const review=await post('/crm/commitments/review',command({source,claimId:claim.claimId,claimRevision:claim.claimRevision,claimHash:claim.claimHash,contextHash:processed.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:'internal_promise',actor:'self',actionLabel:'Prepare the repair summary',due:{kind:'date',date:'2026-10-16',zone:'America/Chicago',expression:'by October 16'}}));
+  const review=await post('/crm/commitments/review',command({source,claimId:claim.claimId,claimRevision:claim.claimRevision,claimHash:claim.claimHash,contextHash:processed.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:'internal_promise',actor:'self',actionLabel:'Prepare the repair summary',due:{kind:'date',date:dueDate,zone:'America/Chicago',expression:`by ${dueDate}`}}));
   expect(review.status).toBe(200);
   await runOnce(db,{registry,owner:'controlled-promise-projector',limit:20});
   expect((await request('GET','/today/actions/v2',null)).body).toMatchObject({actions:[{kind:'promise',reason:'dated_promise'}]});
