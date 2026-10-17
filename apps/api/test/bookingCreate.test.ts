@@ -1,6 +1,7 @@
 import {seedFirm,seedContact} from './support/crmSeed.ts';
 import type {SessionQueryable,QueryResultRowLike} from '@fss/domain/db/queryable.ts';
-import {describe,it,expect} from 'vitest';
+import {describe,it,expect,vi} from 'vitest';
+import * as policyClock from '@fss/domain/policy/clock.ts';
 import {calcomBookingCreateClient} from '../src/integrations/calcomBookingCreateClient.ts';
 import {claimJobs} from '@fss/domain/jobs/jobStore.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
@@ -174,7 +175,10 @@ describe('ordinary owner-confirmed agreed booking admission',()=>{
    const response=await f.request('POST','/meetings/booking-create',f.command(f.payload));expect(response.status).toBe(200);const id=(response.body as {result:{submissionId:string}}).result.submissionId;
    const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,bookingCreate:f.runtime});const run=await runOnce(f.fixture.db,{registry,owner:'normal-controlled-runner',limit:20,classes:['urgent']});expect(run.failed).toBe(0);
    const receipt=await f.request('GET',`/meetings/booking-create?submissionId=${id}`);expect(receipt.body).toMatchObject({state:'accepted',meetingId:expect.any(String)});const meetingId=(receipt.body as {meetingId:string}).meetingId;
-   const today=await f.request('GET','/today/actions/v2');expect(today.status).toBe(200);expect(JSON.stringify(today.body)).toContain(meetingId);
+   // Today is evaluated at the fixture's booking date, not the machine's date.
+   const todayClock=vi.spyOn(policyClock,'databaseNow').mockResolvedValue('2026-10-14T13:00:00Z');
+   try{const today=await f.request('GET','/today/actions/v2');expect(today.status).toBe(200);expect(JSON.stringify(today.body)).toContain(meetingId);}
+   finally{todayClock.mockRestore();}
    const callback=async(triggerEvent:string,startTime:string,endTime:string,createdAt:string)=>{const raw=JSON.stringify({triggerEvent,createdAt,payload:{uid:'booking-31',startTime,endTime,organizer:{email:'owner@booking.example'},attendees:[{email:'prospect@booking.example'}]}});const response=await fetch(`${server.origin}/integrations/calcom/webhook`,{method:'POST',headers:{'content-type':'application/json','x-cal-signature-256':server.calcomSign(Buffer.from(raw))},body:raw});expect(response.status).toBe(200);return raw;};
    const now=Date.now(),start=new Date(now-3600_000).toISOString(),end=new Date(now-2400_000).toISOString();await callback('BOOKING_RESCHEDULED',start,end,new Date(now+1000).toISOString());
    expect((await f.request('POST','/meetings/attendance',f.command({meetingId,attendance:'attended'}))).status).toBe(200);
