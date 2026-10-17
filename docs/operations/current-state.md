@@ -10,11 +10,11 @@ Last production observation: **October 14, 13:09 UTC**, backend `d49dda37`, **sc
 
 ## Release path and approval boundary
 
-#652 owns the source/test contract, currently in implementation, separating backend from provider credentials and exact state, lock and checksum permissions. The historical deployment role explicitly denies backend object reads, so an added allow or OIDC trust alone is insufficient. [Backend research](../sourcing/release-backend-roadmap-research-20261014.md) recommends retaining observed AES256/SSE-S3; it does not authorize encryption or permission changes.
+#652 has a clean-reviewed source/test contract in pending PR #655, separating backend from provider credentials and exact state, lock and checksum permissions. It refuses unsafe deletion/mutation and requires an actual supplied baseline for an offline policy proposal. Source tests do not attest live access. [Backend contract](release-backend-contract.md) retains AES256/SSE-S3; it authorizes no encryption or permission change.
 
 #653 must refresh actual bindings and prepare only the protected prerequisites. Reject unrelated application, database, network, secret or deployment changes. Keep state and saved plans private. Obtain separate exact approvals for the saved plan, role/trust/permission actions and GitHub protections/key bindings. Source templates do not attest deployed rights.
 
-#654 then freezes the candidate/images and actual deployed-to-candidate migration evidence, discloses interruption/recovery limits, and requests a separate rollout approval. Use the serialized [lean release procedure](lean-release-workflow.md). Verify serving version/schema, smoke and durable release record. Deployment does not Enable Gmail, Ask, outreach, posting or booking.
+#654 then freezes the candidate/images and actual deployed-to-candidate migration evidence, discloses interruption/recovery limits, and requests a separate rollout approval. Disposable local PostgreSQL upgrade88→116, startup refusal and transactional failure recovery passed on October17, not live acceptance. Use the serialized [release procedure](lean-release-workflow.md), verify serving version/schema, smoke and durable release record. Deployment does not Enable Gmail, Ask, outreach, posting or booking.
 
 Every infrastructure apply, role change, deploy, Enable, send, post and booking still requires David's explicit approval. Historical plans and consumed paid-evaluation grants are not reusable authority.
 
