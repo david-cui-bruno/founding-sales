@@ -45,6 +45,20 @@ function check(policy: Policy, stage: string, directory: string) {
 }
 
 describe('ordinary reviewed release backend contract CLI', () => {
+  it('keeps active local production init examples on SSE-S3 without changing rehearsal encryption', () => {
+    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
+    const blocks = [...runbook.matchAll(/```bash\n([\s\S]*?)```/gu)].map(match => match[1]!);
+    const production = blocks.filter(block => block.includes('cd infra/roots/production\n') && block.includes('terraform init'));
+    expect(production).toHaveLength(3);
+    for (const block of production) {
+      expect(block).toContain('terraform init -backend-config=backend.hcl\n');
+      expect(block).not.toContain('kms_key_id');
+    }
+    expect(runbook).toContain('../operations/release-backend-contract.md');
+    expect(runbook).toContain('not operational approval');
+    expect(runbook.split('### 3.1')[1]?.split('### 3.2')[0]).toContain('-backend-config="kms_key_id=<state key arn>"');
+  });
+
   it('maps ambient backend and provider identities separately, with no app/maintenance backend', () => {
     expect(mapping('prepare')).toMatchObject({ backend: ROLE.replace('fss-prod-deploy', 'fss-prod-ci-plan'), provider: ROLE.replace('fss-prod-deploy', 'fss-prod-ci-plan'), assumeDeploymentRole: false, encryption: 'SSE-S3', kmsKeyId: null });
     expect(mapping('execute')).toMatchObject({ backend: ROLE, provider: ROLE, assumeDeploymentRole: false });
@@ -125,6 +139,40 @@ describe('ordinary reviewed release backend contract CLI', () => {
         const refused = run(['backend-proposal', file]); expect(refused.status, refused.stdout).toBe(1); expect(refused.stdout).toBe('');
       }
       expect(run(['backend-proposal']).stderr).toContain('backend_baseline_required');
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('rejects effective state version deletion in policy-check and proposal without rewriting the baseline', () => {
+    const directory = sandbox();
+    try {
+      const deletion: Statement = { Sid: 'UnsafeVersionDeletion', Effect: 'Allow', Action: 's3:DeleteObjectVersion', Resource: STATE };
+      for (const stage of ['prepare', 'execute']) {
+        const policy = mapping(stage).policy; policy.Statement.push(deletion);
+        expect(check(policy, stage, directory).stderr).toContain('backend_excess_state_permission');
+        policy.Statement.push({ ...deletion, Sid: 'DenyVersionDeletion', Effect: 'Deny' });
+        expect(check(policy, stage, directory).status).toBe(0);
+      }
+      const original = baseline(); original.policy.Statement.push(deletion);
+      const file = join(directory, 'version-baseline.json'); const bytes = JSON.stringify(original); writeFileSync(file, bytes);
+      expect(run(['backend-proposal', file]).stderr).toContain('backend_excess_state_permission');
+      expect(readFileSync(file, 'utf8')).toBe(bytes);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it.each(['UpdateItem', 'BatchWriteItem', 'PartiQLInsert', 'PartiQLUpdate', 'PartiQLDelete'])('rejects checksum mutation through %s, including a supplied older baseline', action => {
+    const directory = sandbox();
+    try {
+      const mutation: Statement = { Sid: 'UnsafeChecksumMutation', Effect: 'Allow', Action: `dynamodb:${action}`, Resource: ['arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock'], Condition: { 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate-md5'] } } };
+      for (const stage of ['prepare', 'execute']) {
+        const policy = mapping(stage).policy; policy.Statement.push(mutation);
+        expect(check(policy, stage, directory).stderr).toContain('backend_excess_state_permission');
+        policy.Statement.push({ ...mutation, Sid: 'DenyChecksumMutation', Effect: 'Deny' });
+        expect(check(policy, stage, directory).status).toBe(0);
+      }
+      const original = baseline(); original.policy.Statement.push(mutation);
+      const file = join(directory, 'checksum-baseline.json'); const bytes = JSON.stringify(original); writeFileSync(file, bytes);
+      expect(run(['backend-proposal', file]).stderr).toContain('backend_excess_state_permission');
+      expect(readFileSync(file, 'utf8')).toBe(bytes);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 

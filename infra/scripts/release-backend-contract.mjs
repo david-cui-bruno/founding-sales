@@ -118,7 +118,12 @@ export function validatePolicy(policy, stage) {
     const context = statement.Condition ? Object.values(statement.Condition)[0] : {};
     for (const action of statement.Action) if (!decision(action, statement.Resource[0], context)) fail('required_permission_denied');
   }
-  if (decision('s3:DeleteObject', STATE) || (stage !== 'execute' && (decision('s3:PutObject', STATE) || decision('dynamodb:PutItem', TABLE, { 'dynamodb:LeadingKeys': [`${ROW}-md5`] }))) || decision('dynamodb:DeleteItem', TABLE, { 'dynamodb:LeadingKeys': [`${ROW}-md5`] })) fail('excess_state_permission');
+  // Transactional and PartiQL APIs authorize their underlying item actions too.
+  // A planner cannot mutate the checksum by an alternate data-write operation;
+  // the applying backend gets only its exact PutItem path, never deletion/update.
+  const checksumMutations = ['PutItem', 'DeleteItem', 'UpdateItem', 'BatchWriteItem', 'PartiQLInsert', 'PartiQLUpdate', 'PartiQLDelete'];
+  const forbiddenChecksumMutation = checksumMutations.some(action => !(stage === 'execute' && action === 'PutItem') && decision(`dynamodb:${action}`, TABLE, { 'dynamodb:LeadingKeys': [`${ROW}-md5`] }));
+  if (['s3:DeleteObject', 's3:DeleteObjectVersion'].some(action => decision(action, STATE)) || (stage !== 'execute' && decision('s3:PutObject', STATE)) || forbiddenChecksumMutation) fail('excess_state_permission');
   return true;
 }
 
