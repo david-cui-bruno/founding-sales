@@ -1,5 +1,7 @@
 # Read-only release preparation; no resource application, secret-value read or IAM write.
 # The only writes are the existing Terraform backend's locks, scoped to its one key.
+# Existing customer-managed lock-table encryption needs service/context-bound Decrypt,
+# not an S3 KMS override or new key/encryption configuration.
 locals {
   ci_plan_state_bucket = "callie-sourcing-tfstate-326255650484"
   ci_plan_state_key    = "fss/greenfield/production/terraform.tfstate"

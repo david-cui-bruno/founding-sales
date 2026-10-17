@@ -380,7 +380,14 @@ run "saved_plan_preparation_is_read_only_except_existing_backend_locks" {
       && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "BackendState"] == [["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate"]]
       && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "BackendChecksum"] == [["dynamodb:GetItem"]]
       && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "BackendLockRow"] == [["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]]
-      && alltrue([for statement in local.ci_plan_policy.Statement : alltrue([for action in statement.Action : !contains(["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"], action)])])
+      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "BackendLockTableDecrypt"] == [["arn:aws:kms:us-east-1:326255650484:key/a321a083-4058-4130-b060-b950e4aa1404"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Condition if statement.Sid == "BackendLockTableDecrypt"] == [{ StringEquals = {
+        "kms:ViaService"                                  = "dynamodb.us-east-1.amazonaws.com"
+        "kms:EncryptionContext:aws:dynamodb:tableName"    = "callie-sourcing-tflock"
+        "kms:EncryptionContext:aws:dynamodb:subscriberId" = "326255650484"
+      } }]
+      && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "BackendLockTableDecrypt"] == [["kms:Decrypt"]]
+      && alltrue([for statement in local.ci_plan_policy.Statement : alltrue([for action in statement.Action : !contains(["kms:Encrypt", "kms:GenerateDataKey", "kms:CreateGrant"], action)])])
     )
     error_message = "The planner can refresh metadata and read the single existing state; only its existing backend lock writes are authorized."
   }
