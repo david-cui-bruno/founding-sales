@@ -439,7 +439,14 @@ describe('Settings › Research', () => {
     );
     mount();
     await screen.findByTestId('research-settings');
-    expect((screen.getByTestId('research-dailyFirmCeiling') as HTMLInputElement).value).toBe('50');
+    const steps = screen.getByLabelText('Research steps/day');
+    expect(steps).toBe(screen.getByTestId('research-dailyFirmCeiling'));
+    expect((steps as HTMLInputElement).value).toBe('50');
+    expect(steps.getAttribute('aria-describedby')).toBe('research-steps-help');
+    expect(document.getElementById('research-steps-help')?.textContent?.trim()).toBe(
+      'A fresh firm normally uses 2 research steps: qualification and brief. Failures and other work reduce actual throughput.',
+    );
+    expect(screen.queryByLabelText('Firms a day')).toBeNull();
     expect((screen.getByTestId('research-monthlyCostCeilingCents') as HTMLInputElement).value).toBe('1000');
     expect(screen.getByTestId('research-model').textContent).toBe('claude-haiku-4-5 · up to $0.02 a firm');
     expect(screen.getByTestId('research-spend').textContent).toBe('$0.04 today, $0.37 of $10.00 this month.');
