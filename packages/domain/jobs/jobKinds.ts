@@ -205,7 +205,6 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
-  automaticEmail: (revision:number,at:string):string => `automatic-email:${String(revision)}:${hourOf(at)}`,
   sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
   meetingAnalyze: (meetingId: string, notes: number, transcript: number): string => `meeting-analyze:${meetingId}:n${String(notes)}:t${String(transcript)}`,

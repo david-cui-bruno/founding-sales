@@ -12,6 +12,7 @@ import {
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
 import { seedFirm } from "./support/crmSeed.ts";
+import { seedHistoricalAskRequest, readHistoricalAskRequest } from './support/historicalAskRequest.ts';
 import { dispatch } from "../src/server.ts";
 
 async function approveCaptureFixture(
@@ -835,19 +836,13 @@ it('erases saved Ask questions after direct mail-copy deletion without restoring
   try {
     const copied = await copyWithOriginalAndReviewedFirms(fixture);
     const question = 'private copied conversation';
-    const requested = await copied.post('/ask/answers/request', copied.command({ question, scope: { sources: [{ workspaceId: fixture.alpha.workspaceId, sourceId: copied.sourceId, kind: 'mail', revision: 2, contentHash: copied.contentHash, locator: null }] } }));
-    expect(requested.status).toBe(200);
-    const requestId = (requested.body as { result: { requestId: string } }).result.requestId;
-    const current = await copied.post('/ask/answers/read', { requestId });
-    expect(current.status).toBe(200);
-    expect(current.body).toMatchObject({ question, fallback: { passages: [{ text: copied.passage }] } });
+    const requestId = await seedHistoricalAskRequest(fixture,{question,source:{workspaceId:fixture.alpha.workspaceId,sourceId:copied.sourceId,kind:'mail',revision:2,contentHash:copied.contentHash,locator:null}});
+    expect(await readHistoricalAskRequest(fixture,requestId)).toMatchObject({question,result:null});
     const deleted = await copied.post('/crm/business/mail/delete', copied.command({ sourceId: copied.sourceId, expectedRevision: 2 }));
     expect(deleted.status).toBe(200);
-    const erased = await copied.post('/ask/answers/read', { requestId });
-    expect(erased.status).toBe(200);
-    expect(erased.body).toMatchObject({ state: 'deleted', reason: 'deleted', question: null, fallback: null, answer: null });
+    expect(await readHistoricalAskRequest(fixture,requestId)).toMatchObject({state:'deleted',reason:'deleted',question:null,result:null,validated_progress:null});
     expect((await copied.post('/crm/business/mail/restore', copied.command({ sourceId: copied.sourceId, expectedRevision: 3 }))).status).toBe(200);
-    expect((await copied.post('/ask/answers/read', { requestId })).body).toMatchObject({ state: 'deleted', reason: 'deleted', question: null, fallback: null, answer: null });
+    expect(await readHistoricalAskRequest(fixture,requestId)).toMatchObject({state:'deleted',reason:'deleted',question:null,result:null,validated_progress:null});
     expect(copied.bodyReads()).toBe(1);
   } finally {
     await fixture.stop();
@@ -944,18 +939,15 @@ it('reports the actual saved Ask question erasure before a public mail copy dele
   const fixture = await createAuthFixture();
   try {
     const {post, command, sourceId, contentHash, originalFirmId} = await copyWithOriginalAndReviewedFirms(fixture);
-    const requested = await post('/ask/answers/request', command({question:'private copied conversation',scope:{sources:[{workspaceId:fixture.alpha.workspaceId,kind:'mail',sourceId,revision:2,contentHash,locator:null}]}}));
-    expect(requested.status, JSON.stringify(requested.body)).toBe(200);
-    expect(requested.body).toMatchObject({result:{state:'unavailable'}});
-    const requestId = (requested.body as {result:{requestId:string}}).result.requestId;
-    expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({question:'private copied conversation',answer:null});
+    const requestId=await seedHistoricalAskRequest(fixture,{question:'private copied conversation',source:{workspaceId:fixture.alpha.workspaceId,kind:'mail',sourceId,revision:2,contentHash,locator:null}});
+    expect(await readHistoricalAskRequest(fixture,requestId)).toMatchObject({question:'private copied conversation',result:null});
     const preview = await post('/retention/deletions/preview', command({targetKind:'firm',firmId:originalFirmId}));
     expect(preview.status).toBe(200);
     expect(preview.body).toMatchObject({result:{redacts:{crm_ask_requests:1},removes:{crm_ask_request_windows:0}}});
     const shown = (preview.body as {result:{requestId:string;previewHash:string}}).result;
     const committed = await post('/retention/deletions/commit',command({requestId:shown.requestId,previewHash:shown.previewHash}));
     expect(committed.status,JSON.stringify(committed.body)).toBe(200);
-    expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'deleted',question:null,fallback:null,answer:null});
+    expect(await readHistoricalAskRequest(fixture,requestId)).toMatchObject({state:'deleted',question:null,result:null,validated_progress:null});
     expect(committed.body).toMatchObject({status:'accepted',result:{redacted:{crm_ask_requests:1},removed:{crm_ask_request_windows:0}}});
   } finally {
     await fixture.stop();

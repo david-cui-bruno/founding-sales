@@ -7,8 +7,8 @@ export function AutomaticEmailResults({view}:{view:AutomaticEmailLearning}){
  const {control,discovery,outcomes,attention,decisions}=view;
  return <div className="space-y-4" aria-label="Automatic email results">
   <div className="rounded-lg border border-border p-4 space-y-2">
-   <h3 className="font-medium">Discovery and automatic email</h3>
-   <p>{control?`Automatic email admission is ${control.enabled?'on':'off'}.`:'Admission control status is unavailable for this view.'}</p>
+   <h3 className="font-medium">Discovery and historical email outcomes</h3>
+   <p>Automatic email admission has been removed. Recorded outcomes below are historical, not scheduled work.</p>
    <p>{discovery.retainedHits} retained discovery hits · {discovery.supportedProspects} currently supported email prospects · {discovery.admissions} discovered candidates admitted</p>
    <p className="text-sm text-muted-foreground">{discovery.manualStaged} manually staged candidates excluded from discovery yield · {discovery.unavailable} discovered candidates with unavailable evidence</p>
    <p>{outcomes.admissions} admissions · {outcomes.attempts} messages attempted · {outcomes.sent} sent · {outcomes.unsettled} with unsettled delivery</p>
@@ -20,7 +20,7 @@ export function AutomaticEmailResults({view}:{view:AutomaticEmailLearning}){
   <div className="space-y-2"><h3 className="font-medium">Replies and introductory calls</h3><p className="text-sm text-muted-foreground">Handle substantive replies within one business day. Plan up to three introductory calls each week. Booking and confirmed attendance are separate outcomes.</p><Button variant="outline" onClick={()=>navigate({name:'replies'})}>Open replies</Button>
    {attention.map(f=><div key={f.firmId} className="rounded-lg border border-border p-3"><Button variant="quiet" onClick={()=>navigate({name:'firm',firmId:f.firmId})}>{f.firmName}</Button><p>{f.needsReply} replies needing disposition · {f.bookings} bookings · {f.heldQualified} held qualified conversations</p></div>)}
   </div>
-  <div className="space-y-3"><h3 className="font-medium">Automatic admission decisions</h3>
+  <div className="space-y-3"><h3 className="font-medium">Historical automatic admission decisions</h3>
    {!decisions.length?<p className="text-sm text-muted-foreground">No automatic prospect decisions observed in this interval.</p>:null}
    {decisions.map(d=><article key={d.runId} className="rounded-lg border border-border p-4 space-y-2">
     <h4 className="font-medium">{d.firmName}</h4><p>{reasons[d.reason]??label(d.reason)}</p>

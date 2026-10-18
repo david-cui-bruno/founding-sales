@@ -314,7 +314,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
     'outreach.mutate': async(input:OperationInput<'outreach.mutate'>)=>{
       const generation=deps.recordings.identity.current(),{action,commandId,...body}=input;
-      const paths={email_admission:'/outreach/email-admission/save',authorization:'/outreach/authorization/save',policy:'/outreach/settings/save',fact_save:'/outreach/answer-blocks/save',fact_approve:'/outreach/answer-blocks/approve',fact_retire:'/outreach/answer-blocks/retire',cohort_enable:'/outreach/cohort/enable',reply_manual:'/outreach/reply/manual'} as const;
+      const paths={authorization:'/outreach/authorization/save',policy:'/outreach/settings/save',fact_save:'/outreach/answer-blocks/save',fact_approve:'/outreach/answer-blocks/approve',fact_retire:'/outreach/answer-blocks/retire',cohort_enable:'/outreach/cohort/enable',reply_manual:'/outreach/reply/manual'} as const;
       const answer=await deps.api.command(paths[action],body,value=>z.record(z.string(),z.unknown()).parse(value),{commandId});
       if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};
       if(!answer.ok)return {accepted:false,view:null,reason:answer.reason.slice(0,80)};
@@ -567,30 +567,6 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if (!answer.ok) throw new Error(answer.reason);
       return answer.value;
     },
-    "crm.askAnswerActivate": async (input: OperationInput<"crm.askAnswerActivate">,
-    ) => {
-      const generation = deps.recordings.identity.current();
-      const answer = await deps.api.command(
-        "/ask/purpose/activate",input,
-        (
-        value) => OPERATIONS["crm.askAnswerActivate"].output.parse(value),
-      );
-      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
-      if (!answer.ok) throw new Error(answer.reason);
-      return answer.value;
-    },
-    "crm.askAnswerDisable": async (input: OperationInput<"crm.askAnswerDisable">,
-    ) => {
-      const generation = deps.recordings.identity.current();
-      const answer = await deps.api.command(
-        "/ask/purpose/disable",input,
-        (
-        value) => OPERATIONS["crm.askAnswerDisable"].output.parse(value),
-      );
-      if (generation !== deps.recordings.identity.current()) throw new Error('identity_changed');
-      if (!answer.ok) throw new Error(answer.reason);
-      return answer.value;
-    },
     'crm.businessPolicyRead':async(input:OperationInput<'crm.businessPolicyRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/business/policy/read',value=>businessPolicySchema.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessPolicySave':async(input:OperationInput<'crm.businessPolicySave'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/business/policy/save',input,value=>OPERATIONS['crm.businessPolicySave'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessSelectionRead':async(input:OperationInput<'crm.businessSelectionRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/business/selection/read',value=>OPERATIONS['crm.businessSelectionRead'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
@@ -620,20 +596,6 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'ask.read':async(input:OperationInput<'ask.read'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/ask/read',value=>OPERATIONS['ask.read'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'ask.actionRead':async(input:OperationInput<'ask.actionRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/ask/actions/read',value=>OPERATIONS['ask.actionRead'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'ask.actionChange':async(input:OperationInput<'ask.actionChange'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/actions/change',input,value=>OPERATIONS['ask.actionChange'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.actionCreate':async(input:OperationInput<'ask.actionCreate'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/actions/create',input,value=>OPERATIONS['ask.actionCreate'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.historyChange':async(input:OperationInput<'ask.historyChange'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/history/change',input,value=>OPERATIONS['ask.historyChange'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.historyList':async(input:OperationInput<'ask.historyList'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/ask/history/list',value=>OPERATIONS['ask.historyList'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.sessionCreate':async(input:OperationInput<'ask.sessionCreate'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/sessions/create',input,value=>OPERATIONS['ask.sessionCreate'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.sessionTurn':async(input:OperationInput<'ask.sessionTurn'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/sessions/turn',input,value=>OPERATIONS['ask.sessionTurn'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.sessionChange':async(input:OperationInput<'ask.sessionChange'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/sessions/change',input,value=>OPERATIONS['ask.sessionChange'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.sessionRead':async(input:OperationInput<'ask.sessionRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/ask/sessions/read',value=>OPERATIONS['ask.sessionRead'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.sessionList':async(input:OperationInput<'ask.sessionList'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/ask/sessions/list',value=>OPERATIONS['ask.sessionList'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.answerCancel':async(input:OperationInput<'ask.answerCancel'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/answers/cancel',input,value=>OPERATIONS['ask.answerCancel'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.investigationPreview':async(input:OperationInput<'ask.investigationPreview'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/ask/answers/investigation/preview',value=>OPERATIONS['ask.investigationPreview'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.investigationCommit':async(input:OperationInput<'ask.investigationCommit'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/answers/investigation/commit',input,value=>OPERATIONS['ask.investigationCommit'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.answerRequest':async(input:OperationInput<'ask.answerRequest'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/ask/answers/request',input,value=>OPERATIONS['ask.answerRequest'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.answerRead':async(input:OperationInput<'ask.answerRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/ask/answers/read',value=>OPERATIONS['ask.answerRead'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'ask.answerSourceRead':async(input:OperationInput<'ask.answerSourceRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/ask/answers/source/read',value=>OPERATIONS['ask.answerSourceRead'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.processingRead':async(input:OperationInput<'crm.processingRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/processing/read',value=>OPERATIONS['crm.processingRead'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.processingRequest':async(input:OperationInput<'crm.processingRequest'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/processing/request',input,value=>OPERATIONS['crm.processingRequest'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     ...extractionSetupOperations({api:deps.api,identity:{current:()=>deps.recordings.identity.current()}}),

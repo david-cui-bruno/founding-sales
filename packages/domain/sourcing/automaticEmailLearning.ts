@@ -60,7 +60,7 @@ export async function readAutomaticEmailLearning(ctx:RepositoryContext,input:{fr
  }
  const setting=(await ctx.db.query<{enabled:boolean;revision:number}>(`SELECT enabled,revision FROM outreach_email_admission_settings WHERE workspace_id=$1 AND ($2::uuid IS NULL OR owner_user_id=$2)`,[w,assignee])).rows[0];
  const batch=assignee===null||setting?(await ctx.db.query<{occurred_at:Date;detail:{reason:string|null;controlRevision:number}}>(`SELECT occurred_at,detail FROM audit_events WHERE workspace_id=$1 AND action='outreach.email_admission_batch' AND occurred_at<=$2 ORDER BY occurred_at DESC,id DESC LIMIT 1`,[w,input.asOf])).rows[0]:null;
- const control=assignee===null||setting?{enabled:setting?.enabled??false,revision:setting?.revision??0,lastBatchAt:batch?.occurred_at.toISOString()??null,lastBatchReason:batch?.detail.reason??null,lastBatchControlRevision:batch?.detail.controlRevision??null}:null;
+ const control=assignee===null||setting?{enabled:false,revision:setting?.revision??0,lastBatchAt:batch?.occurred_at.toISOString()??null,lastBatchReason:batch?.detail.reason??null,lastBatchControlRevision:batch?.detail.controlRevision??null}:null;
  return {control,discovery,outcomes,attention,decisions};
 }
 
