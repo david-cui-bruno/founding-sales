@@ -61,7 +61,7 @@ it.each(['running','failed','completed'])('never requeues an existing %s researc
  expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true,value:{firmId:made.value.id}});
  expect((await db.session.query("SELECT id FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,made.value.id])).rows).toHaveLength(0);
 });
-async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v4',promptVersion:'qualification-growth-v6',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
+async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v4',promptVersion:'qualification-context-v7',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
 it('refuses a legacy automatic flag without the newly attested owner policy',async()=>{
  const input=await qualified('Owner PM');await enableAutomatic();expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'evaluation_required'});
 });

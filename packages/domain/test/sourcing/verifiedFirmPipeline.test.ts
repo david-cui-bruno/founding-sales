@@ -20,7 +20,7 @@ let db:TestDatabase,seed:TwoWorkspaces,serial=200;
 const user=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),db.session);
 const worker=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'worker'}),db.session);
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
-const currentAttestation=()=>({policyVersion:'qualification-v4',promptVersion:'qualification-growth-v6',verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0});
+const currentAttestation=()=>({policyVersion:'qualification-v4',promptVersion:'qualification-context-v7',verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0});
 beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);for(const state of ['TX','RI','MA'] as const)await tx(()=>recordStatePosture(user(),{state,effectiveFrom:new Date(Date.now()-60000).toISOString(),confirmedStatements:Object.keys(POSTURE_STATEMENTS)}));});
 afterAll(async()=>db.drop());
 beforeEach(async()=>{

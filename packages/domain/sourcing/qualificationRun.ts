@@ -83,7 +83,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  }
  const offered=observations.filter(source=>source.firstParty&&!source.truncated);
  if(!offered.length){await finish('source_incomplete_or_unverified');return;}
- const request={observations:offered,modelName:run.model_name,maxInputTokens:0,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS};
+ const request={candidate:{firmName:run.payload.firmName,locality:run.payload.locality,region:run.payload.region,website:run.payload.website},observations:offered,modelName:run.model_name,maxInputTokens:0,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS};
  let tokens:number;
  try{tokens=await extraction.countInputTokens(request);}catch{await finish('token_count_unavailable');return;}
  if(!Number.isSafeInteger(tokens)||tokens<1||tokens>100000){await finish('input_over_budget');return;}

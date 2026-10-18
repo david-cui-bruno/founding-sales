@@ -10,10 +10,10 @@ function evidence(c:CandidateInput=candidate){
  return {candidate:c,facts,observations:[observation],now};
 }
 it('requires a fresh explicit versioned attestation, not a legacy true flag or old reviewed report',()=>{
- const current={policyVersion:'qualification-v4',promptVersion:'qualification-growth-v6',verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0};
+ const current={policyVersion:'qualification-v4',promptVersion:'qualification-context-v7',verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0};
  expect(validVerifiedFirmAttestation(current)).toBe(true);
  expect(validVerifiedFirmAttestation({policyVersion:current.policyVersion,promptVersion:current.promptVersion,reportSha256:current.reportSha256,reviewedEligible:3,falseEligible:0})).toBe(false);
- for(const edit of [{verifiedFirmPolicyVersion:'verified-firm-v1'},{verifiedFirmPolicyVersion:'verified-firm-v0'},{promptVersion:'old'},{policyVersion:'old'},{reportSha256:'invalid'},{reviewedEligible:0},{falseEligible:1}])expect(validVerifiedFirmAttestation({...current,...edit})).toBe(false);
+ for(const edit of [{promptVersion:'qualification-growth-v6'},{verifiedFirmPolicyVersion:'verified-firm-v1'},{verifiedFirmPolicyVersion:'verified-firm-v0'},{promptVersion:'old'},{policyVersion:'old'},{reportSha256:'invalid'},{reviewedEligible:0},{falseEligible:1}])expect(validVerifiedFirmAttestation({...current,...edit})).toBe(false);
  expect(validVerifiedFirmAttestation(null)).toBe(false);
 });
 it.each([{region:'TX',locality:'Dallas'},{region:'RI',locality:'Newport'},{region:'MA',locality:'Worcester'}] as const)('verifies all-state $region fit without inventing maintenance pain',location=>{
