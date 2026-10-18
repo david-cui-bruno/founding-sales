@@ -405,13 +405,30 @@ describe('trusted local always-finalizer after genuine process interruption', ()
   });
 });
 
+async function prepareRuntimeFixture(db: Awaited<ReturnType<typeof createUpgradeDatabase>>, migrator: Parameters<typeof ensureRuntimeDatabaseUser>[0]): Promise<void> {
+  // Shared CI groups belong to an earlier suite. PG16+ CREATEROLE alone cannot
+  // grant them. Mirror the creator's automatic grant, not superuser execution.
+  const owner = await db.connect('owner');
+  for (const group of ['app_runtime', 'migration']) {
+    await owner.session.query(`GRANT ${group} TO ${MIGRATOR_LOGIN_ROLE} WITH ADMIN OPTION, INHERIT FALSE, SET FALSE`);
+  }
+  const permissions = await migrator.query<{ superuser: boolean; inherit: boolean; admin: boolean }>(
+    `SELECT r.rolsuper AS superuser, pg_has_role(current_user, 'app_runtime', 'USAGE') AS inherit,
+       (SELECT admin_option FROM pg_auth_members WHERE roleid='app_runtime'::regrole AND member=r.oid) AS admin
+     FROM pg_roles r WHERE r.rolname=current_user`,
+  );
+  expect(permissions.rows).toEqual([{ superuser: false, inherit: false, admin: true }]);
+  const ensured = await ensureRuntimeDatabaseUser(migrator, { secretValue: db.runtimeSecretValue });
+  expect(ensured.ok).toBe(true);
+}
+
 describe('real disposable PostgreSQL migration and failure boundary (not production acceptance)', () => {
   it('upgrades actual 117→118 with business data intact and refuses old app range', async () => {
     const db = await createUpgradeDatabase();
     try {
       const migrator = await db.connect(MIGRATOR_LOGIN_ROLE);
       await applyMigrations(migrator.session, { throughVersion: 117 });
-      const ensured = await ensureRuntimeDatabaseUser(migrator.session, { secretValue: db.runtimeSecretValue }); expect(ensured.ok).toBe(true);
+      await prepareRuntimeFixture(db, migrator.session);
       await migrator.session.query("INSERT INTO workspaces(slug,display_name) VALUES ('release-test','Preserved relationship history')");
       const runtime = await db.connect(RUNTIME_LOGIN_ROLE);
       const h = harness({ from: 117, migrate: async () => { await applyMigrations(migrator.session); }, verify: async () => {
@@ -447,7 +464,7 @@ describe('real disposable PostgreSQL migration and failure boundary (not product
     try {
       const migrator = await db.connect(MIGRATOR_LOGIN_ROLE);
       await applyMigrations(migrator.session);
-      await ensureRuntimeDatabaseUser(migrator.session, { secretValue: db.runtimeSecretValue });
+      await prepareRuntimeFixture(db, migrator.session);
       await migrator.session.query("INSERT INTO workspaces(slug,display_name) VALUES ('off-reader','Private business name never returned')");
       const owner = await db.connect('owner');
       const runReader = async () => execute(process.execPath, ['--experimental-transform-types', '--input-type=module', '--eval', release.offRead], { cwd: repositoryPath(''), env: { PATH: process.env['PATH'], DATABASE_URL: db.runtimeUrl, FSS_SENDING_ENABLED: 'true' } });
