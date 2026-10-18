@@ -1,3 +1,5 @@
+import { LINKEDIN_MANUAL_OPERATIONS } from './linkedinManualOperations.ts';
+import { SOCIAL_CONTENT_OPERATIONS } from './socialContentOperations.ts';
 import {askAnswerCancelPayloadSchema,askAnswerCancelledSchema,askAnswerInvestigationPreviewSchema,askAnswerInvestigationPreviewResultSchema,askAnswerInvestigationCommitSchema} from '@fss/contracts';
 import {businessSelectionReadSchema,businessSelectionStatusSchema} from '@fss/contracts';
 import {linkedinRecurringViewSchema} from '@fss/contracts';
@@ -52,7 +54,7 @@ import { todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOp
 import {socialWeeklySchema,socialWeeklySaveSchema} from '@fss/contracts';
 import {socialDraftWorkspaceSchema,socialDraftRequestSchema} from '@fss/contracts';
 import {socialImageImportViewSchema,socialImageChooseSchema,socialImageEditSchema} from './socialImages.ts';
-import {socialWorkspaceSchema,socialPostMutationSchema,socialAssetLibrarySchema} from '@fss/contracts';
+import {socialAssetLibrarySchema} from '@fss/contracts';
 import {outreachControlSchema,outreachSenderStandingResponseSchema,outreachCohortInputSchema,outreachCohortPreviewSchema,outreachMutationSchema} from '@fss/contracts';
 import {callNeedReadSchema,callNeedSaveSchema,callNeedViewSchema} from '@fss/contracts';
 import {learningInputSchema,learningReportSchema,targetingViewSchema,targetingProposalSchema,targetingApplySchema} from '@fss/contracts';
@@ -931,8 +933,8 @@ export const OPERATIONS = {
   'social.saveWeekly': {kind:'command',calls:[{method:'POST',path:'/social/weekly/save'}],input:socialWeeklySaveSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({view:socialWeeklySchema.nullable(),reason:z.string().nullable()}),transform:'Explicit weekly draft opt-in, never publication'},
   'social.drafts': {kind:'read',calls:[{method:'POST',path:'/social/drafts'}],input:z.strictObject({}),output:z.strictObject({view:socialDraftWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Owner sources, approved facts and draft suggestions'},
   'social.requestDrafts': {kind:'command',calls:[{method:'POST',path:'/social/drafts/request'}],input:socialDraftRequestSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({requestId:z.string().uuid().nullable(),reason:z.string().nullable()}),transform:'Request bounded generation without approval'},
-  'social.workspace': {kind:'read',calls:[{method:'POST',path:'/social'}],input:z.strictObject({}),output:z.strictObject({view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Owner social drafts and destination connections'},
-  'social.mutate': {kind:'command',calls:[{method:'POST',path:'/social/posts/save'},{method:'POST',path:'/social/posts/approve'},{method:'POST',path:'/social/posts/cancel'},{method:'POST',path:'/social'}],input:socialPostMutationSchema,output:z.strictObject({accepted:z.boolean(),view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Exact revision and explicit scheduling approval'},
+  ...SOCIAL_CONTENT_OPERATIONS,
+  ...LINKEDIN_MANUAL_OPERATIONS,
   'notifications.read':{kind:'read',calls:[{method:'GET',path:'/notifications/actions'}],input:z.strictObject({}),output:z.union([z.strictObject({ok:z.literal(true),value:actionableNotificationsResponseSchema}),z.strictObject({ok:z.literal(false),reason:z.literal('offline'),offline:z.literal(true)}),z.strictObject({ok:z.literal(false),reason:z.string(),offline:z.literal(false)})]),transform:'Current actionable notification receipts without resolving work'},
   'notifications.runtime':{kind:'read',calls:[],input:z.strictObject({}),output:notificationRuntimeStatusSchema,transform:'This running desktop native notification availability'},
   'replyComposer.context': {kind:'read',calls:[{method:'POST',path:'/replies/composer/context'}],input:replyDraftContextInputSchema,output:replyDraftContextResultSchema,transform:'Current owner-scoped conversation and approved fact versions for a human draft'},
