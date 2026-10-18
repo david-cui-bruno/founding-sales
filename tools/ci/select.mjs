@@ -1,7 +1,7 @@
 // Required gate policy: input is every changed path, including deleted paths.
 import { readFileSync } from 'node:fs';
 const paths = readFileSync(0, 'utf8').split(/\r?\n/u).filter(Boolean);
-const all = ['contracts', 'domain', 'api', 'worker', 'desktop', 'ops', 'ask-evaluation'];
+const all = ['contracts', 'domain', 'api', 'worker', 'desktop', 'ops'];
 const selected = new Set(['ops']);
 const reasons = [];
 let broad = process.argv.includes('--main') || paths.length === 0;

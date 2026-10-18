@@ -4,7 +4,7 @@ import { operations } from "../app/bridges.ts";
 import type { z } from "zod";
 import type { crmCapabilityReadResponseSchema,CrmOwnerApproval } from "@fss/contracts";
 export type Capability =
-  "metadata_review" | "mail_capture" | "crm_extraction" | "ask_answer";
+  "metadata_review" | "mail_capture" | "crm_extraction";
 export interface CapabilityTarget {
   capability: Capability;
   mailboxId?: string;
@@ -47,11 +47,6 @@ const descriptions = {
     detail:
       "Use separately approved hosted AI to identify evidence in your authorized originals. Source ownership, deletion and spending limits still apply.",
   },
-  ask_answer: {
-    name: "Ask answers",
-    detail:
-      "Use separately approved hosted AI for answers grounded in your authorized originals. Keyword and record search remain available while answers are off.",
-  },
 } as const;
 function api() {
   const value = operations();
@@ -78,11 +73,6 @@ export const crmCapabilityPorts: CrmCapabilityPorts = {
           ...input,
           capability: "crm_extraction",
         });
-      case "ask_answer":
-        return api().command("crm.askAnswerActivate", {
-          ...input,
-          capability: "ask_answer",
-        });
     }
   },
   disable: (input) => {
@@ -101,11 +91,6 @@ export const crmCapabilityPorts: CrmCapabilityPorts = {
         return api().command("crm.extractionDisable", {
           ...input,
           capability: "crm_extraction",
-        });
-      case "ask_answer":
-        return api().command("crm.askAnswerDisable", {
-          ...input,
-          capability: "ask_answer",
         });
     }
   },
@@ -129,20 +114,19 @@ export function CrmCapabilitiesSection({
   refreshVersion?: number;
   onChange?: () => void;
 }) {
-  const [askPurpose,setAskPurpose]=useState<"answer"|"embedding">("answer");
   const targets = useMemo<CapabilityTarget[]>(
     () =>
       scope === "ai"
-        ? [{ capability: "crm_extraction" }, { capability: "ask_answer",purpose:askPurpose }]
+        ? [{ capability: "crm_extraction" }]
         : mailboxId
           ? [
               { capability: "metadata_review", mailboxId },
               { capability: "mail_capture", mailboxId },
             ]
           : [],
-    [scope, mailboxId,askPurpose],
+    [scope, mailboxId],
   );
-  const key = `${privacyKey}:${scope}:${mailboxId ?? ""}:${askPurpose}`;
+  const key = `${privacyKey}:${scope}:${mailboxId ?? ""}`;
   const latest = useRef({ key, available });
   latest.current = { key, available };
   const issuance = useRef(0);
@@ -202,7 +186,7 @@ export function CrmCapabilitiesSection({
     if (!available || busy !== null || snapshot?.key !== key) return;
     if (!view.enabled && !view.ready)
       return;
-    if(!view.enabled&&(target.capability==='crm_extraction'||target.capability==='ask_answer')){
+    if(!view.enabled&&(target.capability==='crm_extraction')){
       const review=reviews[target.capability];if(!review?.critical||!review.integration||!review.reference.trim())return;
     }
     const ticket = ++issuance.current;
@@ -215,7 +199,7 @@ export function CrmCapabilitiesSection({
         await ports.activate({
           ...target,
           expectedRevision: view.revision,
-          approval: target.capability==='crm_extraction'||target.capability==='ask_answer'?{
+          approval: target.capability==='crm_extraction'?{
             consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,
             reviewedEvaluationReference:reviews[target.capability]?.reference??'',limitations:['representative_quality_unverified'],
           }:{consentAcknowledged:true,qualityTier:'acquisition',limitations:[]},
@@ -257,23 +241,22 @@ export function CrmCapabilitiesSection({
       aria-label={
         scope === "mail"
           ? "Business email controls"
-          : "Evidence and Ask controls"
+          : "Evidence controls"
       }
     >
-      <h3>{scope === "mail" ? "Business email" : "Evidence and Ask"}</h3>
+      <h3>{scope === "mail" ? "Business email" : "Evidence"}</h3>
       <p>
         These controls do not authorize sending or change sending safeguards.
       </p>
       {scope === "mail" && !mailboxId ? (
         <p>Connect your own mailbox to prepare conversation capture.</p>
       ) : null}
-      {scope==='ai'?<label>Ask purpose<select value={askPurpose} disabled={busy!==null} onChange={event=>setAskPurpose(event.target.value==='embedding'?'embedding':'answer')}><option value="answer">Answers</option><option value="embedding">Embeddings (separate provider and budget)</option></select></label>:null}
       {scope==='mail'&&ports.prepareCapture&&rows.metadata_review?.configuration?<><p>{CRM_MAIL_CAPTURE_CONSENT.text}</p><button type="button" disabled={busy!==null} onClick={()=>void prepareCapture()}>Prepare original email capture (stays off)</button></>:null}
       {targets.map((target) => {
-        const description = target.capability==='ask_answer'&&askPurpose==='embedding'?{name:'Ask embeddings',detail:'Use separately approved hosted embeddings to index and retrieve your authorized originals. Answering has a different approval and budget.'}:descriptions[target.capability],
+        const description = descriptions[target.capability],
           view = rows[target.capability];
         const active = view?.enabled === true;
-        const ai=target.capability==='crm_extraction'||target.capability==='ask_answer';
+        const ai=target.capability==='crm_extraction';
         const review=reviews[target.capability]??{reference:'',critical:false,integration:false};
         const updateReview=(patch:Partial<typeof review>)=>setReviews(old=>({...old,[target.capability]:{...review,...patch}}));
         return (
@@ -297,7 +280,7 @@ export function CrmCapabilitiesSection({
             </p>
             {view?.configuration?<p>Owner: {view.configuration.ownerUserId}. {"mailboxId" in view.configuration?`Mailbox: ${view.configuration.providerAccountId}.`:`Provider: ${view.configuration.endpointId}; model: ${view.configuration.modelVersion}; daily budget: ${view.configuration.dailyCeilingCents} cents; monthly budget: ${view.configuration.monthlyCeilingCents} cents.`}</p>:null}
             {view?.configuration&&'endpointId' in view.configuration?<>
-              <p>Purpose: {view.configuration.capability==='crm_extraction'?'conversation evidence extraction':view.configuration.purpose==='embedding'?'semantic indexing and retrieval':'grounded Ask answering'}.</p>
+              <p>Purpose: conversation evidence extraction.</p>
               <p>Access approval version: {view.configuration.accessGrantVersion}.</p>
               <p>Data handling version: {view.configuration.dataHandlingVersion}. This is the configured policy for data sent to the displayed provider; review its retention and permitted use before approving.</p>
             </>:null}

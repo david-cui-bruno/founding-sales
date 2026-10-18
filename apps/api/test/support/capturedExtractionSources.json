@@ -1,0 +1,6 @@
+[
+  {"caseId":"dev_01","syntheticText":"Mira at Example Sales says: \"I will send the proposal Friday, October 16.\""},
+  {"caseId":"dev_02","syntheticText":"Mira says: \"I can send you a proposal if that helps. We should talk sometime.\""},
+  {"caseId":"dev_05","syntheticText":"From team@example.test: \"Our team is considering a partnership.\" No signature or individual speaker evidence."},
+  {"caseId":"dev_08","syntheticText":"New authored text: \"That old plan is no longer valid.\" Quoted 2025 message: \"I will send the contract Friday.\""}
+]
