@@ -12,7 +12,7 @@ Opt-out/refusal and reply-stop facts go through the existing mail effects and su
 
 Use the normal model transport and its configured access, data-handling and budget controls. Do not introduce a fallback provider or reuse a credential from another purpose. Preserve source/version and current authority checks across waits. Logs and errors must not expose bodies or private model outputs. Deletion and retention also cover cached/derived content, not just the original row.
 
-A classification cache is not timeless evidence. Changes to the relevant source, configuration or model/prompt binding require the existing invalidation rules. Source completion and fixture quality are not evidence of representative live model usefulness.
+Persisted model suggestions retain their original provenance. Ordinary retries do not reclassify them, and changing current settings or the prompt does not itself refresh historical suggestions. Source completion and fixture quality are not evidence of representative live model usefulness.
 
 ## Integration and checks
 
