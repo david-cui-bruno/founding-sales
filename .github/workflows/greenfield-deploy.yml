@@ -567,7 +567,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/application/status.json" ]; then
             # Trusted local-only fallback for cancelled/timed-out execution. Never replay or clean a remote write.
             node infra/scripts/application-release.mjs --finalize --status "$RUNNER_TEMP/application/status.json"
-            jq '{phase,outcome,writesStarted,migrationStarted,fromSchema,targetSchema,observedSchema,recoveryPoint,reason,rollback,currentTaskArn,currentTaskOwner,lastStoppedTaskArn,lastTaskExitCode,temporaryReaderDefinition,previousDefinitions,candidateDefinitions}' "$RUNNER_TEMP/application/status.json" >> "$GITHUB_STEP_SUMMARY"
+            jq '{phase,outcome,writesStarted,migrationStarted,fromSchema,targetSchema,observedSchema,recoveryPoint,reason,rollback,currentTaskArn,currentTaskOwner,lastStoppedTaskArn,lastTaskExitCode,temporaryReaderDefinition,previousDefinitions,candidateDefinitions}' "$RUNNER_TEMP/application/status.json" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo 'Replacement stopped before execution. No replacement writes claimed.' >> "$GITHUB_STEP_SUMMARY"
           fi

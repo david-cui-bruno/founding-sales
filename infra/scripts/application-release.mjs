@@ -273,9 +273,23 @@ export async function runRelease(io, environment) {
     requireThat(result.DBInstances?.length === 1, 'database_unavailable'); database = result.DBInstances[0];
     requireThat(database.DBInstanceArn === 'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg' && database.DbiResourceId && database.DBName && database.Endpoint?.Address && database.DBInstanceStatus === 'available' && database.BackupRetentionPeriod === 35, 'database_binding_changed');
     network = baseline.worker.networkConfiguration?.awsvpcConfiguration;
-    requireThat(network?.subnets?.length && network.securityGroups?.length === 1 && network.assignPublicIp === 'ENABLED' && io.equal(network, baseline.api.networkConfiguration?.awsvpcConfiguration), 'network_binding_changed');
-    const groups = await aws('ec2', 'describe-security-groups', ['--group-ids', ...network.securityGroups]);
-    requireThat(groups.SecurityGroups?.length === 1 && groups.SecurityGroups[0].IpPermissions?.length === 0, 'network_ingress_changed');
+    const apiNetwork = baseline.api.networkConfiguration?.awsvpcConfiguration;
+    const validId = (value, prefix) => typeof value === 'string' && new RegExp(`^${prefix}-[0-9a-f]{8}([0-9a-f]{9})?$`, 'u').test(value);
+    const expectedSubnets = e.TASK_SUBNETS?.split(',');
+    const validSubnets = value => Array.isArray(value) && value.length === 2 && value.every(item => validId(item, 'subnet')) && new Set(value).size === 2;
+    const sameSubnets = value => validSubnets(value) && io.equal([...value].sort(), [...expectedSubnets].sort());
+    const validNetwork = value => value && sameSubnets(value.subnets) && Array.isArray(value.securityGroups) && value.securityGroups.length === 1 && validId(value.securityGroups[0], 'sg') && value.assignPublicIp === 'ENABLED';
+    requireThat(validSubnets(expectedSubnets) && validId(e.TASK_SECURITY_GROUP, 'sg') && validNetwork(network) && validNetwork(apiNetwork) && network.securityGroups[0] === e.TASK_SECURITY_GROUP && apiNetwork.securityGroups[0] !== network.securityGroups[0], 'network_binding_changed');
+    const groups = await aws('ec2', 'describe-security-groups', ['--group-ids', network.securityGroups[0], apiNetwork.securityGroups[0]]);
+    const workerGroup = groups.SecurityGroups?.find(group => group.GroupId === network.securityGroups[0]);
+    const apiGroup = groups.SecurityGroups?.find(group => group.GroupId === apiNetwork.securityGroups[0]);
+    requireThat(groups.SecurityGroups?.length === 2 && workerGroup?.GroupName === 'fss-prod-worker-task' && apiGroup?.GroupName === 'fss-prod-api-task' && validId(workerGroup.VpcId, 'vpc') && apiGroup.VpcId === workerGroup.VpcId, 'network_group_binding_changed');
+    requireThat(Array.isArray(workerGroup.IpPermissions) && workerGroup.IpPermissions.length === 0, 'network_ingress_changed');
+    // Terraform network/main.tf permits only TCP 8080 from the ALB to the API.
+    const rules = apiGroup.IpPermissions, rule = rules?.[0], source = rule?.UserIdGroupPairs?.[0];
+    requireThat(Array.isArray(rules) && rules.length === 1 && rule.IpProtocol === 'tcp' && rule.FromPort === 8080 && rule.ToPort === 8080 && rule.IpRanges?.length === 0 && rule.Ipv6Ranges?.length === 0 && rule.PrefixListIds?.length === 0 && rule.UserIdGroupPairs?.length === 1 && validId(source?.GroupId, 'sg') && source.UserId === identity.Account && !source.VpcPeeringConnectionId, 'api_network_ingress_changed');
+    const alb = await aws('ec2', 'describe-security-groups', ['--group-ids', source.GroupId]);
+    requireThat(alb.SecurityGroups?.length === 1 && alb.SecurityGroups[0].GroupId === source.GroupId && alb.SecurityGroups[0].GroupName === 'fss-prod-alb' && alb.SecurityGroups[0].VpcId === workerGroup.VpcId, 'api_network_source_changed');
     definitions = {};
     for (const name of names) {
       const response = await aws('ecs', 'describe-task-definition', ['--task-definition', baseline[name]?.taskDefinition || `fss-prod-${name}`, '--include', 'TAGS']);
