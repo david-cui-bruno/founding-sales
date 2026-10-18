@@ -386,7 +386,7 @@ export async function runRelease(io, environment) {
       const metric = await aws('cloudwatch', 'get-metric-statistics', ['--namespace', 'FSS/fss-prod', '--metric-name', 'CanaryCompletionAgeSeconds', '--statistics', 'Maximum', '--period', '300', '--start-time', new Date(io.now() - 3600000).toISOString(), '--end-time', new Date(io.now()).toISOString()]);
       const latest = metric.Datapoints?.sort((a, b) => Date.parse(b.Timestamp) - Date.parse(a.Timestamp))[0];
       requireThat(latest && Number.isFinite(latest.Maximum) && io.now() - Date.parse(latest.Timestamp) <= 1200000 && latest.Maximum <= 300, 'canary_unavailable');
-      await io.run('node', ['scripts/productionSmoke.mjs', '--origin', e.FSS_PRODUCTION_ORIGIN, '--canary-age-seconds', String(latest.Maximum), '--expect-sending', envValue(definitions.api.definition, 'FSS_SENDING_ENABLED') === 'true' ? 'enabled' : 'disabled']);
+      await io.run('node', ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', 'scripts/productionSmoke.mjs', '--origin', e.FSS_PRODUCTION_ORIGIN, '--canary-age-seconds', String(latest.Maximum), '--expect-sending', envValue(definitions.api.definition, 'FSS_SENDING_ENABLED') === 'true' ? 'enabled' : 'disabled']);
       await off(current.operations, state.targetSchema);
       const readback = await oneOff('operations', current.operations, ['admin', 'release-record', 'put', '--json-base64', encodedRecord]);
       requireThat(readback.outcome === 'existing' && readback.reference === record.releaseGateReference, 'release_record_readback_failed');
