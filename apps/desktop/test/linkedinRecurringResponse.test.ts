@@ -1,6 +1,6 @@
 // Keep Node file URLs for the real migration/fixture modules and mount the
 // renderer in the existing controlled DOM seam.
-import './support/bookingPolicyDom.mts';
+import './support/componentDom.mts';
 import {beforeAll,afterAll,afterEach,it,expect} from 'vitest';
 import {createElement} from 'react';
 import {fileURLToPath} from 'node:url';

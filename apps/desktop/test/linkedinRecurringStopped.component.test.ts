@@ -1,4 +1,4 @@
-import './support/bookingPolicyDom.mts';
+import './support/componentDom.mts';
 import {beforeAll,afterAll,afterEach,it,expect} from 'vitest';
 import {createElement} from 'react';
 import {fileURLToPath} from 'node:url';
