@@ -16,8 +16,47 @@ Removed generated-answer/index, AI booking lifecycle, automatic email admission 
 
 The scheduler materializes work; a leased job is not proof of an external effect. Runner fencing, business uniqueness and outbound uncertainty are described in [jobs](jobs.md). Process shutdown drains in-flight work before sessions close, subject to its deadline. Heartbeats and metrics are operational signals, not business consent or provider-quality evidence.
 
+## Registered due-work sources
+
+The default `workerDueWorkSources()` registry contains exactly the following names. Registration is not activation: composition flags, configured adapters and current domain authority determine whether a source materializes eligible work. Sources only touch PostgreSQL; provider effects belong to guarded handlers.
+
+| Source | What it materializes |
+| --- | --- |
+| `crm-mail-progress` | CRM mail progress work from retained business state. |
+| `crm-processing-recovery` | Financial recovery of interrupted extraction, not another external dispatch. |
+| `crm-mail-backfill` | Explicitly enabled, authorized CRM backfill work. |
+| `social-drafts` | Manual requests/explicit weekly draft opt-ins and expiry, when configured; no posting authority. |
+| `outreach-replies` | Email attribution/expiry and enabled routine-reply work; registration is not sending consent. |
+| `meeting-analysis` | Eligible retained meeting analysis, when configured. |
+| `meeting-follow-through` | Follow-through from retained meeting business state. |
+| `meeting-recording-setup` | Authorized automatic recording setup for retained meetings, when configured. |
+| `meeting-transcription` | Eligible meeting transcription, when configured. |
+| `canary` | Periodic worker canary jobs. |
+| `today-build` | Due Today projection rebuilds. |
+| `sequence-action` | Due regular sequence actions. |
+| `terminal-stop` | Consumption of terminal stop events. |
+| `send-day-close` | Closing due sender-day accounting. |
+| `retention-batch` | Due bounded retention/privacy batches. |
+| `social-assets-cleanup` | Cleanup of eligible social assets. |
+| `research-sweep` | Daily research scheduling and abandoned-run recovery. |
+| `sourcing-monitor` | Eligible sourcing-monitor work when that composition is enabled. |
+| `sourcing-qualification` | Due candidate qualification under configured composition. |
+| `sourcing-discovery` | Due configured discovery searches. |
+| `telephony-sweep` | Due telephony reconciliation/sweep work. |
+| `calcom-reconcile` | Cal.com reconciliation, when configured. |
+| `call-transcribe-resume` | Resumption of held call transcription, when configured. |
+| `call-transcribe-collect` | Collection of recorded transcription jobs, when configured. |
+| `call-summarize` | Due call summaries, when configured. |
+| `call-analyze` | Due call analyses, when configured. |
+| `call-analyze-sweep` | Call-analysis recovery/sweep work, when configured. |
+| `mail-recovery`, `mail-sync-reconcile`, `mail-watch-renewal`, `outbound-reconcile` | Current-generation recovery, coalesced mailbox sync, watch renewal and observation of uncertain outbound fences. |
+| `classify-reply` | Due reply classification. |
+| `route-validation` | Due route validation. |
+
+Supplying the explicit CRM mail-processing port additionally registers `crm-mail-intents`; it derives authorized CRM mail-processing intents and is not part of the default registry above. Neither registration nor scheduler execution grants capture, backfill, processing, sending or other provider consent.
+
 ## Tools and recovery
 
 The existing worker operations entrypoint is `apps/worker/src/tools/fss.ts`. Do not guess a new CLI or run a command merely because its parser exists. Use current procedures and scoped approval, preserve release/sending holds and data, and reconcile unknown writes before retrying. Configuration/secret names may be documented, never secret values or private runtime evidence.
 
-Verification uses existing startup/config/registry/runner tests, workspace typechecks and operations checks. A local process with fakes is not deployed runtime acceptance. [Current state](../operations/current-state.md) records dated production/main observations. Release simplification is a later separately authorized outcome, not implemented by this documentation rewrite.
+Verification uses existing startup/config/registry/runner tests, workspace typechecks and operations checks. A local process with fakes is not deployed runtime acceptance. [Current state](../operations/current-state.md) records dated production/main observations. Release simplification is separately owned; this page does not replace current operational procedures.
