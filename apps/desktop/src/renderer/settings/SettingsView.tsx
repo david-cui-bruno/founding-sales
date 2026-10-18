@@ -1,15 +1,10 @@
-import { CrmOwnerSetup } from './CrmOwnerSetup.tsx';
-import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
-import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
-import {OutreachSection} from '../outreach/OutreachSection.tsx';
-import { useEffect, useRef, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react';
 import type { MailboxState } from '../../shared/contract.ts';
 import type { Generation } from '../app/generation.ts';
-import { routeShown, SETTINGS_TABS, type Route, type SettingsTab } from '../routes.ts';
+import { routeShown, type Route } from '../routes.ts';
 import { adminViewOf } from '../settingsView.ts';
 import { Alert } from '../ui/alert.tsx';
 import { Page, ViewHeader } from '../ui/layout.tsx';
-import { cn } from '../lib/utils.ts';
 import type { StatusRow } from '../homeView.ts';
 import { Administration } from './Administration.tsx';
 import { isAttributed, NoticeProvider } from './FormNotice.tsx';
@@ -21,39 +16,17 @@ import { ResearchSettings } from './ResearchSettings.tsx';
 import { Panels } from './Panels.tsx';
 import { RecoveryControls } from './RecoveryControls.tsx';
 import { StatusSection } from './StatusSection.tsx';
+import { CrmOwnerSetup } from './CrmOwnerSetup.tsx';
+import { DiscoveryStatus } from './DiscoveryStatus.tsx';
+import { LinkedinConnection } from './LinkedinConnection.tsx';
 import { tabForScreen, useAdmin } from './useAdmin.ts';
 
-/**
- * Settings: Administration, the Dashboard and Diagnostics in one view (1.0.12; in React
- * since 1.0.13).
- *
- * Three tabs of one bridge. Pressing a tab switches the screen in place and the route
- * follows through `routeShown`, so nothing is mounted again and a half-typed setting
- * survives a look at the figures; the sidebar's Settings row and ⌘, mount it afresh at
- * Administration, which is what asking for it again means.
- *
- * Needs you's Open lands on the section it named — the calling number, the sending
- * domain, the alerts — once, on the first answer.
- */
+function OwnerGroup({ title, children }: { readonly title: string; readonly children: ReactNode }) {
+  return <section aria-label={title} className="border-t border-border py-5 first:border-t-0 first:pt-0"><h2 className="mb-3 text-sm font-semibold tracking-tight">{title}</h2><div className="[&>section]:mt-3 [&>section]:border-t-0 [&>section]:pt-0">{children}</div></section>;
+}
 
-const TAB_LABELS: Readonly<Record<SettingsTab, string>> = Object.freeze({
-  administration: 'Administration',
-  dashboard: 'Dashboard',
-  diagnostics: 'Diagnostics',
-});
-
-export function SettingsView({
-  route,
-  identity,
-  generation,
-  guard,
-  mailbox,
-  mailboxWaiting,
-  hasMailboxBridge,
-  status = [],
-  isAdmin = false,
-  onSwitchMailbox,
-}: {
+/** One owner's operational settings. Existing forms retain every command and refusal. */
+export function SettingsView({ route, identity, generation, guard, mailbox, mailboxWaiting, hasMailboxBridge, status = [], isAdmin = false, onSwitchMailbox }: {
   readonly route: Route;
   readonly identity: string | null;
   readonly generation: number;
@@ -61,124 +34,84 @@ export function SettingsView({
   readonly mailbox: MailboxState | null;
   readonly mailboxWaiting: boolean;
   readonly hasMailboxBridge: boolean;
-  /** The routine status rows (slice 3a, C0): `buildHomeView`'s, drawn under Status. */
   readonly status?: readonly StatusRow[];
   readonly isAdmin?: boolean;
   onSwitchMailbox(switchTo: string): void;
 }): JSX.Element {
   const tab = route.name === 'settings' ? route.tab : 'administration';
-  const section = route.name === 'settings' ? (route.section ?? null) : null;
+  const section = route.name === 'settings' ? route.section ?? null : null;
   const admin = useAdmin(tab, identity, generation, guard);
   const state = admin.state;
-
-  /*
-   * Once, when the section Needs you asked for is on screen.
-   *
-   * Not "on the first answer": the reads are cached in memory, so a second visit
-   * renders the tab it was left on before the answer for the tab asked for arrives,
-   * and a scroll then would be a scroll to nothing. Waiting for the element is also
-   * what makes it at most one scroll — after it, the ref is set.
-   */
+  const view = state === null ? null : adminViewOf(state);
+  const [advanced, setAdvanced] = useState(tab !== 'administration' || section !== null);
+  const [emailTechnical, setEmailTechnical] = useState<HTMLDivElement | null>(null);
+  const openEmailTechnical = () => {
+    setAdvanced(true);
+    // Opening a disclosure is presentation only, never a setting command.
+    if (emailTechnical) {
+      const disclosure = emailTechnical.closest('details');
+      if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
+      emailTechnical.scrollIntoView({ block: 'start' });
+    }
+  };
   const scrolled = useRef(false);
   useEffect(() => {
     if (state === null || section === null || scrolled.current) return;
     const target = document.querySelector(`[data-testid="${section}"]`);
     if (target === null) return;
+    // Deep links open containing disclosures before scrolling, never mutate settings.
+    for (let parent = target.parentElement; parent !== null; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
     scrolled.current = true;
     target.scrollIntoView({ block: 'start' });
-  }, [state, section]);
-
-  const view = state === null ? null : adminViewOf(state);
-
-  return (
-    <NoticeProvider value={{ text: view?.notice ?? null, form: admin.lastForm }}>
+  }, [state, section, advanced]);
+  const privacyKey = `${identity}:${String(generation)}`;
+  const editable = identity !== null && state?.mayMutate === true;
+  const configuration = view !== null && tabForScreen(view.screen) === 'administration';
+  return <NoticeProvider value={{ text: view?.notice ?? null, form: admin.lastForm }}>
     <Page data-testid="settings-view" aria-busy={admin.pending > 0} className="callie-v2">
-      <ViewHeader title="Settings" />
-      <nav data-testid="tabs" className="mt-3 flex items-center gap-1 border-b border-border">
-        {SETTINGS_TABS.map(name => (
-          <button
-            key={name}
-            type="button"
-            data-testid={`tab-${name === 'administration' ? 'settings' : name}`}
-            {...(name === tab ? { 'aria-current': 'page' as const } : {})}
-            onClick={() => {
-              routeShown({ name: 'settings', tab: name });
-            }}
-            className={cn(
-              '-mb-px border-b-2 px-2 py-1.5 text-sm transition-colors',
-              name === tab
-                ? 'border-foreground font-medium text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {TAB_LABELS[name]}
-          </button>
-        ))}
-      </nav>
-
-      {/* The routine status needs no read of its own: it is drawn from what the shell holds. */}
-      {tab === 'administration' && view === null ? <StatusSection rows={status} /> : null}
-      {view === null ? null : (
-        <>
-          <div data-testid="banners" className="mt-3 flex flex-col gap-2 empty:hidden">
-            {view.banner === null ? null : (
-              <Alert tone="warning" data-testid="banner-offline">
-                {view.banner}
-              </Alert>
-            )}
-            {/* A command's answer is drawn beside the control that sent it (criterion 6). Only a
-                notice that no form owns — the answer to a read — is said here. */}
-            {view.notice === null || isAttributed(admin.lastForm) ? null : (
-              <Alert tone="info" data-testid="notice">
-                {view.notice}
-              </Alert>
-            )}
-          </div>
-
-          {tabForScreen(view.screen) === 'administration' ? (
-            <>
-              <StatusSection rows={status} />
-              <MailboxSection
-                mailbox={mailbox}
-                waiting={mailboxWaiting}
-                available={hasMailboxBridge}
-                onSwitch={onSwitchMailbox}
-              />
-              {isAdmin ? <CrmOwnerSetup key={`crm-capabilities:${identity}:${String(generation)}`} available={identity!==null && state?.mayMutate===true} privacyKey={`${identity}:${String(generation)}`} /> : null}
-              {/* Lane M4: the demo recordings folder, a setting of this Mac. */}
+      <div className="mx-auto w-full max-w-3xl pb-12">
+        <ViewHeader title="Settings" />
+        <p className="mb-6 mt-1 text-sm text-muted-foreground">Your account and the limits Callie works within.</p>
+        <OwnerGroup title="Account">
+          <p className="mb-2 text-sm" data-testid="signed-in-user">{identity === null ? 'Not signed in' : `Signed in${isAdmin ? ' · Administrator' : ''}`}</p>
+          <StatusSection rows={status.filter(row => row.key === 'system' || row.key === 'update')} />
+          <MailboxSection mailbox={mailbox} waiting={mailboxWaiting} available={hasMailboxBridge} onSwitch={onSwitchMailbox} />
+        </OwnerGroup>
+        <div data-testid="banners" className="flex flex-col gap-2 empty:hidden">
+        {view?.banner ? <Alert tone="warning" data-testid="banner-offline">{view.banner}</Alert> : null}
+        {view?.notice && !isAttributed(admin.lastForm) ? <Alert tone="info" data-testid="notice">{view.notice}</Alert> : null}
+        </div>
+        {view === null ? <p role="status" className="py-4 text-sm text-muted-foreground">Reading settings. Controls remain unavailable until the server answers.</p> : configuration ? <>
+          <OwnerGroup title="Calling">
+            <Administration scope="calling" view={view} actions={admin.actions} busy={admin.busy} />
+            {state ? <CallingCalendarSection scope="calling" state={state} busy={key => admin.busy(`integration:${key}`)} onSave={admin.actions.saveIntegration} onRetry={() => admin.actions.show('administration')} /> : null}
+          </OwnerGroup>
+          <OwnerGroup title="Email"><Administration scope="email" view={view} actions={admin.actions} busy={admin.busy} technicalContainer={emailTechnical} onAdvanced={openEmailTechnical} /></OwnerGroup>
+          <OwnerGroup title="Research & discovery"><ResearchSettings enabled={editable} identity={identity} generation={generation} guard={guard} /><DiscoveryStatus key={`discovery:${privacyKey}`} available={identity !== null} privacyKey={privacyKey} /></OwnerGroup>
+          <OwnerGroup title="LinkedIn"><LinkedinConnection key={privacyKey} enabled={editable} privacyKey={privacyKey} /></OwnerGroup>
+        </> : null}
+        <details data-testid="settings-advanced" open={advanced} onToggle={event => setAdvanced(event.currentTarget.open)} className="border-t border-border py-5">
+          <summary className="cursor-pointer text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4">Advanced <span className="ml-2 font-normal text-muted-foreground">Time zone, recordings, CRM controls & diagnostics</span></summary>
+          <div className="pt-3">
+            <div className="flex flex-wrap gap-4 py-2 text-sm" aria-label="Advanced views">
+              {(['administration', 'dashboard', 'diagnostics'] as const).map(name => <button key={name} data-testid={`tab-${name === 'administration' ? 'settings' : name}`} type="button" className="underline underline-offset-4" aria-current={name === tab ? 'page' : undefined} onClick={() => routeShown({ name: 'settings', tab: name })}>{name === 'administration' ? 'Configuration' : name === 'dashboard' ? 'Dashboard' : 'Diagnostics'}</button>)}
+            </div>
+            {configuration && view && state ? <>
+              <section aria-label="Email release setup and history" className="border-t border-border py-4">
+                <h3 className="mb-2 text-sm font-medium">Email release setup & history</h3>
+                <p className="mb-3 text-xs text-muted-foreground">Technical edits remain drafts until you explicitly Save the corresponding Email setting above. The server validates every release reference.</p>
+                <div ref={setEmailTechnical} data-testid="email-technical" className="space-y-3" />
+              </section>
+              <Administration scope="advanced" view={view} actions={admin.actions} busy={admin.busy} />
+              <CallingCalendarSection scope="advanced" state={state} busy={key => admin.busy(`integration:${key}`)} onSave={admin.actions.saveIntegration} onRetry={() => admin.actions.show('administration')} />
               <RecordingsFolderSection />
-              {state === null ? null : (
-                <CallingCalendarSection
-                  state={state}
-                  busy={key => admin.busy(`integration:${key}`)}
-                  onSave={admin.actions.saveIntegration}
-                  onRetry={() => {
-                    admin.actions.show('administration');
-                  }}
-                />
-              )}
-              <BookingCapacity key={`booking:${identity}:${String(generation)}`} ports={bookingCapacityPorts} />
-              <Administration view={view} actions={admin.actions} busy={admin.busy} />
-              {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
-              <ResearchSettings identity={identity} generation={generation} guard={guard} />
-              {isAdmin?<OutreachSection enabled={identity!==null && state?.mayMutate===true} {...(route.name === 'settings' && route.mailboxId !== undefined ? { initialMailboxId: route.mailboxId } : {})}/>:null}
+              {isAdmin ? <CrmOwnerSetup key={`crm:${privacyKey}`} available={editable} privacyKey={privacyKey} /> : null}
               <ReplyModelSection isAdmin={isAdmin} identity={identity} generation={generation} guard={guard} />
-            </>
-          ) : tabForScreen(view.screen) === 'dashboard' ? (
-            <Panels view={view} />
-          ) : (
-            <>
-              <Panels
-                view={view}
-                onAcknowledge={admin.actions.acknowledgeAlert}
-                acknowledging={alertId => admin.busy(`alert:${alertId}`)}
-              />
-              <RecoveryControls />
-            </>
-          )}
-        </>
-      )}
+              <StatusSection rows={status.filter(row => row.key !== 'system' && row.key !== 'update')} />
+            </> : view ? <><Panels view={view} {...(tab === 'diagnostics' ? { onAcknowledge: admin.actions.acknowledgeAlert, acknowledging: (id: string) => admin.busy(`alert:${id}`) } : {})} />{tab === 'diagnostics' ? <RecoveryControls /> : null}</> : null}
+          </div>
+        </details>
+      </div>
     </Page>
-    </NoticeProvider>
-  );
+  </NoticeProvider>;
 }

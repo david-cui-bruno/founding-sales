@@ -156,6 +156,14 @@ describe('the research settings form', () => {
 
   const field = (name: string): HTMLInputElement => screen.getByTestId(`research-${name}`) as HTMLInputElement;
 
+  it('read-only research disables controls without claiming a pending save', () => {
+    render(<ResearchSettingsSection state={researchState({ mayMutate: false })} saving={false} disabled onSave={noop} />);
+    expect(field('enabled').disabled).toBe(true);
+    expect(field('dailyCostCeilingCents').disabled).toBe(true);
+    expect(screen.getByTestId('research-save')).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('research-save').getAttribute('aria-busy')).toBeNull();
+  });
+
   it('opens with the saved ceilings rather than empty fields', () => {
     render(<ResearchSettingsSection state={researchState()} saving={false} onSave={noop} />);
 

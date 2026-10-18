@@ -1,4 +1,5 @@
-import { useEffect, type JSX } from 'react';
+import { useEffect, type JSX, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { ActiveSettingKey } from '../settingsContract.ts';
 import {
   BUSINESS_ZONE_CHOICES,
@@ -172,6 +173,9 @@ export function SettingRow({
   saving,
   onSave,
   onHistory,
+  compact = false,
+  technicalContainer,
+  onAdvanced,
 }: {
   readonly row: SettingRowView;
   readonly history: AdminView['history'];
@@ -179,6 +183,9 @@ export function SettingRow({
   readonly saving: boolean;
   onSave(input: { readonly settingKey: ActiveSettingKey; readonly value: unknown; readonly changeNote: string }): void;
   onHistory(settingKey: ActiveSettingKey): void;
+  readonly compact?: boolean;
+  readonly technicalContainer?: HTMLElement | null;
+  readonly onAdvanced?: () => void;
 }): JSX.Element {
   const fields = settingFields(row.settingKey, row.value);
   // Every edit is kept above the route (S4R, criterion 7): leaving Settings for Today and
@@ -197,6 +204,12 @@ export function SettingRow({
   const [note, setNote] = useKept(`${prefix}:note`, '');
   const summary = settingSummary(row.settingKey, row.value);
   const key = row.settingKey as ActiveSettingKey;
+  // One draft and one save path. Only the technical DOM moves under shared Advanced.
+  const technical = (content: ReactNode, portalKey?: string): ReactNode => compact
+    ? technicalContainer ? createPortal(content, technicalContainer, portalKey) : null
+    : content;
+  const needsReleaseReference = compact && key === 'sending_enabled' && values['enabled'] === true
+    && String(values['releaseGateReference'] ?? '').trim() === '';
 
   return (
     <section data-testid={`setting-${row.settingKey}`} className="border-b border-border py-4 last:border-b-0">
@@ -227,8 +240,8 @@ export function SettingRow({
             }}
           />
         ) : (
-          fields.map(field => (
-            <Control
+          fields.map(field => {
+            const control = <Control
               key={field.key}
               settingKey={row.settingKey}
               field={field}
@@ -237,15 +250,18 @@ export function SettingRow({
               onChange={next => {
                 setValues(field.key, next);
               }}
-            />
-          ))
+            />;
+            return compact && field.key === 'releaseGateReference'
+              ? technical(<div key={field.key} className="mt-3" data-testid="advanced-release-reference">{control}</div>, field.key)
+              : control;
+          })
         )}
       </fieldset>
 
       <div className="mt-3 flex items-center gap-2">
-        <Input
+        {technical(<Input
           data-testid={`note-${row.settingKey}`}
-          aria-label="Why (optional)"
+          aria-label={compact ? `${row.label}: why (optional)` : 'Why (optional)'}
           placeholder="Why (optional)"
           disabled={!row.editable || saving}
           value={note}
@@ -253,11 +269,11 @@ export function SettingRow({
             setNote(event.target.value);
           }}
           className="h-7 w-56 text-xs"
-        />
+        />)}
         <Button
           size="sm"
           data-testid={`save-${row.settingKey}`}
-          disabled={!row.editable || saving}
+          disabled={!row.editable || saving || needsReleaseReference}
           {...(saving ? { 'aria-busy': true } : {})}
           onClick={() => {
             if (fields === null) {
@@ -280,7 +296,7 @@ export function SettingRow({
         >
           Save
         </Button>
-        <Button
+        {technical(<Button
           size="sm"
           variant="quiet"
           data-testid={`history-${row.settingKey}`}
@@ -288,18 +304,20 @@ export function SettingRow({
             onHistory(key);
           }}
         >
-          History
-        </Button>
+          {compact ? `${row.label} history` : 'History'}
+        </Button>)}
+        {compact ? <Button size="sm" variant="quiet" data-testid={`advanced-${row.settingKey}`} onClick={onAdvanced}>Advanced setup & history</Button> : null}
         <FormNotice forms={[]} exact={`setting:${row.settingKey}`} />
         <ChangedElsewhere show={typed.elsewhere || rawKept.elsewhere} />
       </div>
+      {compact && key === 'sending_enabled' ? <p data-testid="sending-release-guidance" className="mt-2 text-xs text-muted-foreground">{needsReleaseReference ? 'To turn sending on, add the release gate reference in Advanced, then Save here.' : 'Release setup is in Advanced. Every Save remains subject to server release validation.'}</p> : null}
 
       {row.notEditableBecause === null ? null : (
         <p className="mt-2 text-xs text-muted-foreground">{inertSentence(row.notEditableBecause)}</p>
       )}
 
-      <details data-testid={`details-${row.settingKey}`} className="mt-2 text-xs text-muted-foreground">
-        <summary className="cursor-default">Details</summary>
+      {technical(<><details data-testid={`details-${row.settingKey}`} className="mt-2 text-xs text-muted-foreground">
+        <summary className="cursor-default">{compact ? `${row.label} details` : 'Details'}</summary>
         <p className="provenance">{row.provenance}</p>
         <pre data-testid={`json-${row.settingKey}`} className="mt-1 whitespace-pre-wrap">
           {JSON.stringify(row.value, null, 2)}
@@ -328,7 +346,7 @@ export function SettingRow({
             ))}
           </Rows>
         </div>
-      )}
+      )}</>)}
     </section>
   );
 }

@@ -116,22 +116,30 @@ export function Administration({
   view,
   actions,
   busy,
+  scope = 'all',
+  technicalContainer,
+  onAdvanced,
 }: {
   readonly view: AdminView;
   readonly actions: AdminActions;
   /** Whether one named form's own command is on the wire; the sections do not share. */
   busy(form: string): boolean;
+  readonly scope?: 'all' | 'calling' | 'email' | 'advanced';
+  readonly technicalContainer?: HTMLElement | null;
+  readonly onAdvanced?: () => void;
 }): JSX.Element {
   return (
     <>
+      {scope === 'all' || scope === 'calling' ? <>
       <CallingNumberSection
+        compact={scope === 'calling'}
         section={view.callingNumber}
         adding={busy('calling-number')}
         retiring={identityId => busy(`calling-number:${identityId}`)}
         onAdd={actions.addCallingNumber}
         onRetire={actions.retireCallingNumber}
       />
-      {view.postures === null ? null : (
+      {view.postures === null ? null : <details open={scope === 'all'} className="mt-3 text-sm"><summary className="cursor-pointer py-2 font-medium">Calling states · {view.postures.summary}</summary>
         <PosturesSection
           section={view.postures}
           adding={busy('postures')}
@@ -142,18 +150,22 @@ export function Administration({
             actions.show('administration');
           }}
         />
-      )}
+      </details>}
+      </> : null}
 
-      <Section data-testid="settings" title="Workspace settings">
-        {view.sending === null ? null : (
+      {scope === 'calling' ? null : <Section data-testid={scope === 'advanced' ? 'advanced-settings' : 'settings'} title={scope === 'email' ? 'Production sending & postal address' : 'Workspace settings'}>
+        {scope === 'advanced' || view.sending === null ? null : (
           <p data-testid="sending" className="py-1 text-sm">
             {view.sending.line}
           </p>
         )}
         <div className="mt-1 border-t border-border">
-          {view.settings.map(row => (
+          {view.settings.filter(row => scope === 'all' || (scope === 'email' ? ['sending_enabled', 'postal_address'].includes(row.settingKey) : !['sending_enabled', 'postal_address'].includes(row.settingKey))).map(row => (
             <SettingRow
               key={row.settingKey}
+              compact={scope === 'email'}
+              {...(technicalContainer !== undefined ? { technicalContainer } : {})}
+              {...(onAdvanced ? { onAdvanced } : {})}
               row={row}
               history={view.history}
               saving={busy(`setting:${row.settingKey}`)}
@@ -162,9 +174,9 @@ export function Administration({
             />
           ))}
         </div>
-      </Section>
+      </Section>}
 
-      <Section data-testid="stages" title="Pipeline stages" count={view.stages.length}>
+      {scope === 'all' || scope === 'advanced' ? <><Section data-testid="stages" title="Pipeline stages" count={view.stages.length}>
         <Rows>
           {view.stages.map(stage => (
             <Row key={stage.key} data-testid={`stage-${stage.key}`}>
@@ -197,7 +209,9 @@ export function Administration({
       </Section>
 
       <Holidays view={view} actions={actions} saving={busy('holidays')} />
-      <SendingSection
+      </> : null}
+      {scope === 'all' || scope === 'email' ? <SendingSection
+        compact={scope === 'email'}
         view={view}
         recording={busy('sending-domain')}
         capping={busy('sending-cap')}
@@ -206,7 +220,7 @@ export function Administration({
         onRetry={() => {
           actions.show('administration');
         }}
-      />
+      /> : null}
     </>
   );
 }

@@ -13,10 +13,12 @@ import { ResearchSettingsSection } from './ResearchSettingsSection.tsx';
 export function ResearchSettings({
   identity,
   generation,
+  enabled = true,
   guard,
 }: {
   readonly identity: string | null;
   readonly generation: number;
+  readonly enabled?: boolean;
   readonly guard: Generation;
 }): JSX.Element | null {
   const research = useResearch({ firmId: null, identity, generation, guard });
@@ -24,6 +26,7 @@ export function ResearchSettings({
   return (
     <ResearchSettingsSection
       state={research.state}
+      disabled={!enabled || research.state?.mayMutate !== true}
       saving={research.busy(researchForm.settings)}
       onSave={research.actions.saveSettings}
     />
