@@ -14,9 +14,9 @@ import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope
 import { resolveCrmSource, loadCrmExtractionText, type SourceLookup } from '@fss/domain/crm/sourceResolver.ts';
 import type { Generation } from '@fss/domain/crm/processing.ts';
 import { reserveAttempt, markCalling, settleAttempt } from '@fss/domain/research/reservations.ts';
-import { providerFunding } from '@fss/domain/settings/funding.ts';
+import { providerFunding,providerKind } from '@fss/domain/settings/funding.ts';
+import {mailExtractionScopeAllows} from '@fss/domain/crm/processingScope.ts';
 import { lockMonthlySpend } from '@fss/domain/research/ledger.ts';
-import { clearMonthlyCash, monthWithinCeiling } from '@fss/domain/settings/cashCeiling.ts';
 import { workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
 import { localDate } from '@fss/domain/src/rules/localClock.ts';
 const claimsSchema=z.array(z.strictObject({kind:z.enum(['need','objection','commitment']),interpretation:z.string().min(1).max(1000),status:z.enum(['stated','inferred']),locator:z.string().min(1).max(200),quote:z.string().min(1).max(2000)})).max(50);
@@ -41,7 +41,7 @@ async function databaseNow(context:RepositoryContext){const value=(await context
 async function purpose(context:RepositoryContext,row:Generation,adapter:CrmExtractionAdapter|undefined){
  const p=(await context.db.query<Purpose>('SELECT * FROM crm_extraction_purposes WHERE workspace_id=$1 FOR SHARE',[context.scope.workspaceId])).rows[0];
  const matches=p!==undefined&&p.enabled&&adapter!==undefined&&p.revision===row.purpose_revision&&p.model_version===row.model_version&&p.endpoint_id===adapter.endpointId&&p.model_version===adapter.modelVersion&&p.access_grant_version===adapter.accessGrantVersion&&p.data_handling_version===adapter.dataHandlingVersion&&p.daily_ceiling_cents>0&&p.monthly_ceiling_cents>0&&Date.parse(adapter.fundingVerifiedUntil)>Date.parse(await databaseNow(context));
- return matches?p:null;
+ return matches&&providerKind(adapter!.providerKey)==='aws_bedrock'&&providerFunding(adapter!.providerKey)==='credits'&&await mailExtractionScopeAllows(context,{kind:row.source_kind,sourceId:row.source_id},p)?p:null;
 }
 function samePurposeSnapshot(p:Purpose,r:Receipt){return p.revision===r.purpose_revision&&p.endpoint_id===r.endpoint_id&&p.model_version===r.model_version&&p.access_grant_version===r.access_grant_version&&p.data_handling_version===r.data_handling_version&&crmTokenPriceMicrosSchema.parse(p.input_token_price_micros)===crmTokenPriceMicrosSchema.parse(r.input_price_micros)&&crmTokenPriceMicrosSchema.parse(p.output_token_price_micros)===crmTokenPriceMicrosSchema.parse(r.output_price_micros);}
 async function receipt(context:RepositoryContext,id:string){return (await context.db.query<Receipt>('SELECT * FROM crm_extraction_financial_receipts WHERE workspace_id=$1 AND generation_id=$2',[context.scope.workspaceId,id])).rows[0];}
@@ -51,7 +51,7 @@ async function centsWithin(context:RepositoryContext,p:Purpose,at:string,zone:st
  await lockMonthlySpend(context);
  const day=localDate(at,zone);
  const totals=(await context.db.query<{daily:string;monthly:string}>(`SELECT COALESCE(sum(CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END) FILTER(WHERE business_date=$2::date),0)::text daily,COALESCE(sum(CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END) FILTER(WHERE date_trunc('month',business_date)=date_trunc('month',$2::date)),0)::text monthly FROM provider_reservations WHERE workspace_id=$1 AND subject_kind='crm_extraction'`,[context.scope.workspaceId,day])).rows[0];
- return Number(totals?.daily??0)+extra<=p.daily_ceiling_cents&&Number(totals?.monthly??0)+extra<=p.monthly_ceiling_cents&& (providerFunding(providerKey)==='credits'||(extra===0?await monthWithinCeiling(context,{at,zone}):await clearMonthlyCash(context,{at,zone,cents:extra})));
+ return Number(totals?.daily??0)+extra<=p.daily_ceiling_cents&&Number(totals?.monthly??0)+extra<=p.monthly_ceiling_cents&&providerKind(providerKey)==='aws_bedrock'&&providerFunding(providerKey)==='credits';
 }
 /** A reclaimed dispatch is financial recovery, never permission to repeat the call. */
 async function recoverDispatched(input:JobHandlerInput):Promise<boolean>{
@@ -92,6 +92,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
   async function independent(row:Generation){try{return options.verifyPurpose?await options.verifyPurpose(authorityOf(row))===true:options.allowControlledEvaluation===true;}catch{return false;}}
   if(locatedAuthority===null)return;
   if(!await independent(locatedAuthority.row)){await withTransaction(input.session,()=>setState(locatedAuthority.context,locatedAuthority.row.id,'unavailable','purpose_authority_unavailable'));return;}
+  if(!await mailExtractionScopeAllows(locatedAuthority.context,locatedAuthority.source)){await withTransaction(input.session,()=>setState(locatedAuthority.context,locatedAuthority.row.id,'unavailable','extraction_source_scope_unavailable'));return;}
   const reserveAuthority=await verifyMail(input);
   const reserved=await withTransaction(input.session,async()=>{
    const located=await locate(input);if(located===null)return null;
@@ -99,7 +100,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    if(options.revalidatePurpose&&!await options.revalidatePurpose(context,authorityOf(row)))return null;
    const mailAuthority=source.kind==='mail'&&reserveAuthority!==null&&await mailEvidence.revalidatePrepared(context,reserveAuthority)?reserveAuthority:null;
    const authorizationHash=source.kind==='mail'?mailAuthority?.authorizationFingerprint:NATIVE_PROCESSING_AUTHORIZATION_HASH;
-   const resolved=await resolveCrmSource(context,source,mailEvidence);if(resolved===null)return null;
+   const resolved=source.kind==='mail'&&mailAuthority===null?null:await resolveCrmSource(context,source,mailEvidence);if(resolved===null)return null;
    await context.db.query('SELECT id FROM crm_extraction_generations WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,row.id]);
    if(!await fenced(input))return null;
    if(source.kind==='mail'&&mailAuthority===null){await setState(context,row.id,row.authorization_hash===UNAVAILABLE_MAIL_AUTHORIZATION_HASH?'unavailable':'stale',row.authorization_hash===UNAVAILABLE_MAIL_AUTHORIZATION_HASH?'mail_processing_authority_unavailable':'source_or_authority_changed');return null;}
@@ -131,7 +132,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    let currentDispatch=false;try{currentDispatch=options.revalidatePurpose?await options.revalidatePurpose(context,authorityOf(row))===true:options.allowControlledEvaluation===true;}catch{currentDispatch=false;}
    const mailAuthority=source.kind==='mail'&&dispatchAuthority!==null&&await mailEvidence.revalidatePrepared(context,dispatchAuthority)?dispatchAuthority:null;
    const authorizationHash=source.kind==='mail'?mailAuthority?.authorizationFingerprint:NATIVE_PROCESSING_AUTHORIZATION_HASH;
-   const resolved=await resolveCrmSource(context,source,mailEvidence);
+   const resolved=source.kind==='mail'&&mailAuthority===null?null:await resolveCrmSource(context,source,mailEvidence);
    await context.db.query('SELECT id FROM crm_extraction_generations WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,row.id]);
    const p=await purpose(context,row,options.adapter),r=await receipt(context,row.id);
    const currentContext=resolved===null?null:await readProcessingContext(context,source,mailEvidence),capturedContext=parsedProcessingContext(row.context_snapshot);
@@ -160,7 +161,7 @@ export function crmExtractJobHandler(options:CrmExtractOptions):JobHandler{
    const {context,source,row,reservationId}=reserved;
    const mailAuthority=source.kind==='mail'&&publicationAuthority!==null&&await mailEvidence.revalidatePrepared(context,publicationAuthority)?publicationAuthority:null;
    const authorizationHash=source.kind==='mail'?mailAuthority?.authorizationFingerprint:NATIVE_PROCESSING_AUTHORIZATION_HASH;
-   const resolved=await resolveCrmSource(context,source,mailEvidence);
+   const resolved=source.kind==='mail'&&mailAuthority===null?null:await resolveCrmSource(context,source,mailEvidence);
    await context.db.query('SELECT id FROM crm_extraction_generations WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,row.id]);
    const p=await purpose(context,row,options.adapter),r=await receipt(context,row.id);
    const currentContext=resolved===null?null:await readProcessingContext(context,source,mailEvidence),capturedContext=parsedProcessingContext(row.context_snapshot);

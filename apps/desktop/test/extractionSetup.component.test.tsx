@@ -2,12 +2,15 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
-import { CRM_EXTRACTION_ENDPOINT, CRM_EXTRACTION_MODELS } from '@fss/contracts';
+import { CRM_EXTRACTION_ENDPOINT, CRM_EXTRACTION_MODELS, CRM_OWNER_SCOPE_VERSION } from '@fss/contracts';
 import { ExtractionSetup } from '../src/renderer/settings/ExtractionSetup.tsx';
 import { extractionSetupFields, type ExtractionPurpose, type ExtractionSetupPorts } from '../src/renderer/settings/extractionSetup.ts';
 
 afterEach(cleanup);
+const captureBinding={mailboxId:'11111111-1111-4111-8111-111111111111',mailboxEmail:'owner@example.test',ownerApprovalId:'22222222-2222-4222-8222-222222222222'};
+const readCaptureBinding=async()=>captureBinding;
 const configured: ExtractionPurpose = {
+  scopeVersion:CRM_OWNER_SCOPE_VERSION,allowedSourceKinds:['mail'],mailCaptureOwnerApprovalId:captureBinding.ownerApprovalId,
   configured: true, enabled: false, revision: 7,
   endpointId: CRM_EXTRACTION_ENDPOINT, modelVersion: CRM_EXTRACTION_MODELS[0],
   accessGrantVersion: 'reviewed-access-v3', dataHandlingVersion: 'reviewed-handling-v4',
@@ -15,6 +18,7 @@ const configured: ExtractionPurpose = {
   inputTokenPriceMicros: '1.1', outputTokenPriceMicros: '5.5', unavailableReason: 'activation_not_available',
 };
 const unconfigured: ExtractionPurpose = {
+  scopeVersion:CRM_OWNER_SCOPE_VERSION,
   configured: false, enabled: false, revision: 0, modelVersion: null, endpoint: null,
   dailyCeilingCents: 0, monthlyCeilingCents: 0, unavailableReason: 'purpose_not_configured',
 };
@@ -22,7 +26,7 @@ const button = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Save
 const acknowledge = async (user: ReturnType<typeof userEvent.setup>) => user.click(screen.getByRole('checkbox'));
 function mount(read: ExtractionPurpose = configured, save = vi.fn<ExtractionSetupPorts['save']>(async () => ({ revision: 8, enabled: false }))) {
   const onSaved = vi.fn();
-  const ports = { read: vi.fn(async () => read), save };
+  const ports = { readCaptureBinding, read: vi.fn(async () => read), save };
   const view = render(<ExtractionSetup available privacyKey="owner:1" ports={ports} onSaved={onSaved} />);
   return { ...view, ports, onSaved };
 }
@@ -39,6 +43,7 @@ it('displays exact stored bindings, budgets and fractional prices and only saves
   await acknowledge(user);
   await user.click(button());
   expect(ports.save).toHaveBeenCalledExactlyOnceWith({
+    allowedSourceKinds:['mail'],mailCaptureOwnerApprovalId:captureBinding.ownerApprovalId,
     expectedRevision: 7, enabled: false, endpointId: CRM_EXTRACTION_ENDPOINT,
     modelVersion: CRM_EXTRACTION_MODELS[0], accessGrantVersion: 'reviewed-access-v3',
     dataHandlingVersion: 'reviewed-handling-v4', dailyCeilingCents: 100, monthlyCeilingCents: 2000,
@@ -98,7 +103,7 @@ it.each(['purpose_revision_conflict', 'purpose_access_denied', 'private diagnost
 });
 
 it('does not read or save when unavailable', async () => {
-  const ports = { read: vi.fn(async () => configured), save: vi.fn<ExtractionSetupPorts['save']>() };
+  const ports = { readCaptureBinding, read: vi.fn(async () => configured), save: vi.fn<ExtractionSetupPorts['save']>() };
   render(<ExtractionSetup available={false} privacyKey="none" ports={ports} onSaved={vi.fn()} />);
   expect(ports.read).not.toHaveBeenCalled();
   expect(screen.queryByRole('checkbox')).toBeNull();
@@ -107,7 +112,7 @@ it('does not read or save when unavailable', async () => {
 it('drops a pending private read on identity change', async () => {
   let resolve!: (value: ExtractionPurpose) => void;
   const first = new Promise<ExtractionPurpose>(done => { resolve = done; });
-  const ports = { read: vi.fn().mockReturnValueOnce(first).mockResolvedValue(unconfigured), save: vi.fn<ExtractionSetupPorts['save']>() };
+  const ports = { readCaptureBinding, read: vi.fn().mockReturnValueOnce(first).mockResolvedValue(unconfigured), save: vi.fn<ExtractionSetupPorts['save']>() };
   const { rerender } = render(<ExtractionSetup available privacyKey="first" ports={ports} onSaved={vi.fn()} />);
   rerender(<ExtractionSetup available privacyKey="second" ports={ports} onSaved={vi.fn()} />);
   await screen.findByText(/Not configured. No model/);
@@ -119,7 +124,7 @@ it('drops a pending save after owner availability is lost', async () => {
   const user = userEvent.setup();
   let resolve!: (value: { revision: number; enabled: false }) => void;
   const pending = new Promise<{ revision: number; enabled: false }>(done => { resolve = done; });
-  const ports = { read: vi.fn(async () => configured), save: vi.fn(async () => pending) };
+  const ports = { readCaptureBinding, read: vi.fn(async () => configured), save: vi.fn(async () => pending) };
   const onSaved = vi.fn();
   const { rerender } = render(<ExtractionSetup available privacyKey="first" ports={ports} onSaved={onSaved} />);
   await screen.findByDisplayValue('reviewed-access-v3');

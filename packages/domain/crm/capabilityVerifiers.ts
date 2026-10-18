@@ -15,6 +15,8 @@ import {
   type CrmCapabilityRuntime,
 } from "./capabilityAuthority.ts";
 import { createHash } from "node:crypto";
+import {sameForwardCaptureScope} from '../mail/crmForwardCaptureScope.ts';
+import {mailExtractionScopeAllows} from './processingScope.ts';
 import type {
   MailCaptureProof,
   MailCaptureProofVerifier,
@@ -105,7 +107,7 @@ async function capture(
     runtime,
   );
   const c = receipt?.configuration;
-  if (!c || c.capability !== "mail_capture") return false;
+  if (!c || c.capability !== "mail_capture"||!c.forwardScope||!proof.forwardScope||!sameForwardCaptureScope(c.forwardScope,proof.forwardScope)) return false;
   return (
     c.workspaceId === proof.workspaceId &&
     c.ownerUserId === proof.ownerUserId &&
@@ -154,6 +156,7 @@ async function extraction(
     ))
   )
     return false;
+  if(!await mailExtractionScopeAllows(context,{kind:String(row['source_kind']),sourceId:String(row['source_id'])}))return false;
   const receipt = await verifyCurrentCrmCapability(
     context,
     { capability: "crm_extraction" },

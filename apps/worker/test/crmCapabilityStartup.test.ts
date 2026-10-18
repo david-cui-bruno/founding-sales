@@ -2,7 +2,7 @@ import {expect,it} from 'vitest';
 import {readCrmCapabilityStartup,createCrmCapabilityRuntime} from '@fss/domain/crm/capabilityStartup.ts';
 import {composeCrmCapabilities} from '../src/bootstrap/crmCapabilities.ts';
 import {CRM_SUPPORTED_ASK_VERSIONS} from '@fss/domain/crm/capabilityAuthority.ts';
-const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const,providerKey:'synthetic-crm',accessGrantVersion:'reviewed-crm-grant',dataHandlingVersion:'reviewed-crm-handling',fundingVerifiedUntil:'2099-01-01T00:00:00Z'};
+const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const,providerKey:'aws_bedrock.fixture',accessGrantVersion:'reviewed-crm-grant',dataHandlingVersion:'reviewed-crm-handling',fundingVerifiedUntil:'2099-01-01T00:00:00Z'};
 const identity={implementationCommit:'a'.repeat(40),imageDigest:`sha256:${'b'.repeat(64)}`,side:'worker' as const,schemaVersion:88,gmailAvailable:false};
 const noSession=async()=>{throw new Error('unexpected database');};
 it('keeps startup absent/off without opening sessions or constructing hosted transports',async()=>{

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { CRM_EXTRACTION_ENDPOINT, CRM_EXTRACTION_MODELS } from '@fss/contracts';
+import { CRM_EXTRACTION_ENDPOINT, CRM_EXTRACTION_MODELS, CRM_OWNER_SCOPE_VERSION } from '@fss/contracts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { extractionSetupOperations } from '../src/main/extractionSetupOperations.ts';
 import { OPERATIONS } from '../src/shared/operations.ts';
@@ -8,6 +8,7 @@ import type { HttpSend } from '../src/main/apiClient.ts';
 
 afterEach(() => vi.unstubAllGlobals());
 const input = extractionSetupInput.parse({
+  allowedSourceKinds:['mail'],mailCaptureOwnerApprovalId:'11111111-1111-4111-8111-111111111111',
   expectedRevision: 4, enabled: false, endpointId: CRM_EXTRACTION_ENDPOINT,
   modelVersion: CRM_EXTRACTION_MODELS[0], accessGrantVersion: 'reviewed-access', dataHandlingVersion: 'reviewed-policy',
   dailyCeilingCents: 100, monthlyCeilingCents: 2000, inputTokenPriceMicros: '1.1', outputTokenPriceMicros: '5.5',
@@ -71,7 +72,7 @@ it('keeps exact legacy unconfigured read shape and rejects additive private fiel
   const value = { configured: false, enabled: false, revision: 0, modelVersion: null, endpoint: null,
     dailyCeilingCents: 0, monthlyCeilingCents: 0, unavailableReason: 'purpose_not_configured' };
   const send = vi.fn<HttpSend>(async (_url, init) => {
-    expect(JSON.parse(init.body ?? '{}')).toEqual({});
+    expect(JSON.parse(init.body ?? '{}')).toEqual({scopeVersion:CRM_OWNER_SCOPE_VERSION});
     return { status: 200, body: value };
   });
   harness(send);

@@ -22,8 +22,9 @@ export const CRM_EXTRACTION_CONSTRAINT_CASES:readonly Case[]=[
  {constraint:'crm_extraction_context_body_free',run:async f=>await insert(f,'crm_extraction_generations',generation(f,{context_snapshot:JSON.stringify({personId:null,firmIds:[],relationships:[{relationshipId:randomUUID(),revision:1,quote:'Forbidden duplicated body'}],review:'current'})}))},
  {constraint:'crm_selected_extraction_enqueue',run:async f=>{
   await insert(f,'crm_extraction_purposes',purpose(f,{enabled:true}));
-  await f.session.query("CREATE FUNCTION fixture_crm_queue_refusal() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='crm.extract' THEN RAISE EXCEPTION 'durable queue unavailable'; END IF; RETURN NEW; END $$");
-  await f.session.query('CREATE TRIGGER fixture_crm_queue_refusal BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION fixture_crm_queue_refusal()');
+  // Transaction rollback restores this isolated lookup fault after the real
+  // installed trigger wraps it. No native enum or authority is introduced.
+  await f.session.query('ALTER TABLE crm_extraction_purposes RENAME COLUMN enabled TO fixture_enabled_unavailable');
   await f.session.query('SET CONSTRAINTS crm_selected_extraction_enqueue IMMEDIATE');
   return await insert(f,'crm_selected_sources',{workspace_id:f.seeded.alpha.workspaceId,firm_id:f.crm.alpha.firmId,person_id:null,owner_user_id:f.seeded.alpha.salesperson.userId,source_key_hash:hash,content_hash:hash,excerpt:'Atomic capture',occurred_at:'2026-10-01T14:00:00Z'});
  }},

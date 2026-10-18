@@ -1,6 +1,7 @@
 import type { GmailClient, GmailAccessGrant } from './gmailClient.ts';
 import { headerValue } from './gmailClient.ts';
 import type { MailCaptureProvider,MailCaptureProof } from './crmSources.ts';
+import {isForwardCaptureDateAllowed} from './crmForwardCaptureScope.ts';
 
 /** Structural quotation labels are context, never original-authorship or Sent proof. */
 function contextRanges(text:string|null){
@@ -23,6 +24,7 @@ interface ProvenMailAccess {
 export function createGmailMailCaptureProvider(deps: {
   gmail: GmailClient;
   authorizeRead?(proof:MailCaptureProof):Promise<boolean>;
+  authorizeSelectedMetadata?(proof:MailCaptureProof,metadata:Awaited<ReturnType<GmailClient['getMetadata']>>):Promise<boolean>;
   resolveAccess(
     input: Parameters<MailCaptureProvider['read']>[0],
   ): Promise<ProvenMailAccess | null>;
@@ -48,6 +50,10 @@ export function createGmailMailCaptureProvider(deps: {
       );
       if (!metadata || metadata.id !== input.providerMessageId)
         throw new Error('CRM mail metadata identity unavailable');
+      if(!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)||metadata.internalDateEpochMilliseconds<0
+        ||metadata.internalDateEpochMilliseconds>Date.now()+86400000||metadata.labelIds.includes('DRAFT'))throw new Error('CRM mail metadata date unavailable');
+      const selected=deps.authorizeSelectedMetadata;
+      if(!proof || (selected ? !await selected(structuredClone(proof),metadata) : !proof.forwardScope||!isForwardCaptureDateAllowed(proof.forwardScope,metadata.internalDateEpochMilliseconds)))throw new Error('CRM mail forward scope unavailable');
       await authorize();
       const body = await deps.gmail.getBody(proven.access, metadata.id);
       if (body && body.messageId !== metadata.id)

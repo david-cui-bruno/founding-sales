@@ -1,7 +1,8 @@
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import {qualifyBusinessMailMetadata} from './businessQualification.ts';
 import {redactBackfillMetadataForSources} from './crmBackfillMetadata.ts';
-import { businessMetadataObservationSchema, mailConversationSchema } from '@fss/contracts';
+import { businessMetadataObservationSchema, mailConversationSchema, type CrmForwardCaptureScope } from '@fss/contracts';
+import {captureProofForControl,forwardMailSourceAllowed,forwardObservationAllowed,isForwardCaptureDateAllowed} from './crmForwardCaptureScope.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { isSuppressed } from '../suppression/effective.ts';
 import { workspaceScope, repositoryContext } from '../db/workspaceScope.ts';
@@ -42,6 +43,7 @@ export interface MailCaptureProof {
   evaluationReceipt: string | null;
   releaseReceipt: string | null;
   ownerApprovalId?: string;
+  forwardScope?: CrmForwardCaptureScope;
   captureVersion: typeof MAIL_CAPTURE_VERSION;
 }
 export interface MailCaptureProofVerifier {
@@ -257,28 +259,9 @@ async function lockCaptureAuthority(
     )
   )
     return null;
-  return {
-    conversation,
-    mailboxEmail: mailbox.email_address,
-    proof: {
-      workspaceId: scope.workspaceId,
-      mailboxId: mailbox.id,
-      ownerUserId: mailbox.owner_user_id,
-      providerAccountId: payload.providerAccountId,
-      accountBinding: binding!,
-      generation: payload.generation,
-      controlsRevision: control.revision,
-      policyRevision: control.policy_revision,
-      disclosureVersion: control.disclosure_version,
-      disclosureSha256: control.disclosure_sha256,
-      ...control.owner_approval_id?{ownerApprovalId:control.owner_approval_id}:{},
-      grantReceipt: control.grant_receipt,
-      providerPolicyReceipt: control.provider_policy_receipt,
-      evaluationReceipt: control.evaluation_receipt,
-      releaseReceipt: control.release_receipt,
-      captureVersion: MAIL_CAPTURE_VERSION,
-    },
-  };
+  const proof=await captureProofForControl(repositoryContext(scope,db),mailbox.id,control);
+  if(!proof.forwardScope||payload.acquisitionOrigin)return null;
+  return {conversation,mailboxEmail:mailbox.email_address,proof};
 }
 
 /** Provider work is outside database transactions; apply repeats exact authority and lease fences. */
@@ -476,6 +459,7 @@ export function businessMailCaptureHandler(deps: {
       );
       if (!message.success) return done('provider_evidence_invalid');
       const m = message.data;
+      if(!diagnostic&&(!staged.authority.proof.forwardScope||!isForwardCaptureDateAllowed(staged.authority.proof.forwardScope,Date.parse(m.providerAt))))return done('outside_forward_capture_scope');
       if (
         m.providerAccountId !== payload.providerAccountId ||
         m.messageId !== payload.providerMessageId ||
@@ -2019,24 +2003,8 @@ async function prepareMailProcessingSnapshot(
     )
   )
     return { ok: false, reason: 'processing_decision_changed' };
-  const proof: MailCaptureProof = {
-    workspaceId: context.scope.workspaceId,
-    mailboxId: mailbox.id,
-    ownerUserId: source.owner_user_id,
-    providerAccountId: source.provider_account_id,
-    accountBinding: source.account_binding,
-    generation: mailbox.generation,
-    controlsRevision: control.revision,
-    policyRevision: control.policy_revision,
-    disclosureVersion: control.disclosure_version,
-    disclosureSha256: control.disclosure_sha256,
-    ...control.owner_approval_id?{ownerApprovalId:control.owner_approval_id}:{},
-      grantReceipt: control.grant_receipt,
-    providerPolicyReceipt: control.provider_policy_receipt,
-    evaluationReceipt: control.evaluation_receipt,
-    releaseReceipt: control.release_receipt,
-    captureVersion: MAIL_CAPTURE_VERSION,
-  };
+  if(!await forwardMailSourceAllowed(context,source,control))return {ok:false,reason:'mail_forward_scope_unavailable'};
+  const proof=await captureProofForControl(context,mailbox.id,control);
   if (!(await activeBusinessActor(context)))
     return { ok: false, reason: 'processing_authority_unavailable' };
   const final = (
@@ -2305,6 +2273,7 @@ export async function observeApprovedBusinessMail(
   if (!parsed.success)
     return { ok: false as const, reason: 'invalid_metadata' };
   const { ownerUserId, observation } = parsed.data;
+  if(!await forwardObservationAllowed(context,observation.mailboxId,observation.latestProviderAt,parsed.data.acquisitionOrigin))return {ok:false as const,reason:'outside_forward_capture_scope'};
   const mailbox = (
     await context.db.query<Mailbox>(
       'SELECT * FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR NO KEY UPDATE',

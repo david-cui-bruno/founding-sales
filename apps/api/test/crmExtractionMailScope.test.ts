@@ -1,0 +1,114 @@
+import {randomUUID,createHash} from 'node:crypto';
+import {afterEach,expect,it} from 'vitest';
+import {businessPolicySchema,CRM_MAIL_CAPTURE_CONSENT,CRM_OWNER_SCOPE_VERSION,crmCapabilityReadResponseSchema} from '@fss/contracts';
+import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
+import {issueSessionFor} from './support/sessionFixture.ts';
+import {dispatch} from '../src/server.ts';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {claimJobs} from '@fss/domain/jobs/jobStore.ts';
+import {businessMailCaptureHandler,createApprovedBusinessMailObserver} from '@fss/domain/mail/crmSources.ts';
+import {createGmailMailCaptureProvider} from '@fss/domain/mail/crmGmailProvider.ts';
+import {createGmailHttpClient} from '@fss/domain/mail/gmailClientHttp.ts';
+import {createCrmCapabilityVerifiers} from '@fss/domain/crm/capabilityVerifiers.ts';
+import {createNativeCrmMailEvidence} from '@fss/domain/crm/nativeMailEvidence.ts';
+import {enqueueNativeCrmExtraction} from '@fss/domain/crm/processingCapture.ts';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {crmExtractJobHandler,type CrmExtractionAdapter} from '../../worker/src/handlers/crmExtract.ts';
+import {createBedrockCrmExtractionAdapter} from '../../worker/src/providers/crmBedrock.ts';
+import {runOnce} from '../../worker/src/runner/jobRunner.ts';
+let fixture:AuthFixture|undefined;
+afterEach(async()=>{await fixture?.stop();fixture=undefined;});
+async function setup(){
+ const f=await createAuthFixture();fixture=f;
+ const db=await f.database.appRuntimeSession(),workspaceId=f.alpha.workspaceId,ownerUserId=f.alpha.admin.userId;
+ const token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ const runtime={implementationCommit:null,imageDigest:null,side:'api' as const,schemaVersion:119,adapterAvailable:()=>true};
+ const verifiers=createCrmCapabilityVerifiers({runtime:{...runtime,side:'worker'},openSession:async()=>({session:await f.database.appRuntimeSession(),close:async()=>{}})});
+ const mailEvidence=createNativeCrmMailEvidence(verifiers.captureVerifier);
+ const command=(body:object)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...body});
+ const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:db,auth:{...f.deps,db},supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,crmCapabilityRuntime:runtime,crmMailEvidence:mailEvidence});
+ const mailbox=(await f.db.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'owner@example.test','google-owner','connected') RETURNING id",[workspaceId,ownerUserId])).rows[0]!;
+ const policy=businessPolicySchema.parse((await post('/crm/business/policy/read',{mailboxId:mailbox.id})).body);
+ await post('/crm/business/policy/save',command({mailboxId:mailbox.id,expectedRevision:0,expectedGeneration:policy.generation,expectedAccountBinding:policy.accountBinding,enabled:false,disclosure:policy.metadataReviewDisclosure}));
+ await f.db.query("INSERT INTO mailbox_oauth_grant_observations(workspace_id,mailbox_id,owner_user_id,provider_account_id,generation,granted_scopes) VALUES($1,$2,$3,'google-owner',$4,$5)",[workspaceId,mailbox.id,ownerUserId,policy.generation,['https://www.googleapis.com/auth/gmail.readonly','https://www.googleapis.com/auth/gmail.send']]);
+ const acquisition={consentAcknowledged:true,qualityTier:'acquisition',limitations:[]};
+ await post('/crm/business/policy/activate',command({capability:'metadata_review',mailboxId:mailbox.id,expectedRevision:1,approval:acquisition}));
+ await post('/crm/business/mail/controls/save',command({mailboxId:mailbox.id,expectedRevision:0,expectedGeneration:policy.generation,expectedAccountBinding:policy.accountBinding,policyRevision:2,disclosureVersion:CRM_MAIL_CAPTURE_CONSENT.version,disclosureSha256:CRM_MAIL_CAPTURE_CONSENT.sha256}));
+ expect((await post('/crm/business/mail/controls/activate',command({capability:'mail_capture',mailboxId:mailbox.id,expectedRevision:1,approval:acquisition,scopeVersion:CRM_OWNER_SCOPE_VERSION}))).body).toMatchObject({status:'accepted'});
+ const capture=crmCapabilityReadResponseSchema.parse((await post('/crm/capability/read',{capability:'mail_capture',mailboxId:mailbox.id,scopeVersion:CRM_OWNER_SCOPE_VERSION})).body);
+ const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const,providerKey:'aws_bedrock.fixture',accessGrantVersion:'fictional',dataHandlingVersion:'fictional',fundingVerifiedUntil:'2099-01-01T00:00:00Z'};
+ const settings={expectedRevision:0,enabled:false,endpointId:route.endpointId,modelVersion:route.modelVersion,accessGrantVersion:route.accessGrantVersion,dataHandlingVersion:route.dataHandlingVersion,dailyCeilingCents:100,monthlyCeilingCents:2000,inputTokenPriceMicros:'1.1',outputTokenPriceMicros:'5.5',allowedSourceKinds:['mail'],mailCaptureOwnerApprovalId:capture.ownerApprovalId};
+ const prepare=()=>post('/crm/processing/purpose/save',command(settings));
+ const activate=()=>post('/crm/processing/purpose/activate',command({capability:'crm_extraction',expectedRevision:1,scopeVersion:CRM_OWNER_SCOPE_VERSION,approval:{consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,reviewedEvaluationReference:'fictional-only',limitations:['representative_quality_unverified']}}));
+ const context=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db);
+ async function captureSource(){
+  const at=Date.now(),messageId='fictional_original';
+  await withTransaction(db,()=>createApprovedBusinessMailObserver({revalidateAuthority:verifiers.revalidateMetadata,categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'test'})}).observe(context,{mailboxId:mailbox.id,ownerUserId,providerAccountId:'google-owner',generation:policy.generation!,metadata:{id:messageId,threadId:'business_thread',internalDateEpochMilliseconds:at,sizeEstimate:100,labelIds:['INBOX'],headers:{From:'person@example.test',To:'owner@example.test',Subject:'Business proposal'},attachments:[]}}));
+  const gmail=createGmailHttpClient({apiBaseUrl:'https://fictional.invalid',fetch:async url=>({status:200,headers:{},body:JSON.stringify({id:messageId,threadId:'business_thread',internalDate:String(at),labelIds:['INBOX'],payload:{mimeType:'text/plain',headers:[{name:'From',value:'person@example.test'},{name:'To',value:'owner@example.test'}],body:new URL(url).searchParams.get('format')==='full'?{data:Buffer.from('Please discuss a business proposal.').toString('base64url')}:{}}})})});
+  const provider=createGmailMailCaptureProvider({gmail,authorizeRead:verifiers.captureVerifier.verify,resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-owner',generation:policy.generation!,access:{accessToken:'fictional-only',expiresAtEpochSeconds:Date.now()/1000+3600}})});
+  const job=(await claimJobs(db,{owner:randomUUID(),kinds:['crm.mail_capture'],limit:1,leaseSeconds:120}))[0]!;
+  await businessMailCaptureHandler({provider,proofVerifier:verifiers.captureVerifier}).handle({session:db,scope:context.scope,job});
+  const source=(await f.db.query<{source_id:string;source_revision:number;content_hash:string}>('SELECT source_id,source_revision,content_hash FROM crm_mail_sources WHERE workspace_id=$1',[workspaceId])).rows[0]!;
+  return {workspaceId,sourceId:source.source_id,revision:source.source_revision,contentHash:source.content_hash,kind:'mail' as const,locator:null};
+ }
+ async function run(adapter:CrmExtractionAdapter){const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter,mailEvidence,verifyPurpose:verifiers.verifyExtraction,revalidatePurpose:verifiers.revalidateExtraction}));await runOnce(db,{registry,owner:randomUUID(),limit:20});}
+ return {f,db,workspaceId,ownerUserId,post,command,mailbox,policy,capture,settings,prepare,activate,captureSource,route,run,context};
+}
+it('requires paired mail scope, exact capture owner binding and new consent protocol without implicit native authority',async()=>{
+ const h=await setup();
+ for(const patch of [{mailCaptureOwnerApprovalId:undefined},{allowedSourceKinds:undefined},{allowedSourceKinds:['selected_note']},{allowedSourceKinds:['mail','call_transcript']}])expect((await h.post('/crm/processing/purpose/save',h.command({...h.settings,...patch}))).status).toBe(400);
+ expect((await h.post('/crm/processing/purpose/save',h.command({...h.settings,mailCaptureOwnerApprovalId:randomUUID()}))).body).toMatchObject({status:'refused',reason:'extraction_source_scope_unavailable'});
+ expect((await h.prepare()).body).toMatchObject({status:'accepted'});
+ expect((await h.post('/crm/processing/purpose/activate',h.command({capability:'crm_extraction',expectedRevision:1,approval:{consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,reviewedEvaluationReference:'fictional',limitations:['representative_quality_unverified']}}))).body).toMatchObject({status:'refused',reason:'capability_scope_review_required'});
+ expect((await h.activate()).body).toMatchObject({status:'accepted',result:{revision:2,enabled:true}});
+ const scoped=(await h.post('/crm/processing/purpose/read',{scopeVersion:CRM_OWNER_SCOPE_VERSION})).body;
+ expect(scoped).toMatchObject({allowedSourceKinds:['mail'],mailCaptureOwnerApprovalId:h.capture.ownerApprovalId,scopeVersion:CRM_OWNER_SCOPE_VERSION});
+ const legacy=(await h.post('/crm/processing/purpose/read',{})).body;expect(legacy).not.toHaveProperty('allowedSourceKinds');expect(legacy).not.toHaveProperty('mailCaptureOwnerApprovalId');expect(legacy).not.toHaveProperty('scopeVersion');
+ for(const kind of ['selected_note','call_transcript','meeting_transcript'])expect((await h.post('/crm/processing/request',h.command({source:{workspaceId:h.workspaceId,sourceId:randomUUID(),revision:1,contentHash:'a'.repeat(64),kind,locator:null}}))).body).toMatchObject({status:'refused',reason:'extraction_source_scope_unavailable'});
+ await withTransaction(h.db,()=>enqueueNativeCrmExtraction(h.context,{kind:'call_transcript',sourceId:randomUUID()}));
+ expect((await h.f.db.query("SELECT 1 FROM jobs WHERE kind IN ('crm.extract','crm.capture_extraction')")).rows).toHaveLength(0);
+ const person=((await h.post('/crm/people/create',h.command({fullName:'Fictional note owner'}))).body as {result:{personId:string}}).result.personId;
+ expect((await h.post('/crm/people/source/add',h.command({personId:person,sourceKey:'fictional-note',excerpt:'Original note remains readable.',occurredAt:'2026-10-18T22:33:00Z'}))).body).toMatchObject({status:'accepted'});
+ const updated='Updated original note remains readable.';
+ await h.f.db.query('UPDATE crm_selected_sources SET excerpt=$2,content_hash=$3,revision=revision+1 WHERE workspace_id=$1',[h.workspaceId,updated,createHash('sha256').update(updated).digest('hex')]);
+ expect((await h.f.db.query('SELECT excerpt,revision FROM crm_selected_sources WHERE workspace_id=$1',[h.workspaceId])).rows).toEqual([{excerpt:updated,revision:2}]);
+ expect((await h.f.db.query('SELECT 1 FROM crm_selected_sources WHERE workspace_id=$1',[h.workspaceId])).rows).toHaveLength(1);
+ expect((await h.f.db.query('SELECT 1 FROM crm_extraction_generations WHERE workspace_id=$1',[h.workspaceId])).rows).toHaveLength(0);
+ expect((await h.f.db.query("SELECT 1 FROM jobs WHERE kind IN ('crm.extract','crm.capture_extraction')")).rows).toHaveLength(0);
+});
+it('uses actual current mail and native fake Bedrock with exact approved credits-only ceiling and preserves historical reads after Disable',async()=>{
+ const h=await setup();await h.prepare();await h.activate();const source=await h.captureSource();
+ expect((await h.post('/crm/processing/request',h.command({source}))).body).toMatchObject({status:'accepted'});
+ let calls=0;
+ const adapter=createBedrockCrmExtractionAdapter({...h.route,surface:{converse:async()=>{calls++;return {stopReason:'tool_use',usage:{inputTokens:20,outputTokens:5},output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'fictional',name:'emit_crm_extraction',input:{claims:[]}}}]}}};}}});
+ await h.run(adapter);expect(calls).toBe(1);
+ expect((await h.post('/crm/processing/read',{source})).body).toMatchObject({state:'complete',financial:{dispatchState:'settled'}});
+ expect((await h.f.db.query('SELECT provider_key FROM provider_reservations WHERE workspace_id=$1',[h.workspaceId])).rows).toEqual([{provider_key:'aws_bedrock.fixture'}]);
+ expect((await h.post('/crm/business/mail/controls/disable',h.command({capability:'mail_capture',mailboxId:h.mailbox.id,expectedRevision:2}))).body).toMatchObject({status:'accepted'});
+ expect((await h.post('/crm/processing/request',h.command({source}))).body).toMatchObject({status:'refused',reason:'extraction_source_scope_unavailable'});
+ const old=(await h.post('/crm/processing/source/read',source));expect(old.status).toBe(200);
+ expect((await h.post('/crm/capability/read',{capability:'crm_extraction',scopeVersion:CRM_OWNER_SCOPE_VERSION})).body).toMatchObject({enabled:true,ready:false});
+});
+it.each(['disable','reconnect','delete','unknown'] as const)('settles dispatched money before refusing post-wait publication: %s',async mode=>{
+ const h=await setup();await h.prepare();await h.activate();const source=await h.captureSource();
+ await h.post('/crm/processing/request',h.command({source}));let calls=0;
+ const adapter:CrmExtractionAdapter={...h.route,inputBound:()=>({maxInputTokens:1000}),run:async()=>{
+  calls++;
+  if(mode==='delete')expect((await h.post('/crm/business/mail/delete',h.command({sourceId:source.sourceId,expectedRevision:1}))).body).toMatchObject({status:'accepted'});
+  else if(mode==='reconnect')await h.f.db.query("UPDATE mailboxes SET status='disconnected',generation=generation+1,disconnected_at=now() WHERE workspace_id=$1 AND id=$2",[h.workspaceId,h.mailbox.id]);
+  else expect((await h.post('/crm/business/mail/controls/disable',h.command({capability:'mail_capture',mailboxId:h.mailbox.id,expectedRevision:2}))).body).toMatchObject({status:'accepted'});
+  return mode==='unknown'?{acceptance:'unknown',usage:null,claims:[]}:{acceptance:'accepted',usage:{inputTokens:20,outputTokens:5},claims:[{kind:'need',interpretation:'Fictional need',status:'stated',locator:'text:0:6',quote:'Please'}]};
+ }};
+ await h.run(adapter);expect(calls).toBe(1);
+ const financial=(await h.f.db.query<{dispatch_state:string;state:string;settled_cents:number}>("SELECT f.dispatch_state,p.state,p.settled_cents FROM crm_extraction_financial_receipts f JOIN provider_reservations p ON p.workspace_id=f.workspace_id AND p.id=f.reservation_id WHERE f.workspace_id=$1",[h.workspaceId])).rows[0]!;
+ expect(financial).toMatchObject(mode==='unknown'?{dispatch_state:'unknown_acceptance',state:'estimated'}:{dispatch_state:'settled',state:'settled'});
+ expect(financial.settled_cents).toBeGreaterThan(0);
+ expect((await h.f.db.query('SELECT 1 FROM crm_extraction_claims WHERE workspace_id=$1',[h.workspaceId])).rows).toHaveLength(0);
+ await h.run(adapter);expect(calls).toBe(1);
+});
+it('refuses cash adapter before dispatch even with otherwise current mail and owner scope',async()=>{
+ const h=await setup();await h.prepare();await h.activate();const source=await h.captureSource();await h.post('/crm/processing/request',h.command({source}));let calls=0;
+ await h.run({...h.route,providerKey:'anthropic_extraction.fixture',run:async()=>{calls++;return {acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:[]};}});
+ expect(calls).toBe(0);expect((await h.f.db.query('SELECT 1 FROM provider_reservations WHERE workspace_id=$1',[h.workspaceId])).rows).toHaveLength(0);
+});

@@ -311,6 +311,16 @@ export function createCrmAcquisitionDiagnosticCapture(input: {
         gmail: wrapped,
         resolveAccess,
         authorizeRead: verifier.verify,
+        authorizeSelectedMetadata: async (currentProof, metadata) => {
+          if (!metadata) return false;
+          const a = await withContext(currentProof, (session) => verified(currentProof, session));
+          const selected = a?.messages.find((m) => m.messageId === request.providerMessageId);
+          const origin = metadata.labelIds.includes('SENT') ? 'sent' : metadata.labelIds.includes('INBOX') ? 'received' : 'unknown';
+          return !!selected && metadata.id === selected.messageId && metadata.threadId === selected.threadId
+            && origin === selected.origin && Number.isSafeInteger(metadata.internalDateEpochMilliseconds)
+            && metadata.internalDateEpochMilliseconds >= Date.parse(selected.fromAt)
+            && metadata.internalDateEpochMilliseconds <= Date.parse(selected.toAt);
+        },
       }).read(request);
     },
   };

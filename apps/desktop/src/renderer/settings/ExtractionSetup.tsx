@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CRM_EXTRACTION_ENDPOINT, CRM_EXTRACTION_MODELS } from '@fss/contracts';
+import { CRM_EXTRACTION_ENDPOINT, CRM_EXTRACTION_MODELS, CRM_OWNER_SCOPE_VERSION } from '@fss/contracts';
 import {
   extractionDraft, extractionSaveInput, extractionSetupFields, extractionSetupNotice,
   extractionSetupPorts, type ExtractionDraft, type ExtractionPurpose, type ExtractionSetupPorts,
@@ -13,6 +13,7 @@ export function ExtractionSetup({ available, privacyKey, onSaved, ports = extrac
 }) {
   const [purpose, setPurpose] = useState<ExtractionPurpose | null>(null);
   const [draft, setDraft] = useState<ExtractionDraft | null>(null);
+  const [capture,setCapture]=useState<Awaited<ReturnType<NonNullable<ExtractionSetupPorts['readCaptureBinding']>>>>(null);
   const [busy, setBusy] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const [notice, setNotice] = useState('');
@@ -25,13 +26,15 @@ export function ExtractionSetup({ available, privacyKey, onSaved, ports = extrac
     setBusy(true);
     setPurpose(null);
     setDraft(null);
+    setCapture(null);
     setAcknowledged(false);
     setNotice('');
     try {
-      const value = await ports.read();
+      const [value,binding] = await Promise.all([ports.read(),ports.readCaptureBinding?.()??Promise.resolve(null)]);
       if (ticket !== epoch.current) return;
       setPurpose(value);
       setDraft(extractionDraft(value));
+      setCapture(binding);
     } catch (error) {
       if (ticket === epoch.current) setNotice(extractionSetupNotice(error));
     } finally {
@@ -43,6 +46,7 @@ export function ExtractionSetup({ available, privacyKey, onSaved, ports = extrac
     flight.current = false;
     setPurpose(null);
     setDraft(null);
+    setCapture(null);
     setBusy(false);
     setAcknowledged(false);
     setNotice('');
@@ -50,7 +54,7 @@ export function ExtractionSetup({ available, privacyKey, onSaved, ports = extrac
     return () => { epoch.current += 1; flight.current = false; };
   }, [load, privacyKey]);
 
-  const parsed = draft && purpose ? extractionSaveInput(draft, purpose.revision) : null;
+  const parsed = draft && purpose && purpose.scopeVersion===CRM_OWNER_SCOPE_VERSION && capture ? extractionSaveInput(draft, purpose.revision,capture.ownerApprovalId) : null;
   async function save() {
     if (!available || flight.current || !acknowledged || !parsed?.success) return;
     const ticket = epoch.current;
@@ -83,11 +87,13 @@ export function ExtractionSetup({ available, privacyKey, onSaved, ports = extrac
     <p>Owner configuration only. Connecting Gmail is not consent. Capture of qualified incoming and owner-Sent business mail requires its own approval and excludes personal, excluded and unresolved conversations. Hosted extraction of needs, objections and commitments requires separate explicit approval.</p>
     <p>Disable stops fresh work, not accepted provider requests, and retains copied history and consent audit. Explicit scoped deletion erases Callie copies and dependent evidence, not Gmail originals. Disconnect stops new capture, not deletion. Historical backfill requires a separate bounded approval.</p>
     <p>This form does not enable capture, extraction, Ask answering, indexing, embeddings, backfill or sending. Plain keyword and record search remain available. Saving clears any current extraction approval and leaves extraction disabled.</p>
+    <p>Extraction scope is mail only, bound to the current approved capture epoch. Notes, call transcripts and meeting transcripts are not authorized. Incoming and owner-Sent originals must be at or after capture activation, with no older backfill.</p>
     <p>A route on this reviewed list is not proof of a deployed adapter, funding or current access. Enter the exact independently verified access/data-handling versions, token prices and budgets. Proposed defaults are not permission. No automatic provider fallback.</p>
     {!available ? <p>Authenticated owner administrator setup is unavailable.</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
     <button type="button" disabled={!available || busy} onClick={() => { void load(); }}>Reload extraction configuration</button>
     {purpose && draft ? <form onSubmit={event => { event.preventDefault(); void save(); }}>
+      <p>{capture?`Bound business mailbox: ${capture.mailboxEmail}. Mail-only capture approval: ${capture.ownerApprovalId}.`:'Current approved mailbox capture is unavailable. Configure and activate forward-only capture, then reload. Extraction stays off.'}</p>
       <p>Current extraction: {purpose.enabled ? 'enabled' : 'disabled'}; revision {purpose.revision}. {purpose.configured ? 'Configured values below are editable proposals until saved.' : 'Not configured. No model, prices or budget have been assumed.'}</p>
       <fieldset disabled={!available || busy}>
         <legend>Proposed AWS Bedrock configuration</legend>
