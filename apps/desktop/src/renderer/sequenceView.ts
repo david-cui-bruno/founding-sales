@@ -1,4 +1,5 @@
 import { NO_OPTOUT_LINK_RULE, SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES, hasOptOutLink, reasonSentence } from '@fss/contracts';
+import { APPROVAL_FOOTER_POLICY, composeSendBody } from '../../../../packages/domain/src/rules/templateFooter.ts';
 import { OFFLINE_BANNER, OFFLINE_SENTENCE, readErrorSentence } from './readError.ts';
 import type {
   DraftStep,
@@ -251,42 +252,19 @@ function versionPanel(
   };
 }
 
-/**
- * The block the body ends with: the sign-off, and nothing after it. It carried a postal
- * address until David's 22 September decision and a stop line until his 29 September one
- * (`docs/greenfield/decisions/email-presentation-20260929.md`); the address is now a
- * workspace setting composed at send and the stop line is gone. The panel reads
- * `@fss/contracts` for the rule it describes, so it cannot drift from the rule the
- * server applies.
- */
-const FOOTER_OF = (template: TemplateVersion): string => template.footerSignOff;
-
-/**
- * Whether a body ends with the sign-off as a block of its own, in either shape.
- *
- * The separator above the block is a blank line, and a line of spaces or tabs is a
- * blank line: an editor that left one behind must not turn a good footer into a hold
- * (review of PR 311, second round). The same `^[ \t]*$` the server's own recognition
- * uses.
- */
-function endsWithFooterBlock(body: string, signOff: string): boolean {
-  const stripped = body.replace(/\s+$/u, '');
-  return [`${signOff}\n${SENDING_STOP_LINE}`, signOff].some(block => {
-    if (stripped === block) return true;
-    if (!stripped.endsWith(block)) return false;
-    return /\n[ \t]*\n$/u.test(stripped.slice(0, stripped.length - block.length));
-  });
-}
-
 function templatePanel(
   template: TemplateVersion,
   options: { readonly isAdmin: boolean; readonly mayMutate: boolean },
 ): TemplatePanel {
   const approved = template.approvedAt !== null;
   const retired = template.retiredAt !== null;
-  // The same boundary the server applies: a complete separate block at the end, in
-  // today's shape or the pre-0024 one. `includes` would call `Hi David` a footer.
-  const footerPresent = endsWithFooterBlock(template.body, template.footerSignOff);
+  // Readiness means exactly one final footer can be composed, not that stored copy
+  // already carries it. Match server approval's address-free policy without changing bytes.
+  const footerPresent = composeSendBody(
+    template.body,
+    { signOff: template.footerSignOff, postalAddress: null, recordedAddresses: [] },
+    APPROVAL_FOOTER_POLICY,
+  ).composed;
   // Column by column, as the server asks it: joining them would invent an adjacency
   // between the last line of the subject and the first of the body, and refuse a
   // template the database accepts (review of PR 311, second round).
@@ -297,7 +275,7 @@ function templatePanel(
     subject: template.subject,
     body: template.body,
     contentHash: template.contentHash,
-    footer: FOOTER_OF(template),
+    footer: template.footerSignOff,
     approved,
     retired,
     editable: !approved && !retired && options.isAdmin && options.mayMutate,

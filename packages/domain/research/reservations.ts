@@ -1,6 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { localDate } from '../src/rules/localClock.ts';
-import { lockMonthlySpend } from './ledger.ts';
+import { lockMonthlySpend, workspaceBusinessZone } from './ledger.ts';
+import { clearCreditModelBudget, isCreditModelProvider, ModelBudgetRefusal } from './modelBudget.ts';
 
 /**
  * One row per paid attempt, from authorized to settled (`provider_reservations`).
@@ -142,7 +143,23 @@ export async function reserveAttempt(
   context: RepositoryContext,
   input: ReserveInput,
 ): Promise<ReservationRow> {
+  if (![input.cents, input.maxInputTokens, input.maxOutputTokens, input.attempt].every(Number.isSafeInteger) ||
+      input.cents < 0 || input.maxInputTokens < 1 || input.maxOutputTokens < 1 || input.attempt < 1) {
+    throw new ModelBudgetRefusal('model_reservation_mismatch');
+  }
   const businessDate = localDate(input.at, input.businessTimeZone);
+  await lockMonthlySpend(context);
+  const existing = await readAttempt(context, input);
+  if (existing !== null) {
+    if (existing.providerKey !== input.providerKey || existing.modelName !== input.modelName ||
+        existing.cents !== input.cents || existing.maxInputTokens !== input.maxInputTokens ||
+        existing.maxOutputTokens !== input.maxOutputTokens) {
+      throw new ModelBudgetRefusal('model_reservation_mismatch');
+    }
+    // Never re-date or reopen an existing obligation, including closed/ambiguous rows.
+    return existing;
+  }
+  await clearCreditModelBudget(context, { ...input, additionalCents: input.cents });
   await context.db.query(
     `INSERT INTO provider_reservations
        (workspace_id, provider_key, subject_kind, subject_id, attempt, business_date,
@@ -214,6 +231,23 @@ export async function listAttempts(
  * caller has to resolve rather than paper over.
  */
 export async function markCalling(context: RepositoryContext, reservationId: string): Promise<boolean> {
+  await lockMonthlySpend(context);
+  const selected = await context.db.query<ReservationDbRow>(
+    `SELECT ${COLUMNS} FROM provider_reservations WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
+    [context.scope.workspaceId, reservationId],
+  );
+  const row = selected.rows[0];
+  if (row === undefined || row.state !== 'reserved') return false;
+  if (isCreditModelProvider(row.provider_key)) {
+    const current = (await context.db.query<{ at: string }>('SELECT clock_timestamp()::text AS at')).rows[0]?.at;
+    if (current === undefined) throw new Error('database clock unavailable');
+    const zone = await workspaceBusinessZone(context);
+    if (row.business_date !== localDate(current, zone) || row.business_time_zone !== zone) {
+      throw new ModelBudgetRefusal('model_reservation_stale');
+    }
+    // Already present in the open sum. Do not add its cents a second time.
+    await clearCreditModelBudget(context, { providerKey: row.provider_key, at: current, businessTimeZone: zone, additionalCents: 0 });
+  }
   const { rowCount } = await context.db.query(
     `UPDATE provider_reservations SET state = 'calling'
       WHERE workspace_id = $1 AND id = $2 AND state = 'reserved'`,
@@ -269,6 +303,8 @@ export async function settleAttempt(
   context: RepositoryContext,
   input: { readonly reservationId: string; readonly at: string; readonly outcome: SettleOutcome },
 ): Promise<{ readonly recordedCents: number; readonly state: ReservationState } | null> {
+  // Shared lock before reservation rows, not only when writing the ledger below.
+  await lockMonthlySpend(context);
   const state: ReservationState =
     input.outcome.kind === 'settled' ? 'settled' : input.outcome.kind === 'estimated' ? 'estimated' : 'released';
   // Whether a row still marked `calling` may be closed this way. Everything except a

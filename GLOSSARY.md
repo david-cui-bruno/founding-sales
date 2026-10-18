@@ -57,7 +57,7 @@ The known extent and gaps of captured or processed conversation history within a
 _Avoid_: completeness when unresolved gaps remain
 
 **Ask**:
-The section for finding records and asking evidence-backed questions about business history.
+The section for finding business records, exact operational state and original passages by keywords. It does not generate answers.
 _Avoid_: Ask mode, separate Search section
 
 **Activation**:

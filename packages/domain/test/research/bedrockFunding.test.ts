@@ -15,7 +15,7 @@ import { worstCaseRunCents } from '../../research/pricing.ts';
  * released, not called against, by a Bedrock worker's chunk 2.
  */
 
-const AT = '2026-09-28T14:00:00.000Z';
+const AT = new Date().toISOString();
 const BEDROCK = 'aws_bedrock.extraction';
 
 let database: TestDatabase;

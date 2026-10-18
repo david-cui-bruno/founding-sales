@@ -57,6 +57,7 @@ export * from './notifications.ts';
 
 export {bookingCapacityResponseSchema,BOOKING_CAPACITY_REASONS,type BookingCapacityResponse,type BookingCapacityReason} from './bookingCapacity.ts';
 export * from './people.ts';
+export * from './linkedinManual.ts';
 export * from './linkedinRoutes.ts';
 export * from './peopleRelationships.ts';
 export * from './selectedImports.ts';
@@ -76,27 +77,18 @@ export * from './todayActionsV2.ts';
 
 export * from './crmBackfill.ts';
 
-export * from './askAnswers.ts';
-export * from './askHistory.ts';
 export * from './askActions.ts';
 
 export * from './experiments.ts';
 export * from './socialManualHandoff.ts';
 
-export * from './emailAdmissionActivation.ts';
 
 export * from './crmPricing.ts';
+export * from './crmExtractionRoutes.ts';
 
 export * from './crmActivation.ts';
 export * from './crmAcquisitionDiagnostic.ts';
-export * from './askSessions.ts';
-export * from './askAgentScope.ts';
 export * from './linkedinPolicy.ts';
-export * from './bookingInterpretation.ts';
 export * from './linkedinPostingPolicy.ts';
 export * from './linkedinRecurringPosting.ts';
 export * from './bookingPolicy.ts';
-export * from './bookingCreate.ts';
-export * from './bookingChange.ts';
-export * from './bookingConversation.ts';
-export * from './bookingMessages.ts';

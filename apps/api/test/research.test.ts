@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   researchFirmResponseSchema,
   researchSettingsResultSchema,
@@ -103,6 +103,7 @@ describe('the research routes', () => {
   });
 
   beforeEach(async () => {
+    vi.stubEnv('FSS_MODEL_TRANSPORT', 'anthropic');
     await fixture.db.query('DELETE FROM firm_judgments');
     await fixture.db.query('DELETE FROM firm_facts');
     await fixture.db.query('DELETE FROM firm_links');
@@ -110,6 +111,30 @@ describe('the research routes', () => {
     await fixture.db.query('DELETE FROM research_settings');
     await fixture.db.query('DELETE FROM provider_ledger');
     await fixture.db.query('DELETE FROM daily_counters');
+  });
+
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it.each([undefined, 'unknown'])('refuses preview when the explicit worker transport is %s', async transport => {
+    vi.stubEnv('FSS_MODEL_TRANSPORT', transport);
+    const answer = await post('/research/firm/run', assigneeToken, command({ firmId }));
+    expect(answer).toMatchObject({ status: 409, body: { reason: 'research_transport_unavailable' } });
+    const settings = await post('/research/settings', adminToken, command({}));
+    expect(settings).toMatchObject({ status: 409, body: { reason: 'research_transport_unavailable' } });
+  });
+
+  it('prices a Bedrock preview from credit-inclusive spend, independent of cash headroom', async () => {
+    vi.stubEnv('FSS_MODEL_TRANSPORT', 'bedrock');
+    await fixture.db.query(`INSERT INTO workspace_settings(workspace_id,setting_key,version,value,changed_by_user_id)
+      VALUES($1,'monthly_cash_ceiling_cents',1,'{"cents":0}',$2)`, [fixture.alpha.workspaceId, fixture.alpha.admin.userId]);
+    expect((await post('/research/firm/run', assigneeToken, command({ firmId }))).status).toBe(200);
+    await fixture.db.query(`INSERT INTO provider_ledger(workspace_id,provider_key,business_date,business_time_zone,cost_cents)
+      SELECT id,'aws_bedrock.extraction',(now() AT TIME ZONE business_time_zone)::date,business_time_zone,50
+        FROM workspaces WHERE id=$1`, [fixture.alpha.workspaceId]);
+    expect(await post('/research/firm/run', assigneeToken, command({ firmId }))).toMatchObject({ status: 409, body: { reason: 'ceiling_reached' } });
+    const settings = await post('/research/settings', adminToken, command({}));
+    expect((settings.body['result'] as { spend: { todayCents: number } }).spend.todayCents).toBe(50);
+    await fixture.db.query("DELETE FROM workspace_settings WHERE setting_key='monthly_cash_ceiling_cents'");
   });
 
   it('answers the assignee a whole, contract-shaped read for a firm nobody has researched', async () => {

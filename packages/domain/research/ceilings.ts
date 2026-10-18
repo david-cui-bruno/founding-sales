@@ -1,7 +1,7 @@
 import { localDate } from '../src/rules/localClock.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { incrementDailyCounter, readDailyCounter } from '../jobs/counters.ts';
-import { readSpend, workspaceBusinessZone } from './ledger.ts';
+import { lockMonthlySpend, readResearchSpend, readSpend, workspaceBusinessZone } from './ledger.ts';
 import { clearMonthlyCash, readMonthlyCashCeiling } from '../settings/cashCeiling.ts';
 import { providerFunding } from '../settings/funding.ts';
 import { transportOfProviderKey } from '../classification/modelTransport.ts';
@@ -183,6 +183,7 @@ export async function claimResearchClearance(
   // another claim could be inserting, so reading them without it is the read-then-write
   // that ceilings exist to avoid.
   await lockResearchBudget(context);
+  await lockMonthlySpend(context);
 
   const counted =
     input.attemptKind === 'first'
@@ -205,7 +206,7 @@ export async function claimResearchClearance(
   const held = await firmReservationsOnDate(context, { firmId: input.firmId, businessDate });
   if (held >= RESEARCH_FIRM_MAX_RESERVATIONS) return refuse('over_budget');
 
-  const spend = await readSpend(context, { businessTimeZone, at: input.at });
+  const spend = await readResearchSpend(context, { businessTimeZone, at: input.at });
   if (spend.todayCents + worstCaseCents > settings.dailyCostCeilingCents) return refuse('daily_cost_ceiling');
   if (spend.monthToDateCents + worstCaseCents > settings.monthlyCostCeilingCents) {
     return refuse('monthly_cost_ceiling');
@@ -285,11 +286,13 @@ async function firmReservationsOnDate(
  */
 export async function researchClearanceAvailable(
   context: RepositoryContext,
-  input: { readonly at: string },
+  input: { readonly at: string; readonly providerKey?: string },
 ): Promise<ResearchResult<{ readonly remaining: number }>> {
   const settings = await readResearchSettings(context);
   if (!settings.enabled) return refuse('research_disabled');
-  if (!isPricedModel(settings.modelName)) return refuse('model_unpriced');
+  const providerKey = input.providerKey ?? EXTRACTION_PROVIDER;
+  const transport = transportOfProviderKey(providerKey);
+  if (!isPricedModel(settings.modelName, transport)) return refuse('model_unpriced');
 
   const businessTimeZone = await workspaceBusinessZone(context);
   const used = await readDailyCounter(context, {
@@ -304,15 +307,17 @@ export async function researchClearanceAvailable(
 
   const worstCaseCents = worstCaseRunCents({
     modelName: settings.modelName,
+    transport,
     maxPagesPerFirm: settings.maxPagesPerFirm,
     maxPageBytes: settings.maxPageBytes,
   });
-  const spend = await readSpend(context, { businessTimeZone, at: input.at });
+  const spend = await readResearchSpend(context, { businessTimeZone, at: input.at });
   if (spend.todayCents + worstCaseCents > settings.dailyCostCeilingCents) return refuse('daily_cost_ceiling');
   if (spend.monthToDateCents + worstCaseCents > settings.monthlyCostCeilingCents) {
     return refuse('monthly_cost_ceiling');
   }
-  if (spend.monthToDateCents + worstCaseCents > (await readMonthlyCashCeiling(context))) {
+  const cash = await readSpend(context, { businessTimeZone, at: input.at });
+  if (providerFunding(providerKey) === 'cash' && cash.monthToDateCents + worstCaseCents > (await readMonthlyCashCeiling(context))) {
     return refuse('monthly_cash_ceiling');
   }
   return accept({ remaining });

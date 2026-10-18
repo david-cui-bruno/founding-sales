@@ -55,30 +55,21 @@ it('erases retained proposal text without removing opaque attribution or restori
  expect(await tx(()=>saveExperiment(ctx(),{id:p.value.id,expectedRevision:1,status:'accepted',content:content()}))).toMatchObject({ok:false,reason:'proposal_erased'});
 });
 
-it('binds only separately approved exact email copy while keeping admission off and original cadence intact',async()=>{
- const {approvedTemplate,emailStep,publishedPlan,publishedVersionOf}=await import('../sequences/support/versionFixtures.ts');
- const {createTemplateVersion,readTemplateVersion}=await import('../../templates/templates.ts');
- const {fixtureBody}=await import('../sequences/support/sequenceFixtures.ts');
- const {setProspectingAuthorization}=await import('../../outreach/authorization.ts');
- const {saveEmailAdmissionControl,readEmailAdmissionControl}=await import('../../outreach/emailControl.ts');
- const base=await tx(()=>approvedTemplate(ctx(),'Original experiment opening.')),other=await tx(()=>approvedTemplate(ctx(),'Retained follow-up.'));
- const steps=[emailStep(base),...Array.from({length:4},(_,i)=>emailStep(other,i+2,(i+1)*48))];
- const plan=await tx(()=>publishedPlan(ctx(),steps));
- const mailbox=(await db.session.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'experiment@example.test','fixture-account','connected') RETURNING id",[seeded.alpha.workspaceId,seeded.alpha.admin.userId])).rows[0]!.id;
- await tx(()=>setProspectingAuthorization(ctx(),{mailboxId:mailbox,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));
- const old=await readEmailAdmissionControl(ctx());
- expect(await tx(()=>saveEmailAdmissionControl(ctx(),{expectedRevision:old.revision,enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId:mailbox,sequenceVersionId:plan.versionId,evaluation:null}))).toMatchObject({ok:true});
- const body=fixtureBody('Reviewed new opening.'),subject='Specific maintenance question';
- const p=await tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:{...content(),change:{kind:'email_wording',baseTemplateVersionId:base,subject,body}}}));if(!p.ok)throw new Error(p.reason);
- expect(await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:false}))).toMatchObject({ok:false,reason:'approved_copy_binding_required'});
- const original=await readTemplateVersion(ctx(),base);if(!original)throw new Error('missing fixture');
- const copy=await tx(()=>createTemplateVersion(ctx(),{templateId:original.templateId,name:'Reviewed experiment',subject,body,footer:{signOff:original.footerSignOff},requiredVariables:original.requiredVariables,approve:true}));if(!copy.ok)throw new Error(copy.reason);
- const next=await tx(()=>publishedVersionOf(ctx(),plan.sequenceId,[emailStep(copy.value.id),...steps.slice(1)]));
- const a=await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:false,sequenceVersionId:next}));expect(a.ok).toBe(true);
- expect(await readEmailAdmissionControl(ctx())).toMatchObject({enabled:false,evaluation:null,sequenceVersionId:next,reasons:['evaluation_required','runtime_identity_unknown','evaluation_mismatch','activation_receipt_required']});
- if(!a.ok)throw new Error(a.reason);
- expect(await tx(()=>stopExperiment(ctx(),{activationId:a.value.activationId,reason:'Stop without rewinding prior enrollments.'}))).toMatchObject({ok:true});
- expect(await readEmailAdmissionControl(ctx())).toMatchObject({enabled:false,evaluation:null,sequenceVersionId:next});
+it('refuses retired automatic email experiments and retains ordinary sequences and historical stop records',async()=>{
+ const {approvedTemplate,emailStep,publishedPlan}=await import('../sequences/support/versionFixtures.ts');
+ const {readSequenceVersion}=await import('../../sequences/rows.ts');
+ const base=await tx(()=>approvedTemplate(ctx(),'Retained ordinary sequence.'));
+ const plan=await tx(()=>publishedPlan(ctx(),[emailStep(base)]));
+ const original=await readSequenceVersion(ctx(),plan.versionId);
+ const settings=(await db.session.query('SELECT * FROM outreach_email_admission_settings WHERE workspace_id=$1',[seeded.alpha.workspaceId])).rows;
+ const p=await tx(()=>saveExperiment(ctx(),{expectedRevision:0,status:'accepted',content:{...content(),change:{kind:'email_wording',baseTemplateVersionId:base,subject:'Proposed copy',body:'Reviewed suggestion only.'}}}));if(!p.ok)throw new Error(p.reason);
+ expect(await tx(()=>activateExperiment(ctx(),{id:p.value.id,expectedRevision:1,targetingDecision:false,sequenceVersionId:plan.versionId}))).toEqual({ok:false,reason:'automatic_admission_removed'});
+ const activationId=(await import('node:crypto')).randomUUID();
+ await db.session.query('INSERT INTO sourcing_experiment_activations(workspace_id,id,revision,activation_id,result) VALUES($1,$2,1,$3,$4::jsonb)',[seeded.alpha.workspaceId,p.value.id,activationId,JSON.stringify({kind:'email_wording',baseSequenceVersionId:plan.versionId,sequenceVersionId:plan.versionId,controlRevision:'1'})]);
+ expect(await tx(()=>stopExperiment(ctx(),{activationId,reason:'Close retained historical experiment.'}))).toMatchObject({ok:true,value:{rollbackDisposition:'separate_approval_required'}});
+ expect(await readSequenceVersion(ctx(),plan.versionId)).toEqual(original);
+ expect((await db.session.query('SELECT * FROM outreach_email_admission_settings WHERE workspace_id=$1',[seeded.alpha.workspaceId])).rows).toEqual(settings);
+ expect((await readExperiments(ctx())).find(v=>v.id===p.value.id)?.activations[0]).toMatchObject({activationId,stopReason:'Close retained historical experiment.'});
 });
 it('keeps one activation under concurrent decisions and safely stops without rolling back a newer policy',async()=>{
  const baseline=await tx(()=>readTargetingPolicy(ctx()));
