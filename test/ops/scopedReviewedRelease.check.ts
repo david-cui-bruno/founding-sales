@@ -83,12 +83,16 @@ describe('protected reviewed execution without a shared release window', () => {
     if (event === 'push') expect(eventBlock).toContain('    branches: [main]');
   });
 
-  it('keeps missing shared hold fail-closed and literal false only in the exact execute step', () => {
+  it('keeps missing shared hold fail-closed and literal false only in the two exact protected execute steps', () => {
     expect(workflow.split('\njobs:\n')[0]).toContain("FSS_RELEASE_HOLD: ${{ vars.FSS_RELEASE_HOLD || 'true' }}");
     const reviewed = job('reviewed');
     expect(reviewed.split('    steps:\n')[0]).not.toContain('FSS_RELEASE_HOLD');
     const literal = "FSS_RELEASE_HOLD: 'false'";
-    expect(workflow.split(literal)).toHaveLength(2);
+    expect(workflow.split(literal)).toHaveLength(3);
+    const application = job('application');
+    expect(application.split('    steps:\n')[0]).not.toContain('FSS_RELEASE_HOLD');
+    expect(application).toContain('environment: production-release-review');
+    expect(step(application, 'Execute only this approved application release')).toContain(literal);
     const execute = step(reviewed, executeName);
     expect(execute).toContain(`        env:\n          # Only this approved, validated execution and its children may pass the script guards.`);
     expect(execute).toContain(`          ${literal}`);
@@ -118,6 +122,10 @@ describe('protected reviewed execution without a shared release window', () => {
   it.each([undefined, 'true', 'false'])('scoped dispatch admission does not depend on global hold %s', hold => {
     const input = hold === undefined ? {} : { hold };
     expect(admitted('reviewed', input)).toBe(true);
+    expect(admitted('application', { ...input, mode: 'application' })).toBe(true);
+    expect(admitted('application', { ...input, mode: 'automatic' })).toBe(false);
+    expect(admitted('application', { ...input, mode: 'application', event: 'push' })).toBe(false);
+    expect(admitted('application', { ...input, mode: 'application', decision: 'manual' })).toBe(false);
     expect(admitted('reviewed', { ...input, event: 'push' })).toBe(false);
     expect(admitted('reviewed', { ...input, mode: 'automatic' })).toBe(false);
     expect(admitted('reviewed', { ...input, mode: 'review_prepare' })).toBe(false);
