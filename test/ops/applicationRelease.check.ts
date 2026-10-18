@@ -1,5 +1,8 @@
 import { isDeepStrictEqual, promisify } from 'node:util';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ciGateReleaseRecordSchema } from '@fss/contracts';
 import { createUpgradeDatabase, MIGRATOR_LOGIN_ROLE, RUNTIME_LOGIN_ROLE } from '../../tools/upgrade/cluster.ts';
@@ -26,9 +29,9 @@ interface Service {
   networkConfiguration: { awsvpcConfiguration: { subnets: string[]; securityGroups: string[]; assignPublicIp: string } };
 }
 interface Status {
-  phase: string; outcome: string; reason?: string; observedSchema: number | string; migrationStarted: boolean;
+  phase: string; outcome: string; reason?: string; observedSchema: number | string; migrationStarted: boolean; writesStarted: boolean;
   recoveryPoint: { timestamp: string; restoreTested: boolean } | null; rollback?: string;
-  currentTaskArn?: string | null; temporaryReaderDefinition?: string | null;
+  currentTaskArn?: string | null; currentTaskOwner?: string; temporaryReaderDefinition?: string | null;
 }
 interface IO {
   now(): number; equal(a: unknown, b: unknown): boolean; sleep(ms: number): Promise<void>;
@@ -52,7 +55,7 @@ const environment = (): Record<string, string> => ({ GITHUB_ACTIONS: 'true', GIT
 function definition(name: string, schema: number): Definition {
   return { taskDefinitionArn: arn(name), family: `fss-prod-${name}`, taskRoleArn: `arn:aws:iam::${ACCOUNT}:role/fss-prod-${name === 'migration' ? name : side(name)}-task`, executionRoleArn: `arn:aws:iam::${ACCOUNT}:role/fss-prod-${name === 'migration' ? name : side(name)}-exec`, containerDefinitions: [{
     name, image: `${registry}/fss-prod-${side(name)}@${OLD[side(name)]}`, entryPoint: name === 'api' || name === 'worker' ? ['node', 'bootstrap.ts'] : ['node', 'apps/worker/src/tools/fss.ts'], command: name === 'operations' ? ['verify'] : name === 'migration' ? ['migrate'] : [],
-    environment: [{ name: 'FSS_DATABASE_HOST', value: 'private.invalid' }, { name: name === 'migration' ? 'FSS_TARGET_SCHEMA_MIN' : 'FSS_SCHEMA_MIN', value: String(schema) }, { name: name === 'migration' ? 'FSS_TARGET_SCHEMA_MAX' : 'FSS_SCHEMA_MAX', value: String(schema) }, { name: 'FSS_SENDING_ENABLED', value: 'true' }],
+    environment: [{ name: 'FSS_DATABASE_HOST', value: 'private.invalid' }, { name: name === 'migration' ? 'FSS_TARGET_SCHEMA_MIN' : 'FSS_SCHEMA_MIN', value: String(schema) }, { name: name === 'migration' ? 'FSS_TARGET_SCHEMA_MAX' : 'FSS_SCHEMA_MAX', value: String(schema) }, { name: 'FSS_SENDING_ENABLED', value: 'true' }, ...(['api', 'worker'].includes(name) ? [{ name: 'FSS_MODEL_TRANSPORT', value: 'bedrock' }] : [])],
     secrets: name === 'migration' ? [{ name: 'MIGRATION_DATABASE_SECRET', valueFrom: secret('migration') }, { name: 'FSS_RUNTIME_DATABASE_SECRET_ARN', valueFrom: secret('app-runtime') }] : [{ name: 'DATABASE_SECRET_ARN', valueFrom: secret('app-runtime') }],
     logConfiguration: { options: { 'awslogs-group': '/fss/fss-prod/worker', 'awslogs-stream-prefix': name } },
   }] };
@@ -125,7 +128,9 @@ function harness(options: Options = {}) {
       }
       if (action === 'describe-task-definition') {
         const named = arg(args, '--task-definition');
-        return JSON.stringify(definitions[named] ?? definitions[arn(named.slice('fss-prod-'.length))]);
+        const found = structuredClone(definitions[named] ?? definitions[arn(named.slice('fss-prod-'.length))]);
+        if (options.fault?.startsWith('runtime-bedrock') && current() === 'runtime-verify' && found?.taskDefinition.family === `fss-prod-${options.fault.endsWith('worker') ? 'worker' : 'api'}`) found.taskDefinition.containerDefinitions[0]!.environment = found.taskDefinition.containerDefinitions[0]!.environment.filter(entry => entry.name !== 'FSS_MODEL_TRANSPORT');
+        return JSON.stringify(found);
       }
       if (action === 'register-task-definition') {
         const document = JSON.parse(arg(args, '--cli-input-json')) as Definition;
@@ -191,6 +196,49 @@ function harness(options: Options = {}) {
   return { io, env: environment(), calls, states, definitions, services, artifacts, schema: () => schema, run: () => release.runRelease(io, environment()) };
 }
 
+function applicationSummaryScript(): string {
+  const step = readRepositoryFile('.github/workflows/greenfield-deploy.yml').split('      - name: Actual application phase and recovery boundary\n')[1]?.split('\n  smoke:\n')[0];
+  const script = step?.split('        run: |\n')[1];
+  if (!script) throw new Error('Missing trusted always-finalizer');
+  return script.split('\n').map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n');
+}
+
+/** Actual runRelease in an owned child. All remote transport stays in the existing parent fixture. */
+async function interruptRelease(h: ReturnType<typeof harness>, statusFile: string, boundary: string, signal: NodeJS.Signals): Promise<Status> {
+  const script = `
+    import {runRelease} from ${JSON.stringify(modulePath)};
+    import {writeFileSync} from 'node:fs';
+    import {isDeepStrictEqual} from 'node:util';
+    const data=JSON.parse(process.argv[1]), pending=new Map(); let clock=data.now, sequence=0;
+    process.on('message',message=>{const request=pending.get(message.id);if(!request)return;pending.delete(message.id);message.error?request.reject(new Error(message.error)):request.resolve(message.output);});
+    const io={now:()=>clock,equal:isDeepStrictEqual,
+      save:state=>{writeFileSync(data.statusFile,JSON.stringify(state),{mode:0o600});process.send({kind:'save',state});},
+      read:key=>data.files[key],sleep:async ms=>{clock+=ms;process.send({kind:'sleep',ms});},
+      run:(program,args,input)=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});process.send({kind:'run',id,program,args,input});})};
+    await runRelease(io,data.env); process.exit(0);
+  `;
+  const data = { statusFile, env: h.env, now: h.io.now(), files: Object.fromEntries(['images', 'upgradeBinding', 'upgradeEvidence'].map(key => [key, h.io.read(key)])) };
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', script, JSON.stringify(data)], { env: { PATH: process.env['PATH'] }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  let blocked = false, errors = '';
+  child.stderr?.on('data', (chunk: Buffer) => { errors = `${errors}${chunk.toString()}`.slice(-4000); });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Local interruption child timed out')); }, 20000);
+      child.on('error', error => { clearTimeout(timer); reject(error); });
+      child.on('exit', (_code, actualSignal) => { clearTimeout(timer); if (blocked && actualSignal === signal) resolve(); else reject(new Error(`Unexpected local child exit: ${String(actualSignal)} ${errors}`)); });
+      child.on('message', (message: { kind: string; state: Status; ms: number; id: number; program: string; args: string[]; input?: string }) => {
+        if (message.kind === 'save') { h.io.save(message.state); return; }
+        if (message.kind === 'sleep') { void h.io.sleep(message.ms); return; }
+        const phase = h.states.at(-1)?.phase;
+        const stop = boundary === 'preflight' ? message.program === 'gh' : phase === boundary && message.program === 'aws' && message.args[1] === (boundary === 'migrate' ? 'describe-tasks' : 'run-task');
+        if (stop) { blocked = true; child.kill(signal); return; }
+        void h.io.run(message.program, message.args, message.input).then(output => { if (child.connected) child.send({ id: message.id, output }); }, () => { if (child.connected) child.send({ id: message.id, error: 'synthetic_transport_failure' }); });
+      });
+    });
+    return JSON.parse(readFileSync(statusFile, 'utf8')) as Status;
+  } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }
+}
+
 describe('additive protected application release', () => {
   it('completes the simulated same-schema path without fabricating migration, preserving four CLI definitions', async () => {
     const h = harness(); const result = await h.run();
@@ -201,9 +249,40 @@ describe('additive protected application release', () => {
     expect(persistent).toHaveLength(2);
     expect(persistent[1]!.taskDefinition.containerDefinitions[0]!.entryPoint).toEqual(['node', 'apps/worker/src/tools/fss.ts']);
     expect(result.recoveryPoint?.restoreTested).toBe(false);
+    for (const name of ['api', 'worker']) {
+      for (const d of Object.values(h.definitions).filter(item => item.taskDefinition.family === `fss-prod-${name}`)) expect(d.taskDefinition.containerDefinitions[0]!.environment.filter(entry => entry.name === 'FSS_MODEL_TRANSPORT')).toEqual([{ name: 'FSS_MODEL_TRANSPORT', value: 'bedrock' }]);
+    }
     expect(JSON.stringify(h.states)).not.toContain('secret-shaped-raw-line');
     expect(h.calls.every(c => !c.args.join(' ').includes('actions/variables'))).toBe(true);
     for (const c of h.calls.filter(c => c.args[1] === 'register-task-definition' && c.args.join(' ').includes('--eval'))) expect(c.args.join(' ')).toContain('BEGIN READ ONLY');
+  });
+  it.each(['api', 'worker'].flatMap(name => ['missing', 'wrong', 'duplicate', 'conflicting', 'secret-shadow'].map(fault => ({ name, fault }))))('refuses nonunique/non-Bedrock $name/$fault before any release write', async ({ name, fault }) => {
+    const h = harness(), container = h.definitions[arn(name)]!.taskDefinition.containerDefinitions[0]!;
+    if (fault === 'missing') container.environment = container.environment.filter(entry => entry.name !== 'FSS_MODEL_TRANSPORT');
+    else if (fault === 'wrong') container.environment.find(entry => entry.name === 'FSS_MODEL_TRANSPORT')!.value = 'anthropic';
+    else if (fault === 'secret-shadow') container.secrets.push({ name: 'FSS_MODEL_TRANSPORT', valueFrom: 'unapproved-reference' });
+    else container.environment.push({ name: 'FSS_MODEL_TRANSPORT', value: fault === 'duplicate' ? 'bedrock' : 'anthropic' });
+    const result = await h.run(); expect(result.reason).toBe('bedrock_not_explicit'); expect(result.writesStarted).toBe(false);
+    expect(h.calls.some(c => ['register-task-definition', 'run-task', 'update-service'].includes(c.args[1] ?? ''))).toBe(false);
+  });
+  it.each(['api', 'worker'])('rechecks explicit %s Bedrock in candidate runtime readback', async name => {
+    const h = harness({ fault: `runtime-bedrock-${name}` }); const result = await h.run();
+    expect(result.outcome).toBe('repair-required'); expect(result.reason).toBe('bedrock_not_explicit');
+    expect(h.calls.some(c => c.program === 'node' && c.args[0] === 'scripts/productionSmoke.mjs')).toBe(false);
+  });
+  it.each([
+    ['api', 'DATABASE_SECRET_ARN'], ['worker', 'DATABASE_SECRET_ARN'], ['operations', 'DATABASE_SECRET_ARN'],
+    ['migration', 'MIGRATION_DATABASE_SECRET'], ['migration', 'FSS_RUNTIME_DATABASE_SECRET_ARN'],
+  ].flatMap(([name, key]) => ['missing', 'mismatch', 'duplicate', 'conflicting', 'unexpected-reserved'].map(fault => ({ name: name!, key: key!, fault }))))('refuses reserved credential $name/$key/$fault before writes/stop/DDL', async ({ name, key, fault }) => {
+    const h = harness({ from: 117 }), container = h.definitions[arn(name)]!.taskDefinition.containerDefinitions[0]!;
+    const entry = container.secrets.find(item => item.name === key)!;
+    const foreign = key === 'MIGRATION_DATABASE_SECRET' ? secret('app-runtime') : `${secret('app-runtime')}-foreign`;
+    if (fault === 'missing') container.secrets = container.secrets.filter(item => item.name !== key);
+    else if (fault === 'mismatch') entry.valueFrom = foreign;
+    else if (fault === 'unexpected-reserved') container.secrets.push({ name: name === 'migration' ? 'DATABASE_SECRET_ARN' : 'MIGRATION_DATABASE_SECRET', valueFrom: foreign });
+    else container.secrets.push({ ...entry, valueFrom: fault === 'duplicate' ? entry.valueFrom : foreign });
+    const result = await h.run(); expect(result.outcome).toBe('refused'); expect(result.writesStarted).toBe(false); expect(result.migrationStarted).toBe(false);
+    expect(h.calls.some(c => ['register-task-definition', 'run-task', 'update-service'].includes(c.args[1] ?? ''))).toBe(false);
   });
   it('refuses a leftover temporary operations entrypoint before any write', async () => {
     const h = harness(); h.definitions[arn('operations')]!.taskDefinition.containerDefinitions[0]!.entryPoint = ['node', '--eval', 'not-authorized'];
@@ -287,6 +366,42 @@ describe('additive protected application release', () => {
     expect(job).not.toContain('$GITHUB_ENV'); expect(job).not.toContain('actions: write');
     expect(job.split('    steps:\n')[0]).not.toContain("FSS_RELEASE_HOLD: 'false'");
     expect(workflow).toContain('default: automatic');
+  });
+});
+
+describe('trusted local always-finalizer after genuine process interruption', () => {
+  it.each([
+    { boundary: 'preflight', signal: 'SIGTERM' as const },
+    { boundary: 'observe-stored-off', signal: 'SIGINT' as const },
+    { boundary: 'migrate', signal: 'SIGTERM' as const },
+  ])('finalizes real $signal at $boundary without replay or remote cleanup', async ({ boundary, signal }) => {
+    const directory = mkdtempSync(join(process.env['JCODE_SCRATCH_DIR'] ?? tmpdir(), 'fss-application-interrupt-'));
+    try {
+      mkdirSync(join(directory, 'application'));
+      const statusFile = join(directory, 'application/status.json'), h = harness({ from: 117 });
+      const interrupted = await interruptRelease(h, statusFile, boundary, signal);
+      expect(interrupted.phase).toBe(boundary); expect(interrupted.outcome).toBe(boundary === 'preflight' ? 'pending' : 'started');
+      if (boundary !== 'preflight') expect(interrupted.currentTaskOwner).toMatch(/^fss-app-33-/u);
+      if (boundary === 'migrate') { expect(interrupted.observedSchema).toBe('unknown'); expect(interrupted.currentTaskArn).toContain('/owned'); }
+      const calls = h.calls.length;
+      await execute('bash', ['-c', applicationSummaryScript()], { cwd: repositoryPath(''), env: { PATH: process.env['PATH'], RUNNER_TEMP: directory, GITHUB_STEP_SUMMARY: join(directory, 'summary') } });
+      const finalized = JSON.parse(readFileSync(statusFile, 'utf8')) as Status;
+      expect(finalized).toEqual({ ...interrupted, outcome: boundary === 'preflight' ? 'refused' : 'repair-required', reason: 'release_interrupted' });
+      expect(h.calls).toHaveLength(calls); expect(statSync(statusFile).mode & 0o777).toBe(0o600);
+      expect(readFileSync(join(directory, 'summary'), 'utf8')).toContain('release_interrupted');
+      if (boundary === 'migrate') { expect(h.services.api.desiredCount).toBe(0); expect(h.services.api.deploymentConfiguration.deploymentCircuitBreaker.rollback).toBe(false); }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+  it.each(['completed', 'repair-required', 'refused'])('never downgrades or replaces a terminal %s result', async outcome => {
+    const directory = mkdtempSync(join(process.env['JCODE_SCRATCH_DIR'] ?? tmpdir(), 'fss-application-finalize-'));
+    try {
+      mkdirSync(join(directory, 'application'));
+      const h = harness(outcome === 'repair-required' ? { from: 117, fault: 'migration' } : outcome === 'refused' ? { fault: 'main' } : {});
+      const result = await h.run(); expect(result.outcome).toBe(outcome);
+      const statusFile = join(directory, 'application/status.json'); writeFileSync(statusFile, JSON.stringify(result), { mode: 0o600 });
+      await execute('bash', ['-c', applicationSummaryScript()], { cwd: repositoryPath(''), env: { PATH: process.env['PATH'], RUNNER_TEMP: directory, GITHUB_STEP_SUMMARY: join(directory, 'summary') } });
+      expect(JSON.parse(readFileSync(statusFile, 'utf8'))).toEqual(result);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });
 

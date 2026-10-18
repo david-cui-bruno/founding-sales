@@ -2,7 +2,7 @@
 // Additive protected application release. Legacy remains the default until hosted acceptance.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -13,7 +13,16 @@ const digest = /^sha256:[0-9a-f]{64}$/u;
 const id = /^[1-9][0-9]{0,19}$/u;
 const requireThat = (condition, reason) => { if (!condition) throw new Error(reason); };
 const envValue = (definition, key) => definition.containerDefinitions[0].environment?.find(item => item.name === key)?.value;
-const secret = (definition, key) => definition.containerDefinitions[0].secrets?.find(item => item.name === key)?.valueFrom;
+const secret = (definition, key) => {
+  const matches = definition.containerDefinitions[0].secrets?.filter(item => item.name === key) || [];
+  return matches.length === 1 ? matches[0].valueFrom : undefined;
+};
+const explicitBedrock = definition => {
+  const container = definition?.containerDefinitions?.[0];
+  const entries = container?.environment?.filter(item => item.name === 'FSS_MODEL_TRANSPORT') || [];
+  return entries.length === 1 && entries[0].value === 'bedrock' && !container.secrets?.some(item => item.name === 'FSS_MODEL_TRANSPORT');
+};
+const credentialNames = ['DATABASE_SECRET_ARN', 'MIGRATION_DATABASE_SECRET', 'FSS_RUNTIME_DATABASE_SECRET_ARN'];
 const imageSide = name => name === 'api' ? 'api' : 'worker';
 const accepted = (definition, schema) => Number(envValue(definition, 'FSS_SCHEMA_MIN')) <= schema && Number(envValue(definition, 'FSS_SCHEMA_MAX')) >= schema;
 
@@ -170,6 +179,7 @@ export async function runRelease(io, environment) {
     for (const name of names) {
       const arn = state.candidateDefinitions[name];
       const read = await aws('ecs', 'describe-task-definition', ['--task-definition', arn, '--include', 'TAGS']);
+      if (['api', 'worker'].includes(name)) requireThat(explicitBedrock(read.taskDefinition), 'bedrock_not_explicit');
       requireThat(io.equal(read.taskDefinition, current[name].definition) && io.equal(read.tags, current[name].tags), 'candidate_definition_changed');
     }
   }
@@ -273,8 +283,10 @@ export async function runRelease(io, environment) {
       requireThat(d?.family === `fss-prod-${name}` && d.containerDefinitions?.length === 1 && c.name === name && response.tags?.some(tag => tag.key === 'NamePrefix' && tag.value === 'fss-prod') && d.taskRoleArn === `arn:aws:iam::326255650484:role/fss-prod-${name === 'migration' ? 'migration' : imageSide(name)}-task` && d.executionRoleArn === `arn:aws:iam::326255650484:role/fss-prod-${name === 'migration' ? 'migration' : imageSide(name)}-exec`, 'definition_identity_changed');
       requireThat(c.image.startsWith(`${registry}/fss-prod-${imageSide(name)}@`) && digest.test(c.image.split('@')[1] || '') && envValue(d, 'FSS_DATABASE_HOST') === database.Endpoint.Address, 'definition_database_or_image_changed');
       requireThat(!c.environment?.some(item => /SECRET|DATABASE_URL|PASSWORD/u.test(item.name)), 'literal_credential_forbidden');
-      if (name !== 'migration') requireThat(secret(d, 'DATABASE_SECRET_ARN')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-'), 'runtime_credential_binding_changed');
-      else requireThat(secret(d, 'MIGRATION_DATABASE_SECRET')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/migration-database-') && !secret(d, 'DATABASE_SECRET_ARN'), 'migration_credential_binding_changed');
+      const credentials = c.secrets?.filter(item => credentialNames.includes(item.name)) || [];
+      if (name !== 'migration') requireThat(credentials.length === 1 && secret(d, 'DATABASE_SECRET_ARN')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-'), 'runtime_credential_binding_changed');
+      else requireThat(credentials.length === 2 && secret(d, 'MIGRATION_DATABASE_SECRET')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/migration-database-') && secret(d, 'FSS_RUNTIME_DATABASE_SECRET_ARN')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-') && !secret(d, 'DATABASE_SECRET_ARN'), 'migration_credential_binding_changed');
+      if (['api', 'worker'].includes(name)) requireThat(explicitBedrock(d), 'bedrock_not_explicit');
       if (['migration', 'operations'].includes(name)) requireThat(io.equal(c.entryPoint, ['node', 'apps/worker/src/tools/fss.ts']) && io.equal(c.command, [name === 'migration' ? 'migrate' : 'verify']), 'oneoff_cli_contract_changed');
       if (['api', 'worker'].includes(name)) {
         const sourceImage = await aws('ecr', 'describe-images', ['--repository-name', `fss-prod-${name}`, '--image-ids', `imageDigest=${c.image.split('@')[1]}`]);
@@ -282,7 +294,7 @@ export async function runRelease(io, environment) {
       }
       definitions[name] = { definition: d, tags: response.tags }; state.previousDefinitions[name] = d.taskDefinitionArn;
     }
-    requireThat(['api', 'worker'].every(name => accepted(definitions[name].definition, state.fromSchema)) && secret(definitions.api.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.operations.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN'), 'baseline_binding_incompatible');
+    requireThat(['api', 'worker'].every(name => accepted(definitions[name].definition, state.fromSchema)) && secret(definitions.api.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.operations.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.migration.definition, 'FSS_RUNTIME_DATABASE_SECRET_ARN') === secret(definitions.api.definition, 'DATABASE_SECRET_ARN'), 'baseline_binding_incompatible');
     requireThat(['migration', 'operations'].every(name => definitions[name].definition.containerDefinitions[0].image === definitions.worker.definition.containerDefinitions[0].image), 'oneoff_baseline_image_changed');
     phase('observe-stored-off');
     await off(definitions.operations, state.fromSchema);
@@ -375,18 +387,36 @@ export async function runRelease(io, environment) {
   }
 }
 
+// Trusted always-step only: normalize interrupted local status, never issue a release action.
+export function finalizeInterrupted(state) {
+  requireThat(state && typeof state === 'object' && typeof state.writesStarted === 'boolean', 'status_unreadable');
+  if (['completed', 'repair-required', 'refused'].includes(state.outcome)) return state;
+  const result = { ...state, outcome: state.writesStarted ? 'repair-required' : 'refused', reason: 'release_interrupted' };
+  if (state.migrationStarted && state.phase === 'migrate') result.observedSchema = 'unknown';
+  return result;
+}
+function writeStatus(path, state) {
+  writeFileSync(`${path}.tmp`, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  renameSync(`${path}.tmp`, path);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const value = name => args[args.indexOf(name) + 1];
   const status = value('--status');
   requireThat(args.includes('--status') && status, 'status_path_required');
   mkdirSync(dirname(status), { recursive: true, mode: 0o700 });
+  if (args.includes('--finalize')) {
+    requireThat(args.length === 3 && args[0] === '--finalize' && args[1] === '--status', 'finalizer_arguments_refused');
+    writeStatus(status, finalizeInterrupted(JSON.parse(readFileSync(status, 'utf8'))));
+    return;
+  }
   const files = { images: value('--images'), upgradeBinding: value('--upgrade-binding'), upgradeEvidence: value('--upgrade-evidence') };
   const { isDeepStrictEqual } = await import('node:util');
   const io = {
     now: () => Date.now(), equal: isDeepStrictEqual,
     sleep: ms => new Promise(done => setTimeout(done, ms)),
-    save: state => writeFileSync(status, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 }),
+    save: state => writeStatus(status, state),
     read: key => key === 'upgradeEvidence' ? readFileSync(files[key], 'utf8') : JSON.parse(readFileSync(files[key], 'utf8')),
     async run(program, values, input) {
       try {
