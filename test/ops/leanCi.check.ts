@@ -18,7 +18,7 @@ describe('required CI selection', () => {
   });
   it('requires real upgrade checks for schema paths and broad regression on main', () => {
     expect(select(['packages/domain/db/migrations/0100_example.sql']).upgrade).toBe(true);
-    expect(select(['apps/desktop/src/renderer/index.ts'], true).suites).toEqual(['contracts', 'domain', 'api', 'worker', 'desktop', 'ops', 'ask-evaluation']);
+    expect(select(['apps/desktop/src/renderer/index.ts'], true).suites).toEqual(['contracts', 'domain', 'api', 'worker', 'desktop', 'ops']);
   });
   it('keeps the required gate present for documentation with a recorded reason', () => {
     const result = select(['docs/adr/0011-lean-automatic-releases-with-maintenance.md']);

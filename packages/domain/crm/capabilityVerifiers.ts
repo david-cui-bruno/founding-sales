@@ -1,9 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
-import { readAskExecutionEvidence } from "./askExecutionEvidence.ts";
-import { readAskConversationAttribution } from "./askHistoryInvestigation.ts";
-import { resolveCrmSource } from "./sourceResolver.ts";
-import { createNativeCrmMailEvidence } from "./nativeMailEvidence.ts";
-import { readCurrentCanonicalIndexAuthority } from "./askCanonicalIndex.ts";
 import type { BackfillAuthority } from "../mail/crmBackfillAuthority.ts";
 import type {
   BackfillAllocation,
@@ -20,12 +14,12 @@ import {
   crmCapabilityConfigurationFingerprint,
   type CrmCapabilityRuntime,
 } from "./capabilityAuthority.ts";
-import { askFingerprint } from "./askAnswerAuthority.ts";
-import type { AskPurposeProofInput } from "./askAnswerPorts.ts";
+import { createHash } from "node:crypto";
 import type {
   MailCaptureProof,
   MailCaptureProofVerifier,
 } from "../mail/crmSources.ts";
+const allocationFingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export interface CrmExtractionAuthorityInput {
   workspaceId: string;
   generationId: string;
@@ -171,136 +165,6 @@ async function extraction(
     receipt.configuration.processorVersion === input.processorVersion
   );
 }
-async function answer(
-  context: RepositoryContext,
-  input: AskPurposeProofInput,
-  runtime: CrmCapabilityRuntime,
-) {
-  if (
-    (input.stage === "answer"
-      ? input.purpose.purpose !== "answer"
-      : ["embedding_query", "embedding_document"].includes(input.stage)
-        ? input.purpose.purpose !== "embedding"
-        : true) ||
-    context.scope.actor.kind !== "user" ||
-    context.scope.actor.userId !== input.ownerUserId
-  )
-    return null;
-  const receipt = await verifyCurrentCrmCapability(
-    context,
-    {
-      capability: "ask_answer",
-      purpose: input.purpose.purpose === "embedding" ? "embedding" : "answer",
-    },
-    runtime,
-  );
-  if (!receipt || receipt.configuration.capability !== "ask_answer")
-    return null;
-  const c = receipt.configuration;
-  const { capability: _, workspaceId: __, ownerUserId: ___, ...p } = c;
-  void _;
-  void __;
-  void ___;
-  if (
-    input.workspaceId !== context.scope.workspaceId ||
-    Object.entries(input.purpose).some(
-      ([key, value]) =>
-        askFingerprint(p[key as keyof typeof p]) !== askFingerprint(value),
-    ) ||
-    askFingerprint({ purpose: input.purpose, route: input.route }) !==
-      input.configFingerprint
-  )
-    return null;
-  let sources: readonly { kind: string; sourceId: string }[];
-  if (input.target.kind === "canonical_index") {
-    if (input.stage !== "embedding_document") return null;
-    const current = await readCurrentCanonicalIndexAuthority(
-      context,
-      input.target,
-      input.route,
-    );
-    if (!current || !isDeepStrictEqual(current.proofInput, input)) return null;
-    sources = current.sources;
-  } else {
-    const row = (
-      await context.db.query<{ state: string; cancelled_at: Date | null }>(
-        "SELECT state,cancelled_at FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 AND version=$4 AND epoch=$5",
-        [
-          context.scope.workspaceId,
-          input.target.requestId,
-          input.ownerUserId,
-          input.target.version,
-          input.target.epoch,
-        ],
-      )
-    ).rows[0];
-    if (!row || row.state !== "pending" || row.cancelled_at !== null)
-      return null;
-    const evidence = await readAskExecutionEvidence(context, {
-      requestId: input.target.requestId,
-      version: input.target.version,
-      epoch: input.target.epoch,
-    });
-    if (!evidence) return null;
-    const originals = [];
-    const mail = createNativeCrmMailEvidence();
-    for (const source of evidence.scope.sources) {
-      const original = await resolveCrmSource(context, source, mail);
-      if (!original) return null;
-      originals.push(original.source);
-    }
-    const attribution = await readAskConversationAttribution(
-      context,
-      originals,
-    );
-    if (attribution === null) return null;
-    const evidenceFingerprint = evidence.fingerprint,
-      attributionFingerprint = askFingerprint(attribution);
-    const inputScopeFingerprint = askFingerprint(evidence.scope),
-      contextFingerprint = askFingerprint(evidence.contexts),
-      initialAccessFingerprint = askFingerprint(evidence.closure);
-    if (
-      input.inputScopeFingerprint !== inputScopeFingerprint ||
-      input.contextFingerprint !== contextFingerprint ||
-      input.initialAccessFingerprint !== initialAccessFingerprint ||
-      input.evidenceFingerprint !== evidenceFingerprint ||
-      input.attributionFingerprint !== attributionFingerprint ||
-      !isDeepStrictEqual(input.agentScope, evidence.intent)
-    )
-      return null;
-    if (
-      askFingerprint({
-        target: input.target,
-        workspaceId: input.workspaceId,
-        ownerUserId: input.ownerUserId,
-        inputScopeFingerprint,
-        contextFingerprint,
-        initialAccessFingerprint,
-        evidenceFingerprint,
-        attributionFingerprint,
-        agentScope: evidence.intent,
-      }) !== input.authorizationFingerprint
-    )
-      return null;
-    sources = evidence.scope.sources;
-  }
-  for (const source of sources)
-    if (
-      !(await sourceOwned(
-        context,
-        source.kind,
-        source.sourceId,
-        input.ownerUserId,
-      ))
-    )
-      return null;
-  return {
-    configFingerprint: input.configFingerprint,
-    authorizationFingerprint: input.authorizationFingerprint,
-    validUntil: receipt.validUntil,
-    evaluationKind: "actual" as const,
-  };
-}
 /** Independent registry reads never mint grant from config. Network waits are outside these sessions. */
 export function createCrmCapabilityVerifiers(deps: CrmAuthoritySessions) {
   async function outside<T>(
@@ -411,23 +275,12 @@ export function createCrmCapabilityVerifiers(deps: CrmAuthoritySessions) {
       context: RepositoryContext,
       input: CrmExtractionAuthorityInput,
     ) => extraction(context, input, deps.runtime),
-    verifyAskPurpose: (input: AskPurposeProofInput) =>
-      outside(
-        input.workspaceId,
-        input.ownerUserId,
-        (c) => answer(c, input, deps.runtime),
-        null,
-      ),
-    revalidateAskPurpose: async (
-      context: RepositoryContext,
-      input: AskPurposeProofInput,
-    ) => (await answer(context, input, deps.runtime)) !== null,
   };
 }
 
 /** Frozen import/allocation digests contain no message bodies or provider cursor. */
 export function crmBackfillScopeFingerprint(authority: BackfillAuthority) {
-  return askFingerprint({
+  return allocationFingerprint({
     olderContextVersion: "bounded-qualified-thread-v1",
     maxThreadMessages: 500,
     importId: authority.importId,
@@ -439,7 +292,7 @@ export function crmBackfillScopeFingerprint(authority: BackfillAuthority) {
 export function crmBackfillAllocationFingerprint(
   allocation: BackfillAllocation,
 ) {
-  return askFingerprint({
+  return allocationFingerprint({
     mailboxId: allocation.mailbox_id,
     revision: allocation.revision,
     ownerUserId: allocation.owner_user_id,

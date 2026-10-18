@@ -4,7 +4,6 @@ import type {
   crmCommitmentDueSchema,
 } from "@fss/contracts";
 import type { RepositoryContext } from "../db/workspaceScope.ts";
-import type { AskTaskDependency } from "./askTaskDependencies.ts";
 import { readAskActions } from "./askActions.ts";
 import { readCrmCommitments } from "./commitments.ts";
 import { createNativeCrmMailEvidence } from "./nativeMailEvidence.ts";
@@ -44,7 +43,6 @@ function within(scope: Scope, at: string | null) {
 export async function readAskAdditionalOpenTasks(
   context: RepositoryContext,
   scope: Scope,
-  observe?: (dependencies: AskTaskDependency[]) => void,
 ) {
   const tasks = new Map<string, Task>();
   let manualScanned = 0,
@@ -178,7 +176,6 @@ export async function readAskAdditionalOpenTasks(
     if (page.nextAfterId === cursor) break;
     cursor = page.nextAfterId;
   }
-  observe?.([...tasks.values()].map(task => ({kind: task.kind, taskId: task.key.slice(task.key.indexOf(":") + 1), version: task.version})));
   return {
     records: [...tasks.values()],
     complete: manualComplete && commitmentsComplete && !supersededPartial,

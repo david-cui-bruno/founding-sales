@@ -76,8 +76,6 @@ export * from './todayActionsV2.ts';
 
 export * from './crmBackfill.ts';
 
-export * from './askAnswers.ts';
-export * from './askHistory.ts';
 export * from './askActions.ts';
 
 export * from './experiments.ts';
@@ -90,8 +88,6 @@ export * from './crmExtractionRoutes.ts';
 
 export * from './crmActivation.ts';
 export * from './crmAcquisitionDiagnostic.ts';
-export * from './askSessions.ts';
-export * from './askAgentScope.ts';
 export * from './linkedinPolicy.ts';
 export * from './linkedinPostingPolicy.ts';
 export * from './linkedinRecurringPosting.ts';

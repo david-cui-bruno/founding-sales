@@ -1,5 +1,3 @@
-import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
-import type {AskPurposeProofInput} from '@fss/domain/crm/askAnswerPorts.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {crmExtractJobHandler} from '../../worker/src/handlers/crmExtract.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
@@ -51,30 +49,6 @@ it('reserves four cents but settles exact accepted fractional extraction usage a
    expect((await post('/research/firm',{firmId})).body).toMatchObject({spend:{monthToDateCents:4}});
   }finally{release();await running;}
   expect((await post('/crm/processing/read',{source:lookup})).body).toMatchObject({state:'complete',financial:{dispatchState:'settled',settlementState:'settled',settledCents:2}});
-  expect((await post('/research/firm',{firmId})).body).toMatchObject({spend:{monthToDateCents:2}});
- }finally{await f.stop();}
-});
-
-it('settles registered Ask usage at its exact fractional purpose instead of rounded rates',async()=>{
- const f=await createAuthFixture();
- try{
-  const token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
-  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false});
-  const command=(body:Record<string,unknown>)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...body});
-  const personId=((await post('/crm/people/create',command({fullName:'Fractional Ask source'}))).body as {result:{personId:string}}).result.personId;
-  expect((await post('/crm/people/source/add',command({personId,sourceKey:'ask-fractional',excerpt:'repairs '.repeat(1250),occurredAt:'2026-10-01T14:00:00Z'}))).status).toBe(200);
-  const source=((await post('/crm/people/read',{personId})).body as {sources:{workspaceId:string;sourceId:string;revision:number;contentHash:string}[]}).sources[0]!;
-  await f.db.query(`INSERT INTO crm_ask_purposes(workspace_id,purpose,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,evaluation_fingerprint,processor_version,retrieval_version,answer_version,support_version,chunker_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,'answer',1,true,'fractional-ask','literal-v1','fixture-grant','fixture-handling',$2,'ask-answer-v1','lexical-original-v1','literal-v1','exact-original-v1','lexical-original-v1',100,1000,1.1,5.5,$3)`,[f.alpha.workspaceId,'a'.repeat(64),f.alpha.admin.userId]);
-  const requested=await post('/ask/answers/request',command({question:'repairs',scope:{sources:[{workspaceId:source.workspaceId,sourceId:source.sourceId,revision:source.revision,contentHash:source.contentHash,kind:'selected_note',locator:null}]}}));
-  expect(requested.status).toBe(200);
-  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
-  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{allowControlledEvaluation:true,verifyPurpose:async(proof:AskPurposeProofInput)=>{
-   expect(proof.purpose).toMatchObject({inputTokenPriceMicros:'1.1',outputTokenPriceMicros:'5.5'});
-   return {configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture'};
-  },answer:{endpointId:'fractional-ask',modelVersion:'literal-v1',providerKey:'fixture.ask.answer',run:async()=>({acceptance:'accepted',usage:{inputTokens:10000,outputTokens:1000},answer:{claims:[],abstained:true}})}}});
-  await runOnce(f.db,{registry,owner:'fractional-ask',limit:20});
-  expect((await post('/ask/answers/read',{requestId})).body).toMatchObject({state:'complete',answer:{abstained:true}});
-  const firmId=await seedFirm(f,{name:'Fractional Ask public spend',assignedUserId:f.alpha.admin.userId});
   expect((await post('/research/firm',{firmId})).body).toMatchObject({spend:{monthToDateCents:2}});
  }finally{await f.stop();}
 });
@@ -143,8 +117,7 @@ it('keeps zero output price funded and bounded, and settles sub-micro input with
  try{
   const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({allowControlledEvaluation:true,adapter:{endpointId:'precision-fixture',modelVersion:'precision-v1',accessGrantVersion:'fixture-grant',dataHandlingVersion:'fixture-handling',providerKey:'fixture.crm_extraction',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1000000,outputTokens:1000},claims:[]})}}));
   await runOnce(f.db,{registry,owner:'fractional-binary-boundary',limit:20});
-  // 1,000,000 tokens at 0.14 microdollars = exactly 14 cents. The observed
-  // usage exceeds the reserved token fence, so content must still be refused.
+  // Known usage is conserved even when it exceeds the reserved token fence.
   expect((await post('/crm/processing/read',{source})).body).toMatchObject({state:'failed',reason:'provider_usage_exceeded',claims:[],financial:{settlementState:'settled',settledCents:14}});
  }finally{await f.stop();}
 });
