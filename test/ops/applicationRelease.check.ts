@@ -76,10 +76,13 @@ function securityGroups() {
 interface Options {
   from?: number; to?: number; fault?: string;
   migrate?: () => Promise<void>; verify?: () => Promise<unknown>; off?: () => Promise<unknown>;
+  docker?: (args: string[]) => Promise<string>;
 }
 function harness(options: Options = {}) {
   const from = options.from ?? 118, to = options.to ?? 118;
   let schema = from, clock = Date.parse('2026-10-18T18:00:00Z'), revision = 1, taskNumber = 0, recordStored = false, checks = 0;
+  let promotionGateChanged = false;
+  const productionTags: Partial<Record<'api' | 'worker', string>> = {};
   const calls: { program: string; args: string[]; phase: string }[] = [], states: Status[] = [];
   const definitions: Record<string, { taskDefinition: Definition; tags: typeof tags }> = {};
   for (const name of ['api', 'worker', 'migration', 'operations']) definitions[arn(name)] = { taskDefinition: definition(name, from), tags };
@@ -102,6 +105,7 @@ function harness(options: Options = {}) {
       if (options.fault === 'cancel' && current() === 'migrate') throw new Error('cancelled');
       if (program === 'gh') {
         checks++;
+        if (promotionGateChanged && args[1]?.includes('/actions/runs/22')) return JSON.stringify({ ...run('greenfield', 22), conclusion: 'failure' });
         if (options.fault === 'gate-later' && checks > 12) return JSON.stringify({ ...run('greenfield', 22), conclusion: 'failure' });
         if (args[1]?.includes('/actions/runs/22')) return JSON.stringify(run('greenfield', 22));
         if (args[1]?.includes('/actions/runs/11')) return JSON.stringify({ ...run('greenfield-images', 11), run_attempt: options.fault === 'image-attempt' ? 2 : 1 });
@@ -109,7 +113,15 @@ function harness(options: Options = {}) {
         return JSON.stringify({ workflow_runs: [run('greenfield', 22)] });
       }
       if (program === 'curl') return JSON.stringify({ build: { commit: current() === 'runtime-verify' ? COMMIT : BASE }, schema: { databaseVersion: schema, accepted: true } });
-      if (program === 'docker') return '';
+      if (program === 'docker') {
+        const result = await options.docker?.(args) ?? '';
+        if (args[0] === 'buildx') {
+          const which = arg(args, '--tag').includes('/fss-prod-api:') ? 'api' : 'worker';
+          productionTags[which] = NEW[which];
+          if (options.fault === 'promotion-gate-change') promotionGateChanged = true;
+        }
+        return result;
+      }
       if (program === 'node') {
         if (args.includes('tools/ci/release-plan.ts')) return JSON.stringify({ fromSchema: from, toSchema: to, reasons: [] });
         if (options.fault === 'smoke') throw new Error('command_node_failed');
@@ -125,7 +137,15 @@ function harness(options: Options = {}) {
       if (kind === 'ecr') {
         if (action === 'get-login-password') return 'not-a-real-token';
         const which = arg(args, '--repository-name').endsWith('api') ? 'api' : 'worker';
-        return JSON.stringify({ imageDetails: [{ imageDigest: arg(args, '--image-ids').startsWith('imageDigest=') ? OLD[which] : NEW[which], imageTags: [`ci-${BASE}`] }] });
+        if (action === 'batch-get-image') {
+          if (options.fault === 'promotion-gate-prewrite') promotionGateChanged = true;
+          const imageId = { imageTag: arg(args, '--image-ids').slice('imageTag='.length) };
+          if (options.fault === 'promotion-tag-unreadable') return JSON.stringify({ images: [], failures: [{ imageId, failureCode: 'Unknown' }] });
+          return JSON.stringify(productionTags[which]
+            ? { images: [{ imageId: { ...imageId, imageDigest: productionTags[which] } }], failures: [] }
+            : { images: [], failures: [{ imageId, failureCode: 'ImageNotFound' }] });
+        }
+        return JSON.stringify({ imageDetails: [{ imageDigest: arg(args, '--image-ids').startsWith('imageDigest=') || options.fault === 'promotion-digest-drift' ? OLD[which] : productionTags[which], imageTags: [`ci-${BASE}`] }] });
       }
       if (kind === 'cloudwatch') return JSON.stringify({ Datapoints: [{ Maximum: 4, Timestamp: new Date(clock).toISOString() }] });
       if (kind === 'logs') {
@@ -204,8 +224,63 @@ function harness(options: Options = {}) {
       throw new Error('unexpected_cloud_action');
     },
   };
-  return { io, env, groups, calls, states, definitions, services, artifacts, schema: () => schema, run: () => release.runRelease(io, env) };
+  return { io, env, groups, calls, states, definitions, services, artifacts, productionTags, schema: () => schema, run: () => release.runRelease(io, env) };
 }
+
+describe('application image promotion and child-process pull guard (not Fargate acceptance)', () => {
+  it.each([
+    { fault: '', existing: 'none', reason: undefined, copies: 2, pulls: 2 },
+    { fault: '', existing: 'exact', reason: undefined, copies: 0, pulls: 2 },
+    { fault: '', existing: 'api-exact', reason: undefined, copies: 1, pulls: 2 },
+    { fault: '', existing: 'api-conflict', reason: 'promotion_tag_conflict', copies: 0, pulls: 0 },
+    { fault: '', existing: 'worker-conflict', reason: 'promotion_tag_conflict', copies: 1, pulls: 1 },
+    { fault: 'promotion-tag-unreadable', existing: 'none', reason: 'promotion_tag_unreadable', copies: 0, pulls: 0 },
+    { fault: 'promotion-digest-drift', existing: 'none', reason: 'promotion_digest_changed', copies: 1, pulls: 0 },
+    { fault: 'promotion-digest-drift', existing: 'exact', reason: 'promotion_digest_changed', copies: 0, pulls: 0 },
+    { fault: 'pull-api', existing: 'none', reason: 'image_pullability_guard_failed', copies: 1, pulls: 1 },
+    { fault: 'pull-worker', existing: 'exact', reason: 'image_pullability_guard_failed', copies: 0, pulls: 2 },
+    { fault: 'promotion-gate-change', existing: 'none', reason: 'provenance_changed', copies: 1, pulls: 1 },
+    { fault: 'promotion-gate-prewrite', existing: 'none', reason: 'provenance_changed', copies: 0, pulls: 0 },
+  ])('handles $fault / $existing with exact immutable digests', async ({ fault, existing, reason, copies, pulls }) => {
+    const h = harness({ fault, docker: async args => {
+      // Real child exit/stdout transport with an inert Docker stand-in, never a registry.
+      const script = `const args=JSON.parse(process.argv[1]);if(args[0]==='pull'&&args.at(-1)===process.argv[2]){console.error('private-pull-error');process.exit(17);}console.log(JSON.stringify(args));`;
+      const failed = fault === 'pull-api' ? `${registry}/fss-prod-api@${NEW.api}` : fault === 'pull-worker' ? `${registry}/fss-prod-worker@${NEW.worker}` : '';
+      const result = await execute(process.execPath, ['--eval', script, JSON.stringify(args), failed], { env: { PATH: process.env['PATH'] } });
+      expect(JSON.parse(result.stdout)).toEqual(args);
+      return result.stdout;
+    } });
+    if (existing === 'exact') Object.assign(h.productionTags, NEW);
+    if (existing === 'api-exact') h.productionTags.api = NEW.api;
+    if (existing === 'api-conflict') h.productionTags.api = OLD.api;
+    if (existing === 'worker-conflict') h.productionTags.worker = OLD.worker;
+    const result = await h.run();
+    expect(result).toMatchObject({ outcome: reason ? 'repair-required' : 'completed', migrationStarted: false });
+    expect(result.reason).toBe(reason);
+    const promoted = h.calls.filter(c => c.program === 'docker' && c.args[0] === 'buildx');
+    const pulled = h.calls.filter(c => c.program === 'docker' && c.args[0] === 'pull');
+    expect(promoted).toHaveLength(copies); expect(pulled).toHaveLength(pulls);
+    for (const [n, call] of h.calls.filter(c => c.args[1] === 'batch-get-image').entries()) {
+      expect(call.args).toEqual(['ecr', 'batch-get-image', '--repository-name', `fss-prod-${n === 0 ? 'api' : 'worker'}`, '--image-ids', `imageTag=ci-${COMMIT}`, '--output', 'json']);
+    }
+    for (const [n, call] of pulled.entries()) {
+      const name = n === 0 ? 'api' : 'worker';
+      expect(call.args).toEqual(['pull', '--platform', 'linux/arm64', `${registry}/fss-prod-${name}@${NEW[name]}`]);
+    }
+    for (const call of promoted) {
+      const name = call.args.at(-1)?.includes('/fss-rh-api@') ? 'api' : 'worker';
+      expect(call.args).toEqual(['buildx', 'imagetools', 'create', '--tag', `${registry}/fss-prod-${name}:ci-${COMMIT}`, '--prefer-index=false', `${registry}/fss-rh-${name}@${NEW[name]}`]);
+    }
+    if (reason) {
+      expect(result.phase).toBe('promote-images');
+      expect(h.calls.filter(c => c.phase === 'promote-images').every(c => !['register-task-definition', 'run-task', 'update-service'].includes(c.args[1] ?? ''))).toBe(true);
+    } else {
+      const candidate = h.calls.findIndex(c => c.args[1] === 'register-task-definition' && !c.args.join(' ').includes('--eval'));
+      expect(candidate).toBeGreaterThan(h.calls.lastIndexOf(pulled[1]!));
+    }
+    expect(JSON.stringify(h.states)).not.toContain('private-pull-error');
+  });
+});
 
 describe('independent service network contracts', () => {
   it.each([118, 117])('preserves exact worker network for every one-off from schema %s', async from => {
