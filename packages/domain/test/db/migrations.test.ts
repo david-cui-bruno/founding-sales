@@ -8,6 +8,12 @@ import { seedTwoWorkspaces, type TwoWorkspaces } from './support/fixtures.ts';
 import { seedCrm } from './support/crmFixtures.ts';
 import { seedMail } from './support/mailFixtures.ts';
 import { LEGACY_FIXTURE_BODY, seedOutbound } from './support/outboundFixtures.ts';
+import { seedManualLinkedin } from './support/linkedinManualFixture.ts';
+import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
+import { withTransaction } from '../../db/queryable.ts';
+import { readPerson } from '../../crm/people.ts';
+import { bindLinkedinManual } from '../../crm/linkedinManual.ts';
+import { readLinkedinManual } from '../../crm/linkedinManualRead.ts';
 
 /**
  * Tables the foundation migration creates and later migrations keep, scoped and
@@ -140,8 +146,7 @@ describe('the schema release contract: stop, migrate, start', () => {
       '../../db/schemaRange.ts'
     );
     expect(files.at(-1)?.version).toBe(CURRENT_SCHEMA_VERSION);
-    // What the previous release's images declare for both services: every range since
-    // migration 0006 is a point, and production's images before this release say {18, 18}.
+    // Previous images require exactly their own schema, not the new declaration.
     const PREVIOUS_IMAGES = { minimum: previous, maximum: previous };
     for (const range of [API_SCHEMA_RANGE, WORKER_SCHEMA_RANGE]) {
       expect(range).toEqual({ minimum: CURRENT_SCHEMA_VERSION, maximum: CURRENT_SCHEMA_VERSION });
@@ -150,7 +155,14 @@ describe('the schema release contract: stop, migrate, start', () => {
     const seeded = await createTestDatabase({ throughVersion: previous });
     try {
       expect(await readAppliedSchemaVersion(seeded.session)).toBe(previous);
-      await seeded.session.query("INSERT INTO workspaces (slug, display_name) VALUES ('seeded', 'Seeded')");
+      const members = await seedTwoWorkspaces(seeded.session);
+      const crm = await seedCrm(seeded.session, members);
+      const context = repositoryContext(workspaceScope(members.alpha.workspaceId, {
+        kind: 'user', userId: members.alpha.salesperson.userId, role: 'salesperson',
+      }), seeded.session);
+      const binding = await withTransaction(seeded.session, () => seedManualLinkedin(context, crm.alpha.firmId));
+      const before = await readPerson(context, binding.personId);
+      const accountBefore = await seeded.session.query('SELECT * FROM social_accounts WHERE id=$1', [binding.accountId]);
 
       // Before the migration: the previous images run, the new ones refuse to start.
       expect(await checkSchemaRange(seeded.session, PREVIOUS_IMAGES)).toMatchObject({ accepted: true });
@@ -165,6 +177,12 @@ describe('the schema release contract: stop, migrate, start', () => {
       const applied = await applyMigrations(seeded.session);
       expect(applied.map(entry => entry.version)).toEqual([CURRENT_SCHEMA_VERSION]);
       expect(await readAppliedSchemaVersion(seeded.session)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(await readPerson(context, binding.personId)).toEqual(before);
+      expect((await seeded.session.query('SELECT * FROM social_accounts WHERE id=$1', [binding.accountId])).rows).toEqual(accountBefore.rows);
+      expect(await withTransaction(seeded.session, () => bindLinkedinManual(context, binding))).toMatchObject({ ok: true });
+      const ledger = await withTransaction(seeded.session, () => readLinkedinManual(context, { ledgerId: binding.ledgerId }));
+      expect(ledger!.ledgers).toEqual([expect.objectContaining({ id: binding.ledgerId, connectionState: 'unknown', sendingPermission: false })]);
+      expect(ledger!.history).toEqual([]);
 
       // After it: the previous images refuse to start, the new ones run.
       expect(await checkSchemaRange(seeded.session, PREVIOUS_IMAGES)).toMatchObject({

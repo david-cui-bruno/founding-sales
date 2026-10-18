@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { statementsOf } from './sql.ts';
+import { declaredSequenceGrantDifferences } from './sequenceGrants.ts';
 
 /**
  * The privileges the migrations *declare*, against the ones the database *has*.
@@ -211,7 +212,7 @@ function replay(directory: string, through: number, start: ReplayStart): ReplayR
       const verb = (grant[1] ?? '').toUpperCase();
       const privileges = privilegeList(grant[2] ?? '');
       const target = (grant[3] ?? '').trim();
-      if (/^(SCHEMA|FUNCTION)\b/iu.test(target) || /^ALL\s+(SEQUENCES|FUNCTIONS|ROUTINES)/iu.test(target)) continue;
+      if (/^(SCHEMA|FUNCTION|SEQUENCE)\b/iu.test(target) || /^ALL\s+(SEQUENCES|FUNCTIONS|ROUTINES)/iu.test(target)) continue;
       const wholeSchema = /^ALL\s+TABLES/iu.test(target);
       const tables = wholeSchema
         ? [...present]
@@ -851,6 +852,11 @@ export async function checkPrivileges(
   // ---- rule 1b: the four categories the replay cannot speak about.
   compareAcl('PUBLIC', baseline.publicGrants, live.publicGrants, findings);
   compareAcl('sequence', baseline.sequenceGrants, live.sequenceGrants, findings);
+  // New explicit sequence grants are checked exactly, including missing and excess
+  // rights for both roles. They are never mistaken for tables or blanket-exempted.
+  for (const difference of declaredSequenceGrantDifferences(options.migrations, baseline.schemaVersion, options.toVersion, baseline.sequenceGrants, live.sequenceGrants)) {
+    findings.push({ kind: 'grant_differs', ...difference });
+  }
   compareAcl('routine', baseline.routineGrants, live.routineGrants, findings);
   compareAcl('schema', baseline.schemaGrants, live.schemaGrants, findings);
 
