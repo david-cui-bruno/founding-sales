@@ -11,7 +11,7 @@ import { meetingAnalysisPort } from '../../meetings/analysisAdapter.ts';
 import { updateSetting } from '../../settings/store.ts';
 import { beginMeetingAnalysisRequest, dispatchMeetingAnalysisRequest, completeMeetingAnalysisRequest, expireMeetingAnalysisRequest } from '../../meetings/analysisPaid.ts';
 import { meetingTasksFixture } from './support/meetingTasksFixture.ts';
-const at = '2026-10-04T10:00:00Z';
+const at = new Date().toISOString();
 describe('meeting outcome lifecycle', () => {
   let f: Awaited<ReturnType<typeof meetingTasksFixture>>;
   beforeEach(async () => { f = await meetingTasksFixture(); });
@@ -79,10 +79,10 @@ describe('meeting outcome lifecycle', () => {
   });
   it('scrubs content on deletion and accepts late actual usage after timeout without resurrecting notes', async () => {
     const q = await paid();
-    await withTransaction(f.db.session, () => expireMeetingAnalysisRequest(f.context, q.requestId, '2026-10-04T13:00:00Z'));
+    await withTransaction(f.db.session, () => expireMeetingAnalysisRequest(f.context, q.requestId, new Date(Date.parse(at) + 3 * 60 * 60 * 1000).toISOString()));
     const other = await f.db.appRuntimeSession();
     await withTransaction(other, async () => { await other.query('DELETE FROM meetings WHERE id=$1', [q.meetingId]); });
-    expect(await withTransaction(f.db.session, () => completeMeetingAnalysisRequest(f.context, { ...q, at: '2026-10-04T13:01:00Z', result: { outcome: 'accepted', content: { overview: 'Deleted speech', items: [], reviewReasons: [] }, usage: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 0 } } }))).toBe('stale');
+    expect(await withTransaction(f.db.session, () => completeMeetingAnalysisRequest(f.context, { ...q, at: new Date(Date.parse(at) + 181 * 60 * 1000).toISOString(), result: { outcome: 'accepted', content: { overview: 'Deleted speech', items: [], reviewReasons: [] }, usage: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 0 } } }))).toBe('stale');
     expect((await f.db.session.query('SELECT meeting_id,result FROM meeting_analysis_requests WHERE id=$1', [q.requestId])).rows).toEqual([{ meeting_id: null, result: null }]);
     expect((await f.db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE id=$1', [q.attemptId])).rows).toEqual([{ state: 'settled', settled_cents: 1 }]);
     expect((await f.db.session.query('SELECT id FROM meeting_analyses')).rows).toHaveLength(0);

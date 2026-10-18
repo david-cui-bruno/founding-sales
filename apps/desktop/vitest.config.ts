@@ -16,6 +16,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Real-response fixtures import the controlled API/worker deployment in this
+    // process, so they need its explicit model transport just like API tests.
+    env: { FSS_MODEL_TRANSPORT: 'bedrock' },
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx'],
     testTimeout: 15_000,
   },

@@ -6,6 +6,8 @@ import { buildHealthReport } from '../src/health.ts';
 import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError } from '../src/limits.ts';
 import { contextFor, scopeForPrincipal, systemScope, type VerifiedPrincipal } from '../src/scope.ts';
 import { route } from '../src/server.ts';
+import { applyMigrations } from '@fss/domain/db/migrationRunner.ts';
+import { createReadinessGate } from '../src/bootstrap/readinessGate.ts';
 
 const CLIENT_VERSIONS = clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] });
 
@@ -101,6 +103,25 @@ describe('the health route against a real database', () => {
 
   afterAll(async () => {
     await database.drop();
+  });
+
+  it('refuses the previous release schema and serves only after the real upgrade', async () => {
+    const previous = await createTestDatabase({ throughVersion: CURRENT_SCHEMA_VERSION - 1 });
+    const gate = createReadinessGate({ ttlMilliseconds: 0 });
+    const report = () => buildHealthReport({ session: previous.session, supportedClientVersions: CLIENT_VERSIONS, sendingEnabled: false, environment: {} });
+    try {
+      expect(await gate.admit('/crm/linkedin/manual/read', previous.session)).toEqual({ admitted: false, reason: 'schema_out_of_range' });
+      expect(await report()).toMatchObject({ status: 'degraded', schema: {
+        databaseVersion: CURRENT_SCHEMA_VERSION - 1, accepted: false, reason: 'database_behind_binary',
+      } });
+      await applyMigrations(previous.session);
+      expect(await gate.admit('/crm/linkedin/manual/read', previous.session)).toEqual({ admitted: true });
+      expect(await report()).toMatchObject({ status: 'serving', sendingEnabled: false, schema: {
+        databaseVersion: CURRENT_SCHEMA_VERSION, accepted: true, reason: null,
+      } });
+    } finally {
+      await previous.drop();
+    }
   });
 
   it('reports the schema range and the database version', async () => {

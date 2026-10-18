@@ -154,16 +154,24 @@ export async function readCreditSpend(
   return await readFundedSpend(context, input, 'credits');
 }
 
+/** Conservative research money bounds include cash and credits, not just cash. */
+export async function readResearchSpend(
+  context: RepositoryContext,
+  input: { readonly businessTimeZone: string; readonly at: string },
+): Promise<Spend> {
+  return await readFundedSpend(context, input, 'all');
+}
+
 async function readFundedSpend(
   context: RepositoryContext,
   input: { readonly businessTimeZone: string; readonly at: string },
-  funding: 'cash' | 'credits',
+  funding: 'cash' | 'credits' | 'all',
 ): Promise<Spend> {
   const businessDate = localDate(input.at, input.businessTimeZone);
   const monthStart = `${businessDate.slice(0, 7)}-01`;
   // A provider is credit-funded by its kind, the key's part before the first dot.
   const credits = `split_part(provider_key, '.', 1) = ANY($4::text[])`;
-  const funded = funding === 'credits' ? credits : `NOT ${credits}`;
+  const funded = funding === 'all' ? `($4::text[] IS NOT NULL)` : funding === 'credits' ? credits : `NOT ${credits}`;
   const { rows } = await context.db.query<{ today: string | null; month: string | null }>(
     `WITH spend AS (
        SELECT business_date, cost_cents AS cents FROM provider_ledger WHERE workspace_id = $1 AND ${funded}
