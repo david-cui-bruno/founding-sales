@@ -205,11 +205,6 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
-  bookingCreate: (submissionId: string): string => `booking-create:${submissionId}`,
-  bookingChange: (submissionId: string): string => `booking-change:${submissionId}`,
-  bookingConversation: (conversationId: string): string => `booking-conversation:${conversationId}`,
-  bookingMessage: (messageId: string): string => `booking-message:${messageId}`,
-  bookingInterpretation:(requestId:string):string=>`booking-interpretation:${requestId}`,
   automaticEmail: (revision:number,at:string):string => `automatic-email:${String(revision)}:${hourOf(at)}`,
   sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,

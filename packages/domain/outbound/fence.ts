@@ -16,9 +16,8 @@ import {
 import type { OutboundState } from '@fss/contracts';
 
 /** Human callers supply already reviewed final bytes. Dispatch still revalidates authority. */
-export async function prepareStandingBookingFence(context:RepositoryContext,input:Parameters<typeof prepareHumanReplyFence>[1]):Promise<SendResult<PreparedFence>>{return prepareNonStepFence(context,input,'standing_booking');}
 export async function prepareHumanReplyFence(context:RepositoryContext,input:{draftId:string;mailboxId:string;firmId:string;contactId:string;opportunityId:string|null;address:string;routeId:string;routeVersion:number;subject:string;body:string;sourceZone:string}):Promise<SendResult<PreparedFence>>{return prepareNonStepFence(context,input,'draft');}
-async function prepareNonStepFence(context:RepositoryContext,input:Parameters<typeof prepareHumanReplyFence>[1],origin:'draft'|'standing_booking'):Promise<SendResult<PreparedFence>>{
+async function prepareNonStepFence(context:RepositoryContext,input:Parameters<typeof prepareHumanReplyFence>[1],origin:'draft'):Promise<SendResult<PreparedFence>>{
  const existing=await readFenceByDraftId(context,input.draftId);
  if(existing)return acceptSend({outboundMessageId:existing.id,created:false});
  const issue=sendBodyIssue(input.body);
@@ -27,8 +26,8 @@ async function prepareNonStepFence(context:RepositoryContext,input:Parameters<ty
  const domain=(await context.db.query<{domain:string}>('SELECT domain FROM sending_domains WHERE workspace_id=$1 AND is_primary',[context.scope.workspaceId])).rows[0]?.domain;
  if(!domain)return refuseSend('sending_domain_unknown');
  await context.db.query(`INSERT INTO outbound_messages(id,workspace_id,mailbox_id,origin_kind,draft_id,firm_id,contact_id,opportunity_id,recipient_address,recipient_route_id,recipient_route_version,subject,body,rendered_hash,provider_message_id_header,send_at,source_zone,placement_rule_version)
- VALUES($1,$2,$3,$16,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,clock_timestamp(),$15,$17)`,[id,context.scope.workspaceId,input.mailboxId,input.draftId,input.firmId,input.contactId,input.opportunityId,input.address,input.routeId,input.routeVersion,input.subject,input.body,renderedHash(input.subject,input.body),deterministicHumanReplyMessageId(input.draftId,id,domain),input.sourceZone,origin,origin==='standing_booking'?'standing-booking.1':'human-reply.1']);
- await appendEvent(context,{outboundMessageId:id,fromState:null,toState:'prepared',actor:describeActor(context),detail:{origin:origin==='draft'?'human_reply':'standing_booking'}});
+ VALUES($1,$2,$3,$16,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,clock_timestamp(),$15,$17)`,[id,context.scope.workspaceId,input.mailboxId,input.draftId,input.firmId,input.contactId,input.opportunityId,input.address,input.routeId,input.routeVersion,input.subject,input.body,renderedHash(input.subject,input.body),deterministicHumanReplyMessageId(input.draftId,id,domain),input.sourceZone,origin,'human-reply.1']);
+ await appendEvent(context,{outboundMessageId:id,fromState:null,toState:'prepared',actor:describeActor(context),detail:{origin:'human_reply'}});
  return acceptSend({outboundMessageId:id,created:true});
 }
 
