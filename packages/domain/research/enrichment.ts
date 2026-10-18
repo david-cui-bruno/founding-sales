@@ -411,7 +411,7 @@ export async function ensureResearchCalling(
   }
 
   if (reserved !== undefined) {
-    await markCalling(context, reserved.id);
+    if (!await markCalling(context, reserved.id)) return { kind: 'closed' };
     return { kind: 'calling', attempt: reserved.attempt, reservationId: reserved.id, cents: reserved.cents };
   }
 
@@ -472,7 +472,7 @@ export async function ensureResearchCalling(
     maxInputTokens: clearance.value.maxInputTokens,
     maxOutputTokens: clearance.value.maxOutputTokens,
   });
-  await markCalling(context, fresh.id);
+  if (!await markCalling(context, fresh.id)) return { kind: 'closed' };
   return { kind: 'calling', attempt, reservationId: fresh.id, cents: fresh.cents };
 }
 

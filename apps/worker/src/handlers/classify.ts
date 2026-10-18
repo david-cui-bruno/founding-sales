@@ -98,9 +98,9 @@ const LIVE_LOADERS: TransportLoaders = { anthropic: loadAnthropicTransport, bedr
  *
  * `FSS_MODEL_TRANSPORT=bedrock` builds the Bedrock transport from `AWS_REGION` and the task
  * role, and routes by model (review BR1R, finding 1): a model Bedrock can serve for this
- * account (`BEDROCK_MODEL_TABLE`) goes to Bedrock, any other to the direct API with the
- * classifier key when the deployment holds one — the path it had before, cash — and with no
- * key it has no route. The route is per model and fixed, never a fallback after a failure.
+ * account (`BEDROCK_MODEL_TABLE`) goes to Bedrock, any other has no route, even when a
+ * direct key is installed. This deployment is credit-only. The route is per model and
+ * fixed, never a fallback after a failure. Historical direct-API costs remain cash.
  * Unset or `anthropic` is the direct API for every model, and needs the key, as before. Any
  * other value builds nothing.
  */
@@ -112,14 +112,13 @@ export async function readModelTransportComposition(
   const problem = modelTransportProblem(environment);
   if (problem !== null) return { transport: null, problem };
   if (readModelTransport(environment).kind === 'bedrock') {
-    const secrets = environmentClassifierSecrets(environment);
-    const anthropic = secrets.names().length === 0 ? null : await loaders.anthropic({ secrets });
+    // Credit-only deployment: an installed direct key is not authority to spend cash.
     const bedrock = await loaders.bedrock({ region: (environment['AWS_REGION'] ?? '').trim() });
     return {
       transport: routedTransport({
-        route: bedrockModelRoute({ directAvailable: anthropic !== null }),
+        route: bedrockModelRoute({ directAvailable: false }),
         bedrock,
-        anthropic,
+        anthropic: null,
         // The model id and the transport, nothing else.
         onRoute: (model, transport) => log?.('model_route', { model: model.slice(0, 64), transport }),
       }),

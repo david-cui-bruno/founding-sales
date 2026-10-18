@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { meetingOutcomesFixture } from './support/meetingOutcomesFixture.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { updateSetting } from '../../settings/store.ts';
+import { endOfLocalDay } from '../../src/rules/localClock.ts';
 import { meetingAnalysisPort } from '../../meetings/analysisAdapter.ts';
-const accountId = '123456789012', at = '2026-10-04T10:00:00.000Z';
+const accountId = '123456789012', at = new Date().toISOString();
 const coverage = { accountId, service: 'bedrock', evidenceRef: 'synthetic-evidence', verifiedAt: '2026-10-01T00:00:00Z', validUntil: '2026-11-01T00:00:00Z', status: 'verified' };
 describe('credit-only meeting analysis', () => {
   let f: Awaited<ReturnType<typeof meetingOutcomesFixture>>;
@@ -83,7 +84,7 @@ describe('credit-only meeting analysis', () => {
     await configure({ dailyCeilingCents: 1 });
     expect(await withTransaction(f.db.session, () => dispatchMeetingAnalysisRequest(f.context, { requestId: seeded.requestId, reservationId: reserved.reservationId, at }, d))).toMatchObject({ kind: 'held', reason: 'budget_held' });
     expect((await f.db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE id=$1', [reserved.reservationId])).rows).toEqual([{ state: 'released', settled_cents: 0 }]);
-    expect((await f.db.session.query('SELECT paid_attempts,next_wake_at FROM meeting_analysis_requests WHERE id=$1', [seeded.requestId])).rows).toEqual([{ paid_attempts: 0, next_wake_at: new Date('2026-10-05T04:00:00Z') }]);
+    expect((await f.db.session.query('SELECT paid_attempts,next_wake_at FROM meeting_analysis_requests WHERE id=$1', [seeded.requestId])).rows).toEqual([{ paid_attempts: 0, next_wake_at: new Date(Date.parse(endOfLocalDay(at, 'America/New_York')) + 1) }]);
   });
 
 });

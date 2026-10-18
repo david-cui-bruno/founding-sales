@@ -270,8 +270,8 @@ run "the_bedrock_worker_invokes_only_the_mapped_profiles_and_their_routed_models
   }
 
   assert {
-    condition     = output.worker_environment["FSS_MODEL_TRANSPORT"] == "bedrock"
-    error_message = "A Bedrock worker is told so, under the variable the code reads."
+    condition     = output.worker_environment["FSS_MODEL_TRANSPORT"] == "bedrock" && output.api_environment["FSS_MODEL_TRANSPORT"] == "bedrock"
+    error_message = "API preview and worker admission must receive the same explicit Bedrock transport, without adding API model permissions."
   }
 
   assert {
@@ -325,6 +325,7 @@ run "the_default_worker_has_no_bedrock_grant_and_no_transport_variable" {
     condition = (
       !strcontains(aws_iam_role_policy.worker_task.policy, "bedrock:")
       && !contains(keys(output.worker_environment), "FSS_MODEL_TRANSPORT")
+      && output.api_environment["FSS_MODEL_TRANSPORT"] == "anthropic"
     )
     error_message = "worker_model_transport defaults to anthropic: no Bedrock statement, no FSS_MODEL_TRANSPORT."
   }
