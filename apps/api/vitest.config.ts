@@ -12,6 +12,9 @@ export default defineConfig({
     ],
   },
   test: {
+    // Controlled model fixtures use Bedrock. Research previews require an explicit
+    // deployment route, and missing/unknown-route tests override this environment.
+    env: { FSS_MODEL_TRANSPORT: 'bedrock' },
     pool: 'forks',
     globalSetup: ['../../packages/domain/db/testing/globalSetup.ts'],
     include: ['test/**/*.test.ts'],

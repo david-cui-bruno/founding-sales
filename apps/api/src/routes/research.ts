@@ -5,13 +5,14 @@ import {
   researchSettingsCommandSchema,
 } from '@fss/contracts';
 import { readFirmForActor } from '@fss/domain/crm/dto.ts';
+import { modelProviderKey, readModelTransport } from '@fss/domain/classification/modelTransport.ts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { listFirmFacts, readCallBrief, readFirmJudgments } from '@fss/domain/research/brief.ts';
 import { researchClearanceAvailable } from '@fss/domain/research/ceilings.ts';
 import { enqueueFirmResearch } from '@fss/domain/research/enqueue.ts';
-import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
+import { readResearchSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
 import { addFirmLink, listFirmLinks } from '@fss/domain/research/links.ts';
-import { worstCaseRunCents } from '@fss/domain/research/pricing.ts';
+import { isPricedModel, worstCaseRunCents } from '@fss/domain/research/pricing.ts';
 import { listRuns } from '@fss/domain/research/runs.ts';
 import { updateResearchSettings } from '@fss/domain/research/settings.ts';
 import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
@@ -80,6 +81,8 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
   if (!scoped.ok) return scoped.result;
   const context = scoped.context;
   const deps: RouteDeps = { auth, request, principal: authenticated.principal };
+  // Unlike a worker's legacy direct default, a preview cannot infer its worker's route.
+  const transport = (process.env['FSS_MODEL_TRANSPORT'] ?? '').trim() === '' ? null : readModelTransport(process.env).kind;
 
   if (request.path === '/research/settings') {
     // `{}` reads and any field updates, both admin-only: the ceilings are the
@@ -87,18 +90,21 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
     // a separate path, because `updateResearchSettings` is where `decideAdminOnly`
     // lives and a read that skipped it would answer the budget to everybody.
     return await runRouteCommand(deps, researchSettingsCommandSchema, 'configure_research', async (scope, body) => {
+      if (transport === null) return { ok: false, reason: 'research_transport_unavailable' };
       const { commandId: _commandId, clientVersion: _clientVersion, ...patch } = body;
       const updated = await updateResearchSettings(scope, patch);
       if (!updated.ok) return { ok: false, reason: updated.reason };
+      if (!isPricedModel(updated.value.modelName, transport)) return { ok: false, reason: 'model_unpriced' };
       const now = await databaseNow(scope);
       const businessTimeZone = await workspaceBusinessZone(scope);
       return {
         ok: true,
         value: {
           settings: updated.value,
-          spend: await readSpend(scope, { businessTimeZone, at: now }),
+          spend: await readResearchSpend(scope, { businessTimeZone, at: now }),
           worstCaseRunCents: worstCaseRunCents({
             modelName: updated.value.modelName,
+            transport,
             maxPagesPerFirm: updated.value.maxPagesPerFirm,
             maxPageBytes: updated.value.maxPageBytes,
           }),
@@ -110,10 +116,11 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
   if (request.path === '/research/firm/run') {
     return await runRouteCommand(deps, researchRunCommandSchema, 'run_research', async (scope, body) => {
       if (!(await visibleFirm(scope, body.firmId))) return { ok: false, reason: 'firm_unknown' };
+      if (transport === null) return { ok: false, reason: 'research_transport_unavailable' };
       // Asked before the enqueue so a day at its ceiling answers the click rather
       // than queueing a job that will refuse in a minute's time. The handler asks
       // again, because the ceiling can be reached in between.
-      const clearance = await researchClearanceAvailable(scope, { at: await databaseNow(scope) });
+      const clearance = await researchClearanceAvailable(scope, { at: await databaseNow(scope), providerKey: modelProviderKey('extraction', transport) });
       if (!clearance.ok) {
         return { ok: false, reason: clearance.reason === 'research_disabled' ? 'research_disabled' : 'ceiling_reached' };
       }
@@ -196,7 +203,7 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
         extraction: run.extraction,
       })),
       links: await listFirmLinks(context, firmId),
-      spend: await readSpend(context, { businessTimeZone, at: now }),
+      spend: await readResearchSpend(context, { businessTimeZone, at: now }),
     },
   };
 }
