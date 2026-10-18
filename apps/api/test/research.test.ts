@@ -176,7 +176,9 @@ describe('the research routes', () => {
     expect(answer.status).toBe(200);
     expect(wireDrift(researchFirmResponseSchema, answer.body)).toEqual([]);
     const brief = answer.body['brief'] as Record<string, unknown>;
-    expect(brief['generated']).toBe(true);
+    expect(brief['generated']).toBe(false);
+    expect(brief['questions']).toBeNull();
+    expect(brief['opening']).toBeNull();
     expect((brief['whyFit'] as unknown[]).length).toBe(1);
     expect((answer.body['runs'] as Record<string, unknown>[])[0]).toMatchObject({ revision: 1, costCents: 2 });
   });
