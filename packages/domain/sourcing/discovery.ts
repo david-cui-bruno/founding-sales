@@ -1,5 +1,4 @@
 import {discoveryFirmName,isDiscoveryDirectory} from './discoveryIdentity.ts';
-import {requestQualification} from './qualificationStore.ts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -22,7 +21,7 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
  const db=ctx.db as SessionQueryable;
  const attempt=await withTransaction(db,async()=>{
   if(!await allowed(ctx))return null;
-  const settings=(await db.query<{query_cursor:number}>(`SELECT query_cursor FROM sourcing_discovery_settings WHERE workspace_id=$1 AND enabled AND next_run_at<=now() FOR UPDATE`,[ctx.scope.workspaceId])).rows[0];
+  const settings=(await db.query<{query_cursor:number;searches_per_day:number}>(`SELECT query_cursor,searches_per_day FROM sourcing_discovery_settings WHERE workspace_id=$1 AND enabled AND next_run_at<=now() FOR UPDATE`,[ctx.scope.workspaceId])).rows[0];
   if(!settings)return null;
   const account=(await db.query<{halted:boolean;daily_used:number;monthly_used:number}>(`SELECT halted,daily_used,monthly_used FROM sourcing_search_account WHERE id=true FOR UPDATE`)).rows[0];
   if(!account){await db.query("UPDATE sourcing_discovery_settings SET last_result='account_not_configured' WHERE workspace_id=$1",[ctx.scope.workspaceId]);return null;}
@@ -34,10 +33,13 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
   if(budget.daily_used>=20||budget.monthly_used>=600){await db.query("UPDATE sourcing_discovery_settings SET last_result='quota_exhausted' WHERE workspace_id=$1",[ctx.scope.workspaceId]);return null;}
   const policy=await ensureTargetingPolicy(ctx);
   const query=policy.queries[settings.query_cursor%policy.queries.length]!;
-  const row=(await db.query<{id:string;day:Date}>(`INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,policy_version) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id,day) DO NOTHING RETURNING id,day`,[ctx.scope.workspaceId,query.id,query.query,policy.version])).rows[0];
+  // Existing attempts retain slot zero. Never reuse an occupied slot, even after a failure.
+  const slot=(await db.query<{slot:number}>(`SELECT slot FROM generate_series(0,$2::integer-1) AS slots(slot) WHERE NOT EXISTS (SELECT 1 FROM sourcing_discovery_attempts a WHERE a.workspace_id=$1 AND a.day=(now() AT TIME ZONE 'UTC')::date AND a.slot=slots.slot) ORDER BY slot LIMIT 1`,[ctx.scope.workspaceId,settings.searches_per_day])).rows[0]?.slot;
+  if(slot===undefined)return null;
+  const row=(await db.query<{id:string;day:Date}>(`INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,policy_version,slot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(workspace_id,day,slot) DO NOTHING RETURNING id,day`,[ctx.scope.workspaceId,query.id,query.query,policy.version,slot])).rows[0];
   if(!row)return null;
   await db.query('UPDATE sourcing_search_account SET daily_used=daily_used+1,monthly_used=monthly_used+1 WHERE id=true');
-  await db.query("UPDATE sourcing_discovery_settings SET next_run_at=now()+interval '1 day',query_cursor=query_cursor+1,last_result='dispatched' WHERE workspace_id=$1",[ctx.scope.workspaceId]);
+  await db.query("UPDATE sourcing_discovery_settings SET next_run_at=now()+interval '1 day'/$2::integer,query_cursor=query_cursor+1,last_result='dispatched' WHERE workspace_id=$1",[ctx.scope.workspaceId,settings.searches_per_day]);
   return {id:row.id,query};
  });
  if(!attempt)return;
@@ -70,7 +72,7 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
     const saved=await saveCandidate(ctx,{firmName:discoveryFirmName(hit.title,hit.url),website:hit.url,locality:attempt.query.locality,region:attempt.query.region,signal:'fit_only',evidence:hit.snippet.trim().slice(0,2000)||'Search returned no excerpt; source verification required.',sourceUrl:hit.url,observedOn:observed,preparedBy:'Tavily Basic search · not verified',discoveryKnownDomain:known,discoveryQuery:attempt.query.query});
     if(!saved.ok)throw new Error('discovery_candidate_invalid');
     created++;
-    await requestQualification(ctx,{candidateId:saved.value.id,expectedRevision:1});
+    // Qualification is reserved for owner-kept drafts or an explicit manual request.
     await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,saved.value.id]);
    }
   }

@@ -36,7 +36,10 @@ const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourc
 async function discovered(){
  await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'fixture',hits:[{url:'https://example.test/',title:'Boston Real Estate Development - Property Management - ERG',snippet:'Recorded search excerpt; not verified.'}]})});
  const listed=await listCandidates(ctx(),{status:'needs_review',offset:0});if(!listed.ok)throw Error(listed.reason);
- const candidate=listed.value.candidates[0]!;const view=await readQualification(ctx(),{candidateId:candidate.id});if(!view)throw Error('missing qualification');
+ const candidate=listed.value.candidates[0]!;
+ // Identity recovery exercises explicitly requested research, never discovery fan-out.
+ await withTransaction(db.session,()=>requestQualification(ctx(),{candidateId:candidate.id,expectedRevision:candidate.revision}));
+ const view=await readQualification(ctx(),{candidateId:candidate.id});if(!view)throw Error('missing qualification');
  return {candidate,runId:view.runId};
 }
 it('recovers a supported legal office name in place and requires a new revision-bound qualification',async()=>{
@@ -175,7 +178,9 @@ it('recovers the recorded BRG office locality missed by extraction and requires 
  const payload=recordedBrg.candidate;
  await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'recorded-brg',hits:[{url:payload.website,title:payload.firmName,snippet:payload.evidence}]})});
  const listed=await listCandidates(ctx(),{status:'needs_review',offset:0});if(!listed.ok)throw Error(listed.reason);
- const candidate=listed.value.candidates[0]!;const initial=await readQualification(ctx(),{candidateId:candidate.id});if(!initial)throw Error('missing run');
+ const candidate=listed.value.candidates[0]!;
+ await withTransaction(db.session,()=>requestQualification(ctx(),{candidateId:candidate.id,expectedRevision:candidate.revision}));
+ const initial=await readQualification(ctx(),{candidateId:candidate.id});if(!initial)throw Error('missing run');
  const pageFetch:PageFetchProvider={providerKey:'company_page',fetchPages:async()=>({ok:true,costCents:0,value:{pages:recordedBrg.observations.map(source=>({url:source.url,contentHash:'a'.repeat(64),contentType:'text/html',firstParty:source.firstParty,retrievedAt:new Date().toISOString(),body:new TextEncoder().encode(source.blocks.map(b=>`<p>${b.text}</p>`).join('')+(source.truncated?'<p>Excluded overflow block</p>':''))})),skipped:{}}})};
  const recordedExtraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>300,extract:async input=>({ok:true,costCents:1,value:{facts:recordedBrg.facts.map(f=>{
   const old=recordedBrg.observations.find(source=>source.id===f.observationId)!;
