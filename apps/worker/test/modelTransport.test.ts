@@ -89,7 +89,7 @@ describe('the worker builds the transport FSS_MODEL_TRANSPORT names, and only th
   // A generated value: nothing in this repository is a credential.
   const key = randomBytes(24).toString('base64url');
 
-  it('routes by model under bedrock: a mapped model to Bedrock, an unmapped one to the direct API with the key, nowhere without it', async () => {
+  it('refuses unmapped models in the credit-only Bedrock deployment even with a direct key', async () => {
     const direct = directCanary();
     const logs: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
     const recording = recordingLoaders({ anthropic: direct.transport, bedrock: failingBedrock() });
@@ -99,26 +99,25 @@ describe('the worker builds the transport FSS_MODEL_TRANSPORT names, and only th
       recording.loaders,
     );
     if (options === undefined) throw new Error('no options');
-    expect(recording.asked.sort()).toEqual(['anthropic', 'bedrock']);
+    expect(recording.asked).toEqual(['bedrock']);
     expect(recording.regions).toEqual(['us-east-1']);
     const route = routeOfTransport(options.transport);
     expect(route('claude-haiku-4-5')).toBe('bedrock');
     expect(route('claude-haiku-4-5-20251001')).toBe('bedrock');
-    // The production classifier default, which this account cannot call on Bedrock: its path is unchanged.
-    expect(route('claude-opus-5')).toBe('anthropic');
-    expect(route('claude-sonnet-5-5')).toBe('anthropic');
+    // Unsupported models have no route, never a new cash authorization.
+    expect(route('claude-opus-5')).toBeNull();
+    expect(route('claude-sonnet-5-5')).toBeNull();
     expect(describeClassifier(options)).toEqual({ classifier_configured: true, classifier_enabled: true, model_transport: 'bedrock' });
     expect(JSON.stringify(describeClassifier(options))).not.toContain(key);
 
-    // An Opus 5 request reaches the direct client; a Haiku request reaches Bedrock and not it.
+    // An unmapped Opus request reaches neither client. Haiku reaches only Bedrock.
     await anthropicReplyClassifier({ transport: options.transport, model: 'claude-opus-5', effort: 'low', maxOutputTokens: 512 }).classify(MESSAGE);
-    expect(direct.requests()).toBe(1);
+    expect(direct.requests()).toBe(0);
     const haiku = await anthropicReplyClassifier({ transport: options.transport, model: 'claude-haiku-4-5', effort: 'low', maxOutputTokens: 512 }).classify(MESSAGE);
     expect(haiku.provider).toMatchObject({ status: 503, type: 'ServiceUnavailableException' });
-    expect(direct.requests()).toBe(1);
+    expect(direct.requests()).toBe(0);
     // Each route is logged as the model id and the transport, nothing else.
     expect(logs.filter(entry => entry.event === 'model_route').map(entry => entry.fields)).toEqual([
-      { model: 'claude-opus-5', transport: 'anthropic' },
       { model: 'claude-haiku-4-5', transport: 'bedrock' },
     ]);
 
@@ -128,7 +127,7 @@ describe('the worker builds the transport FSS_MODEL_TRANSPORT names, and only th
     expect(routeOfTransport(keyless.transport)('claude-opus-5')).toBeNull();
     const unrouted = await anthropicReplyClassifier({ transport: keyless.transport, model: 'claude-opus-5', effort: 'low', maxOutputTokens: 512 }).classify(MESSAGE);
     expect(unrouted.provider).toMatchObject({ refused: true, type: 'model_unrouted' });
-    expect(direct.requests()).toBe(1);
+    expect(direct.requests()).toBe(0);
   });
 
   it('has no automatic fallback: a Bedrock failure is the paid-call pattern’s ambiguous failure, and the direct API is never asked for that model', async () => {
