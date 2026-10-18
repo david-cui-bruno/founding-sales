@@ -19,7 +19,6 @@ import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts'
 import { crmExtractJobHandler } from '../handlers/crmExtract.ts';
 import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
-import {linkedinRecurringHandler,linkedinRecurringSource} from '../social/linkedinRecurringJobs.ts';
 import {socialDraftModel} from '../social/draftModel.ts';
 import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
 import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts';
@@ -130,7 +129,6 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
-  readonly linkedinRecurring?:Parameters<typeof linkedinRecurringHandler>[0];
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
   /** Controlled composition only; no live proof verifier is configured by startup. */
@@ -281,7 +279,6 @@ export function registerHandlers(
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
-  registry.register(linkedinRecurringHandler(composition.linkedinRecurring));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
   if(composition.research){
@@ -518,7 +515,6 @@ export function workerDueWorkSources(
     readonly crmMailProcessing?:CrmMailEvidencePort;
     readonly crmMailBackfill?:boolean;
     readonly socialDraft?: boolean;
-    readonly linkedinRecurring?:Parameters<typeof linkedinRecurringSource>[0];
     readonly qualification?: boolean;
     readonly discovery?: boolean;
     readonly sourcing?: boolean;
@@ -540,7 +536,6 @@ export function workerDueWorkSources(
     crmMailBackfillSource(options.crmMailBackfill===true),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
-    linkedinRecurringSource(options.linkedinRecurring),
     outreachReplySource(),
     meetingAnalysesSource(options.meetingAnalysis === true),
     meetingFollowThroughSource(),
