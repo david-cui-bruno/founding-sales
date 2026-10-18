@@ -20,7 +20,7 @@ Every infrastructure apply, role change, deploy, Enable, send, post and booking 
 
 ## Product evidence and limits
 
-Business Gmail capture #549, progress/Today #550 and Ask #551 retain separate evidence and activation requirements under #552. Capture is not hosted processing, backfill or outreach consent. Selected-source Ask does not wait for Gmail or native acceptance. Gemini LOW remains the selected next answering route, not permission for a paid run. Actual ordinary-worker results include useful answers and retained support/latency failures; synthetic publication/reference checks do not establish entailment or representative reliability.
+Business Gmail capture #549, progress/Today #550 and Ask #551 retain separate evidence and activation requirements under #552. Capture is not hosted processing, backfill or outreach consent. Selected-source Ask does not wait for Gmail or native acceptance. Gemini LOW remains the selected next answering route, not permission for a paid run. [Actual ordinary-worker results](../sourcing/ask-vertex-worker-results-20261012.md) retain useful answers and support/latency failures; synthetic publication/reference checks do not establish entailment or representative reliability.
 
 Posting policy #616 and booking lifecycle #624 have integrated source to reconcile against their actual acceptance contracts. Native/account/provider/installed evidence and scoped operation remain pending in #618/#625/#633/#460/#466. The bounded #632 reservation experiment settled gate-first identity/lock composition, but did not implement the coordinator or native action history. Its merge-with-mail foreign-key failure remains open evidence, not a pass.
 
