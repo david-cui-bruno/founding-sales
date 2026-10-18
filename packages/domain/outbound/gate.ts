@@ -1,5 +1,3 @@
-import {decideBookingMessagePermission} from '../meetings/bookingMessages.ts';
-import type {BookingMessageRuntime} from '../meetings/bookingMessagesRuntime.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { attestedReleaseBinding, type ReleaseAdmission } from '../release/records.ts';
 import { effectiveSendingEnabled } from '../settings/effective.ts';
@@ -51,7 +49,6 @@ import {currentHolidayCalendar} from '../sequences/calendars.ts';
  */
 
 export interface SendGateDeps {
-  readonly bookingMessageRuntime?: BookingMessageRuntime | undefined;
   /** An explicit queued human approval, never a sequence setting or sending override. */
   readonly humanReplyRevision?: number | undefined;
   /** Database time, so the window agrees with the fence's timestamps. */
@@ -127,6 +124,8 @@ export async function decideSend(
   fence: OutboundFenceRow,
   deps: SendGateDeps = {},
 ): Promise<SendResult<SendPlan>> {
+  // Retained booking fences are history, never fresh dispatch authority.
+  if (fence.originKind === 'standing_booking') return refuseSend('step_ineligible', 'booking_automation_removed');
   // The decision instant. Injected by tests and the drill, which pin the sending
   // window to a weekday morning; otherwise the database's clock at this statement,
   // which inside the claiming transaction is the claim itself (Appendix D: "fence
@@ -175,8 +174,6 @@ export async function decideSend(
   // flag, and the approval of the template the bytes came from.
   const humanPermission=fence.originKind==='draft'?await decideHumanReplyPermission(context,fence,deps.humanReplyRevision):null;
   if(humanPermission&&!humanPermission.ok)return humanPermission;
-  const bookingPermission=fence.originKind==='standing_booking'?await decideBookingMessagePermission(context,fence,deps.bookingMessageRuntime):null;
-  if(bookingPermission&&!bookingPermission.ok)return bookingPermission;
   const permission = fence.originKind!=='step_execution'?null:await decideStepPermission(
     context,
     fence,
