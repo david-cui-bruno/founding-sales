@@ -15,7 +15,9 @@ Callie is a 24/7 maintenance agent for property managers: it handles tenant requ
 | `test/ops` | The ops suite: the release and deploy scripts against stub CLIs, the deployment role policies, the alarm digest and the code-to-Terraform cross-checks. |
 | `docs/greenfield/` | How each part works and how it is released; `docs/archive/decisions/` has the decisions made along the way. |
 
-At the root: `scripts/` holds the secret scan (`verifySecrets.mjs`) and the production smoke, and `certs/` the RDS CA bundle the images trust. The previous-generation app was deleted in lane g95; the tag `legacy-final` holds its last tree ([`docs/greenfield/legacy.md`](docs/greenfield/legacy.md)).
+A connected account, a configured model and source completion are not live permission. Daily selling uses research → call → outcome → human-chosen regular follow-up → reply handling → Today. Ask is plain record/keyword search, not generated answering. AI booking lifecycle, automatic email admission and recurring posting have been removed. Cal.com sync, manual LinkedIn drafting/ledger and historical privacy paths remain.
+
+At the root, `scripts/` holds secret scanning and smoke checks, and `certs/` contains the RDS CA bundle. The previous-generation app is recoverable from tag `legacy-final`; its [historical note](docs/archive/greenfield/pre-lean-docs-20261018/legacy.md) is archived. Finished plans and dated research live in `docs/archive/`, excluded from ordinary agent reading.
 
 ## Quick start
 
@@ -32,7 +34,7 @@ npx playwright install chromium   # only for the desktop window specs
 npm run gate:greenfield           # typecheck, lint, every workspace's tests and the ops suite; what CI runs
 npm run typecheck                 # = typecheck:greenfield
 npm run lint                      # one ESLint config over apps, packages, test/ops and scripts
-npm test                          # workspace, ops and Ask evaluation suites
+npm test                          # current workspace and ops suites
 npm run test:desktop:e2e          # the desktop window in chromium; not part of the gate
 FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop -- /tmp/callie-smoke   # an unsigned local bundle
 ```
@@ -43,10 +45,11 @@ The tests run against a real PostgreSQL 16 (embedded locally, a service containe
 
 - [CRM/Ask module map](docs/agents/crm-ask-modules.md): owning modules and test seams for capture, evidence, retrieval and deletion.
 
-- `docs/greenfield/release.md`: how a release goes out; production has been live since 24 September 2026. The records of the releases before 25 September are in `docs/archive/release-records.md`.
-- `docs/greenfield/processes.md`: what the API and the worker do and how they start and stop.
-- `docs/greenfield/today.md`, `sequences.md`, `sending.md`, `mail.md`, `suppression.md`: the product's rules, one area each.
-- `docs/greenfield/infra-topology.md`, `infra-apply-runbook.md`: the AWS side.
+- [Daily selling guide](docs/operations/how-to-sell.md), [current operating state](docs/operations/current-state.md) and [roadmap](docs/sourcing/roadmap-20261007.md): setup, dated acceptance and current priorities.
+- [Current release procedure](docs/operations/lean-release-workflow.md): the existing supported execution path. `docs/greenfield/release.md` retains detailed invariants and safety references, not an alternative approval.
+- `docs/greenfield/processes.md`: actual API/worker composition and current module entrypoints.
+- `docs/greenfield/today.md`, `calling.md`, `sequences.md`, `mail.md`, `settings.md`: retained product behavior. `sending.md` and `suppression.md` retain independent safeguards.
+- `docs/greenfield/infra-topology.md`, `infra-apply-runbook.md` and `runbooks/restore.md`: existing infrastructure/recovery instructions. This documentation reduction does not simplify or replace the release path.
 
 ## Working rules
 

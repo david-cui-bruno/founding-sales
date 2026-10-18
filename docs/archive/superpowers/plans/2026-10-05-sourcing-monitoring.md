@@ -1,6 +1,6 @@
 # Scheduled candidate source monitoring
 
-Spec: `docs/superpowers/specs/2026-10-04-targeted-lead-sourcing-design.md`.
+Spec: `docs/archive/superpowers/specs/2026-10-04-targeted-lead-sourcing-design.md`.
 
 Use executing-plans inline. Reuse the current isolated branch and draft PR397.
 

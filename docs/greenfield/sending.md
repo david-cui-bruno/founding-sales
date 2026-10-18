@@ -390,7 +390,7 @@ daily cap is reported as suppressed, because that is the fact somebody needs to 
    `single_email` permission is **spent by the claim that sends it** (`consumed_at`), in
    the same committed transaction as the day's counter, so the second attempt reads
    `follow_up_scope_exhausted`. See
-   `docs/greenfield/decisions/follow-up-eligibility-20260929.md`;
+   `docs/archive/greenfield/pre-lean-docs-20261018/decisions/follow-up-eligibility-20260929.md`;
 3. the frozen route invalidated or retired since preparation (12.3's bounce handling);
 4. any open hold blocking `email_send` for this owner or firm (4.2, 12.6);
 5. coverage unproved;

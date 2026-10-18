@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Zod, PostgreSQL, React, Electron, Vitest.
 
-**Spec:** `docs/superpowers/specs/2026-10-04-targeted-lead-sourcing-design.md`
+**Spec:** `docs/archive/superpowers/specs/2026-10-04-targeted-lead-sourcing-design.md`
 
 ## Global Constraints
 - Only AWS/GCP credits or free allowances; this slice invokes no paid provider.

@@ -1,6 +1,6 @@
 # LinkedIn native acceptance — #460
 
-This is a concrete execution plan, not a live provider receipt. Read [the existing adapter evidence](social-adapter-verification.md) and current operations state before executing. Source tests, signed distribution, installed behavior and LinkedIn acceptance are separate gates. Historical October 6 schedules/cancellations do not certify the currently installed build's production runner.
+This is a concrete execution plan, not a live provider receipt. Read [the existing adapter evidence](../archive/sourcing/20261018/social-adapter-verification.md) and current operations state before executing. Source tests, signed distribution, installed behavior and LinkedIn acceptance are separate gates. Historical October 6 schedules/cancellations do not certify the currently installed build's production runner.
 
 ## Candidate and settled behavior
 

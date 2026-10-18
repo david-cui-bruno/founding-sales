@@ -2439,7 +2439,7 @@ Fourteen mutations are appended to `scripts/releaseMutationCheck.mjs` (main + 14
 
 **What was wrong.** Audit item G10 (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`): the root `package.json` belonged to the unused previous-generation app, so `npm start`, `npm test`, `npm run typecheck` and `npm run lint` meant that app, `npm ci` built its native modules, and `.github/workflows/ci.yml` ran its two macOS jobs, `source` and `client`, on every push and pull request. They waited 20 to 40 minutes for a runner and gated every greenfield change.
 
-**What changed.** `docs/archive/decisions/g89-greenfield-is-the-default.md` has the reasoning, and `docs/greenfield/legacy.md` lists what remains of the old app and how to run it.
+**What changed.** `docs/archive/decisions/g89-greenfield-is-the-default.md` has the reasoning, and `docs/archive/greenfield/pre-lean-docs-20261018/legacy.md` lists what remains of the old app and how to run it.
 
 - The bare `typecheck`, `lint` and `test` run the greenfield equivalents; there is no bare `start`. Every old script is `legacy:<its old name>`, except `verify:secrets`, which is shared. `gate:greenfield`, `test:desktop:e2e`, `package:desktop` and every script the `greenfield*.yml` workflows call are unchanged.
 - `postinstall` only fetches the Electron binary. The `safe-log-fs` build and the SQLite driver rebuilds are `npm run legacy:setup`, which `source` and `release.yml` run after `npm ci`.

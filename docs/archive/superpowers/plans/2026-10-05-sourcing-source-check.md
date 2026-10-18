@@ -5,7 +5,7 @@
 **Goal:** Let David check a candidate's cited page through the existing bounded worker fetcher and inspect dated source text without treating retrieval as qualification.
 **Architecture:** Add one optional source-check snapshot to each candidate, an idempotent admin enqueue command, and one bulk job. Keep the last successful snapshot if a later check fails. Reuse research settings, daily counter, source protections and parser; no AI or search provider calls.
 **Tech Stack:** TypeScript, PostgreSQL, React, existing worker/job runner.
-**Spec:** `docs/superpowers/specs/2026-10-04-targeted-lead-sourcing-design.md`
+**Spec:** `docs/archive/superpowers/specs/2026-10-04-targeted-lead-sourcing-design.md`
 
 ## Global constraints
 - No sending, admission, automatic deals or production deployment.

@@ -1,0 +1,349 @@
+# Today: one card per firm, derived from its tasks
+
+Specification revision 3, sections 8.2 and 8.3, Appendix A rows "Reassign firm" and
+"Callback confirm/complete", Appendix C's `today:{workspace}:{business_date}:{algorithm}`,
+Appendix D, and Appendix G 8 and 33. This is the shape of the daily list and the rules
+that govern changing it.
+
+## The short version
+
+`today_items` is the truth: one row per contact task on one workspace business date.
+`today_snapshots` is the *card*, and every column that describes a firm's position in
+the list is recomputed from that firm's unfinished items by a row trigger, inside
+whatever transaction touched them. `today_snoozes` outlives both, because a task
+snoozed until Thursday must not come back in Wednesday's 05:00 rebuild.
+
+Deriving the card rather than writing it is what makes 8.2's hardest sentence true by
+construction: "The firm's lane and sort instant come from its highest-priority and
+earliest-due unfinished item." A writer cannot forget to update the card, because no
+writer updates the card.
+
+## Where everything is
+
+```
+packages/domain/db/migrations/0008_today.sql  the tables, the recompute, the triggers
+packages/domain/today/types.ts                lanes, kinds, refusal codes, the algorithm version
+packages/domain/today/lanes.ts                8.2's ordering, as pure functions
+packages/domain/today/snapshots.ts            the reads and the one write path
+packages/domain/today/build.ts                the 05:00 build and its sources
+packages/domain/today/promotions.ts           the interface G7 and G8 call
+packages/domain/today/snooze.ts               snooze, an automated send's pause, and its release (g79)
+packages/domain/today/dto.ts                  the list, the expanded card
+apps/worker/src/handlers/todayBuild.ts        the job and its scheduler source
+apps/api/src/routes/today.ts                  GET /today, POST /today/firm
+apps/api/src/routes/snooze.ts                 POST /today/snooze, /today/snooze/cancel, /today/pause/release
+apps/api/src/routes/callbacks.ts              GET /callbacks, POST /callbacks/complete, /callbacks/schedule (g79)
+packages/domain/dial/calls.ts                 logging a call against its task (g79: decide, record, apply)
+apps/desktop/src/renderer/today*.ts           the lanes: contract, view model, drawing (today/Lanes.tsx)
+apps/desktop/src/renderer/home*.ts            Home, the main window that shows them (lane g65)
+apps/desktop/src/main/todayBridge.ts          the main-process half of its bridge
+apps/desktop/src/main/telHandoff.ts           the tel: driver and the two dial commands
+apps/desktop/src/main/crmBridge.ts            G3b's CRM views, wired
+apps/desktop/src/main/todayWindow.ts          the Today and CRM channels; the menu is windowMenu.ts
+```
+
+## The rules a reader should carry
+
+### 1. The card is derived, and nothing writes it
+
+`today_refresh_card(workspace, date, firm)` reads the firm's open items and writes the
+card: the lane and sort instant from `ORDER BY today_lane_precedence(lane), due_at,
+item_key LIMIT 1`, the four counts as `count(*) FILTER`, and the assignee from
+`firms.assigned_user_id`. A row trigger on `today_items` calls it after every insert,
+update and delete.
+
+The tiebreak is `item_key` and not `id`, and that is load-bearing: a generated uuid is
+not the same in two databases, so a build of the same data in two places would choose a
+different "earliest" task among ties. The property test in
+`packages/domain/test/today/determinism.test.ts` builds the same firms and callbacks
+twice, in two different insertion orders, on two databases, and compares the lists.
+
+When the last item is finished the card keeps the lane and instant it had and its
+`open_items` reaches zero. It stops being on the list — the reader filters `open_items
+> 0` — and stays in the table as the record of what that day's list contained. That is
+8.2's "Completing one item leaves the firm visible while another qualifying item
+remains", from the other end.
+
+### 1b. Lane 4 puts the call-first firms in front, and the brief rides on the card
+
+Lane 4 was ordered by the firm's creation instant alone. Since lane R it is
+**researched firms whose judgment says `call_first`, then the rest, each group oldest
+first** — a stable partition of the `new_firm` lane in `readTodayList`, applied after
+`listTodayCards` has already ordered every lane. The other three lanes pass through
+untouched: a reply is ordered by when it arrived, and no judgment about a firm should
+move one.
+
+Because the order is part of the algorithm, `TODAY_ALGORITHM_VERSION` is `today.2` and
+migration 0023 moved the database-side `today_algorithm_version()` with it. Appendix C
+makes the version part of the Today job's identity, so the change makes this morning's
+build a different job rather than a second attempt at yesterday's.
+
+**And the partition applies only to a snapshot built under `today.2`.** A card row
+carries the version it was built under; re-ordering a date whose cards say `today.1`
+would rewrite a morning list that has already happened, and `today_snapshots` is the
+record of what that list *was*. One card at an older version therefore leaves the whole
+date alone — half a list ordered two ways is worse than either. Migration 0023 also
+makes `today_refresh_card` stamp `today_algorithm_version()` on the cards it rebuilds
+(its `ON CONFLICT DO UPDATE` branch never touched the column, so a card built yesterday
+and recomputed this morning went on claiming `today.1` for ever), which is what lets a
+date convert wholly at its first rebuild rather than staying mixed.
+
+The expanded card carries `brief` — the call brief of `docs/greenfield/research.md`, or
+null for a firm nobody has researched. It is **optional on the wire and omitted from
+card version 1**: `todayFirmResponseSchema` is a `z.object`, so an installed desktop
+that has never heard of the key strips it rather than refusing the card, and adding it
+is not a wire break.
+
+The first line of the brief, and of the dial panel under it, is the announcement said
+when somebody answers — `CALL_ANNOUNCEMENT` in `packages/contracts/src/dial.ts`, which
+is a constant today and becomes a workspace setting with the next migration that
+rewrites `workspace_settings_key_known`, because that CHECK pins the settings keys and a
+new one cannot be added without a migration and a schema release.
+
+### 2. A promotion commits with its source event, and the source lane never learns about Today
+
+8.2: "Event-driven reply and callback promotions commit with their source event."
+
+**Callbacks are a trigger.** `callbacks_today_promotion` fires inside G4's
+`createCallback` transaction. Nothing in `packages/domain/today` is called and nothing
+in `packages/domain/dial` knows this table exists; a rolled-back callback leaves no
+Today entry, which `today.test.ts` proves by rolling one back and finding none.
+Completing or cancelling the callback finishes its task the same way — Appendix A's
+"Callback and Today promotion/removal".
+
+**Reassignment is a trigger.** `firms_today_transfer` fires on any change of
+`firms.assigned_user_id`, transferring the day's entries when the assignee changes.
+The transfer is an update of the card's assignee, which is transfer
+*without duplication* by construction: there is one card per firm per date and nothing
+to copy. The items carry no assignee of their own, because a firm has at most one
+assigned salesperson and a per-task copy could only ever disagree with the firm.
+
+**Replies are a function**, because G7's tables do not exist yet and there is nothing to
+put a trigger on. `promoteReply(context, { firmId, contactId?, messageId, receivedAt })`
+is what the classification lane calls, in the same transaction as the message and its
+holds — Appendix A's "Record uncertain or ambiguous reply" row commits "message,
+candidates, independent active holds, Today entries, audit" together, and this is the
+fourth of those. Uncertain and ambiguous messages use the same kind: 8.2's lane 1 is
+"replies, including uncertain and ambiguous messages", so there is deliberately no
+second kind for them, and 8.3's classification content is G7b's.
+
+`upsertTodayItem` is the general form, for the sequences lane's due work.
+
+### 3. The build decides which tasks exist, and cancels only what it enumerated
+
+`buildTodaySnapshot` asks each `TodaySource` for its contributions and upserts them.
+Two sources have a table to read today — `callbackSource` (lane 2) and `newFirmSource`
+(lane 4) — and the reply and due-work lanes are sources the lanes that own those tables
+will add to the array. Nothing in `build.ts` changes when they do.
+
+A rebuild cancels the tasks its sources no longer produce, and only for the
+`source_kind`s a source actually declared. A reply promoted at 09:00 by a lane with no
+source in this build is not something the build knows is gone, and there is a test that
+a rebuild leaves it alone.
+
+Two rules live in `today_upsert_item` and nowhere else: a finished task is never
+reopened by a rebuild, and an active snooze wins over a rebuild.
+
+### 4. An automated send is paused, not snoozed, and the server decides which
+
+8.2: "Salespeople may snooze manual tasks with a required reason and explicit return
+instant. Automated sends are not snoozed ad hoc; delaying them creates a recorded hold."
+
+One endpoint, `POST /today/snooze`, and the server reads `today_items.automated` to
+decide. That is deliberate: a client that had the choice would be the thing that let an
+automated send go out on time with nobody expecting it, because its card was drawn
+before the task changed. The answer says which of the two happened and the window
+renders that.
+
+A manual task becomes a `today_snoozes` row keyed by `item_key`, so it survives the
+05:00 rebuild, and it needs its return instant (`snooze_return_required` without one).
+
+**An automated one is paused (lane g79, audit C22).** G6 opened a firm-wide hold,
+closed the day's task and kept the typed return instant only as audit metadata — so a
+"snooze until Thursday" was an indefinite pause of every email to the firm with nothing
+on screen to lift it. The hold model has no scheduled release, and a timer would shift
+the schedule by an interval nobody reviewed, so the action is named what it is:
+
+* the hold (`scoped_pause`, `source_event_kind = 'today.delay_requested'`) is scoped to
+  the task's **enrollment**, or to the firm only for a task with no enrollment behind it;
+* the task **stays open**, and the expanded card's version 2 carries `pauseHoldId` on it;
+  the Mac shows **Paused** and a **Resume** button where **Pause sending** was;
+* Resume is `POST /today/pause/release`: it releases exactly that hold — no other kind of
+  hold is reachable from it — and calls `resumeEnrollment`, which shifts the enrollment's
+  unexecuted steps by the union of its blocking intervals, or sends a pause longer than
+  seven days to review (4.3);
+* Pause asks for a reason and no return time. Pressing it again answers with the same
+  hold.
+
+See `docs/archive/decisions/g6-delaying-an-automated-send.md` and
+`docs/archive/decisions/g79-calls-carry-their-authorization.md`.
+
+### 5. A callback task is completed by the call that fulfils it (lane g79)
+
+Appendix A "Callback confirm/complete": the callback and its Today entry change together.
+`callbacks_today_promotion` has always finished the task when the callback completes; what
+was missing (audit C17) was any way for the Mac to say *which* callback a call fulfilled,
+because the task DTO dropped the callback id.
+
+The expanded card's version 2 carries `callbackId` on a callback task, and the outcome
+form names the task the call was for (`itemId`). Recording an outcome that reached
+somebody, or left a voicemail, against a callback task completes the callback in the call's
+transaction. A missed call (no answer, busy, wrong number, a failure to place it) leaves the
+callback open, and the task stays for another try.
+
+**"Callback — needs a time" (audit C13).** 9.1 creates a callback only "after salesperson
+confirmation of the instant", and "call logging ... never refuses history". So a call
+whose outcome is *callback requested* with no day — or with an instant the server resolves
+differently from the Mac (C18) — is recorded, and a task goes in the callback lane keyed
+`callback-time:<call log id>` (`source_kind = 'callback'`, `source_id` null). The callback
+source carries it from day to day until the time is set — `POST /callbacks/schedule`,
+which creates the callback beside the call that asked for it and finishes the task — or a
+call is recorded against it. The card shows it as *Callback — needs a time* with a day
+and time field; version 2 carries `callLogId` on it.
+
+A callback's instant is always the server's resolution of its local date, time and zone
+through the shared calendar clock (`callbackInstant` in `@fss/contracts`); a supplied
+`dueAt` that disagrees is refused as `callback_instant_mismatch`.
+
+## The job
+
+Appendix C: `today:{workspace}:{business_date}:{algorithm}`, protected by "snapshot
+uniqueness". All three parts of the key matter — the workspace because the list is per
+workspace, the business date because a pass at 05:00 and one at 05:01 are the same
+work, and the algorithm version because changing the ordering rules makes it *different*
+work rather than a second attempt at the old work.
+
+`todayBuildSource` materializes it from the first scheduler pass at or after 05:00 in
+the workspace's own zone, computed by PostgreSQL from `workspaces.business_time_zone`.
+A workspace whose scheduler was down at 05:00 gets its list on the first pass after it
+comes back, which is also what makes 13.3's "Today snapshot absent at 05:10 workspace
+time" an alarm about a real outage.
+
+That alarm reads `TodaySnapshotMissing`, which the worker's metric loop publishes on
+every pass (lane g67, `packages/domain/today/metrics.ts`): 1 when a workspace is at or
+past 05:10 local and that business date's job, under the current algorithm version, is
+not `done`; otherwise 0. It reads the job and not `today_snapshots`, because a workspace
+with no firms is built and still has no snapshot rows.
+
+`TODAY_ALGORITHM_VERSION` in TypeScript and `today_algorithm_version()` in SQL are the
+same string, and a test compares them.
+
+## The Mac
+
+One window since wave 1, with one renderer entry point, one preload script that installs
+every bridge, and one main process that answers their channels. Sign-in, the device page,
+G3b's CRM screens and this lane's Today page are views in it; nothing opens a second
+window.
+
+**Since lane g65 there is no Today window.** The lanes are the main window's signed-in
+screen, Home, beside a status sidebar, the last seven days and a Needs-you list
+(`docs/archive/decisions/g65-today-is-the-home.md`). `todayPage.ts` became `today/Lanes.tsx`,
+which Home calls; ⌘1 brings the main window forward. The bridge, the view model and
+every rule below are unchanged, and G6's Playwright scenarios run against Home in
+`apps/desktop/test/e2e/home.spec.ts`.
+
+**The cards are cached and the expansion is not.** `GET /today` returns exactly the
+shape of `cachedTodaySchema` in `apps/desktop/src/shared/contract.ts` — G2 wrote it as
+a `strictObject` with no field a body, a note or a person's name could occupy, and it is
+written to disk encrypted for 24 hours (5.3). The expanded card names contacts, so it
+lives in a type the cache has never heard of, and an offline window shows the cards
+marked stale with nothing under them. That is 4.2's "unexpired cached Today view marked
+stale" and "mutations fail closed", and it is a unit test in `todayView.ts` rather than
+a screenshot.
+
+**The window never holds a ticket.** `bridge.dial()` performs the setup proof, the
+authorization, the consumption and the `tel:` open in the main process, through G4's
+`dialHandoff.ts` and this lane's `telHandoff.ts`, which is the macOS binding of its two
+ports: the launch-services probe for the proof and `shell.openExternal` for the open.
+There is no Swift helper — section 2's decision table, and David's confirmation. The
+driver opens a `tel:` URI with an E.164 number and throws for anything else, so
+`shell.openExternal` is unreachable from that module for any other scheme, and a probe
+that answers `absent` *or* `unknown` is `no_tel_handler`: an unreadable Launch Services
+database is not a proof of anything. A setup proof older than a ticket's own sixty
+seconds stops being current, because the real check reads an `lsregister -dump` that
+cannot happen between consuming a ticket and opening a URI. The renderer sends the firm, the route and the *displayed* route
+version — 9.2's "authorization uses the route version displayed on the card" — and gets
+back a state with a notice. The calling identity is the one the server reported with the
+card, because 9.1 requires it to be the actor's own and there is nothing there to
+choose.
+
+**A call is recorded against its task and its ticket (lane g79).** After a Call button
+hands a number to the phone app, the main process keeps the ticket id and calling identity
+the server issued (never shown to the renderer) and the window is told only which number
+was called (`lastCall`). The outcome form names the task the call was for — the call due
+or the callback of the contact just called, by default — and the next outcome recorded for
+that firm carries the task, the route, the contact, the ticket and the identity. It sends
+no time of its own: "just now" is the server's clock. The server applies the outcome to
+the step or callback behind the task and answers with `followUps` — a callback that needs a
+time, a number that was not named — which the window shows as the notice. The expansion is
+requested with `cardVersion: 2`; the API answers the older shape to a Mac that does not ask.
+Both versions, the paused answer and Resume's answer are `@fss/contracts`' (`today.ts`).
+See `docs/archive/decisions/g79-calls-carry-their-authorization.md`.
+
+**The card needs the person's own attested number (lane g60).** `readTodayFirm` reports
+`callingIdentityId` from `currentCallingIdentityId`: the most recently attested of the
+actor's verified, enabled calling numbers. Until someone has registered and attested a
+number (the Settings screen's **Your calling number**, `docs/greenfield/settings.md`) it
+is null. The card then has no Call button, and says so: a card with a usable route and
+no calling identity shows *"Callie has no attested number of yours to call from. Add it
+in Window › Administration, under Your calling number."* (`NO_CALLING_NUMBER` in
+`todayView.ts`). Before g60 no product path could make one, so every production card was
+in that state. Once the number is attested, the next expansion carries it and the Call
+button appears. A retired number stops being offered at once, because both the card and
+`authorizeDial` read `enabled`. See `docs/archive/decisions/g60-calling-identities-are-attested-in-version-one.md`.
+
+### What this lane wired that it did not write
+
+G3b built `firmWorkspace.ts`, `firmPage.ts`, `pipelineBoard.ts` and `firmMerge.ts` and
+left them unreachable: `globalThis.callieCrm` was declared in
+`firmWorkspaceContract.ts` and installed by nobody. Added here, with no change to G3b's
+renderer code:
+
+* `apps/desktop/src/main/crmBridge.ts` — the six methods its contract declares,
+  answered from `/crm/firm-page`, `/pipeline/stages`, `/firms`, `/contacts/update`,
+  `/opportunities/stage` and `/merges/firms`;
+* `apps/desktop/src/preload/preload.ts` — `callieCrm` and `callieToday` beside G2's
+  `callie`;
+* `apps/desktop/src/main/todayWindow.ts` — the Today and CRM bridges' IPC registration.
+  Each of these once fed a window of its own; since wave 1 they feed views of the one
+  window and nothing here opens a window. The Window menu is `windowMenu.ts`, which brings
+  that window forward and shows one view in it;
+* `apps/desktop/scripts/bundle.ts` — the two new renderer entry points and their HTML,
+  so a packaged build contains them;
+* `apps/desktop/src/main/sessionManager.ts` — one method, `accessToken()`, which goes
+  through the existing `liveSession` so renewal stays serialised. Without it a second
+  window would have to hold the refresh credential, and reuse revokes the device (5.3);
+* `apps/desktop/src/main/telHandoff.ts` — the macOS binding of G4's two handoff ports,
+  read through `createTodayBridge` (`apps/desktop/src/main/todayBridge.ts`), which is
+  the two commands of 9.2 through the window's authenticated client.
+
+One thing the wiring cannot do yet, recorded rather than faked:
+
+* **Stage changes from the board.** `GET /firms` returns `FirmIdentityDto`, which
+  carries the open opportunity's stage and not its id, so the board can only offer a
+  stage change for firms whose Firm page has been opened. See
+  `docs/archive/decisions/g6-pipeline-board-opportunity-ids.md`; the gap belongs to the lane
+  that owns Appendix F's read matrix.
+
+## Adding a source or a lane
+
+1. Write a `TodaySource` with the `source_kind`s it is authoritative for, and add it to
+   `defaultTodaySources()`.
+2. For an event-driven promotion, call `upsertTodayItem` in the transaction that
+   records the event. Do not write `today_snapshots`; the trigger does.
+3. Pick an `item_key` that is deterministic from the row that produced it, so a replay
+   is an upsert.
+4. `npm run gate:greenfield`.
+
+## Running the tests
+
+```
+npm run gate:greenfield
+npm run test --workspace packages/domain -- test/today            # G 8 and G 33, determinism
+npm run test --workspace packages/domain -- test/policy/callsAndCallbacks.test.ts  # lane g79
+npm run test --workspace apps/api -- test/today.test.ts           # the routes
+npm run test --workspace apps/worker -- test/todayBuild.test.ts   # G 1 and G 2 for this handler
+npm run test --workspace apps/desktop -- test/today.test.ts       # the view model and both bridges
+npm run test --workspace apps/desktop -- test/telHandoff.test.ts  # tel: only, and the probe
+npm run test:desktop:e2e                                          # the window, in chromium
+```
