@@ -27,7 +27,7 @@ it('leaves paused and quota-limited candidates pending with a visible reason, sh
  const ctx=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
  await db.session.query('DELETE FROM sourcing_candidates');
  await saveCandidate(ctx,{firmName:'Budget PM',website:'https://budget.example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:'https://budget.example.test/',observedOn:'2026-10-01',preparedBy:'Fixture'});
- await db.session.query("UPDATE sourcing_candidates SET status='kept',revision=revision+1 WHERE payload->>'firmName'='Budget PM'");
+ await db.session.query("UPDATE sourcing_candidates SET status='kept',revision=revision+1,next_source_check_at=now() WHERE payload->>'firmName'='Budget PM'");
  await db.session.query('INSERT INTO research_settings(workspace_id,enabled,daily_firm_ceiling) VALUES($1,false,0)',[workspaceId]);
  const pass=()=>withTransaction(db.session,()=>sourcingQualificationSource(true).find(db.session,new Date().toISOString()));
  expect(await pass()).toEqual([]);
@@ -64,7 +64,7 @@ it('gives later workspaces a turn even when more than 25 earlier workspaces are 
    wanted.add(workspace.workspaceId);
    const ctx=repositoryContext(workspaceScope(workspace.workspaceId,{kind:'system',component:'worker'}),db.session);
    await saveCandidate(ctx,{firmName:'Waiting PM',website:'https://waiting.example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:'https://waiting.example.test/',observedOn:'2026-10-01',preparedBy:'Fixture'});
-   await db.session.query("UPDATE sourcing_candidates SET status='kept',revision=revision+1 WHERE workspace_id=$1",[workspace.workspaceId]);
+   await db.session.query("UPDATE sourcing_candidates SET status='kept',revision=revision+1,next_source_check_at=now() WHERE workspace_id=$1",[workspace.workspaceId]);
    await db.session.query('INSERT INTO research_settings(workspace_id,enabled) VALUES($1,false)',[workspace.workspaceId]);
   }
  }
@@ -107,7 +107,7 @@ it('queues a kept draft before a refresh and stops at the shared daily allowance
  };
  const old=await make('refresh');
  await withTransaction(db.session,()=>requestQualification(ctx,{candidateId:old,expectedRevision:2}));
- await db.session.query("UPDATE sourcing_qualification_runs SET state='review',requested_at=now()-interval '8 days' WHERE candidate_id=$1",[old]);
+ await db.session.query("UPDATE sourcing_qualification_runs SET state='review',fingerprint=repeat('d',64),requested_at=now()-interval '8 days' WHERE candidate_id=$1",[old]);
  const fresh=await make('fresh-kept');
  await db.session.query('DELETE FROM daily_counters');
  await db.session.query('UPDATE research_settings SET daily_firm_ceiling=1 WHERE workspace_id=$1',[workspaceId]);
