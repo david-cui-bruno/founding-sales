@@ -25,6 +25,7 @@ import { CRM_EXTRACTION_CONSTRAINT_CASES } from "./support/crmExtractionCases.ts
 import { BOOKING_INTERPRETATION_CONSTRAINT_CASES } from "./support/bookingInterpretationCases.ts";
 import { LINKEDIN_POLICY_CONSTRAINT_CASES } from "./support/linkedinPolicyCases.ts";
 import { LINKEDIN_RECURRING_CONSTRAINT_CASES } from "./support/linkedinRecurringCases.ts";
+import { LINKEDIN_MANUAL_CONSTRAINT_CASES } from "./support/linkedinManualCases.ts";
 import { LINKEDIN_POSTING_POLICY_CONSTRAINT_CASES } from "./support/linkedinPostingPolicyCases.ts";
 import { SOCIAL_CONSTRAINT_CASES } from "./support/socialCases.ts";
 import { OUTREACH_CONSTRAINT_CASES } from "./support/outreachCases.ts";
@@ -2252,6 +2253,7 @@ const cases: readonly Case[] = [
   ...LINKEDIN_POLICY_CONSTRAINT_CASES,
   ...LINKEDIN_POSTING_POLICY_CONSTRAINT_CASES,
   ...LINKEDIN_RECURRING_CONSTRAINT_CASES,
+  ...LINKEDIN_MANUAL_CONSTRAINT_CASES,
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
   ...POLICY_CONSTRAINT_CASES,

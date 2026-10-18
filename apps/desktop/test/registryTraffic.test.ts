@@ -1,4 +1,5 @@
 import {createSocialDeliveryRunner} from '../src/main/social/deliveryRunner.ts';
+import {linkedinManualOperations} from '../src/main/social/linkedinManualOperations.ts';
 import {createSocialManualHandoffBridge} from '../src/main/social/manualHandoffBridge.ts';
 import {createSocialAccountsBridge} from '../src/main/social/accountsBridge.ts';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -47,6 +48,7 @@ import { BRIDGE_ANSWERS, FIXTURE_IDS, STALE_CALL_LOG_ID } from './support/bridge
  */
 
 const UUID = '11111111-1111-4111-8111-111111111111';
+const MANUAL_LEDGER = {accounts:[],choices:[],ledgers:[],history:[],nextBefore:null,coverage:'manual_owner_assertions_only'};
 const MANUAL_HANDOFF={postId:UUID,revision:1,fingerprint:'a'.repeat(64),approvalId:UUID,approvedAt:'2026-10-09T00:00:00Z',state:'manual_needed',accountEvidence:'human_review_required',snapshot:{account:{id:UUID,platform:'x',externalId:'example',displayName:'Example',accountKind:'profile',revision:1},text:'Reviewed example.',images:[],publishAt:'2030-10-19T16:00:00Z',zone:'America/New_York'}};
 
 
@@ -72,7 +74,7 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
        * that is how `today.expand`'s `/dial/check` and `replies.refresh`'s
        * `/replies/settings` stayed undeclared through the first review.
        */
-      const body = at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
+      const body = at.pathname==='/crm/linkedin/manual/read'?MANUAL_LEDGER:at.pathname==='/crm/linkedin/manual/bind'||at.pathname==='/crm/linkedin/manual/record'?{status:'accepted',replayed:false,result:{ledgerId:UUID,entryId:null,revision:0}}:at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
       return await Promise.resolve({
         status: 200,
         body: body ?? { status: 'accepted', replayed: false, result: {} },
@@ -162,6 +164,9 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'sourcing.qualification':{candidateId:UUID},
   'sourcing.qualify':{candidateId:UUID,expectedRevision:1,commandId:UUID},
   'sourcing.admit':{candidateId:UUID,expectedRevision:1,qualificationRunId:UUID,mode:'reviewed',commandId:UUID},
+  'linkedinManual.read': {ledgerId:UUID},
+  'linkedinManual.bind': {commandId:UUID,ledgerId:UUID,accountId:UUID,personId:UUID,firmId:UUID,claimId:UUID,claimRevision:1,relationshipId:UUID,relationshipRevision:1},
+  'linkedinManual.record': {commandId:UUID,ledgerId:UUID,entryId:UUID,expectedRevision:0,kind:'reply',connectionState:null,occurredAt:'2026-10-01T13:00:00.000Z',voided:false,correction:null},
   'sourcing.list': {status:'needs_review',offset:0},
   'sourcing.save': {firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Example duties',sourceUrl:'https://example.test/team',observedOn:'2026-10-01',preparedBy:'Fixture',commandId:UUID},
   'sourcing.review': {id:UUID,expectedRevision:1,status:'kept',commandId:UUID},
@@ -593,6 +598,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
       const handlers = operationHandlers({ api, recordings: importer } as unknown as OperationHostDeps);
       return { ...(importer as unknown as Host), recoveries: async () => await handlers['recordings.recoveries']({} as never), forFirm: async (input: unknown) => await handlers['recordings.forFirm'](input as never) } as unknown as Host;
     })(),
+    linkedinManual: (()=>{const handlers=linkedinManualOperations({api,generation:()=>0});return Object.fromEntries(['read','bind','record'].map(method=>[method,async(input:unknown)=>handlers[`linkedinManual.${method}` as keyof typeof handlers](input as never)]));})(),
     mailbox: createMailboxBridge({
       api,
       session,
