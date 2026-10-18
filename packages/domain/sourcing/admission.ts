@@ -1,3 +1,4 @@
+import {enqueueFirmResearchBestEffort} from '../research/enqueue.ts';
 import {attachSourcingAttribution} from './attribution.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationStore.ts';
@@ -108,5 +109,10 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  if(!attribution.ok)throw new Error(`admission_attribution_${attribution.reason}`);
  await recordCrmAuditEvent(ctx,{action:'sourcing.candidate_admitted',subjectKind:'firm',subjectId:firm.id,detail:{candidateId:input.candidateId,runId:run.id,mode:input.mode,decision:verdict.decision}});
  await refreshTodayForFirm(ctx,{firmId:firm.id});
+ // New firms already enqueue inside createFirm. Reused firms need the same handoff,
+ // but do not replace an existing brief or retry a previous/uncertain research run.
+ if(exact[0]&&input.mode==='reviewed'&&(await ctx.db.query('SELECT id FROM research_runs WHERE workspace_id=$1 AND firm_id=$2 LIMIT 1',[w,firm.id])).rows.length===0){
+  await enqueueFirmResearchBestEffort(ctx,{firmId:firm.id,trigger:'user_request',requestedByUserId:owner});
+ }
  return {ok:true,value:{firmId:firm.id,routeId:route.value.id,alreadyAdmitted:false}};
 }
