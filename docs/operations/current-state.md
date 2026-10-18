@@ -1,16 +1,16 @@
 # Current operating state
 
-## October 18, 2026, 22:33 UTC
+## October 18, 2026, 22:43 UTC
 
 Times below are UTC unless marked Eastern. These are dated observations, not proof of later state.
 
-**Production remains schema 118, source `c36764982a52f075fb7a38531907dc35705fbc12` after rollback.** Application release `39148965489` passed. Runtime acceptance at **17:28:36** verified API 2/worker 1, all four images, Bedrock and six smoke checks. The $50/day credit-funded MODEL guard remains model-only, not an all-AWS/Transcribe cap. This release stayed 118→118.
+**Production remains schema 118, source `c36764982a52f075fb7a38531907dc35705fbc12` after rollback.** Root's **22:16** observation found stable API120 (2)/worker121 (1) and public health; six read-only baseline checks passed at **22:20**. The $50/day credit-funded MODEL guard is not an all-AWS/Transcribe cap.
 
-**Latest main is `8ef1c8bcf907e2d3c64c8b06753662712c42814e`, schema 118.** It includes grounding PR683, documentation PR684 and release-path PR687–689. Those newer grounding/suppression changes are **not yet production**. Qualification prompt-v7 and asynchronous research-hold safety are deployed through c367. Source completion alone is not actual model-quality acceptance.
+**Latest main is `8b5998af6447ff0258a812dc7050aed009a7aba1`, schema 118.** PR690 merged normally at **22:41**, with three CLEAN reviews and all PR CI passing; new-main CI is pending. Newer grounding/suppression changes are **not yet production**. Qualification prompt-v7 and asynchronous research-hold safety are deployed through c367. Source completion is not model-quality acceptance.
 
 ## Sending and authority
 
-Separate read-only verification at **17:29:26.944** found **enabled=false, effectiveSendingEnabled=false, finishing=0, settingVersion 4**. Deployment health's sending flag is not the stored workspace switch. **David alone resumes sending.** Fresh OFF/PITR, reviewed changes and passing smoke remain release prerequisites. Use the [release procedure](lean-release-workflow.md). Historical failed/ambiguous attempts must not be replayed.
+Root's read-only verification at **22:14:35.295** found **enabled=false, effectiveSendingEnabled=false, finishing=0, settingVersion 4**. Deployment health's sending flag is not the stored workspace switch. **David alone resumes sending.** Fresh OFF/PITR, reviewed changes and passing smoke remain release prerequisites. Use the [release procedure](lean-release-workflow.md). Historical failed/ambiguous attempts must not be replayed.
 
 Standing authority covers scoped release infrastructure, credentials, read-only operations, restarts and main merges with recovery copies. Ask before unapproved spending, Gmail capture/LinkedIn actions, contacts, prospect-visible changes, irrecoverable business deletion or restores losing writes. Keep credentials and raw evidence private.
 
@@ -32,8 +32,10 @@ Last discovery observation **17:57:36**: configured 10/day, day 1/month 33, halt
 
 David approved Gmail at **22:33:17 UTC on October 18**: incoming and Sent business messages for `david@usecallie.com`, **no older backfill**, Bedrock Claude Haiku 4.5 cross-US, **credits-only $1/day/$20/month**. **Activation is not yet done.** Root must verify this exact scope before Enable, then read back ON, both caps and the first actual CRM messages. Retain Disable, deletion/correction propagation and interruption recovery. Approval is not activation or outreach permission. LinkedIn manual ledger is deployed; no external actions are authorized.
 
+**Gmail blockers:** strict forward-only cutoff is absent. Extraction purpose also enables native call/meeting/note scope; restrict new consent to mail. At **22:38**, API120/worker121 lack `FSS_CRM_CAPABILITY_ADAPTERS`. Funding is unverified: GetCredits IAM disabled; console at **22:42** required sign-in. David was warned before Enable. No activation/readback achieved; no backfill, expanded data or cash fallback permitted.
+
 David reports roughly **$100,000 GCP credits**, not independently verified. Vertex Gemini is a future founding-sales model option, **not a switch now**. At the next research, qualification or Gmail model choice, compare cost and quality and bring David the result.
 
 ## Delivery
 
-Removed automation stays removed; lexical search, privacy/history, regular sequences, Cal.com sync and manual drafting remain. Signed desktop 1.0.52 is published, not forced installed/restarted. At PR684 merge, active documentation was 89,677 words, down 211,975, with 130 originals preserved. Additive release simplification and preflight/image-promotion repairs are merged in PR687–689; the working legacy path remains until replacement hosted proof. No cuts yet. Baseline tag: `archive/pre-lean-selling-20261018-5c7d188e`.
+Removed automation stays removed; lexical search, privacy/history, regular sequences, Cal.com sync and manual drafting remain. Signed desktop 1.0.52 is published, not forced installed/restarted. At PR684 merge, active documentation was 89,677 words, down 211,975, with 130 originals preserved. The legacy release path remains pending replacement hosted proof; no cuts yet. Baseline tag: `archive/pre-lean-selling-20261018-5c7d188e`.
