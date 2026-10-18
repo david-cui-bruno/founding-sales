@@ -26,7 +26,7 @@ import { Section } from './Group.tsx';
  */
 
 const FIELDS = [
-  { key: 'dailyFirmCeiling', label: 'Firms a day' },
+  { key: 'dailyFirmCeiling', label: 'Research steps/day' },
   { key: 'dailyCostCeilingCents', label: 'Daily budget (cents)' },
   { key: 'monthlyCostCeilingCents', label: 'Monthly budget (cents)' },
   { key: 'maxPagesPerFirm', label: 'Pages per firm' },
@@ -101,6 +101,7 @@ export function ResearchSettingsSection({
             <Input
               className="max-w-24"
               data-testid={`research-${field.key}`}
+              aria-describedby={field.key === 'dailyFirmCeiling' ? 'research-steps-help' : undefined}
               inputMode="numeric"
               disabled={saving || disabled}
               value={kept[field.key]?.value ?? ''}
@@ -111,6 +112,9 @@ export function ResearchSettingsSection({
           </label>
         ))}
       </div>
+      <p id="research-steps-help" className="mt-2 text-xs text-muted-foreground">
+        A fresh firm normally uses 2 research steps: qualification and brief. Failures and other work reduce actual throughput.
+      </p>
 
       <ChangedElsewhere show={Object.values(kept).some(entry => entry.elsewhere)} />
       <div className="mt-3 flex items-center gap-3">
