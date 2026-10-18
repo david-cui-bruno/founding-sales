@@ -38,11 +38,34 @@ it('keeps verified identity with missing, multiple or disconnected phones pendin
  const multiple=evidence();multiple.observations[0]!.blocks.push({id:'second',text:`${candidate.firmName} (214) 555-0191`});multiple.facts.push({kind:'business_phone',value:multiple.observations[0]!.blocks[2]!.text,observationId:multiple.observations[0]!.id,blockId:'second'});expect(verifiedFirmEvidence(multiple)).toMatchObject({kind:'verified',phone:null});
  const distant=evidence();distant.observations[0]!.blocks.splice(1,0,...Array.from({length:5},(_,n)=>({id:`gap-${n}`,text:'Unrelated page section'})));expect(verifiedFirmEvidence(distant)).toMatchObject({kind:'verified',phone:null});
 });
-it('never collapses branch paths or branch query identities to a common host',()=>{
+it('preserves branch paths and refuses unsupported query identities',()=>{
  expect(verifiedWebsiteKey('https://WWW.harbor.example.test/dallas/')).toBe('harbor.example.test/dallas');
  expect(verifiedWebsiteKey('https://harbor.example.test/austin')).not.toBe(verifiedWebsiteKey(candidate.website));
- expect(verifiedWebsiteKey('https://harbor.example.test/?office=a')).not.toBe(verifiedWebsiteKey('https://harbor.example.test/?office=b'));
+ expect(verifiedWebsiteKey('https://harbor.example.test/?office=a')).toBeNull();
+ expect(verifiedWebsiteKey('https://harbor.example.test/?office=b')).toBeNull();
+ expect(verifiedFirmEvidence(evidence({...candidate,website:'https://harbor.example.test/?office=a'}))).toMatchObject({kind:'pending'});
  expect(verifiedWebsiteKey('http://harbor.example.test')).toBeNull();
+});
+function literalOffice(texts:readonly string[],kinds:readonly (readonly [QualificationFact['kind'],number])[]){
+ const input=evidence(),source=input.observations[0]!;
+ source.blocks=texts.map((text,n)=>({id:`b${n}`,text}));
+ input.facts=kinds.map(([kind,n])=>({kind,value:texts[n]!,observationId:source.id,blockId:`b${n}`}));return input;
+}
+it('never borrows a neighboring Austin office phone for the Dallas identity',()=>{
+ const input=literalOffice(['Harbor Residential LLC provides residential property management.','Harbor Residential LLC office: Dallas, TX.','Harbor Residential LLC office: Austin, TX.','Contact Harbor Residential LLC Austin office: (512) 555-0190.'],[['firm_identity',0],['residential_management',0],['service_area',1],['business_phone',3]]);
+ expect(verifiedFirmEvidence(input)).toEqual({kind:'unclear',reason:'phone_association_ambiguous'});
+});
+it('accepts a split same-office contact section without joining the next branch',()=>{
+ const input=literalOffice(['Harbor Residential LLC provides residential property management.','Harbor Residential LLC Dallas office','Dallas, TX.','Contact Harbor Residential LLC at (214) 555-0190.','Harbor Residential LLC office: Austin, TX.'],[['firm_identity',0],['residential_management',0],['service_area',2],['business_phone',3]]);
+ expect(verifiedFirmEvidence(input)).toMatchObject({kind:'verified',phone:'+12145550190'});
+});
+it.each(['We do not manage residential properties. We manage commercial properties only.','We never manage residential homes.','We manage commercial properties exclusively.'])('keeps literal residential denial pending: %s',text=>{
+ const input=literalOffice(['Harbor Residential LLC',text,'Harbor Residential LLC office: Dallas, TX. Contact Harbor Residential LLC (214) 555-0190.'],[['firm_identity',0],['residential_management',1],['service_area',2],['business_phone',2]]);
+ expect(verifiedFirmEvidence(input)).toEqual({kind:'pending',reason:'residential_fit_unknown'});
+});
+it('does not let the model omit a literal contrary first-party residential statement',()=>{
+ const input=evidence();input.observations[0]!.blocks.push({id:'contrary',text:'We do not manage residential properties.'});
+ expect(verifiedFirmEvidence(input)).toEqual({kind:'pending',reason:'residential_fit_unknown'});
 });
 it('enforces global10/375 modeled credit bounds and never reports a refund or invoice',()=>{
  expect(discoveryQuotaRemaining(9,374)).toEqual({daily:1,monthly:1});

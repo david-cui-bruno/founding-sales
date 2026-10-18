@@ -50,7 +50,7 @@ export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
    }
    const due=(await session.query<{id:string;revision:number}>(`SELECT c.id,c.revision FROM sourcing_candidates c LEFT JOIN LATERAL
     (SELECT r.requested_at,r.candidate_revision,r.state,r.reason,r.admission_reason FROM sourcing_qualification_runs r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY r.requested_at DESC,r.id DESC LIMIT 1) last ON true
-    WHERE c.workspace_id=$1 AND (c.status='kept' OR ($3 AND c.status='needs_review' AND c.payload->>'preparedBy'='Tavily Basic search · not verified')) AND NOT c.qualification_blocked AND NOT ($3 AND COALESCE(last.admission_reason=ANY($4::text[]),false)) AND (last.requested_at IS NULL OR last.candidate_revision<>c.revision OR
+    WHERE c.workspace_id=$1 AND (c.status='kept' OR ($3 AND c.status='needs_review' AND c.payload->>'preparedBy'='Tavily Basic search · not verified')) AND NOT c.qualification_blocked AND NOT ($3 AND last.candidate_revision=c.revision AND COALESCE(last.admission_reason=ANY($4::text[]),false)) AND (last.requested_at IS NULL OR last.candidate_revision<>c.revision OR
      last.requested_at<$2::timestamptz-interval '7 days' OR (last.state='unavailable' AND last.requested_at<$2::timestamptz-interval '1 day'))
     ORDER BY EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=c.workspace_id AND a.candidate_id=c.id),c.status<>'kept',last.requested_at NULLS FIRST,c.created_at,c.id LIMIT 25`,[workspace.id,now,automatic,IDENTITY_REVIEW_REASONS])).rows;
    for(const candidate of due){

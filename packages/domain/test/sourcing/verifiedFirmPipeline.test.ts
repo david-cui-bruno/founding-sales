@@ -43,6 +43,20 @@ async function draft(options:{payload?:CandidateInput;phone?:string|null;localit
 }
 const advance=(runId:string)=>tx(()=>advanceVerifiedFirm(worker(),{runId}));
 const admission=async(candidateId:string)=>(await db.session.query<{firm_id:string;route_id:string}>('SELECT firm_id,route_id FROM sourcing_admissions WHERE candidate_id=$1',[candidateId])).rows[0];
+it.each(['denial','neighbor'] as const)('never auto-Keeps or admits literal %s evidence',async scenario=>{
+ const d=await draft(),name=d.payload.firmName;
+ const source=(await db.session.query<{observations:SourceObservation[]}>('SELECT observations FROM sourcing_qualification_runs WHERE id=$1',[d.runId])).rows[0]!.observations[0]!;
+ const texts=scenario==='denial'?[name,'We do not manage residential properties. We manage commercial properties only.',`${name} office: Dallas, TX. Contact ${name} (214) 555-0190.`]:[`${name} provides residential property management.`,`${name} office: Dallas, TX.`,`${name} office: Austin, TX.`,`Contact ${name} Austin office: (512) 555-0190.`];
+ source.blocks=texts.map((text,n)=>({id:`b${n}`,text}));
+ const indices=scenario==='denial'?[0,1,2,2]:[0,0,1,3];
+ const facts=['firm_identity','residential_management','service_area','business_phone'].map((kind,n)=>({kind,observationId:source.id,blockId:`b${indices[n]}`,value:texts[indices[n]!]!}));
+ await db.session.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb,facts=$3::jsonb WHERE id=$1',[d.runId,JSON.stringify([source]),JSON.stringify(facts)]);
+ await advance(d.runId);expect(await admission(d.candidateId)).toBeUndefined();
+ expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
+ expect((await db.session.query('SELECT admission_reason FROM sourcing_qualification_runs WHERE id=$1',[d.runId])).rows[0]).toEqual({admission_reason:scenario==='denial'?'residential_fit_unknown':'phone_association_ambiguous'});
+ const queue=await listCandidates(user(),{status:'needs_review',offset:0});if(!queue.ok)throw new Error(queue.reason);
+ expect(queue.value.candidates.map(c=>c.id)).toEqual(scenario==='denial'?[]:[d.candidateId]);
+});
 it('automatically Keeps verified fit, researches, then exposes a useful sourced call brief without outreach',async()=>{
  const d=await draft();
  const untouched=['contacts','opportunities','sequence_enrollments','outbound_messages','outreach_plans','call_sessions','call_logs'];

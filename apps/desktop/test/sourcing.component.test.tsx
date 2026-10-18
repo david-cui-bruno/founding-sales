@@ -5,6 +5,24 @@ import {Candidates,useCandidateReviewVisibility,type CandidatePorts} from '../sr
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
 import type {SourcingCandidate} from '@fss/contracts';
 afterEach(cleanup);
+it('a newer child queue acknowledgement invalidates an earlier parent visibility read',async()=>{
+ let finish!:(value:Awaited<ReturnType<CandidatePorts['list']>>)=>void;
+ const list=vi.fn<CandidatePorts['list']>(()=>new Promise(resolve=>{finish=resolve;}));
+ const {result}=renderHook(()=>useCandidateReviewVisibility(true,'one',0,list));
+ act(()=>result.current.onReviewEmpty(false));
+ await act(async()=>finish({view:{candidates:[],hasMore:false},reason:null}));
+ expect(result.current.visible).toBe(true);
+});
+it('an externally emptied later page cannot hide an earlier unclear queue',async()=>{
+ const p=ports(),onReviewEmpty=vi.fn();
+ p.list=vi.fn().mockResolvedValueOnce({view:{candidates:[candidate],hasMore:true},reason:null}).mockResolvedValueOnce({view:{candidates:[candidate],hasMore:false},reason:null}).mockResolvedValueOnce({view:{candidates:[],hasMore:false},reason:null});
+ render(<DraftsProvider><Candidates ports={p} onReviewEmpty={onReviewEmpty}/></DraftsProvider>);
+ await screen.findByText(candidate.evidence);fireEvent.click(screen.getByRole('button',{name:'Next page'}));
+ await waitFor(()=>expect(p.list).toHaveBeenLastCalledWith({status:'needs_review',offset:50}));
+ await waitFor(()=>expect((screen.getByRole('button',{name:'Refresh candidates'}) as HTMLButtonElement).disabled).toBe(false));
+ onReviewEmpty.mockClear();fireEvent.click(screen.getByRole('button',{name:'Refresh candidates'}));
+ await screen.findByText('No candidates in this view.');expect(onReviewEmpty).not.toHaveBeenCalledWith(true);
+});
 it('hides only an authoritative zero unclear queue and preserves visibility on errors or more pages',async()=>{
  const list=vi.fn<CandidatePorts['list']>().mockResolvedValueOnce({view:{candidates:[],hasMore:false},reason:null}).mockResolvedValueOnce({view:{candidates:[],hasMore:true},reason:null}).mockRejectedValueOnce(new Error('offline'));
  const {result}=renderHook(()=>useCandidateReviewVisibility(true,'session-one',0,list));

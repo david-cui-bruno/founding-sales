@@ -10,7 +10,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { decideAdminOnly } from '../crm/authorization.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
-import {verifiedFirmOwner,IDENTITY_REVIEW_REASONS} from './verifiedFirmPolicy.ts';
+import {verifiedFirmOwner,verifiedWebsiteKey,IDENTITY_REVIEW_REASONS} from './verifiedFirmPolicy.ts';
 import {discoveryQuotaRemaining} from './discoveryQuota.ts';
 
 type Result<T> = {ok:true;value:T} | {ok:false;reason:string};
@@ -27,6 +27,9 @@ export async function saveCandidate(context:RepositoryContext,input:CandidateInp
   if(denied(context)) return {ok:false,reason:'admin_only'};
   const parsed=candidateInputSchema.safeParse(input);
   if(!parsed.success || parsed.data.observedOn > (await databaseNow(context)).slice(0,10)) return {ok:false,reason:'invalid_input'};
+  // Historical keys omit queries. Refuse unsupported query identity rather than silently
+  // collapsing distinct offices or rewriting existing keys/provenance.
+  if(new URL(parsed.data.website).search&&verifiedWebsiteKey(parsed.data.website)===null)return {ok:false,reason:'invalid_input'};
   const key=candidateIdentityKey(parsed.data);
   const inserted=await context.db.query<{id:string}>(
     `INSERT INTO sourcing_candidates(workspace_id,identity_key,payload) VALUES($1,$2,$3::jsonb)

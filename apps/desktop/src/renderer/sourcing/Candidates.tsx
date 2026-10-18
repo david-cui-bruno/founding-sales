@@ -23,13 +23,14 @@ const statuses:Record<SourcingCandidate['status'],string>={needs_review:'Needs r
 /** Visibility follows the server count, never a local eligibility decision. */
 export function useCandidateReviewVisibility(enabled:boolean,privacyKey:string,sourceVersion:unknown,list:CandidatePorts['list']=defaultPorts.list):{visible:boolean;onReviewEmpty:(empty:boolean)=>void} {
  const [answer,setAnswer]=useState<{key:string;hidden:boolean}>({key:'',hidden:false});
- const onReviewEmpty=useCallback((empty:boolean)=>setAnswer({key:privacyKey,hidden:empty}),[privacyKey]);
+ const sequence=useRef(0);
+ const onReviewEmpty=useCallback((empty:boolean)=>{++sequence.current;setAnswer({key:privacyKey,hidden:empty});},[privacyKey]);
  useEffect(()=>{
-  let current=true,sequence=0;
+  let current=true;
   const load=async()=>{
-   const request=++sequence;
-   try{const result=await list({status:'needs_review',offset:0});if(current&&request===sequence)onReviewEmpty(result.view!==null&&result.view.candidates.length===0&&!result.view.hasMore);}
-   catch{if(current&&request===sequence)onReviewEmpty(false);}
+   const request=++sequence.current;
+   try{const result=await list({status:'needs_review',offset:0});if(current&&request===sequence.current)onReviewEmpty(result.view!==null&&result.view.candidates.length===0&&!result.view.hasMore);}
+   catch{if(current&&request===sequence.current)onReviewEmpty(false);}
   };
   if(enabled){void load();window.addEventListener('focus',load);}
   return ()=>{current=false;window.removeEventListener('focus',load);};
@@ -44,7 +45,7 @@ export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty}:{port
     try {
       const answer=await portsRef.current.list(filter);if(generation!==m.generation)return;
       m.view=answer.view;m.failed=answer.view===null;
-      if(filter.status==='needs_review')countRef.current?.(answer.view!==null&&answer.view.candidates.length===0&&!answer.view.hasMore);
+      if(filter.status==='needs_review'&&(filter.offset===0||answer.view!==null&&answer.view.candidates.length>0))countRef.current?.(answer.view!==null&&answer.view.candidates.length===0&&!answer.view.hasMore);
     } catch {if(generation===m.generation){m.view=null;m.failed=true;}}
     finally {if(generation===m.generation){m.loading=false;touch();}}
   },[m,touch]);
