@@ -1,3 +1,4 @@
+import {readsLegacyAsk,legacyAskResponse} from './askCompat.ts';
 import {askReadSchema,askResponseSchema} from '@fss/contracts';
 import {readAsk} from '@fss/domain/crm/ask.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -12,6 +13,9 @@ export async function routeAsk(request:ApiRequest,options:RoutingOptions):Promis
  const scoped=contextForPrincipal(options.auth,verified.principal);if(!scoped.ok)return scoped.result;
  if(request.method!=='POST')return {status:405,body:redactError('method_not_allowed')};
  const parsed=askReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
- const result=await withTransaction(options.auth.db,()=>readAsk(scoped.context,parsed.data));
- return result===null?{status:404,body:redactError('not_found')}:{status:200,body:askResponseSchema.parse(result)};
+ const legacy=readsLegacyAsk(verified.principal);
+ const result=await withTransaction(options.auth.db,()=>readAsk(scoped.context,parsed.data,{operationalTasksOnly:legacy}));
+ if(result===null)return {status:404,body:redactError('not_found')};
+ const body=askResponseSchema.parse(result);
+ return {status:200,body:legacy?legacyAskResponse(body):body};
 }

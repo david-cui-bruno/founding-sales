@@ -1,9 +1,7 @@
-import {askAnswerCancelPayloadSchema,askAnswerCancelledSchema,askAnswerInvestigationPreviewSchema,askAnswerInvestigationPreviewResultSchema,askAnswerInvestigationCommitSchema} from '@fss/contracts';
 import {businessSelectionReadSchema,businessSelectionStatusSchema} from '@fss/contracts';
 import {linkedinRecurringViewSchema} from '@fss/contracts';
 import {linkedinPostingPolicyViewSchema,linkedinPostingPolicySaveSchema,linkedinPostingCandidateBindSchema,linkedinPostingCandidateBindingSchema} from '@fss/contracts';
 import {businessSelectionPayloadSchema} from '@fss/contracts';
-import {askSessionCreatePayloadSchema,askSessionIdentitySchema,askSessionTurnPayloadSchema,askSessionTurnAcknowledgmentSchema,askSessionChangePayloadSchema,askSessionReadSchema,askSessionViewSchema,askSessionListSchema,askSessionPageSchema} from '@fss/contracts';
 import {businessRuleReadSchema,businessRulePayloadSchema,businessRulesSchema} from '@fss/contracts';
 import {
   crmMailCaptureControlsSaveSchema,
@@ -15,9 +13,7 @@ import {
 import {socialDiagnosticAttemptSchema,socialDiagnosticEventSchema,socialDiagnosticReasonSchema} from './socialDiagnostics.ts';
 import {socialManualHandoffInputSchema,socialManualHandoffViewSchema,socialManualHandoffConfirmSchema,socialManualHandoffUseSchema,socialConnectionSchema} from '@fss/contracts';
 import {experimentsReadSchema,experimentsViewSchema,experimentSaveSchema,experimentSaveResultSchema,experimentActivateSchema,experimentActivateResultSchema,experimentStopSchema,experimentStopResultSchema,experimentEraseSchema,experimentEraseResultSchema} from '@fss/contracts';
-import {askActionCreatePayloadSchema,askActionAcknowledgmentSchema,askActionReadSchema,askActionPageSchema,askActionChangePayloadSchema,askActionChangedSchema} from '@fss/contracts';
-import {askHistoryListSchema,askHistoryPageSchema,askHistoryChangePayloadSchema,askHistoryChangedSchema} from '@fss/contracts';
-import {askAnswerRequestPayloadSchema,askAnswerAcknowledgmentSchema,askAnswerReadSchema,askAnswerReadResultSchema,askAnswerSourceReadSchema,askAnswerSourceResultSchema} from '@fss/contracts';
+import {askActionReadSchema,askActionPageSchema,askActionChangePayloadSchema,askActionChangedSchema} from '@fss/contracts';
 import {crmCommitmentReviewPayloadSchema,crmCommitmentCompletePayloadSchema,crmCommitmentQueuedSchema,crmCommitmentCompletedSchema,crmCommitmentReviewStatusSchema,crmCommitmentReviewStatusResultSchema,crmCommitmentReadSchema,crmCommitmentPageSchema,crmCommitmentHistoryPageSchema} from '@fss/contracts';
 import {todayActionsV2ResponseSchema,todayActionOpenV2RequestSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
 import {askReadSchema,askResponseSchema} from '@fss/contracts';
@@ -1277,26 +1273,6 @@ export const OPERATIONS = {
     transform:
       "explicit disable of the current reviewed capability; no grants or sending",
   },
-  "crm.askAnswerActivate": {
-    kind: 'command',
-    calls: [{ method: 'POST', path: "/ask/purpose/activate" }],input: crmCapabilityActivateSchema
-      .omit({ commandId: true, clientVersion: true })
-      .extend({ capability:z.literal("ask_answer") })
-      .strict(),
-    output: capabilityChangedSchema,
-    transform:
-      "explicit activate of the current reviewed capability; no grants or sending",
-  },
-  "crm.askAnswerDisable": {
-    kind: 'command',
-    calls: [{ method: 'POST', path: "/ask/purpose/disable" }],input: crmCapabilityDisableSchema
-      .omit({ commandId: true, clientVersion: true })
-      .extend({ capability:z.literal("ask_answer") })
-      .strict(),
-    output: capabilityChangedSchema,
-    transform:
-      "explicit disable of the current reviewed capability; no grants or sending",
-  },
   'crm.businessPolicyRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/policy/read'}],input:businessPolicyReadSchema,output:businessPolicySchema,transform:'actual actor mailbox configuration; capture remains disabled'},
   'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
   'crm.businessSelectionRead':{kind:'read',calls:[{method:'POST',path:'/crm/business/selection/read'}],input:businessSelectionReadSchema,output:businessSelectionStatusSchema,transform:'current account selection status without provider reads'},
@@ -1323,23 +1299,9 @@ export const OPERATIONS = {
   'crm.evidenceRead':{kind:'read',calls:[{method:'POST',path:'/crm/evidence/read'}],input:crmEvidenceReadSchema,output:crmEvidencePageSchema,transform:'bounded current and human-reviewed source evidence'},
   'crm.processingSource':{kind:'read',calls:[{method:'POST',path:'/crm/processing/source/read'}],input:crmSourceLookupSchema,output:crmResolvedSourceSchema,transform:'exact current source authority and bounded quote'},
   'crm.progressRead':{kind:'read',calls:[{method:'POST',path:'/crm/progress/read'}],input:crmProgressReadSchema,output:crmProgressResponseSchema,transform:'current verified evidence; imports do not send or change sales stages'},
-  'ask.sessionCreate':{kind:'command',calls:[{method:'POST',path:'/ask/sessions/create'}],input:askSessionCreatePayloadSchema,output:askSessionIdentitySchema,transform:'owner-private current conversational scope; no sending authority'},
-  'ask.sessionTurn':{kind:'command',calls:[{method:'POST',path:'/ask/sessions/turn'}],input:askSessionTurnPayloadSchema,output:askSessionTurnAcknowledgmentSchema,transform:'owner-private current conversational scope; no sending authority'},
-  'ask.sessionChange':{kind:'command',calls:[{method:'POST',path:'/ask/sessions/change'}],input:askSessionChangePayloadSchema,output:askSessionIdentitySchema,transform:'owner-private current conversational scope; no sending authority'},
-  'ask.sessionRead':{kind:'read',calls:[{method:'POST',path:'/ask/sessions/read'}],input:askSessionReadSchema,output:askSessionViewSchema,transform:'owner-private current conversational scope; no sending authority'},
-  'ask.sessionList':{kind:'read',calls:[{method:'POST',path:'/ask/sessions/list'}],input:askSessionListSchema,output:askSessionPageSchema,transform:'owner-private current conversational scope; no sending authority'},
   'ask.read':{kind:'read',calls:[{method:'POST',path:'/ask/read'}],input:askReadSchema,output:askResponseSchema,transform:'exact current state and authorized lexical retrieval; no execution authority'},
   'ask.actionRead':{kind:'read',calls:[{method:'POST',path:'/ask/actions/read'}],input:askActionReadSchema,output:askActionPageSchema,transform:'owner-private current human work; unavailable support is source-free'},
   'ask.actionChange':{kind:'command',calls:[{method:'POST',path:'/ask/actions/change'}],input:askActionChangePayloadSchema,output:askActionChangedSchema,transform:'explicit current manual task or proposal revision; no operational task effects'},
-  'ask.actionCreate':{kind:'command',calls:[{method:'POST',path:'/ask/actions/create'}],input:askActionCreatePayloadSchema,output:askActionAcknowledgmentSchema,transform:'explicit human leaf action bound to current supported finding; no policy or send effects'},
-  'ask.historyChange':{kind:'command',calls:[{method:'POST',path:'/ask/history/change'}],input:askHistoryChangePayloadSchema,output:askHistoryChangedSchema,transform:'explicit owner-private metadata CAS; body-free receipt'},
-  'ask.historyList':{kind:'read',calls:[{method:'POST',path:'/ask/history/list'}],input:askHistoryListSchema,output:askHistoryPageSchema,transform:'owner-private dated history with current source authority; no inference'},
-  'ask.answerCancel':{kind:'command',calls:[{method:'POST',path:'/ask/answers/cancel'}],input:askAnswerCancelPayloadSchema,output:askAnswerCancelledSchema,transform:'cancel future dispatch; retain financial settlement'},
-  'ask.investigationPreview':{kind:'read',calls:[{method:'POST',path:'/ask/answers/investigation/preview'}],input:askAnswerInvestigationPreviewSchema,output:askAnswerInvestigationPreviewResultSchema,transform:'dated allowance preview; no dispatch'},
-  'ask.investigationCommit':{kind:'command',calls:[{method:'POST',path:'/ask/answers/investigation/commit'}],input:askAnswerInvestigationCommitSchema.omit({commandId:true,clientVersion:true}),output:askAnswerAcknowledgmentSchema,transform:'explicit new bounded investigation; no grant'},
-  'ask.answerRequest':{kind:'command',calls:[{method:'POST',path:'/ask/answers/request'}],input:askAnswerRequestPayloadSchema,output:askAnswerAcknowledgmentSchema,transform:'explicit bounded question and selected versions; metadata acknowledgment only'},
-  'ask.answerRead':{kind:'read',calls:[{method:'POST',path:'/ask/answers/read'}],input:askAnswerReadSchema,output:askAnswerReadResultSchema,transform:'fresh permission-checked answer and same-input keyword fallback'},
-  'ask.answerSourceRead':{kind:'read',calls:[{method:'POST',path:'/ask/answers/source/read'}],input:askAnswerSourceReadSchema,output:askAnswerSourceResultSchema,transform:'current server-resolved request version and citation window; no navigation authority'},
   'crm.processingRead':{kind:'read',calls:[{method:'POST',path:'/crm/processing/read'}],input:crmProcessingReadSchema,output:crmProcessingResultSchema,transform:'versioned evidence and financial coverage'},
   'crm.processingRequest':{kind:'command',calls:[{method:'POST',path:'/crm/processing/request'}],input:crmProcessingRequestSchema.omit({commandId:true,clientVersion:true}),output:crmProcessingResultSchema,transform:'explicit processing request; no activation authority'},
   'crm.processingPurpose':{kind:'read',calls:[{method:'POST',path:'/crm/processing/purpose/read'}],input:z.strictObject({}),output:crmExtractionPurposeSchema,transform:'purpose-specific disabled configuration'},

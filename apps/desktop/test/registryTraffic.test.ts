@@ -284,11 +284,6 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
     "crm.extractionDisable": {
       capability: "crm_extraction",expectedRevision:1,
     },
-    "crm.askAnswerActivate": {
-      capability: "ask_answer",expectedRevision:1,
-      approval:{consentAcknowledged:true,qualityTier:"acquisition",limitations:[]},
-    },
-    "crm.askAnswerDisable": { capability: "ask_answer",expectedRevision:1 },
   'crm.businessPolicyRead':{},
   'crm.businessPolicySave':{mailboxId:UUID,expectedGeneration:1,expectedAccountBinding:'a'.repeat(64),expectedRevision:0,enabled:false,disclosure:null},
   'crm.businessSelectionRead':{mailboxId:UUID,previewJobId:UUID},

@@ -18,8 +18,6 @@ import {crmCaptureExtractionJobHandler} from '../handlers/crmCaptureExtraction.t
 import {bookingInterpretationJobHandler} from '../handlers/bookingInterpretation.ts';
 import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts';
 import { crmExtractJobHandler } from '../handlers/crmExtract.ts';
-import {askIndexJobHandler} from '../handlers/askIndex.ts';
-import {askAnswerJobHandler} from '../handlers/askAnswer.ts';
 import {automaticEmailHandler,automaticEmailSource} from '../handlers/emailAdmission.ts';
 import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
@@ -146,8 +144,6 @@ export interface HandlerComposition {
   readonly bookingInterpretation?: Parameters<typeof bookingInterpretationJobHandler>[0];
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
-  readonly crmAskIndex?: Parameters<typeof askIndexJobHandler>[0];
-  readonly crmAskAnswers?: Parameters<typeof askAnswerJobHandler>[0];
   /** Controlled composition only; no live proof verifier is configured by startup. */
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
@@ -266,8 +262,6 @@ export function registerHandlers(
   registry.register(retentionBatchJobHandler());
   registry.register(crmExtractJobHandler(composition.crmExtraction??{}));
   registry.register(bookingInterpretationJobHandler(composition.bookingInterpretation??{}));
-  registry.register(askIndexJobHandler(composition.crmAskIndex??{}));
-  registry.register(askAnswerJobHandler(composition.crmAskAnswers??{}));
   registry.register(crmCaptureExtractionJobHandler(composition.crmExtraction?.mailEvidence));
   registry.register(socialAssetsHandler(composition.socialAssets??null));
   // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,
@@ -682,7 +676,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const meetingAnalysis = readMeetingAnalysisComposition(classifier, environment);
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
   const diagnosticRuntime=createCrmAcquisitionDiagnosticStartup(environment,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,connectionString:config.database.connectionString});
-  if(diagnosticRuntime&&(crmConfiguration.capture||crmConfiguration.extraction||crmConfiguration.answer))throw new Error('diagnostic_ordinary_capabilities_forbidden');
+  if(diagnosticRuntime&&(crmConfiguration.capture||crmConfiguration.extraction))throw new Error('diagnostic_ordinary_capabilities_forbidden');
   const diagnosticSessions=async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-acquisition-diagnostic'});await client.connect();return {session:asSession(client),close:()=>client.end()};};
   const diagnostic=diagnosticRuntime&&deployment.gmail?createCrmAcquisitionDiagnosticCapture({runtime:diagnosticRuntime,transport:'actual_transport',gmail:deployment.gmail.gmail,openSession:diagnosticSessions,resolveAccess:createServerCrmGmailAccessResolver({...deployment.gmail,openSession:diagnosticSessions})}):undefined;
   if(diagnosticRuntime&&!diagnostic)throw new Error('diagnostic_gmail_unavailable');
