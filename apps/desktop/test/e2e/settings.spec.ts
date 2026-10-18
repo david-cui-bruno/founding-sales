@@ -33,7 +33,7 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
   await openAdmin(page, adminState());
 
   await expect(page.getByTestId('heading')).toHaveText('Settings');
-  await expect(page.getByTestId('setting-sending_enabled')).toContainText('Default, never configured');
+  await expect(page.getByTestId('email-technical')).toContainText('Default, never configured');
   // Wave 1: the alarm thresholds and the supported versions are gone from the page.
   await expect(page.getByTestId('setting-alert_thresholds')).toHaveCount(0);
   await expect(page.getByTestId('setting-client_version_range')).toHaveCount(0);

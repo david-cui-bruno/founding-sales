@@ -169,7 +169,7 @@ export function SendingSection({
       {section.ramps.length === 0 ? null : (
         <Rows data-testid="ramps" className="mt-4">
           {section.ramps.map(ramp => (
-            <Row key={ramp.mailboxId} data-testid={`ramp-${ramp.mailboxId}`}>
+            <Row key={ramp.mailboxId} data-testid={`ramp-${ramp.mailboxId}`} className={compact ? '[&>span:last-child]:opacity-100' : ''}>
               <RowMain line={ramp.line} />
               <RowActions>
                 <Input

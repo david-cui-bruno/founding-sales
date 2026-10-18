@@ -44,6 +44,16 @@ export function SettingsView({ route, identity, generation, guard, mailbox, mail
   const state = admin.state;
   const view = state === null ? null : adminViewOf(state);
   const [advanced, setAdvanced] = useState(tab !== 'administration' || section !== null);
+  const [emailTechnical, setEmailTechnical] = useState<HTMLDivElement | null>(null);
+  const openEmailTechnical = () => {
+    setAdvanced(true);
+    // Opening a disclosure is presentation only, never a setting command.
+    if (emailTechnical) {
+      const disclosure = emailTechnical.closest('details');
+      if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
+      emailTechnical.scrollIntoView({ block: 'start' });
+    }
+  };
   const scrolled = useRef(false);
   useEffect(() => {
     if (state === null || section === null || scrolled.current) return;
@@ -76,7 +86,7 @@ export function SettingsView({ route, identity, generation, guard, mailbox, mail
             <Administration scope="calling" view={view} actions={admin.actions} busy={admin.busy} />
             {state ? <CallingCalendarSection scope="calling" state={state} busy={key => admin.busy(`integration:${key}`)} onSave={admin.actions.saveIntegration} onRetry={() => admin.actions.show('administration')} /> : null}
           </OwnerGroup>
-          <OwnerGroup title="Email"><Administration scope="email" view={view} actions={admin.actions} busy={admin.busy} /></OwnerGroup>
+          <OwnerGroup title="Email"><Administration scope="email" view={view} actions={admin.actions} busy={admin.busy} technicalContainer={emailTechnical} onAdvanced={openEmailTechnical} /></OwnerGroup>
           <OwnerGroup title="Research & discovery"><ResearchSettings enabled={editable} identity={identity} generation={generation} guard={guard} /><DiscoveryStatus key={`discovery:${privacyKey}`} available={identity !== null} privacyKey={privacyKey} /></OwnerGroup>
           <OwnerGroup title="LinkedIn"><LinkedinConnection key={privacyKey} enabled={editable} privacyKey={privacyKey} /></OwnerGroup>
         </> : null}
@@ -87,6 +97,11 @@ export function SettingsView({ route, identity, generation, guard, mailbox, mail
               {(['administration', 'dashboard', 'diagnostics'] as const).map(name => <button key={name} data-testid={`tab-${name === 'administration' ? 'settings' : name}`} type="button" className="underline underline-offset-4" aria-current={name === tab ? 'page' : undefined} onClick={() => routeShown({ name: 'settings', tab: name })}>{name === 'administration' ? 'Configuration' : name === 'dashboard' ? 'Dashboard' : 'Diagnostics'}</button>)}
             </div>
             {configuration && view && state ? <>
+              <section aria-label="Email release setup and history" className="border-t border-border py-4">
+                <h3 className="mb-2 text-sm font-medium">Email release setup & history</h3>
+                <p className="mb-3 text-xs text-muted-foreground">Technical edits remain drafts until you explicitly Save the corresponding Email setting above. The server validates every release reference.</p>
+                <div ref={setEmailTechnical} data-testid="email-technical" className="space-y-3" />
+              </section>
               <Administration scope="advanced" view={view} actions={admin.actions} busy={admin.busy} />
               <CallingCalendarSection scope="advanced" state={state} busy={key => admin.busy(`integration:${key}`)} onSave={admin.actions.saveIntegration} onRetry={() => admin.actions.show('administration')} />
               <RecordingsFolderSection />

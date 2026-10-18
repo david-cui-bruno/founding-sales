@@ -117,12 +117,16 @@ export function Administration({
   actions,
   busy,
   scope = 'all',
+  technicalContainer,
+  onAdvanced,
 }: {
   readonly view: AdminView;
   readonly actions: AdminActions;
   /** Whether one named form's own command is on the wire; the sections do not share. */
   busy(form: string): boolean;
   readonly scope?: 'all' | 'calling' | 'email' | 'advanced';
+  readonly technicalContainer?: HTMLElement | null;
+  readonly onAdvanced?: () => void;
 }): JSX.Element {
   return (
     <>
@@ -159,6 +163,9 @@ export function Administration({
           {view.settings.filter(row => scope === 'all' || (scope === 'email' ? ['sending_enabled', 'postal_address'].includes(row.settingKey) : !['sending_enabled', 'postal_address'].includes(row.settingKey))).map(row => (
             <SettingRow
               key={row.settingKey}
+              compact={scope === 'email'}
+              {...(technicalContainer !== undefined ? { technicalContainer } : {})}
+              {...(onAdvanced ? { onAdvanced } : {})}
               row={row}
               history={view.history}
               saving={busy(`setting:${row.settingKey}`)}
