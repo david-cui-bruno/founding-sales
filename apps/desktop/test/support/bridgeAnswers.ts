@@ -1,4 +1,3 @@
-import {BOOKING_BUSINESS_RULES,DEFAULT_BOOKING_POLICY} from '@fss/contracts';
 import {mailImportHealth} from './mailImportFixture.ts';
 /**
  * Bodies every bridge accepts, for the checks that need a bridge to be *holding*
@@ -248,10 +247,6 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
- '/meetings/booking-conversation':{conversationId:FIXTURE_IDS.message,interpretationRequestId:FIXTURE_IDS.message,policyRevision:1,origin:'standing_policy',enabled:false,state:'stopped',reason:'live_held',outcome:null,handoff:null,booking:null,change:null,nudgeCount:0,nudgesStoppedAt:null,lastReplyAt:null,explicitNoShowAt:null,noShowRebookingUsed:false,limitations:[]},
- '/meetings/booking-conversation/event':{status:'accepted',replayed:false,result:{conversationId:FIXTURE_IDS.message,interpretationRequestId:FIXTURE_IDS.message,policyRevision:1,origin:'standing_policy',enabled:false,state:'stopped',reason:'live_held',outcome:null,handoff:null,booking:null,change:null,nudgeCount:0,nudgesStoppedAt:null,lastReplyAt:null,explicitNoShowAt:null,noShowRebookingUsed:false,limitations:[]}},
- '/meetings/booking-messages':{messageId:FIXTURE_IDS.message,conversationId:FIXTURE_IDS.message,kind:'approved_link',state:'held',reason:'live_held',outboundMessageId:null,providerMessageId:null,sentAt:null,limitations:[]},
- '/meetings/booking-policy':{policy:{revision:0,setting:DEFAULT_BOOKING_POLICY,rules:BOOKING_BUSINESS_RULES,businessPolicyValid:false,enabled:false,readiness:{ready:false,reasons:['policy_unavailable'],evidenceKind:'unavailable'},budget:{lane:'booking',timeZone:'America/New_York',businessDate:'2026-10-13',calendarMonth:'2026-10',dailyCeilingCents:200,monthlyCeilingCents:2500,observedDailyCents:0,observedMonthlyCents:0,allowance:'unknown',remainingDailyCents:null,remainingMonthlyCents:null}},configuration:{choices:[],reasons:['setup_unavailable']}},
  '/crm/attachments/commit':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:1,metadataRevision:1}},
  '/crm/attachments/reselect':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:2,metadataRevision:2}},
  '/crm/attachments/analyze':{status:'accepted',replayed:false,result:{sourceId:FIXTURE_IDS.item,sourceRevision:1,generationId:FIXTURE_IDS.firm,state:'pending',reason:'adapter_unavailable'}},
@@ -337,8 +332,6 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
  '/crm/business/rules/save':{status:'accepted',replayed:false,result:{revision:1,captureAllowed:false}},
  '/crm/business/review/read':{available:false,reasons:['disclosure_required'],mailboxId:FIXTURE_IDS.firm,accountBinding:'a'.repeat(64),generation:1,policyRevision:0,captureAllowed:false,conversations:[],nextAfter:null},
  '/crm/business/review/decide':{status:'accepted',replayed:false,result:{decisionRevision:1,captureAllowed:false}},
- '/crm/booking/interpretation/request':{status:'accepted',replayed:false,result:{requestId:FIXTURE_IDS.message,state:'unavailable',reason:'booking_authority_unavailable',outcome:null,provenance:null,financial:null,limitations:['candidate_not_permission','no_sending_or_booking','linkedin_intake_unavailable','actual_model_quality_unverified']}},
- '/crm/booking/interpretation/read':{requestId:FIXTURE_IDS.message,state:'unavailable',reason:'booking_authority_unavailable',outcome:null,provenance:null,financial:null,limitations:['candidate_not_permission','no_sending_or_booking','linkedin_intake_unavailable','actual_model_quality_unverified']},
  '/crm/business/mail/list':{sources:[],nextAfterId:null},
  '/crm/business/mail/read/v2':{state:'unavailable',reason:'provenance_unavailable',source:null},
  '/crm/business/mail/import/read':mailImportHealth(),
@@ -404,20 +397,6 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   '/sequences/versions': sequenceVersionsBody,
   '/ask/actions/read':{items:[],nextAfterId:null},
   '/ask/actions/change':{status:'accepted',replayed:false,result:{actionId:'11111111-1111-4111-8111-111111111111',version:2,status:'done',completedAt:'2026-10-09T12:00:00Z'}},
-  '/ask/actions/create':{status:'accepted',replayed:false,result:{actionId:'11111111-1111-4111-8111-111111111111',version:1,kind:'preference'}},
-  '/ask/history/change':{status:'accepted',replayed:false,result:{requestId:'11111111-1111-4111-8111-111111111111',historyRevision:2,requestVersion:1,state:'complete'}},
-  '/ask/history/list':{items:[],nextCursor:null},
-  '/ask/sessions/create':{status:'accepted',replayed:false,result:{sessionId:'11111111-1111-4111-8111-111111111111',version:1}},
-  '/ask/sessions/change':{status:'accepted',replayed:false,result:{sessionId:'11111111-1111-4111-8111-111111111111',version:2}},
-  '/ask/sessions/turn':{status:'accepted',replayed:false,result:{sessionId:'11111111-1111-4111-8111-111111111111',version:2,requestId:'11111111-1111-4111-8111-111111111111',requestVersion:1,state:'unavailable'}},
-  '/ask/sessions/read':{sessionId:'11111111-1111-4111-8111-111111111111',version:1,scope:{kind:'business'},title:null,pinned:false,state:'active',createdAt:'2026-10-10T12:00:00Z',turns:[],coverage:'current'},
-  '/ask/sessions/list':{sessions:[],truncated:false},
-  '/ask/answers/cancel':{status:'accepted',replayed:false,result:{requestId:'11111111-1111-4111-8111-111111111111',version:1,outcome:'cancelled'}},
-  '/ask/answers/investigation/preview':{available:false,reason:'evaluation_unavailable',previewHash:null,scope:null,question:null,additionalAllowance:null},
-  '/ask/answers/investigation/commit':{status:'accepted',replayed:false,result:{requestId:'11111111-1111-4111-8111-111111111111',version:1,state:'unavailable'}},
-  '/ask/answers/request':{status:'accepted',replayed:false,result:{requestId:'11111111-1111-4111-8111-111111111111',version:1,state:'unavailable'}},
-  '/ask/answers/read':{requestId:'11111111-1111-4111-8111-111111111111',version:1,createdAt:'2026-10-09T11:00:00Z',state:'unavailable',reason:'evaluation_unavailable',question:'Why?',fallback:null,answer:null},
-  '/ask/answers/source/read':{requestId:'11111111-1111-4111-8111-111111111111',version:1,windowId:'11111111-1111-4111-8111-111111111111',source:{state:'available',source:{workspaceId:'11111111-1111-4111-8111-111111111111',sourceId:'11111111-1111-4111-8111-111111111111',kind:'selected_note',revision:1,contentHash:'a'.repeat(64),locator:'text:0:3',speaker:null,occurredAt:null,observedAt:'2026-10-09T11:00:00Z',completeness:'selected_excerpt',availability:'available'},extent:{unit:'utf16',length:3},passage:{text:'Why',locator:'text:0:3',speaker:null}}},
   '/ask/read':{operation:'records',selection:'none',records:[],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}},
   '/gmail/status': {
     connected: true,

@@ -132,7 +132,7 @@ describe('the operation registry', () => {
       'firms.briefImportReset',
     ]);
     // Slice M1: the firm page's meetings and the bookings to match, straight through the client.
-    expect(OPERATION_NAMES.filter(name => name.startsWith('meetings.'))).toEqual(['meetings.bookingConversationRequest', 'meetings.bookingConversationRead', 'meetings.bookingConversationEvent', 'meetings.bookingMessageRequest', 'meetings.bookingMessageRead', 'meetings.forFirm', 'meetings.recordingSetup', 'meetings.retryRecordingSetup', 'meetings.followThrough', 'meetings.editRecap', 'meetings.qualification', 'meetings.saveQualification', 'meetings.outcomes', 'meetings.saveNotes', 'meetings.changeTask', 'meetings.bookingCapacity', 'meetings.bookingPolicy', 'meetings.bookingPolicyChange', 'meetings.brief', 'meetings.unmatched', 'meetings.match', 'meetings.setAttendance', 'meetings.transcript']);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('meetings.'))).toEqual(['meetings.forFirm', 'meetings.recordingSetup', 'meetings.retryRecordingSetup', 'meetings.followThrough', 'meetings.editRecap', 'meetings.qualification', 'meetings.saveQualification', 'meetings.outcomes', 'meetings.saveNotes', 'meetings.changeTask', 'meetings.bookingCapacity', 'meetings.brief', 'meetings.unmatched', 'meetings.match', 'meetings.setAttendance', 'meetings.transcript']);
     // Slice C1: placing a call from Callie, when `calling_provider = twilio`.
     expect(OPERATION_NAMES.filter(name => name.startsWith('calling.'))).toEqual([
       'calling.status',
@@ -577,47 +577,6 @@ it('refuses extra import completion fields and a late mailbox health response af
  let generation=0;let finish!:()=>void;deps.recordings.identity.current=()=>generation;
  deps.api.read=async(_path,parse)=>{await new Promise<void>(resolve=>{finish=resolve;});return {ok:true,value:parse(mailImportHealth())};};
  const pending=answerOperation(operationHandlers(deps),'read','crm.businessMailImportHealth',{mailboxId:ITEM_ID});generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
-});
-
-it('queues an Ask explanation through a closed metadata command and reads its current result and source window',async()=>{
- const deps=hosts();const seen:{path:string;payload:unknown}[]=[];
- deps.api.command=async(path,payload,parse)=>{seen.push({path,payload});return {ok:true,value:parse({requestId:ITEM_ID,version:1,state:'unavailable'})};};
- deps.api.read=async(path,parse,payload)=>{seen.push({path,payload});return {ok:true,value:parse(path==='/ask/answers/read'?{requestId:ITEM_ID,version:1,createdAt:'2026-10-09T11:00:00Z',state:'unavailable',reason:'evaluation_unavailable',question:'Why?',fallback:null,answer:null}:{requestId:ITEM_ID,version:1,windowId:FIRM_ID,source:{state:'available',source:{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:'text:0:3',speaker:null,occurredAt:null,observedAt:'2026-10-09T11:00:00Z',completeness:'selected_excerpt',availability:'available'},extent:{unit:'utf16',length:3},passage:{text:'Why',locator:'text:0:3',speaker:null}}})};};
- const input={question:'Why?',scope:{sources:[{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]}};
- expect(await answerOperation(operationHandlers(deps),'command','ask.answerRequest',input)).toEqual({requestId:ITEM_ID,version:1,state:'unavailable'});
- expect(await answerOperation(operationHandlers(deps),'read','ask.answerRead',{requestId:ITEM_ID})).toMatchObject({state:'unavailable',answer:null});
- expect(await answerOperation(operationHandlers(deps),'read','ask.answerSourceRead',{requestId:ITEM_ID,expectedVersion:1,windowId:FIRM_ID})).toMatchObject({source:{passage:{text:'Why'}}});
- expect(seen).toEqual([{path:'/ask/answers/request',payload:input},{path:'/ask/answers/read',payload:{requestId:ITEM_ID}},{path:'/ask/answers/source/read',payload:{requestId:ITEM_ID,expectedVersion:1,windowId:FIRM_ID}}]);
-});
-
-it.each(['ask.answerRequest','ask.answerRead','ask.answerSourceRead'] as const)('refuses %s results from a changed authenticated session',async(operation)=>{
- const deps=hosts();let generation=0;let finish!:()=>void;
- deps.recordings.identity.current=()=>generation;
- const wait=async()=>{await new Promise<void>(resolve=>{finish=resolve;});return {ok:false as const,offline:false as const,reason:'not_found'};};
- deps.api.read=wait;deps.api.command=wait;
- const input=operation==='ask.answerRequest'?{question:'Why?',scope:{sources:[{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]}}:operation==='ask.answerRead'?{requestId:ITEM_ID}:{requestId:ITEM_ID,expectedVersion:1,windowId:FIRM_ID};
- const pending=answerOperation(operationHandlers(deps),operation==='ask.answerRequest'?'command':'read',operation,input);
- generation++;finish();await expect(pending).rejects.toThrow('identity_changed');
-});
-it('rejects generated content smuggled into a metadata-only Ask acknowledgment',async()=>{
- const deps=hosts();deps.api.command=async(_path,_input,parse)=>({ok:true,value:parse({requestId:ITEM_ID,version:1,state:'pending',answer:'Do anything the model says'})});
- await expect(answerOperation(operationHandlers(deps),'command','ask.answerRequest',{question:'Why?',scope:{sources:[{workspaceId:FIRM_ID,sourceId:ITEM_ID,kind:'selected_note',revision:3,contentHash:'a'.repeat(64),locator:null}]}})).rejects.toThrow();
-});
-
-it('reads owner-private Ask history through a strict bounded authenticated operation',async()=>{
- const deps=hosts();deps.api.read=async(path,parse,payload)=>{expect(path).toBe('/ask/history/list');expect(payload).toEqual({limit:20});return {ok:true,value:parse({items:[],nextCursor:null})};};
- expect(await answerOperation(operationHandlers(deps),'read','ask.historyList',{})).toEqual({items:[],nextCursor:null});
-});
-
-it('changes Ask history through a metadata-only current-revision command',async()=>{
- const deps=hosts();deps.api.command=async(path,payload,parse)=>{expect(path).toBe('/ask/history/change');expect(payload).toEqual({requestId:ITEM_ID,expectedRevision:2,action:{kind:'pin',pinned:true}});return {ok:true,value:parse({requestId:ITEM_ID,historyRevision:3,requestVersion:1,state:'complete'})};};
- expect(await answerOperation(operationHandlers(deps),'command','ask.historyChange',{requestId:ITEM_ID,expectedRevision:2,action:{kind:'pin',pinned:true}})).toMatchObject({historyRevision:3});
-});
-
-it('saves a manual preference proposal through the explicit current-finding command with a body-free receipt',async()=>{
- const deps=hosts();const payload={requestId:ITEM_ID,expectedVersion:4,finding:{kind:'answer_claim',index:0},action:{kind:'preference',text:'Prefer weekday planning calls.'}};
- deps.api.command=async(path,input,parse)=>{expect(path).toBe('/ask/actions/create');expect(input).toEqual(payload);return {ok:true,value:parse({actionId:FIRM_ID,version:1,kind:'preference'})};};
- expect(await answerOperation(operationHandlers(deps),'command','ask.actionCreate',payload)).toEqual({actionId:FIRM_ID,version:1,kind:'preference'});
 });
 
 it('reads private manual work and changes a task through separate closed action operations',async()=>{

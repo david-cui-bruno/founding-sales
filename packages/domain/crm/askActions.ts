@@ -1,11 +1,9 @@
-import {readAskExecutionEvidence} from './askExecutionEvidence.ts';
 import {z} from 'zod';
-import {askActionChangedSchema,askActionAcknowledgmentSchema,askActionPageSchema,askExplicitCorpusScopeSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,crmSourceLookupSchema,type AskActionChange,type AskActionCreate,type AskActionRead,type CanonicalSourceReference} from '@fss/contracts';
+import {askActionChangedSchema,askActionPageSchema,askExplicitCorpusScopeSchema,crmClaimContextSchema,crmOriginalAccessClosureSchema,crmSourceLookupSchema,type AskActionChange,type AskActionRead,type CanonicalSourceReference} from '@fss/contracts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from './identityAccess.ts';
 import {lockAskLifecycle} from './askAnswerLifecycle.ts';
-import {readAskAnswer,readAskAnswerSource} from './askAnswers.ts';
 import {lockConflictSources} from './evidenceDecisions.ts';
 import {resolveCrmSource} from './sourceResolver.ts';
 import {readProcessingContext} from './processingContext.ts';
@@ -33,33 +31,6 @@ async function currentActionSupport(context:RepositoryContext,row:ActionAuthorit
   sources.push(resolved.source);
  }
  return {state:'current' as const,sources};
-}
-/** A human action may use a current keyword finding even when model purposes are disabled. */
-export async function createAskAction(context:RepositoryContext,input:AskActionCreate){
- const actor=context.scope.actor;if(actor.kind!=='user'||!await activeIdentityActor(context))return {ok:false as const,reason:'source_unavailable'};
- await lockAskLifecycle(context);
- const current=await readAskAnswer(context,input.requestId);
- if(current===null||current.question===null||current.version!==input.expectedVersion)return {ok:false as const,reason:'source_unavailable'};
- const row=(await context.db.query<{scope:unknown;initial_contexts:unknown;initial_access_closure:unknown;version:number;epoch:number}>('SELECT scope,initial_contexts,initial_access_closure,version,epoch FROM crm_ask_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR SHARE',[context.scope.workspaceId,input.requestId,actor.userId])).rows[0];
- if(row===undefined||row.version!==input.expectedVersion)return {ok:false as const,reason:'source_unavailable'};
- const evidence=await readAskExecutionEvidence(context,{requestId:input.requestId,version:row.version,epoch:row.epoch});if(!evidence||evidence.scope.sources.length===0)return {ok:false as const,reason:'source_unavailable'};
- const scope=askExplicitCorpusScopeSchema.parse(evidence.scope),contexts=evidence.contexts,original=evidence.closure;
- const target=input.action.kind==='preference'?null:input.action.target;
- if(target!==null&&!contexts.some(value=>target.kind==='firm'?value.firmIds.includes(target.firmId):value.personId===target.personId))return {ok:false as const,reason:'source_unavailable'};
- if(target?.kind==='firm'&&target.opportunityId!==undefined&&(await context.db.query('SELECT id FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND id=$3 FOR SHARE',[context.scope.workspaceId,target.firmId,target.opportunityId])).rows.length!==1)return {ok:false as const,reason:'source_unavailable'};
- let references:CanonicalSourceReference[];
- if(input.finding.kind==='keyword_passage')references=current.fallback?.passages[input.finding.index]?.sources??[];
- else{
-  const claim=current.answer?.claims[input.finding.index];if(claim===undefined||(claim.exactResultToolCallIds?.length??0)>0)return {ok:false as const,reason:'source_unavailable'};
-  references=[];
-  for(const windowId of claim.citationWindowIds){const result=await readAskAnswerSource(context,{requestId:input.requestId,expectedVersion:input.expectedVersion,windowId});if(result===null||result.source.passage===null||(current.answer?.resultVersion!=='agent_v1'&&!result.source.passage.text.includes(claim.text)))return {ok:false as const,reason:'source_unavailable'};references.push(result.source.source);}
- }
- const support=supportSchema.safeParse(references.map(({workspaceId,sourceId,kind,revision,contentHash,locator})=>({workspaceId,sourceId,kind,revision,contentHash,locator})));
- if(!support.success)return {ok:false as const,reason:'input_bound_reached'};
- const checked=await currentActionSupport(context,{private_state:'available',input_scope:scope,initial_contexts:contexts,original_access_closure:original,support_refs:support.data});
- if(checked.state!=='current')return {ok:false as const,reason:'source_unavailable'};
- const created=(await context.db.query<{id:string;version:number;kind:string}>(`INSERT INTO crm_ask_actions(workspace_id,owner_user_id,source_request_id,source_request_version,kind,status,target_firm_id,target_person_id,target_opportunity_id,human_text,input_scope,initial_contexts,original_access_closure,support_refs,due) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb) RETURNING id,version,kind`,[context.scope.workspaceId,actor.userId,input.requestId,input.expectedVersion,input.action.kind,input.action.kind==='task'?'open':input.action.kind==='note'?'active':'proposed',target?.kind==='firm'?target.firmId:null,target?.kind==='person'?target.personId:null,target?.kind==='firm'?target.opportunityId??null:null,input.action.kind==='task'?input.action.label:input.action.text,JSON.stringify(scope),JSON.stringify(contexts),JSON.stringify(original),JSON.stringify(support.data),input.action.kind==='task'?JSON.stringify(input.action.due):null])).rows[0]!;
- return {ok:true as const,value:askActionAcknowledgmentSchema.parse({actionId:created.id,version:created.version,kind:created.kind})};
 }
 /** Private note/task bodies are loaded only after all original input and support checks. */
 export async function readAskActions(context:RepositoryContext&{db:SessionQueryable},input:AskActionRead,options:{inTransaction?:boolean}={}){
@@ -95,16 +66,4 @@ export async function changeAskAction(context:RepositoryContext,input:AskActionC
  const changed=(await context.db.query<{id:string;version:number;status:string;completed_at:Date}>(`UPDATE crm_ask_actions SET status='done',version=version+1,completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3 AND version=$4 AND status='open' AND private_state='available' RETURNING id,version,status,completed_at`,[context.scope.workspaceId,actor.userId,input.actionId,input.expectedVersion])).rows[0];
  if(changed===undefined)return {ok:false as const,reason:'source_unavailable'};
  return {ok:true as const,value:askActionChangedSchema.parse({actionId:changed.id,version:changed.version,status:changed.status,completedAt:changed.completed_at.toISOString()})};
-}
-
-/** A copied task depends on its independent original proof, never saved investigation history. */
-export async function readAskTaskSourceAuthority(context: RepositoryContext, taskId: string, expectedVersion?: number) {
- const actor = context.scope.actor;
- if (actor.kind !== 'user' || !await activeIdentityActor(context)) return null;
- const row = (await context.db.query<ActionProof>(`SELECT id,version,kind,status,private_state,target_firm_id,target_person_id,target_opportunity_id,input_scope,initial_contexts,original_access_closure,support_refs,review_required,created_at,updated_at,completed_at FROM crm_ask_actions WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3`, [context.scope.workspaceId, actor.userId, taskId])).rows[0];
- if (!row || row.kind !== 'task' || expectedVersion !== undefined && (row.version !== expectedVersion || row.status !== 'open')) return null;
- if ((await currentActionSupport(context, row)).state !== 'current') return null;
- const locked = (await context.db.query<ActionProof>(`SELECT id,version,kind,status,private_state,target_firm_id,target_person_id,target_opportunity_id,input_scope,initial_contexts,original_access_closure,support_refs,review_required,created_at,updated_at,completed_at FROM crm_ask_actions WHERE workspace_id=$1 AND owner_user_id=$2 AND id=$3 FOR SHARE`, [context.scope.workspaceId, actor.userId, taskId])).rows[0];
- if (JSON.stringify(locked) !== JSON.stringify(row)) return null;
- return { closure: crmOriginalAccessClosureSchema.parse(row.original_access_closure) };
 }

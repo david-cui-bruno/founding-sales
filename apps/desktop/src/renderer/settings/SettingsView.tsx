@@ -1,8 +1,6 @@
-import { CrmCapabilitiesSection } from './CrmCapabilitiesSection.tsx';
+import { CrmOwnerSetup } from './CrmOwnerSetup.tsx';
 import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
 import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
-import {BookingPolicySettings} from './BookingPolicySettings.tsx';
-import {bookingPolicySettingsPorts} from './bookingPolicySettingsPorts.ts';
 import {OutreachSection} from '../outreach/OutreachSection.tsx';
 import { useEffect, useRef, type JSX } from 'react';
 import type { MailboxState } from '../../shared/contract.ts';
@@ -146,7 +144,7 @@ export function SettingsView({
                 available={hasMailboxBridge}
                 onSwitch={onSwitchMailbox}
               />
-              {isAdmin ? <CrmCapabilitiesSection key={`crm-capabilities:${identity}:${String(generation)}`} scope="ai" available={identity!==null && state?.mayMutate===true} privacyKey={`${identity}:${String(generation)}`} /> : null}
+              {isAdmin ? <CrmOwnerSetup key={`crm-capabilities:${identity}:${String(generation)}`} available={identity!==null && state?.mayMutate===true} privacyKey={`${identity}:${String(generation)}`} /> : null}
               {/* Lane M4: the demo recordings folder, a setting of this Mac. */}
               <RecordingsFolderSection />
               {state === null ? null : (
@@ -160,7 +158,6 @@ export function SettingsView({
                 />
               )}
               <BookingCapacity key={`booking:${identity}:${String(generation)}`} ports={bookingCapacityPorts} />
-              {isAdmin?<BookingPolicySettings key={`booking-policy:${identity}:${String(generation)}`} ports={bookingPolicySettingsPorts} mayMutate={identity!==null&&state?.mayMutate===true}/>:null}
               <Administration view={view} actions={admin.actions} busy={admin.busy} />
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />

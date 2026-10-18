@@ -2,11 +2,6 @@ import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquis
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
-import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
-import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
-import type {BookingChangeRuntime} from '@fss/domain/meetings/bookingChangeProvider.ts';
-import type {BookingConversationRuntime} from '@fss/domain/meetings/bookingConversation.ts';
-import type {BookingMessageRuntime} from '@fss/domain/meetings/bookingMessagesRuntime.ts';
 import type {BookingCapacityDeps} from './routes/bookingCapacity.ts';
 import type {SocialMediaStore} from './social/mediaStore.ts';
 import type { CallAudioRemover } from './integrations/callAudio.ts';
@@ -92,19 +87,12 @@ import {
  * (`docs/decisions/g75-one-connection-per-request.md`).
  */
 
-import type {BookingInterpretationAuthorityPort} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 export interface ApiOptions {
-  readonly bookingInterpretationAuthority?:BookingInterpretationAuthorityPort;
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
   readonly crmAcquisitionDiagnosticRuntime?: CrmAcquisitionDiagnosticRuntime;
   readonly bookingCapacity?:BookingCapacityDeps;
-  readonly bookingCreate?:BookingCreateRuntime;
-  readonly bookingChange?:BookingChangeRuntime;
-  readonly bookingConversation?:BookingConversationRuntime;
-  readonly bookingMessages?:BookingMessageRuntime;
-  readonly bookingPolicyRuntime?:BookingPolicyRuntime;
   readonly replyComposer?:HumanReplyDraftPort|null;
   /** One backend for this call and nobody else's: transactions and locks are opened on it. */
   readonly session: SessionQueryable;
@@ -182,17 +170,11 @@ export type { ApiRequest, RouteResult } from './routes/types.ts';
 
 function routingOptions(options: ApiOptions): RoutingOptions {
   return {
-    ...(options.bookingInterpretationAuthority===undefined?{}:{bookingInterpretationAuthority:options.bookingInterpretationAuthority}),
     ...(options.crmMailEvidence===undefined?{}:{crmMailEvidence:options.crmMailEvidence}),
     ...(options.crmMailCaptureReadiness===undefined?{}:{crmMailCaptureReadiness:options.crmMailCaptureReadiness}),
     ...(options.crmCapabilityRuntime===undefined?{}:{crmCapabilityRuntime:options.crmCapabilityRuntime}),
     ...(options.crmAcquisitionDiagnosticRuntime===undefined?{}:{crmAcquisitionDiagnosticRuntime:options.crmAcquisitionDiagnosticRuntime}),
     ...(options.bookingCapacity===undefined?{}:{bookingCapacity:options.bookingCapacity}),
-    ...(options.bookingCreate===undefined?{}:{bookingCreate:options.bookingCreate}),
-    ...(options.bookingChange===undefined?{}:{bookingChange:options.bookingChange}),
-    ...(options.bookingConversation===undefined?{}:{bookingConversation:options.bookingConversation}),
-    ...(options.bookingMessages===undefined?{}:{bookingMessages:options.bookingMessages}),
-    ...(options.bookingPolicyRuntime===undefined?{}:{bookingPolicyRuntime:options.bookingPolicyRuntime}),
     ...(options.replyComposer===undefined?{}:{replyComposer:options.replyComposer}),
     session: options.session,
     supportedClientVersions: options.supportedClientVersions,

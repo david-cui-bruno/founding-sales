@@ -15,12 +15,8 @@ import {crmMailIntentSource} from '../handlers/crmMailIntentSource.ts';
 import type {CrmMailEvidencePort} from '@fss/domain/crm/mailEvidence.ts';
 import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
 import {crmCaptureExtractionJobHandler} from '../handlers/crmCaptureExtraction.ts';
-import {bookingInterpretationJobHandler} from '../handlers/bookingInterpretation.ts';
 import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts';
 import { crmExtractJobHandler } from '../handlers/crmExtract.ts';
-import {askIndexJobHandler} from '../handlers/askIndex.ts';
-import {askAnswerJobHandler} from '../handlers/askAnswer.ts';
-import {automaticEmailHandler,automaticEmailSource} from '../handlers/emailAdmission.ts';
 import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
 import {socialDraftModel} from '../social/draftModel.ts';
@@ -38,10 +34,6 @@ import { meetingAutoRecordingJobHandler,meetingAutoRecordingSource } from '../ha
 import { readZoomMeetingsConfiguration } from '../zoom/meetingsClient.ts';
 import { calcomDemoClient } from '../calcom/bookingClient.ts';
 import { readCalcomSecret } from '@fss/domain/meetings/calcomSecret.ts';
-import {bookingCreateJobHandler} from '../handlers/bookingCreate.ts';
-import {bookingChangeJobHandler} from '../handlers/bookingChange.ts';
-import {bookingConversationJobHandler} from '../handlers/bookingConversation.ts';
-import {bookingMessageSendJobHandler} from '../handlers/bookingMessages.ts';
 import { meetingFollowThroughJobHandler, meetingFollowThroughSource } from '../handlers/meetingFollowThrough.ts';
 import { meetingAnalyzeJobHandler, meetingAnalysesSource, readMeetingAnalysisComposition, type MeetingAnalyzeOptions } from '../handlers/meetingAnalyze.ts';
 import { meetingTranscribeJobHandler, meetingTranscriptionsSource, type MeetingTranscribeOptions } from '../handlers/meetingTranscribe.ts';
@@ -137,15 +129,8 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
-  readonly bookingCreate?:Parameters<typeof bookingCreateJobHandler>[0];
-  readonly bookingChange?:Parameters<typeof bookingChangeJobHandler>[0];
-  readonly bookingConversation?:Parameters<typeof bookingConversationJobHandler>[0];
-  readonly bookingMessages?:Parameters<typeof bookingMessageSendJobHandler>[0];
-  readonly bookingInterpretation?: Parameters<typeof bookingInterpretationJobHandler>[0];
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
-  readonly crmAskIndex?: Parameters<typeof askIndexJobHandler>[0];
-  readonly crmAskAnswers?: Parameters<typeof askAnswerJobHandler>[0];
   /** Controlled composition only; no live proof verifier is configured by startup. */
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
@@ -236,10 +221,6 @@ export function registerHandlers(
   registry.register(businessMailCaptureHandler(composition.crmMailCapture ?? { provider: { async read() { throw new Error('mail_capture_provider_unavailable'); } } }));
   registry.register(humanReplySendJobHandler(composition.send));
   registry.register(meetingFollowThroughJobHandler());
-  registry.register(bookingCreateJobHandler(composition.bookingCreate));
-  registry.register(bookingChangeJobHandler(composition.bookingChange));
-  registry.register(bookingConversationJobHandler(composition.bookingConversation));
-  registry.register(bookingMessageSendJobHandler(composition.bookingMessages));
   if(composition.meetingAutoRecording)registry.register(meetingAutoRecordingJobHandler(composition.meetingAutoRecording));
   registry.register(suppressionFinalizeJobHandler());
   // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
@@ -263,9 +244,6 @@ export function registerHandlers(
   );
   registry.register(retentionBatchJobHandler());
   registry.register(crmExtractJobHandler(composition.crmExtraction??{}));
-  registry.register(bookingInterpretationJobHandler(composition.bookingInterpretation??{}));
-  registry.register(askIndexJobHandler(composition.crmAskIndex??{}));
-  registry.register(askAnswerJobHandler(composition.crmAskAnswers??{}));
   registry.register(crmCaptureExtractionJobHandler(composition.crmExtraction?.mailEvidence));
   registry.register(socialAssetsHandler(composition.socialAssets??null));
   // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,
@@ -302,7 +280,6 @@ export function registerHandlers(
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
-  registry.register(automaticEmailHandler({implementationCommit:buildCommit(process.env),imageDigest:composition.send?.workerImageDigest??null,side:'worker',deploymentSendingEnabled:composition.send?.deploymentSendingEnabled??false,production:composition.send?.production??true,schemaVersion:REQUIRED_SCHEMA}));
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
@@ -574,7 +551,6 @@ export function workerDueWorkSources(
     researchSweepSource(),
     sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
     sourcingQualificationSource(options.qualification===true),
-    automaticEmailSource(),
     sourcingDiscoverySource(options.discovery === true),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a
@@ -677,7 +653,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const meetingAnalysis = readMeetingAnalysisComposition(classifier, environment);
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
   const diagnosticRuntime=createCrmAcquisitionDiagnosticStartup(environment,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,connectionString:config.database.connectionString});
-  if(diagnosticRuntime&&(crmConfiguration.capture||crmConfiguration.extraction||crmConfiguration.answer))throw new Error('diagnostic_ordinary_capabilities_forbidden');
+  if(diagnosticRuntime&&(crmConfiguration.capture||crmConfiguration.extraction))throw new Error('diagnostic_ordinary_capabilities_forbidden');
   const diagnosticSessions=async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-acquisition-diagnostic'});await client.connect();return {session:asSession(client),close:()=>client.end()};};
   const diagnostic=diagnosticRuntime&&deployment.gmail?createCrmAcquisitionDiagnosticCapture({runtime:diagnosticRuntime,transport:'actual_transport',gmail:deployment.gmail.gmail,openSession:diagnosticSessions,resolveAccess:createServerCrmGmailAccessResolver({...deployment.gmail,openSession:diagnosticSessions})}):undefined;
   if(diagnosticRuntime&&!diagnostic)throw new Error('diagnostic_gmail_unavailable');
