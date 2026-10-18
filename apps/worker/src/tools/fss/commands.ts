@@ -360,7 +360,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   },
   {
     path:['admin','discovery','configure'],
-    valueFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used',...REPORTABLE],
+    valueFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used','--searches-per-day',...REPORTABLE],
     booleanFlags:[],requiredFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used'],
     summary:'Enable or pause discovery and initialize reconciled search allowance without resetting existing counters or halts; audited ECS launcher required.',
   },
