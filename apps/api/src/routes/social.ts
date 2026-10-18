@@ -60,11 +60,11 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  if(request.path==='/social/posts/save')return runRouteCommand(deps,socialPostSaveCommandSchema,'social_post_save',(c,input)=>{const {commandId:_id,clientVersion:_client,...post}=input;return saveSocialPost(c,post);});
  if(request.path==='/social/posts/approve')return runRouteCommand(deps,socialPostActionCommandSchema,'social_post_approve',approveSocialPost);
  if(request.path==='/social/posts/cancel')return runRouteCommand(deps,socialPostActionCommandSchema,'social_post_cancel',requestSocialCancellation);
- if(request.path==='/social/delivery/queue'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await withTransaction(auth.db,()=>readSocialDeliveryQueue(ctx,principal.principal.deviceId,options.linkedinRecurring))};}
+ if(request.path==='/social/delivery/queue'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await withTransaction(auth.db,()=>readSocialDeliveryQueue(ctx,principal.principal.deviceId))};}
  if(request.path==='/social/delivery/hold')return runRouteCommand(deps,socialDeliveryHoldCommandSchema,'social_delivery_hold',(c,input)=>holdSocialDelivery(c,{...input,deviceId:principal.principal.deviceId}));
- if(request.path==='/social/delivery/claim')return runRouteCommand(deps,socialPostActionCommandSchema,'social_delivery_claim',(c,input)=>claimSocialDelivery(c,{...input,deviceId:principal.principal.deviceId},options.linkedinRecurring));
+ if(request.path==='/social/delivery/claim')return runRouteCommand(deps,socialPostActionCommandSchema,'social_delivery_claim',(c,input)=>claimSocialDelivery(c,{...input,deviceId:principal.principal.deviceId}));
  if(request.path==='/social/delivery/begin'){
-  const answer=await runRouteCommand(deps,socialBeginCommandSchema,'social_delivery_begin',(c,input)=>beginSocialSubmission(c,{...input,deviceId:principal.principal.deviceId},options.linkedinRecurring));
+  const answer=await runRouteCommand(deps,socialBeginCommandSchema,'social_delivery_begin',(c,input)=>beginSocialSubmission(c,{...input,deviceId:principal.principal.deviceId}));
   // A durable submission marker is not a reusable authorization to click again.
   if(answer.status===200&&(answer.body as {replayed?:boolean}).replayed)return {status:409,body:{error:'inspect_existing_submission'}};
   return answer;

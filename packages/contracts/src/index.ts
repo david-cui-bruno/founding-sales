@@ -89,6 +89,4 @@ export * from './crmExtractionRoutes.ts';
 export * from './crmActivation.ts';
 export * from './crmAcquisitionDiagnostic.ts';
 export * from './linkedinPolicy.ts';
-export * from './linkedinPostingPolicy.ts';
-export * from './linkedinRecurringPosting.ts';
 export * from './bookingPolicy.ts';
