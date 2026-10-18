@@ -379,17 +379,3 @@ export async function cancelTodaySnooze(
   });
   return acceptToday(toSnooze(row));
 }
-
-/** The active snoozes, for the firm page and for the list's expanded card. */
-export async function listActiveSnoozes(
-  context: RepositoryContext,
-  options: { readonly firmId?: string | undefined } = {},
-): Promise<readonly TodaySnoozeRow[]> {
-  const { rows } = await context.db.query<SnoozeDbRow>(
-    `SELECT ${SNOOZE_COLUMNS} FROM today_snoozes
-      WHERE workspace_id = $1 AND cancelled_at IS NULL AND ($2::uuid IS NULL OR firm_id = $2::uuid)
-      ORDER BY return_at, id`,
-    [context.scope.workspaceId, options.firmId ?? null],
-  );
-  return rows.map(toSnooze);
-}

@@ -8,10 +8,9 @@ import { randomUUID } from 'node:crypto';
 import { claimNotification, readActionableNotifications, observeNotification, acknowledgeNotification } from '../../notifications/ledger.ts';
 import { repositoryContext } from '../../db/workspaceScope.ts';
 import { readTodayActions } from '../../today/actions.ts';
-import { reassignFirm } from '../../crm/firms.ts';
+import { reassignFixtureFirm } from '../db/support/firmOwnership.ts';
 import { insertOrReviveMailbox, markMailboxDisconnected } from '../../mail/mailboxes.ts';
 import { previewDeletion, commitDeletion } from '../../retention/deletion.ts';
-import { commitDeparture } from '../../retention/departure.ts';
 import { runRetentionBatch } from '../../retention/runs.ts';
 import { openHold, releaseHold } from '../../policy/holds.ts';
 
@@ -102,7 +101,7 @@ describe('actionable notifications', () => {
     expect((await readActionableNotifications(world.context(), { deviceId, now })).items[0]?.receipt).toMatchObject({ status: 'acknowledged', nativeShownAt: now, acknowledgedAt: now });
     expect((await readTodayActions(world.context(), { now })).actions).toContainEqual(action);
     expect(await claimNotification(world.context(), { eventKey: candidate.eventKey, deviceId, now: '2026-09-15T22:00:00.000Z' })).toBeNull();
-    await withTransaction(world.mail.database.session, async () => await reassignFirm(world!.adminContext(), { firmId: world!.mail.crm.alpha.firmId, toUserId: world!.mail.seeded.alpha.admin.userId }));
+    await withTransaction(world.mail.database.session, async () => await reassignFixtureFirm(world!.adminContext(), { firmId: world!.mail.crm.alpha.firmId, toUserId: world!.mail.seeded.alpha.admin.userId }));
     expect(await acknowledgeNotification(world.context(), { attemptId, deviceId, now })).toBeNull();
     expect((await readActionableNotifications(world.context(), { deviceId, now })).items).toEqual([]);
     expect((await readActionableNotifications(world.context(), { deviceId, now })).recoveries).toMatchObject([{ current: false, receipt: { status: 'acknowledged' } }]);
@@ -119,7 +118,7 @@ describe('actionable notifications', () => {
     await markMailboxDisconnected(world.systemContext(), { mailboxId: mailbox.id, status: 'disconnected', reason: 'owner_requested' });
     expect(await readNotificationCandidates(world.adminContext(), { now })).toEqual([]);
   });
-  it('retains body-free deduplication through expiry, deletion and restore holds while departure revokes delivery authority', async () => {
+  it('retains body-free deduplication through expiry, deletion and restore holds while inactive membership revokes delivery authority', async () => {
     world = await createClassifierWorld({ cases: REPLY_CORPUS.filter(c => c.id === 'terse-human-reply') });
     const now = '2026-09-14T03:00:00.000Z', deviceId = world.mail.seeded.alpha.salesperson.deviceId;
     const candidate = (await readNotificationCandidates(world.context(), { now }))[0]!;
@@ -140,7 +139,7 @@ describe('actionable notifications', () => {
     expect(after.recoveries).toMatchObject([{ current: false, receipt: { attemptId: claimed.receipt.attemptId, status: 'unknown' } }]);
     expect(JSON.stringify(after)).not.toContain('Northwind');
     expect(JSON.stringify(after)).not.toContain('body');
-    expect(await withTransaction(world.mail.database.session, async () => await commitDeparture(world!.adminContext(), { userId: world!.mail.seeded.alpha.salesperson.userId, commandId: 'notification-departure' }))).toMatchObject({ ok: true });
+    await world.mail.database.session.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2", [world.mail.seeded.alpha.workspaceId,world.mail.seeded.alpha.salesperson.userId]);
     expect(await claimNotification(world.context(), { deviceId, eventKey: candidate.eventKey, now })).toBeNull();
     await expect(readActionableNotifications(world.context(), { deviceId, now })).rejects.toThrow('notification_device_unavailable');
   });

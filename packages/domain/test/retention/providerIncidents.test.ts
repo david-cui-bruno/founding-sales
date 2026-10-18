@@ -5,7 +5,6 @@ import {dispatchOutboundMessage} from '../../outbound/send.ts';
 import {reconcileOutboundMessage} from '../../outbound/reconcile.ts';
 import {readProviderIncidents,type ProviderIncident} from '../../outbound/providerIncidents.ts';
 import {commitDeletion,previewDeletion} from '../../retention/deletion.ts';
-import {commitDeparture} from '../../retention/departure.ts';
 import {runRetentionBatch} from '../../retention/runs.ts';
 import {openHold,releaseHold} from '../../policy/holds.ts';
 import {prepareFor,seedFirm,type SeededFirm} from '../outbound/support/dispatchFixtures.ts';
@@ -46,9 +45,12 @@ it('retains the original coded source identity through prospect deletion and res
  expect(box.gmail.sends).toHaveLength(0);
 });
 
-it('retains the incident after owner departure and refuses automatic recovery for its now-unsafe binding',async()=>{
+it('retains the incident for an inactive owner and revoked mailbox and refuses unsafe automatic recovery',async()=>{
  const box=world.alpha;
- expect(await withTransaction(world.database.session,()=>commitDeparture(admin(),{userId:box.workspace.salesperson.userId,commandId:'retained-incident-departure'}))).toMatchObject({ok:true,value:{mailboxesDisconnected:1,refreshTokenMaterialDeleted:true}});
+ await withTransaction(world.database.session,async()=>{
+  await world.database.session.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2",[box.workspace.workspaceId,box.workspace.salesperson.userId]);
+  await world.database.session.query("UPDATE mailboxes SET status='revoked',disconnected_at=now(),disconnect_reason='unavailable owner fixture' WHERE workspace_id=$1 AND owner_user_id=$2",[box.workspace.workspaceId,box.workspace.salesperson.userId]);
+ });
  expect((await readProviderIncidents(system(),box.mailboxId,now)).find(i=>i.id===incident.id)).toMatchObject({...incident,state:'action_required'});
  expect(await reconcileOutboundMessage(system(),world.reconcileDeps(box,{now:()=>new Date(now.getTime()+600_000)}),{outboundMessageId:id})).toMatchObject({outcome:'incident_held'});
  expect(box.gmail.sends).toHaveLength(0);

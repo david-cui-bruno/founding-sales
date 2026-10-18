@@ -447,15 +447,6 @@ export async function recordRefusedRun(
   );
 }
 
-/** One run by id, or null. A plain read, for the API and the brief. */
-export async function readRunById(context: RepositoryContext, runId: string): Promise<RunRow | null> {
-  const { rows } = await context.db.query<RunDbRow>(
-    `SELECT ${RUN_COLUMNS} FROM research_runs WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, runId],
-  );
-  const row = rows[0];
-  return row === undefined ? null : toRun(row);
-}
 
 /**
  * The run row, locked for the rest of this transaction. The serialization point of the
@@ -519,20 +510,4 @@ export async function listRuns(
     [context.scope.workspaceId, firmId, Math.trunc(limit)],
   );
   return rows.map(toRun);
-}
-
-/** The newest completed run, which is the one the brief's revision names. */
-export async function readLatestCompletedRun(
-  context: RepositoryContext,
-  firmId: string,
-): Promise<RunRow | null> {
-  const { rows } = await context.db.query<RunDbRow>(
-    `SELECT ${RUN_COLUMNS} FROM research_runs
-      WHERE workspace_id = $1 AND firm_id = $2 AND outcome = 'completed'
-      ORDER BY revision DESC
-      LIMIT 1`,
-    [context.scope.workspaceId, firmId],
-  );
-  const row = rows[0];
-  return row === undefined ? null : toRun(row);
 }

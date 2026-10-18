@@ -70,16 +70,3 @@ export function pushTokenPolicyOf(config: MailPublicConfig): PushTokenPolicy {
     maximumAgeSeconds: DEFAULT_PUSH_TOKEN_POLICY.maximumAgeSeconds,
   };
 }
-
-/** The startup line. Public identifiers only, and the secret named but never read. */
-export function describeMailConfig(config: MailPublicConfig): Readonly<Record<string, unknown>> {
-  return {
-    gmail_client_id: config.clientId,
-    gmail_redirect_uri: config.redirectUri,
-    push_topic: config.pushTopicName,
-    push_audience: config.pushAudience,
-    push_service_account: config.pushServiceAccountEmail,
-    hosted_domain: config.hostedDomain,
-    baseline_days: config.baselineDays,
-  };
-}

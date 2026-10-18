@@ -22,9 +22,7 @@ function execute(mode: string) {
     mkdirSync(join(directory, 'infra/policies'), { recursive: true });
     for (const name of ['backend.hcl', 'providers.tf', 'versions.tf', 'main.tf']) copyFileSync(repositoryPath(`infra/roots/production/${name}`), join(directory, 'infra/roots/production', name));
     copyFileSync(repositoryPath('infra/policies/production-backend-plan.json'), join(directory, 'infra/policies/production-backend-plan.json'));
-    copyFileSync(repositoryPath('infra/scripts/diagnostic-plan.mjs'), join(scripts, 'diagnostic-plan.mjs'));
-    // diagnostic-plan imports its static source-schema validators before seal/decrypt.
-    for (const name of ['diagnostic-schema.mjs']) copyFileSync(repositoryPath(`infra/scripts/${name}`), join(scripts, name));
+    copyFileSync(repositoryPath('infra/scripts/release-plan-transport.mjs'), join(scripts, 'release-plan-transport.mjs'));
     mkdirSync(join(directory, 'packages/domain/db'), { recursive: true });
     copyFileSync(repositoryPath('packages/domain/db/schemaRange.ts'), join(directory, 'packages/domain/db/schemaRange.ts'));
     const log = join(directory, 'commands'); writeFileSync(log, '');
@@ -53,7 +51,7 @@ function execute(mode: string) {
       worker: { repository: 'fss-rh-worker', tag: `ci-${COMMIT}`, digest: WORKER, schemaRange: { minimum: 88, maximum: 88 } },
     } }));
     const envelope = join(directory, 'envelope.json');
-    const sealed = spawnSync(process.execPath, [repositoryPath('infra/scripts/diagnostic-plan.mjs'), 'seal', saved, manifestPath, publicPath, fingerprint, envelope], { encoding: 'utf8' });
+    const sealed = spawnSync(process.execPath, [repositoryPath('infra/scripts/release-plan-transport.mjs'), 'seal', saved, manifestPath, publicPath, fingerprint, envelope], { encoding: 'utf8' });
     expect(sealed.status, sealed.stderr).toBe(0);
     if (mode === 'plan') {
       const packet = JSON.parse(readFileSync(envelope, 'utf8')) as { ciphertext: string }; packet.ciphertext = Buffer.from('changed ciphertext').toString('base64');

@@ -64,10 +64,6 @@ export function announceKept(): void {
 let counter = 0;
 export const nextStopCommandId = (): number => (counter += 1);
 
-/** Tests: forget everything, as a sign-out does. */
-export function resetTodayKept(): void {
-  current = { epoch: null, kept: fresh() };
-}
 
 /** The store of whoever is signed in now, redrawn whenever anything in it changes. */
 export function useTodayKept(): TodayKept {

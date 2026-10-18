@@ -22,38 +22,6 @@ export interface MailboxAccountRow {
   readonly generationFrom: number;
 }
 
-interface AccountDbRow {
-  readonly id: string;
-  readonly email_address: string;
-  readonly active_from: Date;
-  readonly active_until: Date | null;
-  readonly generation_from: number;
-  readonly [column: string]: unknown;
-}
-
-const toAccount = (row: AccountDbRow): MailboxAccountRow => ({
-  id: row.id,
-  emailAddress: row.email_address,
-  activeFrom: row.active_from.toISOString(),
-  activeUntil: row.active_until?.toISOString() ?? null,
-  generationFrom: row.generation_from,
-});
-
-/** Every interval of one mailbox, oldest first. Empty for a mailbox never switched. */
-export async function listMailboxAccounts(
-  context: RepositoryContext,
-  mailboxId: string,
-): Promise<readonly MailboxAccountRow[]> {
-  const { rows } = await context.db.query<AccountDbRow>(
-    `SELECT id, email_address, active_from, active_until, generation_from
-       FROM mailbox_accounts
-      WHERE workspace_id = $1 AND mailbox_id = $2
-      ORDER BY active_from, created_at, id`,
-    [context.scope.workspaceId, mailboxId],
-  );
-  return rows.map(toAccount);
-}
-
 /**
  * The instant the mailbox's current account began, or null when the mailbox has never
  * been switched — "no bound" for the direct-send rule.

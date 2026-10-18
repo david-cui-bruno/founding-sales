@@ -5,7 +5,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { databaseNow } from '../../policy/clock.ts';
 import { listApplicableHolds } from '../../policy/holds.ts';
 import { completeCallback, createCallback } from '../../dial/callbacks.ts';
-import { reassignFirm } from '../../crm/firms.ts';
+import { reassignFixtureFirm } from '../db/support/firmOwnership.ts';
 import { localParts } from '../../src/rules/localClock.ts';
 import { buildTodaySnapshot } from '../../today/build.ts';
 import { readTodayFirm, readTodayList } from '../../today/dto.ts';
@@ -437,7 +437,7 @@ describe('reassignment transfers unfinished entries (Appendix A)', () => {
     );
 
     expect(
-      await reassignFirm(admin(), { firmId: crm.alpha.firmId, toUserId: seeded.alpha.admin.userId }),
+      await reassignFixtureFirm(admin(), { firmId: crm.alpha.firmId, toUserId: seeded.alpha.admin.userId }),
     ).toMatchObject({ ok: true });
 
     // One entry, and it is the admin's now.

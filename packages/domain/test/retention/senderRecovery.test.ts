@@ -7,7 +7,6 @@ import {applyDirectSendEffects} from '../../mail/effects.ts';
 import {closeSendDay,openSendDay,readRampStanding,readSendDayHealth,recordDaySignal} from '../../outbound/ramp.ts';
 import {openHold,releaseHold} from '../../policy/holds.ts';
 import {commitDeletion,previewDeletion} from '../../retention/deletion.ts';
-import {commitDeparture} from '../../retention/departure.ts';
 import {runRetentionBatch} from '../../retention/runs.ts';
 import {createOutboundWorld,type OutboundWorld} from '../outbound/support/outboundWorld.ts';
 import {seedFirm,type SeededFirm} from '../outbound/support/dispatchFixtures.ts';
@@ -60,9 +59,12 @@ it('retains recovery and day reversal references through prospect deletion and r
  expect(await readRampStanding(system(),box.mailboxId)).toMatchObject({effectiveCap:5,ramp:{healthySendingDays:40},recovery:{epochId,qualifyingDays:0}});
 });
 
-it('keeps earned and recovery history when owner departure revokes mailbox readiness',async()=>{
+it('keeps earned and recovery history when an inactive owner has revoked mailbox readiness',async()=>{
  const box=world.alpha;
- expect(await withTransaction(world.database.session,()=>commitDeparture(admin(),{userId:box.workspace.salesperson.userId,commandId:'retained-recovery-departure'}))).toMatchObject({ok:true,value:{mailboxesDisconnected:1,refreshTokenMaterialDeleted:true}});
+ await withTransaction(world.database.session,async()=>{
+  await world.database.session.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2",[box.workspace.workspaceId,box.workspace.salesperson.userId]);
+  await world.database.session.query("UPDATE mailboxes SET status='revoked',disconnected_at=now(),disconnect_reason='unavailable owner fixture' WHERE workspace_id=$1 AND owner_user_id=$2",[box.workspace.workspaceId,box.workspace.salesperson.userId]);
+ });
  const standing=await readRampStanding(system(),box.mailboxId);
  expect(standing).toMatchObject({effectiveCap:5,ramp:{healthySendingDays:40},recovery:{epochId,qualifyingDays:1},readiness:{ready:false}});
  expect(standing!.readiness.reasons).toContain('mailbox_disconnected');

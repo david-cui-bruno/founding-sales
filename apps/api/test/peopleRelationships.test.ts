@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { correctRelationship } from '@fss/domain/crm/relationships.ts';
 import { changeSelectedSource } from '@fss/domain/crm/people.ts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
-import { reassignFirm } from '@fss/domain/crm/firms.ts';
+import { reassignFixtureFirm } from '@fss/domain/test/db/support/firmOwnership.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -252,7 +252,7 @@ describe('source-backed relationships and endpoint identity', () => {
     }).result.relationshipId;
     await post('/crm/relationships/context/save', command({ personId: identity.personId, relationshipId, relationshipRevision: 1, evidence }));
     await post('/crm/endpoints/claim', command({ personId: identity.personId, firmId: null, shared: false, kind: 'email', value: 'privatecontext@authority.example.test', status: 'current', startDate: '2026-01-01', endDate: null, evidence }));
-    await reassignFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: original, toUserId: fixture.alpha.admin.userId });
+    await reassignFixtureFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: original, toUserId: fixture.alpha.admin.userId });
     expect((await post('/crm/endpoints/match', { kind: 'email', value: 'privatecontext@authority.example.test' })).body).toMatchObject({ outcome: 'needs_review', candidates: [] });
   });
   it('permits authorized administrator selected-source reads without crossing workspace boundaries', async () => {
@@ -387,7 +387,7 @@ describe('source-backed relationships and endpoint identity', () => {
     // Copy captured under B; the current legacy pointer later moves to A.
     // A-captured refusal remains covered by crmEvidenceOriginalAcl.
     await fixture.db.query('UPDATE contacts SET firm_id=$3 WHERE workspace_id=$1 AND id=$2', [fixture.alpha.workspaceId, personId, oldFirmId]);
-    await reassignFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: oldFirmId, toUserId: fixture.alpha.admin.userId });
+    await reassignFixtureFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: oldFirmId, toUserId: fixture.alpha.admin.userId });
     expect((await post('/crm/people/read', { personId })).body).toMatchObject({ person: { firm: null }, sources: [{ excerpt: 'Explicit B selected content' }] });
     expect((await post('/crm/people/source/add', command({ personId, sourceKey: randomUUID(), excerpt: 'Unauthorized default A new capture', occurredAt: '2026-09-16T14:00:00.000Z' }))).status).toBe(409);
     expect((await post('/crm/people/source/delete', command({ personId, sourceId: source.sourceId, expectedRevision: 1 }))).status).toBe(200);

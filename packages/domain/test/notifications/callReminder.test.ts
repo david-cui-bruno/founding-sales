@@ -5,7 +5,7 @@ import { withTransaction } from '../../db/queryable.ts';
 import { readNotificationCandidates } from '../../notifications/actions.ts';
 import { acknowledgeNotification, claimNotification, observeNotification, readActionableNotifications } from '../../notifications/ledger.ts';
 import { readMeetingBrief } from '../../meetings/brief.ts';
-import { reassignFirm } from '../../crm/firms.ts';
+import { reassignFixtureFirm } from '../db/support/firmOwnership.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 
 let world: MailWorld | null = null;
@@ -88,7 +88,7 @@ describe('the current Cal.com call reminder', () => {
     const claimed = await claimNotification(context, { eventKey: stale.eventKey, deviceId, now });
     if (claimed?.receipt == null || stale.target.kind !== 'meeting') throw new Error('call reminder claim missing');
     const admin = repositoryContext(workspaceScope(world.seeded.alpha.workspaceId, { kind: 'user', userId: world.seeded.alpha.admin.userId, role: 'admin' }), world.database.session);
-    expect(await withTransaction(world.database.session, async () => await reassignFirm(admin, { firmId: world!.crm.alpha.firmId, toUserId: world!.seeded.alpha.admin.userId }))).toMatchObject({ ok: true });
+    expect(await withTransaction(world.database.session, async () => await reassignFixtureFirm(admin, { firmId: world!.crm.alpha.firmId, toUserId: world!.seeded.alpha.admin.userId }))).toMatchObject({ ok: true });
     expect(await acknowledgeNotification(context, { attemptId: claimed.receipt.attemptId, deviceId, now })).toBeNull();
     expect(await claimNotification(context, { eventKey: stale.eventKey, deviceId, now })).toBeNull();
     expect(await readMeetingBrief(context, stale.target.meetingId)).toBeNull();

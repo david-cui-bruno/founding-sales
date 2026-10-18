@@ -14,7 +14,8 @@ import {recordSuppression} from '../../suppression/events.ts';
 import {recordingSuppressionJournal} from '../../suppression/journal.ts';
 import {receiveCalcomEvent} from '../../meetings/calcom.ts';
 import {applyDirectSendEffects} from '../../mail/effects.ts';
-import {reassignFirm,resolveZoneForFirm} from '../../crm/firms.ts';
+import {resolveZoneForFirm} from '../../crm/firms.ts';
+import {reassignFixtureFirm} from '../db/support/firmOwnership.ts';
 import {saveAnswerBlock,approveAnswerBlock,retireAnswerBlock} from '../../outreach/facts.ts';
 import {reconcileOutboundMessage} from '../../outbound/reconcile.ts';
 import type {HumanReplySendInput} from '../../../contracts/src/replyComposer.ts';
@@ -73,7 +74,7 @@ for(const change of ['stop','booking','new question','manual Gmail answer','reas
   const before=world.alpha.gmail.sends.length;
   const paused=pausingAtTokenRefresh(world.alpha.gmail,()=>withTransaction(second.session,async()=>{
    if(change==='stop')await recordSuppression(admin,{scope:'firm',firmId:f.firm.firmId,source:'prospect_opt_out',channel:'email',commandId:randomUUID(),journal:recordingSuppressionJournal()});
-   if(change==='reassignment')await reassignFirm(admin,{firmId:f.firm.firmId,toUserId:world.alpha.workspace.admin.userId,reason:'Controlled race'});
+   if(change==='reassignment')await reassignFixtureFirm(admin,{firmId:f.firm.firmId,toUserId:world.alpha.workspace.admin.userId,reason:'Controlled race'});
    if(change==='recipient zone change')await resolveZoneForFirm(admin,{firmId:f.firm.firmId,recordedZone:'America/Chicago'});
    if(change==='retired fact')await retireAnswerBlock(admin,fact!);
    if(change==='ended session')await second.session.query("UPDATE sessions SET status='ended',ended_at=now(),end_reason='signed_out' WHERE workspace_id=$1 AND id=$2",[f.ctx.scope.workspaceId,f.identity.sessionId]);

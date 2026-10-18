@@ -287,8 +287,3 @@ async function defaultFetchBytes(url: string): Promise<Uint8Array> {
   if (!response.ok) throw new Error('the channel did not answer');
   return new Uint8Array(await response.arrayBuffer());
 }
-
-/** The version that would clear a raised minimum, for the upgrade prompt's wording. */
-export function clearsMinimum(manifest: UpdateManifest, minimum: SemanticVersion): boolean {
-  return compareVersions(manifest.releaseVersion, minimum) >= 0;
-}

@@ -15,7 +15,8 @@ import { createContact } from '../../crm/contacts.ts';
 import { recordFunnelFact } from '../../funnel/facts.ts';
 import { readFirmForActor } from '../../crm/dto.ts';
 import { recordEvidence } from '../../crm/evidence.ts';
-import { createFirm, reassignFirm, resolveZoneForFirm, updateFirm } from '../../crm/firms.ts';
+import { createFirm, resolveZoneForFirm, updateFirm } from '../../crm/firms.ts';
+import { reassignFixtureFirm } from '../db/support/firmOwnership.ts';
 import { mergeFirms } from '../../crm/merges.ts';
 import { changeStage, reopenOpportunity } from '../../crm/pipeline.ts';
 import { addEmailRoute, addPhoneRoute, retireRoute, verifyRoute } from '../../crm/routes.ts';
@@ -127,7 +128,6 @@ describe('CRM commands', () => {
           opportunityId: crm.alpha.opportunityId,
           toStageKey: 'demo_booked',
         }),
-        await reassignFirm(context, { firmId: crm.alpha.firmId, toUserId: strangerUserId }),
       ]);
       for (const refusal of refusals) {
         expect(refusal).toMatchObject({ ok: false, reason: 'not_assigned' });
@@ -172,7 +172,7 @@ describe('CRM commands', () => {
 
       try {
         await reassigning.query('BEGIN');
-        const reassigned = await reassignFirm(contextOn(reassigning, admin), {
+        const reassigned = await reassignFixtureFirm(contextOn(reassigning, admin), {
           firmId: crm.alpha.firmId,
           toUserId: strangerUserId,
           reason: 'territory change',
@@ -203,51 +203,8 @@ describe('CRM commands', () => {
         crm.alpha.firmId,
         seeded.alpha.salesperson.userId,
       ]);
-      await session.query(
-        "UPDATE active_holds SET released_at = now() WHERE workspace_id = $1 AND reason_code = 'reassignment' AND released_at IS NULL",
-        [seeded.alpha.workspaceId],
-      );
     });
 
-    it('records the reassignment hold, the transfer hook and the audit event in one transaction', async () => {
-      await inRolledBackTransaction(admin, async context => {
-        const outcome = await reassignFirm(context, {
-          firmId: crm.alpha.firmId,
-          toUserId: strangerUserId,
-          reason: 'territory change',
-        });
-        expect(outcome).toMatchObject({ ok: true });
-        if (!outcome.ok) return;
-        const { holdId } = outcome.value;
-
-        const holds = await context.db.query<{ scope_key: string; blocked_action_kinds: string[] }>(
-          'SELECT scope_key, blocked_action_kinds FROM active_holds WHERE workspace_id = $1 AND id = $2',
-          [seeded.alpha.workspaceId, holdId],
-        );
-        expect(holds.rows).toHaveLength(1);
-        expect(holds.rows[0]?.scope_key).toBe(crm.alpha.firmId);
-        expect(holds.rows[0]?.blocked_action_kinds).toContain('email_send');
-
-        // The transfer hook and the audit event are in the same transaction as the
-        // assignee change; they are matched by this reassignment's own hold id, so an
-        // earlier committed reassignment in this file cannot make the count agree by
-        // accident.
-        const events = await context.db.query<{ event_kind: string }>(
-          `SELECT event_kind FROM crm_domain_events
-            WHERE workspace_id = $1 AND event_kind = 'firm.reassigned' AND dedupe_key = $2`,
-          [seeded.alpha.workspaceId, `${crm.alpha.firmId}:${holdId}`],
-        );
-        expect(events.rows).toHaveLength(1);
-
-        const audits = await context.db.query<{ detail: { holdId?: string; toUserId?: string } }>(
-          `SELECT detail FROM audit_events
-            WHERE workspace_id = $1 AND action = 'firm.reassigned' AND subject_id = $2
-            ORDER BY occurred_at DESC LIMIT 1`,
-          [seeded.alpha.workspaceId, crm.alpha.firmId],
-        );
-        expect(audits.rows[0]?.detail.toUserId).toBe(strangerUserId);
-      });
-    });
   });
 
   // ------------------------------------------------------------- pipeline

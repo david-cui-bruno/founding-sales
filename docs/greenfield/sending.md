@@ -301,7 +301,7 @@ The recheck is not a second copy of anything:
 The claim holds it shared. Every writer of a restrictive stop fact takes it exclusive
 before it commits:
 
-* every hold (`openHold`, `reassignFirm`, `commitDeparture`);
+* every hold (`openHold`);
 * every restrictive suppression event (`recordSuppression`, the journal replay, a
   merge);
 * manual mode;
