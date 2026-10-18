@@ -46,6 +46,17 @@ const INVOCATIONS = CALLERS.flatMap(relative =>
 );
 
 describe('the fss command line accepts every invocation the release scripts make', () => {
+  it('passes optional discovery pacing to its bounded handler and still rejects malformed flags', () => {
+    const base=['admin','discovery','configure','--workspace-id','11111111-1111-4111-8111-111111111111','--enabled','true','--prior-day','2026-10-18','--prior-day-used','0','--prior-month-used','0'];
+    const existing=parseFssCommand(base);
+    expect(existing).toMatchObject({ok:true});
+    if(!existing.ok)throw new Error(existing.reason);
+    expect(existing.value.options['--searches-per-day']).toBeUndefined();
+    expect(parseFssCommand([...base,'--searches-per-day','10'])).toMatchObject({ok:true,value:{options:{'--searches-per-day':'10'}}});
+    expect(parseFssCommand([...base,'--searches-per-day'])).toMatchObject({ok:false,reason:'flag_value_missing',detail:'--searches-per-day'});
+    expect(parseFssCommand([...base,'--searches-per-day','10','--searches-per-day','1'])).toMatchObject({ok:false,reason:'flag_repeated',detail:'--searches-per-day'});
+    expect(parseFssCommand([...base,'--searches-per-dya','10'])).toMatchObject({ok:false,reason:'flag_unknown'});
+  });
   it('finds every `fss` invocation in the scripts', () => {
     // A floor on purpose: an extractor that silently found none would make every case
     // below vacuous, and the scripts are the specification here. Four is the number of
