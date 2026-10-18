@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DashboardResponse } from '@fss/contracts';
 import { NAV_ROWS, SETTINGS_ROW, figuresView, type HomeView } from '../src/renderer/homeView.ts';
@@ -84,7 +84,7 @@ describe('the sidebar', () => {
 });
 
 describe('Settings', () => {
-  it('holds Administration and Diagnostics, and the Dashboard’s figures behind the same view', () => {
+  it('holds Configuration, Diagnostics and Dashboard inside one collapsed Advanced disclosure', () => {
     render(
       <QueryClientProvider client={client()}>
         <SettingsView
@@ -100,12 +100,21 @@ describe('Settings', () => {
       </QueryClientProvider>,
     );
 
-    const tabs = screen.getByTestId('tabs');
-    expect(tabs.textContent).toContain('Administration');
-    expect(tabs.textContent).toContain('Diagnostics');
-    // The figures did not disappear with the navigation entry: the page is still here,
-    // reachable from Settings, and every query behind it is untouched.
-    expect(tabs.textContent).toContain('Dashboard');
+    const advanced = screen.getByTestId('settings-advanced');
+    expect(advanced.hasAttribute('open')).toBe(false);
+    expect(screen.queryByTestId('tabs')).toBeNull();
+    // These destinations remain reachable, but no longer occupy the primary view.
+    for (const name of ['Configuration', 'Diagnostics', 'Dashboard']) {
+      expect(within(advanced).getByRole('button', { name }).closest('details')).toBe(advanced);
+    }
+    const summary = advanced.querySelector('summary');
+    expect(summary).not.toBeNull();
+    if (summary === null) throw new Error('Advanced needs a native summary');
+    fireEvent.click(summary);
+    expect(advanced.hasAttribute('open')).toBe(true);
+    expect(within(advanced).getByRole('button', { name: 'Configuration' }).getAttribute('aria-current')).toBe('page');
+    expect(within(advanced).getByRole('button', { name: 'Diagnostics' })).toBeDefined();
+    expect(within(advanced).getByRole('button', { name: 'Dashboard' })).toBeDefined();
   });
 
   it('still understands the links 1.0.11 left behind', () => {

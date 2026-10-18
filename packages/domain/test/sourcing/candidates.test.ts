@@ -17,6 +17,13 @@ const context = (workspace: 'alpha' | 'beta' = 'alpha', role: 'admin' | 'salespe
   return repositoryContext(workspaceScope(who.workspaceId, {kind:'user',userId:who[role].userId,role}), database.session);
 };
 const save = async (input = draft) => withTransaction(database.session, async () => saveCandidate(context(), input));
+it('refuses unsupported branch queries at real intake without altering historical keys or payloads',async()=>{
+ const first=await save();expect(first.ok).toBe(true);
+ const before=(await database.session.query('SELECT id,identity_key,payload FROM sourcing_candidates')).rows;
+ for(const branch of ['north','south'])expect(await save({...draft,website:`https://example.test/dallas/?branch=${branch}`})).toEqual({ok:false,reason:'invalid_input'});
+ expect((await database.session.query('SELECT id,identity_key,payload FROM sourcing_candidates')).rows).toEqual(before);
+ expect(await save({...draft,website:'https://www.example.test/dallas'})).toMatchObject({ok:true,value:{duplicate:true}});
+});
 beforeAll(async () => { database = await createTestDatabase(); seeded = await seedTwoWorkspaces(database.session); });
 beforeEach(async () => { await database.session.query('DELETE FROM sourcing_candidates'); });
 afterAll(async () => { await database.drop(); });

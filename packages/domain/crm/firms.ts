@@ -1,10 +1,8 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { enqueueFirmResearchBestEffort } from '../research/enqueue.ts';
 import { resolveFirmZone } from '../src/rules/statePosture.ts';
-import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
+import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
-import { emitCrmDomainEvent } from './events.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import { FIRM_ZONE_SOURCES } from './zone.ts';
@@ -16,8 +14,8 @@ import {
 } from './types.ts';
 
 /**
- * Firms: create, update, reassign, and the zone resolution behind them
- * (specification 7.2, 9.2, Appendix A "Reassign firm", Appendix G 7).
+ * Firms: create, update, and the zone resolution behind them
+ * (specification 7.2, 9.2, Appendix G 7).
  *
  * Every mutation here follows the same three steps, in this order and no other:
  *
@@ -202,9 +200,8 @@ const PATCH_COLUMNS: Readonly<Record<keyof FirmPatch, string>> = Object.freeze({
 });
 
 /**
- * Update a firm's canonical fields. The assignee is deliberately not patchable: it
- * changes through `reassignFirm`, which also creates the hold, the transfer signal
- * and the audit event Appendix A requires.
+ * Update a firm's canonical fields. Ownership is deliberately not patchable by
+ * this ordinary edit command.
  */
 export async function updateFirm(
   context: RepositoryContext,
@@ -241,108 +238,6 @@ export async function updateFirm(
     detail: { fields: Object.keys(input.patch).sort() },
   });
   return accept(updated);
-}
-
-export interface ReassignFirmInput {
-  readonly firmId: string;
-  readonly toUserId: string;
-  readonly reason?: string | undefined;
-  readonly commandId?: string | undefined;
-}
-
-export interface ReassignFirmOutcome {
-  readonly firmId: string;
-  readonly fromUserId: string | null;
-  readonly toUserId: string;
-  /** The `active_holds` row that blocks automated work while the handover settles. */
-  readonly holdId: string;
-}
-
-/**
- * Reassign a firm (Appendix A, row "Reassign firm").
- *
- * | Locks / uniqueness | Commits together | After commit |
- * |---|---|---|
- * | Firm, open opportunity, holds, enrollments, fences, Today entries | Assignee change, reassignment hold, future-work cancellation/rebind, Today transfer, audit | Dispatching mail remains with former mailbox and reconciles there |
- *
- * This lane owns the first two columns of the middle cell and the audit event, and
- * signals the rest: enrollments, fences and Today entries do not exist yet, so the
- * cancellation and the transfer are a `firm.reassigned` domain event the lanes that
- * own them subscribe to. The hold is real now, and it is what stops automated work
- * from running between the assignee change and those lanes catching up — which is
- * the point of the hold rather than a placeholder for it.
- *
- * Only an admin reassigns. A salesperson handing their own firm to a colleague is
- * still a change to who may contact a prospect, and section 5.2 gives assignment to
- * admins.
- */
-export async function reassignFirm(
-  context: RepositoryContext,
-  input: ReassignFirmInput,
-): Promise<CrmResult<ReassignFirmOutcome>> {
-  // A change of owner holds the firm's automated work, so it is a stop fact and takes
-  // the send gate before the firm's row (`policy/sendGate.ts`).
-  await lockSendGateForStopFact(context);
-  await lockTodayForFirmChange(context);
-  const firm = await loadFirmForUpdate(context, input.firmId);
-  if (firm === null) return refuse('firm_unknown');
-  if (firm.status === 'merged') return refuse('firm_merged');
-
-  // A salesperson is refused for the same reason and with the same code as every
-  // other mutation on a firm that is not theirs; an assigned salesperson asking to
-  // reassign is refused as admin-only.
-  const mutation = decideFirmMutation(context, firm);
-  if (!mutation.permitted) return refuse(mutation.reason);
-  const admin = decideAdminOnly(context);
-  if (!admin.permitted) return refuse(admin.reason);
-
-  const fromUserId = firm.assigned_user_id;
-  if (fromUserId === input.toUserId) return accept({ firmId: firm.id, fromUserId, toUserId: input.toUserId, holdId: '' });
-
-  try {
-    await context.db.query(
-      'UPDATE firms SET assigned_user_id = $3, updated_at = now() WHERE workspace_id = $1 AND id = $2',
-      [context.scope.workspaceId, input.firmId, input.toUserId],
-    );
-  } catch (error) {
-    if (isForeignKeyViolation(error, 'firms_assignee_fkey')) return refuse('assignee_unknown');
-    throw error;
-  }
-
-  await context.db.query("UPDATE meeting_tasks SET owner_user_id=$3,version=version+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND status='open' AND owner_user_id<>$3", [context.scope.workspaceId, input.firmId, input.toUserId]);
-  await refreshTodayForFirm(context, { firmId: input.firmId });
-
-  // Section 4.3 and 15: a hold names its scope, its reason, the action kinds it
-  // blocks, its source event and the recovery that clears it. Nothing else clears it.
-  const hold = await context.db.query<{ id: string }>(
-    `INSERT INTO active_holds
-       (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds, source_event_kind,
-        source_event_id, owner_user_id, recovery_action)
-     VALUES ($1, 'firm', $2, 'reassignment',
-             ARRAY['email_send', 'call_task', 'dial_authorization', 'enrollment_advance']::text[],
-             'firm.reassigned', $3, $4, 'resume_after_review')
-     RETURNING id`,
-    [context.scope.workspaceId, input.firmId, input.commandId ?? null, input.toUserId],
-  );
-  const holdId = hold.rows[0]?.id ?? '';
-
-  await emitCrmDomainEvent(context, {
-    kind: 'firm.reassigned',
-    firmId: input.firmId,
-    dedupeKey: `${input.firmId}:${holdId}`,
-    reasonCode: 'reassignment',
-    commandId: input.commandId,
-    detail: { fromUserId, toUserId: input.toUserId, holdId },
-  });
-
-  await recordCrmAuditEvent(context, {
-    action: 'firm.reassigned',
-    subjectKind: 'firm',
-    subjectId: input.firmId,
-    detail: { fromUserId, toUserId: input.toUserId, reason: input.reason ?? null },
-  });
-
-  return accept({ firmId: input.firmId, fromUserId, toUserId: input.toUserId, holdId });
 }
 
 export interface FirmZoneOutcome {

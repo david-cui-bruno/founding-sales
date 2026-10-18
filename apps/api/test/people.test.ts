@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dispatch } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
-import { reassignFirm } from '@fss/domain/crm/firms.ts';
+import { reassignFixtureFirm } from '@fss/domain/test/db/support/firmOwnership.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
@@ -79,7 +79,7 @@ describe('independent CRM people and selected evidence', () => {
     const added = await post('/crm/people/source/add', command({ personId: contactId, sourceKey: 'admin-private', excerpt: 'Admin-only evidence', occurredAt: '2026-09-20T14:00:00.000Z' }), adminToken);
     expect(added.status).toBe(200);
     expect((await post('/crm/people/read', { personId: contactId })).body).toMatchObject({ sources: [] });
-    expect((await withTransaction(fixture.db, async () => reassignFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId, toUserId: fixture.alpha.admin.userId }))).ok).toBe(true);
+    expect((await withTransaction(fixture.db, async () => reassignFixtureFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId, toUserId: fixture.alpha.admin.userId }))).ok).toBe(true);
     expect((await post('/crm/people/read', { personId: contactId })).status).toBe(404);
     expect((await post('/crm/people/source/add', command({ personId: contactId, sourceKey: 'late', excerpt: 'Cannot publish', occurredAt: '2026-09-20T14:00:00.000Z' }))).status).toBe(409);
   });
@@ -138,7 +138,7 @@ describe('independent CRM people and selected evidence', () => {
       pid: number;
     }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
     await holder.query('BEGIN');
-    await reassignFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), holder), { firmId, toUserId: fixture.alpha.admin.userId });
+    await reassignFixtureFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), holder), { firmId, toUserId: fixture.alpha.admin.userId });
     const pending = post('/crm/people/source/add', command({ personId: contactId, sourceKey: 'raced', excerpt: 'Must not be retained', occurredAt: '2026-09-20T14:00:00.000Z' }));
     try {
       await waitForBlock(observer, pid);

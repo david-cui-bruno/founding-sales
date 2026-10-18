@@ -77,7 +77,7 @@ describe('reviewed saved production plan contract', () => {
       const bytes = Buffer.from([0, 1, 2, 255, 10]); writeFileSync(plan, bytes);
       writeFileSync(publicPath, publicKey); writeFileSync(privatePath, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }));
       const original = JSON.stringify({ planSha256: createHash('sha256').update(bytes).digest('hex') }); writeFileSync(manifest, original);
-      const run = (...args: string[]) => spawnSync(process.execPath, [repositoryPath('infra/scripts/diagnostic-plan.mjs'), ...args], { encoding: 'utf8' });
+      const run = (...args: string[]) => spawnSync(process.execPath, [repositoryPath('infra/scripts/release-plan-transport.mjs'), ...args], { encoding: 'utf8' });
       expect(run('seal', plan, manifest, publicPath, fingerprint, packet).status).toBe(0);
       expect(run('decrypt', packet, manifest, privatePath, output).status).toBe(0);
       expect(readFileSync(output)).toEqual(bytes);

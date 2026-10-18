@@ -68,12 +68,12 @@ it('does not resurface a dismissed candidate on repeated discovery of the same s
 
 it('serializes account quota across concurrent workspaces',async()=>{
  await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');
- await db.session.query('UPDATE sourcing_search_account SET halted=false,daily_used=19,monthly_used=19');
+ await db.session.query('UPDATE sourcing_search_account SET halted=false,daily_used=9,monthly_used=9');
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
  await db.session.query('INSERT INTO sourcing_discovery_settings(workspace_id,enabled) VALUES($1,true)',[otherWorkspaceId]);
  let calls=0;const provider={providerKey:'tavily_basic',discover:async()=>{calls++;return {ok:true as const,credits:1,requestId:'parallel',hits:[]};}};
  await Promise.all([runDiscovery(repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session),provider),runDiscovery(repositoryContext(workspaceScope(otherWorkspaceId,{kind:'system',component:'worker'}),await db.appRuntimeSession()),provider)]);
- expect(calls).toBe(1);expect((await db.session.query('SELECT daily_used FROM sourcing_search_account')).rows[0]).toMatchObject({daily_used:20});
+ expect(calls).toBe(1);expect((await db.session.query('SELECT daily_used FROM sourcing_search_account')).rows[0]).toMatchObject({daily_used:10});
 });
 it('halts after a crash leaves an old dispatch whose usage is unknown',async()=>{
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
@@ -96,7 +96,7 @@ it('respects a dismissed manual candidate even when the search title and query a
 });
 it('rolls UTC periods without refunding usage within a period',async()=>{
  await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');
- await db.session.query("UPDATE sourcing_search_account SET halted=false,daily_used=20,monthly_used=600,day=current_date-40,month=current_date-40");
+ await db.session.query("UPDATE sourcing_search_account SET halted=false,daily_used=20,monthly_used=375,day=current_date-40,month=current_date-40");
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
  await runDiscovery(repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session),{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'rollover',hits:[]})});
  expect((await db.session.query('SELECT daily_used,monthly_used FROM sourcing_search_account')).rows[0]).toMatchObject({daily_used:1,monthly_used:1});
@@ -181,18 +181,21 @@ it('paces opt-in slots, serializes same-workspace dispatch and cannot exceed ten
  expect(calls).toBe(10);
  expect((await db.session.query('SELECT slot FROM sourcing_discovery_attempts WHERE workspace_id=$1 ORDER BY slot',[workspaceId])).rows).toEqual(Array.from({length:10},(_,slot)=>({slot})));
  expect((await db.session.query('SELECT daily_used,monthly_used FROM sourcing_search_account')).rows[0]).toEqual({daily_used:10,monthly_used:10});
- // UTC rollover opens a fresh slot, without refunding the still-current account period.
+ // Moving workspace slots alone never refunds the global account day.
  await db.session.query('UPDATE sourcing_discovery_attempts SET day=day-1');
+ await runDiscovery(ctx,provider);expect(calls).toBe(10);
+ // A real UTC account-day rollover opens capacity without refunding monthly use.
+ await db.session.query("UPDATE sourcing_search_account SET day=day-1");
  await runDiscovery(ctx,provider);expect(calls).toBe(11);
  expect((await db.session.query('SELECT monthly_used FROM sourcing_search_account')).rows[0]).toEqual({monthly_used:11});
 });
 
 it('does not bypass a monthly account cap with an available workspace slot',async()=>{
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
- await db.session.query('UPDATE sourcing_search_account SET daily_used=0,monthly_used=600');
+ await db.session.query('UPDATE sourcing_search_account SET daily_used=0,monthly_used=375');
  let calls=0;await runDiscovery(repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session),{providerKey:'tavily_basic',discover:async()=>{calls++;throw new Error('must not call');}});
  expect(calls).toBe(0);
- expect((await db.session.query('SELECT monthly_used FROM sourcing_search_account')).rows[0]).toEqual({monthly_used:600});
+ expect((await db.session.query('SELECT monthly_used FROM sourcing_search_account')).rows[0]).toEqual({monthly_used:375});
 });
 
 it('enforces migration118 settings and slot constraints on actual inserts, including composite uniqueness',async()=>{

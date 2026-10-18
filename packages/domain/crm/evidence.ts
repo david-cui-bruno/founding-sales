@@ -85,19 +85,3 @@ export async function recordEvidence(
   const row = existing.rows[0];
   return row === undefined ? refuse('evidence_unknown') : accept(row);
 }
-
-export async function listEvidence(
-  context: RepositoryContext,
-  firmId: string,
-  limit = 50,
-): Promise<readonly EvidenceRow[]> {
-  const { rows } = await context.db.query<EvidenceRow>(
-    `SELECT id, firm_id, contact_id, provider, source_reference, content_hash
-       FROM evidence_items
-      WHERE workspace_id = $1 AND firm_id = $2
-      ORDER BY retrieved_at DESC
-      LIMIT $3`,
-    [context.scope.workspaceId, firmId, Math.trunc(limit)],
-  );
-  return rows;
-}

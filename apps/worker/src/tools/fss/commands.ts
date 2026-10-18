@@ -71,15 +71,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'crm-acquisition-diagnostic bindings':'database',
   'crm-acquisition-diagnostic provision':'database',
   'crm-acquisition-diagnostic revoke':'database',
-  'crm-authority provision': 'database',
-  'crm-authority revoke': 'database',
   'crm-read-allocation put': 'database',
-  // Lane W3-F. Counts, in a READ ONLY transaction, and nothing else. (Lane W2-M's
-  // `schema-preflight 0019` went with the schema it counted: it only ever applied to a
-  // schema-18 database, and production is past it.)
-  'schema-preflight 0020': 'database',
-  // Lane W3-C2, the same shape for migration 0021.
-  'schema-preflight 0021': 'database',
   // Lane RB. The nine read-before-lift reads, in one READ ONLY transaction: PostgreSQL
   // and nothing else, so a report of what the send path would do cannot itself reach a
   // mailbox.
@@ -175,18 +167,6 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'record a separately reviewed bounded history read allowance with migration credentials; grants no acquisition and queues nothing',
   },
   {
-    path: ['admin', 'crm-authority', 'provision'],
-    valueFlags: ['--json', '--json-base64', '--sha256', ...REPORTABLE],
-    booleanFlags: [], requiredFlags: ['--sha256'], oneOf: ['--json', '--json-base64'],
-    summary: 'store an independently reviewed hashed CRM authority receipt with migration credentials; enables nothing',
-  },
-  {
-    path: ['admin', 'crm-authority', 'revoke'],
-    valueFlags: ['--workspace', '--receipt', '--reference', ...REPORTABLE],
-    booleanFlags: [], requiredFlags: ['--workspace', '--receipt', '--reference'],
-    summary: 'irreversibly revoke one CRM authority receipt with migration credentials; does not change sending controls',
-  },
-  {
     path: ['admin', 'database-users', 'ensure'],
     valueFlags: ['--runtime-secret', ...REPORTABLE],
     booleanFlags: ['--rotate-password'],
@@ -273,28 +253,6 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: ['--reference'],
     summary: 'the stored release record for one reference, and the digests it binds sending to. Reads only',
-  },
-  {
-    // Lane W3-F. What `infra/scripts/preflight.sh <root> <prefix> 0020` runs before the
-    // postal-address release stops anything: the settings rows by key, the unsent fences
-    // whose footer will be recomposed, the templates whose legacy block will be deduped,
-    // and every body that would not fit once composed.
-    path: ['admin', 'schema-preflight', '0020'],
-    valueFlags: [...REPORTABLE],
-    booleanFlags: [],
-    requiredFlags: [],
-    summary: 'what migration 0020 recomposes, dedupes or refuses on, counted read-only on schema 19',
-  },
-  {
-    // Lane W3-C2. What `infra/scripts/preflight.sh <root> <prefix> 0021` runs before the
-    // compatibility-cleanup release stops anything: the enrollments still in
-    // `review_required`, which are the only thing 0021 refuses on (FS021), and the
-    // credential and generation rows it will destroy without asking.
-    path: ['admin', 'schema-preflight', '0021'],
-    valueFlags: [...REPORTABLE],
-    booleanFlags: [],
-    requiredFlags: [],
-    summary: 'what migration 0021 destroys or refuses on, counted read-only on schema 20',
   },
   {
     // Lane RB. The eight reads at the bottom of
@@ -402,7 +360,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   },
   {
     path:['admin','discovery','configure'],
-    valueFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used',...REPORTABLE],
+    valueFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used','--searches-per-day',...REPORTABLE],
     booleanFlags:[],requiredFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used'],
     summary:'Enable or pause discovery and initialize reconciled search allowance without resetting existing counters or halts; audited ECS launcher required.',
   },

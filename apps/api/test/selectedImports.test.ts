@@ -1,4 +1,4 @@
-import { reassignFirm } from "@fss/domain/crm/firms.ts";
+import { reassignFixtureFirm } from '@fss/domain/test/db/support/firmOwnership.ts';
 import {
   repositoryContext,
   workspaceScope,
@@ -1414,7 +1414,7 @@ describe("selected conversation imports", () => {
       [fixture.alpha.workspaceId, personId, firmA],
     );
     await withTransaction(fixture.db, () =>
-      reassignFirm(
+      reassignFixtureFirm(
         repositoryContext(
           workspaceScope(fixture.alpha.workspaceId, {
             kind: "user",

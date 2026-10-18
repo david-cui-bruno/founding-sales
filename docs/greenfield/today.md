@@ -112,8 +112,8 @@ Completing or cancelling the callback finishes its task the same way — Appendi
 "Callback and Today promotion/removal".
 
 **Reassignment is a trigger.** `firms_today_transfer` fires on any change of
-`firms.assigned_user_id`, so G3a's `reassignFirm` transfers the day's entries without a
-line in its file. The transfer is an update of the card's assignee, which is transfer
+`firms.assigned_user_id`, transferring the day's entries when the assignee changes.
+The transfer is an update of the card's assignee, which is transfer
 *without duplication* by construction: there is one card per firm per date and nothing
 to copy. The items carry no assignee of their own, because a firm has at most one
 assigned salesperson and a per-task copy could only ever disagree with the firm.

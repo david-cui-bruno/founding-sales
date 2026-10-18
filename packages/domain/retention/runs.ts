@@ -173,39 +173,3 @@ export interface RetentionRunView {
   readonly startedAt: string;
   readonly completedAt: string | null;
 }
-
-/** The admin's view of what retention has done. Typed and redacted; counts, never rows. */
-export async function listRetentionRuns(
-  context: RepositoryContext,
-  options: { readonly dataKind?: string | undefined; readonly limit?: number | undefined } = {},
-): Promise<readonly RetentionRunView[]> {
-  const { rows } = await context.db.query<{
-    id: string;
-    data_kind: string;
-    period: string;
-    outcome: string;
-    boundary_at: Date | null;
-    rows_deleted: number;
-    rows_redacted: number;
-    started_at: Date;
-    completed_at: Date | null;
-  }>(
-    `SELECT id, data_kind, period, outcome, boundary_at, rows_deleted, rows_redacted, started_at, completed_at
-       FROM retention_runs
-      WHERE workspace_id = $1 AND ($2::text IS NULL OR data_kind = $2::text)
-      ORDER BY started_at DESC, data_kind
-      LIMIT $3`,
-    [context.scope.workspaceId, options.dataKind ?? null, Math.trunc(options.limit ?? 100)],
-  );
-  return rows.map(row => ({
-    id: row.id,
-    dataKind: row.data_kind,
-    period: row.period,
-    outcome: row.outcome,
-    boundaryAt: row.boundary_at === null ? null : row.boundary_at.toISOString(),
-    rowsDeleted: Number(row.rows_deleted),
-    rowsRedacted: Number(row.rows_redacted),
-    startedAt: row.started_at.toISOString(),
-    completedAt: row.completed_at === null ? null : row.completed_at.toISOString(),
-  }));
-}

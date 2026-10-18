@@ -44,10 +44,6 @@ function handleOnce(channel: string, handler: (argument: unknown) => Promise<unk
   ipcMain.handle(channel, async (_event, argument: unknown) => await handler(argument));
 }
 
-/** Only for tests: forget what has been registered, so a fresh `ipcMain` can be used. */
-export function resetWindowRegistrations(): void {
-  registered.clear();
-}
 
 export interface WindowBridges {
   readonly today: TodayBridgeHost;

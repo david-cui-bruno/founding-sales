@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {withTransaction} from '../../db/queryable.ts';
-import {createFirm,reassignFirm} from '../../crm/firms.ts';
+import {createFirm} from '../../crm/firms.ts';
+import {reassignFixtureFirm} from '../db/support/firmOwnership.ts';
 import {receiveCalcomEvent} from '../../meetings/calcom.ts';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
@@ -117,7 +118,7 @@ describe('Cal.com capacity and recorded bookings',()=>{
     const result=await readBookingCapacity(formerOwner,{now:NOW,client:{
       async readProfile(){return {id:42,username:'callie-founder'};},
       async readEventTypes(){
-        expect(await withTransaction(db.session,()=>reassignFirm(ctx(),{firmId:created.value.id,toUserId:seed.alpha.admin.userId}))).toMatchObject({ok:true});
+        expect(await withTransaction(db.session,()=>reassignFixtureFirm(ctx(),{firmId:created.value.id,toUserId:seed.alpha.admin.userId}))).toMatchObject({ok:true});
         return [{id:73,ownerId:42,slug:'intro',bookingUrl:'https://cal.com/callie-founder/intro',bookingLimitsCount:{week:3}}];
       },
     }});

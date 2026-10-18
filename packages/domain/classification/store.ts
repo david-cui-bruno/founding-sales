@@ -98,18 +98,6 @@ export async function listClassifications(
   return rows.map(toRow);
 }
 
-export async function readClassification(
-  context: RepositoryContext,
-  input: { readonly messageId: string; readonly layer: 'deterministic' | 'model' },
-): Promise<ClassificationRow | null> {
-  const { rows } = await context.db.query<ClassificationDbRow>(
-    `SELECT ${CLASSIFICATION_COLUMNS} FROM mail_message_classifications
-      WHERE workspace_id = $1 AND mail_message_id = $2 AND layer = $3`,
-    [context.scope.workspaceId, input.messageId, input.layer],
-  );
-  const row = rows[0];
-  return row === undefined ? null : toRow(row);
-}
 
 export interface RecordModelClassificationInput {
   readonly messageId: string;
@@ -198,19 +186,6 @@ export async function recordClassifierCall(
   );
 }
 
-/** How many requests this workspace has actually sent today. The cap reads it. */
-export async function countCallsToday(context: RepositoryContext): Promise<number> {
-  const { rows } = await context.db.query<{ sent: string }>(
-    `SELECT count(*)::text AS sent
-       FROM mail_classification_calls c
-       JOIN workspaces w ON w.id = c.workspace_id
-      WHERE c.workspace_id = $1
-        AND c.request_sent
-        AND c.business_date = (now() AT TIME ZONE w.business_time_zone)::date`,
-    [context.scope.workspaceId],
-  );
-  return Number(rows[0]?.sent ?? '0');
-}
 
 export interface PendingClassification {
   readonly workspaceId: string;

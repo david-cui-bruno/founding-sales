@@ -2,7 +2,7 @@ import type { BlockedActionKind } from '@fss/contracts';
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordHeartbeat } from '../jobs/heartbeats.ts';
-import { listApplicableHolds, openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
+import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { MailboxRow, MailboxStatus, MailboxSyncState } from './types.ts';
 
@@ -110,14 +110,6 @@ export async function readMailboxForOwner(
   return row === undefined ? null : toMailbox(row);
 }
 
-export async function listConnectedMailboxes(context: RepositoryContext): Promise<readonly MailboxRow[]> {
-  const { rows } = await context.db.query<MailboxDbRow>(
-    `SELECT ${MAILBOX_COLUMNS} FROM mailboxes
-      WHERE workspace_id = $1 AND status = 'connected' ORDER BY email_address`,
-    [context.scope.workspaceId],
-  );
-  return rows.map(toMailbox);
-}
 
 /**
  * 13.3's mailbox check: one per connected mailbox per minute, and the interval its
@@ -576,17 +568,6 @@ export async function releaseMailboxHold(
   return released.map(hold => hold.id);
 }
 
-/** Whether anything at all blocks this owner's automated work right now. */
-export async function mailboxAutomationBlocked(
-  context: RepositoryContext,
-  input: { readonly ownerUserId: string; readonly actionKind: BlockedActionKind },
-): Promise<boolean> {
-  const holds = await listApplicableHolds(context, {
-    actionKind: input.actionKind,
-    ownerUserId: input.ownerUserId,
-  });
-  return holds.length > 0;
-}
 
 /**
  * The per-mailbox heartbeat of 13.3.

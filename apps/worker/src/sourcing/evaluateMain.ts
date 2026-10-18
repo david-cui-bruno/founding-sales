@@ -1,25 +1,13 @@
-import {writeFile} from 'node:fs/promises';
-import {randomUUID} from 'node:crypto';
-import {reviewEvaluation} from './discoveryReview.ts';
-import {homedir} from 'node:os';
-import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {evaluateDiscovery} from './evaluateDiscovery.ts';
-import {tavilySearch} from './tavilySearch.ts';
+import {DISCOVERY_DAILY_CREDIT_LIMIT,DISCOVERY_MONTHLY_CREDIT_LIMIT} from '@fss/domain/sourcing/discoveryQuota.ts';
 import {SOURCING_EVALUATION_QUERIES} from './evaluationQueries.ts';
-export async function main(argv:readonly string[],env:NodeJS.ProcessEnv):Promise<number>{
- if(argv.length===0||argv[0]==='--dry-run'){
-  process.stdout.write(JSON.stringify({mode:'dry_run',queries:SOURCING_EVALUATION_QUERIES,maximumBatchCredits:9,dailyAttemptLimit:20,monthlyAttemptLimit:600},null,2)+'\n');return 0;
+/** Planning only. A host-local evaluation ledger cannot enforce the shared account cap. */
+export async function main(argv:readonly string[],_env:NodeJS.ProcessEnv):Promise<number>{
+ if(argv.length===0||(argv.length===1&&argv[0]==='--dry-run')){
+  process.stdout.write(JSON.stringify({mode:'dry_run',queries:SOURCING_EVALUATION_QUERIES,maximumBatchCredits:9,dailyAttemptLimit:DISCOVERY_DAILY_CREDIT_LIMIT,monthlyAttemptLimit:DISCOVERY_MONTHLY_CREDIT_LIMIT},null,2)+'\n');return 0;
  }
- if(argv.length!==1||argv[0]!=='--run'){process.stderr.write('Use --dry-run or --run.\n');return 2;}
- const key=env['FSS_TAVILY_API_KEY'];
- if(!key){process.stderr.write('FSS_TAVILY_API_KEY is required; never pass it as a command argument.\n');return 2;}
- try{
-  const report=await evaluateDiscovery({directory:join(homedir(),'.local','share','callie','sourcing-evaluation'),provider:tavilySearch(key),queries:SOURCING_EVALUATION_QUERIES});
-  const review=reviewEvaluation(report);
-  await writeFile(join(homedir(),'.local','share','callie','sourcing-evaluation',`review-${randomUUID()}.json`),JSON.stringify({version:1,groups:review},null,2),{flag:'wx',mode:0o600});
-  process.stdout.write(JSON.stringify({reviewGroups:review.length,attempts:report.results.length,hits:report.results.reduce((n,r)=>n+(r.result.ok?r.result.hits.length:0),0),stopReason:report.stopReason})+'\n');
-  return report.stopReason===null?0:1;
- }catch{process.stderr.write('Evaluation stopped. Check the local ledger and lock; no automatic reset was attempted.\n');return 1;}
+ if(argv.length!==1||argv[0]!=='--run'){process.stderr.write('Use --dry-run. Paid local evaluation is disabled.\n');return 2;}
+ // Refuse before reading credentials, touching a local ledger or constructing a port.
+ process.stderr.write('Paid local evaluation is disabled. Use the audited sourcing.discovery.configure and scheduled discovery path sharing the global account ledger. Do not reset existing usage or holds.\n');return 2;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)process.exitCode=await main(process.argv.slice(2),process.env);

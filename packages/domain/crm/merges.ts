@@ -9,7 +9,7 @@ import { enqueueFirmResearchBestEffort } from '../research/enqueue.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
-import { loadFirmForUpdate, readFirm } from './firms.ts';
+import { loadFirmForUpdate } from './firms.ts';
 import {
   accept,
   refuse,
@@ -568,21 +568,4 @@ export async function listFirmAliases(
     [context.scope.workspaceId, firmId],
   );
   return rows.map(row => ({ aliasKind: row.alias_kind, aliasValue: row.alias_value }));
-}
-
-/** Whether this firm is still the canonical record, or where it went. */
-export async function canonicalFirmOf(
-  context: RepositoryContext,
-  firmId: string,
-): Promise<string | null> {
-  let current = firmId;
-  // A chain of merges is followed rather than assumed to be one link long, and bounded
-  // so a cycle the database should have refused cannot hang a request.
-  for (let hop = 0; hop < 16; hop += 1) {
-    const firm = await readFirm(context, current);
-    if (firm === null) return null;
-    if (firm.status !== 'merged' || firm.merged_into_firm_id === null) return firm.id;
-    current = firm.merged_into_firm_id;
-  }
-  return null;
 }

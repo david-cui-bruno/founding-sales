@@ -2,7 +2,7 @@ import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { backoffSeconds, DEFAULT_BACKOFF, isExhausted, type BackoffPolicy } from './backoff.ts';
-import { isJobKind, type JobKind } from './jobKinds.ts';
+import type { JobKind } from './jobKinds.ts';
 
 /**
  * The PostgreSQL job queue of specification 13.2.
@@ -586,10 +586,4 @@ export async function requeueDeadJob(
     [context.scope.workspaceId, actorUserId, options.jobId, JSON.stringify({ kind, reason: options.reason })],
   );
   return { requeued: true, jobId: options.jobId, kind };
-}
-
-/** A guard the runner uses so an unregistered kind is never claimed by accident. */
-export function assertKnownKind(kind: string): JobKind {
-  if (!isJobKind(kind)) throw new JobStoreError('JOB_KIND_UNKNOWN', `${kind} is not a job kind of Appendix C`);
-  return kind;
 }

@@ -24,6 +24,7 @@ export function CallingNumberSection({
   retiring,
   onAdd,
   onRetire,
+  compact = false,
 }: {
   readonly section: CallingNumberSectionView;
   /** This section's own Add is on the wire. Nothing else on the page waits for it. */
@@ -32,6 +33,7 @@ export function CallingNumberSection({
   retiring(identityId: string): boolean;
   onAdd(input: { readonly e164: string; readonly label: string }): void;
   onRetire(identityId: string): void;
+  readonly compact?: boolean;
 }): JSX.Element {
   const [e164, setE164] = useKept('settings:calling-number:e164', '');
   const [label, setLabel] = useKept('settings:calling-number:label', '');
@@ -68,7 +70,8 @@ export function CallingNumberSection({
         </Rows>
       )}
 
-      <div className="mt-3 flex items-end gap-2">
+      <details open={!compact} className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">Add a calling number</summary>
+      <div className="mt-3 flex flex-wrap items-end gap-2">
         <Field
           label="Number"
           htmlFor="calling-number-e164"
@@ -124,6 +127,7 @@ export function CallingNumberSection({
           Add number
         </Button>
       </div>
+      </details>
       <div className="mt-2 empty:hidden">
         <FormNotice forms={['calling-number']} />
       </div>

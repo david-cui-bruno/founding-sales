@@ -8,6 +8,7 @@ import {saveCandidate} from './candidates.ts';
 import {DISCOVERY_RESULT_LIMIT,DISCOVERY_NEW_CANDIDATE_LIMIT,type DiscoverySearchProvider,type DiscoverySearchResult} from './discoveryProvider.ts';
 import {sourcingUrlSchema} from '@fss/contracts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
+import {discoveryQuotaRemaining} from './discoveryQuota.ts';
 
 export {DISCOVERY_QUERIES} from './discoveryQueries.ts';
 import {ensureTargetingPolicy} from './targetingProposals.ts';
@@ -30,7 +31,8 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
   if(pending){if(pending.expired)await db.query('UPDATE sourcing_search_account SET halted=true WHERE id=true');return null;}
   const budget=(await db.query<{halted:boolean;daily_used:number;monthly_used:number}>('SELECT halted,daily_used,monthly_used FROM sourcing_search_account WHERE id=true')).rows[0]!;
   if(budget.halted)return null; // Keep the original provider failure visible until reconciliation.
-  if(budget.daily_used>=20||budget.monthly_used>=600){await db.query("UPDATE sourcing_discovery_settings SET last_result='quota_exhausted' WHERE workspace_id=$1",[ctx.scope.workspaceId]);return null;}
+  const remaining=discoveryQuotaRemaining(budget.daily_used,budget.monthly_used);
+  if(remaining.daily===0||remaining.monthly===0){await db.query("UPDATE sourcing_discovery_settings SET last_result='quota_exhausted' WHERE workspace_id=$1",[ctx.scope.workspaceId]);return null;}
   const policy=await ensureTargetingPolicy(ctx);
   const query=policy.queries[settings.query_cursor%policy.queries.length]!;
   // Existing attempts retain slot zero. Never reuse an occupied slot, even after a failure.
@@ -72,7 +74,8 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
     const saved=await saveCandidate(ctx,{firmName:discoveryFirmName(hit.title,hit.url),website:hit.url,locality:attempt.query.locality,region:attempt.query.region,signal:'fit_only',evidence:hit.snippet.trim().slice(0,2000)||'Search returned no excerpt; source verification required.',sourceUrl:hit.url,observedOn:observed,preparedBy:'Tavily Basic search · not verified',discoveryKnownDomain:known,discoveryQuery:attempt.query.query});
     if(!saved.ok)throw new Error('discovery_candidate_invalid');
     created++;
-    // Qualification is reserved for owner-kept drafts or an explicit manual request.
+    // Discovery never changes review status. The separately attested identity
+    // scheduler or an explicit owner request may qualify this saved draft.
     await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,saved.value.id]);
    }
   }

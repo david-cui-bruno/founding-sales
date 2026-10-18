@@ -62,8 +62,8 @@ it.each(['running','failed','completed'])('never requeues an existing %s researc
  expect((await db.session.query("SELECT id FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,made.value.id])).rows).toHaveLength(0);
 });
 async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v4',promptVersion:'qualification-growth-v6',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
-it('requires an explicit owner for automatic admission in a workspace with multiple sellers',async()=>{
- const input=await qualified('Owner PM');await enableAutomatic();expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'sourcing_owner_required'});
+it('refuses a legacy automatic flag without the newly attested owner policy',async()=>{
+ const input=await qualified('Owner PM');await enableAutomatic();expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'evaluation_required'});
 });
 it('refuses stale evidence, missing phone and an unresolved Texas locality with no CRM side effects',async()=>{
  const input=await qualified('Stale PM');await db.session.query("UPDATE sourcing_qualification_runs SET observations=jsonb_set(observations,'{0,retrievedAt}',to_jsonb((now()-interval '8 days')::text)) WHERE id=$1",[input.qualificationRunId]);
@@ -72,9 +72,9 @@ it('refuses stale evidence, missing phone and an unresolved Texas locality with 
  const zone=await qualified('Zone PM',{locality:'Texas'});expect(await tx(()=>admitCandidate(ctx(),zone))).toEqual({ok:false,reason:'zone_unresolved'});
  expect((await db.session.query("SELECT id FROM firms WHERE name IN ('Stale PM','No Phone PM','Zone PM')")).rows).toHaveLength(0);
 });
-it('keeps a fit-only candidate in review for automatic mode but permits explicit reviewed admission',async()=>{
+it('keeps legacy automatic admission disabled while preserving explicit reviewed fit-only admission',async()=>{
  const input=await qualified('Fit PM',{need:'We provide 24/7 maintenance services.'});await enableAutomatic();
- expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'qualification_requires_review'});
+ expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'evaluation_required'});
  expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true});
 });
 it('serializes concurrent repeated admission and does not replace the assignee',async()=>{
