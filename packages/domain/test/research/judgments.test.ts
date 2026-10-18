@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { judgeFirm, type JudgmentInput } from '../../research/judgments.ts';
-import { buildCallBrief, generatedPartsOf, type FirmFactDto } from '../../research/brief.ts';
+import { buildCallBrief, type FirmFactDto } from '../../research/brief.ts';
 import {
   MAX_EXTRACTION_OUTPUT_TOKENS,
   PRICE_CENTS_PER_MILLION,
@@ -277,22 +277,33 @@ describe('the call brief', () => {
     expect(brief.opening).toBeNull();
   });
 
-  it('is generated when the model wrote the questions or the opening', () => {
-    const withQuestions = buildCallBrief({
-      facts: [],
+  it.each([
+    { name: 'zero facts', facts: [] },
+    { name: 'an unrelated company fact', facts: [fact('target_fit', 'We manage property for owners.')] },
+    { name: 'person-only facts', facts: [fact('named_role', null), fact('phone_listed', null)] },
+  ])('ignores historical unconstrained prose with $name', ({ facts }) => {
+    const brief = buildCallBrief({
+      facts,
       judgments,
       revision: 1,
-      runBrief: { questions: ['How do you take work orders?', 'Who handles them?'], opening: 'Hello', generated: true },
+      runBrief: {
+        questions: ['How do your 900 units use AppFolio?', 'Does your Texas office handle repairs?'],
+        opening: 'I saw you manage 900 units on AppFolio in Texas.',
+        generated: true,
+      },
       likelyPerson: null,
     });
-    expect(withQuestions.generated).toBe(true);
-    expect(withQuestions.questions).toEqual(['How do you take work orders?', 'Who handles them?']);
-    expect(withQuestions.opening).toBe('Hello');
+    expect(brief).toMatchObject({ generated: false, questions: null, opening: null });
+    expect(brief.whyFit.map(quote => quote.quote)).toEqual(facts.filter(f => f.key === 'target_fit').map(f => f.quote));
+    expect(JSON.stringify(brief)).not.toMatch(/900|AppFolio|Texas/);
   });
 
   it('ignores a stored brief that is not the shape it claims', () => {
-    expect(generatedPartsOf({ questions: ['only one'], opening: 42 })).toEqual({ questions: null, opening: null });
-    expect(generatedPartsOf(null)).toEqual({ questions: null, opening: null });
+    const brief = buildCallBrief({
+      facts: [], judgments, revision: 1, likelyPerson: null,
+      runBrief: { questions: ['only one'], opening: 42 },
+    });
+    expect(brief).toMatchObject({ generated: false, questions: null, opening: null });
   });
 });
 

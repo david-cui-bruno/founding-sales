@@ -736,7 +736,6 @@ async function finishFirmResearchBody(
   let modelName: string | null = null;
   let inputTokens = 0;
   let outputTokens = 0;
-  let generated: { readonly questions: readonly [string, string]; readonly opening: string } | null = null;
   // Why the model was or was not used, recorded so the sweep can tell the difference
   // between "there was no key" and "there was nothing to read".
   let extractionOutcome: RunExtraction =
@@ -865,9 +864,6 @@ async function finishFirmResearchBody(
         modelName = answer.value.modelName;
         inputTokens = answer.value.inputTokens;
         outputTokens = answer.value.outputTokens;
-        if (answer.value.questions !== null && answer.value.opening !== null) {
-          generated = { questions: answer.value.questions, opening: answer.value.opening };
-        }
       } else {
         // Observed, and never a reason to discard the pages this run already recorded.
         // The sweep retries tomorrow as a new revision; the evidence stays.
@@ -950,7 +946,7 @@ async function finishFirmResearchBody(
     costCents: cost.cents,
     costEstimated: cost.estimated,
     extraction: extractionOutcome,
-    brief: generated === null ? null : { ...generated, generated: true },
+    brief: null, // Suggestions have no claim-to-evidence contract; retain only accepted facts.
   });
   if (!closed) return closedElsewhere();
 
