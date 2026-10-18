@@ -1,4 +1,5 @@
-import {createHash,randomUUID} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
+import {seedHistoricalAskAction} from './support/historicalAskAction.ts';
 import {expect,it} from 'vitest';
 import {recordingSuppressionJournal} from '@fss/domain/suppression/journal.ts';
 import {dispatch} from '../src/server.ts';
@@ -17,12 +18,7 @@ it('measures and erases an independently committed human note when its original 
   const source=await post('/crm/firm-sources/add',command({firmId,sourceKey:'manual-note-erasure',excerpt:text,occurredAt:'2026-10-01T14:00:00Z'}));
   expect(source.status).toBe(200);
   const sourceId=(source.body as {result:{sourceId:string}}).result.sourceId;
-  const requested=await post('/ask/answers/request',command({question:'maintenance',scope:{sources:[{workspaceId:fixture.alpha.workspaceId,sourceId,kind:'selected_note',revision:1,contentHash:createHash('sha256').update(text).digest('hex'),locator:null}]}}));
-  expect(requested.status).toBe(200);
-  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
-  const created=await post('/ask/actions/create',command({requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'note',text:'Discuss the private coordinator workflow.',target:{kind:'firm',firmId}}}));
-  expect(created.status).toBe(200);
-  const actionId=(created.body as {result:{actionId:string}}).result.actionId;
+  const {actionId}=await seedHistoricalAskAction(fixture,{sourceId,firmId,text,kind:'note',humanText:'Discuss the private coordinator workflow.',owner:{userId:fixture.alpha.admin.userId,role:'admin'}});
   const preview=await post('/retention/deletions/preview',command({targetKind:'firm',firmId}));
   expect(preview.status).toBe(200);
   expect(preview.body).toMatchObject({result:{redacts:{crm_ask_actions:1}}});

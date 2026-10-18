@@ -1,4 +1,5 @@
-import {createHash,randomUUID} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
+import {seedHistoricalAskAction} from './support/historicalAskAction.ts';
 import {expect,it} from 'vitest';
 import {recordingSuppressionJournal} from '@fss/domain/suppression/journal.ts';
 import {dispatch} from '../src/server.ts';
@@ -17,9 +18,6 @@ it('withholds private manual action content and refuses completion after origina
   const source=await post('/crm/firm-sources/add',command({firmId,sourceKey:'manual-note-erasure',excerpt:text,occurredAt:'2026-10-01T14:00:00Z'}));
   expect(source.status).toBe(200);
   const sourceId=(source.body as {result:{sourceId:string}}).result.sourceId;
-  const requested=await post('/ask/answers/request',command({question:'maintenance',scope:{sources:[{workspaceId:fixture.alpha.workspaceId,sourceId,kind:'selected_note',revision:1,contentHash:createHash('sha256').update(text).digest('hex'),locator:null}]}}));
-  expect(requested.status).toBe(200);
-  const requestId=(requested.body as {result:{requestId:string}}).result.requestId;
   const opportunityOpened=await post('/opportunities/v2/open',command({firmId,name:'Coordinator evaluation'}));
   expect(opportunityOpened.status).toBe(200);
   const opportunityId=(opportunityOpened.body as {result:{opportunityId:string}}).result.opportunityId;
@@ -27,10 +25,7 @@ it('withholds private manual action content and refuses completion after origina
   const foreignOpened=await post('/opportunities/v2/open',command({firmId:foreignFirmId,name:'Foreign evaluation'}));
   expect(foreignOpened.status).toBe(200);
   const foreignOpportunityId=(foreignOpened.body as {result:{opportunityId:string}}).result.opportunityId;
-  expect((await post('/ask/actions/create',command({requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'note',text:'Do not attach foreign initiative.',target:{kind:'firm',firmId,opportunityId:foreignOpportunityId}}}))).status).toBe(409);
-  const created=await post('/ask/actions/create',command({requestId,expectedVersion:1,finding:{kind:'keyword_passage',index:0},action:{kind:'task',label:'Discuss the private coordinator workflow.',due:null,target:{kind:'firm',firmId,opportunityId}}}));
-  expect(created.status).toBe(200);
-  const actionId=(created.body as {result:{actionId:string}}).result.actionId;
+  const {actionId}=await seedHistoricalAskAction(fixture,{firmId,sourceId,text,kind:'task',humanText:'Discuss the private coordinator workflow.',opportunityId,owner:{userId:fixture.alpha.salesperson.userId,role:'salesperson'}});
   expect((await post('/ask/actions/read',{scope:{kind:'firm',firmId}})).body).toMatchObject({items:[{target:{kind:'firm',firmId,opportunityId}}]});
   expect((await post('/ask/actions/read',{scope:{kind:'firm',firmId,opportunityId}})).body).toMatchObject({items:[{target:{kind:'firm',firmId,opportunityId}}]});
   expect((await post('/ask/actions/read',{scope:{kind:'firm',firmId,opportunityId:foreignOpportunityId}})).body).toMatchObject({items:[]});

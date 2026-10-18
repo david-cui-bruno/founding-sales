@@ -197,37 +197,12 @@ it("projects exactly one internal task from an explicit dated human promise revi
 
     expect((await post("/crm/commitments/read",{scope:{kind:"today"},limit:50})).body).toMatchObject({items:[{task:{taskId:changedTask,status:"open"}}]});
     expect((await post("/today/actions/open/v2",{actionId:promiseAction.actionId,target:promiseAction.target})).body).toEqual({version:2,target:null});
-    // A source-free Ask may observe this task without acquiring its original as model context.
-    await fixture.db.query(`INSERT INTO crm_ask_purposes(workspace_id,purpose,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,evaluation_fingerprint,processor_version,retrieval_version,answer_version,support_version,chunker_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,'answer',1,true,'controlled-answer','literal-v1','fixture-grant','fixture-handling',$2,'ask-answer-v1','lexical-original-v1','literal-v1','exact-original-v1','lexical-original-v1',1000,10000,1,1,$3)`, [source.workspaceId,'a'.repeat(64),fixture.alpha.admin.userId]);
-    const taskQuestion = await post('/ask/answers/request', command({question:'What tasks are currently open for this person?',execution:'agent_v1',agentScope:{kind:'person',personId},scope:{sources:[]}}));
-    expect(taskQuestion.status).toBe(200);
-    const taskAskId = (taskQuestion.body as {result:{requestId:string}}).result.requestId;
-    let taskAskSteps = 0;
-    const taskAskRegistry = registerHandlers(new HandlerRegistry(), {classifier:undefined,mail:undefined,send:undefined,research:undefined,crmAskAnswers:{
-      agent:{endpointId:'controlled-answer',modelVersion:'literal-v1',providerKey:'fixture.ask.internal-task',async runStep(input){
-        taskAskSteps++;
-        expect(input.transcript[0]).toMatchObject({windows:[]});
-        expect(JSON.stringify(input.transcript)).not.toContain(promiseQuote);
-        expect(JSON.stringify(input.transcript)).not.toContain('taskDependencies');
-        if(taskAskSteps===1)return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:10},answer:null,toolCalls:[{id:'read-person-tasks',name:'read_exact',input:{operation:'tasks'}}]};
-        expect(input.transcript[1]).toMatchObject({name:'read_exact',result:{count:'1',records:[{key:`internal_task:${changedTask}`,label:'Prepare a revised repair summary'}]}});
-        return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:10},answer:{claims:[],abstained:true},toolCalls:[]};
-      }},agentLimits:{maxSteps:3,maxInputBytes:100000,maxOutputTokens:1000,deadlineMs:60000},allowControlledEvaluation:true,
-      verifyPurpose:async proof=>({configFingerprint:proof.configFingerprint,authorizationFingerprint:proof.authorizationFingerprint,validUntil:'2099-01-01T00:00:00Z',evaluationKind:'controlled_fixture'}),
-    }});
-    await runOnce(fixture.db,{registry:taskAskRegistry,owner:'internal-task-observation',limit:20});
-    expect(taskAskSteps).toBe(2);
-    const taskAskRead = () => post('/ask/answers/read',{requestId:taskAskId,includeExactResultCitations:true});
-    expect((await taskAskRead()).body).toMatchObject({state:'complete',answer:{claims:[],abstained:true,exactResults:[{toolCallId:'read-person-tasks',value:{records:[{key:`internal_task:${changedTask}`,label:'Prepare a revised repair summary'}]}}]}});
-
     // Cycle3: changed interpretation cannot erase an already performed action.
     const correction=await post("/crm/evidence/decide",command({source,claimId:first.claim.claimId,claimRevision:1,claimHash:first.claim.claimHash,contextHash:first.generation.contextHash,expectedDecisionRevision:0,action:"correct",correctedInterpretation:"This was tentative, not an agreed commitment"}));expect(correction.status).toBe(200);
     const corrected=await read();expect(corrected.status).toBe(200);
     expect(corrected.body).toMatchObject({items:[{state:"review_required",actionLabel:null,due:null,quote:null,source:null,task:{taskId:changedTask,status:"open",version:2,completedAt:null}}]});
-    expect((await taskAskRead()).body).toMatchObject({state:'stale',question:null,fallback:null,answer:null});
     // Cycle4: whole-copy deletion scrubs private promise proof, not completion.
     expect((await post("/crm/people/source/delete",command({personId,sourceId:source.sourceId,expectedRevision:source.revision}))).status).toBe(200);
-    expect((await taskAskRead()).body).toMatchObject({question:null,fallback:null,answer:null});
     expect((await post('/ask/read',{operation:'tasks',scope:{business:true},limit:20})).body).toMatchObject({count:'0',records:[]});
     const redacted=await post("/crm/commitments/read",{scope:{kind:"history"},limit:50});expect(redacted.status).toBe(200);
     expect(redacted.body).toMatchObject({items:[{taskId:originalTask,status:"done",version:3,completedAt}],nextAfterId:null});

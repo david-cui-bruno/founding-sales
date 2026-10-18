@@ -1,6 +1,5 @@
-import type { AskTaskDependency } from "./askTaskDependencies.ts";
 import { readAskAdditionalOpenTasks } from "./askOpenTasks.ts";
-import { readAskRecords, type AskRecordRestriction } from "./askRecords.ts";
+import { readAskRecords } from "./askRecords.ts";
 import { readAskCorpus, discoverAskSources } from "./askCorpus.ts";
 import type { z } from "zod";
 import type {
@@ -19,8 +18,7 @@ import { lockIdentityContext, activeIdentityActor } from "./identityAccess.ts";
 export async function readAsk(
   context: RepositoryContext,
   input: z.infer<typeof askReadSchema>,
-  recordRestriction: AskRecordRestriction = {},
-  observation: { observeTaskDependencies?: (dependencies: AskTaskDependency[]) => void } = {},
+  options: { operationalTasksOnly?: boolean } = {},
 ) {
   if (input.operation === "sources") return discoverAskSources(context, input);
   if (input.operation === "reply_status") {
@@ -162,7 +160,7 @@ export async function readAsk(
     };
   }
   if (input.operation === "records")
-    return readAskRecords(context, input, recordRestriction);
+    return readAskRecords(context, input);
   const firmId = "firmId" in input.scope ? input.scope.firmId : null;
   const personId =
     input.operation === "tasks" && "personId" in input.scope
@@ -258,7 +256,23 @@ export async function readAsk(
         input.limit + 1,
       ])
     ).rows;
-    const additional = await readAskAdditionalOpenTasks(context, input.scope, observation.observeTaskDependencies);
+    if (options.operationalTasksOnly) {
+      if (!(await activeIdentityActor(context))) return null;
+      return {
+        operation: "tasks" as const,
+        scope: input.scope,
+        dateBasis: "task_due_at" as const,
+        count,
+        records: rows.slice(0, input.limit).map((row) => ({
+          key: row.key, kind: row.kind, label: row.label,
+          dueAt: row.due_at.toISOString(), status: row.status,
+          ...(row.deadline === null ? {} : { deadline: row.deadline }),
+        })),
+        truncated: rows.length > input.limit,
+        coverage: { scope: "current_permitted_crm_state" as const, acquisition: "unverified" as const, semantic: "not_requested" as const },
+      };
+    }
+    const additional = await readAskAdditionalOpenTasks(context, input.scope);
     if (additional === null) return null;
     const operational = rows.slice(0, input.limit).map((row) => ({
       ...(firmId === null ? { firmId: row.firm_id } : {}),

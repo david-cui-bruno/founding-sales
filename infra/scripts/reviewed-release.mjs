@@ -149,7 +149,7 @@ try {
     phase('release-record-readback', () => script('record.sh', ['read-back', 'infra/roots/production', 'fss-prod', '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker, '--release-record', record]), true);
     phase('smoke', () => {
       const age = /^canary_age=([0-9.]+)$/mu.exec(script('deploy.sh', ['ci', 'canary']))?.[1]; if (!age) throw new Error('reviewed_canary_unavailable');
-      command(process.execPath, [resolve('scripts/productionSmoke.mjs'), '--origin', process.env.FSS_PRODUCTION_ORIGIN, '--canary-age-seconds', age, '--expect-sending', recordArgs.includes('--enables-sending') ? 'enabled' : 'disabled', '--json'], { reason: 'reviewed_smoke_failed' });
+      command(process.execPath, ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', resolve('scripts/productionSmoke.mjs'), '--origin', process.env.FSS_PRODUCTION_ORIGIN, '--canary-age-seconds', age, '--expect-sending', recordArgs.includes('--enables-sending') ? 'enabled' : 'disabled', '--json'], { reason: 'reviewed_smoke_failed' });
       const live = current(); if (live.from !== manifest.commit || live.fromSchema !== manifest.toSchema) throw new Error('reviewed_readback_changed');
     });
     status.phase = 'verified'; status.outcome = 'completed'; status.previousDeclaredCounts = { api: configuration.api?.declared_desired_count, worker: configuration.worker?.declared_desired_count }; save();

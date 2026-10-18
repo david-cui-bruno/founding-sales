@@ -1,9 +1,9 @@
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 
 /**
- * Acquired before identity, request, job and spending locks by Ask worker stages
- * and scoped deletion. Recovery must conserve money even after private authority
- * is erased, so it cannot rely on the original source locks to serialize deletion.
+ * Shared by retained human-work updates and scoped deletion before identity and
+ * action locks. Historical Ask copies still participate in the deletion closure.
+ * Keep the existing advisory key so those retained paths serialize consistently.
  * Transaction-scoped only: no verifier or provider wait may hold this lock.
  */
 export async function lockAskLifecycle(context:RepositoryContext):Promise<void>{
