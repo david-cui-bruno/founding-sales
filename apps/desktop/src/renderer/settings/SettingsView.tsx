@@ -1,5 +1,4 @@
 import { CrmOwnerSetup } from './CrmOwnerSetup.tsx';
-import {LinkedinPostingPolicy} from '../social/LinkedinPostingPolicy.tsx';
 import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
 import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
 import {OutreachSection} from '../outreach/OutreachSection.tsx';
@@ -163,7 +162,6 @@ export function SettingsView({
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />
               {isAdmin?<OutreachSection enabled={identity!==null && state?.mayMutate===true} {...(route.name === 'settings' && route.mailboxId !== undefined ? { initialMailboxId: route.mailboxId } : {})}/>:null}
-              {identity!==null&&state?.mayMutate===true?<LinkedinPostingPolicy key={`posting-policy:${identity}:${String(generation)}`}/>:null}
               <ReplyModelSection isAdmin={isAdmin} identity={identity} generation={generation} guard={guard} />
             </>
           ) : tabForScreen(view.screen) === 'dashboard' ? (
