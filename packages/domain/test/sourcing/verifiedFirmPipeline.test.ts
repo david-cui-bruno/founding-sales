@@ -27,16 +27,21 @@ beforeEach(async()=>{
  await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM sourcing_discovery_settings');await db.session.query('DELETE FROM daily_counters');await db.session.query('DELETE FROM research_settings');await db.session.query('DELETE FROM jobs');
  await db.session.query('INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,owner_user_id,qualification_evaluation) VALUES($1,true,$2,$3::jsonb)',[seed.alpha.workspaceId,seed.alpha.admin.userId,JSON.stringify(currentAttestation())]);
 });
-async function draft(options:{payload?:CandidateInput;phone?:string|null;locality?:string;region?:CandidateInput['region'];identityName?:string;legacyDuplicate?:boolean}={}){
+async function draft(options:{payload?:CandidateInput;phone?:string|null;locality?:string;region?:CandidateInput['region'];identityName?:string;legacyDuplicate?:boolean;splitOffice?:boolean}={}){
  const n=serial++,payload:CandidateInput=options.payload??{firmName:`Verified Office ${n} LLC`,website:`https://verified-${n}.example.test/`,sourceUrl:`https://verified-${n}.example.test/`,locality:options.locality??'Dallas',region:options.region??'TX',signal:'fit_only',evidence:'Search only, not proof',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Tavily Basic search · not verified'};
  let candidateId:string;
  if(options.legacyDuplicate){candidateId=(await db.session.query<{id:string}>('INSERT INTO sourcing_candidates(workspace_id,identity_key,payload) VALUES($1,$2,$3::jsonb) RETURNING id',[seed.alpha.workspaceId,createHash('sha256').update(randomUUID()).digest('hex'),JSON.stringify(payload)])).rows[0]!.id;}
  else{const saved=await tx(()=>saveCandidate(user(),payload));if(!saved.ok)throw new Error(saved.reason);candidateId=saved.value.id;}
  const requested=await tx(()=>requestQualification(user(),{candidateId,expectedRevision:1}));if(!requested.ok)throw new Error(requested.reason);
  const phone=options.phone===undefined?`(214) 555-${String(n).padStart(4,'0')}`:options.phone;
- const blocks=[{id:'office',text:`${options.identityName??payload.firmName} provides residential property management in ${payload.locality}, ${payload.region}.`},{id:'phone',text:phone?`Contact ${payload.firmName} at ${phone}.`:'No phone published.'}];
+ const blocks=[{id:'office',text:`${options.identityName??payload.firmName} office: ${payload.locality}, ${payload.region}. We provide residential property management.`},{id:'phone',text:phone?`Contact ${payload.firmName} at ${phone}.`:'No phone published.'}];
  const observation:SourceObservation={id:randomUUID(),url:payload.website,contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:new Date().toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks};
- const facts:QualificationFact[]=[...(['firm_identity','residential_management','service_area'] as const).map(kind=>({kind,observationId:observation.id,blockId:'office',value:blocks[0]!.text})),...(phone?[{kind:'business_phone' as const,observationId:observation.id,blockId:'phone',value:blocks[1]!.text}]:[])];
+ let facts:QualificationFact[]=[...(['firm_identity','residential_management','service_area'] as const).map(kind=>({kind,observationId:observation.id,blockId:'office',value:blocks[0]!.text})),...(phone?[{kind:'business_phone' as const,observationId:observation.id,blockId:'phone',value:blocks[1]!.text}]:[])];
+ if(options.splitOffice&&phone){
+  const texts=[`${payload.firmName} provides residential property management.`,`We serve ${payload.locality}, ${payload.region}.`,payload.firmName,phone,'office@fixture.example.test','Office Location','12 Example Street',`${payload.locality}, ${payload.region} 75001`];
+  observation.blocks=texts.map((text,n)=>({id:`b${n}`,text}));
+  facts=([['firm_identity',0],['residential_management',0],['service_area',1],['business_phone',3]] as const).map(([kind,n])=>({kind,observationId:observation.id,blockId:`b${n}`,value:texts[n]!}));
+ }
  const saved=await tx(()=>finishQualification(user(),{runId:requested.value.runId,observations:[observation],facts,reason:null}));if(!saved.ok)throw new Error(saved.reason);
  await tx(()=>evaluateQualification(user(),{runId:requested.value.runId}));
  return {candidateId,runId:requested.value.runId,payload,phone};
@@ -57,8 +62,8 @@ it.each(['denial','neighbor'] as const)('never auto-Keeps or admits literal %s e
  const queue=await listCandidates(user(),{status:'needs_review',offset:0});if(!queue.ok)throw new Error(queue.reason);
  expect(queue.value.candidates.map(c=>c.id)).toEqual(scenario==='denial'?[]:[d.candidateId]);
 });
-it('automatically Keeps verified fit, researches, then exposes a useful sourced call brief without outreach',async()=>{
- const d=await draft();
+it('automatically Keeps a split-card bare-phone proof, researches, then exposes a useful sourced call brief without outreach',async()=>{
+ const d=await draft({splitOffice:true});
  const untouched=['contacts','opportunities','sequence_enrollments','outbound_messages','outreach_plans','call_sessions','call_logs'];
  const counts=async()=>Promise.all(untouched.map(async table=>(await db.session.query<{count:number}>(`SELECT count(*)::int AS count FROM ${table} WHERE workspace_id=$1`,[seed.alpha.workspaceId])).rows[0]!.count));
  const before=await counts();await advance(d.runId);await advance(d.runId);
@@ -92,6 +97,8 @@ it('shows only unresolved identity and leaves temporary unavailable evidence pen
 });
 it('requires new attestation and active owner before any automatic status or CRM change',async()=>{
  const d=await draft();await db.session.query("UPDATE sourcing_discovery_settings SET qualification_evaluation=qualification_evaluation-'verifiedFirmPolicyVersion'");await advance(d.runId);
+ expect(await admission(d.candidateId)).toBeUndefined();expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
+ await db.session.query('UPDATE sourcing_discovery_settings SET qualification_evaluation=$1::jsonb',[JSON.stringify({...currentAttestation(),verifiedFirmPolicyVersion:'verified-firm-v1'})]);await advance(d.runId);
  expect(await admission(d.candidateId)).toBeUndefined();expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
  await db.session.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);await db.session.query('UPDATE sourcing_discovery_settings SET qualification_evaluation=$1::jsonb,owner_user_id=$2',[JSON.stringify(currentAttestation()),seed.alpha.salesperson.userId]);await advance(d.runId);expect(await admission(d.candidateId)).toBeUndefined();await db.session.query("UPDATE workspace_memberships SET status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);
 });
