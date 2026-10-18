@@ -3,7 +3,7 @@ import {qualificationExtraction} from '../src/sourcing/qualificationExtraction.t
 import type {AnthropicMessagesTransport} from '@fss/domain/classification/anthropicClient.ts';
 import type {ClassifierRequest} from '@fss/domain/classification/prompt.ts';
 const source={id:'11111111-1111-4111-8111-111111111111',url:'https://example.test/',contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:'2026-10-05T00:00:00Z',publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'b1',text:'We need maintenance coordination help.'}]};
-const input={observations:[source],modelName:'claude-haiku-4-5',maxInputTokens:5000,maxOutputTokens:2048};
+const input={candidate:{firmName:'Harbor Example Management',locality:'Boston',region:'MA' as const,website:'https://example.test/'},observations:[source],modelName:'claude-haiku-4-5',maxInputTokens:5000,maxOutputTokens:2048};
 it('counts exactly the dispatched request and resolves references locally, never model quotations',async()=>{
  let counted:ClassifierRequest|undefined,sent:ClassifierRequest|undefined;
  const provider=qualificationExtraction({kind:'bedrock',countTokens:async r=>{counted=r;return 120;},create:async r=>{sent=r;return {usage:{input_tokens:120,output_tokens:60},content:[{type:'text',text:JSON.stringify({selections:[{kind:'help_request',observationId:source.id,blockId:'b1'}],openingQuestion:null})}]};}});
@@ -12,6 +12,22 @@ it('counts exactly the dispatched request and resolves references locally, never
  expect(sent).toEqual(counted);expect(sent?.max_tokens).toBe(2048);
  expect(answer).toMatchObject({ok:true,value:{facts:[{kind:'help_request',value:source.blocks[0]!.text,observationId:source.id,blockId:'b1'}]}});
  expect(sent?.system[0]?.text).toContain('untrusted');
+ expect(JSON.parse(String(sent?.messages[0]?.content)).candidate).toEqual(input.candidate);
+});
+it('charges a contradictory or nameless identity refusal without silently dropping the selected evidence',async()=>{
+ for(const text of ['We provide excellent services.','Different Actual Management LLC']){
+  const observation={...source,blocks:[{id:'b1',text}]},before=JSON.stringify(observation);
+  const provider=qualificationExtraction({kind:'bedrock',countTokens:async()=>100,create:async()=>({usage:{input_tokens:100,output_tokens:50},content:[{type:'text',text:JSON.stringify({selections:[{kind:'firm_identity',observationId:source.id,blockId:'b1'}],openingQuestion:null})}]})});
+  expect(await provider.extract({...input,observations:[observation]})).toMatchObject({ok:false,failureCode:'invalid_evidence',costCents:1});
+  expect(JSON.stringify(observation)).toBe(before);
+ }
+});
+it('supplements omitted literal roles from original supplied blocks but does not invent phone facts',async()=>{
+ const observation={...source,blocks:[{id:'b1',text:input.candidate.firmName},{id:'b2',text:'Harbor Example Management manages residential homes in Boston, MA.'}]};
+ const provider=qualificationExtraction({kind:'bedrock',countTokens:async()=>100,create:async()=>({usage:{input_tokens:100,output_tokens:50},content:[{type:'text',text:JSON.stringify({selections:[{kind:'residential_management',observationId:source.id,blockId:'b2'}],openingQuestion:null})}]})});
+ const result=await provider.extract({...input,observations:[observation]});
+ expect(result).toMatchObject({ok:true,value:{facts:[{kind:'residential_management',blockId:'b2'},{kind:'firm_identity',blockId:'b1'},{kind:'service_area',blockId:'b2'}]}});
+ if(result.ok)expect(result.value.facts.some(f=>f.kind==='business_phone')).toBe(false);
 });
 it('rejects unknown references and invented fields after charging the model usage',async()=>{
  for(const selection of [{kind:'help_request',observationId:source.id,blockId:'missing'}, {kind:'help_request',observationId:source.id,blockId:'b1',value:'invented'}]){

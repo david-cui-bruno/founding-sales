@@ -19,7 +19,8 @@ async function pending(){const candidate=await tx(()=>saveCandidate(ctx(),{firmN
 const pages:PageFetchProvider={providerKey:'company_page',fetchPages:async request=>{
  expect(request.urls).toEqual(['https://example.test/']);expect(request.maxPagesPerFirm).toBe(4);expect(await request.shouldContinue?.()).toBe(true);
  return {ok:true,costCents:0,value:{pages:[{url:'https://example.test/',contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode('<p>Example PM manages residential homes in Dallas.</p><p>We need help with maintenance coordination.</p>'),retrievedAt:new Date().toISOString(),firstParty:true}],skipped:{}}};}};
-const extractor=(runId:string):QualificationExtractionProvider=>({providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>300,extract:async _input=>{
+const extractor=(runId:string):QualificationExtractionProvider=>({providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{expect(input.candidate).toEqual({firmName:'Example PM',locality:'Dallas',region:'TX',website:'https://example.test/'});return 300;},extract:async input=>{
+ expect(input.candidate).toEqual({firmName:'Example PM',locality:'Dallas',region:'TX',website:'https://example.test/'});
  const second=await db.appRuntimeSession();expect((await second.query('SELECT state FROM provider_reservations WHERE subject_id=$1',[runId])).rows).toEqual([{state:'calling'}]);
  return {ok:true,costCents:1,value:{facts:[],openingQuestion:null}};
 }});
@@ -29,6 +30,12 @@ it('commits one paid dispatch, preserves evidence, and never repeats a replayed 
  await runQualification(ctx(),ids,{pageFetch:pages,extraction});await runQualification(ctx(),ids,{pageFetch:pages,extraction});
  expect(calls).toBe(1);expect(await readQualification(ctx(),ids)).toMatchObject({status:'review',observations:[{publishedAt:null}]});
  expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations')).rows).toEqual([{state:'settled',settled_cents:1}]);
+});
+it('refuses old prompt runs before fetch, token counting or paid dispatch',async()=>{
+ const ids=await pending();await db.session.query("UPDATE sourcing_qualification_runs SET prompt_version='qualification-growth-v6' WHERE id=$1",[ids.runId]);
+ let calls=0;await runQualification(ctx(),ids,{pageFetch:{...pages,fetchPages:async()=>{calls++;throw new Error('must not fetch');}},extraction:{...extractor(ids.runId),countInputTokens:async()=>{calls++;return 1;}}});
+ expect(calls).toBe(0);expect(await readQualification(ctx(),ids)).toMatchObject({status:'unavailable',reason:'qualification_version_changed'});
+ expect((await db.session.query('SELECT id FROM provider_reservations')).rows).toHaveLength(0);
 });
 it('keeps dispatched timeout spend estimated and expires crashed runs independently',async()=>{
  const ids=await pending();await runQualification(ctx(),ids,{pageFetch:pages,extraction:{...extractor(ids.runId),extract:async()=>{throw new Error('timeout');}}});

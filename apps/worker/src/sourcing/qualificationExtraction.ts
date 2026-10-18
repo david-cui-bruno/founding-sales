@@ -2,6 +2,7 @@ import type {AnthropicMessagesTransport} from '@fss/domain/classification/anthro
 import {routeOfTransport} from '@fss/domain/classification/routedTransport.ts';
 import {providerErrorOf} from '@fss/domain/classification/providerError.ts';
 import {centsOf} from '@fss/domain/research/pricing.ts';
+import {qualificationCitationRoles} from '@fss/domain/sourcing/qualificationCitationRoles.ts';
 import {qualificationRequest,qualificationSelectionSchema,type QualificationExtractionProvider} from '@fss/domain/sourcing/qualificationPrompt.ts';
 export function qualificationExtraction(transport:AnthropicMessagesTransport):QualificationExtractionProvider {
  const route=routeOfTransport(transport);
@@ -30,6 +31,8 @@ export function qualificationExtraction(transport:AnthropicMessagesTransport):Qu
    if(!block||block.text.length>2000)return {ok:false,failureCode:'invalid_evidence',...cost};
    facts.push({...selected,value:block.text});
   }
-  return {ok:true,value:{facts,openingQuestion:parsed.data.openingQuestion},...cost};
+  const roles=qualificationCitationRoles(input.candidate,facts,input.observations);
+  if(!roles.ok)return {ok:false,failureCode:roles.reason,...cost};
+  return {ok:true,value:{facts:roles.facts,openingQuestion:parsed.data.openingQuestion},...cost};
  }};
 }
