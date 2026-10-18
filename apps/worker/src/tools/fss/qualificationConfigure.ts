@@ -1,3 +1,4 @@
+import {VERIFIED_FIRM_POLICY_VERSION} from '@fss/domain/sourcing/verifiedFirmPolicy.ts';
 import {z} from 'zod';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
@@ -24,7 +25,7 @@ export async function qualificationConfigureCommand(input:Pick<AdminInvocation,'
   if(!(await input.session.query('SELECT id FROM workspaces WHERE id=$1',[o['--workspace-id']])).rows.length)return {ok:false,reason:'workspace_unknown',detail:'No workspace has that id.'};
   await lockSendGateForStopFact(ctx);
   if(o['--owner-user-id']&&!(await input.session.query("SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' FOR SHARE",[o['--workspace-id'],o['--owner-user-id']])).rows.length)return {ok:false,reason:'owner_inactive',detail:'Choose an active workspace member.'};
-  const evaluation=enabled?{policyVersion:QUALIFICATION_POLICY_VERSION,promptVersion:QUALIFICATION_PROMPT_VERSION,reportSha256:o['--evaluation-sha256'],reviewedEligible:o['--reviewed-eligible'],falseEligible:0}:null;
+  const evaluation=enabled?{policyVersion:QUALIFICATION_POLICY_VERSION,promptVersion:QUALIFICATION_PROMPT_VERSION,verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:o['--evaluation-sha256'],reviewedEligible:o['--reviewed-eligible'],falseEligible:0}:null;
   await input.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,owner_user_id,qualification_evaluation) VALUES($1,$2,$3,$4::jsonb)
    ON CONFLICT(workspace_id) DO UPDATE SET auto_admission_enabled=$2,owner_user_id=COALESCE($3,sourcing_discovery_settings.owner_user_id),qualification_evaluation=COALESCE($4::jsonb,sourcing_discovery_settings.qualification_evaluation)`,[o['--workspace-id'],enabled,o['--owner-user-id']??null,evaluation?JSON.stringify(evaluation):null]);
   await recordCrmAuditEvent(ctx,{action:'sourcing.qualification_configured',subjectKind:'workspace',subjectId:o['--workspace-id'],detail:{enabled,ownerUserId:o['--owner-user-id']??null,evaluation,launchedBy:launch.launchedBy,taskArn:launch.taskArn}});
