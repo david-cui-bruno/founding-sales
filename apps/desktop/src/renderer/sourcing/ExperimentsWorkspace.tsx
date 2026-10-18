@@ -5,7 +5,7 @@ import {useSessionEpoch} from '../app/drafts.tsx';
 import {Button} from '../ui/button.tsx';
 export interface ExperimentCatalog {policy:TargetingPolicy;templates:{id:string;name:string;subject:string;body:string}[];sequences:{id:string;label:string}[]}
 /** Human-authored suggestions from an attributed report; no automated causal inference. */
-type WorkspaceProps={report:LearningReport;catalog:ExperimentCatalog;ports:Omit<ExperimentProps,'proposal'|'approvedSequences'>};
+type WorkspaceProps={report:LearningReport;catalog:ExperimentCatalog;ports:Omit<ExperimentProps,'proposal'>};
 const keys=new WeakMap<object,number>();let nextKey=0;
 export function ExperimentsWorkspace(props:WorkspaceProps){const epoch=useSessionEpoch();let key=0;if(epoch){key=keys.get(epoch)??++nextKey;keys.set(epoch,key);}return <WorkspaceSession key={key} {...props}/>;}
 function WorkspaceSession({report,catalog,ports}:WorkspaceProps){
@@ -16,6 +16,6 @@ function WorkspaceSession({report,catalog,ports}:WorkspaceProps){
  <label>Experiment kind<select aria-label="Experiment kind" value={kind} onChange={e=>{setKind(e.target.value==='email_wording'?'email_wording':'discovery_query');setBase('');setProposal(null);}}><option value="discovery_query">Discovery query wording</option><option value="email_wording">Email wording</option></select></label>
  <label>Existing approved scope<select aria-label="Existing approved scope" value={base} onChange={e=>{setBase(e.target.value);setProposal(null);}}><option value="">Select a current query or approved template</option>{(kind==='discovery_query'?catalog.policy.queries.map(q=>({id:q.id,label:`${q.locality}: ${q.query}`})):catalog.templates.map(t=>({id:t.id,label:t.name}))).map(x=><option key={x.id} value={x.id}>{x.label}</option>)}</select></label>
  <Button disabled={!base} onClick={prepare}>Prepare suggestion for review</Button>
- {proposal?<Experiments key={`${kind}:${base}`} {...ports} proposal={proposal} approvedSequences={catalog.sequences}/>:null}
+ {proposal?<Experiments key={`${kind}:${base}`} {...ports} proposal={proposal}/>:null}
  </section>;
 }

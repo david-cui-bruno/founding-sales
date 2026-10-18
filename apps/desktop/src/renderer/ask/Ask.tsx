@@ -1,14 +1,10 @@
-import {AskConversation,type AskConversationPorts} from './AskConversation.tsx';
 import {ManualWork,type ManualWorkPorts} from "./ManualWork.tsx";
-import type {AskFollowOnPorts} from "./AskFollowOn.tsx";
 import { useEffect, useRef, useState } from "react";
-import { AskHistory, type AskHistoryPorts } from "./AskHistory.tsx";
-import { AskAnswer, type AskAnswerPorts } from "./AskAnswer.tsx";
 import type { z } from "zod";
 import type { askReadSchema, askResponseSchema } from "@fss/contracts";
 export type AskRead = z.infer<typeof askReadSchema>;
 export type AskResponse = z.infer<typeof askResponseSchema>;
-export interface AskPorts extends Partial<AskConversationPorts>, Partial<AskAnswerPorts>, Partial<AskHistoryPorts>, Partial<AskFollowOnPorts>, Partial<ManualWorkPorts> {
+export interface AskPorts extends Partial<ManualWorkPorts> {
   read(input: AskRead): Promise<AskResponse>;
 }
 const sourceKindLabels = {
@@ -248,8 +244,6 @@ export function Ask({
       className="max-w-5xl space-y-5 p-6 [&_button]:mr-2 [&_button]:mt-2 [&_button]:inline-flex [&_button]:items-center [&_button]:rounded-md [&_button]:border [&_button]:border-border [&_button]:bg-background [&_button]:px-3 [&_button]:py-2 [&_button]:text-sm [&_button:hover]:bg-muted [&_button:disabled]:opacity-50 [&_button:focus-visible]:outline-2 [&_button:focus-visible]:outline-ring [&_p]:text-sm [&_p]:leading-6"
     >
       <h1 className="text-xl font-semibold">Ask</h1>
-      <AskConversation key={`conversation:${key}`} ports={ports} enabled={enabled} initialScope={selected===null?{kind:'business'}:selected.kind==='firm'?{kind:'firm',firmId:selected.recordId,...dateScope}:{kind:'person',personId:selected.recordId,...dateScope}}/>
-      <AskHistory key={key} ports={ports} enabled={enabled} />
       <ManualWork scope={{kind:"history"}} ports={ports} privacyKey={key} enabled={enabled}/>
       <p>
         Retrieve records and original evidence. Conversation coverage may be
@@ -629,7 +623,6 @@ export function Ask({
           >
             Search selected copies
           </button>
-          <AskAnswer key={`${key}:${selected?.recordId}:${copyQuery}:${JSON.stringify(selectedSources)}`} ports={ports} enabled={enabled} question={copyQuery} scope={{sources:selectedSources.map(({workspaceId,sourceId,kind,revision,contentHash})=>({workspaceId,sourceId,kind,revision,contentHash,locator:null}))}} />
         </div>
       )}
       {result?.operation === "passages" && (

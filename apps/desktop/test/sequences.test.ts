@@ -125,10 +125,10 @@ describe('the template panel shows the digest and names what is wrong (11.1, 12.
     expect(screen.templates[0]?.contentHash).toBe(HASH);
   });
 
-  it('refuses to offer approval for a body with no footer, and says so', () => {
+  it('offers approval for a footerless body that can receive the configured sign-off', () => {
     const screen = sequenceScreen(state([template({ approvedAt: null, body: 'Hello,\n\nNo footer.' })]));
-    expect(screen.templates[0]?.footerPresent).toBe(false);
-    expect(screen.templates[0]?.canApprove).toBe(false);
+    expect(screen.templates[0]?.footerPresent).toBe(true);
+    expect(screen.templates[0]?.canApprove).toBe(true);
   });
 
   it('refuses to offer approval for a body carrying an opt-out link, and offers it for the bare word', () => {
