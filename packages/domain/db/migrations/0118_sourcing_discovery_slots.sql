@@ -1,3 +1,4 @@
+-- changes: sourcing_discovery_settings, sourcing_discovery_attempts
 -- Preserve all historical discovery attempts as slot zero. Higher throughput
 -- remains opt-in: existing workspaces continue at one search per UTC day.
 ALTER TABLE sourcing_discovery_settings
