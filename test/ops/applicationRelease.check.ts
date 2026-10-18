@@ -42,6 +42,8 @@ const release = await import(modulePath) as { runRelease(io: IO, env: Record<str
 const execute = promisify(execFile);
 const COMMIT = 'b'.repeat(40), BASE = 'a'.repeat(40), DISPATCH = 'c'.repeat(40);
 const ACCOUNT = '326255650484';
+const subnets = ['subnet-07ae1d846228e9e83', 'subnet-01f53573964548294'];
+const workerSG = 'sg-11111111111111111', apiSG = 'sg-22222222222222222', albSG = 'sg-33333333333333333';
 const registry = `${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com`;
 const cluster = `arn:aws:ecs:us-east-1:${ACCOUNT}:cluster/fss-prod-cluster`;
 const image = (s: string) => `sha256:${s.repeat(64)}`;
@@ -51,7 +53,7 @@ const side = (name: string): 'api' | 'worker' => name === 'api' ? 'api' : 'worke
 const arn = (name: string, revision = 1) => `arn:aws:ecs:us-east-1:${ACCOUNT}:task-definition/fss-prod-${name}:${String(revision)}`;
 const tags = [{ key: 'NamePrefix', value: 'fss-prod' }];
 const secret = (name: string) => `arn:aws:secretsmanager:us-east-1:${ACCOUNT}:secret:fss-prod/${name}-database-aaaaaa`;
-const environment = (): Record<string, string> => ({ GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: DISPATCH, GITHUB_RUN_ID: '33', GITHUB_REPOSITORY: 'david-cui-bruno/founding-sales', AWS_REGION: 'us-east-1', COMMIT, RUN_ID: '11', GATE_RUN_ID: '22', FSS_RELEASE_HOLD: 'false', FSS_PRODUCTION_ORIGIN: 'https://api.usecallie.com' });
+const environment = (): Record<string, string> => ({ GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: DISPATCH, GITHUB_RUN_ID: '33', GITHUB_REPOSITORY: 'david-cui-bruno/founding-sales', AWS_REGION: 'us-east-1', COMMIT, RUN_ID: '11', GATE_RUN_ID: '22', FSS_RELEASE_HOLD: 'false', FSS_PRODUCTION_ORIGIN: 'https://api.usecallie.com', TASK_SUBNETS: [...subnets].reverse().join(','), TASK_SECURITY_GROUP: workerSG });
 function definition(name: string, schema: number): Definition {
   return { taskDefinitionArn: arn(name), family: `fss-prod-${name}`, taskRoleArn: `arn:aws:iam::${ACCOUNT}:role/fss-prod-${name === 'migration' ? name : side(name)}-task`, executionRoleArn: `arn:aws:iam::${ACCOUNT}:role/fss-prod-${name === 'migration' ? name : side(name)}-exec`, containerDefinitions: [{
     name, image: `${registry}/fss-prod-${side(name)}@${OLD[side(name)]}`, entryPoint: name === 'api' || name === 'worker' ? ['node', 'bootstrap.ts'] : ['node', 'apps/worker/src/tools/fss.ts'], command: name === 'operations' ? ['verify'] : name === 'migration' ? ['migrate'] : [],
@@ -61,7 +63,15 @@ function definition(name: string, schema: number): Definition {
   }] };
 }
 function service(name: string): Service {
-  return { serviceName: `fss-prod-${name}`, status: 'ACTIVE', taskDefinition: arn(name), desiredCount: name === 'api' ? 2 : 1, runningCount: name === 'api' ? 2 : 1, pendingCount: 0, deployments: [{ taskDefinition: arn(name), rolloutState: 'COMPLETED' }], deploymentConfiguration: { deploymentCircuitBreaker: { enable: true, rollback: true } }, networkConfiguration: { awsvpcConfiguration: { subnets: ['subnet-owned'], securityGroups: ['sg-owned'], assignPublicIp: 'ENABLED' } } };
+  return { serviceName: `fss-prod-${name}`, status: 'ACTIVE', taskDefinition: arn(name), desiredCount: name === 'api' ? 2 : 1, runningCount: name === 'api' ? 2 : 1, pendingCount: 0, deployments: [{ taskDefinition: arn(name), rolloutState: 'COMPLETED' }], deploymentConfiguration: { deploymentCircuitBreaker: { enable: true, rollback: true } }, networkConfiguration: { awsvpcConfiguration: { subnets: [...subnets], securityGroups: [name === 'api' ? apiSG : workerSG], assignPublicIp: 'ENABLED' } } };
+}
+function securityGroups() {
+  const permission = { IpProtocol: 'tcp', FromPort: 8080, ToPort: 8080, IpRanges: [] as { CidrIp: string }[], Ipv6Ranges: [] as { CidrIpv6: string }[], PrefixListIds: [] as { PrefixListId: string }[], UserIdGroupPairs: [{ GroupId: albSG, UserId: ACCOUNT }] };
+  return [
+    { GroupId: workerSG, GroupName: 'fss-prod-worker-task', VpcId: 'vpc-0123456789abcdef0', IpPermissions: [] as typeof permission[] },
+    { GroupId: apiSG, GroupName: 'fss-prod-api-task', VpcId: 'vpc-0123456789abcdef0', IpPermissions: [permission] },
+    { GroupId: albSG, GroupName: 'fss-prod-alb', VpcId: 'vpc-0123456789abcdef0', IpPermissions: [] as typeof permission[] },
+  ];
 }
 interface Options {
   from?: number; to?: number; fault?: string;
@@ -74,6 +84,7 @@ function harness(options: Options = {}) {
   const definitions: Record<string, { taskDefinition: Definition; tags: typeof tags }> = {};
   for (const name of ['api', 'worker', 'migration', 'operations']) definitions[arn(name)] = { taskDefinition: definition(name, from), tags };
   const services = { api: service('api'), worker: service('worker') };
+  const groups = securityGroups(), env = environment();
   const tasks = new Map<string, { definition: Definition; answer: unknown; exitCode: number; owner: string }>();
   const artifacts = { schema: 'fss.image-digests.v1', commit: COMMIT, workflowRunId: '11', workflowRunAttempt: '1', images: Object.fromEntries(['api', 'worker'].map(name => [name, { repository: `fss-rh-${name}`, tag: `ci-${COMMIT}`, digest: NEW[side(name)], schemaRange: { minimum: to, maximum: to } }])) };
   const run = (workflow: string, id: number) => ({ id, path: `.github/workflows/${workflow}.yml`, head_sha: COMMIT, event: 'push', head_branch: 'main', head_repository: { full_name: 'david-cui-bruno/founding-sales' }, status: 'completed', conclusion: 'success', run_attempt: 1, updated_at: '2026-10-18T17:50:00Z' });
@@ -110,7 +121,7 @@ function harness(options: Options = {}) {
       if (kind === 'rds' && action === 'describe-db-instance-automated-backups') return JSON.stringify({ DBInstanceAutomatedBackups: [{ DBInstanceArn: `arn:aws:rds:us-east-1:${ACCOUNT}:db:fss-prod-pg`, DbiResourceId: options.fault === 'pitr-drift' ? 'db-foreign' : 'db-owned', DBInstanceIdentifier: 'fss-prod-pg', Status: 'active', ...(options.fault === 'pitr-missing' ? {} : { RestoreWindow: { EarliestTime: new Date(options.fault === 'pitr-oldest' ? clock + 86400000 : clock - 86400000).toISOString(), LatestTime: new Date(options.fault === 'pitr' ? clock - 86400000 : options.fault === 'pitr-oldest' ? clock + 172800000 : clock + 1000).toISOString() } }) }] });
       if (kind === 'rds') return JSON.stringify({ DBInstances: [{ DBInstanceArn: `arn:aws:rds:us-east-1:${ACCOUNT}:db:fss-prod-pg`, DbiResourceId: 'db-owned', DBName: 'founder_sales', DBInstanceStatus: 'available', Endpoint: { Address: 'private.invalid' }, BackupRetentionPeriod: 35 }] });
       if (kind === 'secretsmanager') return JSON.stringify({ VersionIdsToStages: { current: ['AWSCURRENT'] } });
-      if (kind === 'ec2') return JSON.stringify({ SecurityGroups: [{ IpPermissions: [] }] });
+      if (kind === 'ec2') return JSON.stringify({ SecurityGroups: groups.filter(group => args.slice(args.indexOf('--group-ids') + 1, args.indexOf('--output')).includes(group.GroupId)) });
       if (kind === 'ecr') {
         if (action === 'get-login-password') return 'not-a-real-token';
         const which = arg(args, '--repository-name').endsWith('api') ? 'api' : 'worker';
@@ -193,8 +204,60 @@ function harness(options: Options = {}) {
       throw new Error('unexpected_cloud_action');
     },
   };
-  return { io, env: environment(), calls, states, definitions, services, artifacts, schema: () => schema, run: () => release.runRelease(io, environment()) };
+  return { io, env, groups, calls, states, definitions, services, artifacts, schema: () => schema, run: () => release.runRelease(io, env) };
 }
+
+describe('independent service network contracts', () => {
+  it.each([118, 117])('preserves exact worker network for every one-off from schema %s', async from => {
+    const h = harness({ from });
+    h.services.api.networkConfiguration.awsvpcConfiguration.subnets.reverse();
+    const network = structuredClone(h.services.worker.networkConfiguration.awsvpcConfiguration);
+    expect(await h.run()).toMatchObject({ outcome: 'completed' });
+    const launches = h.calls.filter(call => call.args[1] === 'run-task');
+    expect(launches.length).toBeGreaterThan(0);
+    for (const { args } of launches) expect(JSON.parse(args[args.indexOf('--network-configuration') + 1]!)).toEqual({ awsvpcConfiguration: network });
+    expect(h.calls.filter(call => call.args[1] === 'update-service').every(call => !call.args.includes('--network-configuration'))).toBe(true);
+  });
+  const mutations: [string, (h: ReturnType<typeof harness>) => void][] = [
+    ...(['api', 'worker'] as const).flatMap(name => [
+      [`${name} empty subnets`, (h: ReturnType<typeof harness>) => { h.services[name].networkConfiguration.awsvpcConfiguration.subnets = []; }],
+      [`${name} malformed subnets`, (h: ReturnType<typeof harness>) => { h.services[name].networkConfiguration.awsvpcConfiguration.subnets[0] = 'subnet-bad'; }],
+      [`${name} duplicate subnets`, (h: ReturnType<typeof harness>) => { h.services[name].networkConfiguration.awsvpcConfiguration.subnets = [subnets[0]!, subnets[0]!]; }],
+      [`${name} mismatched subnets`, (h: ReturnType<typeof harness>) => { h.services[name].networkConfiguration.awsvpcConfiguration.subnets[0] = 'subnet-00000000000000000'; }],
+      [`${name} empty groups`, (h: ReturnType<typeof harness>) => { h.services[name].networkConfiguration.awsvpcConfiguration.securityGroups = []; }],
+      [`${name} extra groups`, (h: ReturnType<typeof harness>) => { h.services[name].networkConfiguration.awsvpcConfiguration.securityGroups.push(albSG); }],
+      [`${name} malformed group`, (h: ReturnType<typeof harness>) => { h.services[name].networkConfiguration.awsvpcConfiguration.securityGroups = ['sg-bad']; }],
+      [`${name} private networking`, (h: ReturnType<typeof harness>) => { h.services[name].networkConfiguration.awsvpcConfiguration.assignPublicIp = 'DISABLED'; }],
+    ] as [string, (h: ReturnType<typeof harness>) => void][]),
+    ['worker wrong group', h => { h.services.worker.networkConfiguration.awsvpcConfiguration.securityGroups = [apiSG]; }],
+    ['API worker group', h => { h.services.api.networkConfiguration.awsvpcConfiguration.securityGroups = [workerSG]; }],
+    ['missing expected subnets', h => { delete h.env['TASK_SUBNETS']; }],
+    ['malformed expected subnets', h => { h.env['TASK_SUBNETS'] = 'subnet-bad'; }],
+    ['missing expected worker group', h => { delete h.env['TASK_SECURITY_GROUP']; }],
+    ['mismatched expected worker group', h => { h.env['TASK_SECURITY_GROUP'] = albSG; }],
+    ['wrong worker identity', h => { h.groups[0]!.GroupName = 'fss-prod-alb'; }],
+    ['wrong API identity', h => { h.groups[1]!.GroupName = 'fss-prod-alb'; }],
+    ['missing worker readback', h => { h.groups.shift(); }],
+    ['worker open ingress', h => { h.groups[0]!.IpPermissions.push(structuredClone(h.groups[1]!.IpPermissions[0]!)); }],
+    ['API VPC mismatch', h => { h.groups[1]!.VpcId = 'vpc-00000000000000000'; }],
+    ['API empty ingress', h => { h.groups[1]!.IpPermissions = []; }],
+    ['API extra ingress', h => { h.groups[1]!.IpPermissions.push(structuredClone(h.groups[1]!.IpPermissions[0]!)); }],
+    ['API open IPv4', h => { h.groups[1]!.IpPermissions[0]!.IpRanges.push({ CidrIp: '0.0.0.0/0' }); }],
+    ['API open IPv6', h => { h.groups[1]!.IpPermissions[0]!.Ipv6Ranges.push({ CidrIpv6: '::/0' }); }],
+    ['API prefix ingress', h => { h.groups[1]!.IpPermissions[0]!.PrefixListIds.push({ PrefixListId: 'pl-00000000' }); }],
+    ['API wrong port', h => { h.groups[1]!.IpPermissions[0]!.ToPort = 8081; }],
+    ['API wrong protocol', h => { h.groups[1]!.IpPermissions[0]!.IpProtocol = '-1'; }],
+    ['API wrong source', h => { h.groups[1]!.IpPermissions[0]!.UserIdGroupPairs[0]!.GroupId = workerSG; }],
+    ['API foreign source owner', h => { h.groups[1]!.IpPermissions[0]!.UserIdGroupPairs[0]!.UserId = '000000000000'; }],
+    ['ALB VPC mismatch', h => { h.groups[2]!.VpcId = 'vpc-00000000000000000'; }],
+    ['ALB wrong identity', h => { h.groups[2]!.GroupName = 'foreign-alb'; }],
+  ];
+  it.each(mutations)('refuses %s before definitions or writes', async (_name, mutate) => {
+    const h = harness(); mutate(h);
+    expect(await h.run()).toMatchObject({ outcome: 'refused', writesStarted: false });
+    expect(h.calls.some(call => ['describe-task-definition', 'register-task-definition', 'run-task', 'update-service'].includes(call.args[1] ?? ''))).toBe(false);
+  });
+});
 
 function applicationSummaryScript(): string {
   const step = readRepositoryFile('.github/workflows/greenfield-deploy.yml').split('      - name: Actual application phase and recovery boundary\n')[1]?.split('\n  smoke:\n')[0];
@@ -384,11 +447,12 @@ describe('trusted local always-finalizer after genuine process interruption', ()
       if (boundary !== 'preflight') expect(interrupted.currentTaskOwner).toMatch(/^fss-app-33-/u);
       if (boundary === 'migrate') { expect(interrupted.observedSchema).toBe('unknown'); expect(interrupted.currentTaskArn).toContain('/owned'); }
       const calls = h.calls.length;
-      await execute('bash', ['-c', applicationSummaryScript()], { cwd: repositoryPath(''), env: { PATH: process.env['PATH'], RUNNER_TEMP: directory, GITHUB_STEP_SUMMARY: join(directory, 'summary') } });
+      const { stdout } = await execute('bash', ['-c', applicationSummaryScript()], { cwd: repositoryPath(''), env: { PATH: process.env['PATH'], RUNNER_TEMP: directory, GITHUB_STEP_SUMMARY: join(directory, 'summary') } });
       const finalized = JSON.parse(readFileSync(statusFile, 'utf8')) as Status;
       expect(finalized).toEqual({ ...interrupted, outcome: boundary === 'preflight' ? 'refused' : 'repair-required', reason: 'release_interrupted' });
       expect(h.calls).toHaveLength(calls); expect(statSync(statusFile).mode & 0o777).toBe(0o600);
       expect(readFileSync(join(directory, 'summary'), 'utf8')).toContain('release_interrupted');
+      expect(stdout).toBe(readFileSync(join(directory, 'summary'), 'utf8'));
       if (boundary === 'migrate') { expect(h.services.api.desiredCount).toBe(0); expect(h.services.api.deploymentConfiguration.deploymentCircuitBreaker.rollback).toBe(false); }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
@@ -398,9 +462,14 @@ describe('trusted local always-finalizer after genuine process interruption', ()
       mkdirSync(join(directory, 'application'));
       const h = harness(outcome === 'repair-required' ? { from: 117, fault: 'migration' } : outcome === 'refused' ? { fault: 'main' } : {});
       const result = await h.run(); expect(result.outcome).toBe(outcome);
-      const statusFile = join(directory, 'application/status.json'); writeFileSync(statusFile, JSON.stringify(result), { mode: 0o600 });
-      await execute('bash', ['-c', applicationSummaryScript()], { cwd: repositoryPath(''), env: { PATH: process.env['PATH'], RUNNER_TEMP: directory, GITHUB_STEP_SUMMARY: join(directory, 'summary') } });
-      expect(JSON.parse(readFileSync(statusFile, 'utf8'))).toEqual(result);
+      const statusFile = join(directory, 'application/status.json');
+      const privateStatus = { ...result, privateBody: 'private-business-body', credentials: 'private-credential-value' };
+      writeFileSync(statusFile, JSON.stringify(privateStatus), { mode: 0o600 });
+      const { stdout } = await execute('bash', ['-c', applicationSummaryScript()], { cwd: repositoryPath(''), env: { PATH: process.env['PATH'], RUNNER_TEMP: directory, GITHUB_STEP_SUMMARY: join(directory, 'summary') } });
+      expect(JSON.parse(readFileSync(statusFile, 'utf8'))).toEqual(privateStatus);
+      expect(stdout).toBe(readFileSync(join(directory, 'summary'), 'utf8'));
+      expect(JSON.parse(stdout)).toMatchObject({ phase: result.phase, outcome, reason: result.reason ?? null, observedSchema: result.observedSchema });
+      expect(stdout).not.toMatch(/private-business-body|private-credential-value|privateBody|credentials/u);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });
