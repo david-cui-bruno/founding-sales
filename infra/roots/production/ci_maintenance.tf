@@ -82,3 +82,46 @@ output "ci_maintenance_role_arn" {
   description = "Separately reviewed production-maintenance environment identity; FSS_PRODUCTION_MAINTENANCE_ROLE_ARN."
   value       = aws_iam_role.ci_maintenance.arn
 }
+
+# Opt-in application replacement. Root alone provisions this role/environment secret.
+# Reuse the bounded action/resource policy, not the app-only role's identity or trust.
+locals {
+  ci_application_policy = {
+    Version = "2012-10-17"
+    Statement = concat(local.ci_maintenance_policy.Statement, [{
+      Sid       = "ReadProductionRestoreWindowOnly"
+      Effect    = "Allow"
+      Action    = ["rds:DescribeDBInstanceAutomatedBackups"]
+      Resource  = ["*"]
+      Condition = { StringEquals = { "aws:RequestedRegion" = local.aws_region } }
+    }])
+  }
+  ci_application_trust_policy = {
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Principal = { Federated = local.ci_deploy_oidc_provider }
+      Condition = { StringEquals = {
+        "${local.ci_deploy_oidc_issuer}:aud" = "sts.amazonaws.com"
+        "${local.ci_deploy_oidc_issuer}:sub" = "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-release-review"
+      } }
+    }]
+  }
+}
+resource "aws_iam_role" "ci_application" {
+  name                 = "${local.name_prefix}-ci-application"
+  description          = "Protected application release only. Existing resources, no state, secret values, IAM writes or DB restore."
+  assume_role_policy   = jsonencode(local.ci_application_trust_policy)
+  max_session_duration = 7200
+  tags                 = { Name = "${local.name_prefix}-ci-application", NamePrefix = local.name_prefix }
+}
+resource "aws_iam_role_policy" "ci_application" {
+  name   = "${local.name_prefix}-ci-application-scope"
+  role   = aws_iam_role.ci_application.id
+  policy = jsonencode(local.ci_application_policy)
+}
+output "ci_application_role_arn" {
+  description = "Narrow protected replacement identity for FSS_PRODUCTION_APPLICATION_ROLE_ARN."
+  value       = aws_iam_role.ci_application.arn
+}

@@ -7,76 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { ciGateReleaseRecordSchema } from '@fss/contracts';
 import { readRepositoryFile, repositoryPath } from './support/repository.ts';
 
-/**
- * Lane g91: an app-only merge to main is deployed to production by CI, and a schema,
- * infrastructure, release-script or workflow change is not (David, 25 September 2026:
- * "I'm a startup, I want to move fast"), as reworked after the review of PR 233.
- *
- * Three things are driven end to end rather than read: the workflow's inline
- * protected-path guard, in a real git history, against a stub AWS CLI that holds
- * production's images and their tags; `infra/scripts/deploy.sh ci`, against the same stub
- * holding each service, each task definition and the rehearsal repositories, and against
- * stub `gh`s for its `gates` and `download`; and `infra/scripts/deploy.sh current`. The
- * workflow itself is held to P6's shape (27 September 2026): five jobs, one gates job, the
- * record's put in the deploy job and its read-back in a job of its own after the smoke, no
- * push-time window, and the schema ranges read from the digests artifact, within a line
- * budget.
- *
- * **A gate decision gone stale before a write (reviews of PRs 273 and 278).** Every
- * production write — the put, each image's promotion write (`images.check.ts`), each
- * registration and each service update — reads the gate again, held to the run the gates
- * job chose. A stub `gh` whose answer changes between two reads (a newer run of the push, a
- * re-run gone red) stops the put, stops the worker before its registration, and stops the
- * API before its registration or, once registered, before its update, deregistering it.
- *
- * **A revision deregistered on a read that cannot prove it.** A failed update-service call
- * and an accepted one whose answer was lost look alike in one read — a snapshot of the
- * service still on the previous revision, with the right name and ARN — so nothing on that
- * path is deregistered at all. The stub fails the call in five ways, and each leaves the
- * revision ACTIVE. A revision goes only on ECS's own rejection: the circuit breaker rolled
- * the service back and the answer lists exactly one deployment of that revision, FAILED.
- * A rollback whose answer does not list it, one that lists a second deployment of it in
- * any other state — under its ARN or under the bare family:revision, which is the same
- * revision — and one whose deployments cannot all be read — an entry that is not an
- * object, or whose taskDefinition or rolloutState is missing or empty — all leave it.
- *
- * **A put that launches twice.** The task runner relaunches after an image-pull failure;
- * the CI put must launch exactly one task and fail on a pull failure, even when the
- * environment asks for three attempts.
- *
- * **A read-back that rebuilds.** The read-back job is handed the exact record the deploy
- * job put (`release_record_base64`) and puts those bytes, asking GitHub for nothing but
- * the gate; a record for another images run, gate run or digest is refused before the put.
- *
- * ## The vacuous-pass traps, named
- *
- * **A path check over the wrong range.** The range starts at the commit production's
- * images were built from, not at the merge, and it is read commit by commit: a history
- * with an infrastructure commit between production and an app commit answers manual,
- * and so does one where a workflow was added and removed again, where an infrastructure
- * file was moved, and where a merge commit itself edited infrastructure. The same
- * history from one commit later answers pass, so "manual" cannot be the only answer.
- *
- * **A failed rollout that reads as a deploy, and a stray revision Terraform would
- * adopt.** The stub rolls a failing service back as the circuit breaker does; the deploy
- * must fail, never touch the API after a failed worker, and deregister the revision it
- * registered. A registration whose stored document differs in more than the image is
- * deregistered before any service names it.
- *
- * **An application log in the workflow log.** The stub's log lines carry a secret-shaped
- * field and a raw line; only `event`, `reason` and `code` may be printed.
- *
- * **A record that arrives after the workers that need it (26 September 2026).** The
- * worker admits a send only under a stored record naming its digest, so the put is the
- * deploy job's first write. `record --before-rollout` runs against a stub production
- * still on the previous digests, with a stub `gh` for the gate and `record.sh from-ci`; the
- * record the operations task was handed is decoded and parsed with the contract the put
- * applies, and nothing else is written. `record --after-rollout`, the read-back, fails
- * on a production not running the digests and on a put that had to create the record.
- * A refused `RunTask`, a put the tool refused and a gate that is not green on main now each fail
- * with no record stored, so "the record step passes" cannot be the only answer. The
- * hand path's put (`record.sh put`) is run in `record.check.ts`.
- */
+// Legacy deploy behavior remains exercised below. Replacement contracts live in applicationRelease.check.ts.
 
 const SCRIPT = repositoryPath('infra/scripts/deploy.sh');
 const WORKFLOW = '.github/workflows/greenfield-deploy.yml';
@@ -1555,7 +1486,7 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     expect(readBackBody).toContain('printf \'%s\' "$RELEASE_RECORD" | base64 -d > "$RUNNER_TEMP/release-record.json"');
     expect(readBackBody).toContain('infra/scripts/deploy.sh ci record --after-rollout --release-record "$RUNNER_TEMP/release-record.json"');
     expect(job(DEPLOY_WORKFLOW, 'smoke')).toContain('needs: [gates, deploy]\n');
-    expect(job(DEPLOY_WORKFLOW, 'summary')).toContain('needs: [gates, deploy, maintenance, review-prepare, reviewed, smoke, read-back]');
+    expect(job(DEPLOY_WORKFLOW, 'summary')).toContain('needs: [gates, deploy, maintenance, review-prepare, reviewed, application, smoke, read-back]');
   });
 });
 
@@ -2039,11 +1970,11 @@ describe('the deploy workflow: one gates job, reviewed maintenance identity, rea
     // One bounded workflow owns application, routine maintenance and reviewed saved
     // plans. Credential scope remains confined to the writer/readback/planner jobs.
     // Future upgrades resolve the observed live source directly; no variable copy.
-    expect(workflow.split('\n').length).toBeLessThanOrEqual(680);
+    expect(workflow.split('\n').length).toBeLessThanOrEqual(800);
     const jobs = [...workflow.slice(workflow.indexOf('\njobs:\n')).matchAll(/^ {2}([a-z-]+):\n/gmu)].map(match => match[1]);
-    expect(jobs).toEqual(['gates', 'deploy', 'maintenance', 'review-prepare', 'reviewed', 'smoke', 'read-back', 'summary']);
+    expect(jobs).toEqual(['gates', 'deploy', 'maintenance', 'review-prepare', 'reviewed', 'application', 'smoke', 'read-back', 'summary']);
     for (const name of ['gates', 'smoke', 'summary']) expect(job(workflow, name), name).not.toContain('id-token: write');
-    for (const name of ['deploy', 'read-back', 'maintenance', 'review-prepare', 'reviewed']) expect(job(workflow, name), name).toContain('id-token: write');
+    for (const name of ['deploy', 'read-back', 'maintenance', 'review-prepare', 'reviewed', 'application']) expect(job(workflow, name), name).toContain('id-token: write');
     // The push-time window and the old entry points are gone; the ranges come from the artifact.
     for (const gone of ['run_started', 'run-started', 'imagePushedAt', 'ci-deploy-app.sh', 'release-promote.sh', "import('./packages/domain/db/schemaRange.ts')", 'ranges:']) {
       expect(workflow, gone).not.toContain(gone);

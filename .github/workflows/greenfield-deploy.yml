@@ -27,10 +27,10 @@ on:
         required: true
         type: string
       release_mode:
-        description: 'Automatic app/routine delivery, read-only reviewed-plan preparation, or one approved exact-plan application'
+        description: 'Legacy automatic/reviewed delivery, or opt-in protected application replacement'
         type: choice
         default: automatic
-        options: [automatic, review_prepare, reviewed]
+        options: [automatic, review_prepare, reviewed, application]
       reviewed_plan_run_id:
         description: 'Successful review_prepare run containing the exact encrypted production plan'
         type: string
@@ -506,6 +506,72 @@ jobs:
             echo 'Reviewed release stopped at prerequisites; no application outcome claimed.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  application:
+    name: Opt-in protected application release (legacy remains default)
+    needs: gates
+    if: github.event_name == 'workflow_dispatch' && inputs.release_mode == 'application' && needs.gates.outputs.decision == 'pass'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    environment: production-release-review
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      COMMIT: ${{ needs.gates.outputs.commit }}
+      RUN_ID: ${{ needs.gates.outputs.run_id }}
+      RUN_ATTEMPT: ${{ needs.gates.outputs.run_attempt }}
+      GATE_RUN_ID: ${{ needs.gates.outputs.gate_run_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - name: Validate immutable candidate before credentials
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ]
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
+            [ -z "${!name:-}" ] || { echo "::error::ambient cloud credentials refused"; exit 1; }
+          done
+          infra/scripts/deploy.sh ci download --run-id "$RUN_ID" --commit "$COMMIT" --out "$RUNNER_TEMP/application-images.json"
+          mkdir -p "$RUNNER_TEMP/application-upgrade"
+          gh run download "$GATE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "upgrade-evidence-$COMMIT" --dir "$RUNNER_TEMP/application-upgrade" || \
+            echo 'No upgrade artifact; execution refuses any schema-changing release without exact evidence.'
+      - name: Assume narrow protected application identity
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.FSS_PRODUCTION_APPLICATION_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: fss-prod-application-${{ github.run_id }}
+          role-duration-seconds: 7200
+      - name: Execute only this approved application release
+        env:
+          # Process-local only. Automatic/maintenance/Google admission remains held.
+          FSS_RELEASE_HOLD: 'false'
+        run: |
+          set -euo pipefail
+          umask 077
+          node infra/scripts/application-release.mjs --images "$RUNNER_TEMP/application-images.json" \
+            --upgrade-binding "$RUNNER_TEMP/application-upgrade/upgrade-binding.json" \
+            --upgrade-evidence "$RUNNER_TEMP/application-upgrade/upgrade-evidence-$COMMIT.txt" \
+            --status "$RUNNER_TEMP/application/status.json"
+      - name: Actual application phase and recovery boundary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/application/status.json" ]; then
+            # Trusted local-only fallback for cancelled/timed-out execution. Never replay or clean a remote write.
+            node infra/scripts/application-release.mjs --finalize --status "$RUNNER_TEMP/application/status.json"
+            jq '{phase,outcome,writesStarted,migrationStarted,fromSchema,targetSchema,observedSchema,recoveryPoint,reason,rollback,currentTaskArn,currentTaskOwner,lastStoppedTaskArn,lastTaskExitCode,temporaryReaderDefinition,previousDefinitions,candidateDefinitions}' "$RUNNER_TEMP/application/status.json" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Replacement stopped before execution. No replacement writes claimed.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   smoke:
     name: Production smoke, with no credential
     needs: [gates, deploy]
@@ -600,7 +666,7 @@ jobs:
 
   summary:
     name: One line
-    needs: [gates, deploy, maintenance, review-prepare, reviewed, smoke, read-back]
+    needs: [gates, deploy, maintenance, review-prepare, reviewed, application, smoke, read-back]
     if: always() && needs.gates.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -616,6 +682,7 @@ jobs:
           MAINTENANCE_RESULT: ${{ needs.maintenance.result }}
           PLAN_RESULT: ${{ needs.review-prepare.result }}
           REVIEWED_RESULT: ${{ needs.reviewed.result }}
+          APPLICATION_RESULT: ${{ needs.application.result }}
           RELEASE_MODE: ${{ inputs.release_mode }}
           RELEASE_HOLD: ${{ vars.FSS_RELEASE_HOLD || 'true' }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
@@ -638,6 +705,9 @@ jobs:
           elif [ "$RELEASE_MODE" = reviewed ]; then
             line="Reviewed production release $REVIEWED_RESULT; its job reports actual phase, schema and repair status."
             [ "$REVIEWED_RESULT" = success ] || level=error
+          elif [ "$RELEASE_MODE" = application ]; then
+            line="Protected application replacement $APPLICATION_RESULT; its job reports actual phase/schema and repair status. Legacy remains available."
+            [ "$APPLICATION_RESULT" = success ] || level=error
           elif [ "$RELEASE_HOLD" = true ]; then
             line="Release held: source checks may finish, but production was not authorized to deploy."
           elif [ "$DECISION" = maintenance ]; then

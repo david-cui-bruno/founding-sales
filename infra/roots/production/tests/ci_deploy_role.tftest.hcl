@@ -429,3 +429,36 @@ run "planner_refreshes_only_observed_database_tags_and_digest_environment" {
     error_message = "Refresh additions must be only exact RDS group tag reads and existing Lambda key Decrypt bound to its service and function context."
   }
 }
+
+run "application_replacement_is_narrow_and_preserves_legacy_roles" {
+  command = plan
+  assert {
+    condition = (
+      aws_iam_role.ci_application.name == "fss-prod-ci-application"
+      && aws_iam_role.ci_application.max_session_duration == 7200
+      && jsondecode(aws_iam_role.ci_application.assume_role_policy).Statement == [{
+        Effect    = "Allow", Action = "sts:AssumeRoleWithWebIdentity",
+        Principal = { Federated = "arn:aws:iam::326255650484:oidc-provider/token.actions.githubusercontent.com" },
+        Condition = { StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-release-review"
+        } }
+      }]
+      && jsondecode(aws_iam_role_policy.ci_application.policy).Statement == concat(jsondecode(aws_iam_role_policy.ci_maintenance.policy).Statement, [{
+        Sid       = "ReadProductionRestoreWindowOnly", Effect = "Allow", Action = ["rds:DescribeDBInstanceAutomatedBackups"], Resource = ["*"],
+        Condition = { StringEquals = { "aws:RequestedRegion" = "us-east-1" } }
+      }])
+      && !strcontains(aws_iam_role_policy.ci_maintenance.policy, "DescribeDBInstanceAutomatedBackups")
+      && aws_iam_role.ci_deploy.name == "fss-prod-ci-deploy"
+      && aws_iam_role.ci_maintenance.name == "fss-prod-ci-maintenance"
+    )
+    error_message = "Replacement uses exactly the existing bounded migration/deploy actions with a separate exact protected subject, not a widened app-only or legacy identity."
+  }
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.ci_application.policy).Statement :
+      alltrue([for action in statement.Action : action == "iam:PassRole" || !can(regex("^(s3:|kms:|rds:(Restore|Create|Delete|Modify)|secretsmanager:(GetSecretValue|Put)|iam:|ssm:)", action))])
+    ])
+    error_message = "No state, secret values, DB restore/snapshot, IAM administration or remote command authority is part of application delivery."
+  }
+}
