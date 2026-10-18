@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { crmInputTokenPriceMicrosSchema, crmTokenPriceMicrosSchema } from './crmPricing.ts';
+import { crmOwnerScopeVersionSchema, crmForwardCaptureScopeSchema, crmExtractionSourceKindsSchema, hasConsistentCrmExtractionSourceScope } from './crmOwnerScope.ts';
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const name = z.string().trim().min(1).max(200);
 const revision = z.number().int().positive().max(2147483647);
@@ -13,9 +14,9 @@ const prices = { dailyCeilingCents:z.number().int().min(1).max(100000), monthlyC
 const route = { endpointId:z.string().min(1).max(100),modelVersion:name,accessGrantVersion:name,dataHandlingVersion:name };
 export const crmCapabilityConfigurationSchema = z.discriminatedUnion('capability',[
  z.strictObject({...common,...mailbox,capability:z.literal('metadata_review'),disclosureVersion:name,disclosureSha256:hash,scopeDays:z.literal(90)}),
- z.strictObject({...common,...mailbox,capability:z.literal('mail_capture'),policyRevision:revision,disclosureVersion:name,disclosureSha256:hash,grantReceipt:name.nullable(),providerPolicyReceipt:name.nullable(),evaluationReceipt:name.nullable(),releaseReceipt:name.nullable(),captureVersion:name}),
+ z.strictObject({...common,...mailbox,capability:z.literal('mail_capture'),policyRevision:revision,disclosureVersion:name,disclosureSha256:hash,grantReceipt:name.nullable(),providerPolicyReceipt:name.nullable(),evaluationReceipt:name.nullable(),releaseReceipt:name.nullable(),captureVersion:name,forwardScope:crmForwardCaptureScopeSchema.nullable().optional()}),
  z.strictObject({...common,...mailbox,capability:z.literal('mail_backfill'),scopeFingerprint:hash,allocationFingerprint:hash}),
- z.strictObject({...common,...route,...prices,capability:z.literal('crm_extraction'),processorVersion:name}),
+ z.strictObject({...common,...route,...prices,capability:z.literal('crm_extraction'),processorVersion:name,allowedSourceKinds:crmExtractionSourceKindsSchema.optional(),mailCaptureOwnerApprovalId:z.uuid().nullable().optional()}).refine(hasConsistentCrmExtractionSourceScope,{message:'Extraction source kinds and capture approval must be paired'}),
  z.strictObject({...common,...route,...prices,capability:z.literal('ask_answer'),purpose:z.enum(['answer','embedding']),agentLimits:askAgentLimitsSchema.optional(),embeddingDimensions:z.union([z.literal(256),z.literal(512),z.literal(1024)]).optional(),evaluationFingerprint:hash,processorVersion:name,retrievalVersion:name,answerVersion:name,supportVersion:name,chunkerVersion:name}),
 ]);
 export type CrmCapabilityConfiguration=z.infer<typeof crmCapabilityConfigurationSchema>;
@@ -31,10 +32,13 @@ const command={commandId:commandIdSchema,clientVersion:semanticVersionSchema};
 const target={capability:crmCapabilitySchema,purpose:z.enum(['answer','embedding']).optional(),mailboxId:z.uuid().optional(),expectedRevision:z.number().int().nonnegative()};
 export const crmOwnerApprovalSchema=z.strictObject({consentAcknowledged:z.literal(true),qualityTier:z.enum(['acquisition','provisional_owner','representative']),criticalControlsPassed:z.literal(true).optional(),modelIntegrationVerified:z.literal(true).optional(),reviewedEvaluationReference:name.optional(),limitations:z.array(z.enum(['representative_quality_unverified','limited_business_examples','vector_quality_unverified'])).max(3).default([])});
 export type CrmOwnerApproval=z.infer<typeof crmOwnerApprovalSchema>;
-export const crmCapabilityActivateSchema=z.strictObject({...command,...target,approval:crmOwnerApprovalSchema});
+// Runtime requires scopeVersion for new capture/extraction activation. Optional
+// parsing preserves explicit legacy refusal and unchanged metadata activation.
+export const crmCapabilityActivateSchema=z.strictObject({...command,...target,approval:crmOwnerApprovalSchema,scopeVersion:crmOwnerScopeVersionSchema.optional()});
 export const crmCapabilityDisableSchema=z.strictObject({...command,...target});
-export const crmCapabilityReadSchema=z.strictObject({capability:crmCapabilitySchema,purpose:z.enum(['answer','embedding']).optional(),mailboxId:z.uuid().optional()});
-export const crmCapabilityReadResponseSchema=z.strictObject({capability:crmCapabilitySchema,mailboxId:z.uuid().nullable(),configured:z.boolean(),revision:z.number().int().nonnegative(),enabled:z.boolean(),ready:z.boolean(),reason:z.string().max(100),authorityReceiptId:z.uuid().nullable(),ownerApprovalId:z.uuid().nullable(),qualityTier:z.enum(['acquisition','provisional_owner','representative']).nullable(),limitations:z.array(z.string().max(100)),proposedRevision:revision,proposedConfigurationFingerprint:hash.nullable(),configuration:crmCapabilityConfigurationSchema.nullable()});
+export const crmCapabilityReadSchema=z.strictObject({capability:crmCapabilitySchema,purpose:z.enum(['answer','embedding']).optional(),mailboxId:z.uuid().optional(),scopeVersion:crmOwnerScopeVersionSchema.optional()});
+// Routes project exact old outer/nested field sets unless scopeVersion was requested.
+export const crmCapabilityReadResponseSchema=z.strictObject({capability:crmCapabilitySchema,mailboxId:z.uuid().nullable(),configured:z.boolean(),revision:z.number().int().nonnegative(),enabled:z.boolean(),ready:z.boolean(),reason:z.string().max(100),authorityReceiptId:z.uuid().nullable(),ownerApprovalId:z.uuid().nullable(),qualityTier:z.enum(['acquisition','provisional_owner','representative']).nullable(),limitations:z.array(z.string().max(100)),proposedRevision:revision,proposedConfigurationFingerprint:hash.nullable(),configuration:crmCapabilityConfigurationSchema.nullable(),scopeVersion:crmOwnerScopeVersionSchema.optional()});
 export const crmMailCaptureControlsSaveSchema=z.strictObject({...command,mailboxId:z.uuid(),expectedRevision:z.number().int().nonnegative(),expectedGeneration:revision,expectedAccountBinding:hash,policyRevision:revision,disclosureVersion:name,disclosureSha256:hash,grantReceipt:name.nullable().optional(),providerPolicyReceipt:name.nullable().optional(),evaluationReceipt:name.nullable().optional(),releaseReceipt:name.nullable().optional()});
 
 export const CRM_MAIL_CAPTURE_CONSENT=Object.freeze({version:'crm-mail-body-acquisition-v1',sha256:'b013f8734b3dd70852d65271c5ac01cd1f8934d62e90417ea1e7c5652d46c3a6',text:'Callie may retain approved business email bodies, including incoming messages and original Sent replies, under the selected owner/account policy. Personal and excluded mail is not automatically copied. Disconnect stops acquisition but preserves approved copies; explicit deletion erases copied content and dependent evidence without deleting Gmail originals. Historical import is bounded and reports incomplete coverage. Hosted AI requires separate purpose, data handling, evaluation and budget approval. This consent does not authorize sending.'});
