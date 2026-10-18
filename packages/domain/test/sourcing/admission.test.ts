@@ -39,6 +39,17 @@ it('admits one firm-level route idempotently without creating deals, contacts or
  expect((await db.session.query('SELECT assigned_user_id FROM firms WHERE id=$1',[firmId])).rows[0]).toEqual({assigned_user_id:seeded.alpha.admin.userId});
  for(const table of ['contacts','opportunities','sequence_enrollments'])expect((await db.session.query(`SELECT id FROM ${table} WHERE workspace_id=$1 AND firm_id=$2`,[seeded.alpha.workspaceId,firmId])).rows).toHaveLength(0);
  expect((await db.session.query('SELECT contact_id,e164 FROM phone_routes WHERE id=$1',[result.value.routeId])).rows[0]).toEqual({contact_id:null,e164:'+12145550100'});
+ expect((await db.session.query("SELECT id FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,firmId])).rows).toHaveLength(1);
+});
+it('hands an existing manually admitted firm with no research to the normal research queue exactly once',async()=>{
+ const {createFirm}=await import('../../crm/firms.ts');
+ const input=await qualified('Existing Research PM');
+ const made=await tx(()=>createFirm(ctx(),{name:'Existing Research PM',website:'https://existingresearchpm.example.test/',locality:'Dallas',regionCode:'TX',assignedUserId:seeded.alpha.admin.userId}));
+ if(!made.ok)throw new Error(made.reason);
+ await db.session.query("DELETE FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,made.value.id]);
+ const result=await tx(()=>admitCandidate(ctx(),input));expect(result).toMatchObject({ok:true,value:{firmId:made.value.id}});
+ expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true,value:{alreadyAdmitted:true}});
+ expect((await db.session.query("SELECT payload FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,made.value.id])).rows).toEqual([{payload:{firmId:made.value.id,revision:1,trigger:'user_request',requestedByUserId:seeded.alpha.admin.userId}}]);
 });
 async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v4',promptVersion:'qualification-growth-v6',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
 it('requires an explicit owner for automatic admission in a workspace with multiple sellers',async()=>{
