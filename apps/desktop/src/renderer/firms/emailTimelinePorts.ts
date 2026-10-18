@@ -8,15 +8,6 @@ function api() {
 }
 
 export const emailTimelinePorts: EmailTimelinePorts = {
-  bookingConversation:{
-    policy:async()=>{const result=await api().read('meetings.bookingPolicy',{});return result.view?{revision:result.view.policy.revision,status:result.view.policy.setting.status}:null;},
-    request:async input=>api().command('meetings.bookingConversationRequest',input),
-    read:async input=>api().read('meetings.bookingConversationRead',input),
-    event:async input=>api().command('meetings.bookingConversationEvent',input),
-    messageRequest:async input=>api().command('meetings.bookingMessageRequest',input),
-    messageRead:async input=>api().read('meetings.bookingMessageRead',input),
-  },
-  booking:{request:async input=>api().command('crm.bookingInterpretationRequest',input),read:async input=>api().read('crm.bookingInterpretationRead',input)},
   list: async (input) => api().read("crm.businessMailList", input),
   read: async (input) => api().read("crm.businessMailRead", input),
   readV2: async (input) => api().read("crm.businessMailReadV2", input),

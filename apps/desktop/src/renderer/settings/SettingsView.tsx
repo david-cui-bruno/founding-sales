@@ -2,8 +2,6 @@ import { CrmCapabilitiesSection } from './CrmCapabilitiesSection.tsx';
 import {LinkedinPostingPolicy} from '../social/LinkedinPostingPolicy.tsx';
 import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
 import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
-import {BookingPolicySettings} from './BookingPolicySettings.tsx';
-import {bookingPolicySettingsPorts} from './bookingPolicySettingsPorts.ts';
 import {OutreachSection} from '../outreach/OutreachSection.tsx';
 import { useEffect, useRef, type JSX } from 'react';
 import type { MailboxState } from '../../shared/contract.ts';
@@ -161,7 +159,6 @@ export function SettingsView({
                 />
               )}
               <BookingCapacity key={`booking:${identity}:${String(generation)}`} ports={bookingCapacityPorts} />
-              {isAdmin?<BookingPolicySettings key={`booking-policy:${identity}:${String(generation)}`} ports={bookingPolicySettingsPorts} mayMutate={identity!==null&&state?.mayMutate===true}/>:null}
               <Administration view={view} actions={admin.actions} busy={admin.busy} />
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />
