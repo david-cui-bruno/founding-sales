@@ -1,7 +1,5 @@
 import {BOOKING_BUSINESS_RULES,DEFAULT_BOOKING_POLICY} from '@fss/contracts';
 import {mailImportHealth} from './mailImportFixture.ts';
-import {LINKEDIN_POSTING_RULES} from '@fss/contracts';
-const postingPolicy={accounts:[],revision:1,state:'saved',enabled:false,technicallyReady:false,policy:{accountId:'11111111-1111-4111-8111-111111111111',accountRevision:1,accountExternalId:'controlled-owner',generation:null,rules:LINKEDIN_POSTING_RULES},rules:LINKEDIN_POSTING_RULES,holds:['runtime_acceptance_pending','publication_not_enabled'],history:[],candidates:[]};
 /**
  * Bodies every bridge accepts, for the checks that need a bridge to be *holding*
  * something (1.0.13).
@@ -250,11 +248,6 @@ const followUpPreviewBody = {
 };
 
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
-  '/social/linkedin-posting-policy/read':postingPolicy,
-  '/social/linkedin-posting-policy/save':{status:'accepted',replayed:false,result:postingPolicy},
-  '/social/linkedin-posting-policy/disable':{status:'accepted',replayed:false,result:{...postingPolicy,revision:2,state:'disabled',holds:['policy_disabled']}},
-  '/social/linkedin-posting-policy/revoke':{status:'accepted',replayed:false,result:{...postingPolicy,revision:2,state:'revoked',holds:['policy_revoked']}},
-  '/social/linkedin-posting-policy/bind-candidate':{status:'accepted',replayed:false,result:{postId:'11111111-1111-4111-8111-111111111111',postRevision:1,policyRevision:1,current:true,publicationReady:false}},
  '/meetings/booking-conversation':{conversationId:FIXTURE_IDS.message,interpretationRequestId:FIXTURE_IDS.message,policyRevision:1,origin:'standing_policy',enabled:false,state:'stopped',reason:'live_held',outcome:null,handoff:null,booking:null,change:null,nudgeCount:0,nudgesStoppedAt:null,lastReplyAt:null,explicitNoShowAt:null,noShowRebookingUsed:false,limitations:[]},
  '/meetings/booking-conversation/event':{status:'accepted',replayed:false,result:{conversationId:FIXTURE_IDS.message,interpretationRequestId:FIXTURE_IDS.message,policyRevision:1,origin:'standing_policy',enabled:false,state:'stopped',reason:'live_held',outcome:null,handoff:null,booking:null,change:null,nudgeCount:0,nudgesStoppedAt:null,lastReplyAt:null,explicitNoShowAt:null,noShowRebookingUsed:false,limitations:[]}},
  '/meetings/booking-messages':{messageId:FIXTURE_IDS.message,conversationId:FIXTURE_IDS.message,kind:'approved_link',state:'held',reason:'live_held',outboundMessageId:null,providerMessageId:null,sentAt:null,limitations:[]},
