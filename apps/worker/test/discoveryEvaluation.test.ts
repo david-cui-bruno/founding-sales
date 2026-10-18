@@ -3,6 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {evaluateDiscovery} from '../src/sourcing/evaluateDiscovery.ts';
+import {main} from '../src/sourcing/evaluateMain.ts';
 const dirs:string[]=[];async function directory(){const d=await mkdtemp(join(tmpdir(),'callie-discovery-'));dirs.push(d);return d;}
 afterEach(async()=>{for(const d of dirs.splice(0))await rm(d,{recursive:true,force:true});});
 const queries=[{id:'test-v1',query:'Dallas maintenance PM',cohort:'fit_only'}];
@@ -39,4 +40,19 @@ it('unexpected provider usage halts this ledger until operator review',async()=>
  const dir=await directory();const discover=vi.fn(async()=>({ok:false as const,code:'usage_unexpected' as const}));
  await evaluateDiscovery({directory:dir,provider:{providerKey:'test',discover},queries,now:()=>now});
  expect((await evaluateDiscovery({directory:dir,provider:{providerKey:'test',discover},queries,now:()=> '2026-10-06T12:00:00.000Z'})).stopReason).toBe('usage_review_required');expect(discover).toHaveBeenCalledTimes(1);
+});
+it('refuses paid CLI evaluation before credentials, ledger access or network, including a configured key',async()=>{
+ const stderr=vi.spyOn(process.stderr,'write').mockReturnValue(true),stdout=vi.spyOn(process.stdout,'write').mockReturnValue(true),network=vi.spyOn(globalThis,'fetch').mockRejectedValue(new Error('must not call'));
+ const environment=new Proxy({}, {get(){throw new Error('must not inspect credentials');}});
+ try{
+  expect(await main(['--run'],environment)).toBe(2);
+  expect(await main(['--run'],{FSS_TAVILY_API_KEY:'fixture-key-not-a-secret'})).toBe(2);
+  expect(stderr).toHaveBeenCalledWith(expect.stringContaining('global account ledger'));
+  expect(network).not.toHaveBeenCalled();expect(stdout).not.toHaveBeenCalled();
+ }finally{stderr.mockRestore();stdout.mockRestore();network.mockRestore();}
+});
+it('keeps dry-run planning without activation and reports shared 10/day and 375/month limits',async()=>{
+ const output:string[]=[],stdout=vi.spyOn(process.stdout,'write').mockImplementation(value=>{output.push(String(value));return true;});
+ try{expect(await main(['--dry-run'],{})).toBe(0);expect(JSON.parse(output.join(''))).toMatchObject({mode:'dry_run',maximumBatchCredits:9,dailyAttemptLimit:10,monthlyAttemptLimit:375});}
+ finally{stdout.mockRestore();}
 });

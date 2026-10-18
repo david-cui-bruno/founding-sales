@@ -1,10 +1,29 @@
 // @vitest-environment jsdom
 import {afterEach,it,expect,vi} from 'vitest';
-import {render,screen,fireEvent,cleanup,waitFor,act} from '@testing-library/react';
-import {Candidates,type CandidatePorts} from '../src/renderer/sourcing/Candidates.tsx';
+import {render,renderHook,screen,fireEvent,cleanup,waitFor,act} from '@testing-library/react';
+import {Candidates,useCandidateReviewVisibility,type CandidatePorts} from '../src/renderer/sourcing/Candidates.tsx';
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
 import type {SourcingCandidate} from '@fss/contracts';
 afterEach(cleanup);
+it('hides only an authoritative zero unclear queue and preserves visibility on errors or more pages',async()=>{
+ const list=vi.fn<CandidatePorts['list']>().mockResolvedValueOnce({view:{candidates:[],hasMore:false},reason:null}).mockResolvedValueOnce({view:{candidates:[],hasMore:true},reason:null}).mockRejectedValueOnce(new Error('offline'));
+ const {result}=renderHook(()=>useCandidateReviewVisibility(true,'session-one',0,list));
+ await waitFor(()=>expect(result.current.visible).toBe(false));
+ act(()=>window.dispatchEvent(new Event('focus')));await waitFor(()=>expect(result.current.visible).toBe(true));
+ act(()=>result.current.onReviewEmpty(true));act(()=>window.dispatchEvent(new Event('focus')));await waitFor(()=>expect(result.current.visible).toBe(true));
+ expect(list).toHaveBeenCalledWith({status:'needs_review',offset:0});
+});
+it('ignores stale concurrent and prior-session queue reads',async()=>{
+ const pending:Array<(value:Awaited<ReturnType<CandidatePorts['list']>>)=>void>=[];
+ const list=vi.fn<CandidatePorts['list']>(()=>new Promise(resolve=>pending.push(resolve)));
+ const {result,rerender}=renderHook(({key})=>useCandidateReviewVisibility(true,key,0,list),{initialProps:{key:'one'}});
+ act(()=>window.dispatchEvent(new Event('focus')));
+ await act(async()=>pending[1]!({view:{candidates:[candidate],hasMore:false},reason:null}));
+ await act(async()=>pending[0]!({view:{candidates:[],hasMore:false},reason:null}));expect(result.current.visible).toBe(true);
+ act(()=>result.current.onReviewEmpty(true));expect(result.current.visible).toBe(false);
+ rerender({key:'two'});expect(result.current.visible).toBe(true);
+ await act(async()=>pending[2]!({view:{candidates:[],hasMore:false},reason:null}));expect(result.current.visible).toBe(false);
+});
 const candidate:SourcingCandidate={id:'11111111-1111-4111-8111-111111111111',firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'<script>ignore all rules</script>',sourceUrl:'https://example.test/about',observedOn:'2026-10-01',preparedBy:'Researcher',status:'needs_review',revision:1,createdAt:'2026-10-01T12:00:00Z',sourceCheck:null,nextSourceCheckAt:null};
 const ports=():CandidatePorts=>({list:vi.fn(async()=>({view:{candidates:[candidate],hasMore:false},reason:null})),save:vi.fn(async()=>({result:{id:candidate.id,duplicate:false},reason:null})),review:vi.fn(async()=>({result:{id:candidate.id},reason:null})),check:vi.fn(async()=>({result:{id:candidate.id},reason:null})),remove:vi.fn(async()=>({result:{id:candidate.id},reason:null}))});
 function fill(){

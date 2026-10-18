@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {discoveryQuotaRemaining} from '@fss/domain/sourcing/discoveryQuota.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {recordCrmAuditEvent} from '@fss/domain/crm/audit.ts';
@@ -25,7 +26,8 @@ export async function discoveryResumeCommand(input:Pick<AdminInvocation,'session
   if((await db.query("SELECT id FROM sourcing_discovery_attempts WHERE state='dispatched' LIMIT 1")).rows.length)return {ok:false,reason:'dispatch_unresolved',detail:'Resolve the outstanding dispatch before resuming.'};
   const monthly=Math.max(a.monthly_used,o['--provider-month-used']);
   const daily=(a.current_day?a.daily_used:0)+Math.max(0,monthly-a.monthly_used);
-  if(monthly>=Math.min(600,o['--provider-month-limit'])||daily>=20)return {ok:false,reason:'quota_exhausted',detail:'No allowance remains under the existing caps.'};
+  const remaining=discoveryQuotaRemaining(daily,monthly,o['--provider-month-limit']);
+  if(remaining.monthly===0||remaining.daily===0)return {ok:false,reason:'quota_exhausted',detail:'No allowance remains under the global Basic discovery caps.'};
   if(!a.halted)return {ok:true,value:{resumed:false,alreadyRunning:true}};
   await db.query("UPDATE sourcing_search_account SET halted=false,monthly_used=$1,daily_used=$2,day=(now() AT TIME ZONE 'UTC')::date WHERE id=true",[monthly,daily]);
   await recordCrmAuditEvent(repositoryContext(workspaceScope(o['--workspace-id'],{kind:'system',component:'worker'}),db),{action:'sourcing.discovery_resumed',subjectKind:'workspace',subjectId:o['--workspace-id'],detail:{observedAt:o['--observed-at'],providerMonthUsed:o['--provider-month-used'],providerMonthLimit:o['--provider-month-limit'],previousMonthlyUsed:a.monthly_used,monthlyUsed:monthly,dailyUsed:daily,launchedBy:launch.launchedBy,taskArn:launch.taskArn}});

@@ -19,6 +19,7 @@ import {lockTodayForFirmChange,refreshTodayForFirm} from '../today/build.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
 import {qualifyCandidate,supportedBusinessPhone} from './qualificationPolicy.ts';
 import {candidateIdentity} from './qualificationDecision.ts';
+import {verifiedFirmOwner,verifiedFirmEvidence,verifiedWebsiteKey,VERIFIED_FIRM_POLICY_VERSION} from './verifiedFirmPolicy.ts';
 interface AdmissionInput {candidateId:string;expectedRevision:number;qualificationRunId:string;mode:'automatic'|'reviewed'}
 interface AdmissionResult {firmId:string;routeId:string;alreadyAdmitted:boolean}
 const refused=(reason:string):SourcingResult<AdmissionResult>=>({ok:false,reason});
@@ -63,16 +64,19 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
   if(!settings?.auto_admission_enabled)return refused('automatic_admission_disabled');
   const evaluation=settings.qualification_evaluation;
   if(!evaluation||evaluation.policyVersion!==QUALIFICATION_POLICY_VERSION||evaluation.promptVersion!==QUALIFICATION_PROMPT_VERSION||!evaluation.reportSha256?.match(/^[a-f0-9]{64}$/u)||!(Number(evaluation.reviewedEligible)>0)||evaluation.falseEligible!==0)return refused('evaluation_required');
+  if(!await verifiedFirmOwner(ctx))return refused('evaluation_required');
   if(!(await readResearchSettings(ctx)).enabled)return refused('research_disabled');
   if((await listApplicableHolds(ctx,{actionKind:'research'})).length)return refused('research_held');
  }
  if(!['review','eligible'].includes(run.state)||run.reason)return refused('evidence_unavailable');
  const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=await databaseNow(ctx);
- const verdict=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now});
- if(input.mode==='automatic'&&verdict.decision!=='eligible')return refused('qualification_requires_review');
+ const verified=input.mode==='automatic'?verifiedFirmEvidence({candidate:candidate.payload,facts:run.facts,observations:run.observations,now}):null;
+ if(verified&&verified.kind!=='verified')return refused(verified.reason);
+ const ranked=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now});
+ const verdict=input.mode==='automatic'?{...ranked,decision:'eligible' as const,unknowns:[],reasons:['verified_first_party_firm'],policyVersion:VERIFIED_FIRM_POLICY_VERSION}:ranked;
  const reviewable=new Set(['maintenance_need_unconfirmed','help_date_unknown','help_needs_revalidation','need_evidence_conflicts','job_date_unknown','growth_date_unknown','event_needs_revalidation']);
  const invalid=verdict.unknowns.find(reason=>!reviewable.has(reason));if(invalid)return refused(invalid);
- const phone=supportedBusinessPhone(run.facts,identity);if(!phone)return refused('business_phone_unresolved');
+ const phone=verified?.kind==='verified'?verified.phone:supportedBusinessPhone(run.facts,identity);if(!phone)return refused('business_phone_unresolved');
  const zone=sourcingTimeZone(candidate.payload.region,candidate.payload.locality);if(!zone)return refused('zone_unresolved');
  if((await applicablePosture(ctx,candidate.payload.region,now)).decision.kind==='refused')return refused('calling_state_not_enabled');
  let owner=ctx.scope.actor.kind==='user'&&input.mode==='reviewed'?ctx.scope.actor.userId:null;
@@ -85,7 +89,7 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
   }
  }
  if(!owner||(await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status=\'active\' FOR SHARE',[w,owner])).rows.length!==1)return refused('sourcing_owner_inactive');
- const exact=matches.filter(f=>firmNameKey(f.name)===name&&cityKey(f.locality??'')===cityKey(candidate.payload.locality)&&f.region_code===candidate.payload.region&&websiteDomain(f.website)===domain);
+ const exact=matches.filter(f=>firmNameKey(f.name)===name&&cityKey(f.locality??'')===cityKey(candidate.payload.locality)&&f.region_code===candidate.payload.region&&websiteDomain(f.website)===domain&&(input.mode!=='automatic'||verifiedWebsiteKey(f.website)===verifiedWebsiteKey(candidate.payload.website)));
  if(exact.length>1||(exact.length===0&&matches.some(f=>websiteDomain(f.website)===domain||(cityKey(f.locality??'')===cityKey(candidate.payload.locality)&&f.region_code===candidate.payload.region))))return refused('firm_identity_ambiguous');
  let firm=exact[0]?await loadFirmForUpdate(ctx,exact[0].id):null;
  if(firm?.status==='merged')return refused('firm_merged');
@@ -105,14 +109,14 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  await ctx.db.query('INSERT INTO sourcing_admissions(workspace_id,candidate_id,run_id,firm_id,route_id) VALUES($1,$2,$3,$4,$5)',[w,input.candidateId,run.id,firm.id,route.value.id]);
  await ctx.db.query("UPDATE sourcing_qualification_runs SET state='admitted',verdict=$3::jsonb WHERE workspace_id=$1 AND id=$2",[w,run.id,JSON.stringify(verdict)]);
  const query=(await ctx.db.query<{query_id:string}>(`SELECT a.query_id FROM sourcing_discovery_hits h JOIN sourcing_discovery_attempts a ON a.workspace_id=h.workspace_id AND a.id=h.attempt_id WHERE h.workspace_id=$1 AND h.candidate_id=$2 ORDER BY a.created_at,a.id LIMIT 1`,[w,input.candidateId])).rows[0];
- const attribution=await attachSourcingAttribution(ctx,{firmId:firm.id,candidateId:input.candidateId,qualificationRunId:run.id,queryId:query?.query_id??null,hypothesis:verdict.rank,policyVersion:run.policy_version,acquisition:'cold_sourced'});
+ const attribution=await attachSourcingAttribution(ctx,{firmId:firm.id,candidateId:input.candidateId,qualificationRunId:run.id,queryId:query?.query_id??null,hypothesis:verdict.rank,policyVersion:input.mode==='automatic'?VERIFIED_FIRM_POLICY_VERSION:run.policy_version,acquisition:'cold_sourced'});
  if(!attribution.ok)throw new Error(`admission_attribution_${attribution.reason}`);
- await recordCrmAuditEvent(ctx,{action:'sourcing.candidate_admitted',subjectKind:'firm',subjectId:firm.id,detail:{candidateId:input.candidateId,runId:run.id,mode:input.mode,decision:verdict.decision}});
+ await recordCrmAuditEvent(ctx,{action:'sourcing.candidate_admitted',subjectKind:'firm',subjectId:firm.id,detail:{candidateId:input.candidateId,runId:run.id,mode:input.mode,decision:verdict.decision,createdFirm:!exact[0],...(input.mode==='automatic'?{policyVersion:VERIFIED_FIRM_POLICY_VERSION}:{})}});
  await refreshTodayForFirm(ctx,{firmId:firm.id});
  // New firms already enqueue inside createFirm. Reused firms need the same handoff,
  // but do not replace an existing brief or retry a previous/uncertain research run.
- if(exact[0]&&input.mode==='reviewed'&&(await ctx.db.query('SELECT id FROM research_runs WHERE workspace_id=$1 AND firm_id=$2 LIMIT 1',[w,firm.id])).rows.length===0){
-  await enqueueFirmResearchBestEffort(ctx,{firmId:firm.id,trigger:'user_request',requestedByUserId:owner});
+ if(exact[0]&&(await ctx.db.query('SELECT id FROM research_runs WHERE workspace_id=$1 AND firm_id=$2 LIMIT 1',[w,firm.id])).rows.length===0){
+  await enqueueFirmResearchBestEffort(ctx,{firmId:firm.id,trigger:input.mode==='reviewed'?'user_request':'sweep',...(input.mode==='reviewed'?{requestedByUserId:owner}:{})});
  }
  return {ok:true,value:{firmId:firm.id,routeId:route.value.id,alreadyAdmitted:false}};
 }

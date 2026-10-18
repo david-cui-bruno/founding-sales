@@ -45,3 +45,14 @@ it('revisits deferred work in a later hour without retrying any dispatched searc
  expect(first).toHaveLength(1);expect(later).toHaveLength(1);
  expect(first[0]!.idempotencyKey).not.toBe(later[0]!.idempotencyKey);
 });
+it('opts into bounded slots explicitly while preserving historical usage, holds and omitted settings',async()=>{
+ const workspace=(await db.session.query<{workspace_id:string}>('SELECT workspace_id FROM sourcing_discovery_settings LIMIT 1')).rows[0]!.workspace_id;
+ const launch={launchedBy:'arn:aws:iam::123456789012:user/operator',taskArn:'arn:aws:ecs:us-east-1:123456789012:task/cluster/abc'};
+ const options={'--workspace-id':workspace,'--enabled':'true','--prior-day':'2026-10-05','--prior-day-used':'0','--prior-month-used':'0'};
+ await db.session.query('UPDATE sourcing_search_account SET halted=true,daily_used=20,monthly_used=600');
+ expect(await discoveryConfigureCommand({session:db.session,launch,options:{...options,'--searches-per-day':'11'}})).toMatchObject({ok:false,reason:'invalid_options'});
+ expect(await discoveryConfigureCommand({session:db.session,launch,options:{...options,'--searches-per-day':'10'}})).toMatchObject({ok:true});
+ expect(await discoveryConfigureCommand({session:db.session,launch,options})).toMatchObject({ok:true});
+ expect((await db.session.query('SELECT searches_per_day FROM sourcing_discovery_settings WHERE workspace_id=$1',[workspace])).rows[0]).toEqual({searches_per_day:10});
+ expect((await db.session.query('SELECT halted,daily_used,monthly_used FROM sourcing_search_account')).rows[0]).toEqual({halted:true,daily_used:20,monthly_used:600});
+});

@@ -4,6 +4,9 @@ import type { JobChunk, JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
+import {lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
+import {lockTodayForFirmChange,refreshTodayForFirm} from '@fss/domain/today/build.ts';
+import {VERIFIED_FIRM_POLICY_VERSION} from '@fss/domain/sourcing/verifiedFirmPolicy.ts';
 import { enqueueFirmResearch } from '@fss/domain/research/enqueue.ts';
 import {
   beginFirmResearch,
@@ -257,6 +260,9 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
       // Chunk 3, from the cursor. Every outcome, including a failure, is recorded on the
       // run row inside this transaction; nothing here throws on one, and a run that is
       // no longer `running` is left exactly as it is.
+      const autoCreated=(await input.session.query(`SELECT 1 FROM audit_events WHERE workspace_id=$1 AND subject_id=$2 AND action='sourcing.candidate_admitted' AND detail->>'policyVersion'=$3 AND detail->>'createdFirm'='true' LIMIT 1`,[input.scope.workspaceId,payload.firmId,VERIFIED_FIRM_POLICY_VERSION])).rows.length>0;
+      // Acquire stop/Today locks before research takes firm locks, not afterwards.
+      if(autoCreated){await lockSendGateForStopFact(context);await lockTodayForFirmChange(context);}
       await finishFirmResearch(context, {
         runId,
         firmId: payload.firmId,
@@ -267,6 +273,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
         pageFetch: options.pageFetch,
         ...(options.extraction === undefined ? {} : { extraction: options.extraction }),
       });
+      if(autoCreated)await refreshTodayForFirm(context,{firmId:payload.firmId});
       return { progress: { ...carried }, done: true };
     },
   };

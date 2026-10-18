@@ -8,6 +8,8 @@ import {
   type TodaySourceKind,
 } from './types.ts';
 import type { TodayItemKind } from '@fss/contracts';
+import {readCallBrief} from '../research/brief.ts';
+import {VERIFIED_FIRM_POLICY_VERSION} from '../sourcing/verifiedFirmPolicy.ts';
 
 /**
  * Building one workspace business date's list (specification 8.2, Appendix C).
@@ -225,8 +227,8 @@ export function newFirmSource(): TodaySource {
     name: 'new-firms',
     sourceKinds: ['firm'],
     find: async (context, input) => {
-      const { rows } = await context.db.query<{ id: string; created_at: Date }>(
-        `SELECT f.id, f.created_at
+      const { rows } = await context.db.query<{ id: string; created_at: Date; requires_brief:boolean }>(
+        `SELECT f.id, f.created_at,EXISTS(SELECT 1 FROM audit_events a WHERE a.workspace_id=f.workspace_id AND a.subject_id=f.id::text AND a.action='sourcing.candidate_admitted' AND a.detail->>'policyVersion'=$3 AND a.detail->>'createdFirm'='true') AS requires_brief
            FROM firms f
            LEFT JOIN opportunities o
              ON o.workspace_id = f.workspace_id AND o.firm_id = f.id AND o.status = 'open'
@@ -252,9 +254,19 @@ export function newFirmSource(): TodaySource {
             )
             AND ($2::uuid IS NULL OR f.id = $2::uuid)
           ORDER BY f.created_at, f.id`,
-        [context.scope.workspaceId, input.firmId ?? null],
+        [context.scope.workspaceId, input.firmId ?? null,VERIFIED_FIRM_POLICY_VERSION],
       );
-      return rows.map(row => ({
+      const ready:typeof rows=[];
+      for(const row of rows){
+        if(row.requires_brief){
+          const brief=await readCallBrief(context,row.id);
+          // A completed run without useful sourced text is pending, not an empty
+          // call-list card. Manual/historical firms keep their existing behavior.
+          if(!brief||!brief.whyFit.some(quote=>quote.firstParty&&quote.quote.trim().length>0))continue;
+        }
+        ready.push(row);
+      }
+      return ready.map(row => ({
         firmId: row.id,
         itemKey: `firm:${row.id}`,
         kind: 'new_firm' as const,

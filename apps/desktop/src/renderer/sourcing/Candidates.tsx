@@ -1,7 +1,7 @@
 import {Learning} from './Learning.tsx';
 import {navigate} from '../routes.ts';
 import {QualificationPanel} from './QualificationPanel.tsx';
-import {useCallback,useEffect,useRef,type JSX} from 'react';
+import {useCallback,useEffect,useRef,useState,type JSX} from 'react';
 import {candidateInputSchema,type SourcingCandidate} from '@fss/contracts';
 import type {OperationInput,OperationOutput} from '../../shared/operations.ts';
 import {operations} from '../app/bridges.ts';
@@ -20,13 +20,31 @@ function api(){const bridge=operations();if(!bridge)throw new Error('unavailable
 const defaultPorts:CandidatePorts={check:async input=>api().command('sourcing.check',input),list:async input=>api().read('sourcing.list',input),save:async input=>api().command('sourcing.save',input),review:async input=>api().command('sourcing.review',input),remove:async input=>api().command('sourcing.delete',input)};
 const signals:Record<SourcingCandidate['signal'],string>={explicit_help:'Asking for help',responsibility_overlap:'Manager handles maintenance too',coordination_hiring:'Hiring a coordinator',manual_handoff:'Manual handoffs',growth:'Expansion',tool_gap:'Gap in their current tools',fit_only:'Potential fit · need unknown'};
 const statuses:Record<SourcingCandidate['status'],string>={needs_review:'Needs review',kept:'Kept for research',dismissed:'Dismissed'};
-export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePorts;enabled?:boolean}):JSX.Element {
+/** Visibility follows the server count, never a local eligibility decision. */
+export function useCandidateReviewVisibility(enabled:boolean,privacyKey:string,sourceVersion:unknown,list:CandidatePorts['list']=defaultPorts.list):{visible:boolean;onReviewEmpty:(empty:boolean)=>void} {
+ const [answer,setAnswer]=useState<{key:string;hidden:boolean}>({key:'',hidden:false});
+ const onReviewEmpty=useCallback((empty:boolean)=>setAnswer({key:privacyKey,hidden:empty}),[privacyKey]);
+ useEffect(()=>{
+  let current=true,sequence=0;
+  const load=async()=>{
+   const request=++sequence;
+   try{const result=await list({status:'needs_review',offset:0});if(current&&request===sequence)onReviewEmpty(result.view!==null&&result.view.candidates.length===0&&!result.view.hasMore);}
+   catch{if(current&&request===sequence)onReviewEmpty(false);}
+  };
+  if(enabled){void load();window.addEventListener('focus',load);}
+  return ()=>{current=false;window.removeEventListener('focus',load);};
+ },[enabled,privacyKey,sourceVersion,onReviewEmpty,list]);
+ return {visible:answer.key!==privacyKey||!answer.hidden,onReviewEmpty};
+}
+export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty}:{ports?:CandidatePorts;enabled?:boolean;onReviewEmpty?:((empty:boolean)=>void)|undefined}):JSX.Element {
   const {memory:m,touch}=useCandidateMemory(),portsRef=useRef(ports);portsRef.current=ports;
+  const countRef=useRef(onReviewEmpty);countRef.current=onReviewEmpty;
   const load=useCallback(async()=>{
     const generation=++m.generation,filter={...m.filter};m.loading=true;m.failed=false;touch();
     try {
       const answer=await portsRef.current.list(filter);if(generation!==m.generation)return;
       m.view=answer.view;m.failed=answer.view===null;
+      if(filter.status==='needs_review')countRef.current?.(answer.view!==null&&answer.view.candidates.length===0&&!answer.view.hasMore);
     } catch {if(generation===m.generation){m.view=null;m.failed=true;}}
     finally {if(generation===m.generation){m.loading=false;touch();}}
   },[m,touch]);
@@ -66,7 +84,7 @@ export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePo
   const tabs=<div className="flex gap-2" aria-label="Sourcing views"><Button variant={m.tab==='candidates'?'outline':'quiet'} onClick={()=>{m.tab='candidates';touch();}}>Candidates</Button><Button variant={m.tab==='results'?'outline':'quiet'} onClick={()=>{m.tab='results';touch();}}>Results</Button></div>;
   if(m.tab==='results')return <section className="space-y-5">{tabs}<Learning enabled={enabled}/></section>;
   return <section className="space-y-5" aria-label="Candidate review">{tabs}
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Research prospects before adding them to your call queue. Keeping starts weekly source checks while research is enabled.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Unclear firm identities remain here for review. Research never contacts anyone.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>
     {m.view?.discovery?<p className="text-sm text-muted-foreground">Discovery {m.view.discovery.halted?'needs attention':m.view.discovery.enabled?'enabled':'paused'} · next scheduled {m.view.discovery.nextRunAt.slice(0,10)} · {m.view.discovery.dailyRemaining} searches left today, {m.view.discovery.monthlyRemaining} this month. Last result: {m.view.discovery.lastResult??'not run'}. Research holds and settings also apply.</p>:null}
     {m.view?.qualificationWaitReason?<p role="status" className="text-sm text-muted-foreground">{m.view.qualificationWaitReason==='daily_firm_ceiling'?'Waiting for research budget':m.view.qualificationWaitReason==='research_disabled'?'Qualification waits while research is paused.':'Qualification waits while research is on hold.'}</p>:null}
     {m.message?<p role="status" className="text-sm">{m.message}</p>:null}
