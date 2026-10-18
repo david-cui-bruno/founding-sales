@@ -282,6 +282,49 @@ describe('application image promotion and child-process pull guard (not Fargate 
   });
 });
 
+describe('application smoke child startup (offline source TypeScript import)', () => {
+  it('needs explicit transform argv and passes all six checks without ambient NODE_OPTIONS', async () => {
+    const h = harness();
+    expect(await h.run()).toMatchObject({ outcome: 'completed', migrationStarted: false });
+    const smokeCalls = h.calls.filter(call => call.program === 'node' && call.args.includes('scripts/productionSmoke.mjs'));
+    expect(smokeCalls).toHaveLength(1);
+    const args = smokeCalls[0]!.args;
+    expect(args).toEqual(['--experimental-transform-types', '--disable-warning=ExperimentalWarning', 'scripts/productionSmoke.mjs', '--origin', 'https://api.usecallie.com', '--canary-age-seconds', '4', '--expect-sending', 'enabled']);
+    const directory = mkdtempSync(join(tmpdir(), 'release-smoke-startup-'));
+    try {
+      const preload = join(directory, 'fetch.mjs');
+      // No real fetch fallback, auth, cloud calls, or substituted schema module.
+      writeFileSync(preload, `
+const bodies = new Map([
+  ['https://api.usecallie.com/healthz', { status: 'live' }],
+  ['https://api.usecallie.com/readyz', { ready: true, schema: { declaredRange: { minimum: 118, maximum: 118 }, accepted: true, databaseVersion: 118 } }],
+  ['https://api.usecallie.com/health', { sendingEnabled: true }],
+]);
+const seen = new Set();
+globalThis.fetch = async (url, options) => {
+  if (options?.method !== 'GET' || !bodies.has(url) || seen.has(url)) throw new Error('unexpected_fixture_request');
+  seen.add(url);
+  return new Response(JSON.stringify(bodies.get(url)), { status: 200 });
+};
+process.on('exit', code => { if (code === 0 && seen.size !== 3) process.exitCode = 91; });
+`);
+      const env = { PATH: process.env['PATH'] };
+      const options = { cwd: repositoryPath('.'), env };
+      const withoutTransform = args.filter(arg => arg !== '--experimental-transform-types');
+      await expect(execute(process.execPath, ['--import', preload, ...withoutTransform], options)).rejects.toMatchObject({
+        code: 2, stderr: expect.stringContaining('TypeScript parameter property is not supported in strip-only mode'),
+      });
+      const result = await execute(process.execPath, ['--import', preload, ...args], options);
+      expect(result.stdout).toBe('');
+      expect(result.stderr.trim().split('\n').map(line => line.split(' (')[0])).toEqual([
+        'PASS health', 'PASS readiness', 'PASS schema_range', 'PASS connectivity', 'PASS canary', 'PASS sending_enabled',
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('independent service network contracts', () => {
   it.each([118, 117])('preserves exact worker network for every one-off from schema %s', async from => {
     const h = harness({ from });
@@ -382,7 +425,7 @@ describe('additive protected application release', () => {
     const h = harness(); const result = await h.run();
     expect(result.outcome, result.reason).toBe('completed'); expect(result.migrationStarted).toBe(false);
     expect(h.calls.some(c => c.args.join(' ').includes('release-prepare'))).toBe(false);
-    expect(h.calls.filter(c => c.program === 'node' && c.args[0] === 'scripts/productionSmoke.mjs')).toHaveLength(1);
+    expect(h.calls.filter(c => c.program === 'node' && c.args.includes('scripts/productionSmoke.mjs'))).toHaveLength(1);
     const persistent = Object.values(h.definitions).filter(d => d.taskDefinition.family === 'fss-prod-operations' && d.taskDefinition.containerDefinitions[0]!.command[0] === 'verify');
     expect(persistent).toHaveLength(2);
     expect(persistent[1]!.taskDefinition.containerDefinitions[0]!.entryPoint).toEqual(['node', 'apps/worker/src/tools/fss.ts']);
@@ -406,7 +449,7 @@ describe('additive protected application release', () => {
   it.each(['api', 'worker'])('rechecks explicit %s Bedrock in candidate runtime readback', async name => {
     const h = harness({ fault: `runtime-bedrock-${name}` }); const result = await h.run();
     expect(result.outcome).toBe('repair-required'); expect(result.reason).toBe('bedrock_not_explicit');
-    expect(h.calls.some(c => c.program === 'node' && c.args[0] === 'scripts/productionSmoke.mjs')).toBe(false);
+    expect(h.calls.some(c => c.program === 'node' && c.args.includes('scripts/productionSmoke.mjs'))).toBe(false);
   });
   it.each([
     ['api', 'DATABASE_SECRET_ARN'], ['worker', 'DATABASE_SECRET_ARN'], ['operations', 'DATABASE_SECRET_ARN'],
