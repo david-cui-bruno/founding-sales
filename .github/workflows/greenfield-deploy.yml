@@ -1,7 +1,8 @@
 name: Greenfield deploy
 
 # One production concurrency group: application-only, classified routine maintenance,
-# and exact reviewed saved-plan application. All application stays behind FSS_RELEASE_HOLD.
+# and exact reviewed saved-plan application. Automatic delivery stays behind FSS_RELEASE_HOLD.
+# Reviewed execution uses only its protected environment's single-run approval.
 # Infrastructure/protected deltas require the reviewed preparation and apply modes.
 #   gates      no credential: a green images publish of a push to main; `deploy.sh ci gates`
 #              (the gate green on that push, the commit on main; else `manual`).
@@ -430,7 +431,7 @@ jobs:
   reviewed:
     name: Apply the one reviewed production plan
     needs: gates
-    if: github.event_name == 'workflow_dispatch' && inputs.release_mode == 'reviewed' && needs.gates.outputs.decision == 'pass' && vars.FSS_RELEASE_HOLD == 'false'
+    if: github.event_name == 'workflow_dispatch' && inputs.release_mode == 'reviewed' && needs.gates.outputs.decision == 'pass'
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     environment: production-release-review
@@ -484,6 +485,9 @@ jobs:
           role-duration-seconds: 3600
       - name: Decrypt, stop if needed, apply exact saved bytes, migrate, restart and verify
         env:
+          # Only this approved, validated execution and its children may pass the script guards.
+          # Never open repository/environment holds or export this authority to another step.
+          FSS_RELEASE_HOLD: 'false'
           MANIFEST_HASH: ${{ inputs.reviewed_manifest_sha256 }}
           PRIVATE_KEY: ${{ secrets.FSS_PRODUCTION_PLAN_PRIVATE_KEY_PEM }}
         run: |
@@ -631,11 +635,11 @@ jobs:
           if [ "$RELEASE_MODE" = review_prepare ]; then
             line="Read-only reviewed plan preparation $PLAN_RESULT. Nothing applied; review the exact public manifest and encrypted saved plan."
             [ "$PLAN_RESULT" = success ] || level=error
-          elif [ "$RELEASE_HOLD" = true ]; then
-            line="Release held: source checks may finish, but production was not authorized to deploy."
           elif [ "$RELEASE_MODE" = reviewed ]; then
             line="Reviewed production release $REVIEWED_RESULT; its job reports actual phase, schema and repair status."
             [ "$REVIEWED_RESULT" = success ] || level=error
+          elif [ "$RELEASE_HOLD" = true ]; then
+            line="Release held: source checks may finish, but production was not authorized to deploy."
           elif [ "$DECISION" = maintenance ]; then
             if [ "$MAINTENANCE_RESULT" = success ]; then
               line="Routine maintenance release $short verified: migration, retained settings, release-record readback and smoke passed."
