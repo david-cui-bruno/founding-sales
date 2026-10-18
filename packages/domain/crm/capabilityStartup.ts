@@ -1,6 +1,7 @@
 import {z} from 'zod';
+import {CRM_EXTRACTION_ENDPOINT,CRM_EXTRACTION_MODELS} from '@fss/contracts';
 import {CRM_SUPPORTED_ASK_VERSIONS,CRM_SUPPORTED_AGENT_ASK_VERSIONS,type CrmCapabilityRuntime} from './capabilityAuthority.ts';
-const route=z.strictObject({region:z.literal('us-east-1'),endpointId:z.literal('bedrock-runtime.us-east-1.amazonaws.com'),modelVersion:z.enum(['us.anthropic.claude-haiku-4-5-20251001-v1:0','us.anthropic.claude-haiku-5-5','us.anthropic.claude-sonnet-5-5','us.anthropic.claude-sonnet-4-6']),providerKey:z.string().min(1).max(100),accessGrantVersion:z.string().min(1).max(200),dataHandlingVersion:z.string().min(1).max(200),fundingVerifiedUntil:z.iso.datetime()});
+const route=z.strictObject({region:z.literal('us-east-1'),endpointId:z.literal(CRM_EXTRACTION_ENDPOINT),modelVersion:z.enum(CRM_EXTRACTION_MODELS),providerKey:z.string().min(1).max(100),accessGrantVersion:z.string().min(1).max(200),dataHandlingVersion:z.string().min(1).max(200),fundingVerifiedUntil:z.iso.datetime()});
 const embedding=route.extend({modelVersion:z.literal('amazon.titan-embed-text-v2:0'),dimensions:z.union([z.literal(256),z.literal(512),z.literal(1024)])});
 const agentLimits=z.strictObject({maxSteps:z.number().int().min(1).max(32),maxInputBytes:z.number().int().min(1).max(1000000),maxOutputTokens:z.number().int().min(1).max(4096),deadlineMs:z.number().int().min(1).max(60000)});
 const bedrockAnswer=route.extend({provider:z.literal('bedrock').optional(),agentLimits:agentLimits.optional()});
