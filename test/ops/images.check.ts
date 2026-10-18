@@ -37,12 +37,23 @@ function run(args: readonly string[], env: Readonly<Record<string, string>> = {}
   return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
 }
 
-describe('images.sh inputs is the images workflow’s push paths', () => {
-  it('lists exactly the paths whose change publishes new images', () => {
+describe('exact-source image publication', () => {
+  it('publishes image inputs and infrastructure-only permission fixes on main without enabling automatic infra deploy', () => {
     const workflow = readRepositoryFile('.github/workflows/greenfield-images.yml');
     const push = workflow.slice(workflow.indexOf('\n  push:\n'), workflow.indexOf('\npermissions:'));
-    const globs = [...push.matchAll(/^ {6}- '([^']+)'$/gmu)].map(match => (match[1] ?? '').replace(/\/\*\*$/u, ''));
-    expect(run(['inputs']).stdout.trim().split('\n')).toEqual(globs);
+    expect(push).toContain('branches: [main]');
+    const globs = [...push.matchAll(/^ {6}- '([^']+)'$/gmu)].map(match => match[1] ?? '');
+    const imagePaths = run(['inputs']).stdout.trim().split('\n');
+    expect(imagePaths.length).toBeGreaterThan(0);
+    expect(globs.map(path => path.replace(/\/\*\*$/u, ''))).toEqual(expect.arrayContaining(imagePaths));
+    expect(globs).toContain('infra/**');
+    expect(push).not.toMatch(/^\s+(?:paths-ignore|branches-ignore):/mu);
+    expect(workflow).not.toMatch(/^\s+workflow_dispatch:/mu);
+    expect(workflow).toContain("if: github.event_name == 'push' && github.ref == 'refs/heads/main'");
+    expect(workflow).toContain('ci-${GITHUB_SHA}');
+    const deploy = readRepositoryFile('.github/workflows/greenfield-deploy.yml');
+    expect(deploy).toContain("infra/*) why='infrastructure, and every release script in infra/scripts'");
+    expect(deploy).toContain('manual "the commits since production');
   });
 });
 

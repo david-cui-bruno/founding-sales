@@ -58,6 +58,23 @@ locals {
         Resource = ["arn:aws:lambda:${local.aws_region}:${local.aws_account_id}:function:${local.name_prefix}-*"]
       },
       {
+        Sid      = "ReadProductionDatabaseGroupTags"
+        Effect   = "Allow"
+        Action   = ["rds:ListTagsForResource"]
+        Resource = ["arn:aws:rds:${local.aws_region}:${local.aws_account_id}:subgrp:${local.name_prefix}-db", "arn:aws:rds:${local.aws_region}:${local.aws_account_id}:pg:${local.name_prefix}-pg16"]
+      },
+      {
+        # Existing Lambda grant context observed for GetFunction refresh only.
+        Sid      = "DecryptExistingProductionDigestEnvironment"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:us-east-1:326255650484:key/d9328328-4988-4608-9aa8-601d4af61073"]
+        Condition = { StringEquals = {
+          "kms:ViaService"                               = "lambda.us-east-1.amazonaws.com"
+          "kms:EncryptionContext:aws:lambda:FunctionArn" = "arn:aws:lambda:us-east-1:326255650484:function:fss-prod-alarm-digest"
+        } }
+      },
+      {
         Sid      = "ReadProductionDigestSchedule"
         Effect   = "Allow"
         Action   = ["scheduler:GetSchedule"]

@@ -8,7 +8,11 @@ Prioritize production catching main before new features. One implementer owns ea
 
 ## Decisions and approvals
 
-Decide ordinary implementation, tests, docs and reversible cleanup autonomously; list decisions in the next update. Ask David before spending, production or credential access, sending/posting/booking or anything real people see, deploys/Enable/infrastructure applies, irrecoverable deletion, or changing customers' or prospects' experience. Ticket/roadmap approval and source merge grant none of these operations. Obtain explicit approval for each infrastructure apply, role change, deploy, Enable, send, post or booking.
+Decide implementation, tests, docs and reversible cleanup autonomously. David's 2026-10-18 01:07:47 UTC authorization covers release-path infrastructure/IAM/GitHub/Terraform plans/applies, keygen/secret storage preserving old restore copies; read-only production/credential inspection, temporary read-only ops tasks, restarts and main merges. Migration 0105 cached Ask redaction accepted.
+
+Production deploys, saved-plan applies, migrations and hold transitions (including 88→116) require clean CI/reviews, pinned PITR before migration, sending paused during release and restored after passing smoke checks. Stop and fix forward on failures. Contain failures first by pausing sending/holding releases, then report. No separate GO for these authorized operations.
+
+Ask before new/higher costs above ~$20/month, new paid services, new sending/posting/booking channels, raised limits, new contact groups, irrecoverable CRM/Gmail/conversation deletion, restores losing writes, or prospect experience beyond approved scope. Report decisions next update.
 
 ## Proof and review
 

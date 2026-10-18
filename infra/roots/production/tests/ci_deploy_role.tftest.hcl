@@ -405,3 +405,27 @@ run "planner_refreshes_scoped_role_and_secret_metadata_without_values" {
     error_message = "Production saved-plan refresh must read actual scoped IAM roles and secret metadata without plaintext secret reads or IAM writes."
   }
 }
+
+run "planner_refreshes_only_observed_database_tags_and_digest_environment" {
+  command = plan
+  assert {
+    condition = (
+      length(local.ci_plan_policy.Statement) == 18
+      && [for s in local.ci_plan_policy.Statement : s if s.Sid == "ReadProductionDatabaseGroupTags"] == [{
+        Sid = "ReadProductionDatabaseGroupTags", Effect = "Allow", Action = ["rds:ListTagsForResource"], Resource = [
+          "arn:aws:rds:us-east-1:326255650484:subgrp:fss-prod-db",
+          "arn:aws:rds:us-east-1:326255650484:pg:fss-prod-pg16"
+        ]
+      }]
+      && [for s in local.ci_plan_policy.Statement : s if s.Sid == "DecryptExistingProductionDigestEnvironment"] == [{
+        Sid      = "DecryptExistingProductionDigestEnvironment", Effect = "Allow", Action = ["kms:Decrypt"],
+        Resource = ["arn:aws:kms:us-east-1:326255650484:key/d9328328-4988-4608-9aa8-601d4af61073"],
+        Condition = { StringEquals = {
+          "kms:ViaService"                               = "lambda.us-east-1.amazonaws.com"
+          "kms:EncryptionContext:aws:lambda:FunctionArn" = "arn:aws:lambda:us-east-1:326255650484:function:fss-prod-alarm-digest"
+        } }
+      }]
+    )
+    error_message = "Refresh additions must be only exact RDS group tag reads and existing Lambda key Decrypt bound to its service and function context."
+  }
+}
