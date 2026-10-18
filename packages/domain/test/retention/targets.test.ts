@@ -81,6 +81,9 @@ describe('the registry covers the retention table', () => {
       'crm_capability_authority_receipts',
       'crm_capability_owner_approvals',
       'mailbox_oauth_grant_observations',
+      'linkedin_manual_ledgers',
+      'linkedin_manual_entries',
+      'linkedin_manual_stops',
     ];
     for (const target of RETENTION_TARGETS) {
       for (const table of target.tables) expect(forbidden, `${target.dataKind} names ${table}`).not.toContain(table);
@@ -90,6 +93,16 @@ describe('the registry covers the retention table', () => {
   it('resolves a kind to its target and refuses an unknown one', () => {
     expect(retentionTargetFor('raw_mime')?.state).toBe('implemented');
     expect(retentionTargetFor('not-a-kind')).toBeUndefined();
+  });
+
+  it('retains body-free manual LinkedIn history without claiming deletion or departure mutations', () => {
+    for (const table of ['linkedin_manual_ledgers', 'linkedin_manual_entries', 'linkedin_manual_stops']) {
+      expect(TABLE_RETENTION_COVERAGE[table]?.dispositions).toEqual(['retained']);
+      expect(TABLE_RETENTION_COVERAGE[table]?.note).toContain('body-free');
+      expect(TABLE_RETENTION_COVERAGE[table]?.note).toContain('source deletion');
+      expect(TABLE_RETENTION_COVERAGE[table]?.note).toContain('departure');
+      expect(COVERAGE_EXEMPT_TABLES).not.toContain(table);
+    }
   });
 });
 

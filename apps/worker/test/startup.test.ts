@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
 import { CURRENT_SCHEMA_VERSION, WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
 import { WORKER_EXIT_CODES, checkWorkerStartup, startupLogLine } from '../src/index.ts';
+import { applyMigrations } from '@fss/domain/db/migrationRunner.ts';
 
 /**
  * The worker's startup check, against a real database.
@@ -34,6 +35,22 @@ describe('worker startup', () => {
       reason: null,
       exitCode: WORKER_EXIT_CODES.ok,
     });
+  });
+
+  it('refuses the previous release schema and starts only after the real upgrade', async () => {
+    const previous = await createTestDatabase({ throughVersion: CURRENT_SCHEMA_VERSION - 1 });
+    try {
+      expect(await checkWorkerStartup({ session: previous.session })).toMatchObject({
+        outcome: 'schema_out_of_range', databaseVersion: CURRENT_SCHEMA_VERSION - 1,
+        reason: 'database_behind_binary', exitCode: WORKER_EXIT_CODES.schemaOutOfRange,
+      });
+      await applyMigrations(previous.session);
+      expect(await checkWorkerStartup({ session: previous.session })).toMatchObject({
+        outcome: 'ready', databaseVersion: CURRENT_SCHEMA_VERSION, exitCode: WORKER_EXIT_CODES.ok,
+      });
+    } finally {
+      await previous.drop();
+    }
   });
 
   it('exits non-zero on a database behind its declared range', async () => {
