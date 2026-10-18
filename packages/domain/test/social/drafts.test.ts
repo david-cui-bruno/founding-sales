@@ -61,7 +61,7 @@ it('caps unsuccessful generation at two paid attempts and respects the credit bu
 it('settles a lost calling reservation conservatively when its request expires',async()=>{
  const {reserveAttempt,markCalling}=await import('../../research/reservations.ts');
  const a=await withTransaction(db.session,async()=>requestSocialDrafts(ctx(),await input()));if(!a.ok)throw new Error(a.reason);
- await withTransaction(db.session,async()=>{const r=await reserveAttempt(worker(),{subjectKind:'social_draft',subjectId:a.value.requestId,attempt:1,providerKey:'aws_bedrock.social_draft',at:new Date().toISOString(),businessTimeZone:'Etc/UTC',cents:3,modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:4096});await markCalling(worker(),r.id);});
+ await withTransaction(db.session,async()=>{const r=await reserveAttempt(worker(),{subjectKind:'social_draft',subjectId:a.value.requestId,attempt:1,providerKey:'aws_bedrock.social_draft',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:3,modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:4096});await markCalling(worker(),r.id);});
  await db.session.query("UPDATE social_draft_requests SET state='calling',paid_attempts=1,created_at=now()-interval '31 minutes',deadline_at=now()-interval '1 minute' WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,a.value.requestId]);
  await withTransaction(db.session,()=>expireSocialDraftRequests(worker()));
  expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE workspace_id=$1 AND subject_id=$2',[seed.alpha.workspaceId,a.value.requestId])).rows).toEqual([{state:'estimated',settled_cents:3}]);
