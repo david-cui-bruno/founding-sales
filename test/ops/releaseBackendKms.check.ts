@@ -34,6 +34,41 @@ function syntheticBaseline() {
 }
 
 describe('ordinary backend CLI existing DynamoDB lock-table CMK contract', () => {
+  const digestDecrypt = (): Statement => ({
+    Sid: 'DecryptExistingProductionDigestEnvironment', Effect: 'Allow', Action: ['kms:Decrypt'],
+    Resource: ['arn:aws:kms:us-east-1:326255650484:key/d9328328-4988-4608-9aa8-601d4af61073'],
+    Condition: { StringEquals: { 'kms:ViaService': 'lambda.us-east-1.amazonaws.com', 'kms:EncryptionContext:aws:lambda:FunctionArn': 'arn:aws:lambda:us-east-1:326255650484:function:fss-prod-alarm-digest' } },
+  });
+
+  it.each(['prepare', 'execute'])('preserves the exact independent Lambda grant without satisfying missing backend rights for %s', stage => {
+    const value = candidate(stage); value.Statement.push(digestDecrypt());
+    expect(check(value, stage).status).toBe(0);
+    value.Statement = value.Statement.filter(s => s.Sid !== SID);
+    expect(check(value, stage).stderr).toContain('backend_required_permission_denied');
+  });
+
+  it.each([
+    ['Encrypt', (s: Statement) => { s.Action = ['kms:Encrypt']; }],
+    ['GenerateDataKey', (s: Statement) => { s.Action = ['kms:GenerateDataKey']; }],
+    ['CreateGrant', (s: Statement) => { s.Action = ['kms:CreateGrant']; }],
+    ['wildcard action', (s: Statement) => { s.Action = ['kms:*']; }],
+    ['other key', (s: Statement) => { s.Resource = [OTHER_KEY]; }],
+    ['backend key', (s: Statement) => { s.Resource = [KEY]; }],
+    ['wildcard key', (s: Statement) => { s.Resource = ['*']; }],
+    ['no conditions', (s: Statement) => { delete s.Condition; }],
+    ['wrong service', (s: Statement) => { s.Condition!['StringEquals']!['kms:ViaService'] = 's3.us-east-1.amazonaws.com'; }],
+    ['wrong region', (s: Statement) => { s.Condition!['StringEquals']!['kms:ViaService'] = 'lambda.us-west-2.amazonaws.com'; }],
+    ['missing service', (s: Statement) => { delete s.Condition!['StringEquals']!['kms:ViaService']; }],
+    ['wrong function', (s: Statement) => { s.Condition!['StringEquals']!['kms:EncryptionContext:aws:lambda:FunctionArn'] = 'arn:aws:lambda:us-east-1:326255650484:function:other'; }],
+    ['missing function', (s: Statement) => { delete s.Condition!['StringEquals']!['kms:EncryptionContext:aws:lambda:FunctionArn']; }],
+    ['wildcard context', (s: Statement) => { s.Condition = { StringLike: { 'kms:ViaService': 'lambda.*.amazonaws.com', 'kms:EncryptionContext:aws:lambda:FunctionArn': '*' } }; }],
+  ] as const)('refuses broadened independent Lambda %s', (_name, mutate) => {
+    for (const stage of ['prepare', 'execute']) {
+      const value = candidate(stage); const extra = digestDecrypt(); mutate(extra); value.Statement.push(extra);
+      expect(check(value, stage).stderr).toContain('backend_kms_permission_scope');
+    }
+  });
+
   it('shares only exact service/context Decrypt across prepare/execute, with unchanged SSE-S3 config', () => {
     for (const stage of ['prepare', 'execute', 'local-plan']) {
       const result = cli(['backend-contract', stage]); expect(result.status, result.stderr).toBe(0);

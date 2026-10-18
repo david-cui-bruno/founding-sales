@@ -10,6 +10,8 @@ export const LOCK = `${STATE}.tflock`;
 export const TABLE = `arn:aws:dynamodb:${REGION}:${ACCOUNT}:table/callie-sourcing-tflock`;
 export const LOCK_TABLE_KMS_KEY = `arn:aws:kms:${REGION}:${ACCOUNT}:key/a321a083-4058-4130-b060-b950e4aa1404`;
 const LOCK_KMS_CONTEXT = { 'kms:ViaService': `dynamodb.${REGION}.amazonaws.com`, 'kms:EncryptionContext:aws:dynamodb:tableName': 'callie-sourcing-tflock', 'kms:EncryptionContext:aws:dynamodb:subscriberId': ACCOUNT };
+const DIGEST_KMS_KEY = `arn:aws:kms:${REGION}:${ACCOUNT}:key/d9328328-4988-4608-9aa8-601d4af61073`;
+const DIGEST_KMS_CONTEXT = { 'kms:ViaService': `lambda.${REGION}.amazonaws.com`, 'kms:EncryptionContext:aws:lambda:FunctionArn': `arn:aws:lambda:${REGION}:${ACCOUNT}:function:fss-prod-alarm-digest` };
 const NAMESPACE_KMS_CONDITION = { StringLike: { 'aws:ResourceTag/NamePrefix': 'fss-prod*' } };
 export const ROW = `${BUCKET}/${KEY}`;
 export const ROLE = `arn:aws:iam::${ACCOUNT}:role/fss-prod-deploy`;
@@ -85,6 +87,9 @@ const touchesKmsData = statement => statement.NotAction || list(statement.Action
 
 function validateKmsScope(policy, { lockKeyNamePrefix } = {}) {
   for (const statement of policy.Statement.filter(s => s.Effect === 'Allow' && touchesKmsData(s))) {
+    // This independent provider refresh grant cannot authorize the backend key.
+    // Recognize only its exact existing key, action, service and function context.
+    if (!statement.NotAction && !statement.NotResource && same(list(statement.Action), ['kms:Decrypt']) && same(list(statement.Resource), [DIGEST_KMS_KEY]) && same(statement.Condition, { StringEquals: DIGEST_KMS_CONTEXT })) continue;
     // Existing namespace-tagged rights are unrelated ONLY with an explicitly supplied
     // observed nonproduction tag classification for this key. Missing is not absent.
     if (namespaceKms(statement)) {

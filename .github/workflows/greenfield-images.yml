@@ -14,8 +14,9 @@ name: Greenfield images
 # `images` runs on a pull request. It builds with `--load`, verifies the local
 # images with `infra/scripts/images.sh verify`, and holds no credential of any kind.
 #
-# `publish` runs on a push to main — only when an image input changed, which is
-# what `push.paths` lists and what `images.sh inputs` names — and replaces
+# `publish` runs on main pushes changing image or release infrastructure inputs.
+# Reviewed preparation checks out this exact image commit, so image-input equality
+# alone cannot make an older commit's infrastructure eligible. This replaces
 # the operator's rebuild-and-push. Before g74 the release digests came from a
 # second build on David's Mac, so what CI verified and what production ran were two
 # builds of one commit. Now:
@@ -59,9 +60,8 @@ on:
   pull_request:
   push:
     branches: [main]
-    # Exactly `infra/scripts/images.sh inputs`, in glob form; the release suite
-    # compares the two. A path that changes an image and is missing here is a main
-    # commit whose images nobody publishes, and `images.sh pin` refuses to pin it.
+    # Image inputs plus release infrastructure: reviewed preparation checks out
+    # the exact image commit, including its Terraform and release scripts.
     paths:
       - 'Dockerfile.api'
       - 'Dockerfile.worker'
@@ -73,6 +73,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/greenfield-images.yml'
+      - 'infra/**'
 
 permissions:
   contents: read
