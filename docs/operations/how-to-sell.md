@@ -2,7 +2,7 @@
 
 ## Before your first session
 
-Open **Callie.app → Settings** (installed 1.0.51: **Administration**). Check the mailbox, calling number and sending-domain health. Production reached schema **118** with six smoke checks passing on October 18. Sending was separately verified off at 13:07 UTC; **David alone turns it back on** when ready. The compact Settings layout is building in desktop 1.0.52, not installed yet.
+Open **Callie.app → Settings** (installed 1.0.51: **Administration**). Check the mailbox, calling number and sending-domain health. Production reached schema **118** with six smoke checks passing on October 18. Sending was separately verified off at 13:07 UTC; **David alone turns it back on** when ready. The compact Settings layout is available in signed desktop 1.0.52 through the existing update channel. Public download/signature verification passed; installed 1.0.51 has not been forcibly updated or restarted.
 
 Calling states include RI and TX; **Massachusetts's personal rule confirmation read back satisfied**. Other calling gates still apply. Calls use Twilio and need an approved cash budget. Research is enabled on Bedrock with a deployed $50/day model-credit guard and 100 shared processing steps/day. A fresh firm normally needs two steps: qualification and brief. Gmail capture and LinkedIn actions are not activated by connecting accounts.
 
@@ -21,4 +21,4 @@ The installed app loads Today, Firms, prepared briefs, outcome controls and five
 
 The footer-warning correction is merged but not yet installed in 1.0.51. That client can warn about footerless stored copy even though the sender appends the configured sign-off. Do not edit approved copy just to silence it. End-to-end production call/email acceptance is still pending.
 
-**Social** in the new desktop includes a manual LinkedIn activity ledger with account/firm/person bindings and conservative reply/refusal stops. The backend is deployed; desktop delivery is pending. It does not send messages or observe LinkedIn activity automatically. Gmail capture for **david@usecallie.com** needs one explicit consent/model/spend approval before activation.
+**Social** in the new desktop includes a manual LinkedIn activity ledger with account/firm/person bindings and conservative reply/refusal stops. The backend is deployed and desktop 1.0.52 is published; use it after the normal update installs. It does not send messages or observe LinkedIn activity automatically. Gmail capture for **david@usecallie.com** needs one explicit consent/model/spend approval before activation.

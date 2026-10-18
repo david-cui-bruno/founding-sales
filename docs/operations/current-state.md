@@ -1,6 +1,6 @@
 # Current operating state
 
-## October 18, 2026, 13:12 UTC
+## October 18, 2026, 13:24 UTC
 
 **Production and main are schema 118**, exact source `4acf7e048925d364dfc2a58e53c95f5a7ad410aa`, API 2/worker 1. Reviewed release `39116046599`, attempt 1, succeeded at 09:55. Fresh independent acceptance at 13:06 verified all four images, API/worker Bedrock transport and six smoke checks. The shared **$50/day model-credit guard remains deployed**. The actual 116→118 upgrade passed all 11 steps before release. Migrations 117/118 are applied; no historical business rows were deleted.
 
@@ -30,4 +30,4 @@ Gmail setup is deployed, capture disabled. Approval remains pending for `david@u
 
 ## Delivery
 
-Booking, Ask answering, automatic email admission, recurring posting and safe-list deletions are merged/deployed. Lexical search, privacy/history, regular sequences, Cal.com sync and manual drafting remain. Compact Settings screenshots were shown before merge. Signed compatible **desktop 1.0.52 build `39130493532` is underway**, not published or installed. Main has **16 open issues**, **51,637 net lines removed**, hotspot counts **86/7/47**. The recoverable tag is `archive/pre-lean-selling-20261018-5c7d188e`. Release simplification follows selling delivery; use the [existing procedure](lean-release-workflow.md) until its replacement is tested.
+Booking, Ask answering, automatic email admission, recurring posting and safe-list deletions are merged/deployed. Lexical search, privacy/history, regular sequences, Cal.com sync and manual drafting remain. Compact Settings screenshots were shown before merge. Signed compatible **desktop 1.0.52 build `39130493532` is published** on the existing update channel. Public signature and complete ZIP bytes verified at 13:23 against the installed app's trusted key. No forced update or restart occurred; installed 1.0.51 remains unchanged. Main has **17 open issues**, including phone-proof fix #675, **51,637 net lines removed**, hotspot counts **86/7/47**. The recoverable tag is `archive/pre-lean-selling-20261018-5c7d188e`. Release simplification follows selling delivery; use the [existing procedure](lean-release-workflow.md) until its replacement is tested.
