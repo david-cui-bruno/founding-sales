@@ -173,7 +173,7 @@ it('reschedules a human-corrected unclear identity through automatic research-on
  const jobs=await tx(()=>sourcingQualificationSource(true).find(db.session,new Date().toISOString()));expect(jobs).toHaveLength(1);
  for(const job of jobs)await enqueueJob(db.session,job);
  const runId=jobs[0]!.payload['runId'];if(typeof runId!=='string')throw new Error('run_id_missing');
- const observationId=randomUUID(),text='Automatic Worcester LLC provides residential property management in Worcester, Massachusetts. Contact Automatic Worcester LLC at (508) 555-0199.';
+ const observationId=randomUUID(),text='Automatic Worcester LLC office: Worcester, Massachusetts. We provide residential property management. Contact Automatic Worcester LLC at (508) 555-0199.';
  expect(await tx(()=>finishQualification(ctx,{runId,reason:null,observations:[{id:observationId,url,contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:new Date().toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'office',text}]}],facts:['firm_identity','residential_management','service_area','business_phone'].map(kind=>({kind,observationId,blockId:'office',value:text}))}))).toMatchObject({ok:true});
  const qualification=new HandlerRegistry().register(sourcingQualificationHandler({pageFetch:{providerKey:'fixture',fetchPages:async()=>{throw new Error('never refetch finished identity');}},extraction:null}));
  expect(await runOnce(db.session,{registry:qualification,owner:'auto-identity',limit:5})).toMatchObject({failed:0});
