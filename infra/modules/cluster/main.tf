@@ -69,12 +69,14 @@ locals {
   })
 
   api_environment = merge(local.common_environment, var.api_environment, {
-    FSS_ROLE        = "api"
-    FSS_SCHEMA_MIN  = tostring(var.api_schema_range.min)
-    FSS_SCHEMA_MAX  = tostring(var.api_schema_range.max)
-    PORT            = tostring(var.container_port)
-    FSS_HTTP_PORT   = tostring(var.container_port)
-    FSS_JOURNAL_ARN = var.journal_bucket_arn
+    # Preview must price the same transport the worker will reserve, without API IAM.
+    FSS_MODEL_TRANSPORT = var.worker_model_transport
+    FSS_ROLE            = "api"
+    FSS_SCHEMA_MIN      = tostring(var.api_schema_range.min)
+    FSS_SCHEMA_MAX      = tostring(var.api_schema_range.max)
+    PORT                = tostring(var.container_port)
+    FSS_HTTP_PORT       = tostring(var.container_port)
+    FSS_JOURNAL_ARN     = var.journal_bucket_arn
     # Slice C3a: the deletion workflow's best-effort delete of a deleted call's objects.
     FSS_CALL_AUDIO_BUCKET = local.call_audio_bucket_name
   })

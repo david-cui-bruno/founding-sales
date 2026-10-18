@@ -1,4 +1,5 @@
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { ModelBudgetRefusal } from '@fss/domain/research/modelBudget.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import type { JobRunOutcome } from '@fss/domain/jobs/atLeastOnce.ts';
 import { DEFAULT_BACKOFF, type BackoffPolicy } from '@fss/domain/jobs/backoff.ts';
@@ -173,6 +174,7 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
     try {
       result = await handler.handle(input);
     } catch (error) {
+      if (error instanceof ModelBudgetRefusal) return { outcome: await killJob(session, job, { code: error.code }) };
       return { outcome: await failJob(session, job, { code: failureCode(error), detail: failureDetail(error), ...failure }) };
     }
     if (isJobChunk(result) && !result.done) {
@@ -226,6 +228,7 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
     thrown = error;
   }
   if (thrown !== null) {
+    if (thrown instanceof ModelBudgetRefusal) return { outcome: await killJob(session, job, { code: thrown.code }) };
     return { outcome: await failJob(session, job, { code: failureCode(thrown), detail: failureDetail(thrown), ...failure }) };
   }
   if (chunk !== null && progress !== null) return { outcome: 'chunk', chunk, progress, writtenHostMs };
