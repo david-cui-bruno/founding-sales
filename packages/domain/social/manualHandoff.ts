@@ -4,6 +4,7 @@ import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {lockSocialPost,readSocialPost,readSocialAccount,type SocialResult} from './posts.ts';
 import {socialAssetObject} from './assets.ts';
 import {inspectXPostText} from './xText.ts';
+import {retiredPostingRevisionReason} from './retiredPosting.ts';
 
 import type {SocialManualHandoffView,SocialManualHandoffSnapshot} from '@fss/contracts';
 export type {SocialManualHandoffView,SocialManualHandoffSnapshot} from '@fss/contracts';
@@ -13,10 +14,12 @@ const owner=(ctx:RepositoryContext)=>ctx.scope.actor.kind==='user'?ctx.scope.act
 /** Caller owns a transaction. Manual review never supplies provider authority. */
 export async function previewSocialManualHandoff(ctx:RepositoryContext,input:SocialManualHandoffInput):Promise<SocialResult<SocialManualHandoffView>>{
  if(!owner(ctx))return {ok:false,reason:'user_required'};
+ const retired=await retiredPostingRevisionReason(ctx,input.postId,input.expectedRevision);
  // Asset writers take this lock before changing any derivative or deleting it.
  await ctx.db.query('SELECT 1 FROM social_library_usage WHERE workspace_id=$1 FOR SHARE',[ctx.scope.workspaceId]);
  const revision=await lockSocialPost(ctx,input.postId);if(revision===null)return {ok:false,reason:'not_found'};
  if(revision!==input.expectedRevision)return {ok:false,reason:'stale_revision'};
+ if(retired)return {ok:false,reason:retired};
  const post=(await readSocialPost(ctx,input.postId))!;
  if(!['draft','failed'].includes(post.state))return {ok:false,reason:'manual_handoff_not_draft'};
  const blocked=(await ctx.db.query(`SELECT 1 FROM social_deliveries WHERE workspace_id=$1 AND post_id=$2

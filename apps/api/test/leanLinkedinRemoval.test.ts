@@ -4,6 +4,7 @@ import {z} from 'zod';
 import {socialWorkspaceSchema} from '@fss/contracts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {runSocialDraft} from '@fss/domain/social/draftRun.ts';
 import {registerHandlers,workerDueWorkSources} from '../../worker/src/bootstrap/main.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
@@ -69,6 +70,26 @@ for(const kind of ['standing','candidate'] as const)it(`never upgrades a histori
  expect(edited.status).toBe(200);
  expect((await call(p.grant.accessToken,'/social/posts/approve',command({postId:p.postId,expectedRevision:2}))).status).toBe(200);
  expect((await call(p.grant.accessToken,'/social/delivery/claim',command({postId:p.postId,expectedRevision:2}))).status).toBe(200);
+});
+for(const kind of ['standing','candidate'] as const)it(`refuses same-revision manual handoff after a historical ${kind} delivery is held`,async()=>{
+ const p=await approved();await historical(p,kind);
+ const action={postId:p.postId,expectedRevision:1};
+ expect((await call(p.grant.accessToken,'/social/delivery/claim',command(action))).body).toMatchObject({reason:'recurring_posting_removed'});
+ expect((await call(p.grant.accessToken,'/social/delivery/hold',command({...action,reason:'adapter_unavailable'}))).status).toBe(200);
+ expect((await f.db.query('SELECT state FROM social_deliveries WHERE workspace_id=$1 AND id=$2',[f.alpha.workspaceId,p.deliveryId])).rows).toEqual([{state:'failed'}]);
+ const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db);
+ const {previewSocialManualHandoff}=await import('@fss/domain/social/manualHandoff.ts');
+ expect(await withTransaction(f.db,()=>previewSocialManualHandoff(ctx,action))).toEqual({ok:false,reason:'recurring_posting_removed'});
+ expect((await call(p.grant.accessToken,'/social/manual-handoff/read',action)).body).toMatchObject({error:'recurring_posting_removed'});
+ expect((await call(p.grant.accessToken,'/social/manual-handoff/confirm',command({...action,fingerprint:'0'.repeat(64),reviewedDestination:true}))).body).toMatchObject({reason:'recurring_posting_removed'});
+ expect((await f.db.query('SELECT 1 FROM social_manual_handoff_approvals WHERE workspace_id=$1 AND post_id=$2',[f.alpha.workspaceId,p.postId])).rows).toHaveLength(0);
+ const edited=await call(p.grant.accessToken,'/social/posts/save',command({...action,accountId:p.accountId,text:'Explicit new unbound human revision',images:[],publishAt:new Date(Date.now()+86400_000).toISOString(),zone:'America/New_York'}));
+ expect(edited.status).toBe(200);
+ const next={postId:p.postId,expectedRevision:2};
+ const preview=await call(p.grant.accessToken,'/social/manual-handoff/read',next);expect(preview.status).toBe(200);
+ const fingerprint=z.object({view:z.object({fingerprint:z.string()})}).parse(preview.body).view.fingerprint;
+ expect((await call(p.grant.accessToken,'/social/manual-handoff/confirm',command({...next,fingerprint,reviewedDestination:true}))).status).toBe(200);
+ expect((await call(p.grant.accessToken,'/social/manual-handoff/read',next)).body).toMatchObject({view:{state:'manual_needed'}});
 });
 it('preserves installed manual submission parsing, and historical uncertainty remains inspect/cancel only',async()=>{
  const p=await approved();
