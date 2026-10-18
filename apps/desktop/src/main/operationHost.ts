@@ -9,8 +9,6 @@ import {firmListResponseSchema} from '@fss/contracts';
 import {relationshipListSchema} from '@fss/contracts';
 import {personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
-import {bookingConversationOperations} from './bookingConversationOperations.ts';
-import {readBookingPolicySettingsOperation,changeBookingPolicySettingsOperation} from './bookingPolicyBridge.ts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,type NotificationRuntimeStatus} from '@fss/contracts';
 import { todayActionsResponseSchema, todayActionOpenResponseSchema } from '@fss/contracts';
@@ -603,8 +601,6 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'crm.processingPurposeSave':async(input:OperationInput<'crm.processingPurposeSave'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/crm/processing/purpose/save',input,value=>OPERATIONS['crm.processingPurposeSave'].output.parse(value));if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.processingHealth':async(input:OperationInput<'crm.processingHealth'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/processing/health/read',value=>OPERATIONS['crm.processingHealth'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.processingRecordHealth':async(input:OperationInput<'crm.processingRecordHealth'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/processing/record/read',value=>OPERATIONS['crm.processingRecordHealth'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'crm.bookingInterpretationRequest':async(input:OperationInput<'crm.bookingInterpretationRequest'>)=>{const generation=deps.recordings.identity.current();const {commandId,...payload}=input;const answer=await deps.api.command('/crm/booking/interpretation/request',payload,value=>OPERATIONS['crm.bookingInterpretationRequest'].output.parse(value),{commandId});if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
-    'crm.bookingInterpretationRead':async(input:OperationInput<'crm.bookingInterpretationRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/booking/interpretation/read',value=>OPERATIONS['crm.bookingInterpretationRead'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessMailList':async(input:OperationInput<'crm.businessMailList'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/business/mail/list',value=>OPERATIONS['crm.businessMailList'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessMailRead':async(input:OperationInput<'crm.businessMailRead'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/business/mail/read',value=>OPERATIONS['crm.businessMailRead'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
     'crm.businessMailReadV2':async(input:OperationInput<'crm.businessMailReadV2'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/crm/business/mail/read/v2',value=>OPERATIONS['crm.businessMailReadV2'].output.parse(value),input);if(generation!==deps.recordings.identity.current())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
@@ -821,9 +817,6 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
 
     // Meetings (slice M1). Straight through the authenticated client, like Diagnostics.
-    ...bookingConversationOperations({api:deps.api,identity:{current:()=>deps.recordings.identity.current()}}),
-    'meetings.bookingPolicy':async()=>readBookingPolicySettingsOperation({api:deps.api,identity:deps.recordings.identity}),
-    'meetings.bookingPolicyChange':async(input:OperationInput<'meetings.bookingPolicyChange'>)=>changeBookingPolicySettingsOperation({api:deps.api,identity:deps.recordings.identity},input),
     'meetings.bookingCapacity':async()=>{
       const generation=deps.recordings.identity.current();
       const answer=await deps.api.read('/meetings/booking-capacity',value=>bookingCapacityResponseSchema.parse(value));

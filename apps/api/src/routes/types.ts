@@ -1,14 +1,8 @@
-import type {BookingInterpretationAuthorityPort} from '@fss/domain/crm/bookingInterpretationAuthority.ts';
 import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
 import type {LinkedinRecurringComposition} from '@fss/domain/social/linkedinRecurringAuthority.ts';
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
-import type {BookingPolicyRuntime} from '@fss/domain/meetings/bookingPolicyTypes.ts';
-import type {BookingCreateRuntime} from '@fss/domain/meetings/bookingCreateRuntime.ts';
-import type {BookingChangeRuntime} from '@fss/domain/meetings/bookingChangeProvider.ts';
-import type {BookingConversationRuntime} from '@fss/domain/meetings/bookingConversation.ts';
-import type {BookingMessageRuntime} from '@fss/domain/meetings/bookingMessagesRuntime.ts';
 import type {BookingCapacityDeps} from './bookingCapacity.ts';
 import type {SocialMediaStore} from '../social/mediaStore.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
@@ -64,17 +58,11 @@ export interface RouteResult {
 
 export interface RoutingOptions {
   readonly linkedinRecurring?:LinkedinRecurringComposition|null;
-  readonly bookingInterpretationAuthority?: BookingInterpretationAuthorityPort;
   readonly crmMailEvidence?:CrmMailEvidencePort;
   readonly crmMailCaptureReadiness?: MailCaptureReadiness;
   readonly crmCapabilityRuntime?: CrmCapabilityRuntime;
   readonly crmAcquisitionDiagnosticRuntime?: CrmAcquisitionDiagnosticRuntime;
   readonly bookingCapacity?:BookingCapacityDeps;
-  readonly bookingCreate?:BookingCreateRuntime;
-  readonly bookingChange?:BookingChangeRuntime;
-  readonly bookingConversation?:BookingConversationRuntime;
-  readonly bookingMessages?:BookingMessageRuntime;
-  readonly bookingPolicyRuntime?:BookingPolicyRuntime;
   readonly replyComposer?:HumanReplyDraftPort|null;
   readonly session: SessionQueryable;
   /** The policy (lane g78). A route that answers with versions publishes `publishedClientVersions` of it. */

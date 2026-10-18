@@ -30,8 +30,6 @@ import { crmDecisionHistoryReadSchema, crmDecisionHistoryPageSchema } from "@fss
 import { crmDecisionHistoryListSchema, crmDecisionHistoryListPageSchema } from "@fss/contracts";
 import { crmEvidenceReadSchema, crmEvidencePageSchema, crmEvidenceDecidePayloadSchema, crmEvidenceDecidedSchema } from "@fss/contracts";
 import {crmMailImportReadSchema,crmMailImportAcknowledgmentSchema,crmMailImportHealthSchema} from "@fss/contracts";
-import {bookingConversationInputSchema,bookingConversationEventCommandSchema,bookingConversationViewSchema,bookingMessageCommandSchema,bookingMessageViewSchema} from '@fss/contracts';
-import {bookingInterpretationRequestSchema,bookingInterpretationReadSchema,bookingInterpretationViewSchema} from '@fss/contracts';
 import {openExplicitOpportunityCommandSchema,reopenExplicitOpportunityCommandSchema,explicitOpportunityResultSchema} from '@fss/contracts';
 import { selectedImportInputSchema, selectedImportReadSchema, selectedImportPreviewSchema, selectedImportPageSchema, selectedImportCommitPayloadSchema, selectedImportCorrectPayloadSchema, selectedImportChangePayloadSchema, selectedImportResultSchema } from '@fss/contracts';
 import {mailSourcesListSchema,mailSourceListSchema,mailSourceReadSchema,mailConversationSchema,mailConversationV2Schema,mailSourceChangePayloadSchema,mailSourceChangedSchema,mailControlsReadSchema,mailCaptureControlsSchema,mailSourceStateReadSchema,mailSourceStateSchema,mailSourceRecaptureQueuedSchema,mailSourceAssociatePayloadSchema} from '@fss/contracts';
@@ -44,7 +42,6 @@ import {relationshipSaveSchema,relationshipCorrectSchema,firmListResponseSchema}
 import {relationshipReadSchema,relationshipListSchema} from '@fss/contracts';
 import {personCreateSchema,personReadSchema,personListSchema,personSourceAddSchema,personSourceChangeSchema,personSourceRecaptureSchema,personPageSchema,peopleListSchema} from '@fss/contracts';
 import {bookingCapacityResponseSchema} from '@fss/contracts';
-import {bookingPolicySettingsViewSchema,bookingPolicyChangeSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,notificationRuntimeStatusSchema} from '@fss/contracts';
 import { todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOpenResponseSchema } from '@fss/contracts';
@@ -1308,8 +1305,6 @@ export const OPERATIONS = {
   'crm.processingPurposeSave':{kind:'command',calls:[{method:'POST',path:'/crm/processing/purpose/save'}],input:crmExtractionPurposeSaveSchema.omit({commandId:true,clientVersion:true}),output:z.strictObject({revision:z.number().int().positive(),enabled:z.literal(false)}),transform:'disabled-only purpose configuration; main owns envelope'},
   'crm.processingHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/health/read'}],input:crmProcessingHealthReadSchema,output:crmProcessingHealthSchema,transform:'body-free status survives deletion; no blind paid retry'},
   'crm.processingRecordHealth':{kind:'read',calls:[{method:'POST',path:'/crm/processing/record/read'}],input:crmProcessingRecordReadSchema,output:crmProcessingRecordHealthSchema,transform:'bounded owner-private body-free native record status survives transcript deletion'},
-  'crm.bookingInterpretationRequest':{kind:'command',calls:[{method:'POST',path:'/crm/booking/interpretation/request'}],input:bookingInterpretationRequestSchema.omit({clientVersion:true}),output:bookingInterpretationViewSchema,transform:'exact admitted-message booking candidate request with stable retry identity, never permission to send or create'},
-  'crm.bookingInterpretationRead':{kind:'read',calls:[{method:'POST',path:'/crm/booking/interpretation/read'}],input:bookingInterpretationReadSchema,output:bookingInterpretationViewSchema,transform:'current authorized booking proposal, clarification, stop or David handoff'},
   'crm.businessMailList': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/list'}],input:mailSourcesListSchema,output:mailSourceListSchema,transform:'bounded copied-email identity page with current source access'},
   'crm.businessMailRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read'}],input:mailSourceReadSchema,output:mailConversationSchema,transform:'exact permitted copied source revision and provenance'},
   'crm.businessMailReadV2': {kind:'read',calls:[{method:'POST',path:'/crm/business/mail/read/v2'}],input:mailSourceReadSchema,output:mailConversationV2Schema,transform:'exact permitted copied source revision and provenance'},
@@ -1918,11 +1913,6 @@ export const OPERATIONS = {
 
   // --- Meetings (slice M1) ------------------------------------------------
   // Straight through the authenticated client, like Diagnostics: no state is kept.
-  'meetings.bookingConversationRequest':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-conversation'}],input:bookingConversationInputSchema,output:bookingConversationViewSchema,transform:'current interpretation admission under standing policy, not human confirmation or live Enable'},
-  'meetings.bookingConversationRead':{kind:'read',calls:[{method:'GET',path:'/meetings/booking-conversation?conversationId={uuid}'}],input:z.strictObject({conversationId:z.uuid()}),output:bookingConversationViewSchema,transform:'current authorized conversation, durable handoff and booking receipt'},
-  'meetings.bookingConversationEvent':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-conversation/event'}],input:bookingConversationEventCommandSchema.omit({commandId:true,clientVersion:true}),output:bookingConversationViewSchema,transform:'shared manual nudge, stop or explicit David no-show event'},
-  'meetings.bookingMessageRequest':{kind:'command',calls:[{method:'POST',path:'/meetings/booking-messages'}],input:bookingMessageCommandSchema.omit({commandId:true,clientVersion:true}),output:bookingMessageViewSchema,transform:'booking-only message request from current conversation, not per-message approval'},
-  'meetings.bookingMessageRead':{kind:'read',calls:[{method:'GET',path:'/meetings/booking-messages?messageId={uuid}'}],input:z.strictObject({messageId:z.uuid()}),output:bookingMessageViewSchema,transform:'current booking-only message receipt, inspect uncertain acceptance without replay'},
   'meetings.forFirm': {
     kind: 'read',
     calls: [{ method: 'GET', path: '/meetings/firm?firmId={uuid}' }],
@@ -1974,14 +1964,6 @@ export const OPERATIONS = {
     kind:'read',calls:[{method:'GET',path:'/meetings/booking-capacity'}],input:nothing,
     output:z.strictObject({capacity:bookingCapacityResponseSchema.nullable()}),
     transform:'Read-only Cal.com event configuration and scoped retained booking evidence; no available-slot inference',
-  },
-  'meetings.bookingPolicy': {
-    kind:'read',calls:[{method:'GET',path:'/meetings/booking-policy?view=settings'}],input:nothing,
-    output:z.strictObject({view:bookingPolicySettingsViewSchema.nullable()}),transform:'Current owner booking scope and exact configured choices, never automatic Enable',
-  },
-  'meetings.bookingPolicyChange': {
-    kind:'command',calls:[{method:'POST',path:'/meetings/booking-policy'}],input:bookingPolicyChangeSchema,
-    output:z.strictObject({revision:z.number().int().positive().nullable(),reason:z.string().max(80).nullable()}),transform:'Version-fenced explicit owner save, Disable or Revoke without provider writes',
   },
   'meetings.brief': {
     kind: 'read',
