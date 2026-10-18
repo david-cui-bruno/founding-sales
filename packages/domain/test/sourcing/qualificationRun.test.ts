@@ -14,7 +14,7 @@ const ctx=()=>repositoryContext(workspaceScope(workspaceId,{kind:'system',compon
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
 beforeAll(async()=>{db=await createTestDatabase();workspaceId=(await seedTwoWorkspaces(db.session)).alpha.workspaceId;});
 afterAll(async()=>db.drop());
-beforeEach(async()=>{await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM provider_reservations');await db.session.query('DELETE FROM provider_ledger');await db.session.query('DELETE FROM research_settings');await db.session.query('DELETE FROM daily_counters');});
+beforeEach(async()=>{await db.session.query('DELETE FROM active_holds');await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM provider_reservations');await db.session.query('DELETE FROM provider_ledger');await db.session.query('DELETE FROM research_settings');await db.session.query('DELETE FROM daily_counters');});
 async function pending(){const candidate=await tx(()=>saveCandidate(ctx(),{firmName:'Example PM',website:'https://example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Property manager',sourceUrl:'https://example.test/',observedOn:'2026-10-01',preparedBy:'Fixture'}));if(!candidate.ok)throw new Error(candidate.reason);const run=await tx(()=>requestQualification(ctx(),{candidateId:candidate.value.id,expectedRevision:1}));if(!run.ok)throw new Error(run.reason);return {candidateId:candidate.value.id,runId:run.value.runId};}
 const pages:PageFetchProvider={providerKey:'company_page',fetchPages:async request=>{
  expect(request.urls).toEqual(['https://example.test/']);expect(request.maxPagesPerFirm).toBe(4);expect(await request.shouldContinue?.()).toBe(true);
@@ -118,4 +118,49 @@ it('counts credit-funded interpretation and routine replies against the same res
  await runQualification(ctx(),ids,{pageFetch:pages,extraction:{...extractor(ids.runId),extract:async()=>{calls++;throw new Error('must not spend beyond credit ceiling');}}});
  expect(calls).toBe(0);
  expect(await readQualification(ctx(),ids)).toMatchObject({status:'unavailable',reason:'research_budget_or_hold'});
+});
+
+it.each(['before_request','queued','during_count'] as const)('honors a research channel pause %s without paid dispatch',async phase=>{
+ const ids=await pending();const {openHold}=await import('../../policy/holds.ts');let calls=0;
+ const pause=()=>tx(()=>openHold(ctx(),{scopeKind:'channel',scopeKey:'research',reasonCode:'scoped_pause',blockedActionKinds:['research'],sourceEventKind:'research_channel_test'}));
+ if(phase!=='during_count')await pause();
+ if(phase==='before_request'){
+  const next=await tx(()=>saveCandidate(ctx(),{firmName:'Second PM',website:'https://second.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Property manager',sourceUrl:'https://second.test/',observedOn:'2026-10-01',preparedBy:'Fixture'}));
+  if(!next.ok)throw Error(next.reason);
+  expect(await tx(()=>requestQualification(ctx(),{candidateId:next.value.id,expectedRevision:1}))).toEqual({ok:false,reason:'research_held'});
+ }
+ await runQualification(ctx(),ids,{pageFetch:{...pages,fetchPages:async input=>{calls++;return pages.fetchPages(input);}},extraction:{...extractor(ids.runId),countInputTokens:async()=>{if(phase==='during_count')await pause();return 100;},extract:async()=>{calls++;throw Error('held extraction must not run');}}});
+ expect(calls).toBe(phase==='during_count'?1:0);
+ expect((await db.session.query('SELECT id FROM provider_reservations')).rows).toHaveLength(0);
+ expect((await db.session.query<{enabled:boolean}>('SELECT enabled FROM research_settings WHERE workspace_id=$1',[workspaceId])).rows[0]?.enabled??true).toBe(true);
+});
+
+it.each(['email','call','unrelated_owner'] as const)('does not infer candidate ownership or widen %s pauses',async lane=>{
+ const ids=await pending();const {openHold}=await import('../../policy/holds.ts');
+ const admin=(await db.session.query<{user_id:string}>("SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND role='admin'",[workspaceId])).rows[0]!.user_id;
+ await tx(()=>openHold(ctx(),{scopeKind:lane==='unrelated_owner'?'owner':'channel',scopeKey:lane==='unrelated_owner'?admin:lane,reasonCode:'scoped_pause',blockedActionKinds:lane==='email'?['email_send']:lane==='call'?['dial_authorization']:['research'],sourceEventKind:'research_channel_test'}));
+ let paid=0;await runQualification(ctx(),ids,{pageFetch:pages,extraction:{...extractor(ids.runId),extract:async()=>{paid++;return {ok:true,costCents:1,value:{facts:[],openingQuestion:null}};}}});
+ expect(paid).toBe(1);
+});
+
+it('research channel pauses discovery and kept-candidate checks, then release restores monitoring',async()=>{
+ const ids=await pending();
+ await tx(()=>reviewCandidate(ctx(),{id:ids.candidateId,expectedRevision:1,status:'kept'}));
+ await db.session.query("UPDATE sourcing_candidates SET next_source_check_at=now()-interval '1 hour' WHERE id=$1",[ids.candidateId]);
+ const {openHold,releaseHold}=await import('../../policy/holds.ts');
+ const {monitorCandidateSources}=await import('../../sourcing/monitoring.ts');
+ const {requestSourceCheck}=await import('../../sourcing/sourceCheck.ts');
+ const {runDiscovery}=await import('../../sourcing/discovery.ts');
+ await db.session.query('INSERT INTO sourcing_search_account(id) VALUES(true) ON CONFLICT DO NOTHING');
+ await db.session.query("INSERT INTO sourcing_discovery_settings(workspace_id,enabled,next_run_at) VALUES($1,true,now()-interval '1 hour')",[workspaceId]);
+ const hold=await tx(()=>openHold(ctx(),{scopeKind:'channel',scopeKey:'research',reasonCode:'scoped_pause',blockedActionKinds:['research'],sourceEventKind:'research_channel_test'}));
+ expect(await tx(()=>requestSourceCheck(ctx(),{id:ids.candidateId,expectedRevision:2}))).toEqual({ok:false,reason:'research_held'});
+ expect(await tx(()=>monitorCandidateSources(ctx()))).toEqual({queued:0});
+ let searches=0;
+ await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>{searches++;throw Error('held search must not run');}});
+ expect(searches).toBe(0);
+ await tx(()=>releaseHold(ctx(),hold));
+ expect(await tx(()=>monitorCandidateSources(ctx()))).toEqual({queued:1});
+ await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>{searches++;return {ok:true,credits:1,requestId:'released-fixture',hits:[]};}});
+ expect(searches).toBe(1);
 });

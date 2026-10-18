@@ -19,6 +19,10 @@ import {
 } from '../src/handlers/research.ts';
 import { composeResearch, describeResearch } from '../src/bootstrap/main.ts';
 import { anthropicExtraction } from '../src/research/anthropicExtraction.ts';
+import { withTransaction } from '@fss/domain/db/queryable.ts';
+import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
+import { sourcingDiscoverySource } from '../src/handlers/sourcingDiscovery.ts';
+import { sourcingMonitorSource } from '../src/handlers/sourcingMonitor.ts';
 
 /**
  * The two research jobs as the worker runs them (specification 13.1, 13.2,
@@ -201,6 +205,9 @@ describe('the research jobs', () => {
   });
 
   beforeEach(async () => {
+    await database.session.query('DELETE FROM active_holds');
+    await database.session.query('DELETE FROM sourcing_candidates');
+    await database.session.query('DELETE FROM sourcing_discovery_settings');
     await database.session.query('DELETE FROM firm_judgments');
     await database.session.query('DELETE FROM firm_facts');
     await database.session.query('DELETE FROM research_runs');
@@ -225,6 +232,63 @@ describe('the research jobs', () => {
     expect(registry.get('research.firm')?.chunked).toBe(true);
     // The sweep is one bounded pass and stays unchunked.
     expect(registry.get('research.sweep')?.chunked).toBeUndefined();
+  });
+
+  it('research channel pauses discovery and monitor schedulers, while email does not', async () => {
+    const { saveCandidate, reviewCandidate } = await import('@fss/domain/sourcing/candidates.ts');
+    const saved = await withTransaction(database.session, () => saveCandidate(context(), {
+      firmName: 'Scheduled Example PM', website: 'https://schedule.example.test/', locality: 'Boston', region: 'MA',
+      signal: 'fit_only', evidence: 'Fixture research', sourceUrl: 'https://schedule.example.test/', observedOn: '2026-10-01', preparedBy: 'Fixture',
+    }));
+    if (!saved.ok) throw new Error(saved.reason);
+    await withTransaction(database.session, () => reviewCandidate(context(), { id: saved.value.id, expectedRevision: 1, status: 'kept' }));
+    await database.session.query("UPDATE sourcing_candidates SET next_source_check_at=now()-interval '1 hour' WHERE id=$1", [saved.value.id]);
+    await database.session.query("INSERT INTO sourcing_discovery_settings(workspace_id,enabled,next_run_at) VALUES($1,true,now()-interval '1 hour')", [workspaceId]);
+    const due = async () => [
+      (await sourcingDiscoverySource(true).find(database.session, now)).length,
+      (await sourcingMonitorSource(true).find(database.session, now)).length,
+    ];
+    expect(await due()).toEqual([1, 1]);
+    const hold = await openHold(context(), { scopeKind: 'channel', scopeKey: 'research', reasonCode: 'scoped_pause', blockedActionKinds: ['research'], sourceEventKind: 'research_channel_test' });
+    expect(await due()).toEqual([0, 0]);
+    await releaseHold(context(), hold);
+    await openHold(context(), { scopeKind: 'channel', scopeKey: 'email', reasonCode: 'scoped_pause', blockedActionKinds: ['email_send'], sourceEventKind: 'research_channel_test' });
+    expect(await due()).toEqual([1, 1]);
+  });
+
+  it('a hold committed before the provider chunk wins the dispatch gate and releases unused spend', async () => {
+    const pageFetch = countingFetch(), extraction = countingExtraction();
+    const handler = researchFirmJobHandler({ pageFetch, extraction });
+    const scope = context().scope;
+    const base = { id: '00000000-0000-4000-8000-00000000000d', workspaceId, kind: 'research.firm',
+      idempotencyKey: jobIdempotencyKey.researchFirm(firmId, 1), attempt: 1, maxAttempts: 3,
+      fencingToken: '1', leaseOwner: 'research-hold-test', leaseExpiresAt: now };
+    const payload = { firmId, revision: 1, trigger: 'sweep' };
+    const one = await withTransaction(database.session, () => handler.handle({ session: database.session, scope, job: { ...base, payload } }));
+    const first = (one as { progress: unknown }).progress;
+    const two = await withTransaction(database.session, () => handler.handle({ session: database.session, scope, job: { ...base, payload: { ...payload, progress: first } } }));
+    const progress = (two as { progress: unknown }).progress;
+    const other = await database.appRuntimeSession();
+    const pid = (await other.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+    await database.session.query('BEGIN');
+    let pending: Promise<unknown> | undefined;
+    try {
+      await openHold(context(), { scopeKind: 'firm', scopeKey: firmId, reasonCode: 'scoped_pause', blockedActionKinds: ['research'], sourceEventKind: 'research_gate_test' });
+      pending = withTransaction(other, () => handler.handle({ session: other, scope, job: { ...base, payload: { ...payload, progress } } }));
+      await expect.poll(async () => (await database.session.query<{ wait_event_type: string }>('SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1', [pid])).rows[0]?.wait_event_type, { timeout: 2000 }).toBe('Lock');
+      expect(pageFetch.calls).toBe(0);
+      expect(extraction.calls).toBe(0);
+      await database.session.query('COMMIT');
+      await pending;
+    } finally {
+      await database.session.query('ROLLBACK');
+      if (pending) await pending;
+    }
+    expect(pageFetch.calls).toBe(0);
+    expect(extraction.counts).toBe(0);
+    expect(extraction.calls).toBe(0);
+    expect(await reservations()).toMatchObject([{ state: 'released', settled: 0 }]);
+    expect((await database.session.query('SELECT outcome,refusal_code FROM research_runs')).rows).toEqual([{ outcome: 'refused', refusal_code: 'research_disabled' }]);
   });
 
   it('refuses a payload that names no firm, no revision or a trigger that is not one', () => {

@@ -11,6 +11,10 @@ import type { ExtractionProvider, ExtractionRequest, PageFetchProvider } from '.
 import { updateResearchSettings } from '../../research/settings.ts';
 import { selectFirmsForSweep } from '../../research/sweep.ts';
 import { readFinishing } from '../../settings/finishing.ts';
+import { openHold, releaseHold } from '../../policy/holds.ts';
+import { enqueueFirmResearch } from '../../research/enqueue.ts';
+import { readResearchSettings } from '../../research/settings.ts';
+import { settleAttempt } from '../../research/reservations.ts';
 
 /**
  * Slice P1, invariant I1, on the research path: the research switch is read again
@@ -54,6 +58,9 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  await session.query('DELETE FROM active_holds');
+  await session.query('DELETE FROM jobs');
+  await session.query('UPDATE firms SET assigned_user_id=$1 WHERE id=$2', [seeded.alpha.salesperson.userId, crm.alpha.firmId]);
   for (const table of [
     'firm_judgments',
     'firm_facts',
@@ -281,5 +288,110 @@ describe('I1: research turned off inside chunk 3, between its requests', () => {
     await chunkThree(where, 1, countingFetch(), extraction);
     expect(extraction.counted.length).toBeGreaterThan(1);
     expect(extraction.called).toHaveLength(0);
+  });
+});
+
+type ResearchHoldScope = 'workspace' | 'firm' | 'owner' | 'channel';
+async function holdResearch(scopeKind: ResearchHoldScope): Promise<string> {
+  const key = { workspace: undefined, firm: crm.alpha.firmId, owner: seeded.alpha.salesperson.userId, channel: 'research' }[scopeKind];
+  return await openHold(context, {
+    scopeKind, ...(key === undefined ? {} : { scopeKey: key }),
+    reasonCode: 'scoped_pause', blockedActionKinds: ['research'], sourceEventKind: 'research_hold_test',
+  });
+}
+
+describe('explicit research holds disable the action, never the stored switch', () => {
+  it.each(['workspace', 'firm', 'owner', 'channel'] as const)('%s hold refuses enqueue and begin before reserving', async scope => {
+    await setResearch(true);
+    await holdResearch(scope);
+    expect(await enqueueFirmResearch(context, { firmId: crm.alpha.firmId, trigger: 'user_request', requestedByUserId: seeded.alpha.admin.userId }))
+      .toEqual({ ok: false, reason: 'research_disabled' });
+    expect(await beginFirmResearch(context, { firmId: crm.alpha.firmId, revision: 1, trigger: 'sweep', at: AT }))
+      .toEqual({ ok: false, reason: 'research_disabled' });
+    expect((await session.query('SELECT id FROM provider_reservations')).rows).toEqual([]);
+    expect((await session.query('SELECT id FROM jobs')).rows).toEqual([]);
+    expect((await readResearchSettings(context)).enabled).toBe(true);
+  });
+
+  it.each(['workspace', 'firm', 'owner', 'channel'] as const)('%s hold after reservation stops fetch/count/extraction and releases unused spend', async scope => {
+    await setResearch(true);
+    const where = await upToTheCall(1);
+    await holdResearch(scope);
+    const fetch = countingFetch(), extraction = recordingExtraction();
+    expect(await chunkThree(where, 1, fetch, extraction)).toEqual({ ok: false, reason: 'research_disabled' });
+    expect(fetch.requests()).toBe(0);
+    expect(extraction.counted).toHaveLength(0);
+    expect(extraction.called).toHaveLength(0);
+    expect(await runRow(where.runId)).toEqual({ outcome: 'refused', refusal: 'research_disabled', state: 'released', settled: 0 });
+    expect((await readResearchSettings(context)).enabled).toBe(true);
+  });
+
+  it('hands the scoped-hold predicate to the fetcher and refuses incomplete work', async () => {
+    const where = await upToTheCall(1);
+    let allowed: boolean | undefined;
+    const fetch: PageFetchProvider = { providerKey: 'company_page', fetchPages: async request => {
+      await holdResearch('firm');
+      allowed = await request.shouldContinue?.();
+      return { ok: true, costCents: 0, value: { pages: [], skipped: { paused: 1 } } };
+    } };
+    const extraction = recordingExtraction();
+    expect(await chunkThree(where, 1, fetch, extraction)).toEqual({ ok: false, reason: 'research_disabled' });
+    expect(allowed).toBe(false);
+    expect(extraction.counted).toHaveLength(0);
+    expect(extraction.called).toHaveLength(0);
+    expect((await readResearchSettings(context)).enabled).toBe(true);
+  });
+
+  it.each([1_000, 10_000_000])('hold during token count %s prevents the next count and paid extraction', async tokens => {
+    const where = await upToTheCall(1);
+    const extraction = recordingExtraction(async () => { await holdResearch('channel'); }, tokens);
+    expect(await chunkThree(where, 1, countingFetch(), extraction)).toEqual({ ok: false, reason: 'research_disabled' });
+    expect(extraction.counted).toHaveLength(1);
+    expect(extraction.called).toHaveLength(0);
+    expect(await runRow(where.runId)).toMatchObject({ outcome: 'refused', state: 'released', settled: 0 });
+  });
+
+  it('re-reads assignment after queuing, rather than binding owner authority to requester', async () => {
+    await openHold(context, { scopeKind: 'owner', scopeKey: seeded.alpha.admin.userId, reasonCode: 'scoped_pause', blockedActionKinds: ['research'], sourceEventKind: 'research_hold_test' });
+    expect((await enqueueFirmResearch(context, { firmId: crm.alpha.firmId, trigger: 'user_request', requestedByUserId: seeded.alpha.admin.userId })).ok).toBe(true);
+    const where = await upToTheCall(1);
+    await session.query('UPDATE firms SET assigned_user_id=$1 WHERE id=$2', [seeded.alpha.admin.userId, crm.alpha.firmId]);
+    const extraction = recordingExtraction(), fetch = countingFetch();
+    expect(await chunkThree(where, 1, fetch, extraction)).toEqual({ ok: false, reason: 'research_disabled' });
+    expect(fetch.requests()).toBe(0);
+    expect(extraction.called).toHaveLength(0);
+  });
+
+  it.each(['settled', 'estimated'] as const)('keeps earlier %s cost while releasing the held current attempt', async kind => {
+    const first = await upToTheCall(1);
+    const row = (await session.query<{ id: string }>('SELECT id FROM provider_reservations WHERE subject_id=$1', [first.runId])).rows[0]!;
+    await settleAttempt(context, { reservationId: row.id, at: AT, outcome: { kind, cents: 2 } });
+    const next = await ensureResearchCalling(context, { runId: first.runId, at: AT, maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS, hasExtraction: true });
+    if (next.kind !== 'calling') throw new Error('retry did not reserve');
+    await holdResearch('firm');
+    const extraction = recordingExtraction();
+    expect(await chunkThree({ runId: first.runId, attempt: next.attempt }, 1, countingFetch(), extraction)).toEqual({ ok: false, reason: 'research_disabled' });
+    expect(extraction.called).toHaveLength(0);
+    expect((await session.query('SELECT outcome,refusal_code,cost_cents,cost_estimated FROM research_runs WHERE id=$1', [first.runId])).rows[0])
+      .toEqual({ outcome: 'refused', refusal_code: 'research_disabled', cost_cents: 2, cost_estimated: kind === 'estimated' });
+    expect((await session.query('SELECT state,settled_cents FROM provider_reservations ORDER BY attempt')).rows)
+      .toEqual([{ state: kind, settled_cents: 2 }, { state: 'released', settled_cents: 0 }]);
+    expect((await readResearchSettings(context)).enabled).toBe(true);
+  });
+
+  it.each(['other_owner', 'other_firm', 'other_workspace', 'email', 'call', 'released', 'unassigned', 'reassigned'] as const)('does not widen %s holds into a research stop', async scenario => {
+    await setResearch(true);
+    if (scenario === 'other_owner') await openHold(context, { scopeKind: 'owner', scopeKey: seeded.alpha.admin.userId, reasonCode: 'scoped_pause', blockedActionKinds: ['research'], sourceEventKind: 'research_hold_test' });
+    else if (scenario === 'other_firm') await openHold(context, { scopeKind: 'firm', scopeKey: crm.beta.firmId, reasonCode: 'scoped_pause', blockedActionKinds: ['research'], sourceEventKind: 'research_hold_test' });
+    else if (scenario === 'other_workspace') await openHold(repositoryContext(workspaceScope(seeded.beta.workspaceId, { kind: 'system', component: 'worker' }), session), { scopeKind: 'workspace', reasonCode: 'scoped_pause', blockedActionKinds: ['research'], sourceEventKind: 'research_hold_test' });
+    else if (scenario === 'email' || scenario === 'call') await openHold(context, { scopeKind: 'channel', scopeKey: scenario, reasonCode: 'scoped_pause', blockedActionKinds: scenario === 'email' ? ['email_send'] : ['call_task', 'dial_authorization'], sourceEventKind: 'research_hold_test' });
+    else if (scenario === 'released') await releaseHold(context, await holdResearch('firm'));
+    else {
+      await holdResearch('owner');
+      await session.query('UPDATE firms SET assigned_user_id=$1 WHERE id=$2', [scenario === 'unassigned' ? null : seeded.alpha.admin.userId, crm.alpha.firmId]);
+    }
+    const where = await upToTheCall(1), extraction = recordingExtraction();
+    expect((await chunkThree(where, 1, countingFetch(), extraction)).ok).toBe(true);
+    expect(extraction.called).toHaveLength(1);
   });
 });

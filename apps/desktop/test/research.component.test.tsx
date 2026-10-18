@@ -407,6 +407,15 @@ describe('the Firm page’s Research section', () => {
     expect(document.body.textContent).not.toContain('link_not_permitted');
   });
 
+  it('renders a scoped research pause without claiming the stored switch is false', async () => {
+    install({}, state({ notice: 'research_disabled' }));
+    mount();
+    expect((await screen.findByTestId('research-notice')).textContent).toBe(
+      'Research is switched off or paused for this firm/workspace. Check research settings and holds.',
+    );
+    expect(document.body.textContent).not.toContain('research_disabled');
+  });
+
   it('says so plainly for a firm Callie has not read yet', async () => {
     install({}, state({ firm: { firmId: FIRM_ID, brief: null, facts: [], judgments: null, runs: [], links: [] } }));
     mount();
@@ -473,6 +482,11 @@ describe('Settings › Research', () => {
 });
 
 describe('the words for a refusal', () => {
+  it('keeps the research_disabled contract but describes action holds without asserting the switch is off', () => {
+    expect(RESEARCH_REFUSAL_CODES).toContain('research_disabled');
+    expect(RESEARCH_REFUSAL_CODES).not.toContain('research_held');
+    expect(researchNotice('research_disabled')).toBe('Research is switched off or paused for this firm/workspace. Check research settings and holds.');
+  });
   it('has English for every code the contract can send', () => {
     // `researchNotice` falls back to the code itself, which is the right behaviour for a
     // server newer than this build and the wrong thing for a code that shipped with it:

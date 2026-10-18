@@ -15,7 +15,7 @@ import {verifiedFirmOwner,verifiedFirmEvidence,VERIFIED_FIRM_POLICY_VERSION} fro
 export async function advanceVerifiedFirm(ctx:RepositoryContext,input:{runId:string}):Promise<void> {
  if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))return;
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
- if(!await verifiedFirmOwner(ctx)||!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)return;
+ if(!await verifiedFirmOwner(ctx)||!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return;
  const w=ctx.scope.workspaceId;
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${w}`]);
  const candidate=(await ctx.db.query<{id:string;revision:number;status:string;qualification_blocked:boolean;payload:CandidateInput}>(`SELECT c.* FROM sourcing_candidates c JOIN sourcing_qualification_runs r ON r.workspace_id=c.workspace_id AND r.candidate_id=c.id WHERE c.workspace_id=$1 AND r.id=$2 FOR UPDATE OF c`,[w,input.runId])).rows[0];

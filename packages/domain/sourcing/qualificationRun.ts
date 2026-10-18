@@ -22,7 +22,7 @@ const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS c
 async function allowed(ctx:RepositoryContext,runId:string):Promise<Run|null>{
  const row=(await ctx.db.query<Run>(readSql,[ctx.scope.workspaceId,runId])).rows[0];
  if(!row||!['pending','running'].includes(row.state)||row.candidate_status==='dismissed'||row.current_revision!==row.candidate_revision||row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx)))return null;
- if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)return null;
+ if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return null;
  return row;
 }
 /** Owns its committed stages. The outbound-fence handler must not wrap this in a transaction. */

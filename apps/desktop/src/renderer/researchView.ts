@@ -21,7 +21,7 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   research_queued: 'Queued. Callie will read the firm’s site shortly.',
   research_link_added: 'Link added. Callie will read it on the next run.',
   research_settings_saved: 'Saved.',
-  research_disabled: 'Research is switched off for this workspace.',
+  research_disabled: 'Research is switched off or paused for this firm/workspace. Check research settings and holds.',
   ceiling_reached: 'Today’s research budget is spent. Callie will pick this firm up tomorrow.',
   daily_firm_ceiling: 'Today’s research budget is spent. Callie will pick this firm up tomorrow.',
   daily_cost_ceiling: 'Today’s research budget is spent. Callie will pick this firm up tomorrow.',

@@ -11,7 +11,7 @@ export const SOURCE_MONITOR_LIMIT=25;
 export async function monitorCandidateSources(context:RepositoryContext):Promise<{queued:number}> {
   if(!decideAdminOnly(context).permitted)return {queued:0};
   if(!(await readResearchSettings(context)).enabled)return {queued:0};
-  if((await listApplicableHolds(context,{actionKind:'research'})).length>0)return {queued:0};
+  if((await listApplicableHolds(context,{actionKind:'research',channel:'research'})).length>0)return {queued:0};
   const {rows}=await context.db.query<{id:string;revision:number}>(
     `SELECT id,revision FROM sourcing_candidates WHERE workspace_id=$1 AND status='kept'
       AND next_source_check_at<=now() ORDER BY next_source_check_at,id
