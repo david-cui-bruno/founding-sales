@@ -10,6 +10,7 @@ import {lockResearchBudget} from '../research/ceilings.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {readCreditSpend,workspaceBusinessZone} from '../research/ledger.ts';
 import {readAttempt,reserveAttempt,markCalling,settleAttempt} from '../research/reservations.ts';
+import {ModelBudgetRefusal} from '../research/modelBudget.ts';
 import {centsOf,countedWithHeadroom} from '../research/pricing.ts';
 import {readReplyDraftContext} from './composer.ts';
 
@@ -50,7 +51,7 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
   const reservation=await reserveAttempt(ctx,{...attempt,providerKey:port.providerKey,at,businessTimeZone:zone,cents,modelName:HUMAN_REPLY_DRAFT_MODEL,maxInputTokens:inputTokens,maxOutputTokens:HUMAN_REPLY_DRAFT_MAX_OUTPUT_TOKENS});
   if(!await markCalling(ctx,reservation.id))return {ok:false as const,reason:'generation_already_attempted'};
   return {ok:true as const,value:reservation};
- });
+ }).catch((error:unknown)=>{if(error instanceof ModelBudgetRefusal)return {ok:false as const,reason:'generation_over_budget' as const};throw error;});
  if(!claim.ok)return claim;
  if(!await currentAuthorization()){
   await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}}));
