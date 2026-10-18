@@ -80,8 +80,8 @@ Recommend a local isolated Gmail acceptance adapter with the existing separate G
 
 ## Supporting research
 
-- [Deployment simplification](../../sourcing/deployment-simplification-research-20261011.md)
-- [Activation simplification](../../sourcing/activation-simplification-research-20261011.md)
+- [Deployment simplification](20261018/deployment-simplification-research-20261011.md)
+- [Activation simplification](20261018/activation-simplification-research-20261011.md)
 - [Gmail acceptance simplification](../../sourcing/gmail-acceptance-simplification-research-20261011.md)
 
 

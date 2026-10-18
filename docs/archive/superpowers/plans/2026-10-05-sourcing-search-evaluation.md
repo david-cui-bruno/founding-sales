@@ -4,7 +4,7 @@
 
 **Goal:** Evaluate Tavily Basic on Callie's actual sourcing hypotheses before wiring unattended daily discovery.
 **Architecture:** A provider-neutral discovery search port returns native result URLs/titles/snippets and usage. A fixed-parameter Tavily adapter implements it. A local evaluation tool uses a durable pre-request credit ledger and a single-process lock, so restart/retry cannot erase consumed allowance. Results remain unverified artifacts, not CRM firms.
-**Spec:** docs/superpowers/specs/2026-10-04-targeted-lead-sourcing-design.md.
+**Spec:** docs/archive/superpowers/specs/2026-10-04-targeted-lead-sourcing-design.md.
 
 ## Constraints
 No production scheduling, admission, outgoing messages, account purchase, payment method or paid overage. 20 attempts/day and 600/month for this single-host evaluation ledger. Each Basic request reserves one credit before network; failures retain that debit. Stop on missing/abnormal usage or provider errors. Cross-host/global quotas belong to the future database-backed production runner. A dedicated free key/account must be checked before live use. Native result URLs are candidates, never evidence of company identity or need.
@@ -17,4 +17,4 @@ No production scheduling, admission, outgoing messages, account purchase, paymen
 ## Review focus
 No exposed credentials; crash after debit cannot refund; no hidden paid fan-out; no raw third-party instructions executed; malformed/oversized responses safely fail; native URL required; benchmark does not admit leads or schedule production jobs.
 
-Verification: full Node 24 greenfield gate passed, 6,853 tests and 16 existing skips. Independent code review found no substantive findings. Live evaluation completed: nine requests/credits, 32 hits, 30 unique URLs. See docs/sourcing/search-evaluation-20261005.md; query and qualification quality need improvement before scheduling.
+Verification: full Node 24 greenfield gate passed, 6,853 tests and 16 existing skips. Independent code review found no substantive findings. Live evaluation completed: nine requests/credits, 32 hits, 30 unique URLs. See docs/archive/sourcing/20261018/search-evaluation-20261005.md; query and qualification quality need improvement before scheduling.

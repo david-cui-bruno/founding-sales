@@ -1,7 +1,7 @@
 # The greenfield workspace
 
 The greenfield tree is the whole repository: the previous-generation app was deleted
-in lane g95 (`docs/greenfield/legacy.md`; the tag `legacy-final` holds it). The root
+in lane g95 (`docs/archive/greenfield/pre-lean-docs-20261018/legacy.md`; the tag `legacy-final` holds it). The root
 `package.json` is the npm workspace root.
 
 ```

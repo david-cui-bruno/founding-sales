@@ -100,5 +100,5 @@ generated operational tools.
 supervisor rows David moved to "now", were deleted by lanes 44–46 on 18 September.
 The four D1a files lane 44 found still reached were kept on purpose (commit
 `a0bb21da`). The other rows are "Delete after replacing one dependency" or "Core,
-keep", and the map says nothing about deleting whole trees. `docs/greenfield/legacy.md`
+keep", and the map says nothing about deleting whole trees. `docs/archive/greenfield/pre-lean-docs-20261018/legacy.md`
 lists what remains and why.
