@@ -4,27 +4,21 @@ import type { JudgmentValue } from './judgments.ts';
 /**
  * The call brief: what a person reads in the two seconds before the phone rings.
  *
- * Assembled, not stored. Only the two generated lines live in a column
- * (`research_runs.brief`); everything else here is read from `firm_facts`,
- * `firm_judgments` and `contacts` at the moment the card is built, so a brief can
- * never be staler than the facts behind it.
+ * Assembled from `firm_facts`, `firm_judgments` and `contacts` when the card is
+ * built. Historical `research_runs.brief` suggestions are not evidence-linked
+ * and are not exposed, even when the run also recorded valid facts.
  *
  * ## The firm's own words, and an AI interpretation, are different things
- *
- * The design record: the brief "distinguishes a firm's own words (a quote with a
- * source) from an AI interpretation (labelled generated)". So the shape does the
- * distinguishing rather than a convention:
  *
  *   * `whyFit` and `whatChanged` are **quotes**. Each carries the source it came from
  *     and the date it was retrieved, and each is the whole text of a block the firm
  *     published — `validateFactSelections` is what makes that true.
- *   * `questions` and `opening` are **written by a model**. They are the only text
- *     here nobody at the firm said, and `generated` is true whenever either is
- *     present, which is what the desktop labels "AI suggestion".
+ *   * `questions` and `opening` retain their nullable wire fields, but are null.
+ *     A generated label or unrelated fact does not ground an individual claim.
  *
  * A brief with no generated part is still a brief: quotes, judgments and a likely
- * person, with `generated: false`. That is what a run without an extraction provider
- * produces, and it is a smaller answer rather than a failure.
+ * person, with `generated: false`. This existing fallback is a smaller answer,
+ * not a claim that unsupported suggestions became trustworthy.
  *
  * ## And a page on somebody else's host is not the firm's own words
  *
@@ -65,9 +59,9 @@ export interface CallBrief {
   /** Up to two quotes. What the firm says has changed. */
   readonly whatChanged: readonly BriefQuote[];
   readonly likelyPerson: BriefPerson | null;
-  /** Generated. Two of them, or none. */
+  /** Compatible wire field. Null until questions have verifiable evidence links. */
   readonly questions: readonly [string, string] | null;
-  /** Generated. One line. */
+  /** Compatible wire field. Unconstrained model openings are not exposed. */
   readonly opening: string | null;
   readonly generated: boolean;
   readonly judgments: {
@@ -256,31 +250,11 @@ function pick(
   return chosen;
 }
 
-/** The two generated lines, read out of `research_runs.brief`. Shape-checked, never trusted. */
-export function generatedPartsOf(brief: Readonly<Record<string, unknown>> | null): {
-  readonly questions: readonly [string, string] | null;
-  readonly opening: string | null;
-} {
-  const questions = brief?.['questions'];
-  const opening = brief?.['opening'];
-  const pair =
-    Array.isArray(questions) &&
-    questions.length === 2 &&
-    typeof questions[0] === 'string' &&
-    typeof questions[1] === 'string'
-      ? ([questions[0], questions[1]] as const)
-      : null;
-  return {
-    questions: pair,
-    opening: typeof opening === 'string' && opening.trim() !== '' ? opening : null,
-  };
-}
-
 export interface BuildBriefInput {
   readonly facts: readonly FirmFactDto[];
   readonly judgments: FirmJudgmentsDto;
   readonly revision: number;
-  /** `research_runs.brief` of the run the judgment came from. */
+  /** Historical input retained for callers. Unconstrained suggestions are ignored. */
   readonly runBrief: Readonly<Record<string, unknown>> | null;
   readonly likelyPerson: BriefPerson | null;
   /** Failed runs since the last completed one. Zero when the last run completed. */
@@ -291,7 +265,6 @@ export interface BuildBriefInput {
 export function buildCallBrief(input: BuildBriefInput): CallBrief {
   const whyFit = pick(input.facts, WHY_FIT_KEYS, MAX_WHY_FIT_QUOTES);
   const whatChanged = pick(input.facts, WHAT_CHANGED_KEYS, MAX_WHAT_CHANGED_QUOTES);
-  const { questions, opening } = generatedPartsOf(input.runBrief);
 
   const sources = new Map<string, string>();
   for (const quote of [...whyFit, ...whatChanged]) {
@@ -302,11 +275,9 @@ export function buildCallBrief(input: BuildBriefInput): CallBrief {
     whyFit,
     whatChanged,
     likelyPerson: input.likelyPerson,
-    questions,
-    opening,
-    // True whenever either generated part is present, which is the claim the desktop
-    // turns into the words "AI suggestion".
-    generated: questions !== null || opening !== null,
+    questions: null,
+    opening: null,
+    generated: false,
     judgments: {
       fit: input.judgments.fit,
       problemEvidence: input.judgments.problemEvidence,
