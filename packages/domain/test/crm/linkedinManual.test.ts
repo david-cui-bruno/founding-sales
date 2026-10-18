@@ -158,11 +158,15 @@ it('rechecks current ownership on read and preserves immutable audit rows in app
   expect(await tx(() => recordLinkedinManual(owner(), activity(binding.ledgerId)))).toMatchObject({ ok: false });
   await db.session.query('UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2', [members.alpha.workspaceId, binding.firmId, members.alpha.salesperson.userId]);
   const runtime = await db.appRuntimeSession();
-  await expect(runtime.query('DELETE FROM linkedin_manual_entries')).rejects.toThrow(/permission denied/u);
+  for (const table of ['linkedin_manual_ledgers', 'linkedin_manual_entries', 'linkedin_manual_stops']) {
+    await expect(runtime.query(`DELETE FROM ${table}`)).rejects.toThrow(/permission denied/u);
+  }
 });
 
 it('audits exceptional admin profile projections and refuses account transfer or membership revocation', async () => {
   const binding = await setup();
+  const entry = activity(binding.ledgerId, { kind: 'refusal' });
+  expect(await tx(() => recordLinkedinManual(owner(), entry))).toMatchObject({ ok: true });
   const admin = repositoryContext(workspaceScope(members.alpha.workspaceId, { kind: 'user', userId: members.alpha.admin.userId, role: 'admin' }), db.session);
   expect((await tx(() => readLinkedinManual(admin, {})))!.choices.some(row => row.personId === binding.personId)).toBe(true);
   const audits = (await db.session.query<{ detail: object }>("SELECT detail FROM audit_events WHERE workspace_id=$1 AND actor_user_id=$2 AND action='linkedin.manual_private_evidence_read'", [members.alpha.workspaceId, members.alpha.admin.userId])).rows;
@@ -175,5 +179,12 @@ it('audits exceptional admin profile projections and refuses account transfer or
   await db.session.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2", [members.alpha.workspaceId, members.alpha.salesperson.userId]);
   expect(await tx(() => readLinkedinManual(owner(), {}))).toBeNull();
   expect(await tx(() => recordLinkedinManual(owner(), activity(binding.ledgerId)))).toMatchObject({ ok: false });
+  for (const [table, key, value] of [
+    ['linkedin_manual_ledgers', 'id', binding.ledgerId],
+    ['linkedin_manual_entries', 'entry_id', entry.entryId],
+    ['linkedin_manual_stops', 'entry_id', entry.entryId],
+  ]) {
+    expect((await db.session.query(`SELECT 1 FROM ${table} WHERE workspace_id=$1 AND ${key}=$2`, [members.alpha.workspaceId, value])).rowCount).toBe(1);
+  }
   await db.session.query("UPDATE workspace_memberships SET status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2", [members.alpha.workspaceId, members.alpha.salesperson.userId]);
 });
