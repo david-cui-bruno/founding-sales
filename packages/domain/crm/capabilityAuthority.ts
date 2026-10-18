@@ -1,7 +1,6 @@
 import {createHash} from 'node:crypto';
-import {CRM_MAIL_CAPTURE_CONSENT,crmCapabilityAuthorityReceiptSchema,crmCapabilityConfigurationSchema,type crmMailCaptureControlsSaveSchema,type crmAskPurposeSaveSchema,type CrmCapabilityAuthorityReceipt,type CrmCapabilityConfiguration,type CrmOwnerApproval} from '@fss/contracts';
+import {CRM_MAIL_CAPTURE_CONSENT,crmCapabilityConfigurationSchema,type crmMailCaptureControlsSaveSchema,type crmAskPurposeSaveSchema,type CrmCapabilityConfiguration,type CrmOwnerApproval} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import {activeIdentityActor} from './identityAccess.ts';
 import {METADATA_REVIEW_DISCLOSURE,businessAccountBinding} from '../business/acquisition.ts';
 import {MAIL_CAPTURE_VERSION} from '../mail/crmSources.ts';
@@ -13,27 +12,6 @@ export const CRM_MAIL_CAPTURE_DISCLOSURE=Object.freeze({version:CRM_MAIL_CAPTURE
 type Capability=CrmCapabilityConfiguration['capability'];
 export interface CrmCapabilityRuntime {implementationCommit:string|null;imageDigest:string|null;side:'api'|'worker';schemaVersion:number;adapterAvailable(configuration:CrmCapabilityConfiguration):boolean}
 export function crmCapabilityConfigurationFingerprint(configuration:CrmCapabilityConfiguration){return createHash('sha256').update(JSON.stringify(crmCapabilityConfigurationSchema.parse(configuration))).digest('hex');}
-function internallyConsistent(r:CrmCapabilityAuthorityReceipt){
- return r.proof.evaluationConfigurationFingerprint===r.configurationFingerprint&&(r.configuration.capability!=='ask_answer'||r.configuration.evaluationFingerprint===r.proof.evaluationFingerprint)&&(r.configuration.capability!=='mail_capture'||r.configuration.evaluationReceipt===r.proof.evaluationReference);
-}
-export function crmCapabilityAuthorityFingerprint(receipt:CrmCapabilityAuthorityReceipt){return createHash('sha256').update(JSON.stringify(crmCapabilityAuthorityReceiptSchema.parse(receipt))).digest('hex');}
-async function trusted(session:SessionQueryable){return (await session.query<{allowed:boolean}>("SELECT pg_has_role(current_user,'migration','MEMBER') AS allowed")).rows[0]?.allowed===true;}
-export async function provisionCrmCapabilityAuthority(session:SessionQueryable,input:CrmCapabilityAuthorityReceipt){
- if(!await trusted(session))return {ok:false as const,reason:'authority_provision_denied'};
- const parsed=crmCapabilityAuthorityReceiptSchema.safeParse(input);if(!parsed.success)return {ok:false as const,reason:'authority_malformed'};
- const r=parsed.data;if(!internallyConsistent(r)||crmCapabilityConfigurationFingerprint(r.configuration)!==r.configurationFingerprint)return {ok:false as const,reason:'authority_fingerprint_mismatch'};
- return withTransaction(session,async()=>{
- await session.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`crm-authority:${r.configuration.workspaceId}:${r.id}`]);
- const fingerprint=crmCapabilityAuthorityFingerprint(r);const previous=(await session.query<{authority_sha256:string}>('SELECT authority_sha256 FROM crm_capability_authority_receipts WHERE workspace_id=$1 AND id=$2',[r.configuration.workspaceId,r.id])).rows[0];
- if(previous)return previous.authority_sha256===fingerprint?{ok:true as const,value:{authorityReceiptId:r.id}}:{ok:false as const,reason:'authority_conflict'};
- await session.query(`INSERT INTO crm_capability_authority_receipts(workspace_id,id,capability,owner_user_id,configuration_sha256,authority_sha256,receipt,reviewed_by,review_reference,verified_at,valid_until) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11)`,[r.configuration.workspaceId,r.id,r.configuration.capability,r.configuration.ownerUserId,r.configurationFingerprint,fingerprint,JSON.stringify(r),r.reviewedBy,r.reviewReference,r.verifiedAt,r.validUntil]);
- return {ok:true as const,value:{authorityReceiptId:r.id}};});
-}
-export async function revokeCrmCapabilityAuthority(session:SessionQueryable,input:{workspaceId:string;authorityReceiptId:string;reference:string}){
- if(!await trusted(session))return {ok:false as const,reason:'authority_provision_denied'};
- if(!input.reference||input.reference.length>200)return {ok:false as const,reason:'authority_malformed'};
- return withTransaction(session,async()=>{await session.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`crm-authority:${input.workspaceId}:${input.authorityReceiptId}`]);const r=await session.query('UPDATE crm_capability_authority_receipts SET revoked_at=clock_timestamp(),revocation_reference=$3 WHERE workspace_id=$1 AND id=$2 AND revoked_at IS NULL RETURNING id',[input.workspaceId,input.authorityReceiptId,input.reference]);return {ok:true as const,value:{revoked:r.rows.length===1}};});
-}
 const tables={metadata_review:'crm_business_policies',mail_capture:'crm_mail_capture_controls',crm_extraction:'crm_extraction_purposes',ask_answer:'crm_ask_purposes'} as const;
 async function snapshot(context:RepositoryContext,input:{capability:Capability;purpose?:'answer'|'embedding';mailboxId?:string},lock:boolean|'share'=false){
  if(context.scope.actor.kind!=='user'||!await activeIdentityActor(context)||input.capability==='mail_backfill')return null;

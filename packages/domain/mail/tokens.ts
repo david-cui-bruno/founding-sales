@@ -112,14 +112,6 @@ export async function readRefreshTokenEnvelope(
   return row === undefined ? null : toEnvelope(row);
 }
 
-/** Whether a grant exists at all, without decrypting anything. */
-export async function hasRefreshToken(context: RepositoryContext, mailboxId: string): Promise<boolean> {
-  const { rows } = await context.db.query<{ present: boolean }>(
-    'SELECT true AS present FROM mailbox_tokens WHERE workspace_id = $1 AND mailbox_id = $2',
-    [context.scope.workspaceId, mailboxId],
-  );
-  return rows[0]?.present === true;
-}
 
 /** 10.3: departure "deletes refresh-token material". Returns how many rows went. */
 export async function deleteRefreshToken(context: RepositoryContext, mailboxId: string): Promise<number> {

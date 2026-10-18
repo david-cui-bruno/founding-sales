@@ -335,7 +335,7 @@ print(match.group(1))
     local diagnostic database checked_schema
     diagnostic="$(release_output "$root" crm_acquisition_diagnostic json)"
     database="$(release_output "$root" database_name)"
-    checked_schema="$(node --input-type=module -e 'import(process.argv[1]).then(({REQUIRED_SCHEMA})=>process.stdout.write(String(REQUIRED_SCHEMA)))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/diagnostic-schema.mjs")" \
+    checked_schema="$(node --input-type=module -e 'import(process.argv[1]).then(({REQUIRED_SCHEMA})=>process.stdout.write(String(REQUIRED_SCHEMA)))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-schema.mjs")" \
       || fail "post-bootstrap diagnostic schema is unavailable."
     if ! FSS_RECORD_DIAGNOSTIC="$diagnostic" FSS_RECORD_DEFINITION="$definition" \
       FSS_RECORD_DATABASE="$database" FSS_RECORD_PREFIX="$prefix" FSS_RECORD_SCHEMA="$checked_schema" \

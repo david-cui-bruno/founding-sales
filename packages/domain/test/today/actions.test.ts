@@ -5,7 +5,7 @@ import { insertOrReviveMailbox, markMailboxDisconnected } from '../../mail/mailb
 import { fixtureMessage } from '../mail/support/mailWorld.ts';
 import { runMailSync } from '../../mail/sync.ts';
 import { randomUUID } from 'node:crypto';
-import { reassignFirm } from '../../crm/firms.ts';
+import { reassignFixtureFirm } from '../db/support/firmOwnership.ts';
 import { recordMessage, readMessage } from '../../mail/messages.ts';
 import { confirmReplyDisposition } from '../../classification/confirmations.ts';
 import { withTransaction } from '../../db/queryable.ts';
@@ -85,7 +85,7 @@ describe('current Today actions', () => {
     world = await createClassifierWorld({ cases: REPLY_CORPUS.filter(c => c.id === 'terse-human-reply') });
     const now = '2026-09-14T16:00:00.000Z';
     const action = (await readTodayActions(world.context(), { now })).actions[0]!;
-    expect((await withTransaction(world.mail.database.session, async () => await reassignFirm(world!.adminContext(), { firmId: world!.mail.crm.alpha.firmId, toUserId: world!.mail.seeded.alpha.admin.userId }))).ok).toBe(true);
+    expect((await withTransaction(world.mail.database.session, async () => await reassignFixtureFirm(world!.adminContext(), { firmId: world!.mail.crm.alpha.firmId, toUserId: world!.mail.seeded.alpha.admin.userId }))).ok).toBe(true);
     expect(await openTodayAction(world.context(), { ...action, now })).toEqual({ version: 1, target: null });
   });
   it('shows a current booked call with its exact meeting identity', async () => {

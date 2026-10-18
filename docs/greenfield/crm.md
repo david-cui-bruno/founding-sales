@@ -221,15 +221,6 @@ predicted the job kind that now drains the first two rows —
 not change; it gained a reader (lane G15,
 `docs/archive/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
 
-## Reassignment (Appendix A)
-
-`reassignFirm` is admin-only and commits four things together: the assignee change, an
-`active_holds` row with reason `reassignment` blocking every automated action kind for
-the firm, the `firm.reassigned` signal, and the audit event. Enrollments, fences and
-Today entries do not exist yet; the hold is what stops automated work in the meantime,
-and the signal is what the lanes that own them will act on. Dispatching mail staying
-with the former owner's mailbox is G6's, as Appendix A says.
-
 ## Merges (Appendix G 37)
 
 Nothing is deleted. The source keeps its row with `status = 'merged'` and a pointer at

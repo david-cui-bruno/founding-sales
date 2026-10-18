@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
   GmailClientError,
-  directionOfLabels,
   headerValue,
   type GmailAccessGrant,
   type GmailAccessOutcome,
@@ -605,9 +604,4 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       };
     },
   };
-}
-
-/** The direction the fixture's labels imply, for a test asserting on its own data. */
-export function fixtureDirection(message: GmailFixtureMessage): 'incoming' | 'outgoing' {
-  return directionOfLabels(message.labelIds ?? []);
 }

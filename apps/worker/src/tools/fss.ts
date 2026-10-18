@@ -1,6 +1,6 @@
 import {crmAcquisitionDiagnosticBindingsCommand} from './fss/crmAcquisitionDiagnosticBindings.ts';
 import {crmAcquisitionDiagnosticProvisionCommand,crmAcquisitionDiagnosticRevokeCommand} from './fss/crmAcquisitionDiagnostic.ts';
-import {crmAuthorityProvisionCommand,crmAuthorityRevokeCommand,crmReadAllocationPutCommand} from './fss/crmAuthority.ts';
+import {crmReadAllocationPutCommand} from './fss/crmReadAllocation.ts';
 import {migrationAuthenticationCheck} from './fss/migrationAuthentication.ts';
 import {discoveryResumeCommand} from './fss/discoveryResume.ts';
 import {qualificationResolveIdentityCommand} from './fss/qualificationResolveIdentity.ts';
@@ -43,8 +43,6 @@ import {
 import { loadS3JournalSource } from './fss/journalSource.ts';
 import { readSchemaVersionReport, runMigrate } from './fss/migrate.ts';
 import { releaseDrainOffCommand, releaseDrainOnCommand, releaseIdleCheckCommand } from './fss/releaseIdle.ts';
-import { schemaPreflight0020Command } from './fss/schemaPreflight0020.ts';
-import { schemaPreflight0021Command } from './fss/schemaPreflight0021.ts';
 import { runVerify } from './fss/verify.ts';
 import { bootstrapWorkspace } from './fss/bootstrapWorkspace.ts';
 import { RUNTIME_SECRET_VARIABLE, ensureRuntimeDatabaseUser } from './fss/databaseUsers.ts';
@@ -105,8 +103,6 @@ export const MIGRATION_IDENTITY_COMMANDS: readonly string[] = Object.freeze([
   'admin crm-acquisition-diagnostic bindings',
   'admin crm-acquisition-diagnostic provision',
   'admin crm-acquisition-diagnostic revoke',
-  'admin crm-authority provision',
-  'admin crm-authority revoke',
   'admin crm-read-allocation put',
 ]);
 
@@ -183,8 +179,6 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'crm-acquisition-diagnostic provision':crmAcquisitionDiagnosticProvisionCommand,
   'crm-acquisition-diagnostic revoke':crmAcquisitionDiagnosticRevokeCommand,
   'crm-read-allocation put': crmReadAllocationPutCommand,
-  'crm-authority provision': crmAuthorityProvisionCommand,
-  'crm-authority revoke': crmAuthorityRevokeCommand,
   'holds list': holdsListCommand,
   'holds release-restore': holdsReleaseRestoreCommand,
   'suppression-journal replay': suppressionJournalReplayCommand,
@@ -193,8 +187,6 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'release-record put': releaseRecordPutCommand,
   'restore-marker put': restoreMarkerPutCommand,
   'release-record show': releaseRecordShowCommand,
-  'schema-preflight 0020': schemaPreflight0020Command,
-  'schema-preflight 0021': schemaPreflight0021Command,
   // Lane RB: the read-before-lift reads of
   // docs/greenfield/send-path-verification-20260929.md, in one READ ONLY transaction.
   'send-path report': sendPathReportCommand,
@@ -442,7 +434,7 @@ async function runCommand(
       ? { ok: true, value: { ...outcome.value } }
       : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
-  if (path === 'admin crm-acquisition-diagnostic bindings' || path === 'admin crm-acquisition-diagnostic provision' || path === 'admin crm-acquisition-diagnostic revoke' || path === 'admin crm-authority provision' || path === 'admin crm-authority revoke' || path === 'admin crm-read-allocation put') {
+  if (path === 'admin crm-acquisition-diagnostic bindings' || path === 'admin crm-acquisition-diagnostic provision' || path === 'admin crm-acquisition-diagnostic revoke' || path === 'admin crm-read-allocation put') {
     if (migrationSession === null) return missingMigrationCredential();
     const name = spec.path.slice(1).join(' ');
     const resolved = await adminInvocation(name, parsed, migrationSession, config, environment);

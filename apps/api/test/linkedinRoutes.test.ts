@@ -4,7 +4,7 @@ import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope
 import { correctRelationship } from '@fss/domain/crm/relationships.ts';
 import { changeSelectedSource } from '@fss/domain/crm/people.ts';
 import { correctEndpoint } from '@fss/domain/crm/endpoints.ts';
-import { reassignFirm } from '@fss/domain/crm/firms.ts';
+import { reassignFixtureFirm } from '@fss/domain/test/db/support/firmOwnership.ts';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { dispatch } from '../src/server.ts';
@@ -84,7 +84,7 @@ it('rejects cross-workspace and non-owner reads and commands, not merely unauthe
     expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId }, bearer)).status).toBe(404);
     expect((await post('/crm/linkedin/routes/refuse', command({ claimId: route.claimId, expectedRevision: 1, firmId: route.firmId, relationshipId: route.relationshipId, expectedRelationshipRevision: 1, scope: 'firm' }), bearer)).status).toBe(409);
   }
-  await reassignFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: route.firmId, toUserId: fixture.alpha.admin.userId });
+  await reassignFixtureFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: route.firmId, toUserId: fixture.alpha.admin.userId });
   expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId })).status).toBe(404);
   expect((await post('/crm/linkedin/routes/refuse', command({ claimId: route.claimId, expectedRevision: 1, firmId: route.firmId, relationshipId: route.relationshipId, expectedRelationshipRevision: 1, scope: 'firm' }))).status).toBe(409);
 });
@@ -297,7 +297,7 @@ it('rechecks original firm assignment after a supported reassignment wait', asyn
   const observer = await fixture.database.appRuntimeSession();
   const pid = (await holder.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
   await holder.query('BEGIN');
-  expect((await reassignFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), holder), { firmId: route.firmId, toUserId: fixture.alpha.admin.userId })).ok).toBe(true);
+  expect((await reassignFixtureFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), holder), { firmId: route.firmId, toUserId: fixture.alpha.admin.userId })).ok).toBe(true);
   const pending = post('/crm/linkedin/routes/assess', { claimId: route.claimId });
   try { await waitForBlock(observer, pid); } finally { await holder.query('COMMIT'); }
   expect((await pending).status).toBe(404);
@@ -325,7 +325,7 @@ it('does not identify a human from a shared firm profile or bypass another origi
   const relation = await post('/crm/relationships/save', command({ personId: route.personId, firmId: otherFirm, status: 'historical', startDate: null, endDate: null, evidence: route.evidence }));
   const relationshipId = (relation.body as { result: { relationshipId: string } }).result.relationshipId;
   await post('/crm/relationships/context/save', command({ personId: route.personId, relationshipId, relationshipRevision: 1, evidence: route.evidence }));
-  await reassignFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: otherFirm, toUserId: fixture.alpha.admin.userId });
+  await reassignFixtureFirm(repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db), { firmId: otherFirm, toUserId: fixture.alpha.admin.userId });
   expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId })).status).toBe(404);
 });
 
@@ -374,9 +374,9 @@ it('preserves the original person stop through fresh evidence, profile correctio
   expect((await post('/crm/relationships/correct', command({ personId: route.personId, relationshipId: route.relationshipId, expectedRevision: 1, firmId: route.firmId, status: 'current', startDate: null, endDate: null, evidence }))).status).toBe(200);
   expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId })).body).toMatchObject({ state: 'held', reason: 'relationship_needs_review' });
   const admin = repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }), fixture.db);
-  await reassignFirm(admin, { firmId: route.firmId, toUserId: fixture.alpha.admin.userId });
+  await reassignFixtureFirm(admin, { firmId: route.firmId, toUserId: fixture.alpha.admin.userId });
   expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId })).status).toBe(404);
-  await reassignFirm(admin, { firmId: route.firmId, toUserId: fixture.alpha.salesperson.userId });
+  await reassignFixtureFirm(admin, { firmId: route.firmId, toUserId: fixture.alpha.salesperson.userId });
   expect((await post('/crm/linkedin/routes/assess', { claimId: route.claimId })).body).toMatchObject({ state: 'held', reason: 'relationship_needs_review' });
   expect((await fixture.db.query('SELECT claim_revision,relationship_revision FROM linkedin_route_refusals WHERE workspace_id=$1 AND person_id=$2', [fixture.alpha.workspaceId, route.personId])).rows).toEqual([{ claim_revision: 1, relationship_revision: 1 }]);
 });

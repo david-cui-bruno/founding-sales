@@ -84,15 +84,5 @@ describe('human corrections to meeting promises', () => {
     expect((await correction).ok).toBe(true);
     expect(await f.tasks(p.meetingId)).toMatchObject([{ status: 'done', user_edited: true }]);
   });
-  it('moves open tasks to the new firm owner while preserving task edits', async () => {
-    const { reconcileMeetingTasks, changeMeetingTask } = await import('../../meetings/tasks.ts');
-    const { reassignFirm } = await import('../../crm/firms.ts');
-    const p = await f.promise('I will send the guide tomorrow.');
-    await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, p));
-    const task = (await f.tasks(p.meetingId))[0]!;
-    await withTransaction(f.db.session, () => changeMeetingTask(f.context, { taskId: String(task['id']), expectedVersion: 1, action: 'edit', label: 'Keep my edit', deadline: { precision: 'date', localDate: '2026-10-09', zone: 'America/New_York' } }));
-    await withTransaction(f.db.session, () => reassignFirm(f.context, { firmId: f.firmId, toUserId: f.seeded.alpha.admin.userId }));
-    expect(await f.tasks(p.meetingId)).toMatchObject([{ owner_user_id: f.seeded.alpha.admin.userId, label: 'Keep my edit', user_edited: true }]);
-  });
 
 });

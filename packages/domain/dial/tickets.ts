@@ -283,23 +283,3 @@ export interface DialTicketState {
   readonly expiresAt: string;
   readonly consumedAt: string | null;
 }
-
-export async function readDialTicket(
-  context: RepositoryContext,
-  ticketId: string,
-): Promise<DialTicketState | null> {
-  const { rows } = await context.db.query<TicketRow & { consumed_at: Date | null }>(
-    `SELECT ${TICKET_COLUMNS}, consumed_at FROM dial_tickets WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, ticketId],
-  );
-  const row = rows[0];
-  if (row === undefined) return null;
-  return {
-    ticketId: row.id,
-    e164: row.e164,
-    firmId: row.firm_id,
-    issuedAt: row.issued_at.toISOString(),
-    expiresAt: row.expires_at.toISOString(),
-    consumedAt: row.consumed_at === null ? null : row.consumed_at.toISOString(),
-  };
-}

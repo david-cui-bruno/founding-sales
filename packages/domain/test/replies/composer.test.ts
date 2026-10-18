@@ -17,7 +17,7 @@ import {openHold} from '../../policy/holds.ts';
 import {humanReplyDraftInterpretation} from '../../replies/composerModel.ts';
 import {receiveCalcomEvent} from '../../meetings/calcom.ts';
 import {readResearchSettings,updateResearchSettings} from '../../research/settings.ts';
-import {reassignFirm} from '../../crm/firms.ts';
+import { reassignFixtureFirm } from '../db/support/firmOwnership.ts';
 import {readCreditSpend,workspaceBusinessZone} from '../../research/ledger.ts';
 import {databaseNow} from '../../policy/clock.ts';
 
@@ -156,7 +156,7 @@ it.each(['retired fact','revoked mailbox authority','reassigned firm'] as const)
  const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>{
   if(change==='retired fact')await f.tx(()=>retireAnswerBlock(f.admin,f.ref));
   if(change==='revoked mailbox authority')await f.tx(()=>setProspectingAuthorization(f.admin,{mailboxId:world.alpha.mailboxId,expectedRevision:source.value.authorizationRevision,enabled:false,basis:'owner_reported_google_permission'}));
-  if(change==='reassigned firm')await f.tx(()=>reassignFirm(f.admin,{firmId:f.firm.firmId,toUserId:world.alpha.workspace.admin.userId,reason:'Controlled source change'}));
+  if(change==='reassigned firm')await f.tx(()=>reassignFixtureFirm(f.admin,{firmId:f.firm.firmId,toUserId:world.alpha.workspace.admin.userId,reason:'Controlled source change'}));
   return {raw:JSON.stringify({text:'An obsolete answer.',factRefs:[f.ref],unsupportedClaims:[]}),costCents:1,costEstimated:false};
  }};
  expect(await generateReplyDraft(f.ctx,{commandId:randomUUID(),clientVersion:'1.0.0',messageId:f.messageId,sourceRevision:source.value.sourceRevision,factRefs:[f.ref],envelope:source.value.envelope},port)).toEqual({ok:false,reason:change==='retired fact'?'block_retired':change==='revoked mailbox authority'?'mailbox_unavailable':'not_assigned'});

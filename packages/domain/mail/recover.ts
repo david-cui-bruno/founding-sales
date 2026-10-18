@@ -7,12 +7,10 @@ import type { EnvelopeCipher } from './envelope.ts';
 import type { GmailAccessGrant, GmailClient, GmailOAuthConfig, GmailListOutcome } from './gmailClient.ts';
 import {readProviderBinding,recordProviderIncident,resolveProviderIncidentsAfterRead} from '../outbound/providerIncidents.ts';
 import {
-  advanceGeneration,
   openMailboxHold,
   readMailbox,
   recordSyncError,
   releaseMailboxHold,
-  setSyncState,
   fenceOf,
   lockForFencedStopFact,
   lockMailboxAtFence,
@@ -253,53 +251,6 @@ export async function startRecovery(
   return toRecovery(created);
 }
 
-/**
- * Appendix E step 4 for one mailbox: a recovery from the restore point minus ten
- * minutes, begun the way every recovery after a baseline is begun (lane g59).
- *
- * `mailbox_recoveries` holds one recovery per mailbox generation, and `startRecovery`
- * returns the one it finds. A connected mailbox has already completed its baseline at
- * its current generation, so a restore recovery started without advancing it was the
- * *baseline* row, already complete: `runMailRecovery` answered `already_complete` and
- * reprocessed nothing, and `fss admin mailbox recover` reported a pass over an inbox it
- * never read. That was true in production as much as in the drill, and the drill's own
- * assertion ("no reply reapplied its effect") is what would have said so.
- *
- * So this is the expired-cursor recovery's shape, with the restore's reason and floor:
- * advance the generation first, so anything in flight for the old one can no longer
- * write; mark the mailbox `recovering` and hold its automation on `coverage_incomplete`,
- * which the completed recovery releases; then start the recovery for the new
- * generation. The caller runs it with the generation this returns.
- */
-export async function beginRestoreRecovery(
-  context: RepositoryContext,
-  input: {
-    readonly mailbox: MailboxRow;
-    /** Appendix E.4's "restore point minus ten minutes". */
-    readonly fromAt: string;
-    /** The profile's `historyId`, read before this is called (`StartRecoveryInput`). */
-    readonly startHistoryId: string;
-    readonly floor?: RecoveryFloorSource | undefined;
-  },
-): Promise<RecoveryRow> {
-  // Gate first, then the row, at the generation and address the caller read (fold 3):
-  // the hold below takes the gate, and a row taken before it could deadlock.
-  await lockForFencedStopFact(context, { mailboxId: input.mailbox.id, fence: fenceOf(input.mailbox), write: 'restore recovery' });
-  const generation = await advanceGeneration(context, input.mailbox.id, fenceOf(input.mailbox));
-  await setSyncState(context, { mailboxId: input.mailbox.id, syncState: 'recovering' });
-  await openMailboxHold(context, {
-    mailboxId: input.mailbox.id,
-    ownerUserId: input.mailbox.ownerUserId,
-    reasonCode: 'coverage_incomplete',
-  });
-  return await startRecovery(context, {
-    mailbox: { ...input.mailbox, generation },
-    reason: 'restore',
-    fromAt: input.fromAt,
-    startHistoryId: input.startHistoryId,
-    ...(input.floor === undefined ? {} : { floor: input.floor }),
-  });
-}
 
 export interface MailRecoveryDeps extends MessagePipelineDeps {
   readonly now?: (()=>Date)|undefined;

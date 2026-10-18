@@ -1,5 +1,5 @@
 // One reviewed saved-plan path in the existing production workflow. The encrypted
-// transport reuses diagnostic-plan seal/decrypt; this is deployment, not feature consent.
+// transport preserves the existing saved-plan seal/decrypt; this is deployment, not feature consent.
 import { createHash, createPublicKey } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -106,7 +106,7 @@ try {
     const manifest = { version: 'fss.reviewed-production-plan.v1', commit: process.env.COMMIT, ...baseline, toSchema, planSha256: hash(readFileSync(planFile)), recipientPublicKeySha256, imagesRunId: process.env.RUN_ID, gateRunId: process.env.GATE_RUN_ID, digests: { api: images.images.api.digest, worker: images.images.worker.digest }, stateLineage: state.lineage, stateSerial: state.serial, backup, changes, root: 'infra/roots/production', activationAllowed: false };
     const manifestFile = resolve(directory, 'public', 'manifest.json'); writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600 });
     const fingerprint = hash(readFileSync(manifestFile)); writeFileSync(resolve(directory, 'public', 'manifest.sha256'), fingerprint + '\n', { mode: 0o600 });
-    command(process.execPath, [resolve('infra/scripts/diagnostic-plan.mjs'), 'seal', planFile, manifestFile, publicKeyFile, recipientPublicKeySha256, resolve(directory, 'public', 'plan.encrypted.json')]);
+    command(process.execPath, [resolve('infra/scripts/release-plan-transport.mjs'), 'seal', planFile, manifestFile, publicKeyFile, recipientPublicKeySha256, resolve(directory, 'public', 'plan.encrypted.json')]);
     process.stdout.write(`Reviewed plan prepared: manifest ${fingerprint}; ${changes.length} changed resources; schema ${baseline.fromSchema} → ${toSchema}. No resource apply or activation.\n`);
     rmSync(join(directory, 'private'), { recursive: true, force: true });
   } else if (mode === 'execute') {
@@ -123,7 +123,7 @@ try {
     const baseline = current(); if (baseline.from !== manifest.from || baseline.fromSchema !== manifest.fromSchema || baseline.bindings.apiTaskDefinition !== manifest.bindings.apiTaskDefinition || baseline.bindings.workerTaskDefinition !== manifest.bindings.workerTaskDefinition) throw new Error('reviewed_baseline_changed');
     status.schema = baseline.fromSchema; status.backup = backupReadiness(); save();
     const plan = resolve(directory, 'release.tfplan');
-    phase('decrypt-saved-plan', () => command(process.execPath, [resolve('infra/scripts/diagnostic-plan.mjs'), 'decrypt', envelopeFile, manifestFile, privateKeyFile, plan]));
+    phase('decrypt-saved-plan', () => command(process.execPath, [resolve('infra/scripts/release-plan-transport.mjs'), 'decrypt', envelopeFile, manifestFile, privateKeyFile, plan]));
     if (hash(readFileSync(plan)) !== manifest.planSha256) throw new Error('reviewed_plan_changed');
     phase('initialize-existing-root', () => terraform(['init', '-input=false', '-reconfigure', '-backend-config=backend.hcl'], 'reviewed_init_failed'));
     const state = JSON.parse(terraform(['state', 'pull'], 'reviewed_state_read_failed'));
