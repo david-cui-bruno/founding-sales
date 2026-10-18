@@ -1,12 +1,12 @@
 # Current operating state
 
-## October 18, 2026, 18:10 UTC
+## October 18, 2026, 22:33 UTC
 
 Times below are UTC unless marked Eastern. These are dated observations, not proof of later state.
 
-**Production is schema 118, source `c36764982a52f075fb7a38531907dc35705fbc12`.** Application release `39148965489` passed. Runtime acceptance at **17:28:36** verified API 2/worker 1, all four images, Bedrock and six smoke checks. The $50/day credit-funded MODEL guard remains model-only, not an all-AWS/Transcribe cap. This release stayed 118→118.
+**Production remains schema 118, source `c36764982a52f075fb7a38531907dc35705fbc12` after rollback.** Application release `39148965489` passed. Runtime acceptance at **17:28:36** verified API 2/worker 1, all four images, Bedrock and six smoke checks. The $50/day credit-funded MODEL guard remains model-only, not an all-AWS/Transcribe cap. This release stayed 118→118.
 
-**Main is `35706e0f3373e361741a2690dfdc4853ac601357`, schema 118.** It includes grounding PR683 and documentation PR684. Those newer grounding/suppression changes are **not yet production**. Qualification prompt-v7 and asynchronous research-hold safety are deployed through c367. Source completion alone is not actual model-quality acceptance.
+**Latest main is `8ef1c8bcf907e2d3c64c8b06753662712c42814e`, schema 118.** It includes grounding PR683, documentation PR684 and release-path PR687–689. Those newer grounding/suppression changes are **not yet production**. Qualification prompt-v7 and asynchronous research-hold safety are deployed through c367. Source completion alone is not actual model-quality acceptance.
 
 ## Sending and authority
 
@@ -30,8 +30,10 @@ Last budget observation **15:56:30**: research enabled, 100 shared qualification
 
 Last discovery observation **17:57:36**: configured 10/day, day 1/month 33, halted=false, dispatched=0, next October 19, 02:32 UTC (October 18, 22:32 EDT). No newer read or guaranteed execution is claimed. David approved Tavily Basic 10/day/$3 monthly card ceiling; preserve counters. Provider configuration does not prove invoice enforcement.
 
-Gmail capture remains disabled pending David's approval for `david@usecallie.com`: included incoming/Sent business messages, no backfill, Bedrock Haiku 4.5 cross-US, proposed $1/day/$20/month credits-only. LinkedIn manual ledger is deployed; no external actions are authorized.
+David approved Gmail at **22:33:17 UTC on October 18**: incoming and Sent business messages for `david@usecallie.com`, **no older backfill**, Bedrock Claude Haiku 4.5 cross-US, **credits-only $1/day/$20/month**. **Activation is not yet done.** Root must verify this exact scope before Enable, then read back ON, both caps and the first actual CRM messages. Retain Disable, deletion/correction propagation and interruption recovery. Approval is not activation or outreach permission. LinkedIn manual ledger is deployed; no external actions are authorized.
+
+David reports roughly **$100,000 GCP credits**, not independently verified. Vertex Gemini is a future founding-sales model option, **not a switch now**. At the next research, qualification or Gmail model choice, compare cost and quality and bring David the result.
 
 ## Delivery
 
-Removed automation stays removed; lexical search, privacy/history, regular sequences, Cal.com sync and manual drafting remain. Signed desktop 1.0.52 is published, not forced installed/restarted. At PR684 merge, active documentation was 89,677 words, down 211,975, with 130 originals preserved. Additive release simplification implementation has started in seven isolated files; the working legacy path remains until replacement hosted proof. No cuts yet. Baseline tag: `archive/pre-lean-selling-20261018-5c7d188e`.
+Removed automation stays removed; lexical search, privacy/history, regular sequences, Cal.com sync and manual drafting remain. Signed desktop 1.0.52 is published, not forced installed/restarted. At PR684 merge, active documentation was 89,677 words, down 211,975, with 130 originals preserved. Additive release simplification and preflight/image-promotion repairs are merged in PR687–689; the working legacy path remains until replacement hosted proof. No cuts yet. Baseline tag: `archive/pre-lean-selling-20261018-5c7d188e`.
