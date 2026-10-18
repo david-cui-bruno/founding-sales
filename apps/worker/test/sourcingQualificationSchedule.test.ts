@@ -6,7 +6,98 @@ import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {saveCandidate,reviewCandidate} from '@fss/domain/sourcing/candidates.ts';
 import {enqueueJob} from '@fss/domain/jobs/jobStore.ts';
 import {sourcingQualificationSource} from '../src/handlers/sourcingQualification.ts';
+import {runSchedulerPass} from '../src/scheduler/schedulerPass.ts';
+import {requestQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from '@fss/domain/sourcing/qualificationStore.ts';
+import {VERIFIED_FIRM_POLICY_VERSION,IDENTITY_REVIEW_REASONS} from '@fss/domain/sourcing/verifiedFirmPolicy.ts';
+import {openHold} from '@fss/domain/policy/holds.ts';
 let db:TestDatabase;let workspaceId:string;
+
+/** Real migrated PostgreSQL and normal scheduler enqueue, isolated from the legacy scenarios below. */
+async function versionFixture(){
+ const database=await createTestDatabase();
+ const {alpha}=await seedTwoWorkspaces(database.session),session=database.session;
+ const ctx=repositoryContext(workspaceScope(alpha.workspaceId,{kind:'system',component:'scheduler'}),session);
+ await session.query('INSERT INTO research_settings(workspace_id,enabled,daily_firm_ceiling) VALUES($1,true,100)',[alpha.workspaceId]);
+ await session.query('INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,owner_user_id,qualification_evaluation) VALUES($1,true,$2,$3::jsonb)',[alpha.workspaceId,alpha.admin.userId,JSON.stringify({verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,promptVersion:QUALIFICATION_PROMPT_VERSION,policyVersion:QUALIFICATION_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0})]);
+ const candidate=async(name:string,versions:{prompt?:string;policy?:string}={})=>withTransaction(session,async()=>{
+  const saved=await saveCandidate(ctx,{firmName:name,website:`https://${name}.example.test/`,locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:`https://${name}.example.test/`,observedOn:'2026-10-18',preparedBy:'Tavily Basic search · not verified'});
+  if(!saved.ok)throw new Error(saved.reason);
+  const kept=await reviewCandidate(ctx,{id:saved.value.id,expectedRevision:1,status:'kept'});if(!kept.ok)throw new Error(kept.reason);
+  const requested=await requestQualification(ctx,{candidateId:saved.value.id,expectedRevision:2},{enqueue:false});if(!requested.ok)throw new Error(requested.reason);
+  // Model a completed historical request without invoking a provider. Its original fingerprint
+  // must differ from today's current-version request, as an actual old-version fingerprint does.
+  await session.query("UPDATE sourcing_qualification_runs SET state='review',reason='fixture_evidence_unavailable',requested_at=now()-interval '1 hour',prompt_version=$2,policy_version=$3,fingerprint=CASE WHEN $4 THEN repeat('b',64) ELSE fingerprint END WHERE id=$1",[requested.value.runId,versions.prompt??QUALIFICATION_PROMPT_VERSION,versions.policy??QUALIFICATION_POLICY_VERSION,Boolean(versions.prompt||versions.policy)]);
+  return {id:saved.value.id,runId:requested.value.runId};
+ });
+ const pass=(enabled=true)=>runSchedulerPass(session,{sources:[sourcingQualificationSource(enabled)],now:new Date().toISOString()});
+ return {database,session,ctx,candidate,pass,workspaceId:alpha.workspaceId};
+}
+
+it.each([{prompt:'qualification-context-v6'},{policy:'qualification-v3'}])('refreshes same-revision stale versions %j exactly once through the registered scheduler',async versions=>{
+ const f=await versionFixture();try{
+  const old=await f.candidate('historical',versions),matching=await f.candidate('matching');
+  const before=(await f.session.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[matching.runId])).rows;
+  expect(await f.pass()).toMatchObject({outcome:'ran',inserted:1,externalActions:0,sources:[{name:'sourcing-qualification',inserted:1}]});
+  const rows=(await f.session.query<{id:string;candidate_revision:number;prompt_version:string;policy_version:string;state:string}>('SELECT id,candidate_revision,prompt_version,policy_version,state FROM sourcing_qualification_runs WHERE candidate_id=$1 ORDER BY requested_at,id',[old.id])).rows;
+  expect(rows).toHaveLength(2);expect(rows[1]).toMatchObject({candidate_revision:2,prompt_version:QUALIFICATION_PROMPT_VERSION,policy_version:QUALIFICATION_POLICY_VERSION,state:'pending'});
+  expect(await f.pass()).toMatchObject({outcome:'ran',inserted:0,alreadyPresent:0,externalActions:0});
+  expect((await f.session.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[matching.runId])).rows).toEqual(before);
+  const jobs=(await f.session.query('SELECT payload,max_attempts FROM jobs')).rows;
+  expect(jobs).toHaveLength(1);expect(jobs[0]).toMatchObject({max_attempts:1,payload:{runId:rows[1]!.id,candidateId:old.id,candidateRevision:2,promptVersion:QUALIFICATION_PROMPT_VERSION,policyVersion:QUALIFICATION_POLICY_VERSION}});
+  expect((await f.session.query('SELECT count(*)::integer AS count FROM sourcing_qualification_runs')).rows[0]).toEqual({count:3});
+  expect((await f.session.query('SELECT count FROM daily_counters')).rows).toEqual([{count:3}]);
+  for(const table of ['contacts','opportunities','sequence_enrollments','outbound_messages','outreach_plans','call_sessions','call_logs','sourcing_admissions','provider_reservations'])expect((await f.session.query(`SELECT * FROM ${table}`)).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
+
+it('retains same-identity review stops across prompt/policy changes and preserves blocked/dismissed drafts',async()=>{
+ const f=await versionFixture();try{
+  for(const [n,reason]of IDENTITY_REVIEW_REASONS.entries()){
+   for(const stale of [false,true]){
+    const c=await f.candidate(`stopped-${n}-${stale}`,stale?{prompt:'qualification-context-v6',policy:'qualification-v3'}:{});
+    // A version bump is not a human correction. Keep the existing identity exclusion
+    // independent of versions, even after the ordinary seven-day refresh interval.
+    await f.session.query("UPDATE sourcing_qualification_runs SET admission_reason=$2,requested_at=now()-interval '8 days' WHERE id=$1",[c.runId,reason]);
+   }
+  }
+  const blocked=await f.candidate('manually-blocked',{prompt:'qualification-context-v6'});
+  await f.session.query('UPDATE sourcing_candidates SET qualification_blocked=true WHERE id=$1',[blocked.id]);
+  const dismissed=await f.candidate('dismissed',{prompt:'qualification-context-v6'});
+  expect(await withTransaction(f.session,()=>reviewCandidate(f.ctx,{id:dismissed.id,expectedRevision:2,status:'dismissed'}))).toMatchObject({ok:true});
+  const before=(await f.session.query('SELECT * FROM sourcing_qualification_runs ORDER BY id')).rows;
+  expect(await f.pass()).toMatchObject({outcome:'ran',inserted:0,externalActions:0});
+  expect((await f.session.query('SELECT * FROM sourcing_qualification_runs ORDER BY id')).rows).toEqual(before);
+  expect((await f.session.query('SELECT * FROM jobs')).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
+
+it('keeps disabled scheduling and automatic-OFF unreviewed intake off despite stale versions',async()=>{
+ const f=await versionFixture();try{
+  const c=await f.candidate('automatic-off',{prompt:'qualification-context-v6'});
+  expect(await f.pass(false)).toMatchObject({outcome:'ran',inserted:0});
+  await f.session.query("UPDATE sourcing_candidates SET status='needs_review',next_source_check_at=NULL WHERE id=$1",[c.id]);
+  await f.session.query('UPDATE sourcing_discovery_settings SET auto_admission_enabled=false');
+  expect(await f.pass()).toMatchObject({outcome:'ran',inserted:0});
+  expect((await f.session.query('SELECT id FROM sourcing_qualification_runs')).rows).toHaveLength(1);
+  expect((await f.session.query('SELECT id FROM jobs')).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
+
+it.each(['disabled','held','ceiling'] as const)('keeps stale-version refresh behind existing research %s gate',async gate=>{
+ const f=await versionFixture();try{
+  await f.candidate('gated',{prompt:'qualification-context-v6'});
+  if(gate==='disabled')await f.session.query('UPDATE research_settings SET enabled=false');
+  if(gate==='held')await withTransaction(f.session,()=>openHold(f.ctx,{scopeKind:'workspace',reasonCode:'scoped_pause',blockedActionKinds:['research'],sourceEventKind:'fixture'}));
+  // This is the SAME shared research_firm_runs counter already consumed by requestQualification.
+  if(gate==='ceiling')await f.session.query('UPDATE daily_counters SET count=100');
+  const before=(await f.session.query('SELECT * FROM daily_counters')).rows;
+  expect(await f.pass()).toMatchObject({outcome:'ran',inserted:0,externalActions:0});
+  expect((await f.session.query('SELECT qualification_wait_reason FROM sourcing_discovery_settings')).rows).toEqual([{qualification_wait_reason:{disabled:'research_disabled',held:'research_held',ceiling:'daily_firm_ceiling'}[gate]}]);
+  expect((await f.session.query('SELECT * FROM daily_counters')).rows).toEqual(before);
+  expect((await f.session.query('SELECT id FROM sourcing_qualification_runs')).rows).toHaveLength(1);
+  expect((await f.session.query('SELECT id FROM jobs')).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
 beforeAll(async()=>{db=await createTestDatabase();workspaceId=(await seedTwoWorkspaces(db.session)).alpha.workspaceId;});afterAll(async()=>db.drop());
 it('drains more than one page of owner-kept candidates, skips unreviewed/dismissed drafts, and deduplicates repeated passes',async()=>{
  const ctx=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
