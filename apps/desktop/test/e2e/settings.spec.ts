@@ -24,6 +24,9 @@ async function openAdmin(page: Page, state: AdminState, hash = '#admin'): Promis
   app = await startAppServer({ admin: state });
   server = app.admin;
   await page.goto(app.url(hash));
+  await page.getByTestId('settings-advanced').evaluate((element: HTMLDetailsElement) => { element.open = true; });
+  const checklist = page.getByText('Review domain authentication checklist', { exact: true });
+  if (await checklist.count()) await checklist.click();
 }
 
 test('an admin sees every slice, its provenance, and an editor for each', async ({ page }) => {
@@ -34,7 +37,7 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
   // Wave 1: the alarm thresholds and the supported versions are gone from the page.
   await expect(page.getByTestId('setting-alert_thresholds')).toHaveCount(0);
   await expect(page.getByTestId('setting-client_version_range')).toHaveCount(0);
-  await expect(page.getByTestId('settings-advanced')).toHaveCount(0);
+  await expect(page.getByTestId('settings-advanced')).toHaveCount(1);
   await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
   await expect(page.getByTestId('value-business_time_zone')).toBeEnabled();
   await expect(page.getByTestId('save-business_time_zone')).toBeEnabled();
@@ -219,7 +222,7 @@ test('the dashboard says a figure is unavailable rather than showing it as zero'
   // The figures that *can* be computed are numbers, not excuses.
   await expect(page.getByTestId('panel-reply-handling')).toContainText('1 of 2 handled.');
   await expect(page.getByTestId('panel-calls')).toContainText('voicemail_left: 3');
-  await expect(page.getByTestId('panel-holds')).toContainText('scoped_pause: 1');
+  await expect(page.getByTestId('panel-holds')).toContainText('Calling is paused for this firm. Resume it when you are ready.');
 });
 
 test('the Dashboard route starts on the Dashboard screen, and its tab and route follow each other', async ({ page }) => {

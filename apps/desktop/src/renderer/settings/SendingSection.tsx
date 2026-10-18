@@ -42,6 +42,7 @@ export function SendingSection({
   onRecord,
   onCap,
   onRetry,
+  compact = false,
 }: {
   readonly view: AdminView;
   /** Whether this section's own checklist save is on the wire (P1-4). */
@@ -51,6 +52,7 @@ export function SendingSection({
   onRecord(input: RecordSendingAuthenticationInput): void;
   onCap(input: SetSendingCapInput): void;
   onRetry(): void;
+  readonly compact?: boolean;
 }): JSX.Element | null {
   const section = view.sendingAdmin;
   /*
@@ -123,7 +125,7 @@ export function SendingSection({
 
       <ChangedElsewhere show={elsewhere} />
       {domain === null ? null : (
-        <>
+        <details open={!compact} className="mt-2 text-sm"><summary className="cursor-pointer text-xs text-muted-foreground">Review domain authentication checklist</summary>
           <div className="mt-2 flex flex-col gap-1">
             {SENDING_CHECK_NAMES.map((name: SendingCheckName) => (
               <label key={name} className="flex items-center gap-2 text-sm">
@@ -161,7 +163,7 @@ export function SendingSection({
             </Button>
             <FormNotice forms={['sending-domain']} />
           </div>
-        </>
+        </details>
       )}
 
       {section.ramps.length === 0 ? null : (

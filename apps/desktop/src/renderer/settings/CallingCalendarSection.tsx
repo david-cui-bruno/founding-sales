@@ -113,21 +113,23 @@ export function CallingCalendarSection({
   busy,
   onSave,
   onRetry,
+  scope = 'all',
 }: {
   readonly state: AdminState;
   /** Whether the save of this setting key is on the wire. */
   busy(settingKey: SaveIntegrationInput['settingKey']): boolean;
   onSave(input: SaveIntegrationInput): void;
   onRetry(): void;
+  readonly scope?: 'all' | 'calling' | 'advanced';
 }): JSX.Element | null {
   if (state.role !== 'admin') return null;
   const integrations = state.integrations ?? null;
   if (integrations === null) {
     return (
-      <Section data-testid="calling-calendar" title="Calling & calendar">
+      <Section data-testid={scope === 'advanced' ? 'calling-advanced' : 'calling-calendar'} title="Calling & calendar">
         <Unread
           line="Callie could not read the calling and calendar settings."
-          testId="calling-calendar-unread"
+          testId={scope === 'advanced' ? 'calling-advanced-unread' : 'calling-calendar-unread'}
           retryTestId="calling-calendar-retry"
           onRetry={onRetry}
         />
@@ -136,6 +138,7 @@ export function CallingCalendarSection({
   }
   return (
     <Loaded
+      scope={scope}
       // A new server answer (after a save) resets the drafts to what is now in force.
       key={JSON.stringify([
         integrations.telephonyBudget,
@@ -163,6 +166,7 @@ function Loaded({
   notice,
   busy,
   onSave,
+  scope,
 }: {
   readonly integrations: IntegrationsSettingsResponse;
   /** Slice P1: "Transcription is off. 1 transcription already sent is finishing.", and the classifier's. */
@@ -171,6 +175,7 @@ function Loaded({
   readonly notice: string | null;
   busy(settingKey: SaveIntegrationInput['settingKey']): boolean;
   onSave(input: SaveIntegrationInput): void;
+  readonly scope: 'all' | 'calling' | 'advanced';
 }): JSX.Element {
   const budget = integrations.telephonyBudget;
   // Kept above the route with the server value each edit began from (K2): an edit whose base
@@ -198,8 +203,9 @@ function Loaded({
   const scriptChanged = scriptTrimmed !== integrations.voicemailScript;
 
   return (
-    <Section data-testid="calling-calendar" title="Calling & calendar">
+    <Section data-testid={scope === 'advanced' ? 'calling-advanced' : 'calling-calendar'} title={scope === 'calling' ? 'Calling budget & voicemail' : scope === 'advanced' ? 'Recording, calendar & spending' : 'Calling & calendar'}>
       <Rows>
+        {scope !== 'advanced' ? <>
         <Row data-testid="row-calling">
           <RowMain
             line="In-app calling"
@@ -282,7 +288,7 @@ function Loaded({
         </Row>
         <Row className="items-start">
           <details data-testid="budget-advanced" className="text-xs text-muted-foreground">
-            <summary className="cursor-default">Advanced</summary>
+            <summary className="cursor-pointer">Call length</summary>
             <label className="mt-1 flex items-center gap-2">
               Longest call, in minutes
               <Input
@@ -335,6 +341,8 @@ function Loaded({
           </Button>
         </Row>
 
+        </> : null}
+        {scope !== 'calling' ? <>
         {integrations.transcription === undefined ? null : (
           <TranscriptionRows transcription={integrations.transcription} editable={editable} busy={busy} onSave={onSave} />
         )}
@@ -373,9 +381,10 @@ function Loaded({
             }}
           />
         </Row>
+        </> : null}
       </Rows>
       {notice === null ? null : (
-        <p data-testid="calling-calendar-notice" role="alert" className="mt-2 text-xs text-destructive">
+        <p data-testid={scope === 'advanced' ? 'calling-advanced-notice' : 'calling-calendar-notice'} role="alert" className="mt-2 text-xs text-destructive">
           {reasonSentence(notice)}
         </p>
       )}

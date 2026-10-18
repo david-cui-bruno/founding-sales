@@ -27,17 +27,19 @@ import { Section } from './Group.tsx';
 
 const FIELDS = [
   { key: 'dailyFirmCeiling', label: 'Firms a day' },
-  { key: 'dailyCostCeilingCents', label: 'Cents a day' },
-  { key: 'monthlyCostCeilingCents', label: 'Cents a month' },
+  { key: 'dailyCostCeilingCents', label: 'Daily budget (cents)' },
+  { key: 'monthlyCostCeilingCents', label: 'Monthly budget (cents)' },
   { key: 'maxPagesPerFirm', label: 'Pages per firm' },
 ] as const;
 
 export function ResearchSettingsSection({
   state,
   saving,
+  disabled = false,
   onSave,
 }: {
   readonly state: ResearchState | null;
+  readonly disabled?: boolean;
   /** Whether this section's own Save is on the wire (P1-4). */
   readonly saving: boolean;
   onSave(edit: ResearchSettingsEdit): void;
@@ -78,7 +80,7 @@ export function ResearchSettingsSection({
         <input
           type="checkbox"
           data-testid="research-enabled"
-          disabled={saving}
+          disabled={saving || disabled}
           checked={settings.enabled}
           onChange={event => {
             onSave({ enabled: event.target.checked });
@@ -92,14 +94,15 @@ export function ResearchSettingsSection({
         </p>
       )}
 
-      <div className="mt-2 flex flex-col gap-2">
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
         {FIELDS.map(field => (
           <label key={field.key} className="flex items-center gap-2 text-sm">
             <span className="w-36 text-muted-foreground">{field.label}</span>
             <Input
+              className="max-w-24"
               data-testid={`research-${field.key}`}
               inputMode="numeric"
-              disabled={saving}
+              disabled={saving || disabled}
               value={kept[field.key]?.value ?? ''}
               onChange={event => {
                 kept[field.key]?.set(event.target.value);
@@ -114,7 +117,7 @@ export function ResearchSettingsSection({
         <Button
           size="sm"
           data-testid="research-save"
-          disabled={saving}
+          disabled={saving || disabled}
           {...(saving ? { 'aria-busy': true } : {})}
           onClick={() => {
             onSave({
