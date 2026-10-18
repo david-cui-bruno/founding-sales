@@ -17,7 +17,6 @@ import { businessMailCaptureHandler } from '@fss/domain/mail/crmSources.ts';
 import {crmCaptureExtractionJobHandler} from '../handlers/crmCaptureExtraction.ts';
 import {crmExtractionRecoverySource} from '../handlers/crmExtractionRecovery.ts';
 import { crmExtractJobHandler } from '../handlers/crmExtract.ts';
-import {automaticEmailHandler,automaticEmailSource} from '../handlers/emailAdmission.ts';
 import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
 import {linkedinRecurringHandler,linkedinRecurringSource} from '../social/linkedinRecurringJobs.ts';
@@ -284,7 +283,6 @@ export function registerHandlers(
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
   registry.register(linkedinRecurringHandler(composition.linkedinRecurring));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
-  registry.register(automaticEmailHandler({implementationCommit:buildCommit(process.env),imageDigest:composition.send?.workerImageDigest??null,side:'worker',deploymentSendingEnabled:composition.send?.deploymentSendingEnabled??false,production:composition.send?.production??true,schemaVersion:REQUIRED_SCHEMA}));
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
@@ -558,7 +556,6 @@ export function workerDueWorkSources(
     researchSweepSource(),
     sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
     sourcingQualificationSource(options.qualification===true),
-    automaticEmailSource(),
     sourcingDiscoverySource(options.discovery === true),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a

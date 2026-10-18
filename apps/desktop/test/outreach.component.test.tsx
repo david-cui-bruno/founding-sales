@@ -6,7 +6,7 @@ import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
 import type {AnswerBlock,OutreachControl,OutreachSenderStandingResponse} from '@fss/contracts';
 afterEach(cleanup);
 const id='11111111-1111-4111-8111-111111111111';
-const view:OutreachControl={emailAdmission:{revision:0,enabled:false,ownerUserId:null,mailboxId:null,sequenceVersionId:null,evaluation:null,configurationSha256:null,ready:false,reasons:['configuration_required']},settings:{revision:0,enabled:false,sequenceVersionId:null,bookingUrl:null},blocks:[],senders:[{id,address:'david@usecallie.com',ownerUserId:id,connected:true,authorized:false,authorizationRevision:0,sendingEnabled:false,dailyCap:5}],sequences:[],candidates:[],replies:[]};
+const view:OutreachControl={settings:{revision:0,enabled:false,sequenceVersionId:null,bookingUrl:null},blocks:[],senders:[{id,address:'david@usecallie.com',ownerUserId:id,connected:true,authorized:false,authorizationRevision:0,sendingEnabled:false,dailyCap:5}],sequences:[],candidates:[],replies:[]};
 const ports=():OutreachPorts=>({read:vi.fn(async()=>({view,reason:null})),preview:vi.fn(async()=>({view:null,reason:'not_found'})),mutate:vi.fn(async()=>({accepted:true,view,reason:null}))});
 it('shows a provider deadline and required authentication review without offering to bypass either hold',async()=>{
  const standing={senders:[{mailboxId:id,standing:{healthySendingDays:40,earnedCap:50,effectiveCap:5,lastActivityAt:null,activityBasis:'mailbox_creation' as const,inactivityDays:0,recovery:null,readiness:{ready:false,reasons:['provider_incident']}},incidents:[
