@@ -69,6 +69,20 @@ function summary(result: string, mode = 'reviewed'): { output: string; file: str
 }
 
 describe('protected reviewed execution without a shared release window', () => {
+  it.each([
+    ['greenfield-images.yml', 'push'],
+    ['greenfield-infra.yml', 'pull_request'],
+    ['greenfield-infra.yml', 'push'],
+  ])('checks release-controller changes in %s %s path filters', (file, event) => {
+    const source = readRepositoryFile(`.github/workflows/${file}`);
+    const triggers = source.split('\npermissions:\n')[0] ?? '';
+    const eventBlock = triggers.split(`\n  ${event}:\n`)[1]?.split(/\n(?: {2}[a-z_]+:|[a-z_]+:)/u)[0];
+    expect(eventBlock).toBeDefined();
+    const paths = [...(eventBlock ?? '').matchAll(/^ {6}- '([^']+)'$/gmu)].map(match => match[1]);
+    expect(paths.filter(path => path === '.github/workflows/greenfield-deploy.yml')).toHaveLength(1);
+    if (event === 'push') expect(eventBlock).toContain('    branches: [main]');
+  });
+
   it('keeps missing shared hold fail-closed and literal false only in the exact execute step', () => {
     expect(workflow.split('\njobs:\n')[0]).toContain("FSS_RELEASE_HOLD: ${{ vars.FSS_RELEASE_HOLD || 'true' }}");
     const reviewed = job('reviewed');

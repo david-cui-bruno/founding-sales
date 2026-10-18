@@ -73,6 +73,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/greenfield-images.yml'
+      - '.github/workflows/greenfield-deploy.yml'
       - 'infra/**'
 
 permissions:

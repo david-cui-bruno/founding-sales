@@ -8,11 +8,13 @@ on:
     paths:
       - 'infra/**'
       - '.github/workflows/greenfield-infra.yml'
+      - '.github/workflows/greenfield-deploy.yml'
   push:
     branches: [main]
     paths:
       - 'infra/**'
       - '.github/workflows/greenfield-infra.yml'
+      - '.github/workflows/greenfield-deploy.yml'
 
 permissions:
   contents: read
