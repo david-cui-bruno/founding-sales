@@ -8,6 +8,9 @@ export const KEY = 'fss/greenfield/production/terraform.tfstate';
 export const STATE = `arn:aws:s3:::${BUCKET}/${KEY}`;
 export const LOCK = `${STATE}.tflock`;
 export const TABLE = `arn:aws:dynamodb:${REGION}:${ACCOUNT}:table/callie-sourcing-tflock`;
+export const LOCK_TABLE_KMS_KEY = `arn:aws:kms:${REGION}:${ACCOUNT}:key/a321a083-4058-4130-b060-b950e4aa1404`;
+const LOCK_KMS_CONTEXT = { 'kms:ViaService': `dynamodb.${REGION}.amazonaws.com`, 'kms:EncryptionContext:aws:dynamodb:tableName': 'callie-sourcing-tflock', 'kms:EncryptionContext:aws:dynamodb:subscriberId': ACCOUNT };
+const NAMESPACE_KMS_CONDITION = { StringLike: { 'aws:ResourceTag/NamePrefix': 'fss-prod*' } };
 export const ROW = `${BUCKET}/${KEY}`;
 export const ROLE = `arn:aws:iam::${ACCOUNT}:role/fss-prod-deploy`;
 const list = value => Array.isArray(value) ? value : [value];
@@ -27,6 +30,7 @@ export function backendPolicy(stage) {
     allow('BackendTable', ['dynamodb:DescribeTable'], TABLE),
     allow('BackendLockRow', ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:DeleteItem'], TABLE, rows([ROW])),
     allow('BackendChecksum', apply ? ['dynamodb:GetItem', 'dynamodb:PutItem'] : ['dynamodb:GetItem'], TABLE, rows([`${ROW}-md5`])),
+    allow('BackendLockTableDecrypt', ['kms:Decrypt'], LOCK_TABLE_KMS_KEY, { StringEquals: LOCK_KMS_CONTEXT }),
   ] };
 }
 
@@ -75,20 +79,47 @@ export function validateConfiguration(stage, { env = process.env, backend = read
 
 // A conservative model, not IAM simulation: unsupported conditions on relevant rights
 // refuse rather than guessing. Unrelated rights are retained, never re-rendered.
+const namespaceKms = statement => same(statement.Condition, NAMESPACE_KMS_CONDITION) && same(list(statement.Resource), ['*']) && !statement.NotAction;
+const kmsDataActions = ['kms:Decrypt', 'kms:Encrypt', 'kms:GenerateDataKey', 'kms:GenerateDataKeyWithoutPlaintext', 'kms:GenerateDataKeyPair', 'kms:GenerateDataKeyPairWithoutPlaintext', 'kms:ReEncryptFrom', 'kms:ReEncryptTo', 'kms:CreateGrant'];
+const touchesKmsData = statement => statement.NotAction || list(statement.Action).some(pattern => kmsDataActions.some(action => matches(pattern, action, true)));
+
+function validateKmsScope(policy, { lockKeyNamePrefix } = {}) {
+  for (const statement of policy.Statement.filter(s => s.Effect === 'Allow' && touchesKmsData(s))) {
+    // Existing namespace-tagged rights are unrelated ONLY with an explicitly supplied
+    // observed nonproduction tag classification for this key. Missing is not absent.
+    if (namespaceKms(statement)) {
+      if (lockKeyNamePrefix === undefined) fail('lock_key_tag_required');
+      if (lockKeyNamePrefix !== null && (typeof lockKeyNamePrefix !== 'string' || !/^[A-Za-z0-9_:/=+.@ -]+$/u.test(lockKeyNamePrefix) || matches('fss-prod*', lockKeyNamePrefix))) fail('lock_key_namespace_changed');
+      continue;
+    }
+    // An alias resource cannot authorize these key-resource data operations. Preserve
+    // the older role's named alias administration without treating it as a key allow.
+    if (!statement.NotResource && list(statement.Resource).every(resource => resource === `arn:aws:kms:${REGION}:${ACCOUNT}:alias/fss-prod*`)) continue;
+    if (statement.NotAction || statement.NotResource || !same(list(statement.Action), ['kms:Decrypt']) || !same(list(statement.Resource), [LOCK_TABLE_KMS_KEY]) || !same(statement.Condition, { StringEquals: LOCK_KMS_CONTEXT })) fail('kms_permission_scope');
+  }
+}
+
 function applies(statement, action, resource, context) {
   const actionMatch = statement.Action ? list(statement.Action).some(pattern => matches(pattern, action, true)) : statement.NotAction ? !list(statement.NotAction).some(pattern => matches(pattern, action, true)) : false;
   const resourceMatch = statement.Resource ? list(statement.Resource).some(pattern => matches(pattern, resource)) : statement.NotResource ? !list(statement.NotResource).some(pattern => matches(pattern, resource)) : false;
   if (!actionMatch || !resourceMatch) return false;
+  // validateKmsScope already required explicit nonproduction tag evidence for this
+  // exact key before a preserved namespace-conditioned allow can be excluded.
+  if (resource === LOCK_TABLE_KMS_KEY && statement.Effect === 'Allow' && namespaceKms(statement)) return false;
+  const supported = ['s3:prefix', 'dynamodb:LeadingKeys', ...Object.keys(LOCK_KMS_CONTEXT)];
+  for (const [operator, entries] of Object.entries(statement.Condition || {})) {
+    if (!['StringEquals', 'StringLike', 'ForAllValues:StringEquals'].includes(operator) || !entries || typeof entries !== 'object' || Array.isArray(entries)) fail('unsupported_relevant_condition');
+    for (const [key, values] of Object.entries(entries)) if (!supported.includes(key) || !list(values).length || list(values).some(value => typeof value !== 'string')) fail('unsupported_relevant_condition');
+  }
   for (const [operator, entries] of Object.entries(statement.Condition || {})) {
     for (const [key, values] of Object.entries(entries)) {
-      if (!['StringEquals', 'StringLike', 'ForAllValues:StringEquals'].includes(operator) || !['s3:prefix', 'dynamodb:LeadingKeys'].includes(key)) fail('unsupported_relevant_condition');
       if (!context[key] || !list(context[key]).every(value => list(values).some(pattern => operator === 'StringLike' ? matches(pattern, value) : pattern === value))) return false;
     }
   }
   return true;
 }
 
-export function validatePolicy(policy, stage) {
+export function validatePolicy(policy, stage, metadata = {}) {
   if (policy?.Version !== '2012-10-17' || !Array.isArray(policy.Statement) || policy.Statement.some(s => !['Allow', 'Deny'].includes(s.Effect))) fail('policy_shape');
   for (const s of policy.Statement) {
     if (Object.keys(s).some(key => !['Sid', 'Effect', 'Action', 'NotAction', 'Resource', 'NotResource', 'Condition'].includes(key)) || Boolean(s.Action) === Boolean(s.NotAction) || Boolean(s.Resource) === Boolean(s.NotResource)) fail('policy_shape');
@@ -100,6 +131,7 @@ export function validatePolicy(policy, stage) {
       const actionTouches = s.NotAction || list(s.Action).some(pattern => required.Action.some(action => matches(pattern, action, true)));
       const resourceTouches = s.NotResource || list(s.Resource).some(pattern => matches(pattern, resource));
       if (!actionTouches || !resourceTouches) continue;
+      if (resource === LOCK_TABLE_KMS_KEY) continue; // separately checked below
       if (s.NotAction || s.NotResource || list(s.Resource).some(value => ![STATE, LOCK, TABLE, `arn:aws:s3:::${BUCKET}`].includes(value)) || list(s.Action).some(value => /[?*]/u.test(value))) fail('permission_scope');
       if (resource === TABLE && required.Sid !== 'BackendTable' && !same(s.Condition?.['ForAllValues:StringEquals']?.['dynamodb:LeadingKeys'], required.Condition['ForAllValues:StringEquals']['dynamodb:LeadingKeys'])) {
         // A separate checksum statement and lock statement must not share write scope.
@@ -109,6 +141,7 @@ export function validatePolicy(policy, stage) {
       if (resource === `arn:aws:s3:::${BUCKET}` && !same(s.Condition, required.Condition)) fail('permission_scope');
     }
   }
+  validateKmsScope(policy, metadata);
   const decision = (action, resource, context = {}) => {
     const applicable = policy.Statement.filter(s => applies(s, action, resource, context));
     return applicable.some(s => s.Effect === 'Allow') && !applicable.some(s => s.Effect === 'Deny');
@@ -124,6 +157,8 @@ export function validatePolicy(policy, stage) {
   const checksumMutations = ['PutItem', 'DeleteItem', 'UpdateItem', 'BatchWriteItem', 'PartiQLInsert', 'PartiQLUpdate', 'PartiQLDelete'];
   const forbiddenChecksumMutation = checksumMutations.some(action => !(stage === 'execute' && action === 'PutItem') && decision(`dynamodb:${action}`, TABLE, { 'dynamodb:LeadingKeys': [`${ROW}-md5`] }));
   if (['s3:DeleteObject', 's3:DeleteObjectVersion'].some(action => decision(action, STATE)) || (stage !== 'execute' && decision('s3:PutObject', STATE)) || forbiddenChecksumMutation) fail('excess_state_permission');
+  const wrongContexts = [{}, ...Object.keys(LOCK_KMS_CONTEXT).map(key => ({ ...LOCK_KMS_CONTEXT, [key]: 'outside-reviewed-lock-scope' }))];
+  if (wrongContexts.some(context => decision('kms:Decrypt', LOCK_TABLE_KMS_KEY, context)) || kmsDataActions.filter(action => action !== 'kms:Decrypt').some(action => decision(action, LOCK_TABLE_KMS_KEY, LOCK_KMS_CONTEXT))) fail('excess_kms_permission');
   return true;
 }
 
@@ -149,7 +184,7 @@ export function proposeExistingPolicy(baseline) {
   const replacement = { Sid: remaining.length ? 'BackendReadDenyOutsideExactObjects' : deny.Sid, Effect: 'Deny', Action: ['s3:GetObject*'], NotResource: [STATE, LOCK] };
   policy.Statement.splice(index, 1, ...(remaining.length ? [{ ...deny, Action: remaining }, replacement] : [replacement]));
   policy.Statement.push(...addition);
-  validatePolicy(policy, 'execute');
+  validatePolicy(policy, 'execute', baseline);
   if (JSON.stringify(policy).length > 10240) fail('inline_policy_size');
   return { version: 'fss.backend-policy-proposal.v1', operationalApproval: false, baseline: structuredClone(baseline), proposed: { ...structuredClone(baseline), policy }, scope: { state: STATE, lock: LOCK, table: TABLE }, warnings: ['Source proposal only. Review actual trust, attachments, boundaries, session and resource policies and encryption under separate approval. Never replace the historical role with the prospective template.'] };
 }

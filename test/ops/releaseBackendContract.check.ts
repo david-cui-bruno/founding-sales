@@ -80,9 +80,9 @@ describe('ordinary reviewed release backend contract CLI', () => {
       expect(plan.Statement.find(s => s.Sid === 'BackendNativeLock')).toMatchObject({ Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'], Resource: [STATE + '.tflock'] });
       expect(plan.Statement.find(s => s.Sid === 'BackendChecksum')?.Action).toEqual(['dynamodb:GetItem']);
       expect(apply.Statement.find(s => s.Sid === 'BackendChecksum')?.Action).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem']);
-      expect(JSON.stringify(apply)).not.toContain('kms:');
+      expect(apply.Statement.filter(s => s.Sid === 'BackendLockTableDecrypt').map(s => s.Action)).toEqual([['kms:Decrypt']]);
       expect(check(apply, 'prepare', directory).stderr).toContain('backend_excess_state_permission');
-      for (const sid of ['BackendNativeLock', 'BackendLockRow', 'BackendChecksum', 'BackendList', 'BackendTable']) {
+      for (const sid of ['BackendNativeLock', 'BackendLockRow', 'BackendChecksum', 'BackendList', 'BackendTable', 'BackendLockTableDecrypt']) {
         const missing = structuredClone(plan); missing.Statement = missing.Statement.filter(s => s.Sid !== sid);
         expect(check(missing, 'prepare', directory).stderr, sid).toContain('backend_required_permission_denied');
       }
@@ -202,9 +202,15 @@ describe('ordinary reviewed release backend contract CLI', () => {
       expect(run(['backend-contract', 'prepare'], directory).stderr).toContain('backend_provider_mapping_changed'); writeFileSync(providerPath, provider);
       const override = join(directory, 'infra/roots/production/local.auto.tfvars'); writeFileSync(override, 'assume_deployment_role = true');
       expect(run(['backend-contract', 'execute'], directory).stderr).toContain('backend_hidden_configuration'); rmSync(override);
-      const policy = mapping('prepare').policy; policy.Statement = policy.Statement.filter(s => s.Sid !== 'BackendNativeLock');
-      writeFileSync(join(directory, 'infra/policies/production-backend-plan.json'), JSON.stringify(policy));
-      expect(run(['backend-contract', 'prepare'], directory).stderr).toContain('backend_required_permission_denied');
+      for (const sid of ['BackendNativeLock', 'BackendLockTableDecrypt']) {
+        const policy = mapping('prepare').policy; policy.Statement = policy.Statement.filter(s => s.Sid !== sid);
+        writeFileSync(join(directory, 'infra/policies/production-backend-plan.json'), JSON.stringify(policy));
+        for (const stage of ['prepare', 'execute']) {
+          expect(run(['backend-contract', stage], directory).stderr).toContain('backend_required_permission_denied');
+          const args = stage === 'prepare' ? ['prepare', 'absent', 'absent', 'absent', 'absent', join(directory, 'out')] : ['execute', 'absent', 'absent', 'absent', 'absent', 'absent', join(directory, 'out')];
+          expect(run(args, directory, { FSS_RELEASE_HOLD: 'false' }).stderr).toContain('backend_required_permission_denied');
+        }
+      }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });
