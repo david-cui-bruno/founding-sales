@@ -48,11 +48,13 @@ export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
     const ready=(await session.query<{id:string}>(`SELECT r.id FROM sourcing_qualification_runs r JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND c.status<>'dismissed' AND NOT c.qualification_blocked AND c.revision=r.candidate_revision AND r.state IN ('review','eligible') AND r.reason IS NULL AND (r.admission_checked_at IS NULL OR r.admission_checked_at<$2::timestamptz-interval '1 hour') AND NOT EXISTS(SELECT 1 FROM sourcing_qualification_runs newer WHERE newer.workspace_id=r.workspace_id AND newer.candidate_id=r.candidate_id AND (newer.requested_at,newer.id)>(r.requested_at,r.id)) ORDER BY r.requested_at,r.id LIMIT 25`,[workspace.id,now])).rows;
     for(const run of ready)await advanceVerifiedFirm(ctx,{runId:run.id});
    }
+   // Old evidence versions are due now, but a version bump is not an identity
+   // correction: the same-revision review stop remains outside every due alternative.
    const due=(await session.query<{id:string;revision:number}>(`SELECT c.id,c.revision FROM sourcing_candidates c LEFT JOIN LATERAL
-    (SELECT r.requested_at,r.candidate_revision,r.state,r.reason,r.admission_reason FROM sourcing_qualification_runs r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY r.requested_at DESC,r.id DESC LIMIT 1) last ON true
+    (SELECT r.requested_at,r.candidate_revision,r.prompt_version,r.policy_version,r.state,r.reason,r.admission_reason FROM sourcing_qualification_runs r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY r.requested_at DESC,r.id DESC LIMIT 1) last ON true
     WHERE c.workspace_id=$1 AND (c.status='kept' OR ($3 AND c.status='needs_review' AND c.payload->>'preparedBy'='Tavily Basic search · not verified')) AND NOT c.qualification_blocked AND NOT ($3 AND last.candidate_revision=c.revision AND COALESCE(last.admission_reason=ANY($4::text[]),false)) AND (last.requested_at IS NULL OR last.candidate_revision<>c.revision OR
-     last.requested_at<$2::timestamptz-interval '7 days' OR (last.state='unavailable' AND last.requested_at<$2::timestamptz-interval '1 day'))
-    ORDER BY EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=c.workspace_id AND a.candidate_id=c.id),c.status<>'kept',last.requested_at NULLS FIRST,c.created_at,c.id LIMIT 25`,[workspace.id,now,automatic,IDENTITY_REVIEW_REASONS])).rows;
+     last.prompt_version<>$5 OR last.policy_version<>$6 OR last.requested_at<$2::timestamptz-interval '7 days' OR (last.state='unavailable' AND last.requested_at<$2::timestamptz-interval '1 day'))
+    ORDER BY EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=c.workspace_id AND a.candidate_id=c.id),c.status<>'kept',last.requested_at NULLS FIRST,c.created_at,c.id LIMIT 25`,[workspace.id,now,automatic,IDENTITY_REVIEW_REASONS,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION])).rows;
    for(const candidate of due){
     const queued=await requestQualification(ctx,{candidateId:candidate.id,expectedRevision:candidate.revision},{enqueue:false});
     if(!queued.ok){
