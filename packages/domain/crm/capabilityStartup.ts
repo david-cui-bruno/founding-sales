@@ -1,6 +1,7 @@
 import {z} from 'zod';
+import {CRM_EXTRACTION_ENDPOINT,CRM_EXTRACTION_MODELS} from '@fss/contracts';
 import type {CrmCapabilityRuntime} from './capabilityAuthority.ts';
-const route=z.strictObject({region:z.literal('us-east-1'),endpointId:z.literal('bedrock-runtime.us-east-1.amazonaws.com'),modelVersion:z.enum(['us.anthropic.claude-haiku-4-5-20251001-v1:0','us.anthropic.claude-haiku-5-5','us.anthropic.claude-sonnet-5-5','us.anthropic.claude-sonnet-4-6']),providerKey:z.string().min(1).max(100),accessGrantVersion:z.string().min(1).max(200),dataHandlingVersion:z.string().min(1).max(200),fundingVerifiedUntil:z.iso.datetime()});
+const route=z.strictObject({region:z.literal('us-east-1'),endpointId:z.literal(CRM_EXTRACTION_ENDPOINT),modelVersion:z.enum(CRM_EXTRACTION_MODELS),providerKey:z.string().min(1).max(100),accessGrantVersion:z.string().min(1).max(200),dataHandlingVersion:z.string().min(1).max(200),fundingVerifiedUntil:z.iso.datetime()});
 // Old deployment JSON may still carry removed Ask keys. Accept and discard them,
 // never construct adapters or treat their presence as runtime availability.
 const configuration=z.strictObject({capture:z.boolean().default(false),extraction:route.optional(),answer:z.unknown().optional(),embedding:z.unknown().optional()}).transform(({capture,extraction})=>({capture,...extraction?{extraction}:{}}));
