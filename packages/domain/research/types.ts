@@ -8,7 +8,8 @@
 
 export const RESEARCH_REFUSAL_CODES = [
   'invalid_input',
-  // The workspace turned research off.
+  // This research action is disabled by the workspace switch OR an applicable hold.
+  // A hold does not change the stored enabled setting. Keep the existing wire code.
   'research_disabled',
   // The three ceilings, each named separately so a person can see which one bound.
   'daily_firm_ceiling',

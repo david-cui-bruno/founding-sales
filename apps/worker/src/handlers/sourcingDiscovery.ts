@@ -12,11 +12,11 @@ export function sourcingDiscoveryHandler(provider:DiscoverySearchProvider):JobHa
 export function sourcingDiscoverySource(enabled:boolean):DueWorkSource {
  return {name:'sourcing-discovery',find:async(session,now)=>{
   if(!enabled)return [];
-  const rows=(await session.query<{workspace_id:string}>(`SELECT s.workspace_id FROM sourcing_discovery_settings s LEFT JOIN research_settings r ON r.workspace_id=s.workspace_id WHERE s.enabled AND COALESCE(r.enabled,true) AND s.next_run_at<=$1::timestamptz AND NOT EXISTS (SELECT 1 FROM active_holds h WHERE h.workspace_id=s.workspace_id AND h.released_at IS NULL AND h.scope_kind='workspace' AND 'research'=ANY(h.blocked_action_kinds)) ORDER BY s.next_run_at,s.workspace_id LIMIT 25`,[now])).rows;
+  const rows=(await session.query<{workspace_id:string}>(`SELECT s.workspace_id FROM sourcing_discovery_settings s LEFT JOIN research_settings r ON r.workspace_id=s.workspace_id WHERE s.enabled AND COALESCE(r.enabled,true) AND s.next_run_at<=$1::timestamptz AND NOT EXISTS (SELECT 1 FROM active_holds h WHERE h.workspace_id=s.workspace_id AND h.released_at IS NULL AND (h.scope_kind='workspace' OR (h.scope_kind='channel' AND h.scope_key='research')) AND 'research'=ANY(h.blocked_action_kinds)) ORDER BY s.next_run_at,s.workspace_id LIMIT 25`,[now])).rows;
   const jobs=[];
   for(const row of rows){
    const ctx=repositoryContext(workspaceScope(row.workspace_id,{kind:'system',component:'scheduler'}),session);
-   if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)continue;
+   if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)continue;
    // Reconsider deferred work hourly. Durable daily slots and next_run_at pace dispatch;
    // the default one slot preserves the original one-search-per-day fence.
    jobs.push({workspaceId:row.workspace_id,kind:'sourcing.discover' as const,idempotencyKey:`sourcing-discover:${row.workspace_id}:${now.slice(0,13)}`,payload:{},maxAttempts:1});

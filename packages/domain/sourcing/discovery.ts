@@ -13,7 +13,7 @@ import {discoveryQuotaRemaining} from './discoveryQuota.ts';
 export {DISCOVERY_QUERIES} from './discoveryQueries.ts';
 import {ensureTargetingPolicy} from './targetingProposals.ts';
 async function allowed(ctx:RepositoryContext):Promise<boolean>{
- return decideAdminOnly(ctx).permitted&&(await readResearchSettings(ctx)).enabled&&(await listApplicableHolds(ctx,{actionKind:'research'})).length===0;
+ return decideAdminOnly(ctx).permitted&&(await readResearchSettings(ctx)).enabled&&(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length===0;
 }
 /** This owns transactions: call only outside an enclosing job transaction.
  * A committed dispatch is never retried, even when the process dies before network.

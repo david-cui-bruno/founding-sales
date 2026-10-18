@@ -66,7 +66,7 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
   if(!evaluation||evaluation.policyVersion!==QUALIFICATION_POLICY_VERSION||evaluation.promptVersion!==QUALIFICATION_PROMPT_VERSION||!evaluation.reportSha256?.match(/^[a-f0-9]{64}$/u)||!(Number(evaluation.reviewedEligible)>0)||evaluation.falseEligible!==0)return refused('evaluation_required');
   if(!await verifiedFirmOwner(ctx))return refused('evaluation_required');
   if(!(await readResearchSettings(ctx)).enabled)return refused('research_disabled');
-  if((await listApplicableHolds(ctx,{actionKind:'research'})).length)return refused('research_held');
+  if((await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return refused('research_held');
  }
  if(!['review','eligible'].includes(run.state)||run.reason)return refused('evidence_unavailable');
  const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=await databaseNow(ctx);

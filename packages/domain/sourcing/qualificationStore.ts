@@ -45,7 +45,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
     [workspaceId,candidate.id,fingerprint])).rows[0];
   if(previous)return {ok:true,value:{runId:previous.id}};
   if(!settings.enabled)return refused('research_disabled');
-  if((await listApplicableHolds(context,{actionKind:'research'})).length)return refused('research_held');
+  if((await listApplicableHolds(context,{actionKind:'research',channel:'research'})).length)return refused('research_held');
   const count=await incrementDailyCounter(context,{subjectKind:'workspace',subjectKey:workspaceId,counterKind:RESEARCH_FIRM_RUN_COUNTER,
     businessTimeZone:await workspaceBusinessZone(context),at:now},settings.dailyFirmCeiling);
   if(!count.allowed)return refused('daily_firm_ceiling');

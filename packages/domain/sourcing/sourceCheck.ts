@@ -26,7 +26,7 @@ export function visibleSourceCheck(value:unknown,jobState:string|null):Candidate
 }
 async function blocked(context:RepositoryContext):Promise<'research_disabled'|'research_held'|null>{
   if(!(await readResearchSettings(context)).enabled)return 'research_disabled';
-  if((await listApplicableHolds(context,{actionKind:'research'})).length>0)return 'research_held';
+  if((await listApplicableHolds(context,{actionKind:'research',channel:'research'})).length>0)return 'research_held';
   return null;
 }
 export async function requestSourceCheck(context:RepositoryContext,input:{id:string;expectedRevision:number},options:{scheduled?:boolean|undefined}={}):Promise<{ok:true;value:{id:string}}|{ok:false;reason:string}> {

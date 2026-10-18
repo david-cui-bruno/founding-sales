@@ -153,7 +153,7 @@ it.each(['info@other.test','example@gmail.com','[email protected]'])('does not r
  expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{id:original.candidate.id,revision:1,firmName:original.candidate.firmName}]}});
 });
 
-it('sees a research hold committed while identity recovery waits for the send gate',async()=>{
+it.each(['workspace','channel'] as const)('sees a %s research hold committed while identity recovery waits for the send gate',async scopeKind=>{
  const original=await discovered(),session=await db.appRuntimeSession();
  const other=repositoryContext(ctx().scope,session),pid=(await session.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
  const {openHold}=await import('../../policy/holds.ts');
@@ -161,7 +161,7 @@ it('sees a research hold committed while identity recovery waits for the send ga
  const attempt=runQualification(other,{runId:original.runId},{pageFetch:pages,extraction:{...extraction,extract:async input=>{
   const answer=await extraction.extract(input);
   await db.session.query('BEGIN');
-  await openHold(ctx(),{scopeKind:'workspace',reasonCode:'scoped_pause',blockedActionKinds:['research'],sourceEventKind:'regression_pause'});
+  await openHold(ctx(),{scopeKind,...(scopeKind==='channel'?{scopeKey:'research'}:{}),reasonCode:'scoped_pause',blockedActionKinds:['research'],sourceEventKind:'regression_pause'});
   opened();return answer;
  }}});
  try{

@@ -54,6 +54,8 @@ export const RESEARCH_OUTCOMES = ['running', 'completed', 'refused', 'failed'] a
  */
 export const RESEARCH_REFUSAL_CODES = [
   'invalid_input',
+  // Action disabled by the research switch OR an applicable research hold.
+  // This refusal does not assert that the stored research setting is off.
   'research_disabled',
   'daily_firm_ceiling',
   'daily_cost_ceiling',

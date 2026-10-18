@@ -22,7 +22,7 @@ export function sourcingMonitorSource(enabled:boolean):DueWorkSource {
     for(const row of rows){
       const ctx=repositoryContext(workspaceScope(row.id,{kind:'system',component:'scheduler'}),session);
       if(!(await readResearchSettings(ctx)).enabled)continue;
-      if((await listApplicableHolds(ctx,{actionKind:'research'})).length>0)continue;
+      if((await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length>0)continue;
       jobs.push({workspaceId:row.id,kind:'sourcing.monitor',idempotencyKey:jobIdempotencyKey.sourcingMonitor(row.id,hour),payload:{},maxAttempts:2});
     }
     return jobs;

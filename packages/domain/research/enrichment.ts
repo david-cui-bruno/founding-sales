@@ -1,6 +1,7 @@
 import { recordEvidence } from '../crm/evidence.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
+import { closeResearchIfPaused, researchEligibility, researchRunCost } from './eligibility.ts';
 import { firmIsResearchable, firmIsSuppressed } from './firmState.ts';
 import { validateFactSelections, type AdmittedFact, type FactSource } from './facts.ts';
 import type { ProviderOutcome } from './providers.ts';
@@ -601,42 +602,13 @@ async function finishFirmResearchBody(
    * the job complete.
    */
   const closedElsewhere = (): ResearchResult<ResearchRunReport> => accept(replayed(input.firmId, input.revision));
-  /**
-   * The final pause check (slice P1, invariant I1): the research switch, read again
-   * immediately before a provider request — the page fetch, the token count and the model
-   * call. Null while research is on.
-   *
-   * Off is a hold, not a failure. Nothing has been asked of the model, so this attempt's
-   * cents go back (`released_not_called`, which this claim may write because it holds the
-   * run's lock and knows first-hand it did not call), and the run closes `refused` with
-   * `research_disabled` — the same answer chunk 1 gives a run that starts while research
-   * is off. That refusal is not a look at the firm (`selectFirmsForSweep` counts only
-   * completed, failed and `no_sources` runs), so the firm is exactly as due as it was
-   * before this run, and the sweep — which runs only while research is on — picks it up
-   * again as a new revision when the switch comes back.
-   */
-  const pausedBeforeCall = async (): Promise<ResearchResult<ResearchRunReport> | null> => {
-    if ((await readResearchSettings(context)).enabled) return null;
-    await release();
-    const cost = await totalCost();
-    const closed = await refuseRun(context, {
-      runId,
-      at: input.at,
-      refusalCode: 'research_disabled',
-      costCents: cost.cents,
-      costEstimated: cost.estimated,
-    });
-    if (!closed) return closedElsewhere();
-    return refuse('research_disabled');
-  };
-  /** Everything this run has been recorded as costing, across every attempt. */
-  const totalCost = async (): Promise<{ readonly cents: number; readonly estimated: boolean }> => {
-    const rows = await listAttempts(context, subject);
-    return {
-      cents: rows.reduce((total, row) => total + row.settledCents, 0),
-      estimated: rows.some(row => row.state === 'estimated'),
-    };
-  };
+  // Switch and scoped holds are re-read before every provider request. Neither
+  // changes the stored switch. The helper closes without retrying paid work and
+  // preserves settled costs while releasing this caller's unused reservation.
+  const pausedBeforeCall = async (): Promise<ResearchResult<ResearchRunReport> | null> =>
+    await closeResearchIfPaused(context, { firmId: input.firmId, runId, at: input.at, release, closedElsewhere });
+  const totalCost = async (): Promise<{ readonly cents: number; readonly estimated: boolean }> =>
+    await researchRunCost(context, runId);
 
   // Asked again, because a suppression or a merge may have landed between the chunks,
   // and a firm that has asked to be left alone is left alone from the moment it asks.
@@ -690,7 +662,7 @@ async function finishFirmResearchBody(
       maxPagesPerFirm: settings.maxPagesPerFirm,
       maxBytes: settings.maxPageBytes,
       // The final pause check before each request the fetcher makes (slice P1).
-      shouldContinue: async () => (await readResearchSettings(context)).enabled,
+      shouldContinue: async () => (await researchEligibility(context, input.firmId)).ok,
     }),
   );
   // Research turned off during the fetch: the fetcher stopped asking, and the run is held
