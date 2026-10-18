@@ -4,7 +4,9 @@ import type {SourcingIdentity} from './qualificationPolicy.ts';
 
 const fold=(value:string)=>value.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 const escape=(value:string)=>value.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&');
-const phonePattern=/(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}/gu;
+const phonePattern=/(?<![\p{L}\d])(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?![\p{L}\d])/gu;
+// A number plus marketing prose is not an address. Unsupported layouts stay pending.
+const streetAddress=/^\d{1,6}\s+(?:[nesw]\.?\s+)?[\p{L}\d][\p{L}\d .'-]*\s+(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|court|ct|boulevard|blvd|way|parkway|pkwy|place|pl|terrace|ter|circle|cir|highway|hwy)(?:\.)?(?:\s+[nesw]\.?)?(?:\s+(?:suite|ste|#)\s*#?[a-z0-9-]+)?$/u;
 const stateNames:Record<string,string>={TX:'texas',RI:'rhode island',MA:'massachusetts'};
 const forbidden=/\b(?:fax|emergency|after.hours|police|fire department|web design|website by|powered by|testimonial|review)\b/iu;
 /** Each accepted proof is one original contiguous section, never synthesized fact text. */
@@ -28,7 +30,7 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
   // Full street/city on one line is still literal geography, never a service-area guess.
   if(!/^\d{1,6}\s/u.test(normalized))return false;
   const parts=normalized.split(/,\s*/u),locationIndex=parts.findIndex((_,index)=>location.test(parts.slice(index).join(', ')));
-  if(locationIndex<1||locationIndex>2||!/^\d{1,6}\s+[\p{L}\d .#'-]+$/u.test(parts[0]!))return false;
+  if(locationIndex<1||locationIndex>2||!streetAddress.test(parts[0]!))return false;
   return locationIndex===1||/^(?:suite|ste|#)\s*#?[a-z0-9-]+$/u.test(parts[1]!);
  };
  const named=(text:string)=>{
@@ -46,8 +48,8 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
   const remainder=fold(text).replaceAll(name,'').replace(phonePattern,'').replace(/\b(?:contact|call|us|today|at|phone|telephone|tel|office|main)\b/gu,'').replace(/[\s:().,+-]/gu,'');
   return remainder==='';
  };
- const street=(text:string)=>/^\d{1,6}\s+[\p{L}\d .,#'-]+$/u.test(fold(text))&&!/,\s*[a-z]{2}(?:\s+\d{5}(?:-\d{4})?)?\.?$/iu.test(text)&&!/\b(?:texas|rhode island|massachusetts)\b/iu.test(text);
- const label=(text:string)=>/^(?:office(?: location| address)?|address|location|contact(?: information)?|suite [a-z0-9-]+)$/u.test(fold(text));
+ const street=(text:string)=>streetAddress.test(fold(text));
+ const label=(text:string)=>/^(?:office(?: location| address)?|address|location|contact(?: information)?|suite [a-z0-9-]+):?$/u.test(fold(text));
  const email=(text:string)=>/^(?:e-?mail\s*:?\s*)?[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}$/iu.test(text.trim());
  const facts=input.facts.filter(fact=>fact.kind==='business_phone');
  const allNumbers=new Set(facts.flatMap(fact=>numbers(fact.value)));
@@ -57,20 +59,36 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
   const source=input.observations.find(observation=>observation.id===fact.observationId);
   const index=source?.blocks.findIndex(block=>block.id===fact.blockId)??-1;
   if(!source||index<0||source.blocks[index]!.text!==fact.value||forbidden.test(fact.value))continue;
+  // A selected phone block must itself be a recognized phone production, not
+  // sneak through another card role such as an address with a numeric prefix.
+  const phoneProduction=phoneLine(fact.value)||(namedLocation(fact.value)&&numbers(fact.value).length===1);
   const blocks=source.blocks;
+  const foreignLocation=(text:string)=>!targetLocationMention.test(fold(text))&&(/,?\s+(?:TX|RI|MA|Texas|Rhode Island|Massachusetts)(?:\s+\d{5}(?:-\d{4})?)?\.?$/iu.test(text)||/\b(?:office|branch)\s*:\s*\S/iu.test(text)||(/\b(?:office|branch)\s*:?$/iu.test(text)&&!label(text)&&!named(text)));
+  const conflictingContinuation=(start:number,end:number)=>{
+   for(const [edge,direction] of [[start-1,-1],[end+1,1]] as const){
+    for(let cursor=edge,seen=0;cursor>=0&&cursor<blocks.length&&seen<8;cursor+=direction,seen++){
+     const text=blocks[cursor]!.text;
+     if(text.length>240||named(text)||(numbers(text).length===0&&fold(text).startsWith(`${name} office: `)))break;
+     if(foreignLocation(text)||numbers(text).some(value=>!allNumbers.has(value)))return true;
+     if(!sameLocation(text)&&!phoneLine(text)&&!street(text)&&!label(text)&&!email(text))break;
+    }
+   }
+   return false;
+  };
   let accepted=false;
   for(let start=Math.max(0,index-7);start<=index;start++)for(let end=index;end<Math.min(blocks.length,start+8);end++){
    const card=blocks.slice(start,end+1);
-   if(card.some(block=>block.text.length>240))continue;
+   if(!phoneProduction||card.some(block=>block.text.length>240))continue;
    // Name-first cards cannot inherit a preceding office's phone. The observed
    // phone-first alternative is allowed only at the very start of the source.
    if(!named(card[0]!.text)&&!namedLocation(card[0]!.text)&&!(start===0&&phoneLine(card[0]!.text)))continue;
-   if(!card.some(block=>namedLocation(block.text)||street(block.text)||(sameLocation(block.text)&&/^\d/u.test(block.text))||/^(?:office(?: location| address)?|address|location)$/u.test(fold(block.text))||fold(block.text)===`${name} ${city} office`||fold(block.text)===`${name} ${city} branch`))continue;
+   if(!card.some(block=>namedLocation(block.text)||street(block.text)||(sameLocation(block.text)&&/^\d/u.test(block.text))||/^(?:office(?: location| address)?|address|location):?$/u.test(fold(block.text))||fold(block.text)===`${name} ${city} office`||fold(block.text)===`${name} ${city} branch`))continue;
    if(card.filter(block=>named(block.text)||namedLocation(block.text)).length!==1)continue;
    if(card.filter(block=>sameLocation(block.text)||namedLocation(block.text)).length!==1||card.filter(block=>street(block.text)).length>1)continue;
    if(!card.every(block=>named(block.text)||namedLocation(block.text)||sameLocation(block.text)||phoneLine(block.text)||street(block.text)||label(block.text)||email(block.text)))continue;
    const cardNumbers=new Set(card.flatMap(block=>numbers(block.text)));
    if(cardNumbers.size!==1||![...cardNumbers].every(value=>allNumbers.has(value)))continue;
+   if(conflictingContinuation(start,end))continue;
    accepted=true;
   }
   supported ||= accepted;
@@ -78,7 +96,7 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
    // An explicitly different nearby office is ambiguous, not a request to infer
    // a replacement locality. Unsupported/distant layouts merely remain pending.
    const nearby=blocks.slice(Math.max(0,index-2),index+3);
-   ambiguous ||= nearby.some(block=>!targetLocationMention.test(fold(block.text))&&!sameLocation(block.text)&&!namedLocation(block.text)&&(/\b(?:office|branch)\s*:/iu.test(block.text)||/,\s*(?:TX|RI|MA|Texas|Rhode Island|Massachusetts)(?:\s|[.,]|$)/iu.test(block.text)));
+   ambiguous ||= nearby.some(block=>foreignLocation(block.text));
   }
  }
  return {phone:supported&&!ambiguous?[...allNumbers][0]!:null,ambiguous};

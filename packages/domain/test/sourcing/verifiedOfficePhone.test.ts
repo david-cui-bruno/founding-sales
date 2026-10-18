@@ -11,6 +11,42 @@ function fixture(card:readonly string[],phoneIndices:readonly number[]=[1]){
  const facts:QualificationFact[]=selected.map(([kind,index])=>({kind,value:texts[index]!,observationId:observation.id,blockId:`b${index}`}));
  return {candidate:{...candidate},observations:[observation],facts,now};
 }
+it.each([
+ [name,phone,'100 Properties Managed','Dallas, TX'],
+ [name,phone,'100 Properties Managed, Dallas, TX'],
+ [name,phone,'214 555 0190 reference 123','Dallas, TX'],
+].map(card=>({card})))('does not use numeric marketing prose as physical address proof: $card',({card})=>{
+ expect(verifiedFirmEvidence(fixture(card))).toMatchObject({kind:'verified',phone:null});
+});
+it.each(['214 555 0190123','214 555 0190 reference 123','1214 555 0190123','x214 555 0190','214 555 0190x'])('requires a complete recognized selected phone production: %s',value=>{
+ expect(verifiedFirmEvidence(fixture([name,value,'Office Location','Dallas, TX']))).toMatchObject({kind:'verified',phone:null});
+});
+it.each(['12 Example Street','42 N Example Ave.','125 Example Boulevard Suite 2'])('retains genuine split and inline address proof: %s',address=>{
+ expect(verifiedFirmEvidence(fixture([name,phone,address,'Dallas, TX']))).toMatchObject({kind:'verified',phone:'+12145550190'});
+ expect(verifiedFirmEvidence(fixture([name,phone,`${address}, Dallas, TX`]))).toMatchObject({kind:'verified',phone:'+12145550190'});
+});
+it('retains a selected phone inside a single explicit office declaration',()=>{
+ const text=`${name} office: Dallas, TX. We provide residential property management. Contact ${name} at ${phone}.`;
+ expect(verifiedFirmEvidence(fixture([text],[0]))).toMatchObject({kind:'verified',phone:'+12145550190'});
+});
+it('refuses a no-comma foreign physical address instead of combining it with the target city',()=>{
+ const card=[name,'Office Location','12 Example Street Austin TX 78701','Dallas, TX',phone];
+ expect(verifiedFirmEvidence(fixture(card,[4]))).not.toMatchObject({phone:'+12145550190'});
+});
+it.each([
+ [name,'Office Location','12 Example Street','Dallas, TX',phone,'Austin, TX'],
+ [name,'Office Location','12 Example Street','Dallas, TX','Austin, TX',phone],
+ [name,'Office Location','12 Example Street','Dallas, TX',phone,'(214) 555-0191'],
+ [name,'Office Location','12 Example Street','Dallas, TX',phone,'Office:','(214) 555-0191'],
+].map(card=>({card})))('does not discard contrary continuation from the compact office section: $card',({card})=>{
+ expect(verifiedFirmEvidence(fixture(card,[card.indexOf(phone)]))).not.toMatchObject({phone:'+12145550190'});
+});
+it('accepts a generic colon office label without mistaking it for foreign identity evidence',()=>{
+ expect(verifiedFirmEvidence(fixture([name,'Office:',phone,'12 Example Street','Dallas, TX'],[2]))).toMatchObject({kind:'verified',phone:'+12145550190'});
+});
+it.each(['Austin Office','Austin Office:'])('recognizes explicit foreign branch independent of punctuation: %s',heading=>{
+ expect(verifiedFirmEvidence(fixture([name,heading,phone],[2]))).toEqual({kind:'unclear',reason:'phone_association_ambiguous'});
+});
 const compact=[name,phone,'office@cedar.example.test','Office Location','12 Example Street','Dallas TX 75001'];
 it('accepts literal bare phone with its name/address in the same six-block office card without mutating citations',()=>{
  const input=fixture(compact),before=JSON.stringify(input);
