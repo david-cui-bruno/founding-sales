@@ -2,13 +2,13 @@
 
 ## Before your first session
 
-Open **Callie.app → Settings** (installed 1.0.51: **Administration**). Check the mailbox, calling number and sending-domain health. Production reached schema **116** with six smoke checks passing on October 18. Sending was verified off; **David alone turns it back on** when ready. The compact Settings layout is not installed yet.
+Open **Callie.app → Settings** (installed 1.0.51: **Administration**). Check the mailbox, calling number and sending-domain health. Production reached schema **118** with six smoke checks passing on October 18. Sending was separately verified off at 13:07 UTC; **David alone turns it back on** when ready. The compact Settings layout is building in desktop 1.0.52, not installed yet.
 
 Calling states include RI and TX; **Massachusetts's personal rule confirmation read back satisfied**. Other calling gates still apply. Calls use Twilio and need an approved cash budget. Research is enabled on Bedrock with a deployed $50/day model-credit guard and 100 shared processing steps/day. A fresh firm normally needs two steps: qualification and brief. Gmail capture and LinkedIn actions are not activated by connecting accounts.
 
 ## The daily flow
 
-1. **Today:** Review overdue replies and callbacks first. Select a firm from the queue, read its prepared brief and verify the details. **Firms → All firms** is the directory; **Pipeline** tracks opportunities. A prepared brief is research, not confirmed customer need. Approved research can prepare prospects without contacting anyone; automatic verified-firm intake is not deployed yet.
+1. **Today:** Review overdue replies and callbacks first. Select a firm from the queue, read its prepared brief and verify the details. **Firms → All firms** is the directory; **Pipeline** tracks opportunities. A prepared brief is research, not confirmed customer need. Approved research can prepare prospects without contacting anyone. Verified-firm intake is deployed but not activated while its phone-evidence handoff is being corrected. The owner-authorized 34 Keeps/28 dismissals are already applied; you do not need to repeat them.
 2. **Call:** Use the selected firm's **Call** control only when enabled. Calling-hour and other refusals are deliberate stops. Read the recording disclosure shown in the call panel. Do not bypass a disabled button or call prospects just to test the tool.
 3. **Record the actual outcome:** Open **Notes and outcome**, choose **Which task** and **What happened**, add your note and select **Record**. Logging an external call is history, not proof that Callie placed it.
 4. **Agree on email follow-up:** After a reached conversation, choose **No follow-up**, **One approved e-mail**, or **An agreed sequence**. The sequence preview shows template names, subjects and dates, not the full bodies; inspect approved copy in **Sequences** first. **One approved e-mail records permission only**: afterward, explicitly enrol the contact in a matching one-email sequence. **An agreed sequence attempts enrollment immediately**: check its **started/refused** notice and do not enrol twice. Record only what they actually agreed to.
@@ -21,4 +21,4 @@ The installed app loads Today, Firms, prepared briefs, outcome controls and five
 
 The footer-warning correction is merged but not yet installed in 1.0.51. That client can warn about footerless stored copy even though the sender appends the configured sign-off. Do not edit approved copy just to silence it. End-to-end production call/email acceptance is still pending.
 
-**Social** is currently a publishing workspace, not a verified LinkedIn outreach inbox. Manual-first connection/message tracking is next. Gmail capture for **david@usecallie.com** will need one explicit consent/model/spend approval before activation.
+**Social** in the new desktop includes a manual LinkedIn activity ledger with account/firm/person bindings and conservative reply/refusal stops. The backend is deployed; desktop delivery is pending. It does not send messages or observe LinkedIn activity automatically. Gmail capture for **david@usecallie.com** needs one explicit consent/model/spend approval before activation.
