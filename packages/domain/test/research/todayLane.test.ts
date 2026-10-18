@@ -201,8 +201,9 @@ describe('the brief on the expanded card', () => {
 
     const page = await readTodayFirm(context, { firmId: researched, now });
     expect(page?.brief?.judgments.fit).toBe('yes');
-    expect(page?.brief?.generated).toBe(true);
-    expect(page?.brief?.questions).toEqual(['How do you take work orders?', 'Who handles them?']);
+    expect(page?.brief?.generated).toBe(false);
+    expect(page?.brief?.questions).toBeNull();
+    expect(page?.brief?.opening).toBeNull();
 
     // An installed desktop that asked for version 1 gets the card it always parsed.
     expect(page === null ? null : 'brief' in todayFirmVersion1(page)).toBe(false);

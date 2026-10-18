@@ -455,7 +455,7 @@ describe('one run', () => {
       'We manage residential property for owners.',
       'Our maintenance team handles every work order.',
     ]);
-    expect(brief?.generated).toBe(true);
+    expect(brief?.generated).toBe(false);
     expect(brief?.revision).toBe(1);
 
     const runs = await listRuns(context, crm.alpha.firmId);
