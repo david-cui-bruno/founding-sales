@@ -314,7 +314,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
     'outreach.mutate': async(input:OperationInput<'outreach.mutate'>)=>{
       const generation=deps.recordings.identity.current(),{action,commandId,...body}=input;
-      const paths={email_admission:'/outreach/email-admission/save',authorization:'/outreach/authorization/save',policy:'/outreach/settings/save',fact_save:'/outreach/answer-blocks/save',fact_approve:'/outreach/answer-blocks/approve',fact_retire:'/outreach/answer-blocks/retire',cohort_enable:'/outreach/cohort/enable',reply_manual:'/outreach/reply/manual'} as const;
+      const paths={authorization:'/outreach/authorization/save',policy:'/outreach/settings/save',fact_save:'/outreach/answer-blocks/save',fact_approve:'/outreach/answer-blocks/approve',fact_retire:'/outreach/answer-blocks/retire',cohort_enable:'/outreach/cohort/enable',reply_manual:'/outreach/reply/manual'} as const;
       const answer=await deps.api.command(paths[action],body,value=>z.record(z.string(),z.unknown()).parse(value),{commandId});
       if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};
       if(!answer.ok)return {accepted:false,view:null,reason:answer.reason.slice(0,80)};

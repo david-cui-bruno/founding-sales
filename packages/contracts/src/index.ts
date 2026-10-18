@@ -81,7 +81,6 @@ export * from './askActions.ts';
 export * from './experiments.ts';
 export * from './socialManualHandoff.ts';
 
-export * from './emailAdmissionActivation.ts';
 
 export * from './crmPricing.ts';
 export * from './crmExtractionRoutes.ts';

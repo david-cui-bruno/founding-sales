@@ -5,9 +5,6 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readSourcingLearning} from './learningReport.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {ensureTargetingPolicy,saveTargetingProposal,applyTargetingProposal} from './targetingProposals.ts';
-import {readSequenceVersion} from '../sequences/rows.ts';
-import {readTemplateVersion} from '../templates/templates.ts';
-import {readEmailAdmissionControl,saveEmailAdmissionControl} from '../outreach/emailControl.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 const admin=(ctx:RepositoryContext)=>ctx.scope.actor.kind==='user'&&ctx.scope.actor.role==='admin';
@@ -59,20 +56,10 @@ export async function readExperiments(ctx:RepositoryContext){
  }
  return experimentsViewSchema.parse(output);
 }
-/** Send gate -> admission settings -> discovery settings -> experiment; caller transaction. */
-async function experimentGate(ctx:RepositoryContext){
- await lockSendGateForStopFact(ctx);
- const row=(await ctx.db.query<{enabled:boolean}>('SELECT enabled FROM outreach_email_admission_settings WHERE workspace_id=$1 FOR UPDATE',[ctx.scope.workspaceId])).rows[0];
- return !row?.enabled;
-}
-async function invalidateEvaluation(ctx:RepositoryContext){
- await ctx.db.query('UPDATE outreach_email_admission_settings SET evaluation=NULL,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND NOT enabled',[ctx.scope.workspaceId]);
- await recordCrmAuditEvent(ctx,{action:'sourcing.experiment_evaluation_invalidated',subjectKind:'workspace',subjectId:ctx.scope.workspaceId,detail:{required:'fresh_exact_version_evaluation'}});
-}
 export async function activateExperiment(ctx:RepositoryContext,input:z.infer<typeof experimentActivateSchema>):Promise<Result<{activationId:string}>>{
  if(!admin(ctx))return {ok:false,reason:'admin_only'};
  if(!experimentActivateSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
- if(!await experimentGate(ctx))return {ok:false,reason:'automatic_admission_must_be_off'};
+ await lockSendGateForStopFact(ctx);
  const policy=await ensureTargetingPolicy(ctx),w=ctx.scope.workspaceId;
  const h=(await ctx.db.query<{revision:number;status:string}>('SELECT revision,status FROM sourcing_experiments WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.id])).rows[0];
  if(!h)return {ok:false,reason:'not_found'};
@@ -80,39 +67,13 @@ export async function activateExperiment(ctx:RepositoryContext,input:z.infer<typ
  if((await ctx.db.query('SELECT 1 FROM sourcing_experiment_activations WHERE workspace_id=$1 AND stopped_at IS NULL',[w])).rows.length)return {ok:false,reason:'experiment_active'};
  const revision=(await ctx.db.query<Revision>('SELECT content FROM sourcing_experiment_revisions WHERE workspace_id=$1 AND id=$2 AND revision=$3',[w,input.id,h.revision])).rows[0]!;
  const change=revision.content.change;
- if(change.kind==='email_wording'){
-  if(!input.sequenceVersionId)return {ok:false,reason:'approved_copy_binding_required'};
-  const control=await readEmailAdmissionControl(ctx);
-  if(!control.sequenceVersionId||!control.mailboxId||!control.ownerUserId)return {ok:false,reason:'configuration_required'};
-  const old=await readSequenceVersion(ctx,control.sequenceVersionId),next=await readSequenceVersion(ctx,input.sequenceVersionId);
-  if(!old||!next||next.state!=='published'||next.retiredAt||next.sequenceId!==old.sequenceId||next.id===old.id)return {ok:false,reason:'approved_copy_binding_required'};
-  await ctx.db.query('SELECT id FROM sequences WHERE workspace_id=$1 AND id=$2 FOR SHARE',[w,next.sequenceId]);
-  const base=await readTemplateVersion(ctx,change.baseTemplateVersionId);if(!base)return {ok:false,reason:'source_unavailable'};
-  if(old.steps.length!==next.steps.length||JSON.stringify(old.stopConditions)!==JSON.stringify(next.stopConditions))return {ok:false,reason:'cadence_changed'};
-  let replacements=0;
-  for(let i=0;i<old.steps.length;i++){
-   const a=old.steps[i]!,b=next.steps[i]!;
-   if(a.channel!==b.channel||a.ordinal!==b.ordinal||JSON.stringify(a.delay)!==JSON.stringify(b.delay)||a.onNoAnswer!==b.onNoAnswer)return {ok:false,reason:'cadence_changed'};
-   if(a.templateVersionId===b.templateVersionId)continue;
-   if(a.templateVersionId!==base.id||!b.templateVersionId)return {ok:false,reason:'unreviewed_copy_change'};
-   const t=await readTemplateVersion(ctx,b.templateVersionId);
-   if(!t||!t.approvedAt||t.retiredAt||t.templateId!==base.templateId||t.subject!==change.subject||t.body!==change.body||t.footerSignOff!==base.footerSignOff||JSON.stringify(t.requiredVariables)!==JSON.stringify(base.requiredVariables))return {ok:false,reason:'approved_copy_binding_required'};
-   replacements++;
-  }
-  if(replacements!==1)return {ok:false,reason:'unreviewed_copy_change'};
-  const saved=await saveEmailAdmissionControl(ctx,{expectedRevision:control.revision,enabled:false,ownerUserId:control.ownerUserId,mailboxId:control.mailboxId,sequenceVersionId:next.id,evaluation:null});if(!saved.ok)return saved;
-  const activationId=randomUUID(),result={kind:'email_wording',baseSequenceVersionId:old.id,sequenceVersionId:next.id,controlRevision:String(saved.value.revision)};
-  await ctx.db.query('INSERT INTO sourcing_experiment_activations(workspace_id,id,revision,activation_id,result) VALUES($1,$2,$3,$4,$5::jsonb)',[w,input.id,h.revision,activationId,JSON.stringify(result)]);
-  await recordCrmAuditEvent(ctx,{action:'sourcing.experiment_activated',subjectKind:'sourcing_experiment',subjectId:input.id,detail:{activationId,revision:h.revision,...result}});
-  return {ok:true,value:{activationId}};
- }
+ if(change.kind==='email_wording')return {ok:false,reason:'automatic_admission_removed'};
  if(!input.targetingDecision)return {ok:false,reason:'targeting_decision_required'};
  if(change.basePolicyVersion!==policy.version)return {ok:false,reason:'policy_changed'};
  const query=policy.queries.find(q=>q.id===change.queryId);if(!query)return {ok:false,reason:'query_unavailable'};
  const proposal=await saveTargetingProposal(ctx,{basePolicyVersion:policy.version,queryChanges:[{...query,query:change.query}],rankOrder:policy.rankOrder as ['help_request','operational_burden','investigation','fit_only'],evidenceIds:[],rationale:revision.content.rationale});
  if(!proposal.ok)return proposal;
  const applied=await applyTargetingProposal(ctx,{id:proposal.value.id,expectedRevision:proposal.value.revision});if(!applied.ok)return applied;
- await invalidateEvaluation(ctx);
  const activationId=randomUUID(),result={kind:'discovery_query',basePolicyVersion:policy.version,policyVersion:applied.value.policyVersion,queryId:query.id};
  await ctx.db.query('INSERT INTO sourcing_experiment_activations(workspace_id,id,revision,activation_id,result) VALUES($1,$2,$3,$4,$5::jsonb)',[w,input.id,h.revision,activationId,JSON.stringify(result)]);
  await recordCrmAuditEvent(ctx,{action:'sourcing.experiment_activated',subjectKind:'sourcing_experiment',subjectId:input.id,detail:{activationId,revision:h.revision,...result}});
@@ -121,19 +82,18 @@ export async function activateExperiment(ctx:RepositoryContext,input:z.infer<typ
 export async function stopExperiment(ctx:RepositoryContext,input:z.infer<typeof experimentStopSchema>):Promise<Result<{stopped:boolean;rollbackDisposition:z.infer<typeof experimentRollbackDispositionSchema>}>>{
  if(!admin(ctx))return {ok:false,reason:'admin_only'};
  if(!experimentStopSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
- if(!await experimentGate(ctx))return {ok:false,reason:'automatic_admission_must_be_off'};
+ await lockSendGateForStopFact(ctx);
  const policy=await ensureTargetingPolicy(ctx),w=ctx.scope.workspaceId;
  const a=(await ctx.db.query<Activation>('SELECT * FROM sourcing_experiment_activations WHERE workspace_id=$1 AND activation_id=$2 FOR UPDATE',[w,input.activationId])).rows[0];
  if(!a)return {ok:false,reason:'not_found'};
  if(a.stopped_at)return {ok:true,value:{stopped:true,rollbackDisposition:experimentRollbackDispositionSchema.parse(a.result['rollbackDisposition'])}};
  let disposition:z.infer<typeof experimentRollbackDispositionSchema>;
  if(a.result['kind']==='email_wording'){
-  const control=await readEmailAdmissionControl(ctx);
-  if(control.sequenceVersionId===a.result['sequenceVersionId']){await invalidateEvaluation(ctx);disposition='separate_approval_required';}
-  else disposition='superseded';
+  // Retained historical activation only. No retired admission settings are rewritten.
+  disposition='separate_approval_required';
  }else if(a.result['policyVersion']===policy.version){
   await ctx.db.query('UPDATE sourcing_discovery_settings SET targeting_version=$2 WHERE workspace_id=$1',[w,a.result['basePolicyVersion']]);
-  await invalidateEvaluation(ctx);disposition='restored';
+  disposition='restored';
  }else disposition='superseded';
  await ctx.db.query("UPDATE sourcing_experiment_activations SET stopped_at=now(),stop_reason=$3,result=result||jsonb_build_object('rollbackDisposition',$4::text) WHERE workspace_id=$1 AND activation_id=$2",[w,input.activationId,input.reason,disposition]);
  await recordCrmAuditEvent(ctx,{action:'sourcing.experiment_stopped',subjectKind:'sourcing_experiment',subjectId:input.activationId,detail:{revision:a.revision,reasonCode:'explicit_stop',rollbackDisposition:disposition}});
