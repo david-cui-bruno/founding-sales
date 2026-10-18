@@ -51,6 +51,16 @@ it('hands an existing manually admitted firm with no research to the normal rese
  expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true,value:{alreadyAdmitted:true}});
  expect((await db.session.query("SELECT payload FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,made.value.id])).rows).toEqual([{payload:{firmId:made.value.id,revision:1,trigger:'user_request',requestedByUserId:seeded.alpha.admin.userId}}]);
 });
+it.each(['running','failed','completed'])('never requeues an existing %s research attempt on reviewed admission',async(outcome)=>{
+ const {createFirm}=await import('../../crm/firms.ts');
+ const name=`Prior ${outcome} Research PM`,website=`https://prior-${outcome}.example.test/`;
+ const input=await qualified(name,{website});
+ const made=await tx(()=>createFirm(ctx(),{name,website,locality:'Dallas',regionCode:'TX',assignedUserId:seeded.alpha.admin.userId}));if(!made.ok)throw new Error(made.reason);
+ await db.session.query("DELETE FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,made.value.id]);
+ await db.session.query("INSERT INTO research_runs(workspace_id,firm_id,revision,trigger,outcome,completed_at,refusal_code) VALUES($1,$2,1,'firm_created',$3,CASE WHEN $3='running' THEN NULL ELSE now() END,CASE WHEN $3='failed' THEN 'lease_lost' ELSE NULL END)",[seeded.alpha.workspaceId,made.value.id,outcome]);
+ expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true,value:{firmId:made.value.id}});
+ expect((await db.session.query("SELECT id FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,made.value.id])).rows).toHaveLength(0);
+});
 async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v4',promptVersion:'qualification-growth-v6',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
 it('requires an explicit owner for automatic admission in a workspace with multiple sellers',async()=>{
  const input=await qualified('Owner PM');await enableAutomatic();expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'sourcing_owner_required'});

@@ -207,3 +207,18 @@ it('enforces migration118 settings and slot constraints on actual inserts, inclu
  await expect(insert(1)).rejects.toMatchObject({code:'23505',constraint:'sourcing_discovery_attempts_workspace_day_slot'});
  expect((await db.session.query('SELECT slot FROM sourcing_discovery_attempts ORDER BY slot')).rows).toEqual([{slot:0},{slot:1}]);
 });
+
+it('upgrades historical attempts to slot zero without activating throughput or resetting settings and account holds',async()=>{
+ const {applyMigrations}=await import('../../db/migrationRunner.ts');
+ const old=await createTestDatabase({throughVersion:117});
+ try{
+  const workspace=(await seedTwoWorkspaces(old.session)).alpha.workspaceId;
+  await old.session.query('INSERT INTO sourcing_search_account(id,halted,daily_used,monthly_used) VALUES(true,true,7,42)');
+  await old.session.query("INSERT INTO sourcing_discovery_settings(workspace_id,enabled,next_run_at,query_cursor,last_result) VALUES($1,true,'2026-10-20T00:00:00Z',4,'unavailable')",[workspace]);
+  const attempt=(await old.session.query<{id:string}>("INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,state) VALUES($1,'historical','historical query','dispatched') RETURNING id",[workspace])).rows[0]!.id;
+  await applyMigrations(old.session);
+  expect((await old.session.query('SELECT enabled,next_run_at,query_cursor,last_result,searches_per_day FROM sourcing_discovery_settings')).rows).toEqual([{enabled:true,next_run_at:new Date('2026-10-20T00:00:00Z'),query_cursor:4,last_result:'unavailable',searches_per_day:1}]);
+  expect((await old.session.query('SELECT id,slot,state,query FROM sourcing_discovery_attempts')).rows).toEqual([{id:attempt,slot:0,state:'dispatched',query:'historical query'}]);
+  expect((await old.session.query('SELECT halted,daily_used,monthly_used FROM sourcing_search_account')).rows).toEqual([{halted:true,daily_used:7,monthly_used:42}]);
+ }finally{await old.drop();}
+});
