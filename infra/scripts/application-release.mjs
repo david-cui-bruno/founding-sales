@@ -323,9 +323,21 @@ export async function runRelease(io, environment) {
     await io.run('docker', ['login', '--username', 'AWS', '--password-stdin', registry], login);
     for (const name of ['api', 'worker']) {
       await gateCheck();
-      await io.run('docker', ['buildx', 'imagetools', 'create', '--tag', `${registry}/fss-prod-${name}:ci-${e.COMMIT}`, '--prefer-index=false', `${registry}/fss-rh-${name}@${images.images[name].digest}`]);
+      const tag = `ci-${e.COMMIT}`, expected = images.images[name].digest;
+      const existing = await aws('ecr', 'batch-get-image', ['--repository-name', `fss-prod-${name}`, '--image-ids', `imageTag=${tag}`]);
+      requireThat(Array.isArray(existing.images) && Array.isArray(existing.failures), 'promotion_tag_unreadable');
+      if (existing.images.length === 1 && existing.failures.length === 0) {
+        requireThat(existing.images[0].imageId?.imageTag === tag && existing.images[0].imageId.imageDigest === expected, 'promotion_tag_conflict');
+      } else {
+        requireThat(existing.images.length === 0 && existing.failures.length === 1 && existing.failures[0].failureCode === 'ImageNotFound' && existing.failures[0].imageId?.imageTag === tag, 'promotion_tag_unreadable');
+        await gateCheck();
+        await io.run('docker', ['buildx', 'imagetools', 'create', '--tag', `${registry}/fss-prod-${name}:${tag}`, '--prefer-index=false', `${registry}/fss-rh-${name}@${expected}`]);
+      }
       const promoted = await aws('ecr', 'describe-images', ['--repository-name', `fss-prod-${name}`, '--image-ids', `imageTag=ci-${e.COMMIT}`]);
-      requireThat(promoted.imageDetails?.length === 1 && promoted.imageDetails[0].imageDigest === images.images[name].digest, 'promotion_digest_changed');
+      requireThat(promoted.imageDetails?.length === 1 && promoted.imageDetails[0].imageDigest === expected, 'promotion_digest_changed');
+      // This runner's pull is an early guard, not a guarantee of a later Fargate pull.
+      try { await io.run('docker', ['pull', '--platform', 'linux/arm64', `${registry}/fss-prod-${name}@${expected}`]); }
+      catch { throw new Error('image_pullability_guard_failed'); }
     }
     const current = {};
     for (const name of names) {
