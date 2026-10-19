@@ -16,6 +16,16 @@ The workflow removes or redacts private content while preserving required busine
 
 Deletion closes dependent jobs and paid attempts under the established lock order. Preserve settled or estimated charges and uncertain provider outcomes. Releasing unused reservations is not evidence that previous work was free or never happened. A later restore or import must not silently revive suppressed contact or erased source content.
 
+## Phone handoff lifecycle catalog
+
+Migration `0120_phone_handoff_attempts.sql` adds three tables classified in `packages/domain/retention/coverage.ts`:
+
+| Table | Dispositions | Lifecycle |
+| --- | --- | --- |
+| `phone_handoff_attempts` | `retained`, `deletion_redacts` | Retain opaque reservations for cadence conservation. Journalled prospect deletion clears the endpoint and nullable prospect bindings before dependent routes/logs are removed. Expired, unknown and erased attempts still count; retention does not authorize redispatch. |
+| `national_registry_snapshots` | `retained` | Retain private publication receipts and area coverage without prospect identity. Retained history is not current registry clearance. |
+| `national_registry_endpoint_scrubs` | `retained`, `deletion_removes` | Retain exact endpoint evidence until journalled prospect deletion removes matching endpoint scrubs. Evidence alone never grants dial authority; deleting shared-number evidence conservatively removes its clearance. |
+
 ## Checks and operations
 
 Use supported preview/deletion commands and existing retention, mail, CRM and historical Ask privacy tests. Verify unavailable rereads, task/search closure, pending-job cancellation, recapture refusal, cross-workspace boundaries and actual cost conservation using disposable PostgreSQL. No data-dropping migration is required to remove a retired capability's source code.
