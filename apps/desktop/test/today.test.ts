@@ -772,7 +772,7 @@ describe('the Today bridge', () => {
     const card = await bridge.expand({ firmId: FIRM_ID });
     // The card says callable, with the firm's own clock beside the number.
     expect(card.dialAdvice).toEqual([
-      { routeId: ROUTE_ID, callable: true, reasons: [], e164: '+14015550187', firmLocalTime: '10:05', firmTimeZone: 'America/New_York', callingWindowOpensAt: null },
+      { routeId: ROUTE_ID, callable: true, reasons: [], e164: '+14015550187', firmLocalTime: '10:05', firmTimeZone: 'America/New_York', callingWindowOpensAt: null, nationalDnc: { status: 'unknown', basis: null, receiptId: null, warning: null } },
     ]);
     expect(buildTodayView(card).dialRoutes.map(entry => entry.enabled)).toEqual([true]);
 

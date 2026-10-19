@@ -363,7 +363,7 @@ describe('the call view', () => {
     expect(screen.getByTestId('dial-limitation').textContent).toBe(state.handoffNotice);
     expect(screen.queryByTestId('call-attempt')).toBeNull();
     fireEvent.click(screen.getByTestId('dial'));
-    expect(dial).toHaveBeenCalledWith({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    expect(dial).toHaveBeenCalledWith({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, expectedNationalDncReceiptId: null });
     expect(world.start).not.toHaveBeenCalled();
   });
 });
