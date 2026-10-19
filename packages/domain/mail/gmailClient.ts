@@ -57,6 +57,8 @@ export class GmailClientError extends Error {
 
 /** An access token and how long it is good for. Never logged, never persisted. */
 export interface GmailAccessGrant {
+  /** Actual provider response scopes, never requested scopes. Missing evidence stays missing. */
+  readonly grantedScopes?: readonly string[];
   readonly accessToken: string;
   readonly expiresAtEpochSeconds: number;
 }

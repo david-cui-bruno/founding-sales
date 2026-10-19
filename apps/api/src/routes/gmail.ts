@@ -1,4 +1,5 @@
 import type { GmailStatus } from '@fss/contracts';
+import { verifyExistingGmailGrant } from '@fss/domain/mail/existingGrant.ts';
 import { prepareCrmAcquisitionDiagnosticConsentIsolation } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
 import {
   beginGmailGrant,
@@ -16,7 +17,7 @@ import { errorFields, type Logger } from '../bootstrap/log.ts';
 import { connectMailboxCommandSchema, disconnectMailboxCommandSchema } from '@fss/contracts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { mailRouteDeps, membershipScope, readBaselineProgress, readLastGrantRefusal } from './mailSupport.ts';
-import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';
+import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -126,6 +127,24 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
     }
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
+    const own = await readOwnMailbox(scoped.context, deps.principal.userId);
+    if (own?.status === 'connected' && options.crmAcquisitionDiagnosticRuntime === undefined) {
+      await verifyExistingGmailGrant(scoped.context, mail, {
+        mailboxId: own.id,
+        authorizeObservation: async () => {
+          // Match normal revocation lock order. Hold the real device/session through insertion.
+          await auth.db.query('SELECT id FROM devices WHERE workspace_id=$1 AND id=$2 FOR SHARE',
+            [deps.principal.workspaceId, deps.principal.deviceId]);
+          await auth.db.query('SELECT id FROM sessions WHERE workspace_id=$1 AND id=$2 FOR SHARE',
+            [deps.principal.workspaceId, deps.principal.sessionId]);
+          const current = await requirePrincipal(auth, request);
+          return current.ok && current.principal.userId === deps.principal.userId &&
+            current.principal.sessionId === deps.principal.sessionId && current.principal.role === deps.principal.role;
+        },
+      });
+      const current = await requirePrincipal(auth, request);
+      if (!current.ok) return current.result;
+    }
     const mailbox = await readOwnMailbox(scoped.context, deps.principal.userId);
     const baseline = mailbox === null ? null : await readBaselineProgress(scoped.context, mailbox);
     const lastGrantRefusal = await readLastGrantRefusal(scoped.context, deps.principal.userId);
