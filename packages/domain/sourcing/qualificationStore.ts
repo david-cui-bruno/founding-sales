@@ -14,6 +14,7 @@ import { RESEARCH_FIRM_RUN_COUNTER } from '../research/ceilings.ts';
 import { workspaceBusinessZone } from '../research/ledger.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
+import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
 
 export const QUALIFICATION_PROMPT_VERSION='qualification-context-v7';
 export const QUALIFICATION_POLICY_VERSION='qualification-v4';
@@ -79,7 +80,7 @@ export async function readQualification(context:RepositoryContext,input:{candida
 }
 
 /** Persist only locally validated source references; this never grants eligibility. */
-export async function finishQualification(context:RepositoryContext,input:{runId:string;observations:unknown[];facts:unknown[];reason:string|null;openingQuestion?:string|null;supplementedEvidence?:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[]}):Promise<SourcingResult<{runId:string}>> {
+export async function finishQualification(context:RepositoryContext,input:{runId:string;observations:unknown[];facts:unknown[];reason:string|null;openingQuestion?:string|null;supplementedEvidence?:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[];diagnostic?:unknown}):Promise<SourcingResult<{runId:string}>> {
   if(!decideAdminOnly(context).permitted)return refused('admin_only');
   const evidence=qualificationEvidenceSchema.safeParse({observations:input.observations,facts:input.facts});
   if(!evidence.success || Buffer.byteLength(JSON.stringify(input.observations),'utf8')>100_000 || Buffer.byteLength(JSON.stringify(input.facts),'utf8')>50_000 ||
@@ -104,7 +105,8 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   await context.db.query(`UPDATE sourcing_qualification_runs SET state=$3,reason=$4,observations=$5::jsonb,facts=$6::jsonb,
     opening_question=$7,finished_at=now() WHERE workspace_id=$1 AND id=$2`,
     [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null]);
-  await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review',policyVersion:run.policy_version,...(input.supplementedEvidence?.length?{evidenceRecovery:{rule:'supported-office-card-v1',citations:input.supplementedEvidence}}:{})}});
+  const diagnostic=input.reason===null?undefined:normalizeQualificationDiagnostic(input.diagnostic);
+  await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review',policyVersion:run.policy_version,...(input.supplementedEvidence?.length?{evidenceRecovery:{rule:'supported-office-card-v1',citations:input.supplementedEvidence}}:{}),...(diagnostic?{diagnostic}:{})}});
   return {ok:true,value:{runId:run.id}};
 }
 
