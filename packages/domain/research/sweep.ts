@@ -144,7 +144,7 @@ export async function selectFirmsForSweep(
           -- 1. Never looked at.
           NOT EXISTS (
             SELECT 1 FROM research_runs r
-             WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id
+             WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id AND r.purpose = 'brief'
                AND (r.outcome IN ('completed', 'failed')
                  OR (r.outcome = 'refused' AND r.refusal_code = 'no_sources'))
           )
@@ -156,7 +156,7 @@ export async function selectFirmsForSweep(
                        ((r.completed_at AT TIME ZONE $6)::date
                           < ($2::timestamptz AT TIME ZONE $6)::date) AS later_day
                   FROM research_runs r
-                 WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id
+                 WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id AND r.purpose = 'brief'
                    AND (r.outcome IN ('completed', 'failed')
                      OR (r.outcome = 'refused' AND r.refusal_code = 'no_sources'))
                  ORDER BY r.revision DESC
@@ -197,11 +197,11 @@ export async function selectFirmsForSweep(
                  -- branch is inside this bracket and not beside it.
                  AND (
                    SELECT count(*) FROM research_runs c
-                    WHERE c.workspace_id = f.workspace_id AND c.firm_id = f.id
+                    WHERE c.workspace_id = f.workspace_id AND c.firm_id = f.id AND c.purpose = 'brief'
                       AND c.outcome = 'failed'
                       AND c.revision > COALESCE((
                         SELECT max(d.revision) FROM research_runs d
-                         WHERE d.workspace_id = f.workspace_id AND d.firm_id = f.id
+                         WHERE d.workspace_id = f.workspace_id AND d.firm_id = f.id AND d.purpose = 'brief'
                            AND d.outcome = 'completed'
                       ), 0)
                  ) < $5
@@ -212,7 +212,7 @@ export async function selectFirmsForSweep(
         -- queue a second revision of work somebody is already waiting on.
         AND NOT EXISTS (
           SELECT 1 FROM research_runs r
-           WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id AND r.outcome = 'running'
+           WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id AND r.purpose = 'brief' AND r.outcome = 'running'
         )
       ORDER BY f.created_at, f.id
       LIMIT $4`,

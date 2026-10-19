@@ -1,4 +1,5 @@
 import {APOLLO_DISCOVERY_CONSTRAINT_CASES} from './apolloDiscoveryCases.ts';
+import {OFFICE_ASSESSMENT_CONSTRAINT_CASES} from './officeAssessmentCases.ts';
 import type {SeededCrm} from './crmFixtures.ts';
 import type {SessionQueryable} from '../../../db/queryable.ts';
 interface Fixture {session:SessionQueryable;crm:SeededCrm;seeded:{alpha:{workspaceId:string}}}
@@ -7,6 +8,7 @@ const insert=(f:Fixture,overrides:Record<string,unknown>={})=>{
  return f.session.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload,status,revision) VALUES($1,$2,$3,$4::jsonb,$5,$6)',Object.values(row));
 };
 export const SOURCING_CONSTRAINT_CASES=[
+ ...OFFICE_ASSESSMENT_CONSTRAINT_CASES,
  ...APOLLO_DISCOVERY_CONSTRAINT_CASES,
  {constraint:'sourcing_search_account_id_check',run:async(f:Fixture)=>{return f.session.query('INSERT INTO sourcing_search_account(id) VALUES(false)');}},
  {constraint:'sourcing_search_account_daily_used_check',run:async(f:Fixture)=>{return f.session.query('INSERT INTO sourcing_search_account(daily_used) VALUES(-1)');}},

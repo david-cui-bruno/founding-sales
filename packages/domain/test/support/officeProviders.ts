@@ -1,0 +1,11 @@
+import {createHash} from 'node:crypto';
+import type {ExtractionProvider,PageFetchProvider} from '../../research/providers.ts';
+import type {OfficeExtractionRequest,OfficeSelection} from '../../research/officeAssessmentContract.ts';
+export const officeHtml='<main><h1>Northwind Test Holdings</h1><p>Northwind Test Holdings manages residential properties in Providence, RI.</p><section><h2>Northwind Test Holdings Providence office</h2><p>123 Main Street, Providence, RI 02903</p><p>Office: (401) 555-0187</p></section></main>';
+export function officeProviders(options:{html?:string;count?:number;beforeCount?:()=>Promise<void>;beforeExtract?:()=>Promise<void>;throwExtract?:boolean;retrievedAt?:string;selections?:(r:OfficeExtractionRequest)=>OfficeSelection[]}={}){
+ let fetches=0,counts=0,calls=0;
+ const requests:OfficeExtractionRequest[]=[];
+ const pageFetch:PageFetchProvider={providerKey:'company_page',fetchPages:async()=>{fetches++;const html=options.html??officeHtml;return {ok:true,costCents:0,value:{skipped:{},pages:[{url:'https://northwind.example.test',contentHash:createHash('sha256').update(html).digest('hex'),retrievedAt:options.retrievedAt??new Date().toISOString(),firstParty:true,contentType:'text/html',body:new TextEncoder().encode(html)}]}};}};
+ const extraction:ExtractionProvider={providerKey:'anthropic_extraction',countInputTokens:async r=>{if(r.purpose!=='office_evidence')throw new Error('Strict fixture only');requests.push(r);counts++;await options.beforeCount?.();return options.count??100;},extract:async r=>{calls++;if(r.purpose!=='office_evidence')throw new Error('Strict fixture only');requests.push(r);await options.beforeExtract?.();if(options.throwExtract)throw new Error('unknown transport outcome');const source=r.observations[0]!;const select=(kind:OfficeSelection['kind'],text:string):OfficeSelection=>({kind,observationId:source.id,blockId:source.blocks.find(b=>b.text.includes(text))!.id});return {ok:true,costCents:1,value:{purpose:'office_evidence',selections:options.selections?.(r)??[select('firm_identity','Northwind Test Holdings'),select('residential_management','manages residential'),select('service_area','manages residential'),select('business_phone','555-0187')],modelName:r.modelName,inputTokens:100,outputTokens:80}};}};
+ return {pageFetch,extraction,requests,stats:()=>({fetches,counts,calls})};
+}

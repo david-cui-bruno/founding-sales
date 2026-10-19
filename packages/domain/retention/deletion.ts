@@ -1,3 +1,4 @@
+import {measureResearchErasure,eraseOfficeAssessments} from './officeAssessments.ts';
 import { measurePhoneHandoffDeletion, erasePhoneHandoffs } from './phoneHandoffs.ts';
 import {lockAskLifecycle} from '../crm/askAnswerLifecycle.ts';
 import {redactBackfillMetadataRows} from '../mail/crmBackfillMetadata.ts';
@@ -574,40 +575,7 @@ async function measure(
         WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
       byContact,
     ),
-    // Lane R's four. They carry no `contact_id`: a fact is about the firm, not about
-    // one person at it, so a contact-scoped deletion leaves them and a firm-scoped one
-    // takes them all. `FIRM_SCOPED_ONLY` is that rule, written once.
-    firm_judgments: await countOf(
-      context,
-      `SELECT count(*) AS count FROM firm_judgments
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
-      byContact,
-    ),
-    firm_facts: await countOf(
-      context,
-      `SELECT count(*) AS count FROM firm_facts
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
-      byContact,
-    ),
-    research_runs: await countOf(
-      context,
-      `SELECT count(*) AS count FROM research_runs
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
-      byContact,
-    ),
-    // Lane PB (0038): one prepared brief per firm, about the firm; firm-scoped only.
-    firm_prepared_briefs: await countOf(
-      context,
-      `SELECT count(*) AS count FROM firm_prepared_briefs
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
-      byContact,
-    ),
-    firm_links: await countOf(
-      context,
-      `SELECT count(*) AS count FROM firm_links
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
-      byContact,
-    ),
+    ...await measureResearchErasure(context,scope,(await identityDeletionClosure(context,scope))?.firms??[scope.firmId]),
     call_logs: await countOf(
       context,
       `SELECT count(*) AS count FROM call_logs
@@ -1370,7 +1338,7 @@ export async function commitDeletion(
 
   const workspace = context.scope.workspaceId;
   const byContact = [workspace, scope.contactId, scope.firmId] as const;
-  const removed: Record<string, number> = {};
+  const removed: Record<string, number> = await eraseOfficeAssessments(context,scope,closure.firms);
   const redacted: Record<string, number> = {};
   const erasedHandoffs = await erasePhoneHandoffs(context, scope);
   redacted['phone_handoff_attempts'] = erasedHandoffs.attempts;

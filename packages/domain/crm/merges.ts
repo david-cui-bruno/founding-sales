@@ -233,7 +233,8 @@ export async function mergeFirms(
     // citing a page the other firm is now said to have published.
     ` AND NOT EXISTS (
          SELECT 1 FROM firm_facts ff
-          WHERE ff.workspace_id = r.workspace_id AND ff.evidence_id = r.id)`,
+          WHERE ff.workspace_id = r.workspace_id AND ff.evidence_id = r.id)
+        AND NOT EXISTS (SELECT 1 FROM firm_office_assessment_sources os WHERE os.workspace_id=r.workspace_id AND os.evidence_id=r.id)`,
   );
   await move('record_aliases', ['contact_id', 'alias_kind', 'alias_value']);
   // Slice 3a (0036): a call task with a contact has followed it by cascade; one with no

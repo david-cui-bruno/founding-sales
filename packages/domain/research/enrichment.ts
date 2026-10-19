@@ -1,4 +1,7 @@
-import { recordEvidence } from '../crm/evidence.ts';
+import {collectResearchPages} from './pageEvidence.ts';
+import {captureOfficeAssessment} from './officeAssessmentTarget.ts';
+import {finishOfficeResearch} from './officeAssessmentRun.ts';
+import type {ResearchPurposeInput,ResearchPurpose} from './officeAssessmentContract.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { closeResearchIfPaused, researchEligibility, researchRunCost } from './eligibility.ts';
@@ -6,7 +9,6 @@ import { firmIsResearchable, firmIsSuppressed } from './firmState.ts';
 import { validateFactSelections, type AdmittedFact, type FactSource } from './facts.ts';
 import type { ProviderOutcome } from './providers.ts';
 import { judgeFirm, type JudgmentContact } from './judgments.ts';
-import { parsePageText } from './pageText.ts';
 import { claimResearchClearance, lockResearchBudget, RESEARCH_FIRM_MAX_RESERVATIONS } from './ceilings.ts';
 import { recordProviderCall, workspaceBusinessZone } from './ledger.ts';
 import {
@@ -35,7 +37,6 @@ import {
 } from './runs.ts';
 import type { ExtractionProvider, PageFetchProvider } from './providers.ts';
 import {
-  COMPANY_PAGE_PROVIDER,
   EXTRACTION_PROVIDER,
   accept,
   refuse,
@@ -146,7 +147,7 @@ import {
  * a transaction that cannot commit has no accounting to lose.
  */
 
-export interface RunFirmResearchInput {
+export interface RunFirmResearchInput extends ResearchPurposeInput {
   readonly firmId: string;
   readonly revision: number;
   readonly trigger: ResearchTrigger;
@@ -159,6 +160,7 @@ export interface RunFirmResearchInput {
 }
 
 export interface ResearchRunReport {
+  readonly purpose?: ResearchPurpose;
   readonly runId: string;
   readonly firmId: string;
   readonly revision: number;
@@ -202,6 +204,7 @@ export type ResearchStep =
   | 'uncalled';
 
 export interface ResearchCursor {
+  readonly purpose?: ResearchPurpose;
   readonly runId: string;
   /** Which `provider_reservations` row of this run the cursor is about. 1, 2 or 3. */
   readonly attempt: number;
@@ -224,7 +227,7 @@ export type ResearchStart =
   /** The revision was already recorded by an earlier claim. Nothing more to do. */
   | { readonly kind: 'done'; readonly report: ResearchRunReport };
 
-export interface BeginResearchInput {
+export interface BeginResearchInput extends ResearchPurposeInput {
   readonly firmId: string;
   readonly revision: number;
   readonly trigger: ResearchTrigger;
@@ -251,12 +254,15 @@ export async function beginFirmResearch(
   input: BeginResearchInput,
 ): Promise<ResearchResult<ResearchStart>> {
   if (!Number.isInteger(input.revision) || input.revision < 1) return refuse('invalid_input');
+  if(input.purpose!==undefined&&input.purpose!=='brief'&&input.purpose!=='office_evidence')return refuse('invalid_input');
+  if(input.purpose==='office_evidence'&&(input.trigger!=='user_request'||!input.requestedByUserId))return refuse('invalid_input');
   const opening = {
     firmId: input.firmId,
     revision: input.revision,
     trigger: input.trigger,
     requestedByUserId: input.requestedByUserId ?? null,
     at: input.at,
+    purpose: input.purpose ?? 'brief',
   };
 
   const firm = await firmIsResearchable(context, input.firmId);
@@ -267,6 +273,7 @@ export async function beginFirmResearch(
 
   const runId = await openRun(context, opening);
   if (runId === null) return accept({ kind: 'done', report: replayed(input.firmId, input.revision) });
+  if(input.purpose==='office_evidence')await captureOfficeAssessment(context,{firmId:input.firmId,runId,at:input.at});
 
   const providerKey = input.providerKey ?? EXTRACTION_PROVIDER;
   const clearance = await claimResearchClearance(context, {
@@ -422,7 +429,7 @@ export async function ensureResearchCalling(
     await settleAttempt(context, { reservationId: row.id, at: input.at, outcome: { kind: 'estimated' } });
   }
 
-  const limit = Math.max(1, Math.trunc(input.maxReservations));
+  const limit = run.purpose==='office_evidence'?1:Math.max(1, Math.trunc(input.maxReservations));
   if (rows.length >= limit) {
     // Three reservations is the most one firm can cost in a day, and this is where that
     // is true rather than hoped: the run is closed here instead of reserving a fourth.
@@ -477,7 +484,7 @@ export async function ensureResearchCalling(
   return { kind: 'calling', attempt, reservationId: fresh.id, cents: fresh.cents };
 }
 
-export interface FinishResearchInput {
+export interface FinishResearchInput extends ResearchPurposeInput {
   readonly runId: string;
   readonly firmId: string;
   readonly revision: number;
@@ -560,6 +567,8 @@ async function finishFirmResearchBody(
     return accept(replayed(input.firmId, input.revision));
   }
   if (run.outcome !== 'running') return accept(replayed(input.firmId, input.revision));
+  if(run.firmId!==input.firmId||run.revision!==input.revision||run.purpose!==(input.purpose??'brief'))return refuse('invalid_input');
+  if(run.purpose==='office_evidence')return await finishOfficeResearch(context,input);
 
   const settings = await readResearchSettings(context);
   const businessTimeZone = await workspaceBusinessZone(context);
@@ -701,35 +710,7 @@ async function finishFirmResearchBody(
     skipped[reason] = (skipped[reason] ?? 0) + 1;
   };
 
-  let evidenceRecorded = 0;
-  const sources: FactSource[] = [];
-  const evidenceByReference = new Map<string, { readonly id: string; readonly retrievedAt: string }>();
-
-  for (const page of fetched.value.pages) {
-    const parsed = parsePageText(page.body, page.contentType);
-    if (parsed.blocks.length === 0) {
-      bump(parsed.truncated ? 'page_over_bound' : 'page_unreadable');
-      continue;
-    }
-    // Idempotent on the content hash, so a page unchanged since the last run is the
-    // same row: `recordEvidence` returns the existing one rather than failing, and a
-    // fact recorded against it this revision points at the evidence that carries it.
-    const evidence = await recordEvidence(context, {
-      firmId: input.firmId,
-      provider: COMPANY_PAGE_PROVIDER,
-      sourceReference: page.url,
-      contentHash: page.contentHash,
-      retrievedAt: new Date(page.retrievedAt),
-      detail: { kind: 'company_page', blocks: parsed.blocks.length, truncated: parsed.truncated },
-    });
-    if (!evidence.ok) {
-      bump(`evidence_${evidence.reason}`);
-      continue;
-    }
-    evidenceRecorded += 1;
-    sources.push({ sourceReference: page.url, blocks: parsed.blocks, firstParty: page.firstParty });
-    evidenceByReference.set(page.url, { id: evidence.value.id, retrievedAt: page.retrievedAt });
-  }
+  const {evidenceRecorded,sources,evidenceByReference}=await collectResearchPages(context,input.firmId,fetched.value.pages,bump);
 
   let facts: readonly AdmittedFact[] = [];
   let factsRefused = 0;
@@ -856,7 +837,7 @@ async function finishFirmResearchBody(
         costCents: 0,
         ...(answer.ok ? {} : { failureCode: answer.failureCode }),
       });
-      if (answer.ok) {
+      if (answer.ok && answer.value.purpose !== 'office_evidence') {
         const validation = validateFactSelections(answer.value.selections, offered);
         facts = validation.facts;
         factsRefused = validation.refused.length;
@@ -867,7 +848,7 @@ async function finishFirmResearchBody(
       } else {
         // Observed, and never a reason to discard the pages this run already recorded.
         // The sweep retries tomorrow as a new revision; the evidence stays.
-        bump(`extraction_${answer.failureCode}`);
+        bump(`extraction_${answer.ok?'wrong_purpose':answer.failureCode}`);
         const cost = await totalCost();
         const closed = await failRun(context, {
           runId,
@@ -976,10 +957,10 @@ async function finishFirmResearchBody(
 export async function recoverResearchCursor(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly revision: number },
-): Promise<{ readonly runId: string; readonly terminal: boolean } | null> {
+): Promise<{ readonly runId: string; readonly terminal: boolean; readonly purpose:ResearchPurpose } | null> {
   const run = await readRunForRevision(context, input);
   if (run === null) return null;
-  return { runId: run.id, terminal: run.outcome !== 'running' };
+  return { runId: run.id, terminal: run.outcome !== 'running', purpose:run.purpose };
 }
 
 /**
@@ -1006,6 +987,7 @@ export async function runFirmResearch(
   return await finishFirmResearch(context, {
     runId: started.value.runId,
     firmId: input.firmId,
+    purpose: input.purpose ?? 'brief',
     revision: input.revision,
     at: input.at,
     attempt: permission.attempt,

@@ -623,6 +623,7 @@ describe('one run', () => {
     const overThenUnder: ExtractionProvider = {
       providerKey: 'anthropic_extraction',
       countInputTokens: async request => {
+        if(request.purpose==='office_evidence')throw new Error('ordinary fixture only');
         sizes.push(request.sources.reduce((total, source) => total + source.blocks.length, 0));
         const answer = counts.length === 0 ? 1_000_000 : 100;
         counts.push(answer);
