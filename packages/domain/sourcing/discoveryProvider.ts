@@ -23,7 +23,7 @@ export interface DiscoveryOrganization {
  readonly employeeCount:number|null;
 }
 export type OrganizationDiscoveryResult =
- | {readonly ok:true;readonly requestId:string;readonly organizations:readonly DiscoveryOrganization[]}
+ | {readonly ok:true;readonly requestId:string;readonly returnedCount:number;readonly organizations:readonly DiscoveryOrganization[]}
  | {readonly ok:false;readonly code:'invalid_query'|'invalid_response'|'auth_failed'|'quota_exhausted'|'rate_limited'|'unavailable'};
 export interface OrganizationDiscoveryProvider {
  readonly providerKey:'apollo_free';

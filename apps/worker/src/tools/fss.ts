@@ -1,3 +1,4 @@
+import {trecVerifyCommand} from './fss/trecVerify.ts';
 import {crmAcquisitionDiagnosticBindingsCommand} from './fss/crmAcquisitionDiagnosticBindings.ts';
 import {crmAcquisitionDiagnosticProvisionCommand,crmAcquisitionDiagnosticRevokeCommand} from './fss/crmAcquisitionDiagnostic.ts';
 import {crmReadAllocationPutCommand} from './fss/crmReadAllocation.ts';
@@ -506,6 +507,20 @@ export async function main(
     console.error(JSON.stringify({ level: 'error', event: 'fss_usage', reason: parsed.reason, detail: parsed.detail }));
     if (parsed.reason === 'command_missing') console.error(describeCommands());
     return FSS_EXIT_CODES.usage;
+  }
+
+  if (parsed.value.spec.path.join(' ') === 'trec verify') {
+    // Local file verification must never resolve database credentials or adapters.
+    const {'--report': reportPath, ...options} = parsed.value.options;
+    const outcome = await trecVerifyCommand({options});
+    try {
+      await report(reportPath, outcome);
+      write(JSON.stringify(outcome));
+      return outcome.ok ? FSS_EXIT_CODES.ok : FSS_EXIT_CODES.refused;
+    } catch {
+      console.error(JSON.stringify({level:'error',event:'trec_report_unavailable'}));
+      return FSS_EXIT_CODES.failed;
+    }
   }
 
   if (parsed.value.spec.path.join(' ') === 'migration-auth-check') {
