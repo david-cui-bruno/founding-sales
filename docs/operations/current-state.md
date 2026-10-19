@@ -1,20 +1,20 @@
 # Current operating state
 
-## October 18, 2026, 23:26 UTC
+## October 19, 2026, 03:19 UTC
 
 Times below are UTC unless marked Eastern. These are dated observations, not proof of later state.
 
-**Production/main: `8b5998af6447ff0258a812dc7050aed009a7aba1`, schema 118.** Application **39174848097 succeeded 23:21**, migrationStarted=false. Root accepted public health at **23:22**: API123 (2)/worker124 (1), sole COMPLETED, pending=0, both explicit Bedrock. At **23:26**, four definition images and three running digests matched; migration109/operations112 match worker. All six actual read-only smokes passed **23:24**, canary 0.400625s. The $50/day MODEL guard is not an all-AWS/Transcribe cap.
-
-PR690 merged normally **22:41**, three CLEAN reviews/all PR CI passing. Main gate **39173307433**, images **39173307430** and infra **39173307550** succeeded. Grounding #683 and scheduler #686 are deployed, without new callable/admission counts or quality acceptance.
+**Serving: `a5789abff07f315dafcb6a4f48feca0803a4f58f`, schema119; config main: `284532746c7eb34c20f23908715a3003cd1d8314`.** PR692 merged; actual118→119 application39189291362 succeeded **02:45**, six independent smokes/OFF accepted **02:50**. PR693's two-file config merged; main gate39191871788/images39191871771/infra39191871809 succeeded. Reviewed saved Terraform config applied **03:11**, runtime accepted **03:18**: API125 desired/running2, worker126 desired/running1, pending0, sole COMPLETED; migration111/operations124 ACTIVE. Four images match accepted119 runtime/roles/secrets, API/worker explicit Bedrock, exact approved Gmail adapter installed. Three RUNNING task digests verified **03:19**. The $50/day MODEL guard is not an all-AWS/Transcribe cap. Grounding #683/scheduler #686 are deployed, not new callable/admission counts or quality acceptance.
 
 ## Sending and authority
 
-Root's read-only task at **23:24:01.625** found **stored/effective OFF, finishing=0, version 4, schema 118**; STOPPED/exit0, temporary operations115 INACTIVE **23:25**. Smoke sending_enabled is a declared deployment flag, not stored permission. **David alone resumes sending.** Shared holds unchanged; no database DDL or outreach. Fresh OFF/PITR, reviews and smoke remain release prerequisites. Use the [release procedure](lean-release-workflow.md). Never replay failed/ambiguous attempts.
+Separate **03:44:49.065** readback: **stored/effective OFF, finishing0/version4; capture_rows0/purpose_rows0**. Probe/accounting tasks STOPPED/exit0, temporary operations126/127 INACTIVE; default operations124 ACTIVE. Deployment flags are not stored permission. **David alone resumes sending.** Shared holds unchanged; no outreach. Fresh OFF/PITR, reviews and smoke remain release prerequisites. Use the [release procedure](lean-release-workflow.md). Never replay failed/ambiguous attempts.
 
 Standing authority covers scoped release infrastructure, credentials, read-only operations, restarts and main merges with recovery copies. Ask before unapproved spending, Gmail capture/LinkedIn actions, contacts, prospect-visible changes, irrecoverable business deletion or restores losing writes. Keep credentials and raw evidence private.
 
 ## Selling readiness and lead supply
+
+Selling and budget snapshots below are October 18 unless dated otherwise.
 
 Follow the [roadmap](../sourcing/roadmap-20261007.md) and [selling guide](how-to-sell.md). The accepted installed flow covers Today, Firms, briefs, outcomes and five sequences. Massachusetts personal-rule confirmation was satisfied; other calling gates still apply. No real call, enrollment or send is established. Agreed sequences attempt enrollment immediately; single-email permission needs later explicit enrollment.
 
@@ -30,12 +30,10 @@ Last budget observation **15:56:30**: research enabled, 100 shared qualification
 
 Last discovery observation **17:57:36**: configured 10/day, day 1/month 33, halted=false, dispatched=0, next October 19, 02:32 UTC (October 18, 22:32 EDT). No newer read or guaranteed execution is claimed. David approved Tavily Basic 10/day/$3 monthly card ceiling; preserve counters. Provider configuration does not prove invoice enforcement.
 
-David approved Gmail at **22:33:17 UTC on October 18**: incoming and Sent business messages for `david@usecallie.com`, **no older backfill**, Bedrock Claude Haiku 4.5 cross-US, **credits-only $1/day/$20/month**. **Activation is not yet done.** Root must verify this exact scope before Enable, then read back ON, both caps and the first actual CRM messages. Retain Disable, deletion/correction propagation and interruption recovery. Approval is not activation or outreach permission. LinkedIn manual ledger is deployed; no external actions are authorized.
-
-**Gmail blockers:** strict forward/mail-only schema119 source fix `09166164` committed isolated **23:01**; implementation39 manifest/tests ongoing, not merged/deployed. Database-only mailbox list **22:56** confirmed only the approved address, not OAuth/capture/authority/funding. Runtime CRM adapters were absent at last **22:38** inspection, not freshly checked. Funding unverified; AWS billing tab still Sign In **23:03**, no verified expiry. Capture not enabled; no first CRM messages observed. No backfill, expanded scope or cash fallback.
+David approved Gmail **October18 22:33:17**: incoming+Sent business-only forward/new originals for `david@usecallie.com`, **no older backfill**, Bedrock Haiku4.5 cross-US, **credits-only 100c/day/2000c/month**. Preserve Disable, deletion/correction propagation and interruption recovery. No activation, Gmail capture/provider read or real CRM arrival verified. Mailbox generation2/ready, last sync October17; grant NULL observed **03:17**, not freshly queried. Owner reconnect may require ordinary Google flow, never impersonation. Actual fictional Haiku integration **03:39:30**: three accepted calls, exact quotes/locators, commitment-count3/3 but full semantics2/3: conditional offer falsely inferred NEED, expected empty; not representative quality. Accounting **03:44:49.065**: three reservations, 6c reserved/3c modeled settled, no open probe obligations; not AWS invoice. Provider/day41c is aggregate, not probe delta. David **October19 01:35:53** confirmed AWS model credits; independent balance/expiry unobserved, not blockers. **October20 01:35:53 UTC** freshness deadline is root's 24h policy, not AWS expiry; disclose before Enable. Verify scope, ON/caps and first CRM arrival. Approval is not activation/outreach permission. LinkedIn ledger deployed; no external actions authorized.
 
 David reports roughly **$100,000 GCP credits**, not independently verified. Vertex Gemini is a future founding-sales model option, **not a switch now**. At the next research, qualification or Gmail model choice, compare cost and quality and bring David the result.
 
 ## Delivery
 
-Removed automation stays removed; lexical search, privacy/history, regular sequences, Cal.com sync and manual drafting remain. Signed desktop 1.0.52 is published, not forced installed/restarted. At PR684 merge, active documentation was 89,677 words, down 211,975, with 130 originals preserved. The legacy release path remains pending replacement hosted proof; no cuts yet. Baseline tag: `archive/pre-lean-selling-20261018-5c7d188e`.
+Removed automation stays removed; lexical search, privacy/history, regular sequences, Cal.com sync and manual drafting remain. Signed desktop1.0.53 commit284532746 published publicly **03:15**, signature/bytes verified; installed1.0.52 observed **03:12**, no forced restart. Prior active documentation: 90,104 words/94 files. Replacement actual118→119 hosted six smokes/OFF passed, but legacy cuts remain blocked by active workflows/contracts; no workflow changes or deletion claimed. Baseline tag: `archive/pre-lean-selling-20261018-5c7d188e`.

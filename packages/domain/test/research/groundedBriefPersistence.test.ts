@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { databaseNow } from '../../policy/clock.ts';
-import { listFirmFacts, readCallBrief, readFirmJudgments } from '../../research/brief.ts';
+import { listFirmFacts, readCallBrief, readFirmJudgments, type CallBrief } from '../../research/brief.ts';
 import { runFirmResearch } from '../../research/enrichment.ts';
 import type { FactSelection } from '../../research/facts.ts';
 import type { ExtractionProvider, PageFetchProvider } from '../../research/providers.ts';
@@ -91,15 +91,58 @@ async function run(selections: readonly FactSelection[], html = HOME) {
   return outcome.value;
 }
 
+function expectNoUnsupportedContent(brief: CallBrief) {
+  // Scan displayed claims, not timestamps, identifiers, counters or provenance metadata.
+  const content = {
+    opening: brief.opening,
+    questions: brief.questions,
+    whyFit: brief.whyFit.map(({ quote, attribution }) => ({ quote, attribution })),
+    whatChanged: brief.whatChanged.map(({ quote, attribution }) => ({ quote, attribution })),
+    likelyPerson: brief.likelyPerson === null ? null : { name: brief.likelyPerson.name, title: brief.likelyPerson.title },
+  };
+  expect(JSON.stringify(content)).not.toMatch(/900|AppFolio|Texas/);
+}
+
 async function expectNoSuggestions() {
   const brief = await readCallBrief(context, crm.alpha.firmId);
   expect(brief).not.toBeNull();
+  if (brief === null) throw new Error('Expected persisted call brief');
   expect(brief).toMatchObject({ opening: null, questions: null, generated: false });
-  expect(JSON.stringify(brief)).not.toMatch(/900|AppFolio|Texas/);
+  expectNoUnsupportedContent(brief);
   return brief;
 }
 
 describe('grounded call brief persistence and historical reads', () => {
+  it('does not mistake .900 timestamp metadata for an unsupported 900-unit claim', async () => {
+    await run([selection('target_fit', 'b1')]);
+    const judgedAt = '2026-10-19T05:19:27.900Z';
+    await database.session.query('UPDATE firm_judgments SET judged_at=$3::timestamptz WHERE workspace_id=$1 AND firm_id=$2',
+      [seeded.alpha.workspaceId, crm.alpha.firmId, judgedAt]);
+    const brief = await expectNoSuggestions();
+    expect(brief?.judgedAt).toBe(judgedAt);
+    expect(brief?.whyFit.map(quote => quote.quote)).toEqual([COMPANY]);
+  });
+
+  it.each(['900', 'AppFolio', 'Texas'])('still detects unsupported %s in every content-bearing brief field', async marker => {
+    await run([selection('target_fit', 'b1')]);
+    const brief = await expectNoSuggestions();
+    const quote = brief.whyFit[0];
+    if (quote === undefined) throw new Error('Expected company quotation');
+    const person = { contactId: crm.alpha.contactId, name: 'Dana Example', title: 'Operations Lead' };
+    const leaks: CallBrief[] = [
+      { ...brief, opening: marker },
+      { ...brief, questions: [marker, 'Grounded question'] },
+      { ...brief, questions: ['Grounded question', marker] },
+      { ...brief, whyFit: [{ ...quote, quote: marker }] },
+      { ...brief, whyFit: [{ ...quote, attribution: marker }] },
+      { ...brief, whatChanged: [{ ...quote, quote: marker }] },
+      { ...brief, whatChanged: [{ ...quote, attribution: marker }] },
+      { ...brief, likelyPerson: { ...person, name: marker } },
+      { ...brief, likelyPerson: { ...person, title: marker } },
+    ];
+    for (const leaked of leaks) expect(() => expectNoUnsupportedContent(leaked)).toThrow();
+  });
+
   it.each([
     { name: 'no selections', selections: [], refused: 0, html: HOME },
     { name: 'unknown block', selections: [selection('target_fit', 'absent')], refused: 1, html: HOME },

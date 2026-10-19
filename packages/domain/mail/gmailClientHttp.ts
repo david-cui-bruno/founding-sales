@@ -517,7 +517,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       return {
         ok: true,
         grant: {
-          accessToken,
+          accessToken, grantedScopes: (asString(json['scope']) ?? '').split(/\s+/u).filter(Boolean),
           expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + (Number.isFinite(expiresIn) ? expiresIn : 3600),
         },
       };
