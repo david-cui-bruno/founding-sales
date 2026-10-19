@@ -10,6 +10,7 @@ let f: AuthFixture;
 let token: string;
 let firmId: string;
 let routeId: string;
+let authorityAt = '2026-09-16T14:00:01.000Z';
 const e164 = '+14015550187';
 const at = '2026-09-16T14:00:00.000Z';
 const command = () => ({ commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, firmId, routeId, routeVersion: 1 });
@@ -19,6 +20,12 @@ async function post(body: unknown, path = '/dial/handoff', access = token) {
 }
 beforeAll(async () => {
   f = await createAuthFixture();
+  const query = f.db.query.bind(f.db);
+  // Policy evidence and the final post-lock clock must share the fixture timeline.
+  // Only substitute this clock read. Authority locks and every write remain real PG.
+  vi.spyOn(f.db, 'query').mockImplementation(async (text, values) =>
+    await query(text === 'SELECT clock_timestamp() AS at' ? 'SELECT $1::timestamptz AS at' : text,
+      text === 'SELECT clock_timestamp() AS at' ? [authorityAt] : values));
   token = (await issueSessionFor(f, f.alpha, f.alpha.salesperson)).accessToken;
   firmId = await seedFirm(f, { name: 'Fixture phone only', regionCode: 'RI', postalCode: '02903', assignedUserId: f.alpha.salesperson.userId });
   const adminToken = (await issueSessionFor(f, f.alpha, f.alpha.admin)).accessToken;
@@ -48,12 +55,19 @@ describe('phone handoff dispatcher and durable command receipts', () => {
       VALUES($1,'fictional-test-only','2026-09-01','2026-09-15',true,ARRAY['401']) RETURNING id`, [f.alpha.workspaceId])).rows[0]?.id;
     await f.db.query(`INSERT INTO national_registry_endpoint_scrubs(workspace_id,snapshot_id,e164,scrubbed_at,result)
       VALUES($1,$2,$3,'2026-09-15','clear')`, [f.alpha.workspaceId, snapshot, e164]);
+    authorityAt = '2026-09-16T14:00:16.000Z';
+    const expired = await post(command());
+    expect(expired.status).toBe(409);
+    expect(expired.body).toMatchObject({ reason: 'phone_handoff_unavailable' });
+    expect((await f.db.query('SELECT id FROM phone_handoff_attempts')).rows).toHaveLength(0);
+    authorityAt = '2026-09-16T14:00:01.000Z';
     const input = command();
     const answer = await post(input);
     expect(answer.status, JSON.stringify(answer.body)).toBe(200);
     const envelope = answer.body as { result: unknown };
     const fresh = phoneHandoffResultSchema.parse(envelope.result);
-    expect(fresh).toMatchObject({ actionable: true, e164, telUri: `tel:${e164}` });
+    expect(fresh).toMatchObject({ actionable: true, e164, telUri: `tel:${e164}`,
+      reservedAt: at, expiresAt: '2026-09-16T14:00:15.000Z', validForMilliseconds: 15000 });
     const receipt = (await f.db.query<{ result: unknown }>('SELECT result FROM command_receipts WHERE command_id=$1', [input.commandId])).rows[0];
     expect(receipt?.result).toEqual({ attemptId: fresh.attemptId });
     expect((await post(input)).body).toMatchObject({ replayed: true, result: { attemptId: fresh.attemptId, actionable: false, e164: null, telUri: null } });
