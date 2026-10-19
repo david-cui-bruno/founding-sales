@@ -6,6 +6,7 @@ import { POSTURE_STATEMENT_KEYS, selectApplicablePosture } from '../../src/rules
 import { CALLING_WINDOW_FLOOR } from '../../src/rules/callingWindow.ts';
 import {
   currentCallingWindow,
+  nextCallingWindowOpening,
   evaluateConfiguredCallingWindow,
   setCallingWindow,
 } from '../../policy/callingWindows.ts';
@@ -39,6 +40,24 @@ import { POSTURE_STATE, seedPolicy, type SeededPolicy } from '../db/support/poli
  *      respectively.
  *  26. Engaged call outcome after handoff prevents every successor.
  */
+
+describe('next configured calling-window opening', () => {
+  const configured = { id: '', version: 1, window: { startMinute: 570, endMinute: 1020 }, weekdays: [1, 3, 5] };
+  it.each([
+    ['2026-10-19T13:29:59.000Z', '2026-10-19T13:30:00.000Z'],
+    ['2026-10-19T13:30:00.000Z', null],
+    ['2026-10-19T21:00:00.000Z', '2026-10-21T13:30:00.000Z'],
+    ['2026-10-20T14:00:00.000Z', '2026-10-21T13:30:00.000Z'],
+    ['2026-10-31T14:00:00.000Z', '2026-11-02T14:30:00.000Z'],
+    ['2026-03-07T15:00:00.000Z', '2026-03-09T13:30:00.000Z'],
+  ])('resolves %s on the firm calendar to %s', (at, expected) => {
+    expect(nextCallingWindowOpening(at ?? '', 'America/New_York', configured)).toBe(expected);
+  });
+  it('does not invent an opening without an established zone or valid instant', () => {
+    for (const zone of [null, 'Not/AZone']) expect(nextCallingWindowOpening('2026-10-19T12:00:00.000Z', zone, configured)).toBeNull();
+    expect(nextCallingWindowOpening('invalid', 'America/New_York', configured)).toBeNull();
+  });
+});
 
 let database: TestDatabase;
 let seeded: TwoWorkspaces;

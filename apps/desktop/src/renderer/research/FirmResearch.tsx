@@ -32,6 +32,9 @@ export function FirmResearch({
     <ResearchSection
       firmId={firmId}
       state={research.state}
+      readFailed={research.readFailed}
+      reading={research.reading}
+      onRetryRead={research.retryRead}
       enabled={enabled}
       busy={research.busy}
       onResearchNow={() => {

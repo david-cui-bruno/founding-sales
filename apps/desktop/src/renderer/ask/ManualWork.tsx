@@ -1,6 +1,7 @@
 import {useCallback,useLayoutEffect,useRef,useState} from 'react';
 import {askActionReadSchema,askActionPageSchema,askActionChangedSchema} from '@fss/contracts';
 import {manualWorkPorts} from './manualWorkPorts.ts';
+import {Button} from '../ui/button.tsx';
 import type {z} from 'zod';
 import type {askActionChangePayloadSchema} from '@fss/contracts';
 export interface ManualWorkPorts {
@@ -34,24 +35,24 @@ export function ManualWork({scope,ports=manualWorkPorts,privacyKey,enabled}:Prop
   }catch{if(captured===epoch.current){setPage(null);setNotice('Action change could not be confirmed. Read current work before trying again.');}}
   finally{if(captured===epoch.current)setBusy(false);}
  }
- return <section aria-label='Manual human work'>
-  <h2>{scope.kind==='today'?'Your manual tasks':'Your manual work'}</h2>
-  <p>Human tasks, annotations and private preference proposals are separate from promises and outreach.</p>
-  <button disabled={!enabled||busy||!readPort} onClick={()=>{void load();}}>Read manual work</button>
+ return <details aria-label='Manual human work' className='rounded-md border border-border p-3 text-sm'>
+  <summary className='cursor-pointer font-medium'>{scope.kind==='today'?'Your manual tasks':'Your manual work'}</summary>
+  <p className='my-2 text-xs text-muted-foreground'>Tasks and notes you saved yourself. Private preferences stay private. These do not send messages or change promises.</p>
+  <Button size='sm' variant='quiet' disabled={!enabled||busy||!readPort} onClick={()=>{void load();}}>Refresh manual work</Button>
   {notice!==null&&<p role='status'>{notice}</p>}
   {page?.items.length===0&&<p>No manual work on this page.</p>}
   {page?.items.map(item=><article key={item.actionId}>
-   <p>{item.kind==='task'?'Manual task':item.kind==='note'?'Human annotation':'Private preference proposal'} · {item.status}</p>
+   <p>{item.kind==='task'?'Manual task':item.kind==='note'?'Your note':'Private preference proposal'} · {item.status}</p>
    {item.supportState==='current'?<>
     {item.label!==null&&<p>{item.label}</p>}{item.text!==null&&<pre className='whitespace-pre-wrap break-words'>{item.text}</pre>}
     {item.due!==null&&<p>Due {item.due.kind==='date'?item.due.date:item.due.at} ({item.due.zone})</p>}
    </>:<p>Supporting evidence is {item.supportState}. Private content is unavailable.</p>}
    {item.reviewRequired&&<p>Evidence review is required before changing this work.</p>}
-   {item.kind==='task'&&item.status==='open'&&item.supportState==='current'&&!item.reviewRequired&&<button disabled={!enabled||busy||!ports.actionChange} onClick={()=>{void change(item,'complete_task');}}>Complete manual task</button>}
-   {item.kind==='task'&&item.status==='open'&&item.supportState==='current'&&!item.reviewRequired&&<button disabled={!enabled||busy||!ports.actionChange} onClick={()=>{void change(item,'cancel_task');}}>Cancel manual task</button>}
-   {item.kind==='preference'&&item.status==='proposed'&&item.supportState==='current'&&!item.reviewRequired&&<button disabled={!enabled||busy||!ports.actionChange} onClick={()=>{void change(item,'dismiss_preference');}}>Dismiss preference proposal</button>}
+   {item.kind==='task'&&item.status==='open'&&item.supportState==='current'&&!item.reviewRequired&&<Button size='sm' variant='outline' disabled={!enabled||busy||!ports.actionChange} onClick={()=>{void change(item,'complete_task');}}>Complete manual task</Button>}
+   {item.kind==='task'&&item.status==='open'&&item.supportState==='current'&&!item.reviewRequired&&<Button size='sm' variant='outline' disabled={!enabled||busy||!ports.actionChange} onClick={()=>{void change(item,'cancel_task');}}>Cancel manual task</Button>}
+   {item.kind==='preference'&&item.status==='proposed'&&item.supportState==='current'&&!item.reviewRequired&&<Button size='sm' variant='outline' disabled={!enabled||busy||!ports.actionChange} onClick={()=>{void change(item,'dismiss_preference');}}>Dismiss preference proposal</Button>}
    {item.completedAt!==null&&<p>Completed {item.completedAt}</p>}
   </article>)}
-  {page?.nextAfterId!=null&&<button disabled={!enabled||busy} onClick={()=>{void load(page.nextAfterId??undefined);}}>Older manual work</button>}
- </section>;
+  {page?.nextAfterId!=null&&<Button size='sm' variant='outline' disabled={!enabled||busy} onClick={()=>{void load(page.nextAfterId??undefined);}}>Older manual work</Button>}
+ </details>;
 }

@@ -51,6 +51,11 @@ it('shows inert unverified evidence and reviews with the displayed revision',asy
  const p=ports();const {container}=render(<DraftsProvider><Candidates ports={p}/></DraftsProvider>);
  expect(await screen.findByText(candidate.evidence)).toBeTruthy();expect(container.querySelector('script')).toBeNull();
  expect(screen.getByText(/not verified by Callie/)).toBeTruthy();
+ const researched=screen.getByText('Researched 1 Oct');
+ expect(researched.closest('details')?.open).toBe(false);
+ expect(screen.getByText('Potential fit · we do not know whether they need help')).toBeTruthy();
+ fireEvent.click(researched);
+ expect(screen.getByText(/observed 2026-10-01 · Researcher/)).toBeTruthy();
  fireEvent.click(screen.getByRole('button',{name:'Keep for research'}));
  await waitFor(()=>expect(p.review).toHaveBeenCalledWith(expect.objectContaining({id:candidate.id,expectedRevision:1,status:'kept'})));
 });

@@ -74,7 +74,7 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
 
   if(request.path==='/today/actions/v2'){
     if(request.method!=='GET')return {status:405,body:redactError('method_not_allowed')};
-    const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV2(context,{now:await databaseNow(context)}));
+    const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV2(context,{now:await databaseNow(context),includeFirmAssociations:includesTasks(request.query,'firmAssociations')}));
     return result===null?{status:404,body:redactError('not_found')}:{status:200,body:todayActionsV2ResponseSchema.parse(result)};
   }
   if(request.path==='/today/actions/open/v2'){

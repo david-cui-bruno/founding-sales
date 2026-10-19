@@ -2,7 +2,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it,vi } from 'vitest';
 import type { JSX } from 'react';
 import { createGeneration } from '../src/renderer/app/generation.ts';
 import { useViewState } from '../src/renderer/app/useViewState.ts';
@@ -34,16 +34,19 @@ interface Scripted {
   readonly api: OperationApi;
   /** Answer the call waiting under this name. */
   release(name: string, value: State): void;
+  reject(name:string):void;
   readonly asked: string[];
 }
 
 function scripted(): Scripted {
   const asked: string[] = [];
   const waiting = new Map<string, (value: State) => void>();
+  const rejected = new Map<string, (error:Error) => void>();
   const answer = async (operation: string): Promise<State> => {
     asked.push(operation);
-    return await new Promise<State>(resolve => {
+    return await new Promise<State>((resolve,reject) => {
       waiting.set(operation, resolve);
+      rejected.set(operation,reject);
     });
   };
   return {
@@ -53,6 +56,7 @@ function scripted(): Scripted {
       waiting.delete(name);
     },
     asked,
+    reject:name=>{rejected.get(name)?.(new Error('offline'));},
   };
 }
 
@@ -68,6 +72,7 @@ function Probe(): JSX.Element {
   return (
     <>
       <span data-testid="zone">{view.state === null ? 'nothing' : view.state.zone}</span>
+      <span data-testid="read-error">{String(view.readFailed)}</span>
       <button
         type="button"
         data-testid="save"
@@ -113,6 +118,26 @@ async function mounted(api: Scripted): Promise<void> {
     expect(screen.getByTestId('zone').textContent).toBe('Chicago');
   });
 }
+it('retains existing data after a read rejects and clears its error after a read-only retry succeeds',async()=>{
+ const error=vi.spyOn(console,'error').mockImplementation(()=>undefined),api=scripted();
+ try{
+ await mounted(api);await userEvent.click(screen.getByTestId('history'));api.reject('history');
+ await waitFor(()=>expect(screen.getByTestId('read-error').textContent).toBe('true'));
+ expect(screen.getByTestId('zone').textContent).toBe('Chicago');
+ await userEvent.click(screen.getByTestId('history'));api.release('history',{zone:'Boston'});
+ await waitFor(()=>expect(screen.getByTestId('read-error').textContent).toBe('false'));
+ expect(screen.getByTestId('zone').textContent).toBe('Boston');expect(api.asked).not.toContain('save');
+ }finally{error.mockRestore();}
+});
+it('does not apply a stale read failure after a newer command answer',async()=>{
+ const error=vi.spyOn(console,'error').mockImplementation(()=>undefined),api=scripted();
+ try{
+ await mounted(api);await userEvent.click(screen.getByTestId('history'));await userEvent.click(screen.getByTestId('save'));
+ api.release('save',{zone:'Boston'});await waitFor(()=>expect(screen.getByTestId('zone').textContent).toBe('Boston'));
+ api.reject('history');await waitFor(()=>expect(error).toHaveBeenCalled());
+ expect(screen.getByTestId('read-error').textContent).toBe('false');
+ }finally{error.mockRestore();}
+});
 
 describe('two answers in flight at once', () => {
   it('keeps the saved value when a read issued beside the save answers last', async () => {

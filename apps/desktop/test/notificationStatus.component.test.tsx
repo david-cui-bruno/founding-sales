@@ -15,20 +15,20 @@ function port(status: Parameters<typeof queue>[0], runtime: NotificationRuntimeS
 }
 it('shows unknown native outcome without claiming delivery or clearing the overdue action', async () => {
   render(<NotificationStatus port={port('unknown')} />);
-  expect(await screen.findByText('Native outcome unknown')).toBeDefined();
+  expect(await screen.findByText('Alert display could not be confirmed')).toBeDefined();
   expect(screen.getByText('Northwind')).toBeDefined();
   expect(screen.getByText('Today work stays open until it is resolved.')).toBeDefined();
   expect(screen.queryByText(/delivered/i)).toBeNull();
 });
 it.each([
-  ['attempting', 'Native alert attempted; no show observed'],
-  ['native_shown', 'Native show observed; awaiting acknowledgement'],
+  ['attempting', 'Alert requested. Display not confirmed.'],
+  ['native_shown', 'Alert shown. Not acknowledged yet.'],
   ['acknowledged', 'Acknowledged'],
-  ['failed', 'Native alert failed'],
+  ['failed', 'Alert could not be shown'],
 ] as const)('distinguishes %s from other notification receipts', async (state, label) => {
   render(<NotificationStatus port={port(state)} />);
   expect(await screen.findByText(label)).toBeDefined();
-  expect(screen.queryByText('Native outcome unknown')).toBeNull();
+  expect(screen.queryByText('Alert display could not be confirmed')).toBeNull();
 });
 it('distinguishes an offline read from an empty healthy queue and suppresses a late previous-session result', async () => {
   let resolveOld: ((value: Awaited<ReturnType<NotificationStatusPort['read']>>) => void) | undefined;
@@ -42,4 +42,18 @@ it('distinguishes an offline read from an empty healthy queue and suppresses a l
   const healthy: NotificationStatusPort = { read: async () => ({ ok: true, value: { ...queue('native_shown'), items: [] } }), runtime: async () => ({ state: 'ready', lastCheckedAt: null }) };
   view.rerender(<NotificationStatus port={healthy} />);
   expect(screen.queryByText('Northwind')).toBeNull();
+});
+
+it('hides only exact internal-test alert rows without acknowledging them', async () => {
+  const hidden = queue('native_shown'), real = queue('unknown');
+  const value = { ...hidden, items: [
+    ...hidden.items.map(item => ({ ...item, subject: 'Callie Internal Test' })),
+    ...real.items.map(item => ({ ...item, subject: 'Callie Internal Test Partners' })),
+  ] };
+  render(<NotificationStatus port={{ read: async () => ({ ok: true, value }), runtime: async () => ({ state: 'ready', lastCheckedAt: null }) }} />);
+  expect(await screen.findByText('Callie Internal Test Partners')).toBeTruthy();
+  expect(screen.queryByText('Callie Internal Test')).toBeNull();
+  expect(screen.queryByText('Alert shown. Not acknowledged yet.')).toBeNull();
+  expect(screen.getByText('Alert display could not be confirmed')).toBeTruthy();
+  expect(hidden.items[0]?.receipt?.status).toBe('native_shown');
 });

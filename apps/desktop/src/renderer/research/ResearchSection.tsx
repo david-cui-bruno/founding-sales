@@ -27,10 +27,16 @@ export function ResearchSection({
   busy,
   onResearchNow,
   onAddLink,
+  readFailed = false,
+  reading = false,
+  onRetryRead,
 }: {
   readonly firmId: string;
   readonly state: ResearchState | null;
   readonly enabled: boolean;
+  readonly readFailed?: boolean;
+  readonly reading?: boolean;
+  onRetryRead?(): void;
   /** Whether one named form's own command is on the wire (1.0.13, P1-4). */
   busy(form: string): boolean;
   onResearchNow(): void;
@@ -60,6 +66,7 @@ export function ResearchSection({
         </Button>
       }
     >
+      {readFailed ? <div role="alert" className="py-2 text-sm"><p>Saved research could not be loaded. Previously shown research is kept.</p>{onRetryRead === undefined ? null : <Button variant="quiet" size="sm" disabled={reading} onClick={onRetryRead}>Retry reading research</Button>}</div> : null}
       {state?.notice == null ? null : (
         <p data-testid="research-notice" className="py-1 text-sm text-muted-foreground">
           {researchNotice(state.notice)}
@@ -68,11 +75,11 @@ export function ResearchSection({
 
       {firm === null ? null : <ResearchBasics facts={firm.facts} />}
 
-      {judgments === null ? (
+      {judgments === null && !readFailed ? (
         <p data-testid="research-empty" className="py-1 text-sm text-muted-foreground">
-          Callie has not read this firm’s site yet.
+          {reading ? 'Loading research…' : state === null || firm === null ? 'Research is unavailable. Check the message above.' : 'No research saved yet.'}
         </p>
-      ) : (
+      ) : judgments === null ? null : (
         <ul data-testid="research-judgments" className="flex flex-col gap-1 py-1">
           {judgmentChips(judgments).map(chip => (
             <li key={chip.label} data-testid={`research-judgment-${chip.label.toLowerCase()}`} className="text-sm">

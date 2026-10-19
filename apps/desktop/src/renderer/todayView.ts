@@ -58,7 +58,7 @@ const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.freeze({
  * The person's own number is what a call should leave on, and Settings is where it goes.
  */
 export const NO_CALLING_NUMBER =
-  'Callie has no attested number of yours to call from. Add it in Settings (⌘,), under Your calling number.';
+  'Add and verify your calling number in Settings (⌘,), under Your calling number.';
 
 /**
  * Why the server will not advise a call, in the words a person can act on.
@@ -98,6 +98,20 @@ const DIAL_REASONS: Readonly<Record<string, string>> = Object.freeze({
 /** The one place a dial reason becomes English. Unknown codes are shown as-is. */
 function dialReasonSentence(code: string): string {
   return DIAL_REASONS[code] ?? reasonSentence(code);
+}
+
+function adviceReasonSentence(code: string, advice: DialAdviceView): string {
+  if (code === 'outside_calling_window' && advice.callingWindowOpensAt != null && advice.firmTimeZone != null) {
+    try {
+      const opening = new Intl.DateTimeFormat('en-US', {
+        timeZone: advice.firmTimeZone, weekday: 'long', hour: 'numeric', minute: '2-digit',
+      }).format(new Date(advice.callingWindowOpensAt));
+      return `Calling window opens ${opening} their time. Other calling checks still apply.`;
+    } catch {
+      // Older or unreadable schedule metadata keeps the existing refusal explanation.
+    }
+  }
+  return dialReasonSentence(code);
 }
 
 /** One number on the expanded card: what it is, and whether the server will advise it. */
@@ -400,7 +414,7 @@ export function buildTodayView(state: TodayState): TodayScreenView {
             ? [dialReasonSentence('dial_advice_unavailable')]
             : advice.callable
               ? []
-              : advice.reasons.map(dialReasonSentence),
+              : advice.reasons.map(code => adviceReasonSentence(code, advice)),
       };
     });
 

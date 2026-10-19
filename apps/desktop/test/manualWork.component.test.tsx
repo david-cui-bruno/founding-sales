@@ -10,6 +10,8 @@ const page:z.infer<typeof askActionPageSchema>={items:[{actionId,version:2,kind:
 it('shows dated owner-private manual tasks as human work distinct from promises',async()=>{
  const actionRead=vi.fn(async()=>page);
  render(<ManualWork scope={{kind:'today'}} ports={{actionRead}} privacyKey='owner:1' enabled/>);
+ expect(screen.getByText('Your manual tasks').closest('details')?.open).toBe(false);
+ fireEvent.click(screen.getByText('Your manual tasks'));
  expect(await screen.findByText('Prepare scheduling options')).toBeTruthy();
  expect(screen.getByText('Manual task · open')).toBeTruthy();
  expect(screen.getByText('Due 2026-10-10 (America/Chicago)')).toBeTruthy();
@@ -22,6 +24,7 @@ it('completes manual work with its current version and refreshes the recorded re
  const actionRead=vi.fn<ManualWorkPorts['actionRead']>(async()=>completed).mockResolvedValueOnce(page);
  const actionChange=vi.fn(async()=>({actionId,version:3,status:'done' as const,completedAt:'2026-10-09T12:00:00.000Z'}));
  render(<ManualWork scope={{kind:'person',personId}} ports={{actionRead,actionChange}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByText('Your manual work'));
  fireEvent.click(await screen.findByRole('button',{name:'Complete manual task'}));
  expect(await screen.findByText('Manual task · done')).toBeTruthy();
  expect(actionChange).toHaveBeenCalledWith({actionId,expectedVersion:2,action:'complete_task'});
@@ -36,6 +39,7 @@ it.each([
  const actionRead=vi.fn<ManualWorkPorts['actionRead']>(async()=>({...current,items:current.items.map(item=>({...item,version:3,status:closed}))})).mockResolvedValueOnce(current);
  const actionChange=vi.fn(async()=>({actionId,version:3,status:closed,completedAt:null}));
  render(<ManualWork scope={{kind:'history'}} ports={{actionRead,actionChange}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByText('Your manual work'));
  fireEvent.click(await screen.findByRole('button',{name:button}));
  expect(await screen.findByText(kind==='task'?'Manual task · cancelled':'Private preference proposal · dismissed')).toBeTruthy();
  expect(actionChange).toHaveBeenCalledWith({actionId,expectedVersion:2,action});
@@ -55,8 +59,9 @@ it('evicts private work on a fresh access refusal and cannot change its stale ta
  const actionRead=vi.fn<ManualWorkPorts['actionRead']>(async()=>page).mockResolvedValueOnce(page).mockRejectedValueOnce(new Error('denied'));
  const actionChange=vi.fn<ManualWorkPorts['actionChange']>();
  render(<ManualWork scope={{kind:'today'}} ports={{actionRead,actionChange}} privacyKey='owner:1' enabled/>);
+ fireEvent.click(screen.getByText('Your manual tasks'));
  expect(await screen.findByText('Prepare scheduling options')).toBeTruthy();
- fireEvent.click(screen.getByRole('button',{name:'Read manual work'}));
+ fireEvent.click(screen.getByRole('button',{name:'Refresh manual work'}));
  expect(await screen.findByText('Manual work is unavailable. Read current access again.')).toBeTruthy();
  expect(screen.queryByText('Prepare scheduling options')).toBeNull();
  expect(screen.queryByRole('button',{name:'Complete manual task'})).toBeNull();

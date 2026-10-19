@@ -3,6 +3,7 @@ import type {BookingCapacityResponse,BookingCapacityReason} from '@fss/contracts
 import {Row,RowMain,RowActions,Rows,Section} from '../ui/layout.tsx';
 import {Button} from '../ui/button.tsx';
 import {shortDayTime} from '../dates.ts';
+import {isOwnerWorkingFirm} from '../ownerWorkingView.ts';
 import {meetingRowWord} from './meetingText.ts';
 export interface BookingCapacityPorts {read():Promise<{readonly capacity:BookingCapacityResponse|null}>}
 const MISSING_EVIDENCE:Readonly<Record<BookingCapacityReason,string>>={
@@ -34,11 +35,10 @@ export function BookingCapacity({ports,onOpenFirm}:{readonly ports:BookingCapaci
   const invalidatePendingRead=useCallback(()=>{readNo.current++;},[]);
   useEffect(()=>{void load();return invalidatePendingRead;},[load,invalidatePendingRead]);
   return <Section title="Booking capacity" data-testid="booking-capacity" actions={<Button variant="quiet" size="sm" aria-label="Refresh booking evidence" disabled={busy||ports===null} onClick={()=>{void load();}}>Refresh</Button>}>
-    <p className="text-sm" data-testid="booking-capacity-preference">Historical three introductory calls per week is an unenforced legacy preference. Its enforcement is not verified. The standing booking policy has no daily or weekly call-count ceiling. Provider availability and configuration require separate verification.</p>
     <p className="text-sm text-muted-foreground" data-testid="booking-capacity-provider">{capacity===undefined?'Reading booking evidence…':capacity===null?'Callie could not read booking evidence.':capacity.provider.status==='observed'?capacity.provider.weeklyLimit===null?'No weekly limit was verified for this booking link.':`Cal.com currently limits this booking link to ${capacity.provider.weeklyLimit} bookings per week. Other event types aren’t covered by this setting.`:capacity.provider.reason===null?'Cal.com configuration is not verified.':MISSING_EVIDENCE[capacity.provider.reason]}</p>
     {capacity===undefined||capacity===null?null:<>
       <p className="mt-3 text-xs text-muted-foreground">Saved booking records. Cal.com owns available times and appointment changes.</p>
-      {capacity.recorded.bookings.length===0?<p className="text-sm text-muted-foreground">No saved bookings in this window.</p>:<Rows>{capacity.recorded.bookings.map(booking=><Row key={booking.meetingId} data-testid="booking-capacity-record">
+      {capacity.recorded.bookings.filter(booking=>isOwnerWorkingFirm(booking.firm?.name)).length===0?<p className="text-sm text-muted-foreground">No saved bookings in this window.</p>:<Rows>{capacity.recorded.bookings.filter(booking=>isOwnerWorkingFirm(booking.firm?.name)).map(booking=><Row key={booking.meetingId} data-testid="booking-capacity-record">
         <RowMain line={<span>{booking.firm?.name??booking.attendeeEmail??'Attendee to match'} · {shortDayTime(booking.startsAt)}</span>} detail={<span className="flex flex-col"><span>{meetingRowWord(booking.state)}{booking.matchReason==='firm_ambiguous'?' · More than one firm could match':booking.matchReason==='firm_unmatched'?' · Firm not matched':''}</span><span data-testid="booking-capacity-source">Cal.com update {shortDayTime(booking.sourceUpdatedAt)}</span></span>}/>
         {booking.firm===null||onOpenFirm===undefined?null:<RowActions><Button variant="quiet" size="sm" aria-label={`Open ${booking.firm.name}`} onClick={()=>{if(booking.firm!==null)onOpenFirm(booking.firm.id);}}>Open firm</Button></RowActions>}
       </Row>)}</Rows>}

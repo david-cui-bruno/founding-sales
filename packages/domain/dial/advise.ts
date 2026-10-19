@@ -1,7 +1,7 @@
 import type { DialRefusalCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { readFirm } from '../crm/firms.ts';
-import { currentCallingWindow, evaluateConfiguredCallingWindow } from '../policy/callingWindows.ts';
+import { currentCallingWindow, evaluateConfiguredCallingWindow, nextCallingWindowOpening } from '../policy/callingWindows.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { listApplicableHolds } from '../policy/holds.ts';
 import { applicablePosture } from '../policy/postures.ts';
@@ -48,6 +48,8 @@ export interface DialAdvice {
   readonly firmTimeZone: string | null;
   /** The firm's local clock at the moment of the advice, `HH:MM`, when the zone is known. */
   readonly firmLocalTime: string | null;
+  /** Schedule information, never permission to call at that time. */
+  readonly callingWindowOpensAt?: string | null;
   /** Database time the advice was taken at. */
   readonly at: string;
 }
@@ -105,12 +107,15 @@ export async function adviseDial(
 
   const zoneKnown = firm.time_zone !== null && firm.time_zone_confidence !== null && firm.region_code !== null;
   let firmLocalTime: string | null = null;
+  let callingWindowOpensAt: string | null = null;
   if (!zoneKnown) {
     add('zone_unresolved');
   } else {
     const posture = await applicablePosture(context, firm.region_code ?? '', at);
     if (posture.decision.kind === 'refused') add(posture.decision.reason);
-    const window = evaluateConfiguredCallingWindow(at, firm.time_zone, await currentCallingWindow(context));
+    const configured = await currentCallingWindow(context);
+    const window = evaluateConfiguredCallingWindow(at, firm.time_zone, configured);
+    callingWindowOpensAt = nextCallingWindowOpening(at, firm.time_zone, configured);
     firmLocalTime = window.localTime;
     if (!window.allowed) add(window.refusal === 'zone_unknown' ? 'zone_unresolved' : 'outside_calling_window');
   }
@@ -136,6 +141,7 @@ export async function adviseDial(
     telUri: callable && route !== null ? `tel:${route.e164}` : null,
     firmTimeZone: firm.time_zone,
     firmLocalTime,
+    callingWindowOpensAt,
     at,
   };
 }

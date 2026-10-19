@@ -4,6 +4,7 @@ import type { OperationInput } from '../../shared/operations.ts';
 import type { TodayState } from '../todayContract.ts';
 import type { Generation } from '../app/generation.ts';
 import { TODAY_TICK_MS, refreshDue } from '../todayView.ts';
+import { ownerToday } from '../ownerWorkingView.ts';
 
 /**
  * Today's reads, as a Query cache in memory (1.0.12).
@@ -147,7 +148,7 @@ export function useToday(identity: string | null, generation: number, guard: Gen
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const state = query.data ?? null;
+  const state = useMemo(() => query.data == null ? null : ownerToday(query.data), [query.data]);
 
   const hold = useCallback((form: string | null, by: 1 | -1): void => {
     if (form === null) return;

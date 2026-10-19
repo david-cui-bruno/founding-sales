@@ -448,6 +448,6 @@ export function buildReplyView(state: ReplyState, chosen: ReplyDisposition | nul
     classifierLine:
       state.classifier === null
         ? null
-        : `Suggestions come from ${state.classifier.modelName} at ${state.classifier.effort} effort.`,
+        : 'Callie’s suggestion. Confirm or change it.',
   };
 }

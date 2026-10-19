@@ -376,7 +376,7 @@ export function adminViewOf(state: AdminState, now: Date = new Date()): AdminVie
   return {
     screen: state.screen,
     notice:
-      state.notice === null ? null : (CALLING_NUMBER_NOTICES[state.notice] ?? POSTURE_NOTICES[state.notice] ?? state.notice),
+      state.notice === null ? null : (CALLING_NUMBER_NOTICES[state.notice] ?? POSTURE_NOTICES[state.notice] ?? (state.notice === 'release_record_unknown' ? 'This release reference was not recognized. Sending remains off.' : state.notice)),
     banner: state.online ? null : OFFLINE_BANNER,
     settings,
     sending,

@@ -22,10 +22,8 @@ import { failedTriesLine, judgmentChips, shortDate, sourceHost, NOT_RESEARCHED_L
  *     other action in this build, and a firm with no brief shows one grey line and the
  *     same action rather than an empty section.
  *
- * Since 29 September 2026 the first line of the brief is the announcement — what is said
- * the moment somebody answers, because the call is recorded. It is above the judgments and
- * above the failed-tries line, and it is there whether or not this firm has ever been
- * researched: it is not a fact about the firm, it is the sentence the call opens with.
+ * The recording announcement appears only when the caller has established Twilio
+ * recording mode. Phone-app calls and unknown provider state never claim recording.
  *
  * A source opens in the system browser through the seam that already exists:
  * `app.ts`'s `setWindowOpenHandler` hands an `https:` URL to `shell.openExternal` and
@@ -93,11 +91,13 @@ function Quotes({
 }
 
 export function Brief({
+  recording = false,
   brief,
   onResearchAgain,
   researching,
   enabled,
 }: {
+  readonly recording?: boolean;
   readonly brief: CallBriefDto | null;
   onResearchAgain(): void;
   /** Whether this card's own "Research again" is on the wire (P1-4). */
@@ -120,7 +120,7 @@ export function Brief({
   if (brief === null) {
     return (
       <div data-testid="today-brief" className="group/brief mb-3">
-        <CallAnnouncement />
+        {recording ? <CallAnnouncement /> : null}
         <div className="flex items-baseline justify-between gap-3">
           <p data-testid="brief-absent" className="text-sm text-muted-foreground">
             {NOT_RESEARCHED_LINE}
@@ -138,7 +138,7 @@ export function Brief({
   return (
     <div data-testid="today-brief" className="group/brief mb-3 border-b border-border pb-3">
       {/* First, above everything: what is said the moment they answer. */}
-      <CallAnnouncement />
+      {recording ? <CallAnnouncement /> : null}
       {failed === null ? null : (
         // Above everything, because it is a statement about how old the rest of this is.
         <p data-testid="brief-failed" className="mb-1 text-xs text-muted-foreground">

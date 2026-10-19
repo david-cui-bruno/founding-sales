@@ -188,6 +188,9 @@ describe('policy, suppression and dialing routes', () => {
     // `@fss/domain` where the instant is a parameter; nothing else stands in the way here.
     expect(advice.reasons.filter(reason => reason !== 'outside_calling_window')).toEqual([]);
     expect(advice.callable).toBe(advice.reasons.length === 0);
+    expect(advice.callingWindowOpensAt === null || typeof advice.callingWindowOpensAt === 'string').toBe(true);
+    const { callingWindowOpensAt: _opening, ...olderAdvice } = advice;
+    expect(dialCheckResponseSchema.safeParse({ advice: olderAdvice }).success).toBe(true);
 
     // Nothing was written: a read, with no receipt.
     const receipts = await fixture.db.query<{ count: string }>(

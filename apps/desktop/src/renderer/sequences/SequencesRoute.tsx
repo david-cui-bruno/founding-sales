@@ -85,6 +85,7 @@ function TemplatePanels({
         ) : undefined
       }
     >
+      {!screen.canAuthor ? <p className="text-xs text-muted-foreground">{!state.isAdmin ? 'Only an administrator can create templates and sequences.' : 'Changes are unavailable. Check your connection and update Callie if needed.'}</p> : null}
       <Rows>
         {screen.templates.map(panel => {
           const template = state.templates.find(entry => entry.id === panel.id);
@@ -273,6 +274,7 @@ export function SequencesRoute({
             >
               New sequence
             </Button>
+            {!screen.canAuthor ? <span className="text-xs text-muted-foreground">{!state.isAdmin ? 'Only an administrator can create sequences.' : 'Changes are unavailable. Check your connection and update Callie if needed.'}</span> : null}
           </form>
         }
       >

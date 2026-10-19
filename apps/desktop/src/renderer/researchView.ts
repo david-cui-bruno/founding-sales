@@ -22,9 +22,9 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   research_link_added: 'Link added. Callie will read it on the next run.',
   research_settings_saved: 'Saved.',
   research_disabled: 'Research is switched off or paused for this firm/workspace. Check research settings and holds.',
-  ceiling_reached: 'Today’s research budget is spent. Callie will pick this firm up tomorrow.',
-  daily_firm_ceiling: 'Today’s research budget is spent. Callie will pick this firm up tomorrow.',
-  daily_cost_ceiling: 'Today’s research budget is spent. Callie will pick this firm up tomorrow.',
+  ceiling_reached: 'Research allowance used. Future runs depend on settings and holds.',
+  daily_firm_ceiling: 'Research allowance used. Future runs depend on settings and holds.',
+  daily_cost_ceiling: 'Research allowance used. Future runs depend on settings and holds.',
   monthly_cost_ceiling: 'This month’s research budget is spent.',
   run_in_progress: 'Callie is already reading this firm.',
   no_sources: 'This firm publishes no website, and no link has been added.',
@@ -34,11 +34,11 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   not_assigned: 'That firm is not assigned to you.',
   admin_only: 'Only an admin may change the research settings.',
   link_not_permitted: 'Callie reads https pages, and never a directory, a social network or a job board.',
-  provider_failure: 'The last run could not finish. Callie will try again.',
-  lease_lost: 'That run stopped part-way. Callie will try again, and has kept what it may have cost.',
+  provider_failure: 'The last run could not finish. Future runs depend on settings and holds.',
+  lease_lost: 'That run stopped part-way. Estimated costs are retained. Future runs depend on settings and holds.',
   model_unpriced: 'The configured model has no reviewed price, so nothing may run.',
   over_budget:
-    'Callie has already read this firm as often as a day’s budget allows. It will pick it up again tomorrow.',
+    'Research allowance used. Future runs depend on settings and holds.',
   invalid_input: 'Callie could not use that.',
   refused: 'The server refused that.',
   unreadable_answer: 'Callie could not read the server’s answer.',
@@ -116,7 +116,7 @@ export function failedTriesLine(failedTries: number): string | null {
   const plural = `${String(tries)} tr${tries === 1 ? 'y' : 'ies'}`;
   return tries >= 3
     ? `Research failed, ${plural}. Callie has stopped trying this firm.`
-    : `Research failed, ${plural}. Callie will try again tomorrow.`;
+    : `Research failed, ${plural}. Future runs depend on settings and holds.`;
 }
 
 /**
@@ -134,7 +134,7 @@ export function factSourceLine(fact: {
   readonly firstParty: boolean;
 }): string {
   const own = fact.firstParty ? '' : ' · another source';
-  return `${fact.key} · ${sourceHost(fact.sourceReference)} · ${shortDate(fact.retrievedAt)}${own}`;
+  return `${({portfolio_size:'Portfolio size',software_evidence:'Software'} as Readonly<Record<string,string>>)[fact.key] ?? fact.key.replaceAll('_', ' ')} · ${sourceHost(fact.sourceReference)} · ${shortDate(fact.retrievedAt)}${own}`;
 }
 
 /**

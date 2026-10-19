@@ -149,12 +149,14 @@ describe('8.0aj: the reply window reads the classifier at max', () => {
     const lane = await replies.refresh();
     expect(lane.notice).toBeNull();
     expect(lane.classifier).toEqual({ enabled: true, modelName: 'claude-opus-5', effort: 'max' });
-    expect(buildReplyView(lane, null).classifierLine).toBe('Suggestions come from claude-opus-5 at max effort.');
+    expect(buildReplyView(lane, null).classifierLine).toBe('Callie’s suggestion. Confirm or change it.');
 
     const opened = await replies.open({ messageId });
     expect(opened.notice).toBeNull();
     expect(opened.open?.messageId).toBe(messageId);
     const view = buildReplyView(opened, null);
+    // RepliesView retains this provenance inside its native Suggestion details disclosure.
+    expect(view.card?.suggestion?.attribution).toBe('claude-opus-5, prompt g7b.replies.1');
     expect(view.card?.impactLines).toContain(`On hold: ${reasonSentence('uncertain_reply')} Paused: email send.`);
     expect(view.card?.nextAction).toBe('confirm_disposition');
   });

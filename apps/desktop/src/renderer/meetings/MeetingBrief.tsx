@@ -5,6 +5,7 @@ import { OUTCOME_LABELS } from '../outcomeForm.ts';
 import { OBJECTION_WORDS } from '../today/Recap.tsx';
 import { Button } from '../ui/button.tsx';
 import { useBriefMemory } from './briefMemory.ts';
+import { observedDate } from '../research/PreparedBrief.tsx';
 
 /**
  * The meeting brief, opened inline under a Meetings row (lane M2): what Callie already knows,
@@ -112,9 +113,9 @@ function Section({ name, section }: { readonly name: MeetingPreparationSectionKe
                   {label === null ? null : <span className="font-medium">{/[?:.!]$/u.test(label) ? `${label} ` : `${label}: `}</span>}
                   <span>{entry.provenance === 'observed' && entry.source !== 'call' && entry.source !== 'email_thread' ? `“${entry.text}”` : entry.text}</span>
                 </p>
-                <p className="text-xs text-faint">{day === null ? originOf(entry) : `${originOf(entry)} · ${day}`}
+                {entry.source === 'prepared_brief' ? <details className="text-xs text-faint"><summary className="w-fit cursor-pointer">{entry.at === null ? 'Research date unavailable' : `Researched ${observedDate(entry.at.slice(0,10)).replace(/ \d{4}$/u,'')}`}</summary><p>{originOf(entry)}{entry.at === null ? '' : ` · observed ${entry.at}`}{link === null ? null : <> · <a className="underline" href={link} target="_blank" rel="noreferrer">Source</a></>}</p></details> : <p className="text-xs text-faint">{day === null ? originOf(entry) : `${originOf(entry)} · ${day}`}
                   {link === null ? null : <> · <a className="underline" href={link} target="_blank" rel="noreferrer">Source</a></>}
-                </p>
+                </p>}
               </li>
             );
           })}

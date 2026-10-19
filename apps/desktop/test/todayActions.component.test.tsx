@@ -11,7 +11,7 @@ import type { Today, TodayActions } from '../src/renderer/today/useToday.ts';
 import type { TodayState } from '../src/renderer/todayContract.ts';
 import { setNavigator } from '../src/renderer/routes.ts';
 import type { OperationApi } from '../src/shared/operations.ts';
-import type { TodayActionsV2Response } from '@fss/contracts';
+import { todayPromiseActionSchema, todayCommitmentBlockerActionSchema, type TodayActionsV2Response } from '@fss/contracts';
 import { buildTodayView } from '../src/renderer/todayView.ts';
 
 /** Today actions through the public workspace and a controlled Operations adapter. */
@@ -87,7 +87,7 @@ function Harness({ call }: { readonly call: CallControl }): JSX.Element {
   const memory = useTodayMemory();
   const actions = {
     busy: () => false,
-    dial: vi.fn(),
+    dial: () => setState(current => ({ ...current, notice: 'dial_opened', lastCall: { firmId: A, routeId: ROUTE_ID, contactId: null, e164: '+12145550142', callSessionId: null } })),
     expand: (firmId: string) => {
       asked.push({ firmId, answer: () => setState(current => ({ ...current, expanded: expandedFor(firmId) })) });
     },
@@ -120,8 +120,10 @@ const MESSAGE = '55555555-5555-4555-8555-555555555555';
 const read: TodayActionsV2Response = { promiseCoverage:{scope:"current_authorized_work",truncated:false,nextAfterId:null},version: 2, workspaceId: A, businessTimeZone: 'America/Chicago', asOf: '2026-10-01T14:00:00.000Z', actions: [{ actionId: `reply-message:${MESSAGE}`, kind: 'reply', subject: 'Elm Fork Test Rentals', reason: 'substantive_reply', dueAt: '2026-09-30T14:00:00.000Z', state: 'overdue', target: { kind: 'reply', firmId: A, messageId: MESSAGE } }] };
 let currentRead: TodayActionsV2Response | null;
 let currentTarget: typeof read.actions[number]['target'] | null;
+let provider: 'tel' | 'twilio';
 const navigated = vi.fn();
 beforeEach(() => {
+  provider = 'twilio';
   currentRead = read;
   currentTarget = read.actions[0]!.target;
   setNavigator(navigated, () => undefined);
@@ -130,7 +132,7 @@ beforeEach(() => {
     read: async (operation: string) => operation === 'today.actionsV2' ? currentRead
       : operation === 'today.openActionV2' ? { version: 2, target: currentTarget }
       : operation === 'recordings.recoveries' ? { items: [], truncated: false }
-      : operation === 'calling.status' ? { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } }
+      : operation === 'calling.status' ? { provider, cadence: provider === 'tel' ? null : { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } }
       : { calls: [] },
     command: async () => { throw new Error('Action navigation never sends a command'); },
   } as unknown as OperationApi;
@@ -139,11 +141,67 @@ afterEach(() => { globalThis.callieApi = undefined; });
 function show() {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><DraftsProvider><Harness call={callOf({ phase: 'idle' })} /></DraftsProvider></QueryClientProvider>);
 }
+const promise = (subject:string,firms?:{id:string;name:string}[]|null) => todayPromiseActionSchema.parse({actionId:'promise-proof',kind:'promise',subject,...(firms===undefined?{}:{firms}),reason:'dated_promise',due:{kind:'date',date:'2026-10-20',zone:'America/Chicago',expression:'tomorrow'},state:'open',target:{kind:'internal_task',taskId:A,expectedVersion:1,review:{commitmentId:B,revision:1,projectionVersion:1},support:{sourceKind:'selected_note',sourceId:A,sourceRevision:1,sourceHash:'a'.repeat(64),contextHash:'b'.repeat(64),decisionRevision:0}}});
+it.each([
+ ['Callie Internal Test',undefined,true],
+ ['Callie Internal Test',[{id:A,name:'Real firm'}],true],
+ ['Send the requested details',[{id:A,name:'Callie Internal Test'}],false],
+ ['Send the requested details',[{id:A,name:'Callie Internal Test Rentals'}],true],
+ ['Send the requested details',[{id:A,name:'Callie Internal Test'},{id:B,name:'External firm'}],true],
+ ['Send the requested details',null,true],
+ ['Send the requested details',[],true],
+] as const)('uses authoritative firms rather than arbitrary promise label %s',async(subject,firms,visible)=>{
+ currentRead={...read,actions:[promise(subject,firms===undefined||firms===null?firms:[...firms])]};
+ show();
+ await vi.waitFor(()=>expect(screen.queryByTestId('today-actions')!==null).toBe(visible));
+ if(visible)expect(await screen.findByText(subject)).toBeTruthy();
+});
+it.each([undefined,[{id:A,name:'Callie Internal Test'}]] as const)('filters blockers by proven firm identity, never their label',async firms=>{
+ const original=promise('Callie Internal Test');
+ const blocker=todayCommitmentBlockerActionSchema.parse({actionId:'blocker',kind:'problem',subject:original.subject,...(firms===undefined?{}:{firms}),reason:'commitment_projection_failed',dueAt:read.asOf,state:'open',target:{kind:'commitment_blocker',review:{commitmentId:B,revision:1},support:original.target.support}});
+ currentRead={...read,actions:[blocker]};show();
+ if(firms===undefined)expect(await screen.findByText('Callie Internal Test')).toBeTruthy();else await vi.waitFor(()=>expect(screen.queryByTestId('today-actions')).toBeNull());
+});
 it('opens the exact current overdue reply from Today without resolving it', async () => {
   show();
   fireEvent.click(await screen.findByRole('button', { name: /Open reply/ }));
   await vi.waitFor(() => expect(navigated).toHaveBeenCalledWith({ name: 'replies', messageId: MESSAGE }));
   expect(screen.getByText('Overdue reply')).toBeTruthy();
+  expect(screen.getByTestId('today-owner-replies').textContent).toContain('1 reply needs you');
+  expect(screen.queryByText('Your manual tasks')).toBeNull();
+  expect(screen.queryByText('Desktop alerts')).toBeNull();
+  expect(screen.getByTestId('queue-region')).toBeTruthy();
+  expect(screen.getByTestId('today-firm')).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Call' })).toBeTruthy();
+});
+
+it('keeps Notes and outcome editable and retained after phone-app handoff, without recording claims', async () => {
+  provider = 'tel';
+  show();
+  await vi.waitFor(() => expect((screen.getByTestId('dial') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByTestId('dial'));
+  expect(await screen.findByText('Handed to the phone app.')).toBeTruthy();
+  expect(screen.queryByTestId('call-announcement')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Notes and outcome' }));
+  fireEvent.change(screen.getByTestId('outcome-note'), { target: { value: 'Ask about the portfolio next time' } });
+  fireEvent.change(screen.getByTestId('outcome-select'), { target: { value: 'no_answer' } });
+  expect((screen.getByTestId('outcome-submit') as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: /Close.*Esc/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Notes and outcome' }));
+  expect((screen.getByTestId('outcome-note') as HTMLTextAreaElement).value).toBe('Ask about the portfolio next time');
+  expect((screen.getByTestId('outcome-select') as HTMLSelectElement).value).toBe('no_answer');
+});
+
+it('does not show empty reply work or the exact internal test reply, but keeps similar real firm names', async () => {
+  currentRead = { ...read, actions: read.actions.map(action => ({ ...action, subject: 'Callie Internal Test' })) };
+  const view = show();
+  await vi.waitFor(() => expect(screen.queryByText(/Loading actions/)).toBeNull());
+  expect(screen.queryByTestId('today-owner-replies')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Open reply' })).toBeNull();
+  view.unmount();
+  currentRead = { ...read, actions: read.actions.map(action => ({ ...action, subject: 'Callie Internal Test Partners' })) };
+  show();
+  expect(await screen.findByTestId('today-owner-replies')).toBeTruthy();
 });
 
 it('describes uncertain mail as reply review rather than a substantive reply', async () => {
@@ -159,7 +217,8 @@ it('drops a resolved or stale action when the current open read refuses its old 
   currentTarget = null;
   currentRead = { ...read, actions: [] };
   fireEvent.click(button);
-  expect(await screen.findByText('No actions need you.')).toBeTruthy();
+  await vi.waitFor(() => expect(screen.queryByTestId('today-owner-replies')).toBeNull());
+  expect(screen.queryByText('No actions need you.')).toBeNull();
   expect(navigated).not.toHaveBeenCalled();
   expect(screen.getByText('This action changed. Today has been refreshed.').getAttribute('role')).toBe('status');
 });

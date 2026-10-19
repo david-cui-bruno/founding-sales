@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { JSX, ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it,vi } from 'vitest';
 import type { FirmMeetingDto, FirmRecording } from '@fss/contracts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { resetAttendanceMemory } from '../src/renderer/meetings/attendanceMemory.ts';
@@ -133,6 +133,35 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+it.each(['local','registered'] as const)('distinguishes initial %s recording read failure from empty and retries reads only',async(kind)=>{
+ const h=harness(viewOf([]));
+ const state=vi.fn(async()=>viewOf([])),forFirm=vi.fn(async()=>({recordings:[] as FirmRecording[],truncated:false}));
+ if(kind==='local')state.mockRejectedValueOnce(new Error('offline'));else forFirm.mockRejectedValueOnce(new Error('offline'));
+ const commands={chooseMeeting:vi.fn(h.ports.chooseMeeting),ignore:vi.fn(h.ports.ignore),retry:vi.fn(h.ports.retry)};
+ const ports={...h.ports,...commands,state,forFirm};
+ render(<Session><FirmMeetings firmId="11111111-1111-4111-8111-111111111111" ports={{forFirm:async()=>({meetings:[]})}} recordingPorts={ports}/></Session>);
+ expect((await screen.findByRole('alert')).textContent).toContain('Recordings could not be loaded');
+ expect(screen.queryByText('No recordings saved for this firm.')).toBeNull();
+ fireEvent.click(screen.getByRole('button',{name:'Retry reading recordings'}));
+ expect(await screen.findByText('No recordings saved for this firm.')).toBeTruthy();
+ expect(screen.queryByRole('alert')).toBeNull();
+ expect(state).toHaveBeenCalledTimes(2);expect(forFirm).toHaveBeenCalledTimes(2);
+ for(const command of Object.values(commands))expect(command).not.toHaveBeenCalled();
+});
+it('keeps previously read firm recordings after a registered refresh rejects',async()=>{
+ const h=harness(viewOf([])),meetings=[{meetingId:MEETING_ONE,state:'ended',startsAt:'2026-10-05T18:00:00.000Z',endsAt:'2026-10-05T18:20:00.000Z',attendanceSource:null}];
+ const forFirm=vi.fn(async()=>({recordings:[serverRow(MEETING_ONE,'audio')],truncated:false})).mockResolvedValueOnce({recordings:[serverRow(MEETING_ONE,'audio')],truncated:false}).mockRejectedValueOnce(new Error('offline'));
+ const ports={...h.ports,forFirm},meetingPorts={forFirm:async()=>({meetings})};
+ const component=(refreshKey:string)=><Session><FirmMeetings firmId="11111111-1111-4111-8111-111111111111" ports={meetingPorts} recordingPorts={ports} refreshKey={refreshKey}/></Session>;
+ const mounted=render(component('one'));
+ expect(await screen.findByTestId('firm-recording-registered')).toBeTruthy();
+ mounted.rerender(component('two'));
+ expect((await screen.findByRole('alert')).textContent).toContain('Previously shown recordings are kept');
+ expect(screen.getByTestId('firm-recording-registered')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Retry reading recordings'}));
+ await waitFor(()=>expect(screen.queryByRole('alert')).toBeNull());
+ expect(screen.getByTestId('firm-recording-registered')).toBeTruthy();
 });
 
 describe('K1: nothing about recordings outlives the session', () => {

@@ -23,7 +23,7 @@ import {emailTimelinePorts} from './emailTimelinePorts.ts';
 import {businessReviewPorts} from './businessReviewPorts.ts';
 import { Candidates,useCandidateReviewVisibility } from '../sourcing/Candidates.tsx';
 import { useKept } from '../replies/kept.ts';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import type { Generation } from '../app/generation.ts';
 import { inWords } from '../dates.ts';
@@ -47,6 +47,7 @@ import { PreparedBrief } from '../research/PreparedBrief.tsx';
 import { buildFirmWorkspaceView, FIRMS_HEADING, noticeText, PIPELINE_HEADING } from '../firmWorkspaceView.ts';
 import type { CrmState, StageChange, ValueChange } from '../firmWorkspaceContract.ts';
 import { useCrm } from './useCrm.ts';
+import { ownerPipeline } from '../ownerWorkingView.ts';
 
 /**
  * Pipeline, Firms, one firm's page, Add firm, Import and the merge screen (1.0.14).
@@ -112,7 +113,7 @@ export function FirmsRoute({
 }): JSX.Element {
   const { memory, touch } = useCrmMemory(identity, generation);
   const crm = useCrm(route, identity, generation, guard, () => memory.panelFirmId, enterAtRoot);
-  const state = crm.state;
+  const state = useMemo(() => crm.state === null || crm.state.pipeline === null ? crm.state : { ...crm.state, pipeline: ownerPipeline(crm.state.pipeline) }, [crm.state]);
   const [firmsTab, setFirmsTab] = useKept('firms:tab', 'firms');
   const [mailSourceVersion, setMailSourceVersion] = useState(0);
   const candidateReview=useCandidateReviewVisibility(state?.role==='admin'&&route.name==='firms',`${identity}:${generation}`,state?.pipeline);
@@ -180,6 +181,7 @@ export function FirmsRoute({
       </Page>
     );
   }
+  if (state === null && crm.readFailed) return <Page className="callie-v2"><ViewHeader title={rowHeading} /><p role="alert" className="mt-4 text-sm">{rowHeading} could not be loaded.</p><Button variant="outline" disabled={crm.reading} onClick={crm.retryRead}>Retry loading {rowHeading.toLowerCase()}</Button></Page>;
   if (state === null) {
     // Loading: the shape of what is coming, so nothing jumps when it arrives.
     return onPipelineRow ? (
@@ -336,27 +338,24 @@ export function FirmsRoute({
         stageName={stageName}
         variant={variant}
         guard={guard}
-        research={
+        brief={
           <>
-            {/* Lane PB: the prepared brief, negotiated on the firm page read
-              (`include: ['preparedBrief']`), beside Callie's own research. */}
-            {state.role === 'admin' ? (
-              <FirmQualification key={`qualification:${firm.read.firm.id}`} firmId={firm.read.firm.id} enabled={view.actionsEnabled} />
-            ) : null}
             {firm.visibility === 'assigned_or_admin' && firm.preparedBrief != null ? (
               <div className="mb-4">
                 <PreparedBrief key={firm.read.firm.id} brief={firm.preparedBrief} />
               </div>
             ) : null}
-            {/* Its own read, because the firm page's contract is strict behind
-              `pageVersion` and a key added to it is a wire break (lane R). */}
-            <FirmResearch
+            <details><summary className="cursor-pointer text-sm text-muted-foreground">Research & sources</summary><FirmResearch
               firmId={firm.read.firm.id}
               identity={identity}
               generation={generation}
               guard={guard}
               enabled={view.actionsEnabled}
-            />
+            /></details>
+          </>
+        }
+        research={<>
+          {state.role === 'admin' ? <FirmQualification key={`qualification:${firm.read.firm.id}`} firmId={firm.read.firm.id} enabled={view.actionsEnabled} /> : null}
           <RecordProgress firmId={firm.read.firm.id} enabled={view.actionsEnabled} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion}/>
           <EmailTimeline processing={processingPorts} workspaceId={workspaceId} key={`email:${identity}:${generation}:${firm.read.firm.id}`} enabled={view.actionsEnabled} ports={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} firmId={firm.read.firm.id} firms={state.pipeline ? firmsOf(state.pipeline).map(value => ({id:value.id,name:value.name})) : [{id:firm.read.firm.id,name:firm.read.firm.name}]} />
           </>

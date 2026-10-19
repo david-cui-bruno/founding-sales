@@ -436,7 +436,7 @@ export function EmailTimeline({
           <li key={context.contextId}>
             <p>
               {context.identityStatus === "observed_label"
-                ? "Observed name; person unconfirmed"
+                ? "Name from email, not yet linked to a person"
                 : context.personId === null
                   ? "Person unknown"
                   : (personChoices.find(

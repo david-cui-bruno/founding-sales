@@ -181,6 +181,19 @@ afterEach(() => {
   cleanup();
   globalThis.callieApi = undefined;
 });
+it('distinguishes an initial rejected saved-research read and retries only that read',async()=>{
+ const open=vi.fn(async()=>state()).mockRejectedValueOnce(new Error('offline'));
+ const run=vi.fn(async()=>state());
+ install({'research.open':open,'research.run':run});
+ vi.spyOn(console,'error').mockImplementation(()=>undefined);
+ const {guard}=createGeneration();
+ render(<QueryClientProvider client={client()}><FirmResearch firmId={FIRM_ID} identity="owner" generation={0} guard={guard} enabled/></QueryClientProvider>);
+ expect(await screen.findByRole('alert')).toHaveProperty('textContent',expect.stringContaining('Saved research could not be loaded'));
+ expect(screen.queryByText('Loading research…')).toBeNull();
+ await userEvent.click(screen.getByRole('button',{name:'Retry reading research'}));
+ expect((await screen.findByTestId('research-facts')).textContent).toContain('We manage residential property for owners.');
+ expect(screen.queryByRole('alert')).toBeNull();expect(open).toHaveBeenCalledTimes(2);expect(run).not.toHaveBeenCalled();
+});
 
 describe('the call brief on the Today card', () => {
   const noop = (): void => undefined;
@@ -234,7 +247,7 @@ describe('the call brief on the Today card', () => {
   it('says how many runs have failed, and that Callie has stopped after three', () => {
     render(<Brief brief={brief({ failedTries: 1 })} enabled onResearchAgain={noop} researching={false} />);
     expect(screen.getByTestId('brief-failed').textContent).toBe(
-      'Research failed, 1 try. Callie will try again tomorrow.',
+      'Research failed, 1 try. Future runs depend on settings and holds.',
     );
     cleanup();
     render(<Brief brief={brief({ failedTries: 3 })} enabled onResearchAgain={noop} researching={false} />);
@@ -317,7 +330,7 @@ describe('the Firm page’s Research section', () => {
     const facts = screen.getAllByTestId('research-fact');
     expect(facts[0]?.textContent).toContain('“We manage residential property for owners.”');
     expect(screen.getAllByTestId('research-fact-source')[0]?.textContent).toBe(
-      'target_fit · northwind.example.test · 28 Sep 2026',
+      'target fit · northwind.example.test · 28 Sep 2026',
     );
     // The evidence is reachable, not merely named: the whole source URL is the
     // anchor's own, opened through `setWindowOpenHandler` like the brief's.
@@ -334,7 +347,7 @@ describe('the Firm page’s Research section', () => {
     // And a fact off a link somebody added says so: a page on another host is not the
     // firm speaking, and a line laid out identically would present it as though it were.
     expect(screen.getAllByTestId('research-fact-source')[2]?.textContent).toBe(
-      'recent_change · news.example.test · 28 Sep 2026 · another source',
+      'recent change · news.example.test · 28 Sep 2026 · another source',
     );
     expect(screen.getAllByTestId('research-run')[0]?.textContent).toBe('28 Sep 2026 — 1 fact, $0.03');
   });
@@ -419,7 +432,8 @@ describe('the Firm page’s Research section', () => {
   it('says so plainly for a firm Callie has not read yet', async () => {
     install({}, state({ firm: { firmId: FIRM_ID, brief: null, facts: [], judgments: null, runs: [], links: [] } }));
     mount();
-    expect((await screen.findByTestId('research-empty')).textContent).toBe('Callie has not read this firm’s site yet.');
+    expect(screen.getByTestId('research-empty').textContent).toBe('Loading research…');
+    expect(await screen.findByText('No research saved yet.')).toBeDefined();
   });
 });
 

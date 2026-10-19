@@ -19,7 +19,7 @@ afterEach(cleanup);
 it('lets the owner bind an existing CRM identity and record manual history without any send/Enable control', async () => {
   const api = ports();
   render(<LinkedinManualLedger ports={api} />);
-  await screen.findByText(/Manual owner assertions only/);
+  await screen.findByText(/You recorded this activity yourself/);
   fireEvent.change(screen.getByLabelText('LinkedIn ledger account'), { target: { value: id('2') } });
   fireEvent.change(screen.getByLabelText('Person, Firm and profile'), { target: { value: '0' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add manual ledger' }));
@@ -54,7 +54,7 @@ it('retries an uncertain acknowledgement with the identical command and entry ID
   await screen.findByText(/Connection: unknown/);
   fireEvent.change(screen.getByLabelText('Activity date and time'), { target: { value: '2026-10-01T13:00' } });
   fireEvent.click(screen.getByRole('button', { name: 'Record manual activity' }));
-  fireEvent.click(await screen.findByRole('button', { name: 'Retry exact ledger record' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Retry saving this record' }));
   await waitFor(() => expect(api.record).toHaveBeenCalledTimes(2));
   expect(vi.mocked(api.record).mock.calls[0]![0]).toEqual(vi.mocked(api.record).mock.calls[1]![0]);
 });

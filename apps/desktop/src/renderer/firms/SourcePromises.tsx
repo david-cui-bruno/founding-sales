@@ -184,7 +184,7 @@ export function SourcePromises({
                   : item.state === "review_required"
                     ? "Review required"
                     : item.state === "pending"
-                      ? "Awaiting projection"
+                      ? "Waiting for this update to appear"
                       : item.state === "redacted"
                         ? "Evidence removed"
                         : "Internal work"}{" "}

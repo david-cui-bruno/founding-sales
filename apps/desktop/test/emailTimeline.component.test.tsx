@@ -143,7 +143,7 @@ it("opens approved email with explicit partial, observed identity and date label
   expect(screen.getByText("Sender date unknown")).toBeTruthy();
   expect(screen.getByText(`Provider date: ${PROVIDER_AT}`)).toBeTruthy();
   expect(screen.getByText(`Observed in Callie: ${OBSERVED_AT}`)).toBeTruthy();
-  expect(screen.getByText("Observed name; person unconfirmed")).toBeTruthy();
+  expect(screen.getByText("Name from email, not yet linked to a person")).toBeTruthy();
   expect(screen.getByText("Firm unknown")).toBeTruthy();
   expect(screen.getByText("Sent state unverified")).toBeTruthy();
   expect(

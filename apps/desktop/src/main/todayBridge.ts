@@ -628,7 +628,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       callable: advice.callable,
       reasons: advice.reasons,
       e164: advice.e164,
-      firmLocalTime: advice.firmLocalTime,
+      firmLocalTime: advice.firmLocalTime, firmTimeZone: advice.firmTimeZone, callingWindowOpensAt: advice.callingWindowOpensAt ?? null,
     };
   };
 

@@ -9,6 +9,7 @@ import {Button} from '../ui/button.tsx';
 import {Input} from '../ui/input.tsx';
 import {noDefiniteAnswer} from '../today/afterCallModel.ts';
 import {useCandidateMemory,type Pending} from './memory.ts';
+import {observedDate} from '../research/PreparedBrief.tsx';
 export interface CandidatePorts {
   list(input:OperationInput<'sourcing.list'>):Promise<OperationOutput<'sourcing.list'>>;
   save(input:OperationInput<'sourcing.save'>):Promise<OperationOutput<'sourcing.save'>>;
@@ -18,7 +19,7 @@ export interface CandidatePorts {
 }
 function api(){const bridge=operations();if(!bridge)throw new Error('unavailable');return bridge;}
 const defaultPorts:CandidatePorts={check:async input=>api().command('sourcing.check',input),list:async input=>api().read('sourcing.list',input),save:async input=>api().command('sourcing.save',input),review:async input=>api().command('sourcing.review',input),remove:async input=>api().command('sourcing.delete',input)};
-const signals:Record<SourcingCandidate['signal'],string>={explicit_help:'Asking for help',responsibility_overlap:'Manager handles maintenance too',coordination_hiring:'Hiring a coordinator',manual_handoff:'Manual handoffs',growth:'Expansion',tool_gap:'Gap in their current tools',fit_only:'Potential fit · need unknown'};
+const signals:Record<SourcingCandidate['signal'],string>={explicit_help:'Asking for help',responsibility_overlap:'Manager handles maintenance too',coordination_hiring:'Hiring a coordinator',manual_handoff:'Manual handoffs',growth:'Expansion',tool_gap:'Gap in their current tools',fit_only:'Potential fit · we do not know whether they need help'};
 const statuses:Record<SourcingCandidate['status'],string>={needs_review:'Needs review',kept:'Kept for research',dismissed:'Dismissed'};
 /** Visibility follows the server count, never a local eligibility decision. */
 export function useCandidateReviewVisibility(enabled:boolean,privacyKey:string,sourceVersion:unknown,list:CandidatePorts['list']=defaultPorts.list):{visible:boolean;onReviewEmpty:(empty:boolean)=>void} {
@@ -103,7 +104,7 @@ export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty}:{port
     {m.view!==null?<><ul className="divide-y divide-border">{m.view.candidates.map(candidate=><li key={candidate.id} className="space-y-3 py-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className="font-medium">{candidate.firmName}</h3><span className="text-sm text-muted-foreground">{candidate.discoveryQuery?'Search area: ':''}{candidate.locality}, {candidate.region}</span></div>
       <p className="text-sm">{signals[candidate.signal]}</p>{candidate.discoveryQuery?<p className="text-sm text-muted-foreground">Search result · name and location unverified. {candidate.discoveryKnownDomain?'Website domain already appears in your CRM; check for an existing firm. ':''}Query: {candidate.discoveryQuery}</p>:null}<p className="whitespace-pre-wrap break-words text-sm">{candidate.evidence}</p>
-      <p className="text-xs text-muted-foreground">Prepared research · not verified by Callie · observed {candidate.observedOn} · {candidate.preparedBy}</p>
+      <details className="text-xs text-muted-foreground"><summary className="w-fit cursor-pointer">Researched {observedDate(candidate.observedOn).replace(/ \d{4}$/u,'')}</summary><p>Prepared research · not verified by Callie · observed {candidate.observedOn} · {candidate.preparedBy}</p></details>
       <div className="flex gap-4 text-sm"><a className="underline underline-offset-4" href={candidate.sourceUrl} target="_blank" rel="noreferrer">Source evidence</a><a className="underline underline-offset-4" href={candidate.website} target="_blank" rel="noreferrer">Firm website</a></div>
       <QualificationPanel onOpenFirm={firmId=>navigate({name:'firm',firmId})} candidateId={candidate.id} revision={candidate.revision} enabled={!blocked&&candidate.status!=='dismissed'}/>
       {candidate.status==='kept'?<p className="text-xs text-muted-foreground">Weekly source monitoring · next due {candidate.nextSourceCheckAt?.slice(0,10)??'when research is available'}. Returning to review or dismissing stops monitoring. Checks wait for research settings and allowance.</p>:null}

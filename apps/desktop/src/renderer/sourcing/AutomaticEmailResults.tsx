@@ -8,7 +8,7 @@ export function AutomaticEmailResults({view}:{view:AutomaticEmailLearning}){
  return <div className="space-y-4" aria-label="Automatic email results">
   <div className="rounded-lg border border-border p-4 space-y-2">
    <h3 className="font-medium">Discovery and historical email outcomes</h3>
-   <p>Automatic email admission has been removed. Recorded outcomes below are historical, not scheduled work.</p>
+   <p>Past email activity only. Nothing shown here schedules new outreach.</p>
    <p>{discovery.retainedHits} retained discovery hits · {discovery.supportedProspects} currently supported email prospects · {discovery.admissions} discovered candidates admitted</p>
    <p className="text-sm text-muted-foreground">{discovery.manualStaged} manually staged candidates excluded from discovery yield · {discovery.unavailable} discovered candidates with unavailable evidence</p>
    <p>{outcomes.admissions} admissions · {outcomes.attempts} messages attempted · {outcomes.sent} sent · {outcomes.unsettled} with unsettled delivery</p>
@@ -24,7 +24,7 @@ export function AutomaticEmailResults({view}:{view:AutomaticEmailLearning}){
    {!decisions.length?<p className="text-sm text-muted-foreground">No automatic prospect decisions observed in this interval.</p>:null}
    {decisions.map(d=><article key={d.runId} className="rounded-lg border border-border p-4 space-y-2">
     <h4 className="font-medium">{d.firmName}</h4><p>{reasons[d.reason]??label(d.reason)}</p>
-    <p className="text-sm">{d.status==='exhausted'?`Rechecks exhausted after ${d.checks} checks`:d.status==='held'?`Held after ${d.checks} checks`:label(d.status)}{d.retryAt?` · next check ${new Date(d.retryAt).toLocaleString()}`:''}</p>
+    <p className="text-sm">{d.status==='exhausted'?`Rechecks exhausted after ${d.checks} checks`:d.status==='held'?`Held after ${d.checks} checks`:label(d.status)}{d.retryAt?` · Recorded retry date ${new Date(d.retryAt).toLocaleString()}`:''}</p>
     <p className="text-sm text-muted-foreground">Rank: {label(d.rank)} · decided {new Date(d.decidedAt).toLocaleString()}</p>
     {d.firmId?<Button variant="quiet" onClick={()=>navigate({name:'firm',firmId:d.firmId!})}>Open firm and meetings</Button>:null}
     <details><summary>Evidence and decision binding</summary><div className="mt-2 space-y-2 text-xs break-words">

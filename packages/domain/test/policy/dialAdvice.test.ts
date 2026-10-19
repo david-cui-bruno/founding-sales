@@ -69,6 +69,7 @@ describe('adviseDial', () => {
       telUri: `tel:${policy.alpha.e164}`,
       firmTimeZone: 'America/New_York',
       firmLocalTime: '10:00',
+      callingWindowOpensAt: null,
       at: policy.insideWindow,
     });
     // Without a number it answers about the firm alone.
@@ -84,6 +85,7 @@ describe('adviseDial', () => {
     const advice = await advise({ at: policy.outsideWindow });
     expect(advice?.callable).toBe(false);
     expect(advice?.reasons).toEqual(['posture_missing', 'outside_calling_window']);
+    expect(advice?.callingWindowOpensAt).toBe('2026-09-16T12:00:00.000Z');
     expect(advice?.telUri).toBeNull();
   });
 
@@ -107,6 +109,10 @@ describe('adviseDial', () => {
     expect(recorded.ok).toBe(true);
     // The number itself is usable; the firm is not. A refused call carries no URI.
     expect(await advise()).toMatchObject({ callable: false, reasons: ['firm_suppressed'], telUri: null });
+    expect(await advise({ at: policy.outsideWindow })).toMatchObject({
+      callable: false, reasons: ['firm_suppressed', 'outside_calling_window'], telUri: null,
+      callingWindowOpensAt: '2026-09-16T12:00:00.000Z',
+    });
   });
 
   it('gives no URI for a suppressed number', async () => {
@@ -150,6 +156,15 @@ describe('adviseDial', () => {
     const paused = await openPause(contextFor('alpha', 'admin'), { scopeKind: 'channel', channel: 'call' });
     expect(paused.ok).toBe(true);
     expect(await advise()).toMatchObject({ callable: false, reasons: ['scoped_pause'] });
+    expect(await advise({ at: policy.outsideWindow })).toMatchObject({
+      callable: false, reasons: ['outside_calling_window', 'scoped_pause'], telUri: null,
+      callingWindowOpensAt: '2026-09-16T12:00:00.000Z',
+    });
+  });
+
+  it('does not invent a next opening when the firm zone is unresolved', async () => {
+    await database.session.query('UPDATE firms SET time_zone = NULL, time_zone_confidence = NULL, time_zone_source = NULL, time_zone_rule_version = NULL WHERE id = $1', [crm.alpha.firmId]);
+    expect(await advise()).toMatchObject({ callable: false, reasons: ['zone_unresolved'], callingWindowOpensAt: null, telUri: null });
   });
 
   it('answers nothing about a firm the caller may not see', async () => {

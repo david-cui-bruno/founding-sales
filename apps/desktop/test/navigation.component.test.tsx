@@ -55,7 +55,7 @@ describe('the sidebar', () => {
       .getAllByRole('button')
       .filter(node => node.dataset['testid']?.startsWith('nav-') === true)
       .map(node => node.textContent);
-    expect(labels).toEqual(['Today⌘1', 'Replies⌘2', 'Pipeline⌘3', 'Firms⌘4', 'Sequences⌘5', 'Social⌘6', 'Ask⌘7', 'Settings⌘,']);
+    expect(labels).toEqual(['Today⌘1', 'Replies⌘2', 'Pipeline⌘3', 'Firms⌘4', 'Sequences⌘5', 'Social⌘6', 'Settings⌘,']);
     // Neither of the two that moved into Settings is a row here.
     expect(screen.queryByTestId('nav-dashboard')).toBeNull();
     expect(screen.queryByTestId('nav-admin')).toBeNull();
@@ -84,7 +84,7 @@ describe('the sidebar', () => {
 });
 
 describe('Settings', () => {
-  it('holds Configuration, Diagnostics and Dashboard inside one collapsed Advanced disclosure', () => {
+  it('keeps Configuration and Sending recovery inside Advanced without retired dashboard navigation', () => {
     render(
       <QueryClientProvider client={client()}>
         <SettingsView
@@ -104,7 +104,7 @@ describe('Settings', () => {
     expect(advanced.hasAttribute('open')).toBe(false);
     expect(screen.queryByTestId('tabs')).toBeNull();
     // These destinations remain reachable, but no longer occupy the primary view.
-    for (const name of ['Configuration', 'Diagnostics', 'Dashboard']) {
+    for (const name of ['Configuration', 'Sending recovery']) {
       expect(within(advanced).getByRole('button', { name }).closest('details')).toBe(advanced);
     }
     const summary = advanced.querySelector('summary');
@@ -113,8 +113,8 @@ describe('Settings', () => {
     fireEvent.click(summary);
     expect(advanced.hasAttribute('open')).toBe(true);
     expect(within(advanced).getByRole('button', { name: 'Configuration' }).getAttribute('aria-current')).toBe('page');
-    expect(within(advanced).getByRole('button', { name: 'Diagnostics' })).toBeDefined();
-    expect(within(advanced).getByRole('button', { name: 'Dashboard' })).toBeDefined();
+    expect(within(advanced).getByRole('button', { name: 'Sending recovery' })).toBeDefined();
+    expect(within(advanced).queryByRole('button', { name: 'Dashboard' })).toBeNull();
   });
 
   it('still understands the links 1.0.11 left behind', () => {

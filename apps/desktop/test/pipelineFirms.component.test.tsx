@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, render, screen,fireEvent } from '@testing-library/react';
+import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
+import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
+import {createGeneration} from '../src/renderer/app/generation.ts';
+import {FirmsRoute} from '../src/renderer/firms/FirmsRoute.tsx';
+import {crmState} from './e2e/support/crmFixtures.ts';
+import type {OperationApi} from '../src/shared/operations.ts';
+import { afterEach, describe, expect, it,vi } from 'vitest';
 import type { FirmIdentityDto } from '@fss/contracts';
 import type { CrmState, PipelineView } from '../src/renderer/firmWorkspaceContract.ts';
 import { FIRMS_HEADING, PIPELINE_HEADING } from '../src/renderer/firmWorkspaceView.ts';
@@ -68,6 +74,18 @@ const PIPELINE: PipelineView = {
   opportunityIdByFirmId: {},
   unplacedFirms: [ELM, DELTA],
 };
+it.each(['firms','pipeline'] as const)('shows a truthful %s read failure and a read-only retry',async(name)=>{
+ const read=vi.fn(async(_operation:string)=>crmState({screen:'pipeline',firm:null,pipeline:PIPELINE,role:'salesperson'})).mockRejectedValueOnce(new Error('offline'));
+ const command=vi.fn();globalThis.callieApi={read,command} as unknown as OperationApi;
+ const error=vi.spyOn(console,'error').mockImplementation(()=>undefined),{guard}=createGeneration();
+ try{
+ render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><DraftsProvider><FirmsRoute route={{name}} identity="owner" generation={0} guard={guard}/></DraftsProvider></QueryClientProvider>);
+ expect((await screen.findByRole('alert')).textContent).toContain('could not be loaded');
+ fireEvent.click(screen.getByRole('button',{name:`Retry loading ${name}`}));
+ expect(await screen.findByTestId(name==='firms'?'firms-list':'pipeline-board')).toBeTruthy();
+ expect(command).not.toHaveBeenCalled();expect(read.mock.calls.filter(([operation])=>operation==='crm.state')).toHaveLength(2);
+ }finally{globalThis.callieApi=undefined;error.mockRestore();}
+});
 
 const noop = (): void => undefined;
 
