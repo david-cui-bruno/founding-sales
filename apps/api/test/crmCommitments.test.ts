@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { crmProcessingResultSchema,todayPromiseActionSchema } from "@fss/contracts";
+import {createNativeCrmMailEvidence} from '@fss/domain/crm/nativeMailEvidence.ts';
 import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
 import { registerHandlers } from "../../worker/src/bootstrap/main.ts";
 import { runOnce } from "../../worker/src/runner/jobRunner.ts";
@@ -11,7 +12,61 @@ import {
 } from "./support/authFixture.ts";
 import { seedFirm, seedContact } from "./support/crmSeed.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
-import {seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
+import {seedHistoricalExtraction,activateForwardFixture} from './support/crmForwardScopeFixture.ts';
+
+it.each(['null mail firm','unmapped person continuity'] as const)('preserves projected work with known internal plus %s authority',async(kind)=>{
+ const fixture=await createAuthFixture();try{
+  const forward=await activateForwardFixture(fixture);
+  const {command}=forward;
+  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
+  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,crmMailEvidence:createNativeCrmMailEvidence()});
+  const get=(include?:string)=>dispatch({method:'GET',path:'/today/actions/v2',body:null,query:new URLSearchParams(include===undefined?undefined:{include}),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+  const firmId=await seedFirm(fixture,{name:'Callie Internal Test',assignedUserId:fixture.alpha.admin.userId});
+  const knownPerson=await seedContact(fixture,{firmId,fullName:'Known internal person'});
+  expect((await post('/crm/people/bridge',command({contactIds:[knownPerson]}))).status).toBe(200);
+  const native=await post('/crm/people/create',command({fullName:'Distinct unbridged person'}));
+  const personId=(native.body as {result:{personId:string}}).result.personId;
+  const date=(await fixture.db.query<{date:string}>("SELECT ((clock_timestamp() AT TIME ZONE 'UTC')::date + 3)::text AS date")).rows[0]!.date;
+  const quote=`I will prepare the repair summary by ${date}.`;
+  let source:{workspaceId:string;sourceId:string;kind:'mail'|'selected_note';revision:number;contentHash:string;locator:null};
+  if(kind==='null mail firm'){
+   const captured=await forward.original(quote,{direction:'outgoing'});
+   expect((await post('/crm/business/mail/associate',command({sourceId:captured.sourceId,expectedRevision:1,personId:knownPerson,firmId}))).status).toBe(200);
+   // Controlled retained native-context fixture, as in crmCommitmentIntent: real
+   // rows and the native adapter, not a forged action DTO or bypassed review.
+   await fixture.db.query("INSERT INTO crm_mail_source_contexts(workspace_id,source_id,source_revision,person_id,firm_id,context_kind,review) VALUES($1,$2,2,$3,NULL,'reviewed','current')",[captured.workspaceId,captured.sourceId,knownPerson]);
+   source={...captured,revision:2};
+  }else{
+   expect((await post('/crm/people/source/add',command({personId,sourceKey:'unmapped-person-promise',excerpt:quote,occurredAt:'2026-10-01T14:00:00Z'}))).status).toBe(200);
+   const page=(await post('/crm/people/read',{personId})).body as {sources:{sourceId:string;revision:number;contentHash:string}[]};
+   const selected=page.sources[0]!;
+   const evidence={sourceId:selected.sourceId,sourceRevision:selected.revision,contentHash:selected.contentHash};
+   const relationship=await post('/crm/relationships/save',command({personId,firmId,status:'current',startDate:null,endDate:null,evidence}));
+   expect(relationship.status).toBe(200);
+   const relationshipId=(relationship.body as {result:{relationshipId:string}}).result.relationshipId;
+   expect((await post('/crm/relationships/context/save',command({personId,relationshipId,relationshipRevision:1,evidence}))).status).toBe(200);
+   source={workspaceId:fixture.alpha.workspaceId,sourceId:selected.sourceId,revision:selected.revision,contentHash:selected.contentHash,kind:'selected_note',locator:null};
+  }
+  expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:'review-evaluation',modelVersion:'fixture-associations',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
+  await seedHistoricalExtraction(fixture,{source,claims:[{kind:'commitment',status:'stated',interpretation:'Prepare the repair summary',locator:`text:0:${quote.length}`,quote}]});
+  const response=await post('/crm/processing/read',{source});expect(response.status,JSON.stringify(response.body)).toBe(200);
+  const processed=crmProcessingResultSchema.parse(response.body);
+  if(processed?.state!=='complete')throw new Error(`Retained controlled extraction unavailable: ${JSON.stringify(response.body)}`);
+  expect(processed.claims[0]!.context.firmIds).toContain(firmId);
+  const claim=processed.claims[0]!;
+  const reviewed=await post('/crm/commitments/review',command({source,claimId:claim.claimId,claimRevision:1,claimHash:claim.claimHash,contextHash:processed.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:'internal_promise',actor:'self',actionLabel:'Prepare the repair summary',due:{kind:'date',date,zone:'UTC',expression:`by ${date}`}}));
+  expect(reviewed.status).toBe(200);
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
+  await runOnce(fixture.db,{registry,owner:'incomplete-firm-projector',limit:20});
+  const ordinary=await get();expect(ordinary.status).toBe(200);
+  const action=(ordinary.body as {actions:{kind:string;actionId:string;target:unknown}[]}).actions.find(value=>value.kind==='promise');
+  expect(action).toBeDefined();expect(action).not.toHaveProperty('firms');
+  expect(()=>todayPromiseActionSchema.omit({firms:true}).parse(action)).not.toThrow();
+  expect((await get('firmAssociations')).body).toMatchObject({actions:[{kind:'promise',firms:null,target:action!.target}]});
+  expect((await get('unknownFutureCapability')).body).toMatchObject({actions:[action]});
+  expect((await post('/today/actions/open/v2',{actionId:action!.actionId,target:action!.target})).body).toEqual({version:2,target:action!.target});
+ }finally{await fixture.stop();}
+});
 
 it("projects exactly one internal task from an explicit dated human promise review through the registered worker", async () => {
   const fixture = await createAuthFixture();
@@ -139,7 +194,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
     expect(JSON.stringify(actionsV2.body)).not.toContain('"firms":');
     expect(()=>todayPromiseActionSchema.omit({firms:true}).parse((actionsV2.body as {actions:unknown[]}).actions[0])).not.toThrow();
     expect((await get('/today/actions/v2','unknownFutureCapability')).body).toMatchObject({actions:(actionsV2.body as {actions:unknown[]}).actions});
-    expect((await get('/today/actions/v2','firmAssociations')).body).toMatchObject({actions:[{kind:'promise',firms:[]}]});
+    expect((await get('/today/actions/v2','firmAssociations')).body).toMatchObject({actions:[{kind:'promise',firms:null}]});
     expect(actionsV2.body).toMatchObject({version:2,actions:[{kind:"promise",reason:"dated_promise",due:{kind:"date",date:promiseDate,zone:"America/Chicago"},target:{kind:"internal_task",taskId:originalTask,expectedVersion:1,review:{commitmentId:receipt.result.commitmentId,revision:1,projectionVersion:1}}}]});
     expect((await get("/today/actions")).body).toMatchObject({version:1,actions:[]});
     const promiseAction=(actionsV2.body as {actions:{actionId:string;target:unknown}[]}).actions[0]!;
@@ -185,7 +240,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
     const scrubbed=(await runtime.query<Record<string,unknown>>("SELECT anchor_id,target,context_snapshot,original_access_closure,classification,actor,action_label,due,source_zone_receipt,projection_receipt FROM crm_commitment_reviews WHERE workspace_id=$1 AND id=$2",[source.workspaceId,receipt.result.commitmentId])).rows[0]!;
     expect(Object.values(scrubbed)).toEqual(Array(10).fill(null));
     // Cycle7: terminal original-firm deletion previews and redacts current private proof.
-    const firmId=await seedFirm(fixture,{name:"Original promise authority",assignedUserId:fixture.alpha.admin.userId});
+    const firmId=await seedFirm(fixture,{name:"Callie Internal Test",assignedUserId:fixture.alpha.admin.userId});
     const bridgedId=await seedContact(fixture,{firmId,fullName:"Captured firm promise owner"});
     expect((await post("/crm/people/bridge",command({contactIds:[bridgedId]}))).status).toBe(200);
     expect((await post("/crm/people/source/add",command({personId:bridgedId,sourceKey:"firm-promise",excerpt:promiseQuote,occurredAt:"2026-10-01T14:00:00Z"}))).status).toBe(200);
@@ -199,7 +254,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
     await runOnce(fixture.db,{registry,owner:"firm-commitment-projector",limit:20});
     const firmCommitments=await post("/crm/commitments/read",{scope:{kind:"person",personId:bridgedId},limit:50});expect(firmCommitments.status).toBe(200);
     const secondTask=(firmCommitments.body as {items:{task:{taskId:string}}[]}).items[0]!.task.taskId;
-    expect((await get('/today/actions/v2','firmAssociations')).body).toMatchObject({actions:[{kind:'promise',firms:[{id:firmId,name:'Original promise authority'}]}]});
+    expect((await get('/today/actions/v2','firmAssociations')).body).toMatchObject({actions:[{kind:'promise',firms:[{id:firmId,name:'Callie Internal Test'}]}]});
     expect(JSON.stringify((await get('/today/actions/v2')).body)).not.toContain('"firms":');
     expect((await post("/crm/commitments/complete",command({taskId:secondTask,expectedVersion:1}))).status).toBe(200);
     // Controlled current-context drift: original A capture is retained while current source moves to B.

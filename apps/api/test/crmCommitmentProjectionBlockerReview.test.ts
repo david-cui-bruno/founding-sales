@@ -239,7 +239,7 @@ it("shows a persistent source-bound Today problem only after promise projection 
     expect(historicalPublications).toBe(1);
     const failed = await get("/today/actions/v2");
     expect(JSON.stringify(failed.body)).not.toContain('"firms":');
-    expect((await get('/today/actions/v2','firmAssociations')).body).toMatchObject({actions:[{reason:'commitment_projection_failed',firms:[]}]});
+    expect((await get('/today/actions/v2','firmAssociations')).body).toMatchObject({actions:[{reason:'commitment_projection_failed',firms:null}]});
     expect(failed.status).toBe(200);
     expect(failed.body).toMatchObject({
       version: 2,

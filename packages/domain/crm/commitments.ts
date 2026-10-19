@@ -233,8 +233,8 @@ export async function readCommitmentActionFirms(context:RepositoryContext,snapsh
 async function reviewActionFirms(context:RepositoryContext,row:Review){
  const tasks=await reviewedOpenTasks(context,row.id);
  if(tasks.length>100)return null;
- const snapshots=[...reviewContexts([row],tasks),row.original_access_closure];
- const firmIds:string[]=[],personIds:string[]=[];
+ const snapshots=[...reviewContexts([row],tasks),...reviewClosures([row],tasks)];
+ const firmIds:string[]=[],personIds:string[]=[],resolvedPeople=new Set<string>();
  for(const snapshot of snapshots){
   if(snapshot===null||typeof snapshot!=='object'||!('firmIds' in snapshot)||!Array.isArray(snapshot.firmIds)||snapshot.firmIds.some(id=>typeof id!=='string'))return null;
   firmIds.push(...snapshot.firmIds as string[]);
@@ -242,11 +242,13 @@ async function reviewActionFirms(context:RepositoryContext,row:Review){
   if('personIds' in snapshot){if(!Array.isArray(snapshot.personIds)||snapshot.personIds.some(id=>typeof id!=='string'))return null;personIds.push(...snapshot.personIds as string[]);}
   if('mailContexts' in snapshot){
    if(!Array.isArray(snapshot.mailContexts))return null;
-   for(const entry of snapshot.mailContexts){if(entry===null||typeof entry!=='object'||!('firmId' in entry))return null;if(entry.firmId!==null){if(typeof entry.firmId!=='string')return null;firmIds.push(entry.firmId);}if('personId' in entry&&typeof entry.personId==='string')personIds.push(entry.personId);}
+   for(const entry of snapshot.mailContexts){if(entry===null||typeof entry!=='object'||!('firmId' in entry)||typeof entry.firmId!=='string')return null;firmIds.push(entry.firmId);if('personId' in entry&&typeof entry.personId==='string'){personIds.push(entry.personId);resolvedPeople.add(entry.personId);}}
   }
  }
  // Existing legacy-person associations are relational authority, never task-label matches.
- const current=(await context.db.query<{firm_id:string}>('SELECT c.firm_id FROM crm_legacy_contact_people b JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id WHERE b.workspace_id=$1 AND b.person_id::text=ANY($2::text[])',[context.scope.workspaceId,[...new Set(personIds)]])).rows;
+ const current=(await context.db.query<{person_id:string;firm_id:string}>('SELECT b.person_id,c.firm_id FROM crm_legacy_contact_people b JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id WHERE b.workspace_id=$1 AND b.person_id::text=ANY($2::text[])',[context.scope.workspaceId,[...new Set(personIds)]])).rows;
+ for(const value of current)resolvedPeople.add(value.person_id);
+ if(personIds.some(id=>!resolvedPeople.has(id)))return null;
  return readCommitmentActionFirms(context,{firmIds:[...firmIds,...current.map(value=>value.firm_id)]});
 }
 /** Private action proof is resolved under the same source/context locks as current work. */
