@@ -132,6 +132,8 @@ export const DIAL_REFUSAL_SENTENCES: Readonly<Record<DialRefusalCode, string>> =
   ticket_expired: 'That call authorisation ran out. Press Call again.',
   ticket_wrong_device: 'That call was authorised on another Mac. Press Call again on this one.',
   already_consumed: 'That call authorisation was already used. Press Call again for a new one.',
+  dnc_coverage_unknown: 'National DNC coverage is missing, stale or incomplete. This call is not authorised.',
+  dnc_registry_match: 'This number matches the national DNC registry. Callie will not dial it.',
 });
 
 /** Shown by Today beside the dial reasons: not a server code, but the same one place for words. */

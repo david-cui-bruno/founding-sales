@@ -3,6 +3,7 @@ import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, instant, uuid } from './foundationRows.ts';
 import { STEP_CHANNELS, STEP_NO_ANSWER_ACTIONS } from './sequences.ts';
+import { nationalDncDisclosureSchema } from './nationalDnc.ts';
 
 /**
  * The wire contract of policy, suppression and dialing
@@ -98,6 +99,8 @@ const DIAL_REQUEST_REFUSAL_CODES = [
   'ticket_expired',
   'ticket_wrong_device',
   'already_consumed',
+  'dnc_coverage_unknown',
+  'dnc_registry_match',
 ] as const;
 
 const DIAL_REFUSAL_CODES = [...DIAL_HOLD_REFUSAL_CODES, ...DIAL_REQUEST_REFUSAL_CODES] as const;
@@ -424,6 +427,7 @@ export const dialCheckRequestSchema = z.strictObject({
  */
 const dialAdviceSchema = z.object({
   firmId: uuid,
+  nationalDnc: nationalDncDisclosureSchema.optional(),
   callable: z.boolean(),
   reasons: z.array(dialRefusalCodeSchema),
   routeId: uuid.nullable(),

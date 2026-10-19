@@ -1,4 +1,5 @@
 import {SOURCING_RETENTION_COVERAGE} from './sourcingCoverage.ts';
+import {PHONE_RETENTION_COVERAGE} from './phoneCoverage.ts';
 
 /**
  * What happens to every table in the schema, under retention, deletion and departure.
@@ -759,9 +760,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       ["deletion_removes"],
       "Evidence waiting for a person, naming the firm; removed with the firm.",
     ),
-    phone_handoff_attempts: coverage(['retained', 'deletion_redacts'], 'Opaque reservations retain cadence, deletion clears endpoint and prospect bindings.'),
-    national_registry_snapshots: coverage(['retained'], 'Private registry publication receipts and area coverage, no prospect identity.'),
-    national_registry_endpoint_scrubs: coverage(['retained', 'deletion_removes'], 'Exact endpoint evidence removed with erased handles, never dial authority by itself.'),
+    ...PHONE_RETENTION_COVERAGE,
     call_sessions: coverage(
       ["deletion_removes"],
       "One Twilio call attempt and its recording reference; removed with the firm or the person.",

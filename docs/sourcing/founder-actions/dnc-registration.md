@@ -1,59 +1,45 @@
-# National DNC Registry: Seller registration preparation
+# National DNC policy and registry operations
 
-**As of October 19, 2026: proposal only. No SAN or registry files have been obtained.** Registry matches and their impact are unknown. This checklist does not register Callie, authorize calls, establish compliance or change any sending/calling control.
+**Policy owner: David Cui Jr., operating as Callie. Decision: October 19, 2026, 22:15:31 UTC.** This supersedes the October19 registration proposal and the earlier narrow own-number coverage exception. Owner acceptance of risk is not registry clearance or a legal-compliance finding. Recording this policy does not activate calling or sending.
 
-## 1. Review the proposed five free area codes before registration
+## Subscription and spending boundary
 
-The reviewed, database-only READ ONLY snapshot at **October 19, 2026, 06:19:11.275333 UTC**, schema119, found **33 distinct standing phone-ready firms** in TX/RI/MA. The exact optimal combination of at most five area codes, prioritizing distinct TX firms before RI/MA coverage, was:
+David reports that the subscription registered **September3, 2026** is **Completed**, a SAN is issued, and expiry is **August31, 2027**. Organization: **Callie (David Cui, sole proprietor)**. The September3 screenshot establishes the historical pending submission, not today's completion. Current SAN/scope remain subject to private authenticated verification.
 
-| Proposed selection order | Endpoint area code | TX firms covered | RI firms covered |
-| --- | --- | --- | --- |
-| 1 | **817** | 14 | 0 |
-| 2 | **972** | 6 | 0 |
-| 3 | **469** | 4 | 1 |
-| 4 | **214** | 4 | 0 |
-| 5 | **940** | 2 | 0 |
+Covered endpoint area codes are exactly **401, 508, 617, 774, 857**. There are **no Texas codes** in this subscription. Coverage follows the endpoint's area code, not the firm's state. David declines paid coverage, reporting **$85 per additional code**. **Do not buy or add codes, expand the subscription, enter a paid trial or accept any fee.** The former proposed Texas-code selection is withdrawn.
 
-Together these five cover **31 distinct firms: 30 TX and 1 RI**. Outside that combination: **945 covers one additional TX firm; 401 covers one additional RI firm**. MA had **zero** firms in this standing phone-ready census. Do not substitute the former RI/MA geography-based code list or add paid coverage automatically.
+Credentials, SAN, registry files and private receipts belong in restricted local/operator storage, never chat, source control, public issues or application logs. David enters his Organization ID and Downloader password himself on the official National DNC Telemarketer portal. No password reset or new registration is required.
 
-Coverage follows the **phone endpoint's area code**, while priority follows the **firm's state**. A RI firm can have a 469 endpoint. Combination scores deduplicate firms across area codes; per-code counts are not generally additive.
+## Covered codes: complete import and fail-closed protection
 
-### Snapshot scope and limitations
+For **401/508/617/774/857**, obtain a complete official **Full List** download for exactly the completed subscription scope. Validate format, archive integrity, requested area-code completeness, original download date and artifact identity before publishing a snapshot. Local hashes/counts are integrity records, not an FTC attestation. Do not treat a change-only file, partial response, login page or manual lookup as a complete snapshot.
 
-The census included active, assigned firms with active workspace membership, candidate/usable NANP-shaped phone routes, no applicable effective phone/all suppression, a known zone, one currently effective state posture and no applicable dial-authorization hold. It excluded only the exact owner-view fixture name `Callie Internal Test`, not businesses containing “Test”. Closed-only opportunity history was informational, not an invented dial blocker.
+- Scrub **every applicable workspace phone endpoint**, including firm switchboards, alternate contact numbers, duplicate/shared endpoints and numbers not currently selected in Today. Registry data is compliance-only, never a lead source.
+- **Block national-registry matches**, using the existing journalled phone-handle suppression path. Honor internal firm/contact/handle do-not-call requests immediately. A business label or owner risk acceptance never overrides a known match or an internal stop.
+- Unknown, missing, incomplete, revoked, future-dated or **31-day-old** covered-code evidence refuses calling. Freshness is anchored to the actual complete download, not import or deployment time. Remind on day28 and refuse at day31 until a fresh complete download and scrub succeed.
+- Publish coverage, endpoint results and awaited suppression writes atomically under the existing admission gate. A failed import cannot confer partial clearance. Never fall back to an older clear publication after a newer unusable publication.
+- New or replaced endpoints remain unknown until compared with the validated full source. A new association for the same exact scrubbed endpoint may reuse that endpoint evidence, subject to every other gate.
+- Subscription expiry does **not** turn these five codes into uncovered codes eligible for the risk policy. Missing or stale data stays blocked. Do not clear suppression merely because a later file is incomplete, stale or unavailable.
 
-This is **standing phone-ready supply ignoring calling hours**, not the useful-brief intersection, current dial permission, verified reachability, line-type proof or registry-safe supply. An area-code shape does not prove a US endpoint. National-registry matches were not available and no new suppression/import/block was performed. Recheck the proposal if the underlying endpoint supply changes before selection. The dated private operational receipt is `dnc119-standing-coverage-20261019-0609-readback.json`; it is not committed here.
+## Uncovered codes: explicit owner-accepted risk, iPhone only
 
-## 2. David completes normal Seller registration privately
+For endpoint area codes **outside those five**, David accepts calling without national-registry coverage **through the iPhone handoff only**, for **business-office numbers on verified firms**, excluding numbers known to be personal cells. Persist this exact decision once as an owner-approval receipt. It is not a registry snapshot or a clear scrub result.
 
-Primary guidance: [FTC Q&A for telemarketers and sellers about the DNC provisions of the TSR](https://www.ftc.gov/business-guidance/resources/qa-telemarketers-sellers-about-dnc-provisions-tsr-0), checked October 19, 2026. The [official telemarketing registry portal](https://telemarketing.donotcall.gov/) returned a System Error to the research fetch, so these are FTC-documented steps, not a claim that the live form was observed successfully. Stop if the portal differs or requests payment.
+Before an unchecked handoff, the call panel must visibly say **“Not checked against national DNC.”** Keep checked-clear, unchecked owner-risk and unknown states distinct. An older client unable to show the warning must not receive an unchecked dispatch capability.
 
-- [ ] David reviews the proposed area codes above. No selection/subscription has been submitted.
-- [ ] Open the official portal and choose **REGISTER NEW USERS**.
-- [ ] Choose **Seller**, calling on its own behalf to sell its own product. Do not choose an exempt-organization shortcut or a telemarketer calling for other sellers.
-- [ ] Enter the legal sole-proprietor name **DAVID CUI JR** and **Callie** as DBA if the form provides that field. David personally enters his **EIN, not SSN**, address and contact details in the official form. Do not paste these values into chat, repository files, logs or tickets.
-- [ ] Retain the displayed **Organization ID** privately. Receive the issued **Representative and Downloader passwords** privately and follow the activation email. Log in with the Organization ID and **Representative** password. Thereafter enter through **LOGIN CURRENT USERS** on the official portal, not by reusing the activation link. David personally handles verification and stores these credentials in his password manager, never the repository. No password reset is part of this checklist.
-- [ ] Through **LOGIN CURRENT USERS**, log in as Representative, then choose **CREATE NEW SUBSCRIPTION** → **SUBSCRIBE TO AREA CODES OR ADD AREA CODES TO YOUR CURRENT SUBSCRIPTION** → **AREA CODES BY AREA CODE NUMBER** → **SUBMIT**. In the displayed individual-code checkboxes, select exactly **817, 972, 469, 214, 940**, then **CONTINUE**. Review that exactly these five are selected and the charge is **zero**, then choose **CONTINUE** to confirm or **CHANGE** to correct the selection. The first **five or fewer** area codes are free. Never select all-state or all-US coverage. Stop before any fee, paid selection or payment.
-- [ ] Allow up to **one business day** for processing. To check progress, choose **MANAGE/RENEW SUBSCRIPTIONS** → **CHECK STATUS**, select **CURRENT** and **SUBMIT**. **IN PROCESS** means processing is not complete. When **COMPLETED** appears, retrieve the **SAN from the site**. It also appears at the top of **Home** or under **VIEW AREA CODES**. The SAN is **not emailed**. Store it privately with the subscription scope/renewal information. SAN issuance alone is not permission to call or evidence of a scrub.
+- Require current first-party, source-bound firm and business-office endpoint evidence matching the exact firm identity and current route/version. A useful brief, phone-shaped value, business name, old admission or human assumption is not sufficient. Unverified/stale/ambiguous proof stays blocked.
+- Known personal-cell evidence prevents this business-office allowance. Do not infer landline status from an area code or website listing. Unknown line type is not represented as verified landline.
+- Preserve immediate internal DNC/suppression, assignment/current device and membership, calling identity, actual calling hours, state posture, applicable holds, the shared **four attempts in fourteen days**, and refusal/reply stops. No provider switch, higher cap or new contact group is implicit.
+- Keep national matches blocked when known. No general bypass flag, fabricated registry evidence or silent substitution of the unknown state is permitted. Normal Twilio authorization remains registry-gated and Twilio remains off.
 
-## 3. Written DNC policy and intended refresh cycle
+## Single owner-number acceptance test
 
-**Accountable owner: David.** The following is the conservative operating policy to complete before registry-backed calling. It is not a claim that automated enforcement exists today.
+David separately authorizes **one** normal iPhone handoff to his own number **ending8262**, on the exact internal **Callie Phone Test** record. This is an owner self-test, not first-party business-office evidence or prospect permission. Bind it to the same dated decision and record the actual durable attempt separately. A committed/unknown handoff consumes the test permanently; replay, OS failure or outcome correction cannot authorize another test.
 
-- Honor internal do-not-call requests **immediately** on the requested number/contact/firm scope through the existing suppression controls. Preserve the suppression history and do not purge stops as ordinary prospect retention cleanup.
-- Use registry data **only for permitted compliance purposes**, never as lead supply. Keep access limited to authorized users. Maintain written procedures, relevant caller training and monitoring that checks adherence.
-- Compare endpoints against complete data for their subscribed area codes before calling. Registry matches are suppressed conservatively. A company website, business label or claimed business use never overrides a registry match. Unknown line type remains conservative, not presumed to be an exempt business line. These planning counts do not classify line type.
-- Use registry data **no more than 31 days old**. This is a freshness requirement, not a 31-day grace period for calling a long-registered number. **Target:** remind David on day28 and refuse calling on stale coverage at day31 until refreshed and re-scrubbed. Uncovered area codes remain outside registry-cleared scope.
-- Preserve private download/import receipts, source/version dates, full/delta completeness, area-code coverage, scrub time and results. A fresh subscription or receipt alone does not prove a complete comparison. Do not remove a registry stop merely because a later file is incomplete or stale.
-- Anchor the **first** day28 reminder/day31 deadline to the **actual initial complete registry download date**, then maintain it from real refreshes. No initial download date or reminder is invented today, and no calendar task is created by this document.
-- Keep national-registry checks separate from state postures, state registration/list obligations, calling hours, assignment, identity, holds and all other restrictions. This checklist provides **no TX, RI or MA state-law clearance**. A recorded posture or apparent B2B context does not replace these checks.
+**Tell David immediately before triggering it**, so he can confirm on his iPhone. Do not call a prospect as a substitute. Preserve all other safeguards, record only the outcome actually observed, and distinguish phone-app opening from an answered call. Sending remains OFF unless David himself enables it.
 
-## 4. What remains after SAN issuance
+## Implementation and proof boundaries
 
-Existing journalled suppression events accept an imported source, and effective phone/all stops are checked by dial advice and ticket authorization/consumption. Refused advice does not emit a `tel:` URI. Those controls do **not** establish that a national registry import or scrub occurred.
+Existing registry tables and handoff gates were deployed with #702/PR703. **The full importer and revised unchecked-risk policy are not yet released or activated.** #707 owns complete import/scrubbing. #702 owns authenticated iPhone acceptance and the visible, receipted risk path. No completed download, full scrub, actionable risk receipt, test call or legal clearance is claimed by this document.
 
-**The runtime does not currently provide a complete bulk national-registry importer or automatic subscription-area/registry-age gate.** The day28/day31 and uncovered-area rules above are targets, not shipped fail-closed enforcement. The state-posture selector is separate and does not enforce the registry's 31-day freshness requirement.
-
-After an actual SAN and complete download, a separately reviewed implementation still needs to map the exact covered endpoints, compare registry data, apply matches through the normal suppression path, retain completeness/freshness receipts and enforce stale/out-of-area refusal across relevant calling paths. Unknown line types need conservative treatment. Do not claim current blocked impact, “registered”, “compliant” or “registry-safe” before the corresponding real evidence exists.
-
-No downloads, imports, calendar changes, account creation, new calls or sending activation are performed by this documentation change.
+Primary operational guidance: [FTC Q&A for telemarketers and sellers](https://www.ftc.gov/business-guidance/resources/qa-telemarketers-sellers-about-dnc-provisions-tsr-0) and the [official National DNC Telemarketer portal](https://telemarketing.donotcall.gov/). Public format guidance was checked October19; actual downloaded bytes and current subscription scope must still be verified privately. National registry policy does not replace state-law posture or any other calling restriction.

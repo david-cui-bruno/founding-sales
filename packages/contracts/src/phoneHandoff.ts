@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, instant, uuid } from './foundationRows.ts';
+import { nationalDncDisclosureSchema } from './nationalDnc.ts';
 
 /** Authorize one phone-app handoff, never a reusable dial link. */
 export const reservePhoneHandoffCommandSchema = z.strictObject({
@@ -10,6 +11,8 @@ export const reservePhoneHandoffCommandSchema = z.strictObject({
   firmId: uuid,
   routeId: uuid,
   routeVersion: z.number().int().min(1),
+  /** Echo the risk receipt displayed before clicking. Not a bypass or authorization. */
+  expectedNationalDncReceiptId: uuid.nullable().optional(),
   opportunityId: uuid.nullable().optional(),
   itemId: uuid.optional(),
 });
@@ -29,6 +32,7 @@ export const PHONE_HANDOFF_MAX_LIFETIME_MS = 15_000;
 const identity = phoneHandoffIdentitySchema.shape;
 const fresh = z.strictObject({
   ...identity,
+  nationalDnc: nationalDncDisclosureSchema.optional(),
   actionable: z.literal(true),
   e164,
   telUri: z.string().regex(/^tel:\+[1-9][0-9]{7,14}$/u),
