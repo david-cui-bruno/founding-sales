@@ -1,51 +1,59 @@
-# National DNC Registry — Seller Registration Checklist
+# National DNC Registry: Seller registration preparation
 
-Goal: get a Subscription Account Number (SAN), download the five free area codes we call into, and set up the 31-day re-scrub cycle. Total time: ~30 minutes.
+**As of October 19, 2026: proposal only. No SAN or registry files have been obtained.** Registry matches and their impact are unknown. This checklist does not register Callie, authorize calls, establish compliance or change any sending/calling control.
 
-## 1. Create the account (~10 min)
+## 1. Review the proposed five free area codes before registration
 
-- [ ] Go to <https://telemarketing.donotcall.gov> and click **Create an account** (new users).
-- [ ] Register as a **Seller** (we make calls to sell our own product; we are not a third-party telemarketer calling for others). You will provide: company legal name, EIN, address, and an authorized representative (founder).
-- [ ] Designate the founder as the authorized representative and add a downloader/user login.
-- [ ] Record credentials in the password manager.
+The reviewed, database-only READ ONLY snapshot at **October 19, 2026, 06:19:11.275333 UTC**, schema119, found **33 distinct standing phone-ready firms** in TX/RI/MA. The exact optimal combination of at most five area codes, prioritizing distinct TX firms before RI/MA coverage, was:
 
-## 2. Get the SAN and pick area codes (~10 min)
+| Proposed selection order | Endpoint area code | TX firms covered | RI firms covered |
+| --- | --- | --- | --- |
+| 1 | **817** | 14 | 0 |
+| 2 | **972** | 6 | 0 |
+| 3 | **469** | 4 | 1 |
+| 4 | **214** | 4 | 0 |
+| 5 | **940** | 2 | 0 |
 
-- [ ] Complete the subscription step. The **SAN (Subscription Account Number)** is issued when the subscription is processed. Keep it: any telemarketing vendor or dialer we ever use will ask for it.
-- [ ] Subscriptions cover **up to 5 area codes free**. Beyond that: $82/area code/year now, rising to **$85/area code/year on October 1, 2026** (FY2027 fees, annual national cap $23,425). Subscriptions renew annually.
-- [ ] Select these five free area codes:
+Together these five cover **31 distinct firms: 30 TX and 1 RI**. Outside that combination: **945 covers one additional TX firm; 401 covers one additional RI firm**. MA had **zero** firms in this standing phone-ready census. Do not substitute the former RI/MA geography-based code list or add paid coverage automatically.
 
-| Area code | Coverage | Why |
-|---|---|---|
-| **401** | All of Rhode Island | Home market. The rental registry is RI-wide, so this is the bulk of the list. |
-| **508 / 774** | Southeastern MA (New Bedford, Fall River, Worcester overlay) | Closest MA markets to RI, heavy multifamily stock, natural expansion ring. |
-| **617 / 857** | Boston core (overlay pair) | Largest MA landlord concentration. Both codes cover the same territory, so scrubbing one without the other leaves gaps. |
+Coverage follows the **phone endpoint's area code**, while priority follows the **firm's state**. A RI firm can have a 469 endpoint. Combination scores deduplicate firms across area codes; per-code counts are not generally additive.
 
-- Skipped for now: 781/339 (Boston suburbs), 978/351 (northeast MA), 413 (western MA). Add them (paid, or on next renewal) only when the list actually contains numbers in those codes. Note that landlord cell phones can carry any area code, so scrub coverage should follow the numbers in the list, not geography alone. If more than ~10 area codes appear in the data, compare cost against a scrubbing service that bundles national DNC access.
+### Snapshot scope and limitations
 
-## 3. Download and scrub (~10 min)
+The census included active, assigned firms with active workspace membership, candidate/usable NANP-shaped phone routes, no applicable effective phone/all suppression, a known zone, one currently effective state posture and no applicable dial-authorization hold. It excluded only the exact owner-view fixture name `Callie Internal Test`, not businesses containing “Test”. Closed-only opportunity history was informational, not an invented dial blocker.
 
-- [ ] Download the registry lists for the selected area codes (full change list first, then incremental daily/weekly change files).
-- [ ] Scrub the calling list: remove or flag every number that appears on the registry **before** the first call.
-- [ ] **31-day rule:** you may not call a number registered on the DNC registry for more than 31 days. Re-download and re-scrub at least **every 31 days**. Set a recurring calendar task for every 28 days to leave margin.
-- [ ] Log each scrub date. Accessing the registry per its rules is a TSR safe-harbor element, so keep the evidence.
+This is **standing phone-ready supply ignoring calling hours**, not the useful-brief intersection, current dial permission, verified reachability, line-type proof or registry-safe supply. An area-code shape does not prove a US endpoint. National-registry matches were not available and no new suppression/import/block was performed. Recheck the proposal if the underlying endpoint supply changes before selection. The dated private operational receipt is `dnc119-standing-coverage-20261019-0609-readback.json`; it is not committed here.
 
-## 4. Merge with the internal DNC list
+## 2. David completes normal Seller registration privately
 
-- [ ] Maintain our own **internal do-not-call (suppression) list**: anyone who says "don't call me" goes on it immediately and permanently. This is required regardless of the national registry, and it overrides everything (an internal DNC request beats any exemption, including an established business relationship).
-- [ ] Scrub order at dial time: internal DNC list first, then national registry list. A number must pass both.
-- [ ] Never delete internal DNC entries during the 12-month data retention purge. Suppression entries are permanent.
-- [ ] Note: the FTC treats numbers of sole proprietors as registrable, so do not assume "it's a business number" exempts a landlord's cell from scrubbing. (Attorney question Q4 covers the B2B boundary.)
+Primary guidance: [FTC Q&A for telemarketers and sellers about the DNC provisions of the TSR](https://www.ftc.gov/business-guidance/resources/qa-telemarketers-sellers-about-dnc-provisions-tsr-0), checked October 19, 2026. The [official telemarketing registry portal](https://telemarketing.donotcall.gov/) returned a System Error to the research fetch, so these are FTC-documented steps, not a claim that the live form was observed successfully. Stop if the portal differs or requests payment.
 
-## 5. State-level requirements (RI / MA / CT)
+- [ ] David reviews the proposed area codes above. No selection/subscription has been submitted.
+- [ ] Open the official portal and choose **REGISTER NEW USERS**.
+- [ ] Choose **Seller**, calling on its own behalf to sell its own product. Do not choose an exempt-organization shortcut or a telemarketer calling for other sellers.
+- [ ] Enter the legal sole-proprietor name **DAVID CUI JR** and **Callie** as DBA if the form provides that field. David personally enters his **EIN, not SSN**, address and contact details in the official form. Do not paste these values into chat, repository files, logs or tickets.
+- [ ] Retain the Organization ID privately. Complete the email activation and Representative password setup, and any required authorized-representative/downloader setup. David personally handles verification. Store credentials in his password manager, never the repository.
+- [ ] Choose **CREATE NEW SUBSCRIPTION**, then select **individual area codes by area-code number**. Enter only the reviewed five above, not an all-state or all-US selection. The first **five or fewer** area codes are free. Confirm zero charge and stop before any paid selection or payment.
+- [ ] Allow up to **one business day** for processing. Retrieve the **SAN from the site**; it is not emailed. Store it privately with the subscription scope/renewal information. SAN issuance alone is not permission to call or evidence of a scrub.
 
-- [ ] **RI:** No separate state DNC list — RI law (R.I. Gen. Laws § 5-61-3.5) keys off the federal registry, so the national scrub covers it. However, RI's Telephone Sales Solicitation Act (§ 5-61-3) requires telemarketers to **register with the RI Attorney General** ($100/yr, at least 10 days before doing business, form on riag.ri.gov) [VERIFY: whether a founder making own B2B calls needs this registration — attorney Q4].
-- [ ] **MA:** Massachusetts operates its **own state DNC registry** (M.G.L. c. 159C, run by OCABR via vendor Fiserv). Telephone solicitors calling MA consumers must register annually with OCABR (201 CMR 12.04) and obtain the MA list separately from the federal one [VERIFY: current OCABR registration fee and whether pure B2B calls to landlords are exempt — attorney Q4].
-- [ ] **CT:** Connecticut's "no sales solicitation calls" listing (Conn. Gen. Stat. § 42-288a) is **identical to the National DNC Registry**, so the federal scrub covers the list itself. CT also has telemarketer provisions in ch. 743m [VERIFY: whether CT requires separate telemarketer registration for founder-dialed B2B calls — attorney Q4].
+## 3. Written DNC policy and intended refresh cycle
 
-## Done when
+**Accountable owner: David.** The following is the conservative operating policy to complete before registry-backed calling. It is not a claim that automated enforcement exists today.
 
-- SAN issued and stored
-- 401, 508, 774, 617, 857 downloaded and first scrub complete
-- 28-day recurring re-scrub task on calendar
-- Internal DNC suppression list live in the CRM and checked at dial time
+- Honor internal do-not-call requests **immediately** on the requested number/contact/firm scope through the existing suppression controls. Preserve the suppression history and do not purge stops as ordinary prospect retention cleanup.
+- Use registry data **only for permitted compliance purposes**, never as lead supply. Keep access limited to authorized users. Maintain written procedures, relevant caller training and monitoring that checks adherence.
+- Compare endpoints against complete data for their subscribed area codes before calling. Registry matches are suppressed conservatively. A company website, business label or claimed business use never overrides a registry match. Unknown line type remains conservative, not presumed to be an exempt business line. These planning counts do not classify line type.
+- Use registry data **no more than 31 days old**. This is a freshness requirement, not a 31-day grace period for calling a long-registered number. **Target:** remind David on day28 and refuse calling on stale coverage at day31 until refreshed and re-scrubbed. Uncovered area codes remain outside registry-cleared scope.
+- Preserve private download/import receipts, source/version dates, full/delta completeness, area-code coverage, scrub time and results. A fresh subscription or receipt alone does not prove a complete comparison. Do not remove a registry stop merely because a later file is incomplete or stale.
+- Anchor the **first** day28 reminder/day31 deadline to the **actual initial complete registry download date**, then maintain it from real refreshes. No initial download date or reminder is invented today, and no calendar task is created by this document.
+- Keep national-registry checks separate from state postures, state registration/list obligations, calling hours, assignment, identity, holds and all other restrictions. This checklist provides **no TX, RI or MA state-law clearance**. A recorded posture or apparent B2B context does not replace these checks.
+
+## 4. What remains after SAN issuance
+
+Existing journalled suppression events accept an imported source, and effective phone/all stops are checked by dial advice and ticket authorization/consumption. Refused advice does not emit a `tel:` URI. Those controls do **not** establish that a national registry import or scrub occurred.
+
+**The runtime does not currently provide a complete bulk national-registry importer or automatic subscription-area/registry-age gate.** The day28/day31 and uncovered-area rules above are targets, not shipped fail-closed enforcement. The state-posture selector is separate and does not enforce the registry's 31-day freshness requirement.
+
+After an actual SAN and complete download, a separately reviewed implementation still needs to map the exact covered endpoints, compare registry data, apply matches through the normal suppression path, retain completeness/freshness receipts and enforce stale/out-of-area refusal across relevant calling paths. Unknown line types need conservative treatment. Do not claim current blocked impact, “registered”, “compliant” or “registry-safe” before the corresponding real evidence exists.
+
+No downloads, imports, calendar changes, account creation, new calls or sending activation are performed by this documentation change.
