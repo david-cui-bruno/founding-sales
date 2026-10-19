@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   e164,
+  nationalDncDisclosureSchema,
   instant,
   uuid,
   todayCardDtoSchema,
@@ -69,6 +70,7 @@ export type TodayFirm = TodayFirmResponse;
  * something to open.
  */
 const dialAdviceViewSchema = z.strictObject({
+  nationalDnc: nationalDncDisclosureSchema.optional(),
   routeId: uuid,
   callable: z.boolean(),
   /**
@@ -282,6 +284,7 @@ export interface ReleasePauseRequest {
 }
 
 export interface DialRequest {
+  readonly expectedNationalDncReceiptId?: string | null;
   readonly firmId: string;
   readonly contactId: string | null;
   readonly routeId: string;

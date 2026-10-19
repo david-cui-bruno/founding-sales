@@ -7,6 +7,7 @@ import { DialPanel } from '../src/renderer/today/Lanes.tsx';
 import type { TodayActions } from '../src/renderer/today/useToday.ts';
 import { todayStateSchema } from '../src/renderer/todayContract.ts';
 import { buildTodayView } from '../src/renderer/todayView.ts';
+import { NATIONAL_DNC_UNCHECKED_WARNING } from '@fss/contracts';
 const firmId = '11111111-1111-4111-8111-111111111111';
 const routeId = '22222222-2222-4222-8222-222222222222';
 const a = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -20,6 +21,19 @@ const state = (attemptId = a) => todayStateSchema.parse({ snapshotDate: '2026-10
   lastCall: { firmId, routeId, contactId: null, e164: '+14015550187', callSessionId: null, phoneHandoffAttemptId: attemptId } });
 afterEach(() => { cleanup(); globalThis.callieApi = undefined; });
 describe('phone-app outcome identity and truthful disclosure', () => {
+  it('shows the exact warning adjacent Call before click and echoes only the displayed receipt', () => {
+    const value = state();
+    value.dialAdvice = [{ routeId, callable: true, reasons: [], e164: '+14015550187', firmLocalTime: '10:00',
+      nationalDnc: { status: 'not_checked_owner_risk', basis: 'owner_self_test', receiptId: b, warning: NATIONAL_DNC_UNCHECKED_WARNING } }];
+    const dial = vi.fn();
+    const actions = { busy: () => false, dial } as unknown as TodayActions;
+    render(<DraftsProvider><DialPanel state={value} view={buildTodayView(value)} actions={actions} /></DraftsProvider>);
+    expect(screen.getByTestId('national-dnc-warning').textContent).toBe(NATIONAL_DNC_UNCHECKED_WARNING);
+    expect(dial).not.toHaveBeenCalled();
+    expect(screen.getByTestId('dial-route').contains(screen.getByTestId('national-dnc-warning'))).toBe(true);
+    fireEvent.click(screen.getByTestId('dial'));
+    expect(dial).toHaveBeenCalledWith({ firmId, contactId: null, routeId, expectedNationalDncReceiptId: b });
+  });
   it('never substitutes an old Twilio session for the phone attempt', () => {
     const call = currentCallOf(state(), firmId, oldSession);
     expect(call).toMatchObject({ phoneHandoffAttemptId: a, callSessionId: null });

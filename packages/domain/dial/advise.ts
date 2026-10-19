@@ -1,4 +1,4 @@
-import type { DialRefusalCode } from '@fss/contracts';
+import { unknownNationalDncDisclosure, type DialRefusalCode, type NationalDncDisclosure } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { readFirm } from '../crm/firms.ts';
 import { currentCallingWindow, evaluateConfiguredCallingWindow, nextCallingWindowOpening } from '../policy/callingWindows.ts';
@@ -7,6 +7,7 @@ import { listApplicableHolds } from '../policy/holds.ts';
 import { applicablePosture } from '../policy/postures.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
 import { suppressionKeys } from './authorize.ts';
+import { readPhoneNationalDecision } from './phoneNationalPolicy.ts';
 
 /**
  * "Can I call this firm now?" as advice, not a ticket (wave 2, S4.5).
@@ -37,6 +38,7 @@ import { suppressionKeys } from './authorize.ts';
  */
 
 export interface DialAdvice {
+  readonly nationalDnc?: NationalDncDisclosure;
   readonly firmId: string;
   readonly callable: boolean;
   /** Every reason that applies, in 9.2's order, each once. Empty when callable. */
@@ -60,12 +62,13 @@ interface AdviceRouteRow {
   readonly contact_id: string | null;
   readonly e164: string;
   readonly eligibility: 'candidate' | 'usable' | 'invalid' | 'retired';
+  readonly version: number;
   readonly [column: string]: unknown;
 }
 
 export async function adviseDial(
   context: RepositoryContext,
-  input: { readonly firmId: string; readonly routeId?: string | undefined; readonly at?: string | undefined },
+  input: { readonly firmId: string; readonly routeId?: string | undefined; readonly at?: string | undefined; readonly omitNationalDnc?: boolean },
 ): Promise<DialAdvice | null> {
   const actor = context.scope.actor;
   const firm = await readFirm(context, input.firmId);
@@ -82,7 +85,7 @@ export async function adviseDial(
   let route: AdviceRouteRow | null = null;
   if (input.routeId !== undefined) {
     const { rows } = await context.db.query<AdviceRouteRow>(
-      'SELECT id, firm_id, contact_id, e164, eligibility FROM phone_routes WHERE workspace_id = $1 AND id = $2',
+      'SELECT id, firm_id, contact_id, e164, eligibility, version FROM phone_routes WHERE workspace_id = $1 AND id = $2',
       [context.scope.workspaceId, input.routeId],
     );
     const found = rows[0];
@@ -132,7 +135,10 @@ export async function adviseDial(
   // itself, so a suppressed, out-of-window or otherwise refused number must not carry
   // one. A refused route has a reason of its own, so `callable` covers it too.
   const callable = reasons.length === 0;
+  const national = route && !input.omitNationalDnc ? await readPhoneNationalDecision(context,
+    { firmId: firm.id, routeId: route.id, routeVersion: route.version, e164: route.e164, at }) : null;
   return {
+    nationalDnc: national?.ok ? national.disclosure : unknownNationalDncDisclosure(),
     firmId: firm.id,
     callable,
     reasons,
