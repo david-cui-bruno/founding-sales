@@ -14,10 +14,12 @@ import { Section } from './Group.tsx';
  */
 export function Panels({
   view,
+  alertsOnly = false,
   onAcknowledge,
   acknowledging,
 }: {
   readonly view: AdminView;
+  readonly alertsOnly?: boolean;
   onAcknowledge?(alertId: string): void;
   /** Whether this row's own Acknowledge is on the wire (P1-4). */
   acknowledging?(alertId: string): boolean;
@@ -25,7 +27,7 @@ export function Panels({
   return (
     <>
       <div data-testid="panels">
-        {view.panels.map(panel => (
+        {(alertsOnly ? [] : view.panels).map(panel => (
           <Section
             key={panel.title}
             data-testid={`panel-${panel.title.toLowerCase().replaceAll(' ', '-')}`}

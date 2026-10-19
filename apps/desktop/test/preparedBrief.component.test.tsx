@@ -29,7 +29,9 @@ afterEach(() => {
 describe('the prepared brief, read-only', () => {
   it('says it is prepared research Callie did not verify, links https sources only, and offers nothing to change', () => {
     render(<PreparedBrief brief={BRIEF} />);
-    expect(screen.getByTestId('prepared-brief-provenance').textContent).toBe('Prepared research · observed 2 Oct 2026 · not verified by Callie');
+    expect(screen.getByTestId('prepared-brief-provenance').textContent).toBe('Researched 2 Oct');
+    expect(screen.getByTestId('prepared-brief-evidence').textContent).toContain('Prepared research · observed 2 Oct 2026 · not verified by Callie');
+    expect(screen.getByTestId('prepared-brief-evidence').closest('details')?.open).toBe(false);
     expect(screen.getByTestId('prepared-brief-text').textContent).toBe(BRIEF.brief);
     const links = screen.getAllByTestId('prepared-brief-source');
     expect(links.map(link => link.getAttribute('href'))).toEqual(['https://firm.example.test/contact']);

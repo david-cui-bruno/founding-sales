@@ -117,9 +117,9 @@ describe('the words and the actions on a meeting row', () => {
       'Booked',
     ]);
     const buttons = (node: HTMLElement): string[] => within(node).queryAllByRole('button').map(button => button.textContent ?? '');
-    expect(rows.map(buttons)).toEqual([['Attended', 'No-show', 'Demo qualification', 'Notes & tasks', 'Follow-up'], ['Undo', 'Demo qualification', 'Notes & tasks', 'Follow-up'], ['Demo qualification', 'Notes & tasks', 'Follow-up'], ['Demo qualification', 'Notes & tasks', 'Follow-up']]);
-    // Quiet until hover or focus (David's taste): the actions are hidden at rest.
-    expect(within(rows[0] as HTMLElement).getByTestId('attendance-actions').className).toContain('opacity-0');
+    expect(rows.map(buttons)).toEqual([['Meeting held: confirm it', 'No-show', 'Demo qualification', 'Notes & tasks', 'Follow-up'], ['Undo', 'Demo qualification', 'Notes & tasks', 'Follow-up'], ['Demo qualification', 'Notes & tasks', 'Follow-up'], ['Demo qualification', 'Notes & tasks', 'Follow-up']]);
+    // Owner attendance confirmation stays discoverable without hover.
+    expect(within(rows[0] as HTMLElement).getByTestId('attendance-actions').className).not.toContain('opacity-0');
   });
 
   it('offers nothing while the session may not change anything', async () => {
@@ -156,6 +156,7 @@ describe('kept state (K1, K3, K6, K7)', () => {
       reads[0]?.resolve({ meetings: [row(MEETING, 'ended')] });
       await Promise.resolve();
     });
+    expect((await screen.findByTestId('attendance-attended')).textContent).toBe('Meeting held: confirm it');
     await userEvent.click(await screen.findByTestId('attendance-attended'));
     expect(sent).toEqual([{ meetingId: MEETING, attendance: 'attended', commandId: expect.any(String) as string }]);
 
@@ -227,6 +228,7 @@ describe('kept state (K1, K3, K6, K7)', () => {
         <FirmMeetings firmId={FIRM_ID} ports={ports} />
       </Session>,
     );
+    expect((await screen.findByTestId('attendance-attended')).textContent).toBe('Meeting held: confirm it');
     await userEvent.click(await screen.findByTestId('attendance-attended'));
     await act(async () => {
       answers[0]?.resolve({ set: null, reason: 'offline' });
@@ -414,6 +416,7 @@ describe('review M1R', () => {
         <FirmMeetings firmId={FIRM_ID} ports={ports} refreshKey="before" />
       </Session>,
     );
+    expect((await screen.findByTestId('attendance-attended')).textContent).toBe('Meeting held: confirm it');
     await userEvent.click(await screen.findByTestId('attendance-attended'));
     // A read begins before the answer (the page's stage moved, say).
     view.rerender(

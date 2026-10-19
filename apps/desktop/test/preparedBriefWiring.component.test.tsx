@@ -82,7 +82,7 @@ describe('the firm page and the prepared brief', () => {
       install(role, BRIEF);
       mount();
       expect((await screen.findByTestId('prepared-brief-text')).textContent).toBe(BRIEF.brief);
-      expect(screen.getByTestId('prepared-brief-provenance').textContent).toContain('not verified by Callie');
+      expect(screen.getByTestId('prepared-brief-evidence').textContent).toContain('not verified by Callie');
       expect(screen.queryByTestId('prepared-brief-edit')).toBeNull();
       expect(calls.some(call => call.name.startsWith('firms.'))).toBe(false);
     });

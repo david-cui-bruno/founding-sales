@@ -50,6 +50,7 @@ export interface PendingRecordingCommand {
 
 export interface RecordingsMemory {
   view: RecordingsView | null;
+  readFailed?: boolean;
   answers: number;
   reads: number;
   readonly picking: Map<string, { readonly meetingId: string | null }>;
@@ -160,9 +161,10 @@ export function useRecordings(ports: RecordingsPorts | null): Recordings {
         // K7: only the latest read, and never one an answer has overtaken.
         if (mine !== kept.reads || answersAtStart !== kept.answers) return;
         kept.view = answer;
+        kept.readFailed = false;
         touch();
       },
-      () => undefined,
+      () => { if (mine === kept.reads && answersAtStart === kept.answers) { kept.readFailed = true; touch(); } },
     );
   }, [touch]);
 

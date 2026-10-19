@@ -20,6 +20,8 @@ import { CrmOwnerSetup } from './CrmOwnerSetup.tsx';
 import { DiscoveryStatus } from './DiscoveryStatus.tsx';
 import { LinkedinConnection } from './LinkedinConnection.tsx';
 import { tabForScreen, useAdmin } from './useAdmin.ts';
+import { NotificationStatus } from '../today/NotificationStatus.tsx';
+import { navigate } from '../routes.ts';
 
 function OwnerGroup({ title, children }: { readonly title: string; readonly children: ReactNode }) {
   return <section aria-label={title} className="border-t border-border py-5 first:border-t-0 first:pt-0"><h2 className="mb-3 text-sm font-semibold tracking-tight">{title}</h2><div className="[&>section]:mt-3 [&>section]:border-t-0 [&>section]:pt-0">{children}</div></section>;
@@ -75,11 +77,13 @@ export function SettingsView({ route, identity, generation, guard, mailbox, mail
         <OwnerGroup title="Account">
           <p className="mb-2 text-sm" data-testid="signed-in-user">{identity === null ? 'Not signed in' : `Signed in${isAdmin ? ' · Administrator' : ''}`}</p>
           <StatusSection rows={status.filter(row => row.key === 'system' || row.key === 'update')} />
+          <button type="button" className="mb-3 text-sm underline underline-offset-4" onClick={() => navigate({ name: 'ask' })}>Search records and conversation history</button>
           <MailboxSection mailbox={mailbox} waiting={mailboxWaiting} available={hasMailboxBridge} onSwitch={onSwitchMailbox} />
         </OwnerGroup>
         <div data-testid="banners" className="flex flex-col gap-2 empty:hidden">
         {view?.banner ? <Alert tone="warning" data-testid="banner-offline">{view.banner}</Alert> : null}
         {view?.notice && !isAttributed(admin.lastForm) ? <Alert tone="info" data-testid="notice">{view.notice}</Alert> : null}
+        {state?.notice === 'release_record_unknown' ? <details className="text-xs text-muted-foreground"><summary>Technical details</summary><code>{state.notice}</code></details> : null}
         </div>
         {view === null ? <p role="status" className="py-4 text-sm text-muted-foreground">Reading settings. Controls remain unavailable until the server answers.</p> : configuration ? <>
           <OwnerGroup title="Calling">
@@ -91,10 +95,11 @@ export function SettingsView({ route, identity, generation, guard, mailbox, mail
           <OwnerGroup title="LinkedIn"><LinkedinConnection key={privacyKey} enabled={editable} privacyKey={privacyKey} /></OwnerGroup>
         </> : null}
         <details data-testid="settings-advanced" open={advanced} onToggle={event => setAdvanced(event.currentTarget.open)} className="border-t border-border py-5">
-          <summary className="cursor-pointer text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4">Advanced <span className="ml-2 font-normal text-muted-foreground">Time zone, recordings, CRM controls & diagnostics</span></summary>
+          <summary className="cursor-pointer text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4">Advanced <span className="ml-2 font-normal text-muted-foreground">Time zone, recordings, CRM controls & troubleshooting</span></summary>
           <div className="pt-3">
+            <NotificationStatus />
             <div className="flex flex-wrap gap-4 py-2 text-sm" aria-label="Advanced views">
-              {(['administration', 'dashboard', 'diagnostics'] as const).map(name => <button key={name} data-testid={`tab-${name === 'administration' ? 'settings' : name}`} type="button" className="underline underline-offset-4" aria-current={name === tab ? 'page' : undefined} onClick={() => routeShown({ name: 'settings', tab: name })}>{name === 'administration' ? 'Configuration' : name === 'dashboard' ? 'Dashboard' : 'Diagnostics'}</button>)}
+              {(['administration', 'diagnostics'] as const).map(name => <button key={name} data-testid={`tab-${name === 'administration' ? 'settings' : name}`} type="button" className="underline underline-offset-4" aria-current={name === tab ? 'page' : undefined} onClick={() => routeShown({ name: 'settings', tab: name })}>{name === 'administration' ? 'Configuration' : 'Sending recovery'}</button>)}
             </div>
             {configuration && view && state ? <>
               <section aria-label="Email release setup and history" className="border-t border-border py-4">
@@ -108,7 +113,7 @@ export function SettingsView({ route, identity, generation, guard, mailbox, mail
               {isAdmin ? <CrmOwnerSetup key={`crm:${privacyKey}`} available={editable} privacyKey={privacyKey} /> : null}
               <ReplyModelSection isAdmin={isAdmin} identity={identity} generation={generation} guard={guard} />
               <StatusSection rows={status.filter(row => row.key !== 'system' && row.key !== 'update')} />
-            </> : view ? <><Panels view={view} {...(tab === 'diagnostics' ? { onAcknowledge: admin.actions.acknowledgeAlert, acknowledging: (id: string) => admin.busy(`alert:${id}`) } : {})} />{tab === 'diagnostics' ? <RecoveryControls /> : null}</> : null}
+            </> : view ? <><Panels alertsOnly view={view} {...(tab === 'diagnostics' ? { onAcknowledge: admin.actions.acknowledgeAlert, acknowledging: (id: string) => admin.busy(`alert:${id}`) } : {})} />{tab === 'diagnostics' ? <RecoveryControls /> : null}</> : null}
           </div>
         </details>
       </div>

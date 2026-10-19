@@ -24,6 +24,7 @@ import type {
 } from "@fss/contracts";
 import { promiseActionPorts } from "./promiseActionPorts.ts";
 import { Button } from "../ui/button.tsx";
+import { isOwnerWorkingFirm } from "../ownerWorkingView.ts";
 
 export interface PromiseActionPorts {
   read(
@@ -42,10 +43,14 @@ export function ActionQueue({
   refreshKey,
   enabled,
   promisePorts = promiseActionPorts,
+  compactReplies = false,
+  excludeReplies = false,
 }: {
   readonly refreshKey: string | null;
   readonly enabled: boolean;
   readonly promisePorts?: PromiseActionPorts;
+  readonly compactReplies?: boolean;
+  readonly excludeReplies?: boolean;
 }): JSX.Element {
   const [read, setRead] = useState<TodayActionsV2Response | null | undefined>(
     undefined,
@@ -219,6 +224,19 @@ export function ActionQueue({
       if (alive.current && ticket === issued.current) setBusy(null);
     }
   };
+  const actions = (read?.actions ?? []).filter(action => isOwnerWorkingFirm(action.subject));
+  const visible = excludeReplies ? actions.filter(action => action.kind !== 'reply') : actions;
+  if (compactReplies) {
+    const replies = actions.filter(action => action.kind === 'reply');
+    if (replies.length === 0) return notice === null ? <></> : <p role="status" className="shrink-0 px-5 py-1 text-xs text-muted-foreground">{notice}</p>;
+    return <div data-testid="today-owner-replies" className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-5 text-xs">
+      <span>{replies.length} {replies.length === 1 ? 'reply needs' : 'replies need'} you</span>
+      <span className="text-muted-foreground">{replies.some(reply => reply.reason === 'reply_review') ? 'Reply needs review' : replies.some(reply => reply.state === 'overdue') ? 'Overdue reply' : 'Substantive reply'}</span>
+      <Button variant="link" size="sm" className="h-6 px-1 text-xs" disabled={busy !== null} onClick={() => { const first = replies[0]; if (first) void open(first); }}>Open reply</Button>
+      {notice === null ? null : <span role="status">{notice}</span>}
+    </div>;
+  }
+  if (excludeReplies && read !== null && read !== undefined && visible.length === 0 && !read.promiseCoverage.truncated && notice === null) return <></>;
   return (
     <section
       aria-label="Actions"
@@ -234,7 +252,7 @@ export function ActionQueue({
             Retry actions
           </Button>
         </p>
-      ) : read.actions.length === 0 ? (
+      ) : visible.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {read.promiseCoverage.truncated
             ? "No actions on this page."
@@ -242,7 +260,7 @@ export function ActionQueue({
         </p>
       ) : (
         <ul className="flex max-h-[40vh] flex-col gap-2 overflow-y-auto">
-          {read.actions.map((action) => (
+          {visible.map((action) => (
             <li key={action.actionId} className="flex items-center gap-3">
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium">{action.subject}</p>

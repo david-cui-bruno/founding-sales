@@ -24,7 +24,7 @@ export function Learning({read=defaultRead,enabled=true}:{read?:Read;enabled?:bo
   {view&&!failed?<>
    <p className="text-sm">Observed through {new Date(view.asOf).toLocaleDateString()} · {new Date(view.from).toLocaleDateString()} to {new Date(view.to).toLocaleDateString()}</p>
    <div className="rounded-lg border border-border p-4 space-y-2"><h3 className="font-medium">All candidate coverage</h3><p>{view.coverage.candidates} candidates found</p><p className="text-sm text-muted-foreground">{view.coverage.qualified} marked eligible at last check · {view.coverage.admitted} admitted · {view.coverage.unavailable} unavailable</p><p className="text-sm text-muted-foreground">{view.search.attempts} search dispatches · {view.search.creditsReserved} search credits reserved once per request, shared across its results. Candidate coverage includes manual staging; discovery yield is separated below.</p></div>
-   {view.automation?<AutomaticEmailResults view={view.automation}/>:<p className="text-sm text-muted-foreground">Automatic email results are unavailable in this report.</p>}
+   {view.automation?<AutomaticEmailResults view={view.automation}/>:<p className="text-sm text-muted-foreground">No historical automatic-email results in this report.</p>}
    {view.cohorts.length===0?<p>No contacted firms in this interval yet. Conversion rates are unavailable.</p>:<div className="space-y-4">{view.cohorts.map(c=><article key={`${c.acquisition}:${c.hypothesis}:${c.policyVersion}`} className="rounded-lg border border-border p-4 space-y-3">
     <h3 className="font-medium capitalize">{label(c.hypothesis)} · {label(c.acquisition)}</h3>
     <p className="text-xs text-muted-foreground">Policy {c.policyVersion}</p>

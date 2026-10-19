@@ -47,7 +47,7 @@ it('shows original spaced text and exact factual provenance without approving or
  render(<DraftsProvider><SocialDraftStudio onUse={onUse} ports={{request:vi.fn(),read:async()=>({reason:null,view:{sources:[],facts:[{...ref,text:'Actual owner work.',socialInput:{topic:'technical',status:'local',sanitized:true}}],requests:[{id,mode:'linkedin_grounded',state:'ready',factBlocks:[ref],sourceRefs:[],concepts:[{theme:'technical',factRefs:[ref],variants:[{platform:'linkedin',text}]}],reason:null,createdAt:'2026-10-13T10:00:00Z',deadlineAt:'2026-10-13T10:30:00Z'}]}})}}/></DraftsProvider>);
  const use=await screen.findByRole('button',{name:'Use LinkedIn draft'});fireEvent.click(use);
  expect(onUse).toHaveBeenCalledWith({platform:'linkedin',text});
- expect(screen.getByLabelText('Factual provenance').textContent).toContain('version 2 · local');
+ expect(screen.getByLabelText('Sources for these facts').textContent).toContain('version 2 · local');
  expect(screen.getByText(/References preserve provenance, not proof/)).toBeTruthy();
  expect(screen.queryByRole('button',{name:'Use Facebook draft'})).toBeNull();
 });

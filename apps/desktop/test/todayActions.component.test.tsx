@@ -144,6 +144,24 @@ it('opens the exact current overdue reply from Today without resolving it', asyn
   fireEvent.click(await screen.findByRole('button', { name: /Open reply/ }));
   await vi.waitFor(() => expect(navigated).toHaveBeenCalledWith({ name: 'replies', messageId: MESSAGE }));
   expect(screen.getByText('Overdue reply')).toBeTruthy();
+  expect(screen.getByTestId('today-owner-replies').textContent).toContain('1 reply needs you');
+  expect(screen.queryByText('Your manual tasks')).toBeNull();
+  expect(screen.queryByText('Desktop alerts')).toBeNull();
+  expect(screen.getByTestId('queue-region')).toBeTruthy();
+  expect(screen.getByTestId('today-firm')).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Call' })).toBeTruthy();
+});
+
+it('does not show empty reply work or the exact internal test reply, but keeps similar real firm names', async () => {
+  currentRead = { ...read, actions: read.actions.map(action => ({ ...action, subject: 'Callie Internal Test' })) };
+  const view = show();
+  await vi.waitFor(() => expect(screen.queryByText(/Loading actions/)).toBeNull());
+  expect(screen.queryByTestId('today-owner-replies')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Open reply' })).toBeNull();
+  view.unmount();
+  currentRead = { ...read, actions: read.actions.map(action => ({ ...action, subject: 'Callie Internal Test Partners' })) };
+  show();
+  expect(await screen.findByTestId('today-owner-replies')).toBeTruthy();
 });
 
 it('describes uncertain mail as reply review rather than a substantive reply', async () => {
@@ -159,7 +177,8 @@ it('drops a resolved or stale action when the current open read refuses its old 
   currentTarget = null;
   currentRead = { ...read, actions: [] };
   fireEvent.click(button);
-  expect(await screen.findByText('No actions need you.')).toBeTruthy();
+  await vi.waitFor(() => expect(screen.queryByTestId('today-owner-replies')).toBeNull());
+  expect(screen.queryByText('No actions need you.')).toBeNull();
   expect(navigated).not.toHaveBeenCalled();
   expect(screen.getByText('This action changed. Today has been refreshed.').getAttribute('role')).toBe('status');
 });

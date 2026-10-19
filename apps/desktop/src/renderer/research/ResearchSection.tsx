@@ -70,7 +70,7 @@ export function ResearchSection({
 
       {judgments === null ? (
         <p data-testid="research-empty" className="py-1 text-sm text-muted-foreground">
-          Callie has not read this firm’s site yet.
+          {state === null ? 'Loading research…' : firm === null ? 'Research is unavailable. Check the message above.' : 'No research saved yet.'}
         </p>
       ) : (
         <ul data-testid="research-judgments" className="flex flex-col gap-1 py-1">

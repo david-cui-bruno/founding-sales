@@ -4,6 +4,7 @@ import type { OperationInput } from '../../shared/operations.ts';
 import { REPLY_DISPOSITIONS, type ReplyDisposition, type ReplyState } from '../replyContract.ts';
 import { useKept } from './kept.ts';
 import { nextAfter } from './queue.ts';
+import { ownerReplies } from '../ownerWorkingView.ts';
 
 /**
  * The reply lane's reads, deliberately **not** through Query (specification 8.3, 12.4).
@@ -121,7 +122,8 @@ export function useReplies(initialMessageId?: string): Replies {
       hold(form, 1);
       void next
         .then(
-          value => {
+          raw => {
+            const value = ownerReplies(raw);
             // A recorded confirmation spends its typed text whether or not the view is still here (K6).
             if (kind === 'confirm' && form !== null && CONFIRM_SUCCESS.has(value.notice ?? '')) {
               latest.current.clearDrafts(`replies:m:${form}:`);

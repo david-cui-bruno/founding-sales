@@ -1,6 +1,4 @@
-import {ManualWork} from '../ask/ManualWork.tsx';
-import {NotificationStatus,type NotificationStatusPort} from './NotificationStatus.tsx';
-import {operations} from '../app/bridges.ts';
+import { isOwnerWorkingFirm } from '../ownerWorkingView.ts';
 import { ActionQueue } from './ActionQueue.tsx';
 import {FirmQualification} from '../sourcing/FirmQualification.tsx';
 import { useQueryClient } from '@tanstack/react-query';
@@ -286,10 +284,6 @@ function Warnings({ warnings, onConnectMailbox }: { readonly warnings: HomeView[
   );
 }
 
-const notificationStatusPort:NotificationStatusPort={
- read:async()=>{const api=operations();return api?await api.read('notifications.read',{}):{ok:false,reason:'unavailable',offline:false};},
- runtime:async()=>{const api=operations();return api?await api.read('notifications.runtime',{}):{state:'unavailable',lastCheckedAt:null};},
-};
 export function TodayWorkspace({
   home,
   today,
@@ -424,7 +418,7 @@ export function TodayWorkspace({
     else if (phase === 'completed') marks[entryFirm] = 'Notes ready';
     else if (phase === 'failed') marks[entryFirm] = 'Notes could not be written';
   }
-  const reviewItems = review.items ?? [];
+  const reviewItems = (review.items ?? []).filter(item => isOwnerWorkingFirm(item.firmName));
   const afterBlock =
     firmId === null || expanded === null ? null : (
       <div className="flex flex-col gap-4" data-testid="after-block">
@@ -583,9 +577,7 @@ export function TodayWorkspace({
           </button>
         </div>
       ) : null}
-      <ManualWork scope={{kind:'today'}} enabled={hasTodayBridge} privacyKey={state?.asOf??null}/>
-      <ActionQueue refreshKey={state?.asOf ?? null} enabled={hasTodayBridge} />
-      <NotificationStatus port={notificationStatusPort}/>
+      <ActionQueue refreshKey={state?.asOf ?? null} enabled={hasTodayBridge} compactReplies />
       {unavailable ? (
         <div className="max-w-[640px] p-6">
           <p data-testid="today-unavailable" className="text-sm text-muted-foreground">
@@ -617,13 +609,13 @@ export function TodayWorkspace({
                 memory.queueScroll.current = top;
               }}
               onSelect={select}
-              footer={<HomeExtras home={home} onConnectMailbox={onConnectMailbox} compact showFigures={false} />}
+              footer={<><ActionQueue refreshKey={state?.asOf ?? null} enabled={hasTodayBridge} excludeReplies /><HomeExtras home={home} onConnectMailbox={onConnectMailbox} compact showFigures={false} /></>}
               marks={marks}
               review={
                 <>
                 {review.items === null ? null : (
                   <>
-                    <ReviewGroup items={review.items} cards={cards} selected={firmId} onSelect={select} onChanged={reload} />
+                    <ReviewGroup items={reviewItems} cards={cards} selected={firmId} onSelect={select} onChanged={reload} />
                     {review.failed ? (
                       <p data-testid="review-refresh-failed" role="status" className="mb-3 flex items-center gap-1 px-2 text-xs text-muted-foreground">
                         Couldn’t refresh.
@@ -738,24 +730,11 @@ export function TodayWorkspace({
                   </div>
                 ) : null}
 
-                {todayView.tasks.length === 0 ? null : (
-                  <Block className="mt-4">
-                    <Label>On today’s list</Label>
-                    <Feedback feedback={feedback} zone="tasks" />
-                    <ul data-testid="today-tasks" className="flex flex-col">
-                      {todayView.tasks.map(entry => (
-                        <TaskRow key={entry.task.itemId} entry={entry} state={state} actionsEnabled={todayView.actionsEnabled} actions={actions} />
-                      ))}
-                    </ul>
-                  </Block>
-                )}
-
                 {history.progress !== null && history.latest !== null && recentCall(history.latest) ? (
                   <LatestCall history={history} view={analyses.get(history.latest.sessionId)} waiting={Date.now() - (Number.isFinite(latestEnded) ? latestEnded : Date.now()) < WAITING_WINDOW_MS} />
                 ) : null}
 
                 {/* Lane PB: the prepared brief, negotiated on the card read, above Callie's own research. */}
-                {state?.role==='admin'?<FirmQualification key={`qualification:${expanded.firmId}`} firmId={expanded.firmId} enabled={state.mayMutate&&!live}/>:null}
                 {expanded.preparedBrief == null ? null : (
                   <div className="mt-6">
                     <PreparedBrief key={expanded.firmId} brief={expanded.preparedBrief} />
@@ -773,6 +752,18 @@ export function TodayWorkspace({
                     onCorrected={reload}
                   />
                 </div>
+                {state?.role==='admin'?<FirmQualification key={`qualification:${expanded.firmId}`} firmId={expanded.firmId} enabled={state.mayMutate&&!live}/>:null}
+                {todayView.tasks.length === 0 ? null : (
+                  <Block className="mt-4">
+                    <Label>On today’s list</Label>
+                    <Feedback feedback={feedback} zone="tasks" />
+                    <ul data-testid="today-tasks" className="flex flex-col">
+                      {todayView.tasks.map(entry => (
+                        <TaskRow key={entry.task.itemId} entry={entry} state={state} actionsEnabled={todayView.actionsEnabled} actions={actions} />
+                      ))}
+                    </ul>
+                  </Block>
+                )}
               </div>
             )}
           </div>

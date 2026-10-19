@@ -19,7 +19,7 @@ it('shows the current call reminder as unknown and offline without inventing nat
   const pending = reminder();
   const port: NotificationStatusPort = { read: async () => ({ ok: true, value: pending }), runtime: async () => ({ state: 'ready', lastCheckedAt: pending.asOf }) };
   const view = render(<NotificationStatus port={port} />);
-  expect(await screen.findByText('Native outcome unknown')).toBeDefined();
+  expect(await screen.findByText('Alert display could not be confirmed')).toBeDefined();
   expect(screen.getByText('Northwind Test Holdings')).toBeDefined();
   expect(screen.queryByText(/show observed|delivered/i)).toBeNull();
   view.rerender(<NotificationStatus port={{ read: async () => ({ ok: false, reason: 'offline', offline: true }), runtime: async () => ({ state: 'offline', lastCheckedAt: pending.asOf }) }} />);
@@ -43,5 +43,5 @@ it('does not restore a cancelled call reminder when an older read arrives after 
   expect(screen.queryByRole('region', { name: 'Desktop alert status' })).toBeNull();
   await act(async () => { releaseOld?.({ ok: true, value: old }); });
   expect(screen.queryByText('Northwind Test Holdings')).toBeNull();
-  expect(screen.queryByText('Native outcome unknown')).toBeNull();
+  expect(screen.queryByText('Alert display could not be confirmed')).toBeNull();
 });

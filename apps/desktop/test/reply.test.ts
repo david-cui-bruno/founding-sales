@@ -316,7 +316,7 @@ describe('the reply card view model', () => {
 
   it('names the model the workspace pays for, and says when the reading is switched off', () => {
     expect(buildReplyView(state(), null).classifierLine).toBe(
-      'Suggestions come from claude-opus-5 at low effort.',
+      'Callie’s suggestion. Confirm or change it.',
     );
     const off = buildReplyView(state({ classifier: { enabled: false, modelName: 'claude-opus-5', effort: 'low' } }), null);
     expect(off.banners.some(banner => banner.text.includes('switched off'))).toBe(true);
@@ -814,7 +814,7 @@ describe('the classifier line at every effort the server accepts (lane g78, D03)
       });
       const after = await createReplyBridge({ api, session: session() }).refresh();
       expect(after.classifier, effort).toEqual({ enabled: true, modelName: 'claude-opus-5', effort });
-      expect(buildReplyView(after, null).classifierLine, effort).toBe(`Suggestions come from claude-opus-5 at ${effort} effort.`);
+      expect(buildReplyView(after, null).classifierLine, effort).toBe('Callie’s suggestion. Confirm or change it.');
     }
   });
 

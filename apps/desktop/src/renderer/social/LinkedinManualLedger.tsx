@@ -72,9 +72,9 @@ export function LinkedinManualLedger({ ports = defaults }: { ports?: LinkedinMan
         m.notice = answer.view ? 'Manual owner record saved.' : 'Record saved. Refresh manual ledger before relying on its state.';
       } else {
         if (!['offline', 'unavailable', 'unreadable_answer'].includes(answer.reason ?? '')) m.pending = null;
-        m.notice = m.pending ? 'Ledger write not confirmed. Do not follow up. Retry only this exact record or check history.' : 'Record refused. Refresh current history and identity before correcting or retrying.';
+        m.notice = m.pending ? 'Could not confirm this was saved. Do not follow up. Retry this same record or check history.' : 'Record refused. Refresh current history and identity before correcting or retrying.';
       }
-    } catch { if (generation === live.current) m.notice = 'Ledger write not confirmed. Do not follow up. Retry only this exact record or check history.'; }
+    } catch { if (generation === live.current) m.notice = 'Could not confirm this was saved. Do not follow up. Retry this same record or check history.'; }
     finally { if (generation === live.current) { m.busy = false; render(); } }
   };
   const bind = () => {
@@ -101,11 +101,11 @@ export function LinkedinManualLedger({ ports = defaults }: { ports?: LinkedinMan
   const set = (change: () => void) => { change(); render(); };
   return <section aria-label="Manual LinkedIn selling ledger" className="space-y-3 rounded-md border p-3">
     <h2>Manual LinkedIn ledger</h2>
-    <p>Manual owner assertions only. This is not native acceptance or complete inbox/reply coverage. Verify replies yourself before any outreach. Callie does not send or enable LinkedIn actions here.</p>
+    <p>You recorded this activity yourself. Callie has not verified it on LinkedIn or checked all replies. Check replies before contacting anyone. Callie does not send or enable LinkedIn actions here.</p>
     <p>Choose an existing CRM Person, Firm relationship and supported profile. Missing identity evidence stays unknown. Lists show up to 100 associations/choices and history is paginated.</p>
     {m.notice && <p role="status">{m.notice}</p>}
     <Button disabled={m.busy} variant="outline" onClick={() => void load(m.selected ? { ledgerId: m.selected } : {})}>Refresh manual ledger</Button>
-    {m.pending && <Button disabled={m.busy} variant="outline" onClick={() => void run(m.pending!)}>Retry exact ledger record</Button>}
+    {m.pending && <Button disabled={m.busy} variant="outline" onClick={() => void run(m.pending!)}>Retry saving this record</Button>}
     {m.view && <>
       <fieldset disabled={locked} className="space-y-2"><legend>Account and CRM association</legend>
         <label>LinkedIn ledger account<select aria-label="LinkedIn ledger account" value={m.account} onChange={e => set(() => { m.account = e.target.value; })}><option value="">Choose account</option>{m.view.accounts.map(a => <option key={a.id} value={a.id}>{a.displayName}</option>)}</select></label>

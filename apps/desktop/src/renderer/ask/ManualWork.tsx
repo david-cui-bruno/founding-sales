@@ -41,7 +41,7 @@ export function ManualWork({scope,ports=manualWorkPorts,privacyKey,enabled}:Prop
   {notice!==null&&<p role='status'>{notice}</p>}
   {page?.items.length===0&&<p>No manual work on this page.</p>}
   {page?.items.map(item=><article key={item.actionId}>
-   <p>{item.kind==='task'?'Manual task':item.kind==='note'?'Human annotation':'Private preference proposal'} · {item.status}</p>
+   <p>{item.kind==='task'?'Manual task':item.kind==='note'?'Your note':'Private preference proposal'} · {item.status}</p>
    {item.supportState==='current'?<>
     {item.label!==null&&<p>{item.label}</p>}{item.text!==null&&<pre className='whitespace-pre-wrap break-words'>{item.text}</pre>}
     {item.due!==null&&<p>Due {item.due.kind==='date'?item.due.date:item.due.at} ({item.due.zone})</p>}

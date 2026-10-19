@@ -31,7 +31,7 @@ function Item({ item, recordings, enabled }: { readonly item: RecordingItem; rea
   const picked = picking?.meetingId ?? null;
   // A pick the current choices no longer offer is dropped rather than sent (K2).
   const pickedStillOffered = picked !== null && item.choices.some(choice => choice.meetingId === picked);
-  const detail = item.state === 'failed' ? reasonSentence(item.failure ?? 'upload_failed') : 'Which meeting was this?';
+  const detail = item.state === 'failed' ? reasonSentence(item.failure ?? 'upload_failed') : item.choices.length === 0 ? 'No matching meetings found. Check the meeting time and calendar connection.' : 'Which meeting was this?';
   return (
     <li data-testid="recording-to-sort" data-state={item.state} className="flex flex-col gap-1 border-b border-border py-1.5 last:border-b-0">
       <span className="flex min-w-0 flex-col">
@@ -144,7 +144,7 @@ export function RecordingsToSort({
   const recordings = useRecordings(ports);
   const heading = useRef<HTMLHeadingElement>(null);
   const items = (recordings.view?.items ?? []).filter(entry => entry.state === 'needs_matching' || entry.state === 'failed');
-  if (ports === null || items.length === 0) return null;
+  if (ports === null || items.length === 0 && !recordings.memory.readFailed) return null;
 
   // K4: a navigation key pressed on one of these buttons moves focus to the heading first,
   // so the Enter that follows presses nothing. The page's own shortcut still runs.
@@ -159,6 +159,7 @@ export function RecordingsToSort({
         <span>Recordings</span>
         <small className="text-[11px] font-normal">{items.length}</small>
       </h2>
+      {recordings.memory.readFailed ? <p role="status" className="text-xs text-muted-foreground">Could not refresh recordings. Any shown items are from the last successful read. <button type="button" className="underline" onClick={() => recordings.read()}>Retry recordings</button></p> : null}
       <ul className="flex flex-col border-t border-border">
         {items.map(entry => (
           <Item key={entry.itemId} item={entry} recordings={recordings} enabled={actionsEnabled} />

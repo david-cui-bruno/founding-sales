@@ -86,7 +86,7 @@ export function ExtractionSetup({ available, privacyKey, onSaved, ports = extrac
     <h2>Evidence extraction setup</h2>
     <p>Owner configuration only. Connecting Gmail is not consent. Capture of qualified incoming and owner-Sent business mail requires its own approval and excludes personal, excluded and unresolved conversations. Hosted extraction of needs, objections and commitments requires separate explicit approval.</p>
     <p>Disable stops fresh work, not accepted provider requests, and retains copied history and consent audit. Explicit scoped deletion erases Callie copies and dependent evidence, not Gmail originals. Disconnect stops new capture, not deletion. Historical backfill requires a separate bounded approval.</p>
-    <p>This form does not enable capture, extraction, Ask answering, indexing, embeddings, backfill or sending. Plain keyword and record search remain available. Saving clears any current extraction approval and leaves extraction disabled.</p>
+    <p>This form does not enable capture, backfill or sending. Saving leaves extraction off and clears its previous approval. Plain keyword and record search remain available.</p>
     <p>Extraction scope is mail only, bound to the current approved capture epoch. Notes, call transcripts and meeting transcripts are not authorized. Incoming and owner-Sent originals must be at or after capture activation, with no older backfill.</p>
     <p>A route on this reviewed list is not proof of a deployed adapter, funding or current access. Enter the exact independently verified access/data-handling versions, token prices and budgets. Proposed defaults are not permission. No automatic provider fallback.</p>
     {!available ? <p>Authenticated owner administrator setup is unavailable.</p> : null}

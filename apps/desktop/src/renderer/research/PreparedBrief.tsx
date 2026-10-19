@@ -7,8 +7,8 @@ import { Label } from '../v2/parts.tsx';
  * A firm's prepared brief (lane PB, migration 0038), on the firm page and on the Today card.
  *
  * Text prepared outside Callie — the DFW research agent's call briefs — shown beside
- * Callie's own research and never mistaken for it: the label says "Prepared research ·
- * observed <date> · not verified by Callie". The text keeps its line breaks and folds
+ * Callie's own research and never mistaken for it: compact date with evidence details.
+ * The text keeps its line breaks and folds
  * beyond about six lines behind "Show more". Each source is a link that opens in the
  * default browser through the seam that already exists (`app.ts`'s window-open handler
  * hands an `https:` URL to `shell.openExternal` and denies everything else); a source that
@@ -52,9 +52,10 @@ export function PreparedBrief({
   return (
     <section data-testid="prepared-brief">
       <Label>Prepared brief</Label>
-      <p data-testid="prepared-brief-provenance" className="mb-1.5 text-xs text-faint">
-        Prepared research · observed {observedDate(brief.observedOn)} · not verified by Callie
-      </p>
+      <details className="mb-1.5 text-xs text-muted-foreground">
+        <summary data-testid="prepared-brief-provenance" className="w-fit cursor-pointer">Researched {observedDate(brief.observedOn).replace(/ \d{4}$/u, '')}</summary>
+        <p data-testid="prepared-brief-evidence" className="mt-1">Prepared research · observed {observedDate(brief.observedOn)} · not verified by Callie. Prepared by {brief.preparedBy}. Updated {shortDate(brief.updatedAt)}.</p>
+      </details>
       <p data-testid="prepared-brief-text" className={folded ? 'line-clamp-6 text-sm whitespace-pre-line' : 'text-sm whitespace-pre-line'}>
         {brief.brief}
       </p>

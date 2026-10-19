@@ -90,7 +90,7 @@ export function Sidebar({
       </div>
 
       <nav data-testid="nav" className="flex flex-col gap-px">
-        {NAV_ROWS.map(row => (
+        {NAV_ROWS.filter(row => row.route !== 'ask').map(row => (
           <NavButton
             key={row.route}
             row={row}

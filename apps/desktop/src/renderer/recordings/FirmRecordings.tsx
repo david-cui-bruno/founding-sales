@@ -102,12 +102,12 @@ export function FirmRecordings({
           const note = recordings.memory.notes.get(entry.itemId);
           return (
             <li key={entry.itemId} data-testid="firm-recording" data-state={entry.state} className="group flex flex-col border-b border-border py-1.5 text-sm">
-              <span className="flex items-center gap-3">
+              <span className="flex flex-wrap items-center gap-3">
                 <span className="flex-1 truncate">
                   {recordingTitle(entry.folderName)} · {shortDayTime(entry.startedAt)}
                 </span>
                 {entry.state === 'failed' && actionsEnabled ? (
-                  <span className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                  <span className="flex flex-wrap items-center gap-0.5">
                     <Button
                       size="sm"
                       variant="quiet"

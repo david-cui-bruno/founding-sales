@@ -109,9 +109,7 @@ function Suggestion({ card }: { readonly card: ReplyCardView }): JSX.Element {
           <blockquote data-testid="suggestion-excerpt" className="border-l-2 border-strong pl-3 text-sm text-muted-foreground">
             {orDash(card.suggestion.excerpt)}
           </blockquote>
-          <p data-testid="suggestion-by" className="text-xs text-faint">
-            {orDash(card.suggestion.attribution)}
-          </p>
+          <details className="text-xs text-faint"><summary>Suggestion details</summary><p data-testid="suggestion-by">{orDash(card.suggestion.attribution)}</p></details>
         </>
       )}
       <ul data-testid="signals" className="mt-1 flex flex-col gap-0.5">
@@ -408,6 +406,7 @@ function Panel({
       <p data-testid="card-subject" className="text-sm font-medium">
         {orDash(card.subject)}
       </p>
+      {composer ? <Button size="sm" variant="quiet" onClick={() => { const target = document.querySelector<HTMLElement>('[aria-label="Reply composer"]'); target?.scrollIntoView?.({ block: 'start' }); target?.querySelector<HTMLTextAreaElement>('textarea')?.focus(); }}>Write a reply</Button> : null}
 
       {card.redacted ? (
         <p data-testid="card-redacted" className="text-sm text-muted-foreground">
@@ -415,7 +414,7 @@ function Panel({
         </p>
       ) : (
         <>
-          <pre data-testid="card-body" className="rounded-md bg-muted/60 p-3 font-sans text-base leading-relaxed whitespace-pre-wrap">
+          <pre data-testid="card-body" className="max-h-64 overflow-y-auto rounded-md bg-muted/60 p-3 font-sans text-base leading-relaxed whitespace-pre-wrap">
             {card.bodyText ?? ''}
           </pre>
           {card.bodyTruncated ? (

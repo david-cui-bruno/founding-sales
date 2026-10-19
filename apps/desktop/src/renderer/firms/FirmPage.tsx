@@ -184,7 +184,7 @@ function Identity({
 function phoneTag(route: RouteDto): { readonly text: string; readonly tone: 'ok' | 'warn' | 'none' } {
   if (route.eligibility === 'retired') return { text: 'Retired', tone: 'none' };
   if (route.eligibility === 'invalid') return { text: 'Not a number Callie can dial', tone: 'warn' };
-  return { text: 'Callable', tone: 'ok' };
+  return { text: 'Number recorded', tone: 'none' };
 }
 
 function PhoneRoutes({ routes }: { readonly routes: readonly RouteDto[] }): JSX.Element {
@@ -919,7 +919,7 @@ export function FirmPage({
   card,
   stageName = inWords,
   variant = 'page',
-  research = null,
+  research = null, brief = null,
   guard,
   timelinePorts,
   onApplyStageSuggestion,
@@ -953,11 +953,10 @@ export function FirmPage({
   /** `page`: the whole firm in two columns. `panel`: the Pipeline's side panel, one column. */
   readonly variant?: 'page' | 'panel';
   /** The Research section, mounted by the caller because it has its own read. */
-  readonly research?: ReactNode;
+  readonly research?: ReactNode; readonly brief?: ReactNode;
   /** The session's guard, so a timeline page read for a session that ended is dropped. */
   readonly guard?: Generation;
   readonly timelinePorts?: TimelinePorts | null;
-  /** Lane M1: "Move to Demo booked" from the Meetings rows, through the ordinary stage command. */
   /** Lane M1: told the firm the suggestion was read for, which the command must use. */
   onApplyStageSuggestion?(suggestion: StageSuggestion, firmId: string): void;
 }): JSX.Element {
@@ -1021,8 +1020,8 @@ export function FirmPage({
           )}
         </Group>
         <ContactsBrief detail={detail} />
-        <div className="mt-7 first:mt-0">{calls}</div>
-        {research}
+        {brief}
+        <div className="mt-7 first:mt-0">{calls}</div>{research}
       </div>
     );
   }
@@ -1038,6 +1037,7 @@ export function FirmPage({
           busy={busy}
           onTakeOver={onTakeOver}
         />}
+        {brief}
         <div className="mt-7">{calls}</div>
         {page.timeline === undefined || guard === undefined ? null : (
           <FirmTimeline

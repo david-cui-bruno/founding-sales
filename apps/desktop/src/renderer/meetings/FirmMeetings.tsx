@@ -309,11 +309,11 @@ export function FirmMeetings({
                 {canCommand ? (
                   <span
                     data-testid="attendance-actions"
-                    className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                    className="flex items-center gap-0.5"
                   >
                     {row.state === 'ended' ? (
                       <>
-                        {action('attended', 'Attended', 'attendance-attended')}
+                        {action('attended', 'Meeting held: confirm it', 'attendance-attended')}
                         {action('no_show', 'No-show', 'attendance-no-show')}
                       </>
                     ) : null}
