@@ -201,7 +201,7 @@ export async function mergeFirms(
   // composite keys that share its firm_id. Moving the contacts rewrites that firm_id by
   // cascade while the opportunity is still the source's, so the opportunity key is
   // deferred until the opportunities below have moved too, and checked again there.
-  await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey DEFERRED');
+  await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey,phone_handoff_attempts_opportunity_fkey,call_logs_opportunity_fkey DEFERRED');
   await context.db.query('SET CONSTRAINTS enrollment_outreach_firm,mail_match_outreach_firm,reply_confirmation_outreach_firm,sequence_enrollments_contact_fkey,sequence_enrollments_opportunity_fkey,step_executions_contact_fkey,step_executions_enrollment_fkey DEFERRED');
   // Preserve both histories but require fresh review after identities are combined.
   await context.db.query("UPDATE outreach_plans SET state='stopped',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=ANY($2::uuid[]) AND state NOT IN ('stopped','completed')",[context.scope.workspaceId,[source.id,target.id]]);
@@ -244,9 +244,11 @@ export async function mergeFirms(
 
   // Identity merging preserves distinct commercial initiatives and their histories.
   await move('opportunities');
+  await move('call_logs', [], ' AND EXISTS (SELECT 1 FROM phone_handoff_attempts h WHERE h.workspace_id=r.workspace_id AND h.call_log_id=r.id)');
+  await move('phone_handoff_attempts');
   // Every meeting that named a contact or an opportunity has followed it by now; the
   // key is checked here rather than at commit, so a merge that broke it fails as itself.
-  await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey IMMEDIATE');
+  await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey,phone_handoff_attempts_opportunity_fkey,call_logs_opportunity_fkey IMMEDIATE');
   // And a meeting that named only the firm follows the firm that survives.
   await move('meetings');
   await mergeSourcingAttribution(context, source.id, target.id);

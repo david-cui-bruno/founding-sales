@@ -1,3 +1,4 @@
+import { routePhoneHandoff } from './phoneHandoff.ts';
 import { dialCheckRequestSchema } from '@fss/contracts';
 import { adviseDial } from '@fss/domain/dial/advise.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
@@ -13,7 +14,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * in the router below is redundant for a mounted request and kept because the
  * router is also called directly, by tests and by `route`.
  */
-export const DIAL_PATHS: readonly string[] = ['/dial/check'];
+export const DIAL_PATHS: readonly string[] = ['/dial/check', '/dial/handoff'];
 
 /**
  * Dial advice (specification 9.2, 5.3).
@@ -42,6 +43,7 @@ export async function routeDial(request: ApiRequest, options: RoutingOptions): P
   }
 
   switch (request.path) {
+    case '/dial/handoff': return await routePhoneHandoff(deps);
     case '/dial/check': {
       const parsed = dialCheckRequestSchema.safeParse(request.body);
       if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };

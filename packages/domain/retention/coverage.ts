@@ -8,12 +8,9 @@
  * what its rows are under section 10.3 fails the build rather than quietly creating a
  * store of prospect data with no horizon.
  *
- * That is the failure mode worth preventing. A retention policy is not a document;
- * it is a claim about every row in the database, and the only way that claim stays
- * true across eleven lanes is for the claim to be checked against the catalog.
+ * Coverage is checked against the live catalog, so new tables cannot evade lifecycle policy.
  *
- * The dispositions are not mutually exclusive — `contacts` is retained as business
- * history *and* redacted by the deletion workflow — so each table names a set.
+ * Dispositions overlap: retained business history may also require prospect erasure.
  */
 
 export type TableDisposition =
@@ -791,6 +788,9 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       ["deletion_removes"],
       "Evidence waiting for a person, naming the firm; removed with the firm.",
     ),
+    phone_handoff_attempts: coverage(['retained', 'deletion_redacts'], 'Opaque reservations retain cadence, deletion clears endpoint and prospect bindings.'),
+    national_registry_snapshots: coverage(['retained'], 'Private registry publication receipts and area coverage, no prospect identity.'),
+    national_registry_endpoint_scrubs: coverage(['retained', 'deletion_removes'], 'Exact endpoint evidence removed with erased handles, never dial authority by itself.'),
     call_sessions: coverage(
       ["deletion_removes"],
       "One Twilio call attempt and its recording reference; removed with the firm or the person.",

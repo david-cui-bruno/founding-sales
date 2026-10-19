@@ -1,9 +1,12 @@
--- changes: national_registry_snapshots, national_registry_endpoint_scrubs, phone_handoff_attempts
+-- changes: national_registry_snapshots, national_registry_endpoint_scrubs, phone_handoff_attempts, call_logs
 -- Empty tables confer no registry clearance. No provider setting or prospect is changed.
 -- Registry publication/revocation MUST take the same workspace admission stop-gate
--- exclusively. Admission takes that gate shared, selects the latest PUBLISHED
+-- exclusively. Admission takes that gate exclusively, selects the latest PUBLISHED
 -- covering snapshot (even if unusable), locks it, then reads clock_timestamp().
 -- Never fall back to an older clear publication. Drafts have published_at NULL.
+-- A linked outcome follows both contact and opportunity during an explicit firm merge.
+-- Both semantic keys must agree again before the merge's final immediate check.
+ALTER TABLE call_logs ALTER CONSTRAINT call_logs_opportunity_fkey DEFERRABLE INITIALLY IMMEDIATE;
 CREATE TABLE national_registry_snapshots (
   workspace_id uuid NOT NULL REFERENCES workspaces(id),
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -61,7 +64,7 @@ CREATE TABLE phone_handoff_attempts (
   FOREIGN KEY (workspace_id,actor_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
   FOREIGN KEY (workspace_id,device_id) REFERENCES devices(workspace_id,id),
   FOREIGN KEY (workspace_id,contact_id,firm_id) REFERENCES contacts(workspace_id,id,firm_id) ON UPDATE CASCADE,
-  FOREIGN KEY (workspace_id,opportunity_id,firm_id) REFERENCES opportunities(workspace_id,id,firm_id) ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED,
+  CONSTRAINT phone_handoff_attempts_opportunity_fkey FOREIGN KEY (workspace_id,opportunity_id,firm_id) REFERENCES opportunities(workspace_id,id,firm_id) ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED,
   FOREIGN KEY (workspace_id,phone_route_id) REFERENCES phone_routes(workspace_id,id),
   FOREIGN KEY (workspace_id,registry_snapshot_id) REFERENCES national_registry_snapshots(workspace_id,id),
   FOREIGN KEY (workspace_id,call_log_id) REFERENCES call_logs(workspace_id,id),

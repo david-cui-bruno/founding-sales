@@ -11,8 +11,8 @@ import { suppressionKeys } from './authorize.ts';
 /**
  * "Can I call this firm now?" as advice, not a ticket (wave 2, S4.5).
  *
- * The Mac shows the answer on the card, opens `tel:` itself when the person presses Call,
- * and logs the call afterwards with `POST /calls/log`, which needs no ticket. So this is a
+ * The Mac shows the answer on the card. A separate durable handoff reservation must
+ * recheck registry, policy and cadence before launching the phone app. This advice is a
  * read: it writes nothing, mints nothing, and answers every reason that applies rather
  * than the first, so a card can say "outside the calling window, and the state is not on
  * your list" in one go.
@@ -43,7 +43,7 @@ export interface DialAdvice {
   readonly reasons: readonly DialRefusalCode[];
   readonly routeId: string | null;
   readonly e164: string | null;
-  /** The URI the Mac opens: only when `callable` is true and a number of this firm's was named; null otherwise. */
+  /** Always null. Legacy desktops cannot launch an unreserved advisory URI. */
   readonly telUri: string | null;
   readonly firmTimeZone: string | null;
   /** The firm's local clock at the moment of the advice, `HH:MM`, when the zone is known. */
@@ -138,7 +138,8 @@ export async function adviseDial(
     reasons,
     routeId: route?.id ?? null,
     e164: route?.e164 ?? null,
-    telUri: callable && route !== null ? `tel:${route.e164}` : null,
+    // Advice is never an OS dispatch capability, including for legacy desktops.
+    telUri: null,
     firmTimeZone: firm.time_zone,
     firmLocalTime,
     callingWindowOpensAt,

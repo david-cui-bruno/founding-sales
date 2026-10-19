@@ -1,3 +1,4 @@
+import { measurePhoneHandoffDeletion, erasePhoneHandoffs } from './phoneHandoffs.ts';
 import {lockAskLifecycle} from '../crm/askAnswerLifecycle.ts';
 import {redactBackfillMetadataRows} from '../mail/crmBackfillMetadata.ts';
 import {
@@ -525,8 +526,10 @@ async function measure(
   const firm = scope.firmId;
   const contact = scope.contactId;
   const byContact = [workspace, contact, firm] as const;
+  const handoffs = await measurePhoneHandoffDeletion(context, scope);
 
   const removes: Record<string, number> = {
+    national_registry_endpoint_scrubs: handoffs.scrubs,
     crm_ask_window_vectors:await countOf(context,`SELECT count(*) AS count FROM crm_ask_window_vectors v JOIN crm_ask_request_windows w ON w.workspace_id=v.workspace_id AND w.id=v.window_id WHERE v.workspace_id=$1 AND w.request_id IN(${CRM_ASK_REQUEST_IDS})`,byContact),
     crm_ask_admitted_sources:await countOf(context,`SELECT count(*) AS count FROM crm_ask_admitted_sources WHERE workspace_id=$1 AND request_id IN(${CRM_ASK_REQUEST_IDS})`,byContact),
     crm_ask_task_dependencies:await countOf(context,`SELECT count(*) AS count FROM crm_ask_task_dependencies WHERE workspace_id=$1 AND request_id IN(${CRM_ASK_REQUEST_IDS})`,byContact),
@@ -736,6 +739,7 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    phone_handoff_attempts: handoffs.attempts,
     crm_ask_index_work:await countOf(context,`SELECT count(*) AS count FROM crm_ask_index_work a WHERE a.workspace_id=$1 AND ${CRM_ASK_INDEX_IN_SCOPE}`,byContact),
     crm_ask_canonical_windows:await countOf(context,`SELECT count(*) AS count FROM crm_ask_canonical_windows WHERE workspace_id=$1 AND work_id IN(${CRM_ASK_INDEX_IDS}) AND state IN ('pending','current')`,byContact),
     crm_commitment_reviews: await countOf(context,`SELECT count(*) AS count FROM crm_commitment_reviews r WHERE r.workspace_id=$1 AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE}`,byContact),
@@ -939,14 +943,7 @@ async function measure(
       "SELECT count(*) AS count FROM opportunities WHERE workspace_id = $1 AND firm_id = $2",
       [workspace, firm],
     ),
-    // The honest line in the report, and the one an approver would otherwise
-    // discover afterwards. An address frozen into the envelope of a fence that has
-    // dispatched cannot be removed: 0010 revokes `DELETE` on `outbound_messages`,
-    // its trigger makes the envelope immutable from the instant an attempt token
-    // exists, and `outbound_messages_route_fkey` has no `ON DELETE` clause — so the
-    // route row is pinned by the same promise that lets Sent-folder reconciliation
-    // find the message afterwards. The address is in the tombstones regardless, so
-    // the handle is suppressed even where the row survives.
+    // Dispatched immutable correspondence remains retained, with suppression tombstones.
     email_addresses_pinned_by_a_sent_fence: await countOf(
       context,
       `SELECT count(DISTINCT a.id) AS count FROM email_addresses a
@@ -981,7 +978,7 @@ async function measure(
       WHERE m.workspace_id = $1 AND m.attendee_email IS NOT NULL AND ${MEETING_IN_SCOPE}`,
     byContact,
   );
-  const handles = new Set(handleRows.map((row) => row.handle));
+  const handles = new Set([...handleRows.map(row => row.handle), ...handoffs.handles]);
   const attendeeKeys = new Set<string>();
   for (const row of attendeeRows) {
     const canonical = canonicalizeHandle(row.handle);
@@ -1184,13 +1181,10 @@ export async function commitDeletion(
   // Ask recovery has no surviving source authority after erasure. Serialize its
   // bounded database stage before the existing deletion lock hierarchy.
   await lockAskLifecycle(context);
-  // The send gate first, before the request row and before anything is measured (Cal.com
-  // slice M1, review fold 2, finding 3 (ii)). Every stop-fact writer takes it first —
-  // the tombstones below do too — and so does a Cal.com booking: a booking that commits
-  // while this deletion runs is either measured (and tombstoned) or waits for it.
+  // Gate before rows and measurement: concurrent bookings/admissions either commit
+  // into this erasure closure first or wait until its tombstones have committed.
   await lockSendGateForStopFact(context);
   await lockTodayForFirmChange(context);
-
   const request = await context.db.query<{
     id: string;
     target_kind: DeletionTargetKind;
@@ -1378,6 +1372,9 @@ export async function commitDeletion(
   const byContact = [workspace, scope.contactId, scope.firmId] as const;
   const removed: Record<string, number> = {};
   const redacted: Record<string, number> = {};
+  const erasedHandoffs = await erasePhoneHandoffs(context, scope);
+  redacted['phone_handoff_attempts'] = erasedHandoffs.attempts;
+  removed['national_registry_endpoint_scrubs'] = erasedHandoffs.scrubs;
   const indexIds=(await context.db.query<{id:string}>(CRM_ASK_INDEX_IDS,byContact)).rows.map(row=>row.id);
   redacted['crm_ask_canonical_windows']=(await context.db.query("UPDATE crm_ask_canonical_windows SET state='deleted',embedding=NULL,context_snapshot=NULL,original_access_closure=NULL WHERE workspace_id=$1 AND work_id=ANY($2::uuid[]) AND state IN ('pending','current')",[workspace,indexIds])).rowCount??0;
   redacted['crm_ask_index_work']=(await context.db.query("UPDATE crm_ask_index_work SET state='deleted',scope=NULL,source_scope=NULL,context_snapshot=NULL,original_access_closure=NULL,reason='deleted',revision=revision+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND state NOT IN ('stale','deleted')",[workspace,indexIds])).rowCount??0;

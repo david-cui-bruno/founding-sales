@@ -1,3 +1,4 @@
+import { CALL_CADENCE_PARKED_SOURCE, readCallCadence, isoMicroseconds } from './cadence.ts';
 import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import { randomUUID } from 'node:crypto';
 import {
@@ -27,7 +28,7 @@ import { correctSettledCents, markCalling, settleAttempt, type SettleOutcome } f
 import { readTelephonyBudget, readVoicemailScript } from '../settings/integrations.ts';
 import { clearMonthlyCash, lockMonthlyCash } from '../settings/cashCeiling.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
-import { localDate, localParts } from '../src/rules/localClock.ts';
+import { localDate } from '../src/rules/localClock.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { sendGateLockName } from '../policy/sendGate.ts';
 import { admitToAnalysisPath, lockGateAndFirmForCallSid } from './pendingHold.ts';
@@ -222,151 +223,14 @@ export async function createCallSession(
 // The cadence (slice C1)
 // ---------------------------------------------------------------------------
 
-/** `active_holds.source_event_kind` of the hold that parks a firm after its last unanswered attempt. */
-export const CALL_CADENCE_PARKED_SOURCE = 'call_cadence_parked';
+export { CALL_CADENCE_PARKED_SOURCE, UNANSWERED_OUTCOMES, readCallCadence, type CallCadenceState } from './cadence.ts';
 
-/** Outcomes recorded for a placed call that say nobody answered: recording one may park the firm. */
-export const UNANSWERED_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>(['no_answer', 'busy', 'voicemail_left']);
-/** Twilio's final status of the dialled leg when nobody answered, before an outcome is recorded. */
 const UNANSWERED_PROVIDER_STATUSES: ReadonlySet<string> = new Set(['no-answer', 'busy']);
-/**
- * Outcomes that start the count again: somebody was reached ("a connected conversation")
- * or asked to be called back. Any call log counts, placed from Callie or not — a callback
- * that rang David's cellphone is logged the same way.
- */
-const RESETTING_OUTCOMES: readonly CallOutcome[] = [
-  'interested',
-  'referral_or_wrong_person',
-  'callback_requested',
-  'not_interested',
-  'do_not_call',
-];
-
-export interface CallCadenceState extends CallCadence {
-  /** The last unanswered attempt's session, for the parking hold's source event. */
-  readonly lastAttemptSessionId: string | null;
-  /** The open parking hold, when the firm is parked and the hold has been written. */
-  readonly parkingHoldId: string | null;
-}
-
-/**
- * The firm's calling cadence at `at` (`CALL_CADENCE`): how many attempts count, which
- * attempt the next call would be, and why the cadence would refuse one now.
- *
- * **Every placed (consumed) session is an attempt from the moment it is consumed**, and
- * stays an unanswered attempt in the window's history until an outcome that says
- * somebody was reached — a resetting outcome — is recorded for the firm. A call that
- * rang out, reached a machine, failed, or was never classified is an attempt; nothing
- * expires one but the window itself (review of C1, fold 1, finding 2).
- *
- * Counted in the window `(at − windowDays, at]` — bounded above, so a late decision about
- * an old call looks at the window it belongs to (review of C1, fold 2) — and since the
- * later of the last resetting outcome recorded for the firm and the last release of a
- * parking hold (the review).
- *
- * Spacing is on the firm's own clock, from every counted session's time: at most one
- * attempt a local date, and the next at least `spacingMinutes` of the clock away from the
- * previous one's time of day. The calling window itself is `authorizeDial`'s. A firm with
- * no zone is not spaced here; `authorizeDial` refuses it (`zone_unresolved`).
- */
-/** A timestamptz expression as ISO 8601 text in UTC, to the microsecond (no JS Date). */
-function isoMicroseconds(expression: string): string {
-  return `to_char((${expression}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
-}
-
-/** The database's instant of this statement, not of the transaction's start. */
 async function clockInstant(db: Queryable): Promise<string> {
-  const { rows } = await db.query<{ at: string }>(`SELECT ${isoMicroseconds('clock_timestamp()')} AS at`);
-  const at = rows[0]?.at;
+  const result = await db.query<{ at: string }>(`SELECT ${isoMicroseconds('clock_timestamp()')} AS at`);
+  const at = result.rows[0]?.at;
   if (at === undefined) throw new Error('the database did not answer with its clock');
   return at;
-}
-
-export async function readCallCadence(
-  context: RepositoryContext,
-  firmId: string,
-  at: string,
-  /**
-   * Count every call placed up to this instant as well, when it is later than `at`.
-   * Consumption passes `clock_timestamp()` read after its locks (review of C1, fold 3).
-   */
-  countThrough?: string,
-  /**
-   * The cadence as if this one call log had this outcome (S3X, review S3XD 6): an outcome
-   * correction asks whether an automatic park would still be justified after it. The
-   * override applies to **both** halves of the count — the last resetting outcome, and the
-   * classification of each counted session's attempt — so the preview and the command,
-   * which both ask this, cannot disagree with each other or with the count after the save.
-   */
-  override?: { readonly callLogId: string; readonly outcome: CallOutcome } | undefined,
-): Promise<CallCadenceState> {
-  const workspaceId = context.scope.workspaceId;
-  // The log's outcome, or the override's for the one log it names (`$logParam`, `$logParam+1`).
-  const outcomeOf = (alias: string, logParam: number): string =>
-    `CASE WHEN ${alias}id = $${String(logParam)}::uuid THEN $${String(logParam + 1)}::text ELSE ${alias}outcome END`;
-  const { rows: resets } = await context.db.query<{ reset_at: string | null }>(
-    `SELECT ${isoMicroseconds('max(t)')} AS reset_at FROM (
-       SELECT occurred_at AS t FROM call_logs
-        WHERE workspace_id = $1 AND firm_id = $2 AND (${outcomeOf('', 5)}) = ANY($3::text[])
-       UNION ALL
-       SELECT released_at AS t FROM active_holds
-        WHERE workspace_id = $1 AND scope_kind = 'firm' AND scope_key = ($2::uuid)::text
-          AND source_event_kind = $4 AND released_at IS NOT NULL
-     ) AS resets`,
-    [workspaceId, firmId, [...RESETTING_OUTCOMES], CALL_CADENCE_PARKED_SOURCE, override?.callLogId ?? null, override?.outcome ?? null],
-  );
-  const resetAt = resets[0]?.reset_at ?? null;
-
-  const { rows: sessions } = await context.db.query<{ id: string; consumed_at: Date; outcome: CallOutcome | null }>(
-    `SELECT s.id, s.consumed_at, ${outcomeOf('l.', 7)} AS outcome
-       FROM call_sessions s
-       LEFT JOIN call_logs l ON l.workspace_id = s.workspace_id AND l.id = s.call_log_id
-      WHERE s.workspace_id = $1 AND s.firm_id = $2 AND s.consumed_at IS NOT NULL
-        AND s.consumed_at > $3::timestamptz - make_interval(days => $4)
-        AND s.consumed_at <= GREATEST($3::timestamptz, COALESCE($6::timestamptz, $3::timestamptz))
-        AND ($5::timestamptz IS NULL OR s.consumed_at > $5::timestamptz)
-      ORDER BY s.consumed_at, s.id`,
-    [workspaceId, firmId, at, CALL_CADENCE.windowDays, resetAt, countThrough ?? null, override?.callLogId ?? null, override?.outcome ?? null],
-  );
-  const attempts = sessions.filter(row => row.outcome === null || !RESETTING_OUTCOMES.includes(row.outcome));
-  const last = attempts.at(-1) ?? null;
-
-  const { rows: holds } = await context.db.query<{ id: string }>(
-    `SELECT id FROM active_holds
-      WHERE workspace_id = $1 AND scope_kind = 'firm' AND scope_key = ($2::uuid)::text
-        AND source_event_kind = $3 AND released_at IS NULL
-      ORDER BY started_at, id LIMIT 1`,
-    [workspaceId, firmId, CALL_CADENCE_PARKED_SOURCE],
-  );
-  const parkingHoldId = holds[0]?.id ?? null;
-
-  const count = attempts.length;
-  const parked = count >= CALL_CADENCE.unansweredLimit || parkingHoldId !== null;
-  let refusal: CallCadence['refusal'] = parked ? 'call_attempts_exhausted' : null;
-  if (refusal === null && last !== null) {
-    const { rows: firms } = await context.db.query<{ time_zone: string | null }>(
-      'SELECT time_zone FROM firms WHERE workspace_id = $1 AND id = $2',
-      [workspaceId, firmId],
-    );
-    const zone = firms[0]?.time_zone ?? null;
-    if (zone !== null) {
-      const previous = localParts(last.consumed_at.toISOString(), zone);
-      const current = localParts(at, zone);
-      if (previous.date === current.date) refusal = 'call_attempt_today';
-      else if (Math.abs(current.minuteOfDay - previous.minuteOfDay) < CALL_CADENCE.spacingMinutes) {
-        refusal = 'call_attempt_too_soon';
-      }
-    }
-  }
-  return {
-    unansweredAttempts: count,
-    nextAttempt: parked ? null : count + 1,
-    limit: CALL_CADENCE.unansweredLimit,
-    parked,
-    refusal,
-    lastAttemptSessionId: last?.id ?? null,
-    parkingHoldId,
-  };
 }
 
 /**
@@ -387,8 +251,11 @@ export async function parkIfCadenceSpent(
   // The bound stays text at the database's microseconds (review of C1, fold 3): through
   // a JS Date it would lose them, and the latest call would fall outside its own window.
   const { rows } = await context.db.query<{ placed: boolean; latest: string | null }>(
-    `SELECT EXISTS (SELECT 1 FROM call_sessions WHERE workspace_id = $1 AND id = $3 AND consumed_at IS NOT NULL) AS placed,
-            (SELECT ${isoMicroseconds('max(consumed_at)')} FROM call_sessions WHERE workspace_id = $1 AND firm_id = $2) AS latest`,
+    `SELECT EXISTS (SELECT 1 FROM call_sessions WHERE workspace_id=$1 AND firm_id=$2 AND id=$3 AND consumed_at IS NOT NULL
+        UNION ALL SELECT 1 FROM phone_handoff_attempts WHERE workspace_id=$1 AND firm_id=$2 AND id=$3) AS placed,
+       (SELECT ${isoMicroseconds('max(t)')} FROM (
+          SELECT consumed_at AS t FROM call_sessions WHERE workspace_id=$1 AND firm_id=$2
+          UNION ALL SELECT reserved_at FROM phone_handoff_attempts WHERE workspace_id=$1 AND firm_id=$2) a) AS latest`,
     [context.scope.workspaceId, input.firmId, input.sessionId],
   );
   const latest = rows[0]?.latest ?? null;

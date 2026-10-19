@@ -66,7 +66,7 @@ describe('adviseDial', () => {
       reasons: [],
       routeId: policy.alpha.phoneRouteId,
       e164: policy.alpha.e164,
-      telUri: `tel:${policy.alpha.e164}`,
+      telUri: null,
       firmTimeZone: 'America/New_York',
       firmLocalTime: '10:00',
       callingWindowOpensAt: null,
@@ -149,7 +149,7 @@ describe('adviseDial', () => {
        VALUES ($1, $2, '+14015550187', 'import', now()) RETURNING id`,
       [seeded.alpha.workspaceId, crm.alpha.firmId],
     );
-    expect(await advise({ routeId: rows[0]?.id ?? '' })).toMatchObject({ callable: true, telUri: 'tel:+14015550187' });
+    expect(await advise({ routeId: rows[0]?.id ?? '' })).toMatchObject({ callable: true, telUri: null });
   });
 
   it('names an open pause of the call channel by its own reason', async () => {

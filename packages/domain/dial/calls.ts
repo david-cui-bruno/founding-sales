@@ -1,4 +1,5 @@
-import {attributeFirmInteraction} from '../sourcing/attribution.ts';
+import { bindPhoneHandoffOutcome, linkPhoneHandoffOutcome } from './phoneHandoffOutcomes.ts';
+import { attributeFirmInteraction } from '../sourcing/attribution.ts';
 import {
   CALL_OCCURRED_AT_TOLERANCE_SECONDS,
   DEFAULT_DO_NOT_CALL_CHOICE,
@@ -80,7 +81,8 @@ import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep
  */
 
 export interface LogCallOutcomeInput {
-  readonly opportunityId?: string | undefined;
+  readonly opportunityId?: string | null | undefined;
+  readonly phoneHandoffAttemptId?: string | undefined;
   readonly firmId: string;
   readonly contactId?: string | undefined;
   readonly routeId?: string | undefined;
@@ -252,15 +254,11 @@ export async function logCallOutcome(
 
   // ---- 1. Decide ----------------------------------------------------------
   //
-  // The send gate first, before any row (P1-4 of the second review of PR 332). An
-  // engaged call is a stop fact: it sets the opportunity manual and ends its
-  // enrollments, and `policy/sendGate.ts` asks every stop-fact writer to take the gate
-  // EXCLUSIVE before it locks anything. This function used to lock the firm first and
-  // reach the gate only at step 3 — the opposite of the claim's gate-then-firm order, so
-  // a claim waiting for the firm and a call waiting for the gate could deadlock. Taking
-  // it here costs nothing: the same lock is taken a few statements later either way, and
-  // a call that refuses releases it at the end of the caller's transaction.
+  // Gate precedes every row lock and every engaged-call stop effect.
   await lockSendGateForStopFact(context);
+  const handoffBinding = await bindPhoneHandoffOutcome(context, input);
+  if (!handoffBinding.ok) return handoffBinding;
+  input = handoffBinding.value;
   // Slice 3a (the one lock order, docs/greenfield/calling.md): an outcome that retires or
   // suppresses the dialled number takes that route's row **before** the firm's, the order
   // `retireRoute` and `updateFirmBasics` keep (route → firm). Taken after the firm, as it
@@ -494,7 +492,7 @@ export async function logCallOutcome(
     bound !== null ? bound.enrollment.opportunityId : boundItemOpportunityId !== undefined ? boundItemOpportunityId : input.opportunityId;
   const opportunity =
     selectedOpportunityId === null ? null : await readOperationalOpportunity(context, input.firmId, selectedOpportunityId);
-  if (input.opportunityId !== undefined && opportunity === null) return refusePolicy('invalid_input');
+  if (input.opportunityId != null && opportunity === null) return refusePolicy('invalid_input');
 
   // ---- 2. Record ----------------------------------------------------------
   //
@@ -531,6 +529,7 @@ export async function logCallOutcome(
   );
   const callLogId = logged.rows[0]?.id;
   if (callLogId === undefined) throw new Error('the call log insert returned no row');
+  await linkPhoneHandoffOutcome(context, input, callLogId);
   // A call placed through a Twilio call session (0028) is linked to the outcome David
   // recorded for it: the session's ticket is the call log's ticket. First log wins.
   if (input.ticketId !== undefined) {

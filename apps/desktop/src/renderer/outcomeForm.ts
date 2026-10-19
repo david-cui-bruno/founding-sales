@@ -206,6 +206,7 @@ export const SUPPRESSION_WARNINGS: Readonly<Record<DoNotCallChoiceKey, string>> 
 });
 
 export interface LogCallCommand {
+  readonly phoneHandoffAttemptId?: string;
   readonly commandId: string;
   readonly clientVersion: string;
   readonly firmId: string;
@@ -228,6 +229,7 @@ export interface LogCallCommand {
 }
 
 export interface LogCallCommandInput {
+  readonly phoneHandoffAttemptId?: string;
   readonly commandId: string;
   readonly clientVersion: string;
   readonly firmId: string;
@@ -262,6 +264,7 @@ export function logCallCommand(
       commandId: input.commandId,
       clientVersion: input.clientVersion,
       firmId: input.firmId,
+      ...(input.phoneHandoffAttemptId ? { phoneHandoffAttemptId: input.phoneHandoffAttemptId } : {}),
       ...(input.contactId === undefined ? {} : { contactId: input.contactId }),
       ...(input.routeId === undefined ? {} : { routeId: input.routeId }),
       ...(input.itemId === undefined ? {} : { itemId: input.itemId }),

@@ -186,7 +186,7 @@ const outcomeInput = z.strictObject({
   firmId: uuid,
   itemId: uuid.nullable(),
   /** The call named by the page; never replaced by the bridge's own last call. */
-  callSessionId: uuid.nullable().optional(),
+  callSessionId: uuid.nullable().optional(), phoneHandoffAttemptId: uuid.optional(),
   contactId: uuid.nullable(),
   routeId: uuid.nullable(),
   outcome: z.enum(CALL_OUTCOMES),
