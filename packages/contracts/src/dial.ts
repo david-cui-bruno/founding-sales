@@ -432,10 +432,10 @@ const dialAdviceSchema = z.object({
   telUri: z.string().regex(/^tel:\+[1-9][0-9]{7,14}$/u, 'a tel: URI for an E.164 number').nullable(),
   firmTimeZone: z.string().max(64).nullable(),
   firmLocalTime: z.string().max(5).nullable(),
+  callingWindowOpensAt: instant.nullable().optional(),
   at: instant,
 });
 
-/** `POST /dial/check`'s answer. */
 export const dialCheckResponseSchema = z.object({ advice: dialAdviceSchema });
 
 /**

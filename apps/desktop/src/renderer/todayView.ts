@@ -100,6 +100,20 @@ function dialReasonSentence(code: string): string {
   return DIAL_REASONS[code] ?? reasonSentence(code);
 }
 
+function adviceReasonSentence(code: string, advice: DialAdviceView): string {
+  if (code === 'outside_calling_window' && advice.callingWindowOpensAt != null && advice.firmTimeZone != null) {
+    try {
+      const opening = new Intl.DateTimeFormat('en-US', {
+        timeZone: advice.firmTimeZone, weekday: 'long', hour: 'numeric', minute: '2-digit',
+      }).format(new Date(advice.callingWindowOpensAt));
+      return `Calling window opens ${opening} their time. Other calling checks still apply.`;
+    } catch {
+      // Older or unreadable schedule metadata keeps the existing refusal explanation.
+    }
+  }
+  return dialReasonSentence(code);
+}
+
 /** One number on the expanded card: what it is, and whether the server will advise it. */
 interface DialRouteView {
   readonly route: TodayRoute;
@@ -400,7 +414,7 @@ export function buildTodayView(state: TodayState): TodayScreenView {
             ? [dialReasonSentence('dial_advice_unavailable')]
             : advice.callable
               ? []
-              : advice.reasons.map(dialReasonSentence),
+              : advice.reasons.map(code => adviceReasonSentence(code, advice)),
       };
     });
 

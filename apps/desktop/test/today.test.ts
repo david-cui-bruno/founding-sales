@@ -12,11 +12,7 @@ import { heldAnswer, snoozedAnswer } from './support/todayAnswers.ts';
 /**
  * The Today window and the two bridges behind it (specification 8.2, 9.2, 14.2).
  *
- * Three layers, three kinds of test, none of them needing Electron.
- *
- * The **view model** is pure, so the rules of 4.2 — "shows its unexpired cached Today
- * view marked stale" and "mutations fail closed" — are assertions rather than
- * screenshots.
+ * Pure view-model and scripted-bridge tests cover Today without Electron.
  *
  * The **bridges** are given a scripted API and a scripted session, so what is proved
  * is the wiring: that the window is never handed a token, that a local wall-clock
@@ -188,7 +184,6 @@ describe('the Today view model', () => {
   });
 
   it('shows only a usable route, and disables one the server has not advised', () => {
-    // A candidate or retired number is shown on the Firm page and is not offered here.
     const card = buildTodayView(state({ expanded: firmPage() }));
     expect(card.dialRoutes.map(entry => entry.route.routeId)).toEqual([ROUTE_ID]);
     // No advice yet — the read failed, or the card came from the cache — so the button
@@ -206,6 +201,11 @@ describe('the Today view model', () => {
     );
     expect(advised.dialRoutes[0]?.enabled).toBe(true);
     expect(advised.dialRoutes[0]?.reasons).toEqual([]);
+    const blocked = { routeId: ROUTE_ID, callable: false, reasons: ['outside_calling_window', 'firm_suppressed'], e164: '+14015550187', firmLocalTime: '07:00', firmTimeZone: 'America/New_York', callingWindowOpensAt: '2026-11-02T14:30:00.000Z' };
+    const schedule = buildTodayView(state({ expanded: firmPage(), dialAdvice: [blocked] })).dialRoutes[0];
+    expect(schedule?.enabled).toBe(false);
+    expect(schedule?.reasons).toEqual(['Calling window opens Monday 9:30 AM their time. Other calling checks still apply.', 'This firm asked not to be contacted.']);
+    expect(buildTodayView(state({ expanded: firmPage(), dialAdvice: [{ ...blocked, callingWindowOpensAt: null }] })).dialRoutes[0]?.reasons[0]).toBe('It is outside this firm’s calling hours.');
   });
 
   it('says where to add a calling number when a card has a number to dial and nothing to dial it from (lane g60)', () => {
@@ -779,7 +779,7 @@ describe('the Today bridge', () => {
     const card = await bridge.expand({ firmId: FIRM_ID });
     // The card says callable, with the firm's own clock beside the number.
     expect(card.dialAdvice).toEqual([
-      { routeId: ROUTE_ID, callable: true, reasons: [], e164: '+14015550187', firmLocalTime: '10:05' },
+      { routeId: ROUTE_ID, callable: true, reasons: [], e164: '+14015550187', firmLocalTime: '10:05', firmTimeZone: 'America/New_York', callingWindowOpensAt: null },
     ]);
     expect(buildTodayView(card).dialRoutes.map(entry => entry.enabled)).toEqual([true]);
 

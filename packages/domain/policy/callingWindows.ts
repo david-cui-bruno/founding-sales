@@ -8,7 +8,7 @@ import {
   type CallingWindow,
   type CallingWindowDecision,
 } from '../src/rules/callingWindow.ts';
-import { localParts } from '../src/rules/localClock.ts';
+import { addCalendarDays, localInstant, localParts } from '../src/rules/localClock.ts';
 import { acceptPolicy, refusePolicy, type PolicyResult } from './types.ts';
 
 /**
@@ -116,6 +116,25 @@ export function evaluateConfiguredCallingWindow(
     };
   }
   return decision;
+}
+
+/** Schedule information only. A future opening does not clear other call blockers. */
+export function nextCallingWindowOpening(at: string, zone: string | null, configured: ConfiguredCallingWindow): string | null {
+  try {
+    if (zone === null || evaluateConfiguredCallingWindow(at, zone, configured).allowed) return null;
+    const date = localParts(at, zone).date;
+    for (let day = 0; day <= 7; day += 1) {
+      const candidate = localInstant(addCalendarDays(date, day), {
+        hour: Math.floor(configured.window.startMinute / 60),
+        minute: configured.window.startMinute % 60,
+      }, zone);
+      if (Date.parse(candidate) > Date.parse(at) && evaluateConfiguredCallingWindow(candidate, zone, configured).allowed) return candidate;
+    }
+  } catch {
+    // Unknown zones or invalid instants cannot establish an opening.
+    return null;
+  }
+  return null;
 }
 
 export interface SetCallingWindowInput {

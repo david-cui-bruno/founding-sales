@@ -87,7 +87,7 @@ function Harness({ call }: { readonly call: CallControl }): JSX.Element {
   const memory = useTodayMemory();
   const actions = {
     busy: () => false,
-    dial: vi.fn(),
+    dial: () => setState(current => ({ ...current, notice: 'dial_opened', lastCall: { firmId: A, routeId: ROUTE_ID, contactId: null, e164: '+12145550142', callSessionId: null } })),
     expand: (firmId: string) => {
       asked.push({ firmId, answer: () => setState(current => ({ ...current, expanded: expandedFor(firmId) })) });
     },
@@ -120,8 +120,10 @@ const MESSAGE = '55555555-5555-4555-8555-555555555555';
 const read: TodayActionsV2Response = { promiseCoverage:{scope:"current_authorized_work",truncated:false,nextAfterId:null},version: 2, workspaceId: A, businessTimeZone: 'America/Chicago', asOf: '2026-10-01T14:00:00.000Z', actions: [{ actionId: `reply-message:${MESSAGE}`, kind: 'reply', subject: 'Elm Fork Test Rentals', reason: 'substantive_reply', dueAt: '2026-09-30T14:00:00.000Z', state: 'overdue', target: { kind: 'reply', firmId: A, messageId: MESSAGE } }] };
 let currentRead: TodayActionsV2Response | null;
 let currentTarget: typeof read.actions[number]['target'] | null;
+let provider: 'tel' | 'twilio';
 const navigated = vi.fn();
 beforeEach(() => {
+  provider = 'twilio';
   currentRead = read;
   currentTarget = read.actions[0]!.target;
   setNavigator(navigated, () => undefined);
@@ -130,7 +132,7 @@ beforeEach(() => {
     read: async (operation: string) => operation === 'today.actionsV2' ? currentRead
       : operation === 'today.openActionV2' ? { version: 2, target: currentTarget }
       : operation === 'recordings.recoveries' ? { items: [], truncated: false }
-      : operation === 'calling.status' ? { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } }
+      : operation === 'calling.status' ? { provider, cadence: provider === 'tel' ? null : { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } }
       : { calls: [] },
     command: async () => { throw new Error('Action navigation never sends a command'); },
   } as unknown as OperationApi;
@@ -150,6 +152,23 @@ it('opens the exact current overdue reply from Today without resolving it', asyn
   expect(screen.getByTestId('queue-region')).toBeTruthy();
   expect(screen.getByTestId('today-firm')).toBeTruthy();
   expect(screen.getByRole('region', { name: 'Call' })).toBeTruthy();
+});
+
+it('keeps Notes and outcome editable and retained after phone-app handoff, without recording claims', async () => {
+  provider = 'tel';
+  show();
+  await vi.waitFor(() => expect((screen.getByTestId('dial') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByTestId('dial'));
+  expect(await screen.findByText('Handed to the phone app.')).toBeTruthy();
+  expect(screen.queryByTestId('call-announcement')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Notes and outcome' }));
+  fireEvent.change(screen.getByTestId('outcome-note'), { target: { value: 'Ask about the portfolio next time' } });
+  fireEvent.change(screen.getByTestId('outcome-select'), { target: { value: 'no_answer' } });
+  expect((screen.getByTestId('outcome-submit') as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: /Close.*Esc/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Notes and outcome' }));
+  expect((screen.getByTestId('outcome-note') as HTMLTextAreaElement).value).toBe('Ask about the portfolio next time');
+  expect((screen.getByTestId('outcome-select') as HTMLSelectElement).value).toBe('no_answer');
 });
 
 it('does not show empty reply work or the exact internal test reply, but keeps similar real firm names', async () => {

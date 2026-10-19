@@ -80,6 +80,8 @@ const dialAdviceViewSchema = z.strictObject({
   e164: e164.nullable(),
   /** The firm's own clock at the moment of the advice, `HH:MM`, when the zone is known. */
   firmLocalTime: z.string().max(5).nullable(),
+  firmTimeZone: z.string().max(64).nullable().optional(),
+  callingWindowOpensAt: instant.nullable().optional(),
 });
 export type DialAdviceView = z.infer<typeof dialAdviceViewSchema>;
 
@@ -344,4 +346,3 @@ export interface OutcomeRequest {
 export interface RefreshRequest {
   readonly quiet?: boolean;
 }
-
