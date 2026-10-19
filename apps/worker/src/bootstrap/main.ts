@@ -25,7 +25,9 @@ import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts'
 import {routineReplyInterpretation} from '../outreach/replyInterpretation.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
 import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
-import {sourcingDiscoveryHandler,sourcingDiscoverySource} from '../handlers/sourcingDiscovery.ts';
+import {sourcingDiscoveryHandler,sourcingDiscoverySource,apolloDiscoverySource} from '../handlers/sourcingDiscovery.ts';
+import {apolloFromEnvironment} from '../sourcing/apolloSearch.ts';
+import type {ApolloDiscoveryDependencies,ApolloBinding} from '@fss/domain/sourcing/apolloAllowance.ts';
 import {tavilySearch} from '../sourcing/tavilySearch.ts';
 import type {DiscoverySearchProvider} from '@fss/domain/sourcing/discoveryProvider.ts';
 import {sourcingMonitorHandler,sourcingMonitorSource} from '../handlers/sourcingMonitor.ts';
@@ -134,6 +136,7 @@ export interface HandlerComposition {
   /** Controlled composition only; no live proof verifier is configured by startup. */
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
+  readonly apolloDiscovery?: ApolloDiscoveryDependencies;
   readonly discovery?: DiscoverySearchProvider;
   readonly meetingAutoRecording?: Parameters<typeof meetingAutoRecordingJobHandler>[0] | undefined;
   readonly meetingAnalysis?: MeetingAnalyzeOptions | undefined;
@@ -280,7 +283,7 @@ export function registerHandlers(
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
-  if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
+  if(composition.discovery||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(composition.discovery,composition.apolloDiscovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
     registry.register(sourcingCheckHandler(composition.research.pageFetch));
@@ -465,11 +468,12 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'classifier'|'crmExtraction'>>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'classifier'|'crmExtraction'>>): {
   readonly crmMailProcessing?:CrmMailEvidencePort;
   readonly socialDraft: boolean;
   readonly qualification: boolean;
   readonly discovery: boolean;
+  readonly apolloDiscovery?: ApolloBinding;
   readonly sourcing: boolean;
   readonly meetingAutoRecording: boolean;
   readonly meetingAnalysis: boolean;
@@ -485,6 +489,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
     socialDraft: composition.classifier?.processEnabled===true,
     qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
     discovery: composition.discovery !== undefined,
+    ...composition.apolloDiscovery?{apolloDiscovery:{accountRef:composition.apolloDiscovery.accountRef,keyRef:composition.apolloDiscovery.keyRef}}:{},
     sourcing: composition.research !== undefined,
     meetingAutoRecording: composition.meetingAutoRecording !== undefined,
     meetingAnalysis: composition.meetingAnalysis !== undefined,
@@ -517,6 +522,7 @@ export function workerDueWorkSources(
     readonly socialDraft?: boolean;
     readonly qualification?: boolean;
     readonly discovery?: boolean;
+    readonly apolloDiscovery?: ApolloBinding;
     readonly sourcing?: boolean;
     readonly meetingAutoRecording?: boolean;
     readonly meetingAnalysis?: boolean;
@@ -552,6 +558,7 @@ export function workerDueWorkSources(
     sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
     sourcingQualificationSource(options.qualification===true),
     sourcingDiscoverySource(options.discovery === true),
+    apolloDiscoverySource(options.apolloDiscovery),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a
     // job only in a worker that has a Cal.com API key to run it with — a job no handler
@@ -659,11 +666,13 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   if(diagnosticRuntime&&!diagnostic)throw new Error('diagnostic_gmail_unavailable');
   const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.gmail!==undefined});
   const crm=await composeCrmCapabilities({configuration:crmConfiguration,runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-authority'});await client.connect();return {session:asSession(client),close:()=>client.end()};},...deployment.gmail?{gmail:{...deployment.gmail,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-oauth'});await client.connect();return {session:asSession(client),close:()=>client.end()};}}}:{}});
+  const apolloDiscovery=apolloFromEnvironment(environment);
   const composition: HandlerComposition = {
     ...composed,
     ...crm.handlers,
     ...composed.mail&&crmConfiguration.capture?{mail:{...composed.mail,businessMailObserver:crm.observer}}:{},
     socialAssets:await socialDeletionPort(environment),
+    ...apolloDiscovery?{apolloDiscovery}:{},
     ...(environment['FSS_TAVILY_API_KEY']?{discovery:tavilySearch(environment['FSS_TAVILY_API_KEY'])}:{}),
     ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),
     ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),

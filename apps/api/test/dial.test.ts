@@ -183,7 +183,7 @@ describe('policy, suppression and dialing routes', () => {
     expect(wireDrift(dialCheckResponseSchema, checked.body)).toEqual([]);
     const { advice } = dialCheckResponseSchema.parse(checked.body);
     // A URI only when the answer is yes (the window depends on the clock the suite runs at).
-    expect(advice).toMatchObject({ firmId, routeId, telUri: advice.callable ? `tel:${advice.e164 ?? ''}` : null });
+    expect(advice).toMatchObject({ firmId, routeId, telUri: null });
     // The calling window depends on the clock the suite runs at, and is tested in
     // `@fss/domain` where the instant is a parameter; nothing else stands in the way here.
     expect(advice.reasons.filter(reason => reason !== 'outside_calling_window')).toEqual([]);

@@ -42,6 +42,7 @@ The default `workerDueWorkSources()` registry contains exactly the following nam
 | `sourcing-monitor` | Eligible sourcing-monitor work when that composition is enabled. |
 | `sourcing-qualification` | Due candidate qualification under configured composition. |
 | `sourcing-discovery` | Due configured discovery searches. |
+| `apollo-discovery` | Apollo Free company-only pages with matching operator-bound account/key references and a verified exclusive Free-cycle allowance. One atomic spent reservation per page, no retry or paid fallback. Disabled without key/attestation, intake remains unverified and first-party qualification still requires current owner approval. |
 | `telephony-sweep` | Due telephony reconciliation/sweep work. |
 | `calcom-reconcile` | Cal.com reconciliation, when configured. |
 | `call-transcribe-resume` | Resumption of held call transcription, when configured. |

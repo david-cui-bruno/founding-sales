@@ -93,6 +93,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // Lane PBM: whether a CSV import's firms are in a workspace, five counts, READ ONLY.
   'import-match report': 'database',
   'discovery configure': 'database',
+  'apollo configure': 'database',
   'discovery resume': 'database',
   'qualification configure': 'database',
   'qualification resolve-identity': 'database',
@@ -359,10 +360,22 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary:'Resume halted discovery after a fresh provider usage check; preserves reserved credits and never retries old searches or changes sending.',
   },
   {
+    path:['trec','verify'],
+    valueFlags:['--file','--source-url','--retrieved-at','--source-updated-at','--firms-json','--official-legacy-file',...REPORTABLE],
+    booleanFlags:[],requiredFlags:['--file','--source-url','--retrieved-at','--firms-json','--official-legacy-file'],
+    summary:'Corroborate existing firm licenses from an operator-selected official TREC legacy file. Local reads only, no database, contacts, qualification or outreach authority.',
+  },
+  {
     path:['admin','discovery','configure'],
     valueFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used','--searches-per-day',...REPORTABLE],
     booleanFlags:[],requiredFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used'],
     summary:'Enable or pause discovery and initialize reconciled search allowance without resetting existing counters or halts; audited ECS launcher required.',
+  },
+  {
+    path:['admin','apollo','configure'],
+    valueFlags:['--action','--workspace-id','--account-ref','--key-ref','--enabled','--cycle-start','--cycle-end','--verified-at','--exclusive-attested-at','--prior-used','--exclusive-account-confirmed','--key-account-binding-confirmed','--free-plan-no-trial-no-paid-confirmed','--external-usage-reconciled','--attempt-id','--count-spent-confirmed'],
+    booleanFlags:[],requiredFlags:['--action','--workspace-id','--account-ref','--key-ref'],
+    summary:'Configure, disable or reconcile a Free-only exclusive Apollo allowance through the audited ECS launcher. Opaque references only, no secrets, provider calls or quota refunds.',
   },
   {
     // Lane PBM: a prepared-brief file previewed as every row unmatched in production, and

@@ -124,6 +124,7 @@ export const todayStateSchema = z.strictObject({
       contactId: uuid.nullable(),
       e164: z.string().max(20),
       callSessionId: uuid.nullable().optional(),
+      phoneHandoffAttemptId: uuid.optional(),
     })
     .nullable()
     .optional(),
@@ -298,6 +299,7 @@ export interface OutcomeRequest {
    * as it is; when absent the main process may use the last call it placed to this firm.
    */
   readonly callSessionId?: string | null;
+  readonly phoneHandoffAttemptId?: string;
   readonly contactId: string | null;
   readonly routeId: string | null;
   readonly outcome: (typeof CALL_OUTCOMES)[number];

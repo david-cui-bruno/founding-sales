@@ -1,3 +1,4 @@
+import { phoneAttemptIdForLog } from '../dial/phoneHandoffOutcomes.ts';
 import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import {
   CALL_CADENCE,
@@ -50,10 +51,7 @@ import { PROPOSAL_DECIDED_ACTION } from './proposalMeasure.ts';
 import { CALL_CADENCE_PARKED_SOURCE, UNANSWERED_OUTCOMES, parkIfCadenceSpent, readCallCadence } from './sessions.ts';
 
 /**
- * Correcting a logged call outcome (slice S3X, lane X2; DESIGN-S3X Part 2). No migration, no
- * new table, no new lock.
- *
- * ## The revision model
+ * Correcting linked provider or phone-app outcomes preserves the revision model.
  *
  * `call_logs.outcome` is updated **in place** under the log's row lock — with the agreement
  * columns in the same statement when the agreement is undone, so migration 0036's
@@ -420,8 +418,9 @@ async function discoverEffects(
     // The cadence recomputed as if the correction had happened, in the window that ends at
     // the firm's latest placed call — the window `parkIfCadenceSpent` parked in.
     const { rows: latest } = await context.db.query<{ at: string | null }>(
-      `SELECT to_char(max(consumed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at
-         FROM call_sessions WHERE workspace_id = $1 AND firm_id = $2`,
+      `SELECT to_char(max(t) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM (
+         SELECT consumed_at AS t FROM call_sessions WHERE workspace_id=$1 AND firm_id=$2
+         UNION ALL SELECT reserved_at FROM phone_handoff_attempts WHERE workspace_id=$1 AND firm_id=$2) attempts`,
       [workspaceId, log.firm_id],
     );
     const at = latest[0]?.at ?? (await databaseNow(context));
@@ -502,7 +501,7 @@ async function discoverEffects(
   if (effectsOf.setsManual) alsoHappens.push('manual_mode');
   if (outcome === 'do_not_call') alsoHappens.push('stop_recorded');
   if (outcome === 'wrong_number') alsoHappens.push('route_retired');
-  if (UNANSWERED_OUTCOMES.has(outcome) && sessionId !== null) alsoHappens.push('cadence_checked');
+  if (UNANSWERED_OUTCOMES.has(outcome) && (sessionId !== null || await phoneAttemptIdForLog(context, log.id) !== null)) alsoHappens.push('cadence_checked');
   if (outcome === 'callback_requested' && !hasOpenCallback) alsoHappens.push(callbackTimeRequired ? 'callback_scheduled' : 'callback_needs_time');
   if (effectsOf.suggestsLost) alsoHappens.push('suggest_lost');
 
@@ -835,8 +834,9 @@ export async function correctCallOutcome(
       if (!retired.ok) throw new Refused('route_unknown');
       applied.retiredRouteId = log.phone_route_id;
     }
-    if (UNANSWERED_OUTCOMES.has(input.outcome) && sessionId !== null) {
-      const hold = await parkIfCadenceSpent(context, { firmId: log.firm_id, sessionId });
+    const cadenceAttemptId = sessionId ?? await phoneAttemptIdForLog(context, log.id);
+    if (UNANSWERED_OUTCOMES.has(input.outcome) && cadenceAttemptId !== null) {
+      const hold = await parkIfCadenceSpent(context, { firmId: log.firm_id, sessionId: cadenceAttemptId });
       if (hold !== null && !found.openParkIds.includes(hold)) applied.parkHoldId = hold;
     }
     if (input.outcome === 'callback_requested' && !found.hasOpenCallback) {

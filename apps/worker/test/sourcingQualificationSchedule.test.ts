@@ -10,6 +10,12 @@ import {runSchedulerPass} from '../src/scheduler/schedulerPass.ts';
 import {requestQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from '@fss/domain/sourcing/qualificationStore.ts';
 import {VERIFIED_FIRM_POLICY_VERSION,IDENTITY_REVIEW_REASONS} from '@fss/domain/sourcing/verifiedFirmPolicy.ts';
 import {openHold} from '@fss/domain/policy/holds.ts';
+import {runApolloDiscovery} from '@fss/domain/sourcing/apolloDiscovery.ts';
+import {APOLLO_PREPARED_BY} from '@fss/domain/sourcing/apolloIntake.ts';
+import {qualificationConfigureCommand} from '../src/tools/fss/qualificationConfigure.ts';
+import {sourcingQualificationHandler} from '../src/handlers/sourcingQualification.ts';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {runOnce} from '../src/runner/jobRunner.ts';
 let db:TestDatabase;let workspaceId:string;
 
 /** Real migrated PostgreSQL and normal scheduler enqueue, isolated from the legacy scenarios below. */
@@ -32,6 +38,33 @@ async function versionFixture(){
  const pass=(enabled=true)=>runSchedulerPass(session,{sources:[sourcingQualificationSource(enabled)],now:new Date().toISOString()});
  return {database,session,ctx,candidate,pass,workspaceId:alpha.workspaceId};
 }
+
+it('qualifies an Apollo draft only with internal origin and current owner attestation, never vendor metadata or a spoofed label',async()=>{
+ const f=await versionFixture();try{
+  const w=f.workspaceId;
+  await f.session.query(`INSERT INTO sourcing_apollo_allowances(workspace_id,account_ref,key_ref,cycle_start,cycle_end,verified_at,exclusive_attested_at,starting_used,enabled) VALUES($1,'qualification-account','qualification-key',clock_timestamp()-interval '1 day',clock_timestamp()+interval '20 days',clock_timestamp(),clock_timestamp(),0,true)`,[w]);
+  await runApolloDiscovery(f.ctx,{accountRef:'qualification-account',keyRef:'qualification-key',provider:{providerKey:'apollo_free',discoverOrganizations:async()=>({ok:true,requestId:'local',returnedCount:1,organizations:[{name:'Apollo Suggested PM',domain:'apollo-suggested.test',hqCity:'Dallas',hqState:'TX',employeeCount:3}]})}});
+  const candidate=(await f.session.query<{id:string}>('SELECT id FROM sourcing_candidates')).rows[0]!;
+  await saveCandidate(f.ctx,{firmName:'Spoofed PM',website:'https://spoofed-apollo.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:'https://spoofed-apollo.test/',observedOn:new Date().toISOString().slice(0,10),preparedBy:APOLLO_PREPARED_BY});
+  await f.session.query("UPDATE sourcing_discovery_settings SET qualification_evaluation='{}'::jsonb WHERE workspace_id=$1",[w]);
+  expect(await f.pass()).toMatchObject({inserted:0}); // Historical flag/report is not current consent.
+  const owner=(await f.session.query<{owner_user_id:string}>('SELECT owner_user_id FROM sourcing_discovery_settings')).rows[0]!.owner_user_id;
+  expect(await qualificationConfigureCommand({session:f.session,launch:{launchedBy:'arn:aws:iam::123456789012:user/operator',taskArn:'arn:aws:ecs:us-east-1:123456789012:task/cluster/abc'},options:{'--workspace-id':w,'--enabled':'true','--owner-user-id':owner,'--evaluation-sha256':'a'.repeat(64),'--reviewed-eligible':'3','--false-eligible':'0'}})).toMatchObject({ok:true});
+  expect(await f.pass()).toMatchObject({inserted:1});
+  expect((await f.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[candidate.id])).rows[0]).toEqual({status:'needs_review',revision:1});
+  expect((await f.session.query('SELECT candidate_id,observations,facts FROM sourcing_qualification_runs')).rows).toEqual([{candidate_id:candidate.id,observations:[],facts:[]}]);
+  let fetches=0,extractions=0;
+  const registry=new HandlerRegistry().register(sourcingQualificationHandler({pageFetch:{providerKey:'fixture',fetchPages:async input=>{
+   fetches++;expect(input.firmWebsite).toBe('https://apollo-suggested.test/');
+   return {ok:true,costCents:0,value:{pages:[{url:'https://apollo-suggested.test/',contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode('<p>Apollo Suggested PM provides residential property management in Dallas, Texas.</p>'),retrievedAt:new Date().toISOString(),firstParty:false}],skipped:{}}};
+  }},extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>{extractions++;return 100;},extract:async()=>{throw new Error('Non-first-party observations cannot invoke extraction');}}}));
+  expect(await runOnce(f.session,{registry,owner:'apollo-first-party-test',limit:5})).toMatchObject({failed:0});
+  expect(fetches).toBe(1);expect(extractions).toBe(0);
+  expect((await f.session.query('SELECT reason FROM sourcing_qualification_runs')).rows).toEqual([{reason:'source_incomplete_or_unverified'}]);
+  expect((await f.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[candidate.id])).rows[0]).toEqual({status:'needs_review',revision:1});
+  for(const table of ['firms','contacts','sourcing_admissions','provider_reservations'])expect((await f.session.query(`SELECT * FROM ${table}`)).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
 
 it.each([{prompt:'qualification-context-v6'},{policy:'qualification-v3'}])('refreshes same-revision stale versions %j exactly once through the registered scheduler',async versions=>{
  const f=await versionFixture();try{

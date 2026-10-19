@@ -1,3 +1,4 @@
+import { createPhoneHandoff } from './phoneHandoff.ts';
 import type { BridgeIdentity } from './identityReset.ts';
 import {
   CALL_CADENCE,
@@ -211,6 +212,7 @@ const UNAVAILABLE: CallingView = Object.freeze({ provider: 'unavailable', cadenc
 
 /** The last handed-off call, so the outcome recorded next can name the number. */
 interface LastCall {
+  readonly phoneHandoffAttemptId?: string;
   readonly firmId: string;
   readonly routeId: string;
   readonly contactId: string | null;
@@ -301,6 +303,7 @@ export function localToInstant(local: string, zone: string): string | null {
 const EXPANSION_CACHE_LIMIT = 200;
 
 export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
+  const phoneHandoff = createPhoneHandoff({ api: deps.api, handoff: deps.handoff });
   /**
    * The identity generation (send-path v2, S3, round 6, P0). `forget` advances it; every
    * method takes a copy when it starts, and every write that follows an `await` asks
@@ -359,12 +362,6 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   let pendingAgreement: PendingAgreementView | null = null;
   /** What the last recorded call agreed to, for the notice. Cleared with the notice. */
   let agreement: AgreementView | null = null;
-  /**
-   * The URI each advised number would open, by route. It never crosses the bridge: a
-   * renderer that cannot name a `tel:` string cannot ask for one to be opened, however
-   * the page is edited later.
-   */
-  const telUris = new Map<string, string | null>();
   /**
    * The last expansion read for each firm, in memory only (wave 1). Until then a card
    * opened while the Mac was offline read the network, failed, and closed: the list was
@@ -457,9 +454,10 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
               routeId: lastCall.routeId,
               contactId: lastCall.contactId,
               e164: lastCall.e164,
+              ...(lastCall.phoneHandoffAttemptId ? { phoneHandoffAttemptId: lastCall.phoneHandoffAttemptId } : {}),
               // The session of that call, when it was placed from Callie (X1F rule 1).
               callSessionId:
-                lastSession !== null && lastSession.firmId === lastCall.firmId && lastSession.routeId === lastCall.routeId
+                !lastCall.phoneHandoffAttemptId && lastSession !== null && lastSession.firmId === lastCall.firmId && lastSession.routeId === lastCall.routeId
                   ? lastSession.sessionId
                   : null,
             },
@@ -622,7 +620,6 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     const answer = await deps.api.read('/dial/check', value => dialCheckResponseSchema.parse(value), { firmId, routeId });
     if (!answer.ok || stale(mine)) return null;
     const advice = answer.value.advice;
-    telUris.set(routeId, advice.telUri);
     return {
       routeId,
       callable: advice.callable,
@@ -710,6 +707,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      * work shown to somebody else.
      */
     async forget() {
+      phoneHandoff.forget();
       generation += 1;
       previewRequest += 1;
       // An identity change: nothing of the last person's stays — not their pending
@@ -786,7 +784,6 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       agreement = null;
       followUpPreview = null;
       dialAdvice = [];
-      telUris.clear();
       return await snapshot();
     },
 
@@ -838,56 +835,18 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     },
 
     /**
-     * Call this number (9.2; wave 2's S4.5 shape).
-     *
-     * The advice on the card may be a minute old, so it is read again here — the calling
-     * window closes at a wall-clock time and a suppression can be recorded while a card
-     * is open — and the URI that reaches macOS is the one that read answered with, not
-     * the one on screen. A number the server will not advise now is a refusal with its
-     * own reason and nothing opened.
+     * Reserve durably before one phone-app dispatch. Advice is never launch authority.
+     * Server policy, registry coverage and shared cadence are rechecked on every press.
      */
     async dial(input) {
       const mine = generation;
-      const setup = await deps.handoff.checkSetup();
+      const route = expanded?.firmId === input.firmId ? expanded.routes.find(row => row.routeId === input.routeId) : undefined;
+      if (!route) { notice = 'route_missing'; return await answerFor(mine); }
+      const answer = await phoneHandoff.dispatch({ firmId: input.firmId, routeId: route.routeId, routeVersion: route.version, e164: route.e164 }, () => !stale(mine));
       if (stale(mine)) return await answerFor(mine);
-      if (!setup.ready) {
-        notice = setup.reason;
-        return await answerFor(mine);
-      }
-      const fresh = await adviseRoute(input.firmId, input.routeId, mine);
-      if (stale(mine)) return await answerFor(mine);
-      if (fresh === null) {
-        notice = 'dial_advice_unavailable';
-        return await answerFor(mine);
-      }
-      // The card is told what the fresh read found, whether or not the call goes ahead.
-      dialAdvice = dialAdvice.map(entry => (entry.routeId === fresh.routeId ? fresh : entry));
-      const telUri = telUris.get(input.routeId) ?? null;
-      if (!fresh.callable || telUri === null) {
-        notice = fresh.reasons[0] ?? 'not_callable';
-        return await answerFor(mine);
-      }
-      const outcome = await deps.handoff.open({ telUri, e164: fresh.e164 ?? '' });
-      // The number was handed to macOS either way; what the window shows is only the
-      // current person's to be told.
-      if (stale(mine)) return await answerFor(mine);
-      notice =
-        outcome.status === 'opened'
-          ? 'dial_opened'
-          : outcome.status === 'opened_unknown'
-            ? 'dial_opened_unknown'
-            : outcome.reason;
-      if (outcome.status === 'opened' || outcome.status === 'opened_unknown') {
-        // The call may have been placed either way, so the outcome form is told which
-        // number it is recording (C16).
-        const route = expanded?.routes.find(entry => entry.routeId === input.routeId);
-        lastCall = {
-          firmId: input.firmId,
-          routeId: input.routeId,
-          contactId: route?.contactId ?? input.contactId,
-          e164: fresh.e164 ?? route?.e164 ?? '',
-        };
-      }
+      notice = answer.notice;
+      if (answer.attemptId) lastCall = { firmId: input.firmId, routeId: route.routeId, contactId: route.contactId,
+        e164: route.e164, phoneHandoffAttemptId: answer.attemptId };
       return await answerFor(mine);
     },
 
@@ -939,7 +898,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       // When the page names the call (a Needs review item's Log), that session is sent as it
       // is and `lastSession` is never consulted: it may be another call, or none after a restart.
       const placed =
-        verbatim || named !== null
+        verbatim || named !== null || input.phoneHandoffAttemptId != null || call?.phoneHandoffAttemptId != null
           ? null
           : lastSession !== null && lastSession.firmId === input.firmId && (routeId === null || routeId === lastSession.routeId)
             ? lastSession
@@ -952,6 +911,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           ...(routeId === null ? {} : { routeId }),
           ...(input.itemId === null ? {} : { itemId: input.itemId }),
           ...(named !== null ? { callSessionId: named } : placed === null ? {} : { callSessionId: placed.sessionId }),
+          ...(input.phoneHandoffAttemptId ? { phoneHandoffAttemptId: input.phoneHandoffAttemptId } : call?.phoneHandoffAttemptId ? { phoneHandoffAttemptId: call.phoneHandoffAttemptId } : {}),
           outcome: input.outcome,
           // No `occurredAt`: "just now" is the server's clock (C15).
           ...(input.note === '' ? {} : { note: input.note }),
@@ -994,6 +954,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       pendingAgreement = null;
       if (note(answer, null) && answer.ok) {
         notice = outcomeNotice(answer.value);
+        const completedPhoneAttempt = input.phoneHandoffAttemptId ?? call?.phoneHandoffAttemptId;
+        if (completedPhoneAttempt) phoneHandoff.complete(completedPhoneAttempt);
         agreement = agreementOf(agreed, answer.value, { templates: followUpTemplates, sequences: followUpSequences });
         followUpPreview = null;
         if (call !== null) lastCall = null;
@@ -1003,11 +965,11 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
         // a retry reads neither, so clearing them never changes it.
         if (verbatim) {
           const lastCallSession =
-            lastCall !== null && lastSession !== null && lastSession.firmId === lastCall.firmId && lastSession.routeId === lastCall.routeId
+            lastCall !== null && !lastCall.phoneHandoffAttemptId && lastSession !== null && lastSession.firmId === lastCall.firmId && lastSession.routeId === lastCall.routeId
               ? lastSession.sessionId
               : null;
           // A retry of call A that lands after call B was placed on the same number leaves B.
-          if (lastCall !== null && lastCall.firmId === input.firmId && input.routeId !== null && lastCall.routeId === input.routeId && lastCallSession === named) {
+          if (lastCall !== null && lastCall.firmId === input.firmId && input.routeId !== null && lastCall.routeId === input.routeId && lastCallSession === named && lastCall.phoneHandoffAttemptId === input.phoneHandoffAttemptId) {
             lastCall = null;
           }
           if (lastSession !== null && named !== null && lastSession.sessionId === named) lastSession = null;

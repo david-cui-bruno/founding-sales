@@ -9,25 +9,14 @@ import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { ApiOutcome, HttpAnswer } from '../src/main/apiClient.ts';
 import { heldAnswer, snoozedAnswer } from './support/todayAnswers.ts';
 
-/**
- * The Today window and the two bridges behind it (specification 8.2, 9.2, 14.2).
- *
- * Pure view-model and scripted-bridge tests cover Today without Electron.
- *
- * The **bridges** are given a scripted API and a scripted session, so what is proved
- * is the wiring: that the window is never handed a token, that a local wall-clock
- * instant is resolved against the workspace zone before it leaves the Mac, and that
- * the outcome of a snooze is the server's word and not the client's guess.
- *
- * No real business name or number appears; `example.test` is reserved by RFC 6761 and
- * the numbers are in the NANP 555-01XX fictional block.
- */
+/** Scripted Today bridges, with fictional endpoints and no real OS dispatch. */
 
 const FIRM_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_FIRM_ID = '22222222-2222-4222-8222-222222222222';
 const ITEM_ID = '33333333-3333-4333-8333-333333333333';
 const ROUTE_ID = '44444444-4444-4444-8444-444444444444';
 const IDENTITY_ID = '55555555-5555-4555-8555-555555555555';
+const ATTEMPT_ID = '66666666-6666-4666-8666-666666666666';
 
 function firmPage(overrides: Partial<TodayFirm> = {}): TodayFirm {
   return {
@@ -271,6 +260,11 @@ function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>): {
     send: async (url, init) => {
       const path = new URL(url).pathname;
       calls.push({ path, body: init.body === undefined ? null : JSON.parse(init.body) });
+      const now = Date.now();
+      if (path === '/dial/handoff' && !answers[path]) return { status: 200, body: { status: 'accepted', replayed: false, result: {
+        attemptId: ATTEMPT_ID, firmId: FIRM_ID, routeId: ROUTE_ID, e164: '+14015550187', telUri: 'tel:+14015550187', actionable: true,
+        reservedAt: new Date(now).toISOString(), expiresAt: new Date(now + 15000).toISOString(), validForMilliseconds: 15000,
+      } } };
       return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
     },
   });
@@ -297,7 +291,7 @@ describe('the Today bridge', () => {
     body: { status: 'accepted', replayed: false, result },
   });
 
-  /** `POST /dial/check` saying yes for this fixture's usable number. */
+  /** The fresh handoff command, not an advisory read, is authoritative. */
   const advice = (overrides: Record<string, unknown> = {}): HttpAnswer => ({
     status: 200,
     body: {
@@ -307,8 +301,7 @@ describe('the Today bridge', () => {
         reasons: [],
         routeId: ROUTE_ID,
         e164: '+14015550187',
-        telUri: 'tel:+14015550187',
-        firmTimeZone: 'America/New_York',
+        telUri: null, firmTimeZone: 'America/New_York',
         firmLocalTime: '10:05',
         at: '2026-09-21T14:05:00.000Z',
         ...overrides,
@@ -768,7 +761,7 @@ describe('the Today bridge', () => {
     expect(calls.filter(call => call.path === '/dial/check')).toHaveLength(1);
   });
 
-  it('reads the advice again at the press, and refuses with the server’s own reasons', async () => {
+  it('reserves again at the press, and refuses with the server’s own reason', async () => {
     const opened: string[] = [];
     const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
     const bridge = createTodayBridge({
@@ -788,6 +781,7 @@ describe('the Today bridge', () => {
     const refusing = scriptedApi({
       '/today/firm': { status: 200, body: firmPage() },
       '/dial/check': advice({ callable: false, reasons: ['outside_calling_window', 'posture_missing'], telUri: null }),
+      '/dial/handoff': { status: 409, body: { status: 'refused', reason: 'outside_calling_window' } },
     });
     const second = createTodayBridge({
       api: refusing.api,
@@ -807,7 +801,7 @@ describe('the Today bridge', () => {
     expect(answer.lastCall ?? null).toBeNull();
   });
 
-  it('opens the URI the advice carried, and never lets the window see it', async () => {
+  it('opens only the durable handoff URI, and never lets the window see it', async () => {
     const opened: string[] = [];
     const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
     const bridge = createTodayBridge({
@@ -820,13 +814,12 @@ describe('the Today bridge', () => {
 
     expect(answer.notice).toBe('dial_opened');
     expect(opened).toEqual(['tel:+14015550187']);
-    // The advice is read once for the card and again at the press: the window closes at
-    // a wall-clock time and a suppression can be recorded while a card is open.
-    expect(calls.filter(call => call.path === '/dial/check')).toHaveLength(2);
+    // Advisory reads never authorize an OS handoff. Reservation rechecks the policy.
+    expect(calls.filter(call => call.path === '/dial/handoff')).toHaveLength(1);
     expect(calls.filter(call => call.path === '/dial/authorize')).toHaveLength(0);
     expect(calls.filter(call => call.path === '/dial/consume')).toHaveLength(0);
     // The window is told which number, never the URI.
-    expect(answer.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187', callSessionId: null });
+    expect(answer.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187', callSessionId: null, phoneHandoffAttemptId: ATTEMPT_ID });
     expect(JSON.stringify(answer)).not.toContain('tel:');
   });
 
@@ -870,7 +863,7 @@ describe('the Today bridge', () => {
     });
     await bridge.expand({ firmId: FIRM_ID });
     const dialled = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
-    expect(dialled.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187', callSessionId: null });
+    expect(dialled.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187', callSessionId: null, phoneHandoffAttemptId: ATTEMPT_ID });
 
     const answer = await bridge.recordOutcome({
       firmId: FIRM_ID,
@@ -885,7 +878,7 @@ describe('the Today bridge', () => {
     });
     expect(answer.notice).toBe('outcome_recorded');
     const sent = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
-    expect(sent).toMatchObject({ firmId: FIRM_ID, itemId: ITEM_ID, routeId: ROUTE_ID, outcome: 'voicemail_left' });
+    expect(sent).toMatchObject({ firmId: FIRM_ID, itemId: ITEM_ID, routeId: ROUTE_ID, outcome: 'voicemail_left', phoneHandoffAttemptId: ATTEMPT_ID });
     // No ticket and no calling identity: `POST /dial/authorize` and `POST /dial/consume`
     // are not called any more, and logging a call never needed either of them.
     expect(sent).not.toHaveProperty('ticketId');

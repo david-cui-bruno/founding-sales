@@ -174,6 +174,10 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   outcome_recorded: 'Call recorded.',
   // Slice S2: "Log incoming call".
   incoming_logged: 'Incoming call logged on the firm’s history.',
+  dnc_coverage_unknown: 'Calling is held: current complete National DNC coverage and this number’s scrub result are not established.',
+  dnc_registry_match: 'Do not call: this number matches the National DNC Registry.',
+  phone_handoff_unavailable: 'Phone-app handoff is not available. No call was handed off.',
+  handoff_reconciliation_required: 'A handoff may already have occurred. Inspect and record what happened. Callie will not retry it automatically.',
   dial_opened: 'Handed to the phone app.',
   dial_opened_unknown: 'Callie could not confirm the phone app opened. Record what happened either way.',
   no_tel_handler: 'This Mac has no phone app registered for tel: links.',

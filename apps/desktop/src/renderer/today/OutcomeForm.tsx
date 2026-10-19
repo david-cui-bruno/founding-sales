@@ -69,6 +69,7 @@ const CURRENT: LogTarget = { kind: 'current' };
 
 /** "The call just placed", resolved once: what the outcome request names for it. */
 export interface ResolvedCall {
+  readonly phoneHandoffAttemptId?: string;
   readonly routeId: string;
   readonly contactId: string | null;
   readonly e164: string;
@@ -83,15 +84,17 @@ export interface ResolvedCall {
 export function currentCallOf(state: TodayState, firmId: string | null, endedSession: string | null = null): ResolvedCall | null {
   const last = state.lastCall;
   if (last == null || firmId === null || last.firmId !== firmId) return null;
-  return { routeId: last.routeId, contactId: last.contactId, e164: last.e164, callSessionId: last.callSessionId ?? endedSession };
+  return { routeId: last.routeId, contactId: last.contactId, e164: last.e164,
+    callSessionId: last.phoneHandoffAttemptId ? null : last.callSessionId ?? endedSession,
+    ...(last.phoneHandoffAttemptId ? { phoneHandoffAttemptId: last.phoneHandoffAttemptId } : {}) };
 }
 
 /** One call's identity: its session, or its number for a call handed to the phone app. */
-export const callIdentity = (call: ResolvedCall): string => call.callSessionId ?? `route:${call.routeId}`;
+export const callIdentity = (call: ResolvedCall): string => call.phoneHandoffAttemptId ?? call.callSessionId ?? `route:${call.routeId}`;
 
 /** The key every draft and command of a call is kept under (X1F rule 2): its session, or `none`. */
 export function outcomeSessionKey(target: LogTarget, resolved: ResolvedCall | null): string {
-  return target.kind === 'session' ? target.callSessionId : (resolved?.callSessionId ?? 'none');
+  return target.kind === 'session' ? target.callSessionId : (resolved?.phoneHandoffAttemptId ?? resolved?.callSessionId ?? 'none');
 }
 
 /** Where a call's outcome drafts live: by firm and by call, never by firm alone. */
@@ -133,9 +136,8 @@ export function OutcomeForm({
   const named = target.kind === 'session';
   const expanded = state.expanded;
   const firmId = expanded?.firmId ?? '';
-  // The call this opening records (X1F rules 1 and 2). "The call just placed" was resolved when
-  // the form opened; a named session is itself. Every draft and the command on the wire are
-  // kept under that call, so call B never sees call A's fields, stop or unanswered command.
+  // Resolve once per opening. Drafts and wire commands stay under that attempt/session,
+  // never borrowing a prior call's fields, stop or unanswered command (X1F rules 1 and 2).
   const resolved = named ? null : target.call !== undefined ? target.call : currentCallOf(state, expanded?.firmId ?? null, callSessionId);
   const sessionKey = outcomeSessionKey(target, resolved);
   const prefix = outcomeDraftPrefix(firmId, sessionKey);
@@ -365,6 +367,7 @@ export function OutcomeForm({
               routeId: lastCall?.routeId ?? null,
               itemId: itemId === '' ? null : itemId,
               ...(sessionId === null ? {} : { callSessionId: sessionId }),
+              ...(lastCall?.phoneHandoffAttemptId ? { phoneHandoffAttemptId: lastCall.phoneHandoffAttemptId } : {}),
               outcome: built.command.outcome,
               note: built.command.note ?? '',
               callback:
@@ -418,7 +421,7 @@ export function OutcomeForm({
       <p data-testid="outcome-call" className="text-xs text-muted-foreground">
         {named ? 'This records the call you chose from Needs review.' : lastCall === null ? 'Not after a call from Callie: this records the call as history.' : `The call to ${lastCall.e164}.`}
       </p>
-      {callSessionId === null ? null : (
+      {callSessionId === null || resolved?.phoneHandoffAttemptId ? null : (
         <p data-testid="outcome-call-session" data-session={callSessionId} className="text-xs text-muted-foreground">
           Placed from Callie and recorded: this outcome is filed with the recording.
         </p>

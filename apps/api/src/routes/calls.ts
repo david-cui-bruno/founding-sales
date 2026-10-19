@@ -189,6 +189,7 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
       ...(body.routeId === undefined ? {} : { routeId: body.routeId }),
       ...(body.ticketId === undefined ? {} : { ticketId: body.ticketId }),
       ...(body.callSessionId === undefined ? {} : { callSessionId: body.callSessionId }),
+      ...(body.phoneHandoffAttemptId === undefined ? {} : { phoneHandoffAttemptId: body.phoneHandoffAttemptId }),
       ...(body.callingIdentityId === undefined ? {} : { callingIdentityId: body.callingIdentityId }),
       ...(body.itemId === undefined ? {} : { itemId: body.itemId }),
       outcome: body.outcome,

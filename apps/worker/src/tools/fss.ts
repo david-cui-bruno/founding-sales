@@ -1,3 +1,5 @@
+import {trecVerifyCommand} from './fss/trecVerify.ts';
+import {apolloDiscoveryConfigureCommand} from './fss/apolloDiscoveryConfigure.ts';
 import {crmAcquisitionDiagnosticBindingsCommand} from './fss/crmAcquisitionDiagnosticBindings.ts';
 import {crmAcquisitionDiagnosticProvisionCommand,crmAcquisitionDiagnosticRevokeCommand} from './fss/crmAcquisitionDiagnostic.ts';
 import {crmReadAllocationPutCommand} from './fss/crmReadAllocation.ts';
@@ -205,6 +207,7 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'pipeline stage-counts': pipelineStageCountsCommand,
   // Lane PBM: whether a CSV import's firms are in a workspace, as counts.
   'discovery configure': discoveryConfigureCommand,
+  'apollo configure': apolloDiscoveryConfigureCommand,
   'discovery resume': discoveryResumeCommand,
   'qualification configure': qualificationConfigureCommand,
   'qualification resolve-identity': qualificationResolveIdentityCommand,
@@ -262,7 +265,7 @@ async function adminInvocation(
     options: parsed.options,
     switches: parsed.switches,
   };
-  if (name === 'holds release-restore' || name === 'discovery configure' || name === 'discovery resume' || name === 'qualification configure' || name === 'qualification resolve-identity' || name.startsWith('release drain ')) {
+  if (name === 'holds release-restore' || name === 'discovery configure' || name === 'apollo configure' || name === 'discovery resume' || name === 'qualification configure' || name === 'qualification resolve-identity' || name.startsWith('release drain ')) {
     const identity = await launchIdentity(environment);
     if ('refusal' in identity) return identity;
     return { ...base, launch: identity.launch };
@@ -506,6 +509,20 @@ export async function main(
     console.error(JSON.stringify({ level: 'error', event: 'fss_usage', reason: parsed.reason, detail: parsed.detail }));
     if (parsed.reason === 'command_missing') console.error(describeCommands());
     return FSS_EXIT_CODES.usage;
+  }
+
+  if (parsed.value.spec.path.join(' ') === 'trec verify') {
+    // Local file verification must never resolve database credentials or adapters.
+    const {'--report': reportPath, ...options} = parsed.value.options;
+    const outcome = await trecVerifyCommand({options});
+    try {
+      await report(reportPath, outcome);
+      write(JSON.stringify(outcome));
+      return outcome.ok ? FSS_EXIT_CODES.ok : FSS_EXIT_CODES.refused;
+    } catch {
+      console.error(JSON.stringify({level:'error',event:'trec_report_unavailable'}));
+      return FSS_EXIT_CODES.failed;
+    }
   }
 
   if (parsed.value.spec.path.join(' ') === 'migration-auth-check') {

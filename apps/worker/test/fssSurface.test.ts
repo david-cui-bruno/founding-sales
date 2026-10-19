@@ -483,6 +483,33 @@ describe('what fss hands the restore commands (lane W3-S8 review)', () => {
     });
 
 
+    it('routes Apollo configuration through the same audited launcher without accepting keys', async () => {
+      const workspace = (await session.query<{id:string}>(
+        'INSERT INTO workspaces (slug,display_name) VALUES ($1,$2) RETURNING id',
+        [`apollo-${randomUUID()}`,'Apollo CLI test'],
+      )).rows[0]!.id;
+      const now = new Date();
+      const base = ['admin','apollo','configure','--workspace-id',workspace,'--account-ref',`account-${randomUUID()}`,'--key-ref',`key-${randomUUID()}`];
+      const args = [...base,'--action','configure','--enabled','true',
+        '--cycle-start',new Date(now.getTime()-3600000).toISOString(),
+        '--cycle-end',new Date(now.getTime()+86400000).toISOString(),
+        '--verified-at',now.toISOString(),'--exclusive-attested-at',now.toISOString(),
+        '--prior-used','0','--exclusive-account-confirmed','true','--key-account-binding-confirmed','true',
+        '--free-plan-no-trial-no-paid-confirmed','true','--external-usage-reconciled','true'];
+      const unattributed = await run(args,{ECS_CONTAINER_METADATA_URI_V4:origin});
+      expect(unattributed.code).toBe(20);
+      expect(refused(unattributed.stderr)).toBe('launcher_unknown');
+      expect((await session.query('SELECT id FROM sourcing_apollo_allowances WHERE workspace_id=$1',[workspace])).rows).toEqual([]);
+      const identity = {FSS_LAUNCHED_BY:launcher,ECS_CONTAINER_METADATA_URI_V4:origin};
+      const done = await run(args,identity);
+      expect(done.code,done.stderr).toBe(0);
+      expect((await session.query('SELECT enabled,reserved FROM sourcing_apollo_allowances WHERE workspace_id=$1',[workspace])).rows).toEqual([{enabled:true,reserved:0}]);
+      expect((await session.query<{detail:unknown}>('SELECT detail FROM audit_events WHERE workspace_id=$1 AND action=$2',[workspace,'sourcing.apollo_configured'])).rows[0]?.detail).toMatchObject({launchedBy:launcher,taskArn});
+      expect((await run([...base,'--action','disable'],identity)).code).toBe(0);
+      expect((await session.query('SELECT enabled,reserved FROM sourcing_apollo_allowances WHERE workspace_id=$1',[workspace])).rows).toEqual([{enabled:false,reserved:0}]);
+      expect((await run([...args,'--api-key','not-a-key'],identity)).code).toBe(64);
+    });
+
     it('is attributed to the launcher the task was given and the task the metadata endpoint names', async () => {
       const done = await run(release, { FSS_LAUNCHED_BY: launcher, ECS_CONTAINER_METADATA_URI_V4: origin });
       expect(done.code).toBe(0);

@@ -190,7 +190,7 @@ describe('what the API mounts', () => {
       '/devices',
       '/devices/revoke',
       '/diagnostics',
-      '/dial/check',
+      '/dial/check', '/dial/handoff',
       '/enrollments',
       '/enrollments/enroll',
       '/enrollments/migrate',
