@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
+import { firmOfficeAssessmentSchema, researchPurposeSchema } from './officeAssessment.ts';
 
 /**
  * The wire contract of research (`.context/DECISION-20260928-crm-design.md`,
@@ -221,6 +222,8 @@ export const researchFirmResponseSchema = z.object({
   runs: z.array(researchRunSchema).max(5),
   links: z.array(researchLinkSchema),
   spend: researchSpendSchema,
+  /** Absent on old servers. Clients normalize absence to not_evaluated, never supported. */
+  officeAssessment: firmOfficeAssessmentSchema.optional(),
 });
 export type ResearchFirmResponse = z.infer<typeof researchFirmResponseSchema>;
 
@@ -232,12 +235,15 @@ export const researchRunCommandSchema = z.strictObject({
   commandId: commandIdSchema,
   clientVersion: semanticVersionSchema,
   firmId: uuid,
+  /** No request default: old omitted-purpose command hashes must stay unchanged. */
+  purpose: researchPurposeSchema.optional(),
 });
 
 export const researchRunResultSchema = z.object({
   revision: z.number().int().min(1),
   /** False when a job for this revision was already queued. Not an error. */
   queued: z.boolean(),
+  purpose: researchPurposeSchema.default('brief'),
 });
 
 export const researchAddLinkCommandSchema = z.strictObject({
