@@ -154,7 +154,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     session = database.session;
     seeded = await seedTwoWorkspaces(session);
     crm = await seedCrm(session, seeded);
-    policy = await seedPolicy(session, seeded, crm);
+    policy = await seedPolicy(session, seeded, crm, { registry: false });
     await setting('telephony_budget', { dailyCeilingCents: 10_000, maxMinutesPerCall: 30, unitPriceMicros: 14_000 });
     await setting('monthly_cash_ceiling_cents', { cents: 5000 });
     // Seed the actual schema-34 shapes, without invoking HEAD's dial commands.
