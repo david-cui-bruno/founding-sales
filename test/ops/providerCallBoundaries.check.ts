@@ -56,6 +56,16 @@ export const BOUNDARIES: readonly Boundary[] = [
   {name:'routine reply interpretation',site:'packages/domain/outreach/replyRun.ts',owner:'runRoutineReply',methods:{countInputTokens:1,interpret:1}},
   {name:'human reply suggestion',site:'packages/domain/replies/composerGeneration.ts',owner:'generateReplyDraft',methods:{countInputTokens:1,prepareReplyDraft:1}},
   {name:'candidate qualification provider calls',site:'packages/domain/sourcing/qualificationRun.ts',owner:'runQualification',methods:{fetchPages:1,countInputTokens:1,extract:1}},
+  {
+    name: 'strict office assessment provider calls',
+    site: 'packages/domain/research/officeAssessmentRun.ts',
+    // The registered research worker commits the existing calling reservation and takes
+    // the dispatch gate before finishFirmResearch routes here. This owner rechecks the
+    // immutable strict target/source binding after waits, admits the counted input
+    // against that reservation (600 output tokens), and never buys a repair attempt.
+    owner: 'finishOfficeResearch',
+    methods: { fetchPages: 1, countInputTokens: 1, extract: 1 },
+  },
   {name:'continuous discovery search',site:'packages/domain/sourcing/discovery.ts',owner:'runDiscovery',methods:{discover:1}},
   {name:'discovery evaluation search',site:'apps/worker/src/sourcing/evaluateDiscovery.ts',owner:'evaluateDiscovery',methods:{discover:1}},
   { name:'Zoom local recording update', site:'packages/domain/meetings/autoRecording.ts', owner:'runMeetingRecordingSetup', methods:{setLocalAutoRecording:1} },
@@ -427,6 +437,37 @@ describe('the check itself', () => {
 
   it('passes the clean fixture', () => {
     expect(withSite('')).toEqual([]);
+  });
+
+  it('enforces each strict office method at its exact owner, not anywhere in its file', () => {
+    const office = BOUNDARIES.find(boundary => boundary.owner === 'finishOfficeResearch');
+    expect(office).toBeDefined();
+    if (office === undefined) throw new Error('missing strict office boundary');
+    const files: Record<string, string> = {};
+    for (const boundary of BOUNDARIES) files[boundary.site] = real(boundary.site);
+    expect(findViolations(scratch(files))).toEqual([]);
+    for (const method of Object.keys(office.methods)) {
+      for (const bypass of [
+        `function bypass(p: any) { return p.${method}({}); }`,
+        `const detached = p.${method};`,
+      ]) {
+        const found = findViolations(scratch({ ...files, [office.site]: `${files[office.site]}\n${bypass}` }));
+        expect(found.some(v => v.boundary === office.name && v.method === method && v.kind === 'outside-owner'), bypass).toBe(true);
+        expect(found.every(v => v.file === office.site), bypass).toBe(true);
+      }
+      const original = files[office.site]!;
+      const call = `.${method}(`;
+      expect(original.split(call)).toHaveLength(2);
+      for (const changed of [
+        original.replace(call, '.unguardedMethod('),
+        original.replace(' const reservation=', ` input.extraction?.${method}({});\n const reservation=`),
+        original.replace(' const reservation=', ` const alias=input.extraction?.${method};\n const reservation=`),
+      ]) {
+        const found = findViolations(scratch({ ...files, [office.site]: changed }));
+        expect(found.some(v => v.boundary === office.name && v.method === method && v.kind === 'owner-calls')).toBe(true);
+        expect(found.every(v => v.kind === 'owner-calls' && v.file === office.site)).toBe(true);
+      }
+    }
   });
 
   it('fails on a helper in the same file that calls the provider (the review’s case)', () => {
