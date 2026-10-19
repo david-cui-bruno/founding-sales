@@ -1,15 +1,12 @@
-import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
 import {randomUUID} from 'node:crypto';
 import {expect,it} from 'vitest';
 import {crmProcessingResultSchema,selectedImportPageSchema} from '@fss/contracts';
-import {createCrmCapabilityRuntime,type CrmCapabilityStartupConfiguration} from '@fss/domain/crm/capabilityStartup.ts';
+import {activateForwardFixture} from './support/crmForwardScopeFixture.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {composeCrmCapabilities} from '../../worker/src/bootstrap/crmCapabilities.ts';
 import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
-import {dispatch} from '../src/server.ts';
-import {createAuthFixture,CURRENT_CLIENT_VERSION} from './support/authFixture.ts';
-import {issueSessionFor} from './support/sessionFixture.ts';
+import {createAuthFixture} from './support/authFixture.ts';
 import {seedFirm} from './support/crmSeed.ts';
 
 // Captured diagnostic output is synthetic; it does not explain the original cohort failures.
@@ -27,24 +24,21 @@ const cases=[
 it('aligns only unique exact selected-original quotes with UTF16 offsets and retains strict schema and quote refusal',async()=>{
  const fixture=await createAuthFixture();
  try{
-  const db=await fixture.database.appRuntimeSession();
-  const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
-  const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const,providerKey:'controlled.alignment',accessGrantVersion:'controlled',dataHandlingVersion:'controlled',fundingVerifiedUntil:'2099-01-01T00:00:00Z'};
-  const configuration:CrmCapabilityStartupConfiguration={capture:false,extraction:route};
-  const runtime=createCrmCapabilityRuntime(configuration,{implementationCommit:null,imageDigest:null,side:'api',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:false});
-  const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:db,auth:{...fixture.deps,db},supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,crmCapabilityRuntime:runtime});
-  const command=(body:object)=>({...body,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
+  const forward=await activateForwardFixture(fixture),{db,post,command,runtime}=forward;
+  const route={...forward.route,region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const};
+  const configuration={capture:true,extraction:route};
   const firmId=await seedFirm(fixture,{name:'Synthetic alignment firm',assignedUserId:fixture.alpha.admin.userId});
-  expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:route.endpointId,modelVersion:route.modelVersion,accessGrantVersion:route.accessGrantVersion,dataHandlingVersion:route.dataHandlingVersion,dailyCeilingCents:100,monthlyCeilingCents:100,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
-  expect((await post('/crm/processing/purpose/activate',command({capability:'crm_extraction',expectedRevision:1,approval:{consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,reviewedEvaluationReference:'controlled-external-fake-only',limitations:['representative_quality_unverified']}}))).body).toMatchObject({status:'accepted'});
+  await forward.extraction();
   let calls=0;
   for(const item of cases){
    const selection={text:item.text,subtype:item.subtype??'pasted_text',label:item.name,direction:'unknown',participants:[],occurredAt:new Date().toISOString(),attachments:[]};
    const preview=await post('/crm/imports/preview',selection);expect(preview.status).toBe(200);
    expect((await post('/crm/imports/commit',command({...selection,firmId,personId:null,importKey:randomUUID(),previewHash:(preview.body as {previewHash:string}).previewHash,parserVersion:'selected-v1'}))).status).toBe(200);
    const imported=selectedImportPageSchema.parse((await post('/crm/imports/read',{firmId,limit:20})).body).imports.find(entry=>entry.metadata.label===item.name)!;
-   const source={workspaceId:imported.source.workspaceId,sourceId:imported.source.sourceId,revision:imported.source.revision,contentHash:imported.source.contentHash,kind:'selected_note' as const,locator:null};
-   const composed=await composeCrmCapabilities({configuration,runtime:{...runtime,side:'worker'},openSession:async()=>({session:await fixture.database.appRuntimeSession(),close:async()=>{}}),loadSurface:async()=>({endpointId:route.endpointId,converse:async input=>{calls++;expect(input.messages[0]!.content[0]!.text).toBe(item.text);return {stopReason:'tool_use',usage:{inputTokens:127,outputTokens:84},output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'controlled-alignment',name:'emit_crm_extraction',input:{claims:[item.claim]}}}]}}};}})});
+   const nativeSource={workspaceId:imported.source.workspaceId,sourceId:imported.source.sourceId,revision:imported.source.revision,contentHash:imported.source.contentHash,kind:'selected_note' as const,locator:null};
+   expect((await post('/crm/processing/request',command({source:nativeSource}))).status).toBe(409);
+   const source=await forward.original(item.text);
+   const composed=await composeCrmCapabilities({configuration,runtime:{...runtime,side:'worker'},openSession:async()=>({session:db,close:async()=>{}}),loadSurface:async()=>({endpointId:route.endpointId,converse:async input=>{calls++;expect(JSON.parse(input.messages[0]!.content[0]!.text)).toMatchObject({text:item.text});return {stopReason:'tool_use',usage:{inputTokens:127,outputTokens:84},output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'controlled-alignment',name:'emit_crm_extraction',input:{claims:[item.claim]}}}]}}};}})});
    const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,...composed.handlers});
    expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
    expect((await runOnce(db,{registry,owner:'controlled-alignment',limit:20})).failed).toBe(0);

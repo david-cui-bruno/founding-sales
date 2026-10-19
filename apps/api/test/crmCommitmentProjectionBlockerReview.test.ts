@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import {seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
 import { expect, it } from "vitest";
 import { crmProcessingResultSchema } from "@fss/contracts";
 import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
@@ -92,7 +93,7 @@ it("shows a persistent source-bound Today problem only after promise projection 
       contentHash: selected.contentHash,
       locator: null,
     };
-    let modelCalls = 0;
+    let historicalPublications = 0;
     async function process(modelVersion: string, expectedRevision: number) {
       expect(
         (
@@ -113,31 +114,9 @@ it("shows a persistent source-bound Today problem only after promise projection 
           )
         ).status,
       ).toBe(200);
-      // Isolated evaluation fixture only; public controls cannot enable processing.
-      await fixture.db.query(
-        "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-        [source.workspaceId],
-      );
-      await post("/crm/processing/request", command({ source }));
-      const registry = registerHandlers(new HandlerRegistry(), {
-        classifier: undefined,
-        mail: undefined,
-        send: undefined,
-        research: undefined,
-        crmExtraction: { allowControlledEvaluation:true,
-          adapter: {
-            endpointId: "review-evaluation",
-            modelVersion,
-            accessGrantVersion: "fixture-review-grant",
-            dataHandlingVersion: "fixture-review-policy",
-            providerKey: "fixture.crm_review",
-            fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-            run: async () => {
-              modelCalls++;
-              return {
-                acceptance: "accepted",
-                usage: { inputTokens: 1, outputTokens: 1 },
-                claims: [
+      // Offline retained historical evidence, never current native consent.
+      historicalPublications++;
+      await seedHistoricalExtraction(fixture,{source,claims:[
                   {
                     kind: "commitment",
                     status: "stated",
@@ -145,17 +124,7 @@ it("shows a persistent source-bound Today problem only after promise projection 
                     locator: `text:0:${promiseQuote.length}`,
                     quote:promiseQuote,
                   },
-                ],
-              };
-            },
-          },
-        },
-      });
-      await runOnce(fixture.db, {
-        registry,
-        owner: `review-${modelVersion}`,
-        limit: 20,
-      });
+                ]});
       const result = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );
@@ -267,7 +236,7 @@ it("shows a persistent source-bound Today problem only after promise projection 
       version: 1,
       actions: [],
     });
-    expect(modelCalls).toBe(1);
+    expect(historicalPublications).toBe(1);
     const failed = await get("/today/actions/v2");
     expect(failed.status).toBe(200);
     expect(failed.body).toMatchObject({

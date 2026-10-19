@@ -1,7 +1,8 @@
 import {z} from 'zod';
 import {CRM_EXTRACTION_ENDPOINT,CRM_EXTRACTION_MODELS} from '@fss/contracts';
 import type {CrmCapabilityRuntime} from './capabilityAuthority.ts';
-const route=z.strictObject({region:z.literal('us-east-1'),endpointId:z.literal(CRM_EXTRACTION_ENDPOINT),modelVersion:z.enum(CRM_EXTRACTION_MODELS),providerKey:z.string().min(1).max(100),accessGrantVersion:z.string().min(1).max(200),dataHandlingVersion:z.string().min(1).max(200),fundingVerifiedUntil:z.iso.datetime()});
+import {providerFunding,providerKind} from '../settings/funding.ts';
+const route=z.strictObject({region:z.literal('us-east-1'),endpointId:z.literal(CRM_EXTRACTION_ENDPOINT),modelVersion:z.enum(CRM_EXTRACTION_MODELS),providerKey:z.string().min(1).max(100).refine(key=>providerKind(key)==='aws_bedrock'&&providerFunding(key)==='credits'),accessGrantVersion:z.string().min(1).max(200),dataHandlingVersion:z.string().min(1).max(200),fundingVerifiedUntil:z.iso.datetime()});
 // Old deployment JSON may still carry removed Ask keys. Accept and discard them,
 // never construct adapters or treat their presence as runtime availability.
 const configuration=z.strictObject({capture:z.boolean().default(false),extraction:route.optional(),answer:z.unknown().optional(),embedding:z.unknown().optional()}).transform(({capture,extraction})=>({capture,...extraction?{extraction}:{}}));

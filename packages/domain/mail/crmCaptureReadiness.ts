@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { withTransaction } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { businessAccountBinding } from '../business/acquisition.ts';
+import {forwardScopeForControl} from './crmForwardCaptureScope.ts';
 import { readMailCaptureControls, MAIL_CAPTURE_VERSION, type MailCaptureProof, type MailCaptureProofVerifier } from './crmSources.ts';
 
 export interface MailCaptureReadiness {
@@ -24,7 +25,8 @@ async function snapshot(context: RepositoryContext, mailboxId?: string) {
   const receiptNames = ['disclosure_version', 'disclosure_sha256'] as const;
   if (receiptNames.some(name => typeof row[name] !== 'string' || String(row[name]).length === 0) || typeof row['policy_disclosure_version'] !== 'string' || typeof row['policy_disclosure_sha256'] !== 'string') return { controls, proof: null, fingerprint: null };
   const proof: MailCaptureProof = { workspaceId: context.scope.workspaceId, mailboxId: controls.mailboxId, ownerUserId: String(row['owner_user_id']), providerAccountId: row['provider_account_id'], accountBinding: binding, generation: Number(row['generation']), controlsRevision: controls.revision, policyRevision: Number(row['policy_revision']), disclosureVersion: String(row['disclosure_version']), disclosureSha256: String(row['disclosure_sha256']), ...typeof row['owner_approval_id']==='string'?{ownerApprovalId:row['owner_approval_id']}:{},grantReceipt: typeof row['grant_receipt']==='string'?row['grant_receipt']:null, providerPolicyReceipt: typeof row['provider_policy_receipt']==='string'?row['provider_policy_receipt']:null, evaluationReceipt: typeof row['evaluation_receipt']==='string'?row['evaluation_receipt']:null, releaseReceipt: typeof row['release_receipt']==='string'?row['release_receipt']:null, captureVersion: MAIL_CAPTURE_VERSION };
-  return { controls, proof, fingerprint: createHash('sha256').update(JSON.stringify(row)).digest('hex') };
+  const forwardScope=await forwardScopeForControl(context,row);
+  return { controls, proof:forwardScope?{...proof,forwardScope}:null, fingerprint: createHash('sha256').update(JSON.stringify(row)).digest('hex') };
 }
 /** Body-free provider verification stays outside transactions. Readiness never activates acquisition. */
 export async function readMailCaptureReadiness(context: RepositoryContext, mailboxId?: string, deps?: MailCaptureReadiness) {

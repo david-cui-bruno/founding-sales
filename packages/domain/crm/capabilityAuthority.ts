@@ -1,5 +1,7 @@
 import {createHash} from 'node:crypto';
-import {CRM_MAIL_CAPTURE_CONSENT,crmCapabilityConfigurationSchema,type crmMailCaptureControlsSaveSchema,type CrmCapabilityConfiguration,type CrmOwnerApproval} from '@fss/contracts';
+import {CRM_MAIL_CAPTURE_CONSENT,CRM_OWNER_SCOPE_VERSION,crmCapabilityConfigurationSchema,type crmMailCaptureControlsSaveSchema,type CrmCapabilityConfiguration,type CrmOwnerApproval} from '@fss/contracts';
+import {forwardCaptureScopeForApproval,readForwardCaptureApproval} from '../mail/crmForwardCaptureScope.ts';
+import {currentExtractionCaptureBinding} from './processingScope.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from './identityAccess.ts';
 import {METADATA_REVIEW_DISCLOSURE,businessAccountBinding} from '../business/acquisition.ts';
@@ -24,10 +26,10 @@ async function snapshot(context:RepositoryContext,input:{capability:Capability;p
   const m=(await context.db.query<{[key:string]:unknown;id:string;owner_user_id:string;email_address:string;provider_account_id:string;generation:number;status:string}>('SELECT * FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.scope.workspaceId,input.mailboxId])).rows[0];
   if(!m||m.status!=='connected'||m.owner_user_id!==common.ownerUserId||m.provider_account_id!==row['provider_account_id']||m.generation!==row['generation']||businessAccountBinding(context.scope.workspaceId,m)!==row['account_binding'])return {row,configuration:null,table,acquisition};
   const mailbox={mailboxId:m.id,providerAccountId:m.provider_account_id,generation:m.generation,accountBinding:String(row['account_binding'])};
-  config=capability==='metadata_review'?{...common,...mailbox,capability,disclosureVersion:row['disclosure_version'],disclosureSha256:row['disclosure_sha256'],scopeDays:90}:{...common,...mailbox,capability,policyRevision:Number(row['policy_revision']),disclosureVersion:row['disclosure_version'],disclosureSha256:row['disclosure_sha256'],grantReceipt:row['grant_receipt'],providerPolicyReceipt:row['provider_policy_receipt'],evaluationReceipt:row['evaluation_receipt'],releaseReceipt:row['release_receipt'],captureVersion:MAIL_CAPTURE_VERSION};
+  config=capability==='metadata_review'?{...common,...mailbox,capability,disclosureVersion:row['disclosure_version'],disclosureSha256:row['disclosure_sha256'],scopeDays:90}:{...common,...mailbox,capability,policyRevision:Number(row['policy_revision']),disclosureVersion:row['disclosure_version'],disclosureSha256:row['disclosure_sha256'],grantReceipt:row['grant_receipt'],providerPolicyReceipt:row['provider_policy_receipt'],evaluationReceipt:row['evaluation_receipt'],releaseReceipt:row['release_receipt'],captureVersion:MAIL_CAPTURE_VERSION,forwardScope:(await readForwardCaptureApproval(context,row['owner_approval_id']))?.scope??null};
  }else{
   const route={endpointId:row['endpoint_id'],modelVersion:row['model_version'],accessGrantVersion:row['access_grant_version'],dataHandlingVersion:row['data_handling_version'],dailyCeilingCents:row['daily_ceiling_cents'],monthlyCeilingCents:row['monthly_ceiling_cents'],inputTokenPriceMicros:row['input_token_price_micros'],outputTokenPriceMicros:row['output_token_price_micros']};
-  config=capability==='crm_extraction'?{...common,...route,capability,processorVersion:'crm-extract-v1'}:{...common,...route,capability,purpose:row['purpose'],...row['agent_limits']===null||row['agent_limits']===undefined?{}:{agentLimits:row['agent_limits']},...row['embedding_dimensions']===null||row['embedding_dimensions']===undefined?{}:{embeddingDimensions:row['embedding_dimensions']},evaluationFingerprint:row['evaluation_fingerprint'],processorVersion:row['processor_version'],retrievalVersion:row['retrieval_version'],answerVersion:row['answer_version'],supportVersion:row['support_version'],chunkerVersion:row['chunker_version']};
+  config=capability==='crm_extraction'?{...common,...route,capability,processorVersion:'crm-extract-v1',allowedSourceKinds:row['allowed_source_kinds'],mailCaptureOwnerApprovalId:row['mail_capture_owner_approval_id']}:{...common,...route,capability,purpose:row['purpose'],...row['agent_limits']===null||row['agent_limits']===undefined?{}:{agentLimits:row['agent_limits']},...row['embedding_dimensions']===null||row['embedding_dimensions']===undefined?{}:{embeddingDimensions:row['embedding_dimensions']},evaluationFingerprint:row['evaluation_fingerprint'],processorVersion:row['processor_version'],retrievalVersion:row['retrieval_version'],answerVersion:row['answer_version'],supportVersion:row['support_version'],chunkerVersion:row['chunker_version']};
  }
  const parsed=crmCapabilityConfigurationSchema.safeParse(config);return {row,configuration:parsed.success?parsed.data:null,table,acquisition};
 }
@@ -38,12 +40,23 @@ function compatible(configuration:CrmCapabilityConfiguration,runtime?:CrmCapabil
  if(configuration.capability==='metadata_review')return configuration.disclosureVersion===METADATA_REVIEW_DISCLOSURE.version&&configuration.disclosureSha256===METADATA_REVIEW_DISCLOSURE.sha256;
  if(configuration.capability==='mail_capture')return configuration.disclosureVersion===CRM_MAIL_CAPTURE_DISCLOSURE.version&&configuration.disclosureSha256===CRM_MAIL_CAPTURE_DISCLOSURE.sha256;
  if(configuration.capability==='ask_answer')return [CRM_SUPPORTED_ASK_VERSIONS,CRM_SUPPORTED_AGENT_ASK_VERSIONS].some(versions=>Object.entries(versions).every(([key,value])=>configuration[key as keyof typeof versions]===value));
- return configuration.capability!=='crm_extraction'||configuration.processorVersion==='crm-extract-v1';
+ return configuration.capability!=='crm_extraction'||configuration.processorVersion==='crm-extract-v1'&&configuration.allowedSourceKinds?.length===1&&configuration.allowedSourceKinds[0]==='mail'&&!!configuration.mailCaptureOwnerApprovalId;
+}
+async function extractionCaptureCurrent(context:RepositoryContext,configuration:Extract<CrmCapabilityConfiguration,{capability:'crm_extraction'}>,runtime?:CrmCapabilityRuntime){
+ const id=configuration.mailCaptureOwnerApprovalId;if(!id||!await currentExtractionCaptureBinding(context,id))return false;
+ const epoch=await readForwardCaptureApproval(context,id);if(!epoch)return false;
+ return (await verifyCurrentCrmCapability(context,{capability:'mail_capture',mailboxId:epoch.configuration.mailboxId},runtime))?.ownerApprovalId===id;
 }
 async function verifyOwnerApproval(context:RepositoryContext,configuration:CrmCapabilityConfiguration,approvalId:string,runtime?:CrmCapabilityRuntime):Promise<CrmOwnerAuthority|null>{
  if(!compatible(configuration,runtime)||context.scope.actor.kind!=='user'||configuration.ownerUserId!==context.scope.actor.userId||!await activeIdentityActor(context))return null;
- const row=(await context.db.query<{id:string;quality_tier:CrmOwnerAuthority['qualityTier'];limitations:string[]}>('SELECT id,quality_tier,limitations FROM crm_capability_owner_approvals WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 AND capability=$4 AND configuration_sha256=$5',[configuration.workspaceId,approvalId,configuration.ownerUserId,configuration.capability,crmCapabilityConfigurationFingerprint(configuration)])).rows[0];
+ const row=(await context.db.query<{id:string;quality_tier:CrmOwnerAuthority['qualityTier'];limitations:string[];scope_configuration:unknown}>('SELECT id,quality_tier,limitations,scope_configuration FROM crm_capability_owner_approvals WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 AND capability=$4 AND configuration_sha256=$5',[configuration.workspaceId,approvalId,configuration.ownerUserId,configuration.capability,crmCapabilityConfigurationFingerprint(configuration)])).rows[0];
  if(!row)return null;
+ if(configuration.capability==='mail_capture'||configuration.capability==='crm_extraction'){
+  const audit=crmCapabilityConfigurationSchema.safeParse(row.scope_configuration);
+  if(!audit.success||crmCapabilityConfigurationFingerprint(audit.data)!==crmCapabilityConfigurationFingerprint(configuration))return null;
+  if(configuration.capability==='mail_capture'&&(!configuration.forwardScope||!await readForwardCaptureApproval(context,approvalId)))return null;
+  if(configuration.capability==='crm_extraction'&&!await extractionCaptureCurrent(context,configuration,runtime))return null;
+ }
  if('mailboxId' in configuration){
   const grant=(await context.db.query<{granted_scopes:string[]}>('SELECT granted_scopes FROM mailbox_oauth_grant_observations WHERE workspace_id=$1 AND mailbox_id=$2 AND owner_user_id=$3 AND provider_account_id=$4 AND generation=$5 ORDER BY observed_at DESC LIMIT 1',[configuration.workspaceId,configuration.mailboxId,configuration.ownerUserId,configuration.providerAccountId,configuration.generation])).rows[0];
   if(!grant||!GMAIL_SCOPES.every(scope=>grant.granted_scopes.includes(scope)))return null;
@@ -59,10 +72,10 @@ export async function readCrmCapability(context:RepositoryContext,input:{capabil
  const revision=Number(s.row?.['revision']??0),enabled=s.row?.['enabled']===true;
  const ownerApprovalId=typeof s.row?.['owner_approval_id']==='string'?s.row['owner_approval_id']:null;
  const authority=s.configuration&&enabled&&ownerApprovalId?await verifyOwnerApproval(context,s.configuration,ownerApprovalId,runtime):null;
- const prepared=s.configuration&&context.scope.actor.kind==='user'&&s.configuration.ownerUserId===context.scope.actor.userId&&compatible(s.configuration,runtime);
+ const prepared=s.configuration&&context.scope.actor.kind==='user'&&s.configuration.ownerUserId===context.scope.actor.userId&&compatible(s.configuration,runtime)&&(s.configuration.capability!=='crm_extraction'||await extractionCaptureCurrent(context,s.configuration,runtime));
  return {capability:input.capability,mailboxId:input.mailboxId??null,configured:s.row!==null,revision,enabled,ready:enabled?authority!==null:!!prepared,reason:authority?'ready':!s.configuration?'configuration_unavailable':!prepared?'adapter_or_configuration_unavailable':enabled?'owner_consent_unavailable':'owner_consent_required',authorityReceiptId:null,ownerApprovalId,qualityTier:authority?.qualityTier??null,limitations:authority?.limitations??[],proposedRevision:revision+1,proposedConfigurationFingerprint:null,configuration:s.configuration};
 }
-async function modify(context:RepositoryContext,input:{capability:Capability;purpose?:'answer'|'embedding';mailboxId?:string;expectedRevision:number;approval?:CrmOwnerApproval},enabled:boolean,runtime?:CrmCapabilityRuntime){
+async function modify(context:RepositoryContext,input:{capability:Capability;purpose?:'answer'|'embedding';mailboxId?:string;expectedRevision:number;approval?:CrmOwnerApproval;scopeVersion?:typeof CRM_OWNER_SCOPE_VERSION},enabled:boolean,runtime?:CrmCapabilityRuntime){
  const actor=context.scope.actor;if(actor.kind!=='user'||actor.role!=='admin'||!await activeIdentityActor(context))return {ok:false as const,reason:'capability_access_denied'};
  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${context.scope.workspaceId}:crm-capability:${input.capability}:${input.mailboxId??''}`]);const s=await snapshot(context,input,true);
  if(!s?.row||enabled&&!s.configuration)return {ok:false as const,reason:'configuration_unavailable'};
@@ -70,13 +83,17 @@ async function modify(context:RepositoryContext,input:{capability:Capability;pur
  if(Number(s.row['revision'])!==input.expectedRevision)return {ok:false as const,reason:'capability_revision_conflict'};
  let ownerApprovalId:string|null=null;
  if(enabled){
+  if((input.capability==='mail_capture'||input.capability==='crm_extraction')&&input.scopeVersion!==CRM_OWNER_SCOPE_VERSION)return {ok:false as const,reason:'capability_scope_review_required'};
   const approval=input.approval;
   if(!approval?.consentAcknowledged||!compatible(s.configuration!,runtime))return {ok:false as const,reason:'owner_consent_unavailable'};
   const ai=input.capability==='crm_extraction'||input.capability==='ask_answer';
   if(ai&&(approval.qualityTier==='acquisition'||!approval.criticalControlsPassed||!approval.modelIntegrationVerified||!approval.reviewedEvaluationReference||approval.qualityTier==='provisional_owner'&&!approval.limitations.includes('representative_quality_unverified')))return {ok:false as const,reason:'quality_review_required'};
   if(!ai&&approval.qualityTier!=='acquisition')return {ok:false as const,reason:'quality_scope_mismatch'};
-  const configuration={...s.configuration!,revision:input.expectedRevision+1};
-  const row=(await context.db.query<{id:string}>(`INSERT INTO crm_capability_owner_approvals(workspace_id,owner_user_id,capability,configuration_sha256,quality_tier,evaluation_reference,limitations,critical_controls_attested,model_integration_attested) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,[context.scope.workspaceId,actor.userId,input.capability,crmCapabilityConfigurationFingerprint(configuration),approval.qualityTier,approval.reviewedEvaluationReference??null,approval.limitations,approval.criticalControlsPassed===true,approval.modelIntegrationVerified===true])).rows[0];
+  const approvedAt=(await context.db.query<{at:string}>(`SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at`)).rows[0]?.at;
+  if(!approvedAt)throw new Error('database_clock_unavailable');
+  let configuration:CrmCapabilityConfiguration={...s.configuration!,revision:input.expectedRevision+1};
+  if(configuration.capability==='mail_capture')configuration={...configuration,forwardScope:forwardCaptureScopeForApproval(approvedAt)};
+  const row=(await context.db.query<{id:string}>(`INSERT INTO crm_capability_owner_approvals(workspace_id,owner_user_id,capability,configuration_sha256,quality_tier,evaluation_reference,limitations,critical_controls_attested,model_integration_attested,approved_at,scope_configuration) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::timestamptz,$11::jsonb) RETURNING id`,[context.scope.workspaceId,actor.userId,input.capability,crmCapabilityConfigurationFingerprint(configuration),approval.qualityTier,approval.reviewedEvaluationReference??null,approval.limitations,approval.criticalControlsPassed===true,approval.modelIntegrationVerified===true,approvedAt,JSON.stringify(crmCapabilityConfigurationSchema.parse(configuration))])).rows[0];
   if(!row)throw new Error('owner approval insert failed');ownerApprovalId=row.id;
   if(!await verifyOwnerApproval(context,configuration,ownerApprovalId,runtime))return {ok:false as const,reason:'owner_consent_unavailable'};
  }
@@ -84,7 +101,7 @@ async function modify(context:RepositoryContext,input:{capability:Capability;pur
  await context.db.query(`UPDATE ${s.table} SET enabled=$2,revision=revision+1,authority_receipt_id=NULL,owner_approval_id=$3 WHERE workspace_id=$1 ${s.acquisition?'AND mailbox_id=$4':input.capability==='ask_answer'?"AND purpose=$4":''}`,[context.scope.workspaceId,enabled,ownerApprovalId,...s.acquisition?[input.mailboxId]:input.capability==='ask_answer'?[input.purpose??'answer']:[]]);
  return {ok:true as const,value:{revision:input.expectedRevision+1,enabled,authorityReceiptId:null,ownerApprovalId}};
 }
-export function activateCrmCapability(context:RepositoryContext,input:{capability:Capability;purpose?:'answer'|'embedding';mailboxId?:string;expectedRevision:number;approval:CrmOwnerApproval},runtime?:CrmCapabilityRuntime){return modify(context,input,true,runtime);}
+export function activateCrmCapability(context:RepositoryContext,input:{capability:Capability;purpose?:'answer'|'embedding';mailboxId?:string;expectedRevision:number;approval:CrmOwnerApproval;scopeVersion?:typeof CRM_OWNER_SCOPE_VERSION},runtime?:CrmCapabilityRuntime){return modify(context,input,true,runtime);}
 export function disableCrmCapability(context:RepositoryContext,input:{capability:Capability;purpose?:'answer'|'embedding';mailboxId?:string;expectedRevision:number}){return modify(context,input,false);}
 export async function saveCrmMailCaptureControls(context:RepositoryContext,input:Omit<ReturnType<typeof crmMailCaptureControlsSaveSchema.parse>,'commandId'|'clientVersion'>){
  const actor=context.scope.actor;if(actor.kind!=='user'||actor.role!=='admin'||!await activeIdentityActor(context))return {ok:false as const,reason:'capability_access_denied'};

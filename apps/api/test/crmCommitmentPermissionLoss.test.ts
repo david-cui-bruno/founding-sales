@@ -11,6 +11,7 @@ import {
 } from "./support/authFixture.ts";
 import { seedFirm, seedContact } from "./support/crmSeed.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
+import {seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
 
 it("retains unrelated permitted Today promises after another original source loses access", async () => {
   const fixture = await createAuthFixture();
@@ -140,29 +141,8 @@ it("retains unrelated permitted Today promises after another original source los
           )
         ).status,
       ).toBe(200);
-      // Isolated evaluation fixture only; public controls cannot enable processing.
-      await fixture.db.query(
-        "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-        [source.workspaceId],
-      );
-      await post("/crm/processing/request", command({ source }));
-      const registry = registerHandlers(new HandlerRegistry(), {
-        classifier: undefined,
-        mail: undefined,
-        send: undefined,
-        research: undefined,
-        crmExtraction: { allowControlledEvaluation:true,
-          adapter: {
-            endpointId: "review-evaluation",
-            modelVersion,
-            accessGrantVersion: "fixture-review-grant",
-            dataHandlingVersion: "fixture-review-policy",
-            providerKey: "fixture.crm_review",
-            fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-            run: async () => ({
-              acceptance: "accepted",
-              usage: { inputTokens: 1, outputTokens: 1 },
-              claims: [
+      // Offline retained historical evidence, never current native consent.
+      await seedHistoricalExtraction(fixture,{source,claims:[
                 {
                   kind: "commitment",
                   status: "stated",
@@ -170,16 +150,7 @@ it("retains unrelated permitted Today promises after another original source los
                   locator: `text:0:${promiseQuote.length}`,
                   quote:promiseQuote,
                 },
-              ],
-            }),
-          },
-        },
-      });
-      await runOnce(fixture.db, {
-        registry,
-        owner: `review-${modelVersion}`,
-        limit: 20,
-      });
+              ]});
       const result = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );

@@ -4,6 +4,7 @@ import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import {redactError} from '../limits.ts';
 import type {ApiRequest,RoutingOptions,RouteResult} from './types.ts';
+import {projectCrmCapabilityRead} from './crmOwnerScope.ts';
 
 const routes = {
  '/crm/business/policy/activate': {action:'activate',capability:'metadata_review'},
@@ -25,9 +26,9 @@ export async function routeCrmCapabilities(request:ApiRequest,options:RoutingOpt
  const scoped=contextForPrincipal(options.auth,verified.principal);if(!scoped.ok)return scoped.result;
  if(request.method!=='POST')return {status:405,body:redactError('method_not_allowed')};
  if(route.action==='mail_save')return runRouteCommand({auth:options.auth,request,principal:verified.principal},crmMailCaptureControlsSaveSchema,'crm.mail_capture_controls_saved',saveCrmMailCaptureControls);
- if(route.action==='activate')return runRouteCommand({auth:options.auth,request,principal:verified.principal},crmCapabilityActivateSchema,'crm.capability_activated',(context,body)=>body.capability!==route.capability?Promise.resolve({ok:false,reason:'capability_path_mismatch'}):activateCrmCapability(context,{...capabilityTarget(body),expectedRevision:body.expectedRevision,approval:body.approval},options.crmCapabilityRuntime));
+ if(route.action==='activate')return runRouteCommand({auth:options.auth,request,principal:verified.principal},crmCapabilityActivateSchema,'crm.capability_activated',(context,body)=>body.capability!==route.capability?Promise.resolve({ok:false,reason:'capability_path_mismatch'}):activateCrmCapability(context,{...capabilityTarget(body),expectedRevision:body.expectedRevision,approval:body.approval,...body.scopeVersion?{scopeVersion:body.scopeVersion}:{}},options.crmCapabilityRuntime));
  if(route.action==='disable')return runRouteCommand({auth:options.auth,request,principal:verified.principal},crmCapabilityDisableSchema,'crm.capability_disabled',(context,body)=>body.capability!==route.capability?Promise.resolve({ok:false,reason:'capability_path_mismatch'}):disableCrmCapability(context,{...capabilityTarget(body),expectedRevision:body.expectedRevision}));
  const parsed=crmCapabilityReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
  const result=await withTransaction(options.auth.db,()=>readCrmCapability(scoped.context,capabilityTarget(parsed.data),options.crmCapabilityRuntime));
- return result===null?{status:404,body:redactError('not_found')}:{status:200,body:crmCapabilityReadResponseSchema.parse(result)};
+ return result===null?{status:404,body:redactError('not_found')}:{status:200,body:projectCrmCapabilityRead(crmCapabilityReadResponseSchema.parse(result),parsed.data.scopeVersion)};
 }

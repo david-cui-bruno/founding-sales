@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import {historicalMailFixtureRegistry,seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
 import { expect, it } from "vitest";
 import {
   crmProcessingResultSchema,
@@ -6,11 +7,8 @@ import {
 } from "@fss/contracts";
 import { createNativeCrmMailEvidence } from "@fss/domain/crm/nativeMailEvidence.ts";
 import { businessAccountBinding } from "@fss/domain/business/acquisition.ts";
-import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
 import { enqueueJob, claimJobs } from "@fss/domain/jobs/jobStore.ts";
 import { workspaceScope } from "@fss/domain/db/workspaceScope.ts";
-import { registerHandlers } from "../../worker/src/bootstrap/main.ts";
-import { runOnce } from "../../worker/src/runner/jobRunner.ts";
 import {
   createAuthFixture,
   CURRENT_CLIENT_VERSION,
@@ -123,14 +121,12 @@ it("reviews conflicts across two actual copied mailboxes after disconnect withou
         owner,
       );
       const passage = "Could we discuss maintenance next week?";
-      const captured = registerHandlers(new HandlerRegistry(), {
+      const captured = historicalMailFixtureRegistry({
         classifier: undefined,
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmMailCapture: {
-          proofVerifier: verifier,
-          provider: {
+        retainedMailFixture: { original: {
             read: async () => ({
               providerAccountId: "google-business",
               messageId: "approved-message",
@@ -216,50 +212,10 @@ it("reviews conflicts across two actual copied mailboxes after disconnect withou
         )
       ).status,
     ).toBe(200);
-    await fixture.db.query(
-      "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-      [fixture.alpha.workspaceId],
-    );
-    const registry = registerHandlers(new HandlerRegistry(), {
-      classifier: undefined,
-      mail: undefined,
-      send: undefined,
-      research: undefined,
-      crmExtraction: { allowControlledEvaluation:true,
-        mailEvidence: port,
-        adapter: {
-          endpointId: "mail-evaluation",
-          modelVersion: "fixture-mail-v1",
-          accessGrantVersion: "fixture-mail-grant",
-          dataHandlingVersion: "fixture-mail-partial-policy",
-          providerKey: "fixture.crm_extraction",
-          fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-          run: async () => ({
-            acceptance: "accepted",
-            usage: { inputTokens: 20, outputTokens: 30 },
-            claims: [
-              {
-                kind: "need",
-                interpretation: "Maintenance discussion",
-                status: "stated",
-                locator: "text:0:8",
-                quote: "Could we",
-              },
-            ],
-          }),
-        },
-      },
-    });
+    // Offline retained original claims, never new extraction consent.
     const members = [];
     for (const source of sources) {
-      expect(
-        (await post("/crm/processing/request", command({ source }))).status,
-      ).toBe(200);
-      await runOnce(fixture.db, {
-        registry,
-        owner: "mail-conflict-evaluation",
-        limit: 20,
-      });
+      await seedHistoricalExtraction(fixture,{source,claims:[{kind:'need',interpretation:'Maintenance discussion',status:'stated',locator:'text:0:8',quote:'Could we'}]});
       const generation = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );

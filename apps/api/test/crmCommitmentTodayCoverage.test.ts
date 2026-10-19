@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
 import {expect,it} from 'vitest';
 import {crmProcessingResultSchema,todayActionsResponseSchema} from '@fss/contracts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
@@ -23,12 +24,10 @@ it('keeps a bounded 50-promise Today page and unrelated unanswered work with tru
   for(const [index,batch] of batches.entries())expect((await post('/crm/people/source/add',command({personId,sourceKey:`bounded-${index}`,excerpt:batch.join('\n'),occurredAt:'2026-10-01T14:00:00Z'}))).status).toBe(200);
   const sources=((await post('/crm/people/read',{personId})).body as {sources:{sourceId:string;workspaceId:string;revision:number;contentHash:string;excerpt:string}[]}).sources;
   expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:'bounded-eval',modelVersion:'bounded-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
-  await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[fixture.alpha.workspaceId]);
-  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{ allowControlledEvaluation:true,adapter:{endpointId:'bounded-eval',modelVersion:'bounded-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',providerKey:'fixture.bounded',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async({text})=>({acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:text.split('\n').map(quote=>({kind:'commitment',status:'stated',interpretation:'A human must attest the promise',quote,locator:`text:${text.indexOf(quote)}:${text.indexOf(quote)+quote.length}`}))})}}});
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
   for(const row of sources){
    const source={workspaceId:row.workspaceId,sourceId:row.sourceId,kind:'selected_note' as const,revision:row.revision,contentHash:row.contentHash,locator:null};
-   expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
-   await runOnce(fixture.db,{registry,owner:'bounded-extract',limit:20});
+   await seedHistoricalExtraction(fixture,{source,claims:row.excerpt.split('\n').map(quote=>({kind:'commitment',status:'stated',interpretation:'A human must attest the promise',quote,locator:`text:${row.excerpt.indexOf(quote)}:${row.excerpt.indexOf(quote)+quote.length}`}))});
    const processed=crmProcessingResultSchema.parse((await post('/crm/processing/read',{source})).body);if(!('generationId' in processed)||processed.state!=='complete')throw new Error('controlled extraction missing');
    for(const claim of processed.claims)expect((await post('/crm/commitments/review',command({source,claimId:claim.claimId,claimRevision:1,claimHash:claim.claimHash,contextHash:processed.contextHash,expectedDecisionRevision:0,expectedCommitmentRevision:0,classification:'internal_promise',actor:'self',actionLabel:claim.quote,due:{kind:'date',date:promiseDate,zone:'UTC',expression:`by ${promiseDate}`}}))).status).toBe(200);
    for(let pass=0;pass<3;pass++)await runOnce(fixture.db,{registry,owner:'bounded-project',limit:20});

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {CRM_MAIL_CAPTURE_CONSENT,type crmMailCaptureControlsSaveSchema} from "@fss/contracts";
+import {CRM_MAIL_CAPTURE_CONSENT,CRM_OWNER_SCOPE_VERSION,type crmMailCaptureControlsSaveSchema} from "@fss/contracts";
 import { operations } from "../app/bridges.ts";
 import type { z } from "zod";
 import type { crmCapabilityReadResponseSchema,CrmOwnerApproval } from "@fss/contracts";
@@ -40,12 +40,12 @@ const descriptions = {
   mail_capture: {
     name: "original email capture",
     detail:
-      "Copy approved business email, including incoming messages and your sent replies. Personal and excluded mail stays excluded. Hosted AI requires separate approval.",
+      "Copy approved business incoming and Sent originals from activation forward only. No older backfill. Personal, excluded and unresolved mail stays excluded. Hosted AI requires separate approval.",
   },
   crm_extraction: {
     name: "evidence extraction",
     detail:
-      "Use separately approved hosted AI to identify evidence in your authorized originals. Source ownership, deletion and spending limits still apply.",
+      "Use separately approved hosted AI for mail only, bound to the current capture approval. Notes, call and meeting transcripts are not authorized. Source ownership, deletion and spending limits still apply.",
   },
 } as const;
 function api() {
@@ -55,7 +55,7 @@ function api() {
 }
 export const crmCapabilityPorts: CrmCapabilityPorts = {
   prepareCapture:input=>api().command("crm.mailCapturePrepare",input),
-  read: (input) => api().read("crm.capabilityRead", input),
+  read: (input) => api().read("crm.capabilityRead", {...input,scopeVersion:CRM_OWNER_SCOPE_VERSION}),
   activate: (input) => {
     switch (input.capability) {
       case "metadata_review":
@@ -67,11 +67,13 @@ export const crmCapabilityPorts: CrmCapabilityPorts = {
         return api().command("crm.mailCaptureActivate", {
           ...input,
           capability: "mail_capture",
+          scopeVersion:CRM_OWNER_SCOPE_VERSION,
         });
       case "crm_extraction":
         return api().command("crm.extractionActivate", {
           ...input,
           capability: "crm_extraction",
+          scopeVersion:CRM_OWNER_SCOPE_VERSION,
         });
     }
   },
@@ -186,6 +188,7 @@ export function CrmCapabilitiesSection({
     if (!available || busy !== null || snapshot?.key !== key) return;
     if (!view.enabled && !view.ready)
       return;
+    if(!view.enabled&&target.capability!=='metadata_review'&&view.scopeVersion!==CRM_OWNER_SCOPE_VERSION)return;
     if(!view.enabled&&(target.capability==='crm_extraction')){
       const review=reviews[target.capability];if(!review?.critical||!review.integration||!review.reference.trim())return;
     }
@@ -279,6 +282,8 @@ export function CrmCapabilitiesSection({
                       : "Off. Current verification is still required."}
             </p>
             {view?.configuration?<p>Owner: {view.configuration.ownerUserId}. {"mailboxId" in view.configuration?`Mailbox: ${view.configuration.providerAccountId}.`:`Provider: ${view.configuration.endpointId}; model: ${view.configuration.modelVersion}; daily budget: ${view.configuration.dailyCeilingCents} cents; monthly budget: ${view.configuration.monthlyCeilingCents} cents.`}</p>:null}
+            {view?.configuration?.capability==='mail_capture'&&view.configuration.forwardScope?<p>Forward-only original cutoff: {view.configuration.forwardScope.enabledAt}. Incoming and Sent use the same cutoff; restart does not move it.</p>:null}
+            {view?.configuration?.capability==='crm_extraction'?<p>Allowed originals: mail only when current capture approval matches {view.configuration.mailCaptureOwnerApprovalId??'unconfigured'}. No native transcript or note processing authority.</p>:null}
             {view?.configuration&&'endpointId' in view.configuration?<>
               <p>Purpose: conversation evidence extraction.</p>
               <p>Access approval version: {view.configuration.accessGrantVersion}.</p>
@@ -298,7 +303,7 @@ export function CrmCapabilitiesSection({
               disabled={
                 busy !== null ||
                 !view ||
-                (!active && (!view.ready||ai&&(!review.critical||!review.integration||!review.reference.trim())))
+                (!active && (!view.ready||target.capability!=='metadata_review'&&view.scopeVersion!==CRM_OWNER_SCOPE_VERSION||ai&&(!review.critical||!review.integration||!review.reference.trim())))
               }
               onClick={() => {
                 if (view) void perform(target, view);

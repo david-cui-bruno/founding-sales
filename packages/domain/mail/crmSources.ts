@@ -1,7 +1,8 @@
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import {qualifyBusinessMailMetadata} from './businessQualification.ts';
 import {redactBackfillMetadataForSources} from './crmBackfillMetadata.ts';
-import { businessMetadataObservationSchema, mailConversationSchema } from '@fss/contracts';
+import { businessMetadataObservationSchema, mailConversationSchema, type CrmForwardCaptureScope } from '@fss/contracts';
+import {captureProofForControl,forwardMailSourceAllowed,observationScopeAllowed,isForwardCaptureDateAllowed} from './crmForwardCaptureScope.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { isSuppressed } from '../suppression/effective.ts';
 import { workspaceScope, repositoryContext } from '../db/workspaceScope.ts';
@@ -11,7 +12,7 @@ import {
 } from '../business/acquisition.ts';
 import { headerValue } from './gmailClient.ts';
 import type { GmailMessageMetadata } from './gmailClient.ts';
-import type { BusinessMailMetadataObserver } from './pipeline.ts';
+import type { BusinessMailMetadataObserver,HistoricalMetadataAdmission } from './pipeline.ts';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -42,6 +43,7 @@ export interface MailCaptureProof {
   evaluationReceipt: string | null;
   releaseReceipt: string | null;
   ownerApprovalId?: string;
+  forwardScope?: CrmForwardCaptureScope;
   captureVersion: typeof MAIL_CAPTURE_VERSION;
 }
 export interface MailCaptureProofVerifier {
@@ -99,6 +101,8 @@ export interface MailCaptureProvider {
 }
 /** Separately composed historical provider; every actual metadata/body call is reserved. */
 export interface HistoricalMailCaptureProvider {
+  /** Caller-owned publication transaction, after the last external wait. Raw read identity only. */
+  revalidateOriginal(context:RepositoryContext,original:CapturedMailMessage):Promise<boolean>;
   revalidate?(context:RepositoryContext,input:{importId:string;expectedProof:MailCaptureProof}):Promise<boolean>;
   read(input: Parameters<MailCaptureProvider['read']>[0] & {
     importId: string; conversationId: string; decisionRevision: number;
@@ -257,28 +261,9 @@ async function lockCaptureAuthority(
     )
   )
     return null;
-  return {
-    conversation,
-    mailboxEmail: mailbox.email_address,
-    proof: {
-      workspaceId: scope.workspaceId,
-      mailboxId: mailbox.id,
-      ownerUserId: mailbox.owner_user_id,
-      providerAccountId: payload.providerAccountId,
-      accountBinding: binding!,
-      generation: payload.generation,
-      controlsRevision: control.revision,
-      policyRevision: control.policy_revision,
-      disclosureVersion: control.disclosure_version,
-      disclosureSha256: control.disclosure_sha256,
-      ...control.owner_approval_id?{ownerApprovalId:control.owner_approval_id}:{},
-      grantReceipt: control.grant_receipt,
-      providerPolicyReceipt: control.provider_policy_receipt,
-      evaluationReceipt: control.evaluation_receipt,
-      releaseReceipt: control.release_receipt,
-      captureVersion: MAIL_CAPTURE_VERSION,
-    },
-  };
+  const proof=await captureProofForControl(repositoryContext(scope,db),mailbox.id,control);
+  if(!proof.forwardScope)return null;
+  return {conversation,mailboxEmail:mailbox.email_address,proof};
 }
 
 /** Provider work is outside database transactions; apply repeats exact authority and lease fences. */
@@ -305,6 +290,28 @@ async function validExplicitMailRecapture(
       )
     ).rows.length === 1
   );
+}
+
+function captureAuthorityLocker(
+  deps: Parameters<typeof businessMailCaptureHandler>[0],
+  diagnostic: boolean,
+) {
+  return async (
+    input: JobHandlerInput,
+    payload: CapturePayload,
+    lockConversation = false,
+    beforeConversation?: () => Promise<boolean>,
+  ) => {
+    if (diagnostic) {
+      if (beforeConversation && !(await beforeConversation())) return null;
+      return deps.diagnostic!.lockAuthority(input, payload);
+    }
+    const authority = await lockCaptureAuthority(input, payload, lockConversation, beforeConversation);
+    return !payload.acquisitionOrigin ? authority : authority && deps.historicalProvider?.revalidate &&
+      await deps.historicalProvider.revalidate(repositoryContext(input.scope, input.session), {
+        importId: payload.acquisitionOrigin.importId, expectedProof: authority.proof,
+      }) ? authority : null;
+  };
 }
 
 export function businessMailCaptureHandler(deps: {
@@ -342,23 +349,7 @@ export function businessMailCaptureHandler(deps: {
         ? deps.diagnostic?.proofVerifier
         : deps.proofVerifier;
       if (!verifier) return done('acquisition_disabled');
-      async function lockAuthority(
-        input: JobHandlerInput,
-        payload: CapturePayload,
-        lockConversation = false,
-        beforeConversation?: () => Promise<boolean>,
-      ) {
-        if (diagnostic) {
-          if (beforeConversation && !(await beforeConversation())) return null;
-          return deps.diagnostic!.lockAuthority(input, payload);
-        }
-        return lockCaptureAuthority(
-          input,
-          payload,
-          lockConversation,
-          beforeConversation,
-        );
-      }
+      const lockAuthority = captureAuthorityLocker(deps, diagnostic);
       // Historical reads require the separately reserved import adapter; never fall through to live reads.
       if (payload.acquisitionOrigin && !deps.historicalProvider)
         return done('historical_read_meter_required');
@@ -468,14 +459,15 @@ export function businessMailCaptureHandler(deps: {
           providerAccountId: payload.providerAccountId,
           generation: payload.generation,
       };
-      const message = providerMessageSchema.safeParse(
+      const providerOriginal =
         payload.acquisitionOrigin===undefined?await (diagnostic?deps.diagnostic!.provider:deps.provider).read(providerInput):await deps.historicalProvider!.read({...providerInput,
           importId:payload.acquisitionOrigin.importId,conversationId:payload.conversationId,decisionRevision:payload.decisionRevision,
           expectedProof:staged.authority.proof,context:repositoryContext(input.scope,input.session),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken,
-        }),
-      );
+        });
+      const message = providerMessageSchema.safeParse(providerOriginal);
       if (!message.success) return done('provider_evidence_invalid');
       const m = message.data;
+      if(!diagnostic&&!payload.acquisitionOrigin&&(!staged.authority.proof.forwardScope||!isForwardCaptureDateAllowed(staged.authority.proof.forwardScope,Date.parse(m.providerAt))))return done('outside_forward_capture_scope');
       if (
         m.providerAccountId !== payload.providerAccountId ||
         m.messageId !== payload.providerMessageId ||
@@ -505,7 +497,7 @@ export function businessMailCaptureHandler(deps: {
       if (!(await verifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
       return withTransaction(input.session, async () => {
-        if(payload.acquisitionOrigin&&deps.historicalProvider?.revalidate&&!await deps.historicalProvider.revalidate(repositoryContext(input.scope,input.session),{importId:payload.acquisitionOrigin.importId,expectedProof:staged.authority.proof}))return done('verification_unavailable');
+        if(payload.acquisitionOrigin&&(!deps.historicalProvider?.revalidateOriginal||!await deps.historicalProvider.revalidateOriginal(repositoryContext(input.scope,input.session),providerOriginal)))return done('verification_unavailable');
         if (verifier.revalidate && !await verifier.revalidate(repositoryContext(input.scope,input.session),staged.authority.proof)) return done('verification_unavailable');
         const senderEndpoint = participants[0]!;
         const senderHash = createHash('sha256')
@@ -2019,24 +2011,8 @@ async function prepareMailProcessingSnapshot(
     )
   )
     return { ok: false, reason: 'processing_decision_changed' };
-  const proof: MailCaptureProof = {
-    workspaceId: context.scope.workspaceId,
-    mailboxId: mailbox.id,
-    ownerUserId: source.owner_user_id,
-    providerAccountId: source.provider_account_id,
-    accountBinding: source.account_binding,
-    generation: mailbox.generation,
-    controlsRevision: control.revision,
-    policyRevision: control.policy_revision,
-    disclosureVersion: control.disclosure_version,
-    disclosureSha256: control.disclosure_sha256,
-    ...control.owner_approval_id?{ownerApprovalId:control.owner_approval_id}:{},
-      grantReceipt: control.grant_receipt,
-    providerPolicyReceipt: control.provider_policy_receipt,
-    evaluationReceipt: control.evaluation_receipt,
-    releaseReceipt: control.release_receipt,
-    captureVersion: MAIL_CAPTURE_VERSION,
-  };
+  if(!await forwardMailSourceAllowed(context,source,control))return {ok:false,reason:'mail_forward_scope_unavailable'};
+  const proof=await captureProofForControl(context,mailbox.id,control);
   if (!(await activeBusinessActor(context)))
     return { ok: false, reason: 'processing_authority_unavailable' };
   const final = (
@@ -2295,6 +2271,7 @@ export const approvedBusinessMailObservationSchema = z
 export async function observeApprovedBusinessMail(
   context: RepositoryContext,
   value: unknown,
+  historical?:HistoricalMetadataAdmission,
 ) {
   if (
     context.scope.actor.kind !== 'system' ||
@@ -2305,6 +2282,7 @@ export async function observeApprovedBusinessMail(
   if (!parsed.success)
     return { ok: false as const, reason: 'invalid_metadata' };
   const { ownerUserId, observation } = parsed.data;
+  if(!await observationScopeAllowed(context,parsed.data,historical))return {ok:false as const,reason:'outside_forward_capture_scope'};
   const mailbox = (
     await context.db.query<Mailbox>(
       'SELECT * FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR NO KEY UPDATE',
@@ -2424,7 +2402,7 @@ export function createApprovedBusinessMailObserver(
   } = {},
 ): BusinessMailMetadataObserver {
   return {
-    async observe(context, input) {
+    async observe(context, input, historical) {
       if(input.metadata.labelIds.includes('DRAFT'))return {ok:false,reason:'metadata_observation_unavailable'};
       if(options.revalidateAuthority&&!await options.revalidateAuthority(context,input))return {ok:false,reason:'metadata_observation_unavailable'};
       const policy = (
@@ -2472,7 +2450,7 @@ export function createApprovedBusinessMailObserver(
           ).toISOString(),
           ...classification,
         },
-      });
+      },historical);
       if(!result.ok)return {ok:false,reason:result.reason==='outside_review_window'?'outside_review_window':result.reason==='metadata_deleted'?'metadata_deleted':'metadata_observation_unavailable'};
       if(result.value.conversationId===null)return {ok:false,reason:'metadata_observation_unavailable'};
       return {ok:true,conversationId:result.value.conversationId};

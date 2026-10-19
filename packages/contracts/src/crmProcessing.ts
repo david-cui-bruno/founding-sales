@@ -6,6 +6,7 @@ import { z } from "zod";
 import { commandIdSchema } from "./auth.ts";
 import { semanticVersionSchema } from "./clientVersion.ts";
 import { canonicalSourceReferenceSchema } from "./people.ts";
+import { crmOwnerScopeVersionSchema, crmExtractionSourceKindsSchema, hasConsistentCrmExtractionSourceScope } from './crmOwnerScope.ts';
 
 /** Lookup identity is exact; dates, attribution and quoted content come from the server. */
 export const crmSourceLookupSchema = canonicalSourceReferenceSchema.pick({
@@ -41,8 +42,21 @@ export const crmExtractionPurposeSaveSchema = z
     monthlyCeilingCents: z.number().int().min(1).max(1000000),
     inputTokenPriceMicros: crmInputTokenPriceMicrosSchema,
     outputTokenPriceMicros: crmTokenPriceMicrosSchema,
+    // Omission saves disabled/unscoped settings. Runtime validates this pair
+    // against the current effective capture approval before saving mail scope.
+    allowedSourceKinds: z.tuple([z.literal('mail')]).optional(),
+    mailCaptureOwnerApprovalId: z.uuid().optional(),
   })
   .strict();
+
+// Keep the base object composable through existing desktop .omit/.extend.
+// Authenticated saves use this paired command parser, not an unrefined shortcut.
+export const crmExtractionPurposeCommandSchema = crmExtractionPurposeSaveSchema.refine(
+  hasConsistentCrmExtractionSourceScope,
+  { message: 'Extraction source kinds and capture approval must be paired' },
+);
+/** Existing read route; optional negotiation preserves shipped strict responses. */
+export const crmExtractionPurposeReadSchema = z.strictObject({ scopeVersion: crmOwnerScopeVersionSchema.optional() });
 
 export const crmProcessingHealthReadSchema = crmSourceLookupSchema
   .pick({ sourceId: true, kind: true })
@@ -194,6 +208,7 @@ export const crmExtractionPurposeSchema = z.union([
       dailyCeilingCents: z.literal(0),
       monthlyCeilingCents: z.literal(0),
       unavailableReason: z.literal("purpose_not_configured"),
+      scopeVersion: crmOwnerScopeVersionSchema.optional(),
     })
     .strict(),
   z
@@ -210,8 +225,12 @@ export const crmExtractionPurposeSchema = z.union([
       inputTokenPriceMicros: crmInputTokenPriceMicrosSchema,
       outputTokenPriceMicros: crmTokenPriceMicrosSchema,
       unavailableReason: z.string().nullable(),
+      allowedSourceKinds: crmExtractionSourceKindsSchema.optional(),
+      mailCaptureOwnerApprovalId: z.uuid().nullable().optional(),
+      scopeVersion: crmOwnerScopeVersionSchema.optional(),
     })
-    .strict(),
+    .strict()
+    .refine(hasConsistentCrmExtractionSourceScope, { message: 'Extraction source kinds and capture approval must be paired' }),
 ]);
 
 export const crmProcessingRecordReadSchema = z

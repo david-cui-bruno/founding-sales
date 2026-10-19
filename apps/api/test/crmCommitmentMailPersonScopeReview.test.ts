@@ -1,12 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
+import {historicalMailFixtureRegistry,seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
 import { expect, it } from "vitest";
 import { crmProcessingResultSchema } from "@fss/contracts";
 import { createNativeCrmMailEvidence } from "@fss/domain/crm/nativeMailEvidence.ts";
-import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
 import { enqueueJob, claimJobs } from "@fss/domain/jobs/jobStore.ts";
 import { businessAccountBinding } from "@fss/domain/business/acquisition.ts";
 import { workspaceScope } from "@fss/domain/db/workspaceScope.ts";
-import { registerHandlers } from "../../worker/src/bootstrap/main.ts";
 import { runOnce } from "../../worker/src/runner/jobRunner.ts";
 import {
   createAuthFixture,
@@ -200,44 +199,8 @@ it("keeps unrelated Today work when a mail person loses current legacy firm acce
         )
       ).status,
     ).toBe(200);
-    // Explicit isolated fake evaluation configuration; no production activation.
-    await fixture.db.query(
-      "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-      [workspaceId],
-    );
-    const registry = registerHandlers(new HandlerRegistry(), {
-      classifier: undefined,
-      mail: undefined,
-      send: undefined,
-      research: undefined,
-      crmExtraction: { allowControlledEvaluation:true,
-        mailEvidence: port,
-        adapter: {
-          endpointId: "mail-coverage-evaluation",
-          modelVersion: "fixture-mail-coverage",
-          accessGrantVersion: "fixture",
-          dataHandlingVersion: "fixture",
-          providerKey: "fixture.mail_coverage",
-          fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-          run: async ({ text }) => {
-            const original = JSON.parse(text) as { text: string };
-            return {
-              acceptance: "accepted",
-              usage: { inputTokens: 1, outputTokens: 1 },
-              claims: [
-                {
-                  kind: "commitment",
-                  status: "stated",
-                  interpretation: "A human must attest this promise",
-                  locator: `text:0:${original.text.length}`,
-                  quote: original.text,
-                },
-              ],
-            };
-          },
-        },
-      },
-    });
+    // Offline historical evidence below, not current extraction authority.
+    const registry=historicalMailFixtureRegistry({classifier:undefined,mail:undefined,send:undefined,research:undefined});
     const taskIds: string[] = [];
     for (let index = 0; index < 2; index++) {
       const providerMessageId =
@@ -285,16 +248,12 @@ it("keeps unrelated Today work when a mail person loses current legacy firm acce
           })
         )[0]!;
       }
-      const capture = registerHandlers(new HandlerRegistry(), {
+      const capture = historicalMailFixtureRegistry({
         classifier: undefined,
         mail: undefined,
         send: undefined,
         research: undefined,
-        crmMailCapture: {
-          proofVerifier: {
-            verify: async (proof) => proof.accountBinding === binding,
-          },
-          provider: {
+        retainedMailFixture: { original: {
             read: async () => ({
               providerAccountId: "google-business",
               messageId: providerMessageId,
@@ -352,14 +311,7 @@ it("keeps unrelated Today work when a mail person loses current legacy firm acce
         contentHash: createHash("sha256").update(quote).digest("hex"),
         locator: null,
       };
-      expect(
-        (await post("/crm/processing/request", command({ source }))).status,
-      ).toBe(200);
-      await runOnce(fixture.db, {
-        registry,
-        owner: `mail-coverage-extraction-${index}`,
-        limit: 20,
-      });
+      await seedHistoricalExtraction(fixture,{source,claims:[{kind:'commitment',status:'stated',interpretation:'A human must attest this promise',locator:`text:0:${quote.length}`,quote}]});
       const processed = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );

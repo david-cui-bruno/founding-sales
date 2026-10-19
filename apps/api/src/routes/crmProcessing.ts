@@ -1,5 +1,6 @@
 import { readCrmProcessing, requestCrmProcessing, readCrmExtractionPurpose, saveCrmExtractionPurpose, readCrmProcessingHealth,readCrmProcessingRecord } from '@fss/domain/crm/processing.ts';
-import { crmResolvedSourceSchema, crmSourceLookupSchema, crmProcessingReadSchema, crmProcessingRequestSchema, crmExtractionPurposeSaveSchema, crmProcessingHealthReadSchema,crmProcessingRecordReadSchema } from '@fss/contracts';
+import { crmResolvedSourceSchema, crmSourceLookupSchema, crmProcessingReadSchema, crmProcessingRequestSchema, crmExtractionPurposeCommandSchema, crmExtractionPurposeReadSchema, crmProcessingHealthReadSchema,crmProcessingRecordReadSchema } from '@fss/contracts';
+import {projectCrmExtractionPurpose} from './crmOwnerScope.ts';
 import { resolveCrmSource } from '@fss/domain/crm/sourceResolver.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
@@ -23,11 +24,12 @@ export async function routeCrmProcessing(request: ApiRequest, options: RoutingOp
     return result === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: result };
   }
   if (request.path === '/crm/processing/purpose/save')
-    return runRouteCommand({ auth: options.auth, request, principal: verified.principal }, crmExtractionPurposeSaveSchema,
+    return runRouteCommand({ auth: options.auth, request, principal: verified.principal }, crmExtractionPurposeCommandSchema,
       'crm.extraction_purpose_saved', (context, body) => saveCrmExtractionPurpose(context, body));
   if (request.path === '/crm/processing/purpose/read') {
+    const parsed=crmExtractionPurposeReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
     const result = await readCrmExtractionPurpose(scoped.context);
-    return result === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: result };
+    return result === null ? { status: 404, body: redactError('not_found') } : { status: 200, body: projectCrmExtractionPurpose(result,parsed.data.scopeVersion) };
   }
   if (request.path === '/crm/processing/request')
     return runRouteCommand({ auth: options.auth, request, principal: verified.principal }, crmProcessingRequestSchema,

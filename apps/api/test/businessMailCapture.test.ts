@@ -33,8 +33,9 @@ import { workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { createAuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { dispatch } from '../src/server.ts';
+import {activateForwardFixture,historicalMailFixtureRegistry} from './support/crmForwardScopeFixture.ts';
 
-async function approveCaptureFixture(
+async function seedHistoricalCaptureFixture(
   fixture: Awaited<ReturnType<typeof createAuthFixture>>,
   ownerUserId = fixture.alpha.admin.userId,
 ) {
@@ -91,6 +92,12 @@ async function approveCaptureFixture(
     })
   )[0]!;
   return { workspaceId, ownerUserId, mailbox, binding, conversationId, job };
+}
+async function approveCaptureFixture(fixture:Awaited<ReturnType<typeof createAuthFixture>>){
+ const seeded=await seedHistoricalCaptureFixture(fixture),forward=await activateForwardFixture(fixture,seeded.mailbox.id);
+ const job:typeof seeded.job={...seeded.job,payload:{...seeded.job.payload,controlsRevision:forward.capture.revision,policyRevision:forward.policy.revision}};
+ await fixture.db.query('UPDATE jobs SET payload=$3::jsonb WHERE workspace_id=$1 AND id=$2',[seeded.workspaceId,job.id,JSON.stringify(job.payload)]);
+ return {...seeded,job,forward};
 }
 
 it('disabled acquisition calls no body adapter and creates no source, person or enrollment', async () => {
@@ -197,17 +204,13 @@ it('disabled acquisition calls no body adapter and creates no source, person or 
 it('captures an approved unknown business message with immutable lineage and conserves replay', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, ownerUserId, mailbox, binding, job } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, ownerUserId, mailbox, binding, job ,forward}=await approveCaptureFixture(fixture);
     const passage = 'Could we discuss maintenance next week?';
     let reads = 0;
     const handler = captureHandler({
       proofVerifier: {
         async verify(proof) {
-          return (
-            proof.grantReceipt === 'fixture-grant' &&
-            proof.accountBinding === binding
-          );
+          return forward.verifiers.captureVerifier.verify(proof);
         },
       },
       provider: {
@@ -218,7 +221,7 @@ it('captures an approved unknown business message with immutable lineage and con
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: 'Thu, 08 Oct 2026 10:00:00 -0500',
             from: 'Unknown@business.test',
             to: ['business@example.test'],
@@ -470,15 +473,10 @@ it('captures an approved unknown business message with immutable lineage and con
 it('revocation during provider wait cannot publish a source or successor intent', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, mailbox, binding, job } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, mailbox, job ,forward}=await approveCaptureFixture(fixture);
     const body = 'Revoked message must remain unavailable';
     const handler = captureHandler({
-      proofVerifier: {
-        async verify(proof) {
-          return proof.accountBinding === binding;
-        },
-      },
+      proofVerifier:forward.verifiers.captureVerifier,
       provider: {
         async read() {
           await fixture.db.query(
@@ -490,7 +488,7 @@ it('revocation during provider wait cannot publish a source or successor intent'
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: 'other@business.test',
             to: ['business@example.test'],
@@ -514,7 +512,7 @@ it('revocation during provider wait cannot publish a source or successor intent'
         }),
         job,
       }),
-    ).toMatchObject({ done: true, progress: { outcome: 'authority_changed' } });
+    ).toMatchObject({ done: true, progress: { outcome: 'verification_unavailable' } });
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -542,15 +540,10 @@ it('revocation during provider wait cannot publish a source or successor intent'
 it('explicit person association preserves the original unresolved copy and advances context revision', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, mailbox, binding, job } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, mailbox, job ,forward}=await approveCaptureFixture(fixture);
     const passage = 'An unknown business correspondent';
     const handler = captureHandler({
-      proofVerifier: {
-        async verify(p) {
-          return p.accountBinding === binding;
-        },
-      },
+      proofVerifier:forward.verifiers.captureVerifier,
       provider: {
         async read() {
           return {
@@ -558,7 +551,7 @@ it('explicit person association preserves the original unresolved copy and advan
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: 'Unknown@business.test',
             to: ['business@example.test'],
@@ -762,15 +755,10 @@ it.each([
   async (example) => {
     const fixture = await createAuthFixture();
     try {
-      const { workspaceId, binding, job } =
-        await approveCaptureFixture(fixture);
+      const { workspaceId, job ,forward}=await approveCaptureFixture(fixture);
       const passage = 'A manually sent business reply';
       const handler = captureHandler({
-        proofVerifier: {
-          async verify(p) {
-            return p.accountBinding === binding;
-          },
-        },
+        proofVerifier:forward.verifiers.captureVerifier,
         provider: {
           async read() {
             return {
@@ -779,7 +767,7 @@ it.each([
               threadId: 'approved-thread',
               labels: example.labels,
               origin: 'origin' in example ? example.origin : 'sent',
-              providerAt: '2026-10-08T15:00:00.000Z',
+              providerAt: new Date().toISOString(),
               rawSenderDate: null,
               from: 'from' in example ? example.from : 'business@example.test',
               to: ['Unknown@business.test'],
@@ -845,8 +833,7 @@ it.each([
 it('snapshots an existing exact operational context without inventing a person', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, ownerUserId, mailbox, binding, job } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, ownerUserId, mailbox, job ,forward}=await approveCaptureFixture(fixture);
     const firmId = (
       await fixture.db.query<{ id: string }>(
         "INSERT INTO firms(workspace_id,name,assigned_user_id) VALUES($1,'Original business firm',$2) RETURNING id",
@@ -873,11 +860,7 @@ it('snapshots an existing exact operational context without inventing a person',
     ).rows[0]!.id;
     const passage = 'A known operational message';
     const handler = captureHandler({
-      proofVerifier: {
-        async verify(p) {
-          return p.accountBinding === binding;
-        },
-      },
+      proofVerifier:forward.verifiers.captureVerifier,
       provider: {
         async read() {
           return {
@@ -885,7 +868,7 @@ it('snapshots an existing exact operational context without inventing a person',
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: 'Unknown@business.test',
             to: ['business@example.test'],
@@ -958,15 +941,10 @@ it('snapshots an existing exact operational context without inventing a person',
 it('registered retention preserves approved unmatched business copies beyond metadata horizons', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, mailbox, binding, job, conversationId } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, mailbox, job, conversationId ,forward}=await approveCaptureFixture(fixture);
     const passage = 'Approved unknown firm business correspondence';
     const handler = captureHandler({
-      proofVerifier: {
-        async verify(p) {
-          return p.accountBinding === binding;
-        },
-      },
+      proofVerifier:forward.verifiers.captureVerifier,
       provider: {
         async read() {
           return {
@@ -974,7 +952,7 @@ it('registered retention preserves approved unmatched business copies beyond met
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: 'Unknown@business.test',
             to: ['business@example.test'],
@@ -1094,8 +1072,7 @@ it('registered retention preserves approved unmatched business copies beyond met
 it('registered sync qualifies an unknown business correspondent without body reads then captures through independent authority', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, ownerUserId, mailbox, binding } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, ownerUserId, mailbox, binding ,forward}=await approveCaptureFixture(fixture);
     await fixture.db.query(
       'UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',
       [
@@ -1144,7 +1121,7 @@ it('registered sync qualifies an unknown business correspondent without body rea
         },
       ],
     });
-    const observer = createApprovedBusinessMailObserver();
+    const observer = createApprovedBusinessMailObserver({revalidateAuthority:forward.verifiers.revalidateMetadata});
     const registry = registerHandlers(new HandlerRegistry(), {
       classifier: undefined,
       send: undefined,
@@ -1167,11 +1144,7 @@ it('registered sync qualifies an unknown business correspondent without body rea
         businessMailObserver: observer,
       },
       crmMailCapture: {
-        proofVerifier: {
-          async verify(proof) {
-            return proof.accountBinding === binding;
-          },
-        },
+        proofVerifier:forward.verifiers.captureVerifier,
         provider: createGmailMailCaptureProvider({
           gmail,
           async resolveAccess(_request) {
@@ -1277,7 +1250,7 @@ it('registered sync qualifies an unknown business correspondent without body rea
 it('refuses a newly returned deleted participant after the provider wait even without original matches', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, binding, job } = await approveCaptureFixture(fixture);
+    const { workspaceId, job ,forward}=await approveCaptureFixture(fixture);
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -1328,11 +1301,7 @@ it('refuses a newly returned deleted participant after the provider wait even wi
       ).status,
     ).toBe(200);
     const handler = captureHandler({
-      proofVerifier: {
-        async verify(proof) {
-          return proof.accountBinding === binding;
-        },
-      },
+      proofVerifier:forward.verifiers.captureVerifier,
       provider: {
         async read() {
           const preview = await post(
@@ -1356,7 +1325,7 @@ it('refuses a newly returned deleted participant after the provider wait even wi
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: 'deleted@firm.example',
             to: ['business@example.test'],
@@ -1392,7 +1361,7 @@ it('refuses a newly returned deleted participant after the provider wait even wi
 it('omits owner-private mail summaries when any reviewed firm assignment is no longer authorized', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, binding, job } = await approveCaptureFixture(
+    const { workspaceId, job } = await seedHistoricalCaptureFixture(
       fixture,
       fixture.alpha.salesperson.userId,
     );
@@ -1415,20 +1384,15 @@ it('omits owner-private mail summaries when any reviewed firm assignment is no l
           sendingEnabled: false,
         },
       );
-    const handler = captureHandler({
-      proofVerifier: {
-        async verify(proof) {
-          return proof.accountBinding === binding;
-        },
-      },
-      provider: {
+    // H: retained pre119 owner-private copy, not a new salesperson consent.
+    const handler = historicalMailFixtureRegistry({classifier:undefined,mail:undefined,send:undefined,research:undefined,retainedMailFixture:{original:{
         async read() {
           return {
             providerAccountId: 'google-business',
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: 'unknown@business.test',
             to: ['business@example.test'],
@@ -1442,7 +1406,7 @@ it('omits owner-private mail summaries when any reviewed firm assignment is no l
           };
         },
       },
-    });
+    }}).get('crm.mail_capture')!;
     const result = await handler.handle({
       session: fixture.db,
       scope: workspaceScope(workspaceId, {
@@ -1514,7 +1478,7 @@ it('omits owner-private mail summaries when any reviewed firm assignment is no l
 it('captures a safe observed sender label as an unknown-firm person without any operational contact or enrollment', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, binding, job } = await approveCaptureFixture(fixture);
+    const { workspaceId, job ,forward}=await approveCaptureFixture(fixture);
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -1535,11 +1499,7 @@ it('captures a safe observed sender label as an unknown-firm person without any 
         },
       );
     const handler = captureHandler({
-      proofVerifier: {
-        async verify(proof) {
-          return proof.accountBinding === binding;
-        },
-      },
+      proofVerifier:forward.verifiers.captureVerifier,
       provider: {
         async read() {
           return {
@@ -1547,7 +1507,7 @@ it('captures a safe observed sender label as an unknown-firm person without any 
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: 'morgan@unknown.test',
             fromDisplayName: 'Morgan Avery',
@@ -1619,11 +1579,7 @@ it('captures a safe observed sender label as an unknown-firm person without any 
         })
       )[0]!;
       const nextHandler = captureHandler({
-        proofVerifier: {
-          async verify(proof) {
-            return proof.accountBinding === binding;
-          },
-        },
+        proofVerifier:forward.verifiers.captureVerifier,
         provider: {
           async read() {
             return {
@@ -1631,7 +1587,7 @@ it('captures a safe observed sender label as an unknown-firm person without any 
               messageId,
               threadId: 'approved-thread',
               labels: ['INBOX'],
-              providerAt: '2026-10-09T15:00:00.000Z',
+              providerAt: new Date().toISOString(),
               rawSenderDate: null,
               from: 'morgan@unknown.test',
               fromDisplayName: label,
@@ -1708,7 +1664,7 @@ it('captures a safe observed sender label as an unknown-firm person without any 
 it('requires an explicit revision-bound recapture after restore and preserves old reference vetoes', async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, binding, job } = await approveCaptureFixture(fixture);
+    const { workspaceId, job ,forward}=await approveCaptureFixture(fixture);
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -1736,11 +1692,7 @@ it('requires an explicit revision-bound recapture after restore and preserves ol
     let passage = 'Original private copy';
     let reads = 0;
     const handler = captureHandler({
-      proofVerifier: {
-        async verify(proof) {
-          return proof.accountBinding === binding;
-        },
-      },
+      proofVerifier:forward.verifiers.captureVerifier,
       provider: {
         async read() {
           reads++;
@@ -1749,7 +1701,7 @@ it('requires an explicit revision-bound recapture after restore and preserves ol
             messageId: 'approved-message',
             threadId: 'approved-thread',
             labels: ['INBOX'],
-            providerAt: '2026-10-08T15:00:00.000Z',
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: 'unknown@business.test',
             to: ['business@example.test'],
@@ -1861,8 +1813,7 @@ it.each([
   async (example) => {
     const fixture = await createAuthFixture();
     try {
-      const { workspaceId, binding, job } =
-        await approveCaptureFixture(fixture);
+      const { workspaceId, job ,forward}=await approveCaptureFixture(fixture);
       const token = (
         await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
       ).accessToken;
@@ -1884,11 +1835,7 @@ it.each([
           },
         );
       const handler = captureHandler({
-        proofVerifier: {
-          async verify(proof) {
-            return proof.accountBinding === binding;
-          },
-        },
+        proofVerifier:forward.verifiers.captureVerifier,
         provider: {
           async read() {
             return {
@@ -1896,7 +1843,7 @@ it.each([
               messageId: 'approved-message',
               threadId: 'approved-thread',
               labels: ['INBOX'],
-              providerAt: '2026-10-08T15:00:00.000Z',
+              providerAt: new Date().toISOString(),
               rawSenderDate: null,
               from: 'casey@unknown.test',
               fromDisplayName: 'Casey Sutton',
@@ -1970,8 +1917,7 @@ it('serializes registered metadata observation and capture without reversing the
   const monitor = await fixture.database.appRuntimeSession();
   let released = false;
   try {
-    const { workspaceId, mailbox, binding, job } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, mailbox, job ,forward}=await approveCaptureFixture(fixture);
     await fixture.db.query(
       'UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',
       [
@@ -2039,6 +1985,7 @@ it('serializes registered metadata observation and capture without reversing the
         replyPromoter: { async promoteReply() {} },
         pushTopicName: 'projects/example/topics/mail',
         businessMailObserver: createApprovedBusinessMailObserver({
+          revalidateAuthority:forward.verifiers.revalidateMetadata,
           categorizeMetadata: () => ({
             category: 'business',
             reason: 'business_metadata',
@@ -2047,11 +1994,7 @@ it('serializes registered metadata observation and capture without reversing the
         }),
       },
       crmMailCapture: {
-        proofVerifier: {
-          async verify(proof) {
-            return proof.accountBinding === binding;
-          },
-        },
+        proofVerifier:forward.verifiers.captureVerifier,
         provider: {
           async read() {
             return {
@@ -2059,7 +2002,7 @@ it('serializes registered metadata observation and capture without reversing the
               messageId: 'approved-message',
               threadId: 'approved-thread',
               labels: ['INBOX'],
-              providerAt: '2026-10-08T15:00:00.000Z',
+              providerAt: new Date().toISOString(),
               rawSenderDate: null,
               from: 'unknown@business.test',
               to: ['business@example.test'],
@@ -2161,8 +2104,7 @@ it('serializes registered metadata observation and capture without reversing the
 it.each(['automated','legacy_policy'] as const)('registered sync holds %s business-looking mail without fetching a body or enrolling anyone', async (scenario) => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, mailbox, binding } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, mailbox ,forward}=await approveCaptureFixture(fixture);
     await fixture.db.query(
       'UPDATE crm_business_policies SET disclosure_version=$3,disclosure_sha256=$4 WHERE workspace_id=$1 AND mailbox_id=$2',
       [
@@ -2213,7 +2155,7 @@ it.each(['automated','legacy_policy'] as const)('registered sync holds %s busine
         },
       ],
     });
-    const observer = createApprovedBusinessMailObserver();
+    const observer = createApprovedBusinessMailObserver({revalidateAuthority:forward.verifiers.revalidateMetadata});
     const registry = registerHandlers(new HandlerRegistry(), {
       classifier: undefined,
       send: undefined,
@@ -2236,11 +2178,7 @@ it.each(['automated','legacy_policy'] as const)('registered sync holds %s busine
         businessMailObserver: observer,
       },
       crmMailCapture: {
-        proofVerifier: {
-          async verify(proof) {
-            return proof.accountBinding === binding;
-          },
-        },
+        proofVerifier:forward.verifiers.captureVerifier,
         provider: createGmailMailCaptureProvider({
           gmail,
           async resolveAccess(_request) {

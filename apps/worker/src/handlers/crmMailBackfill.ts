@@ -11,6 +11,7 @@ import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {GmailClientError,type GmailClient,type GmailAccessGrant} from '@fss/domain/mail/gmailClient.ts';
 import type {MailCaptureProofVerifier} from '@fss/domain/mail/crmSources.ts';
 import {recordBackfillMetadata} from '@fss/domain/mail/crmBackfillMetadata.ts';
+import {reservedHistoricalObservation} from '@fss/domain/mail/crmBackfillCapture.ts';
 import {METADATA_HEADERS} from '@fss/domain/mail/types.ts';
 import type {BusinessMailMetadataObserver} from '@fss/domain/mail/pipeline.ts';
 import type {JobHandler,JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
@@ -39,6 +40,13 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
   if(await readBackfillAllocation(context,authority.proof.mailboxId)===null){await block('quota_configuration_required');return;}
   let recoveryScope:HistoryRecovery|undefined;
   let expansionReadScope:BackfillExpansionReadScope|undefined;
+  const metadataReads=new WeakMap<object,{reservationId:string;authority:BackfillAuthority}>();
+  const observer:BusinessMailMetadataObserver={async observe(observationContext,original){
+   const read=metadataReads.get(original.metadata);
+   if(!read||original.acquisitionOrigin?.importId!==importId)return {ok:false,reason:'metadata_observation_unavailable'};
+   const admission=reservedHistoricalObservation({metadata:original.metadata,reservationId:read.reservationId,authority:read.authority,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken,allocationVerifier:adapters.allocationVerifier,...recoveryScope?{recovery:recoveryScope}:{}});
+   return adapters.observer.observe(observationContext,original,admission);
+  }};
   async function providerRead<T>(method:BackfillReadMethod,bound:BackfillAuthority,read:(access:GmailAccessGrant)=>Promise<T>,original?:RetainedCopyTraversal):Promise<T>{
    if(!await adapters.proofVerifier.verify(bound.proof))throw new BackfillFailure('acquisition_verification_required');
    const proofInput={workspaceId:input.scope.workspaceId,mailboxId:bound.proof.mailboxId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation};
@@ -53,6 +61,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
    const latest=await adapters.resolveAccess(proofInput),current=await readBackfillAuthority(context,importId);
    if(latest===null||latest.mailboxId!==proofInput.mailboxId||latest.providerAccountId!==proofInput.providerAccountId||latest.generation!==proofInput.generation||current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof))throw new BackfillFailure('acquisition_binding_changed');
    if(current&&!await withTransaction(input.session,()=>revalidateAuthority(context,current)))throw new BackfillFailure('quota_or_authority_unavailable');
+   if(method==='metadata'&&result!==null&&typeof result==='object')metadataReads.set(result,{reservationId:reservation.reservationId,authority:structuredClone(bound)});
    return result;
   }
   async function providerMetadata(bound:BackfillAuthority,messageId:string,expected?:{source:ExactMailSource;contextIdentity:string;traversal:RetainedCopyTraversal}){
@@ -104,7 +113,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
     if(metadata&&metadata.threadId!==expansion.provider_thread_id)throw new BackfillFailure('provider_evidence_invalid');
     await withTransaction(input.session,async()=>{
      if(!await fenced(input)||!await validExpansion())return;
-     const receipt=metadata===null||metadata.labelIds.includes('DRAFT')?undefined:await adapters.observer.observe(context,{mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation,metadata,acquisitionOrigin:{importId},olderContext:{conversationId:expansion.conversation_id,decisionRevision:expansion.decision_revision}});
+     const receipt=metadata===null||metadata.labelIds.includes('DRAFT')?undefined:await observer.observe(context,{mailboxId:bound.proof.mailboxId,ownerUserId:bound.proof.ownerUserId,providerAccountId:bound.proof.providerAccountId,generation:bound.proof.generation,metadata,acquisitionOrigin:{importId},olderContext:{conversationId:expansion.conversation_id,decisionRevision:expansion.decision_revision}});
      await recordBackfillMetadata(context,{revalidateAuthority,authority:bound,messageId,metadata,scope:'expanded',observationReceipt:receipt});
      await input.session.query(`UPDATE crm_mail_thread_expansions SET next_ordinal=next_ordinal+1,revision=revision+1,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2`,[input.scope.workspaceId,expansion.id]);
     });return;
@@ -154,7 +163,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      const outcome=await advanceHistoryRecovery(context,{revalidateAuthority,authority:bound,recovery,jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken},{
       list:async request=>await providerRead('list',bound,access=>adapters.gmail.listMessageIds(access,request)),
       history:async request=>await providerRead('history',bound,access=>adapters.gmail.listHistory(access,request)),
-      metadata:async messageId=>(await providerMetadata(bound,messageId)).metadata,observer:adapters.observer,
+      metadata:async messageId=>(await providerMetadata(bound,messageId)).metadata,observer,
      });
      if(outcome==='provider_unavailable')throw new BackfillFailure('provider_read_unavailable');
      if(outcome==='invalid_evidence')throw new BackfillFailure('provider_evidence_invalid');
@@ -200,7 +209,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
        const current=await readBackfillAuthority(context,importId,true);
      if(current&&!await revalidateAuthority(context,current))throw new BackfillFailure('quota_or_authority_unavailable');
        if(current===null||JSON.stringify(current.proof)!==JSON.stringify(bound.proof)||current.historyCursor!==bound.historyCursor||current.historyPageToken!==bound.historyPageToken||current.fromEpochMicroseconds!==bound.fromEpochMicroseconds||current.toEpochMicroseconds!==bound.toEpochMicroseconds)throw new BackfillFailure('acquisition_binding_changed');
-       const observationReceipt=metadata===null?undefined:await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
+       const observationReceipt=metadata===null?undefined:await observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
        await recordBackfillMetadata(context,{revalidateAuthority,authority:current,messageId,metadata,scope:'overlap',observationReceipt});
       });
      }
@@ -228,7 +237,7 @@ export function crmMailBackfillJobHandler(deps?:CrmMailBackfillDeps):JobHandler{
      const current=await readBackfillAuthority(context,importId,true);
      if(current&&!await revalidateAuthority(context,current))throw new BackfillFailure('quota_or_authority_unavailable');
      if(current===null||JSON.stringify(current.proof)!==JSON.stringify(expected.proof)||current.fromEpochMicroseconds!==expected.fromEpochMicroseconds||current.toEpochMicroseconds!==expected.toEpochMicroseconds)throw new BackfillFailure('acquisition_binding_changed');
-     const observationReceipt=metadata===null?undefined:await adapters.observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
+     const observationReceipt=metadata===null?undefined:await observer.observe(context,{mailboxId:current.proof.mailboxId,ownerUserId:current.proof.ownerUserId,providerAccountId:current.proof.providerAccountId,generation:current.proof.generation,metadata,acquisitionOrigin:{importId}});
      await recordBackfillMetadata(context,{revalidateAuthority,authority:current,messageId,metadata,scope:'historical',observationReceipt});
     });
    }

@@ -403,16 +403,16 @@ describe('the call.transcribe job', () => {
     expect(logs.find(line => line.event === 'call_transcription')?.fields).toMatchObject({ settled_cents: 2, utterances: 2 });
   });
 
-  it('queues exact call evidence with the original call actor only under enabled extraction configuration',async()=>{
+  it('stores exact call evidence but old unscoped extraction configuration grants no native successor',async()=>{
     await database.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2)",[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
     try{
       const sessionId=await call(60);await enqueue(sessionId);const provider=scripted([ok(60)]);await drain(provider);expect(provider.calls).toBe(1);
       const generations=(await database.session.query("SELECT id,source_id,source_revision,requested_by,purpose_revision FROM crm_extraction_generations WHERE workspace_id=$1 AND source_kind='call_transcript'",[seeded.alpha.workspaceId])).rows;
-      expect(generations).toHaveLength(1);expect(generations[0]).toMatchObject({source_id:sessionId,source_revision:1,requested_by:seeded.alpha.salesperson.userId,purpose_revision:1});
-      expect((await database.session.query("SELECT payload FROM jobs WHERE workspace_id=$1 AND kind='crm.extract'",[seeded.alpha.workspaceId])).rows).toEqual([{payload:{generationId:generations[0]!['id']}}]);
+      expect(generations).toEqual([]); expect(await readCallTranscript(salesperson(),sessionId)).not.toBeNull();
+      expect((await database.session.query("SELECT payload FROM jobs WHERE workspace_id=$1 AND kind IN ('crm.extract','crm.capture_extraction')",[seeded.alpha.workspaceId])).rows).toEqual([]);
+      expect(await attempts(sessionId)).toMatchObject([{state:'settled'}]);
     }finally{await database.session.query('UPDATE crm_extraction_purposes SET enabled=false WHERE workspace_id=$1',[seeded.alpha.workspaceId]);}
   });
-
   it('refuses with transcription_budget_exhausted when the day’s ceiling would be passed, and calls nobody', async () => {
     const sessionId = await call(600);
     expect((await enqueue(sessionId)).enqueued).toBe(true);
@@ -1444,15 +1444,15 @@ describe('the call.transcribe job', () => {
     expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 1, settled_cents: 1 }]);
   });
 
-  it('rolls back call transcript and settlement when its body-free capture intent fails',async()=>{
+  it('preserves independently authorized call transcript and settlement without attempting a prohibited native CRM successor',async()=>{
     await database.session.query("INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by) VALUES($1,1,true,'fixture','fixture-v1','fixture-grant','fixture-handling',100,1000,1,1,$2) ON CONFLICT(workspace_id) DO UPDATE SET enabled=true",[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
     const sessionId=await call(60);await enqueue(sessionId);
     await database.session.query("CREATE FUNCTION reject_call_capture_intent() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='crm.capture_extraction' THEN RAISE EXCEPTION 'capture_intent_failure'; END IF; RETURN NEW; END $$");
     await database.session.query('CREATE TRIGGER reject_call_capture_intent BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION reject_call_capture_intent()');
     try{
       const provider=scripted([ok(60)]),registry=new HandlerRegistry().register(callTranscribeJobHandler({provider,recordings}));
-      expect((await runOnce(database.session,{registry,owner:'call-capture-rollback',limit:10})).failed).toBe(1);
-      expect(await readCallTranscript(salesperson(),sessionId)).toBeNull();expect(await attempts(sessionId)).toMatchObject([{state:'calling'}]);
+      expect((await runOnce(database.session,{registry,owner:'call-capture-rollback',limit:10})).failed).toBe(0);
+      expect(await readCallTranscript(salesperson(),sessionId)).not.toBeNull();expect(await attempts(sessionId)).toMatchObject([{state:'settled'}]);
       expect((await database.session.query("SELECT id FROM jobs WHERE workspace_id=$1 AND kind='crm.capture_extraction' AND payload->'source'->>'sourceId'=$2",[seeded.alpha.workspaceId,sessionId])).rows).toEqual([]);expect(provider.calls).toBe(1);
     }finally{await database.session.query('DROP TRIGGER reject_call_capture_intent ON jobs');await database.session.query('DROP FUNCTION reject_call_capture_intent()');await database.session.query('UPDATE crm_extraction_purposes SET enabled=false WHERE workspace_id=$1',[seeded.alpha.workspaceId]);}
   });

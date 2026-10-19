@@ -15,7 +15,7 @@ const purpose = { expectedRevision: 0, enabled: false, endpointId: CRM_EXTRACTIO
 const config = readCrmCapabilityStartup({ FSS_CRM_CAPABILITY_ADAPTERS: JSON.stringify({ extraction: {
   region: 'us-east-1', ...purpose, expectedRevision: undefined, enabled: undefined,
   dailyCeilingCents: undefined, monthlyCeilingCents: undefined, inputTokenPriceMicros: undefined, outputTokenPriceMicros: undefined,
-  providerKey: 'fixture.extraction', fundingVerifiedUntil: '2099-01-01T00:00:00Z',
+  providerKey: 'aws_bedrock.fixture', fundingVerifiedUntil: '2099-01-01T00:00:00Z',
 } }) });
 const runtime = createCrmCapabilityRuntime(config, { implementationCommit: null, imageDigest: null, side: 'api', schemaVersion: 116, gmailAvailable: false });
 const command = (body: Record<string, unknown>) => ({ commandId: randomUUID(), clientVersion: '1.0.51', ...body });
@@ -50,7 +50,7 @@ it('saves only disabled exact settings through the 1.0.51 contract, with no work
     ...settings, configured: true, revision: 1, unavailableReason: 'activation_not_available',
   });
   const view = crmCapabilityReadResponseSchema.parse((await post('/crm/capability/read', { capability: 'crm_extraction' })).body);
-  expect(view).toMatchObject({ enabled: false, ready: true, reason: 'owner_consent_required', authorityReceiptId: null, ownerApprovalId: null });
+  expect(view).toMatchObject({ enabled: false, ready: false, reason: 'adapter_or_configuration_unavailable', authorityReceiptId: null, ownerApprovalId: null });
   expect((await f.db.query('SELECT 1 FROM crm_capability_owner_approvals')).rows).toHaveLength(0);
   expect((await f.db.query('SELECT 1 FROM crm_capability_authority_receipts')).rows).toHaveLength(0);
   expect((await f.db.query("SELECT 1 FROM jobs WHERE kind='crm.extract'")).rows).toHaveLength(0);

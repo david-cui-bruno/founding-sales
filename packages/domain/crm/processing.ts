@@ -1,4 +1,5 @@
-import {crmInputTokenPriceMicrosSchema,crmTokenPriceMicrosSchema,type CrmTokenPriceMicros} from '@fss/contracts';
+import {crmInputTokenPriceMicrosSchema,crmTokenPriceMicrosSchema,hasConsistentCrmExtractionSourceScope,type CrmTokenPriceMicros} from '@fss/contracts';
+import {currentExtractionCaptureBinding,extractionScopeFromRow,mailExtractionScopeAllows} from './processingScope.ts';
 import {unavailableMailEvidence,type CrmMailEvidencePort} from './mailEvidence.ts';
 import {readProcessingContext,parsedProcessingContext,sameProcessingContext,processingContextHash,NATIVE_PROCESSING_AUTHORIZATION_HASH,UNAVAILABLE_MAIL_AUTHORIZATION_HASH} from './processingContext.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
@@ -41,6 +42,7 @@ export async function readCrmProcessing(context: RepositoryContext, source: Sour
 }
 export async function requestCrmProcessing(context: RepositoryContext, source: SourceLookup,mailEvidence:CrmMailEvidencePort=unavailableMailEvidence,selection: {selectedFileHash:string}|undefined=undefined) {
   const actor = context.scope.actor;
+  if(!await mailExtractionScopeAllows(context,source))return {ok:false as const,reason:'extraction_source_scope_unavailable'};
   if (actor.kind !== 'user' || await resolveCrmSource(context, { ...source, locator: null },mailEvidence) === null)
     return { ok: false as const, reason: 'source_unavailable' };
   if(source.kind==='selected_note'){
@@ -81,32 +83,34 @@ export async function readCrmExtractionPurpose(context: RepositoryContext) {
     modelVersion: row.model_version, accessGrantVersion: row.access_grant_version, dataHandlingVersion: row.data_handling_version,
     dailyCeilingCents: row.daily_ceiling_cents, monthlyCeilingCents: row.monthly_ceiling_cents,
     inputTokenPriceMicros: crmInputTokenPriceMicrosSchema.parse(row.input_token_price_micros), outputTokenPriceMicros: crmTokenPriceMicrosSchema.parse(row.output_token_price_micros),
-    unavailableReason: row.enabled ? null : 'activation_not_available' };
+    ...extractionScopeFromRow(row), unavailableReason: row.enabled ? null : 'activation_not_available' };
 }
 export async function saveCrmExtractionPurpose(context: RepositoryContext, input: {
   expectedRevision: number; enabled: boolean; endpointId: string; modelVersion: string;
   accessGrantVersion: string; dataHandlingVersion: string; dailyCeilingCents: number;
   monthlyCeilingCents: number; inputTokenPriceMicros: CrmTokenPriceMicros; outputTokenPriceMicros: CrmTokenPriceMicros;
+  allowedSourceKinds?: ['mail']|undefined; mailCaptureOwnerApprovalId?: string|undefined;
 }) {
   const actor = context.scope.actor;
   const { activeIdentityActor } = await import('./identityAccess.ts');
   if (actor.kind !== 'user' || actor.role !== 'admin' || !await activeIdentityActor(context))
     return { ok: false as const, reason: 'purpose_access_denied' };
   if (input.enabled) return { ok: false as const, reason: 'activation_not_available' };
+  if(!hasConsistentCrmExtractionSourceScope(input)||input.mailCaptureOwnerApprovalId&&!await currentExtractionCaptureBinding(context,input.mailCaptureOwnerApprovalId))return {ok:false as const,reason:'extraction_source_scope_unavailable'};
   await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`${context.scope.workspaceId}:crm-extraction-purpose`]);
   if (!await activeIdentityActor(context)) return { ok: false as const, reason: 'purpose_access_denied' };
   const current = (await context.db.query<{ revision: number }>('SELECT revision FROM crm_extraction_purposes WHERE workspace_id=$1 FOR UPDATE', [context.scope.workspaceId])).rows[0];
   if ((current?.revision ?? 0) !== input.expectedRevision) return { ok: false as const, reason: 'purpose_revision_conflict' };
   await context.db.query(`INSERT INTO crm_extraction_purposes(workspace_id,revision,enabled,endpoint_id,model_version,
-    access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by)
-    VALUES($1,$2,false,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(workspace_id) DO UPDATE SET
+    access_grant_version,data_handling_version,daily_ceiling_cents,monthly_ceiling_cents,input_token_price_micros,output_token_price_micros,approved_by,allowed_source_kinds,mail_capture_owner_approval_id)
+    VALUES($1,$2,false,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(workspace_id) DO UPDATE SET
     revision=EXCLUDED.revision,enabled=false,authority_receipt_id=NULL,owner_approval_id=NULL,endpoint_id=EXCLUDED.endpoint_id,model_version=EXCLUDED.model_version,
     access_grant_version=EXCLUDED.access_grant_version,data_handling_version=EXCLUDED.data_handling_version,
     daily_ceiling_cents=EXCLUDED.daily_ceiling_cents,monthly_ceiling_cents=EXCLUDED.monthly_ceiling_cents,
     input_token_price_micros=EXCLUDED.input_token_price_micros,output_token_price_micros=EXCLUDED.output_token_price_micros,
-    approved_by=EXCLUDED.approved_by,approved_at=now()`, [context.scope.workspaceId, input.expectedRevision + 1,
+    approved_by=EXCLUDED.approved_by,approved_at=now(),allowed_source_kinds=EXCLUDED.allowed_source_kinds,mail_capture_owner_approval_id=EXCLUDED.mail_capture_owner_approval_id`, [context.scope.workspaceId, input.expectedRevision + 1,
     input.endpointId,input.modelVersion,input.accessGrantVersion,input.dataHandlingVersion,input.dailyCeilingCents,
-    input.monthlyCeilingCents,input.inputTokenPriceMicros,input.outputTokenPriceMicros,actor.userId]);
+    input.monthlyCeilingCents,input.inputTokenPriceMicros,input.outputTokenPriceMicros,actor.userId,input.allowedSourceKinds??[],input.mailCaptureOwnerApprovalId??null]);
   return { ok: true as const, value: { revision: input.expectedRevision + 1, enabled: false } };
 }
 

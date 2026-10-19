@@ -5,15 +5,13 @@ import type {
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { crmProcessingResultSchema } from "@fss/contracts";
-import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
-import { registerHandlers } from "../../worker/src/bootstrap/main.ts";
-import { runOnce } from "../../worker/src/runner/jobRunner.ts";
 import { dispatch } from "../src/server.ts";
 import {
   createAuthFixture,
   CURRENT_CLIENT_VERSION,
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
+import {seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
 
 it("preserves a dated human confirmation on equivalent reprocessing with a new physical claim", async () => {
   const fixture = await createAuthFixture();
@@ -96,29 +94,8 @@ it("preserves a dated human confirmation on equivalent reprocessing with a new p
           )
         ).status,
       ).toBe(200);
-      // Isolated evaluation fixture only; public controls cannot enable processing.
-      await fixture.db.query(
-        "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-        [source.workspaceId],
-      );
-      await post("/crm/processing/request", command({ source }));
-      const registry = registerHandlers(new HandlerRegistry(), {
-        classifier: undefined,
-        mail: undefined,
-        send: undefined,
-        research: undefined,
-        crmExtraction: { allowControlledEvaluation:true,
-          adapter: {
-            endpointId: "review-evaluation",
-            modelVersion,
-            accessGrantVersion: "fixture-review-grant",
-            dataHandlingVersion: "fixture-review-policy",
-            providerKey: "fixture.crm_review",
-            fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-            run: async () => ({
-              acceptance: "accepted",
-              usage: { inputTokens: 1, outputTokens: 1 },
-              claims: [
+      // Offline retained historical evidence, never current native consent.
+      await seedHistoricalExtraction(fixture,{source,claims:[
                 {
                   kind: "need",
                   status: "stated",
@@ -126,16 +103,7 @@ it("preserves a dated human confirmation on equivalent reprocessing with a new p
                   locator: "text:0:12",
                   quote: "We need help",
                 },
-              ],
-            }),
-          },
-        },
-      });
-      await runOnce(fixture.db, {
-        registry,
-        owner: `review-${modelVersion}`,
-        limit: 20,
-      });
+              ]});
       const result = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );
@@ -350,29 +318,8 @@ it("refuses replay of a human decision after its exact source is deleted", async
           )
         ).status,
       ).toBe(200);
-      // Isolated evaluation fixture only; public controls cannot enable processing.
-      await fixture.db.query(
-        "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-        [source.workspaceId],
-      );
-      await post("/crm/processing/request", command({ source }));
-      const registry = registerHandlers(new HandlerRegistry(), {
-        classifier: undefined,
-        mail: undefined,
-        send: undefined,
-        research: undefined,
-        crmExtraction: { allowControlledEvaluation:true,
-          adapter: {
-            endpointId: "review-evaluation",
-            modelVersion,
-            accessGrantVersion: "fixture-review-grant",
-            dataHandlingVersion: "fixture-review-policy",
-            providerKey: "fixture.crm_review",
-            fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-            run: async () => ({
-              acceptance: "accepted",
-              usage: { inputTokens: 1, outputTokens: 1 },
-              claims: [
+      // Offline retained historical evidence, never current native consent.
+      await seedHistoricalExtraction(fixture,{source,claims:[
                 {
                   kind: "need",
                   status: "stated",
@@ -380,16 +327,7 @@ it("refuses replay of a human decision after its exact source is deleted", async
                   locator: "text:0:12",
                   quote: "We need help",
                 },
-              ],
-            }),
-          },
-        },
-      });
-      await runOnce(fixture.db, {
-        registry,
-        owner: `review-${modelVersion}`,
-        limit: 20,
-      });
+              ]});
       const result = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );
@@ -630,29 +568,8 @@ it("requires fresh human review when reprocessing materially changes the interpr
           )
         ).status,
       ).toBe(200);
-      // Isolated evaluation fixture only; public controls cannot enable processing.
-      await fixture.db.query(
-        "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-        [source.workspaceId],
-      );
-      await post("/crm/processing/request", command({ source }));
-      const registry = registerHandlers(new HandlerRegistry(), {
-        classifier: undefined,
-        mail: undefined,
-        send: undefined,
-        research: undefined,
-        crmExtraction: { allowControlledEvaluation:true,
-          adapter: {
-            endpointId: "review-evaluation",
-            modelVersion,
-            accessGrantVersion: "fixture-review-grant",
-            dataHandlingVersion: "fixture-review-policy",
-            providerKey: "fixture.crm_review",
-            fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-            run: async () => ({
-              acceptance: "accepted",
-              usage: { inputTokens: 1, outputTokens: 1 },
-              claims: [
+      // Offline retained historical evidence, never current native consent.
+      await seedHistoricalExtraction(fixture,{source,claims:[
                 {
                   kind: "need",
                   status: "stated",
@@ -660,16 +577,7 @@ it("requires fresh human review when reprocessing materially changes the interpr
                   locator: "text:0:12",
                   quote: "We need help",
                 },
-              ],
-            }),
-          },
-        },
-      });
-      await runOnce(fixture.db, {
-        registry,
-        owner: `review-${modelVersion}`,
-        limit: 20,
-      });
+              ]});
       const result = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );
@@ -853,29 +761,8 @@ it("keeps original interpretation and dated decision history while refusing a st
           )
         ).status,
       ).toBe(200);
-      // Isolated evaluation fixture only; public controls cannot enable processing.
-      await fixture.db.query(
-        "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-        [source.workspaceId],
-      );
-      await post("/crm/processing/request", command({ source }));
-      const registry = registerHandlers(new HandlerRegistry(), {
-        classifier: undefined,
-        mail: undefined,
-        send: undefined,
-        research: undefined,
-        crmExtraction: { allowControlledEvaluation:true,
-          adapter: {
-            endpointId: "review-evaluation",
-            modelVersion,
-            accessGrantVersion: "fixture-review-grant",
-            dataHandlingVersion: "fixture-review-policy",
-            providerKey: "fixture.crm_review",
-            fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-            run: async () => ({
-              acceptance: "accepted",
-              usage: { inputTokens: 1, outputTokens: 1 },
-              claims: [
+      // Offline retained historical evidence, never current native consent.
+      await seedHistoricalExtraction(fixture,{source,claims:[
                 {
                   kind: "need",
                   status: "stated",
@@ -883,16 +770,7 @@ it("keeps original interpretation and dated decision history while refusing a st
                   locator: "text:0:12",
                   quote: "We need help",
                 },
-              ],
-            }),
-          },
-        },
-      });
-      await runOnce(fixture.db, {
-        registry,
-        owner: `review-${modelVersion}`,
-        limit: 20,
-      });
+              ]});
       const result = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );
@@ -1053,29 +931,8 @@ it("resolves an explicit conflicting group without erasing either dated source",
           )
         ).status,
       ).toBe(200);
-      // Isolated evaluation fixture only; public controls cannot enable processing.
-      await fixture.db.query(
-        "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-        [source.workspaceId],
-      );
-      await post("/crm/processing/request", command({ source }));
-      const registry = registerHandlers(new HandlerRegistry(), {
-        classifier: undefined,
-        mail: undefined,
-        send: undefined,
-        research: undefined,
-        crmExtraction: { allowControlledEvaluation:true,
-          adapter: {
-            endpointId: "review-evaluation",
-            modelVersion,
-            accessGrantVersion: "fixture-review-grant",
-            dataHandlingVersion: "fixture-review-policy",
-            providerKey: "fixture.crm_review",
-            fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-            run: async () => ({
-              acceptance: "accepted",
-              usage: { inputTokens: 1, outputTokens: 1 },
-              claims: [
+      // Offline retained historical evidence, never current native consent.
+      await seedHistoricalExtraction(fixture,{source,claims:[
                 {
                   kind: "need",
                   status: "stated",
@@ -1083,16 +940,7 @@ it("resolves an explicit conflicting group without erasing either dated source",
                   locator: "text:0:12",
                   quote: "We need help",
                 },
-              ],
-            }),
-          },
-        },
-      });
-      await runOnce(fixture.db, {
-        registry,
-        owner: `review-${modelVersion}`,
-        limit: 20,
-      });
+              ]});
       const result = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );

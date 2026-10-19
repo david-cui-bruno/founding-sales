@@ -12,6 +12,7 @@ import {createAuthFixture,CURRENT_CLIENT_VERSION} from './support/authFixture.ts
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {seedFirm,seedContact} from './support/crmSeed.ts';
 import {dispatch} from '../src/server.ts';
+import {activateForwardFixture} from './support/crmForwardScopeFixture.ts';
 async function approveCaptureFixture(
   fixture: Awaited<ReturnType<typeof createAuthFixture>>,
   ownerUserId = fixture.alpha.admin.userId,
@@ -45,6 +46,7 @@ async function approveCaptureFixture(
     "INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'google-business',$4,1,1,true,1,'full-body-fixture',$5,'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')",
     [workspaceId, mailbox.id, ownerUserId, binding, 'b'.repeat(64)],
   );
+  const forward=await activateForwardFixture(fixture,mailbox.id),captureAt=new Date().toISOString();
   await enqueueJob(fixture.db, {
     workspaceId,
     kind: 'crm.mail_capture',
@@ -55,8 +57,8 @@ async function approveCaptureFixture(
       providerAccountId: 'google-business',
       generation: 1,
       conversationId,
-      controlsRevision: 1,
-      policyRevision: 1,
+      controlsRevision: forward.capture.revision,
+      policyRevision: forward.policy.revision,
       decisionRevision: 0,
     },
   });
@@ -68,7 +70,7 @@ async function approveCaptureFixture(
       leaseSeconds: 120,
     })
   )[0]!;
-  return { workspaceId, ownerUserId, mailbox, binding, conversationId, job };
+  return { workspaceId, ownerUserId, mailbox, binding, conversationId, job,forward,captureAt };
 }
 
 
@@ -94,9 +96,9 @@ it.each([
  {name:'unknown actor',quote:'They will prepare the repair summary by 2026-10-12 UTC.',origin:'sent' as const,completeness:'complete' as const,rangeKind:'authored' as const,eligible:false},
 ])('uses actual registered native capture/extraction/intent: $name',async({name,quote,origin,completeness,rangeKind,eligible})=>{
  const fixture=await createAuthFixture();try{
-  const {workspaceId,mailbox,binding,job}=await approveCaptureFixture(fixture);
+  const {workspaceId,mailbox,job,forward,captureAt}=await approveCaptureFixture(fixture);
   const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
-  const port=createNativeCrmMailEvidence({verify:async proof=>proof.accountBinding===binding});
+  const port=createNativeCrmMailEvidence(forward.verifiers.captureVerifier);
   const post=(path:string,body:unknown)=>dispatch({method:'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,crmMailEvidence:port});
   const command=<T extends object>(fields:T)=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,...fields});
   const firmId=await seedFirm(fixture,{name:'Verified promise firm',assignedUserId:fixture.alpha.admin.userId});
@@ -113,7 +115,7 @@ it.each([
    const otherOpportunity=(await fixture.db.query<{id:string}>('INSERT INTO opportunities(workspace_id,firm_id,stage_id,control_mode_changed_at) VALUES($1,$2,(SELECT id FROM pipeline_stages WHERE workspace_id=$1 ORDER BY position LIMIT 1),now()) RETURNING id',[workspaceId,firmId])).rows[0]!.id;
    await fixture.db.query("INSERT INTO mail_message_matches(workspace_id,mail_message_id,firm_id,contact_id,opportunity_id,match_rule) VALUES($1,$2,$3,$4,$5,'thread')",[workspaceId,message.id,firmId,otherId,otherOpportunity]);
   }
-  const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:{verify:async proof=>proof.accountBinding===binding},provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:name==='draft label'?['DRAFT']:['SENT'],origin,providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:name==='other sender'?'someoneelse@example.test':'business@example.test',to:['known@example.test'],cc:[],subject:'Repair summary',body:quote,parserVersion:'controlled-authored-mime-v1',representation:'plain_text',completeness,ranges:[{start:0,end:quote.length,kind:rangeKind}]})}}});
+  const capture=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:forward.verifiers.captureVerifier,provider:{read:async()=>({providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:name==='draft label'?['DRAFT']:['SENT'],origin,providerAt:captureAt,rawSenderDate:null,from:name==='other sender'?'someoneelse@example.test':'business@example.test',to:['known@example.test'],cc:[],subject:'Repair summary',body:quote,parserVersion:'controlled-authored-mime-v1',representation:'plain_text',completeness,ranges:[{start:0,end:quote.length,kind:rangeKind}]})}}});
   const handler=capture.get('crm.mail_capture');if(!handler)throw new Error('capture registration missing');
   const captured=await handler.handle({session:fixture.db,scope:workspaceScope(workspaceId,{kind:'system',component:'worker'}),job});
   expect(captured?.progress['sourceId']).toBe(message.id);
@@ -145,9 +147,9 @@ it.each([
   }
 
   expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:'promise-evaluation',modelVersion:'fixture-promises-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
-  await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[workspaceId]);
+  await forward.extraction({endpointId:'promise-evaluation',modelVersion:'fixture-promises-v1',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000});
   expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
-  const extractionRegistry=(modelVersion:string)=>registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{ allowControlledEvaluation:true,mailEvidence:port,adapter:{endpointId:'promise-evaluation',modelVersion,accessGrantVersion:'fixture',dataHandlingVersion:'fixture',providerKey:'fixture.promise_intent',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:[{kind:'commitment',status:'stated',interpretation:'Untrusted date/actor interpretation deliberately ignored',locator:`text:0:${quote.length}`,quote}]})}}});
+  const extractionRegistry=(modelVersion:string)=>registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmExtraction:{ verifyPurpose:forward.verifiers.verifyExtraction,revalidatePurpose:forward.verifiers.revalidateExtraction,mailEvidence:port,adapter:{endpointId:'promise-evaluation',modelVersion,accessGrantVersion:'fixture',dataHandlingVersion:'fixture',providerKey:'aws_bedrock.fixture',fundingVerifiedUntil:'2099-01-01T00:00:00Z',run:async()=>({acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:[{kind:'commitment',status:'stated',interpretation:'Untrusted date/actor interpretation deliberately ignored',locator:`text:0:${quote.length}`,quote}]})}}});
   const registry=extractionRegistry('fixture-promises-v1');
   await runOnce(fixture.db,{registry,owner:'promise-extraction',limit:20});
   const processed=await post('/crm/processing/read',{source});expect(processed.body).toMatchObject({state:'complete'});
@@ -173,8 +175,8 @@ it.each([
    const first=(page.body as {items:{task:{taskId:string;version:number}}[]}).items[0]!.task;
    const originalReceipt=(await fixture.db.query<{activation_receipt:unknown}>('SELECT activation_receipt FROM crm_internal_tasks WHERE workspace_id=$1 AND id=$2',[workspaceId,first.taskId])).rows[0]!.activation_receipt;
    expect((await post('/crm/commitments/complete',command({taskId:first.taskId,expectedVersion:first.version}))).status).toBe(200);
-   expect((await post('/crm/processing/purpose/save',command({expectedRevision:1,enabled:false,endpointId:'promise-evaluation',modelVersion:'fixture-promises-v2',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
-   await fixture.db.query('UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1',[workspaceId]);
+   expect((await post('/crm/processing/purpose/save',command({expectedRevision:3,enabled:false,endpointId:'promise-evaluation',modelVersion:'fixture-promises-v2',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
+   await forward.extraction({endpointId:'promise-evaluation',modelVersion:'fixture-promises-v2',accessGrantVersion:'fixture',dataHandlingVersion:'fixture',dailyCeilingCents:100,monthlyCeilingCents:1000});
    expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
    const nextRegistry=extractionRegistry('fixture-promises-v2');
    for(let pass=0;pass<3;pass++)await runOnce(fixture.db,{registry:nextRegistry,owner:'promise-rerun',limit:20});

@@ -1,11 +1,10 @@
 import {z} from 'zod';
+import {historicalMailFixtureRegistry} from './support/crmForwardScopeFixture.ts';
 import {crmProgressEventSchema} from '@fss/contracts';
 import {randomUUID} from 'node:crypto';
 import {expect,it} from 'vitest';
 import {businessAccountBinding} from '@fss/domain/business/acquisition.ts';
 import {enqueueJob} from '@fss/domain/jobs/jobStore.ts';
-import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
-import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION} from './support/authFixture.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
@@ -33,7 +32,7 @@ async function observationFixture(){
   const conversationId=(await fixture.db.query<{id:string}>("INSERT INTO crm_business_conversations(workspace_id,mailbox_id,owner_user_id,account_binding,provider_thread_id,subject,participants,latest_provider_at,category,reason,classifier_version,metadata_hash) VALUES($1,$2,$3,$4,$5,'Business','[]','2026-10-08T15:00:00Z','business','fixture','fixture',repeat('a',64)) RETURNING id",[workspaceId,mailbox.id,captureOwner,binding,providerId])).rows[0]!.id;
   await enqueueJob(fixture.db,{workspaceId,kind:'crm.mail_capture',idempotencyKey:providerId,payload:{mailboxId:mailbox.id,providerMessageId:providerId,providerAccountId:mailbox.provider_account_id,generation:1,conversationId,controlsRevision:1,policyRevision:1,decisionRevision:0}});
   const outgoing=origin==='sent';
-  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:{verify:async()=>true},provider:{read:async()=>({providerAccountId:mailbox.provider_account_id,messageId:providerId,threadId:providerId,origin,labels:outgoing?['SENT']:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:outgoing?mailbox.email_address:'shared@customer.test',to:[outgoing?'shared@customer.test':mailbox.email_address],cc:[],subject:'Business',body:'Can we discuss repairs?',parserVersion:'controlled-unknown-authorship',representation:'plain_text',completeness:'complete',ranges:[{start:0,end:23,kind:'unknown'}]})}}});
+  const registry=historicalMailFixtureRegistry({classifier:undefined,mail:undefined,send:undefined,research:undefined,retainedMailFixture: { original:{read:async()=>({providerAccountId:mailbox.provider_account_id,messageId:providerId,threadId:providerId,origin,labels:outgoing?['SENT']:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:outgoing?mailbox.email_address:'shared@customer.test',to:[outgoing?'shared@customer.test':mailbox.email_address],cc:[],subject:'Business',body:'Can we discuss repairs?',parserVersion:'controlled-unknown-authorship',representation:'plain_text',completeness:'complete',ranges:[{start:0,end:23,kind:'unknown'}]})}}});
   await runOnce(fixture.db,{registry,owner:'observed-capture',limit:20});
   const sourceId=(await fixture.db.query<{source_id:string}>('SELECT s.source_id FROM crm_mail_sources s JOIN mail_messages m ON m.workspace_id=s.workspace_id AND m.id=s.source_id WHERE s.workspace_id=$1 AND s.mailbox_id=$2 AND m.provider_message_id=$3',[workspaceId,mailbox.id,providerId])).rows[0]!.source_id;
   expect((await post('/crm/business/mail/associate',command({sourceId,expectedRevision:1,firmId}))).status).toBe(200);

@@ -14,6 +14,7 @@ import { issueSessionFor } from "./support/sessionFixture.ts";
 import { seedFirm } from "./support/crmSeed.ts";
 import { seedHistoricalAskRequest, readHistoricalAskRequest } from './support/historicalAskRequest.ts';
 import { dispatch } from "../src/server.ts";
+import {activateForwardFixture} from './support/crmForwardScopeFixture.ts';
 
 async function approveCaptureFixture(
   fixture: Awaited<ReturnType<typeof createAuthFixture>>,
@@ -48,6 +49,7 @@ async function approveCaptureFixture(
     "INSERT INTO crm_mail_capture_controls(workspace_id,mailbox_id,owner_user_id,provider_account_id,account_binding,generation,revision,enabled,policy_revision,disclosure_version,disclosure_sha256,grant_receipt,provider_policy_receipt,evaluation_receipt,release_receipt) VALUES($1,$2,$3,'google-business',$4,1,1,true,1,'full-body-fixture',$5,'fixture-grant','fixture-provider','fixture-evaluation','fixture-release')",
     [workspaceId, mailbox.id, ownerUserId, binding, "b".repeat(64)],
   );
+  const forward=await activateForwardFixture(fixture,mailbox.id);
   await enqueueJob(fixture.db, {
     workspaceId,
     kind: "crm.mail_capture",
@@ -58,8 +60,8 @@ async function approveCaptureFixture(
       providerAccountId: "google-business",
       generation: 1,
       conversationId,
-      controlsRevision: 1,
-      policyRevision: 1,
+      controlsRevision: forward.capture.revision,
+      policyRevision: forward.policy.revision,
       decisionRevision: 0,
     },
   });
@@ -71,15 +73,14 @@ async function approveCaptureFixture(
       leaseSeconds: 120,
     })
   )[0]!;
-  return { workspaceId, ownerUserId, mailbox, binding, conversationId, job };
+  return { workspaceId, ownerUserId, mailbox, conversationId, job,forward };
 }
 
 async function copyWithOriginalAndReviewedFirms(
   fixture: Awaited<ReturnType<typeof createAuthFixture>>,
   observedUnknown = false,
 ) {
-  const { workspaceId, ownerUserId, mailbox, binding, job } =
-    await approveCaptureFixture(fixture);
+  const { workspaceId, ownerUserId, mailbox, job ,forward}=await approveCaptureFixture(fixture);
   const token = (
     await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
   ).accessToken;
@@ -139,14 +140,7 @@ async function copyWithOriginalAndReviewedFirms(
     send: undefined,
     research: undefined,
     crmMailCapture: {
-      proofVerifier: {
-        async verify(proof) {
-          return (
-            proof.grantReceipt === "fixture-grant" &&
-            proof.accountBinding === binding
-          );
-        },
-      },
+      proofVerifier:forward.verifiers.captureVerifier,
       provider: {
         async read() {
           bodyReads++;
@@ -156,7 +150,7 @@ async function copyWithOriginalAndReviewedFirms(
             messageId: "approved-message",
             threadId: "approved-thread",
             labels: ["INBOX"],
-            providerAt: "2026-10-08T15:00:00.000Z",
+            providerAt: new Date().toISOString(),
             rawSenderDate: null,
             from: observedUnknown ? "observed@business.test" : "shared@business.test",
             to: ["business@example.test"],
@@ -233,8 +227,7 @@ async function copyWithOriginalAndReviewedFirms(
 it("firm deletion removes an associated mail copy and fresh capture authority cannot restore its deleted identity", async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, mailbox, binding, conversationId, job } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, mailbox, conversationId, job ,forward}=await approveCaptureFixture(fixture);
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -269,14 +262,7 @@ it("firm deletion removes an associated mail copy and fresh capture authority ca
       send: undefined,
       research: undefined,
       crmMailCapture: {
-        proofVerifier: {
-          async verify(proof) {
-            return (
-              proof.grantReceipt === "fixture-grant" &&
-              proof.accountBinding === binding
-            );
-          },
-        },
+        proofVerifier:forward.verifiers.captureVerifier,
         provider: {
           async read() {
             bodyReads++;
@@ -285,7 +271,7 @@ it("firm deletion removes an associated mail copy and fresh capture authority ca
               messageId: "approved-message",
               threadId: "approved-thread",
               labels: ["INBOX"],
-              providerAt: "2026-10-08T15:00:00.000Z",
+              providerAt: new Date().toISOString(),
               rawSenderDate: null,
               from: "unknown@business.test",
               to: ["business@example.test"],
@@ -415,10 +401,10 @@ it("firm deletion removes an associated mail copy and fresh capture authority ca
       "UPDATE crm_business_conversations SET metadata_availability='available',subject='Fresh permitted metadata',participants='[]',latest_provider_at=now(),category='business',reason='fresh_fixture',classifier_version='fixture-v2',metadata_hash=$3,metadata_revision=metadata_revision+1 WHERE workspace_id=$1 AND id=$2",
       [workspaceId, conversationId, "c".repeat(64)],
     );
-    await fixture.db.query(
-      "UPDATE crm_mail_capture_controls SET revision=2 WHERE workspace_id=$1 AND mailbox_id=$2",
+    const freshControls = (await fixture.db.query<{revision:number}>(
+      "SELECT revision FROM crm_mail_capture_controls WHERE workspace_id=$1 AND mailbox_id=$2",
       [workspaceId, mailbox.id],
-    );
+    )).rows[0]!;
     await enqueueJob(fixture.db, {
       workspaceId,
       kind: "crm.mail_capture",
@@ -429,8 +415,8 @@ it("firm deletion removes an associated mail copy and fresh capture authority ca
         providerAccountId: "google-business",
         generation: 1,
         conversationId,
-        controlsRevision: 2,
-        policyRevision: 1,
+        controlsRevision: freshControls.revision,
+        policyRevision: forward.policy.revision,
         decisionRevision: 0,
       },
     });
@@ -469,8 +455,7 @@ it("firm deletion removes an associated mail copy and fresh capture authority ca
 it("public firm deletion blocks a matched capture that is already waiting for provider content", async () => {
   const fixture = await createAuthFixture();
   try {
-    const { workspaceId, ownerUserId, mailbox, binding, job } =
-      await approveCaptureFixture(fixture);
+    const { workspaceId, ownerUserId, mailbox, job ,forward}=await approveCaptureFixture(fixture);
     const token = (
       await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)
     ).accessToken;
@@ -532,14 +517,7 @@ it("public firm deletion blocks a matched capture that is already waiting for pr
       send: undefined,
       research: undefined,
       crmMailCapture: {
-        proofVerifier: {
-          async verify(proof) {
-            return (
-              proof.grantReceipt === "fixture-grant" &&
-              proof.accountBinding === binding
-            );
-          },
-        },
+        proofVerifier:forward.verifiers.captureVerifier,
         provider: {
           async read() {
             bodyReads++;
@@ -550,7 +528,7 @@ it("public firm deletion blocks a matched capture that is already waiting for pr
               messageId: "approved-message",
               threadId: "approved-thread",
               labels: ["INBOX"],
-              providerAt: "2026-10-08T15:00:00.000Z",
+              providerAt: new Date().toISOString(),
               rawSenderDate: null,
               from: "matched@business.test",
               to: ["business@example.test"],
@@ -895,7 +873,7 @@ it('scoped firm deletion redacts an otherwise unsupported observed person label 
 it('retention waits for capture promotion and preserves the newly approved copy', async () => {
  const fixture=await createAuthFixture();
  try {
-  const {workspaceId,mailbox,binding,job}=await approveCaptureFixture(fixture);
+  const {workspaceId,mailbox,job,forward}=await approveCaptureFixture(fixture);
   const sourceId=(await fixture.db.query<{id:string}>("INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,recorded_at) VALUES($1,$2,'approved-message','approved-thread','incoming',now()-interval '120 days',now()-interval '120 days') RETURNING id",[workspaceId,mailbox.id])).rows[0]!.id;
   const captureSession=await fixture.database.appRuntimeSession();
   const retentionSession=await fixture.database.appRuntimeSession();
@@ -907,7 +885,7 @@ it('retention waits for capture promotion and preserves the newly approved copy'
   await enqueueJob(fixture.db,{workspaceId,kind:'retention.batch',idempotencyKey:'capture-promotion-race',payload:{dataKind:'unmatched_gmail_metadata',period:new Date().toISOString().slice(0,10)}});
   const retentionJob=(await claimJobs(fixture.db,{owner:'retention-race',kinds:['retention.batch'],limit:1,leaseSeconds:120}))[0]!;
   const passage='Approved business copy committed while retention waits.';
-  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:{async verify(p){return p.accountBinding===binding;}},provider:{async read(){return {providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:'2026-10-08T15:00:00.000Z',rawSenderDate:null,from:'observed@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'complete',ranges:[{start:0,end:passage.length,kind:'authored'}]};}}}});
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:forward.verifiers.captureVerifier,provider:{async read(){return {providerAccountId:'google-business',messageId:'approved-message',threadId:'approved-thread',labels:['INBOX'],providerAt:new Date().toISOString(),rawSenderDate:null,from:'observed@business.test',to:['business@example.test'],cc:[],subject:'Business',body:passage,parserVersion:'fixture-mime-v1',representation:'plain_text',completeness:'complete',ranges:[{start:0,end:passage.length,kind:'authored'}]};}}}});
   const scope=workspaceScope(workspaceId,{kind:'system',component:'worker'});
   const capture=registry.get('crm.mail_capture')!;
   const captureRun=capture.handle({session:captureSession,scope,job}).then(value=>({ok:true,value}),error=>({ok:false,error}));
