@@ -1,5 +1,5 @@
 import type {SessionQueryable} from '@fss/domain/db/queryable.ts';
-import {expect,it} from 'vitest';
+import {expect,it,vi} from 'vitest';
 import {randomUUID} from 'node:crypto';
 import {createAuthFixture} from './support/authFixture.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
@@ -18,6 +18,7 @@ import {CRM_OWNER_SCOPE_VERSION,type CrmCapabilityConfiguration} from '@fss/cont
 for (const mutation of ['missing', 'date', 'thread', 'before-body-date', 'forged-copy', 'unchanged'] as const) {
  it(`historical selected original continuity: ${mutation}`, async () => {
   const fixture = await createAuthFixture();
+  const clock = vi.spyOn(Date, 'now');
   try {
    const seeded = await seedCapture(fixture), a = await authorize(fixture, seeded);
    const {requestCrmMailImport} = await import('@fss/domain/mail/crmBackfill.ts');
@@ -32,7 +33,12 @@ for (const mutation of ['missing', 'date', 'thread', 'before-body-date', 'forged
    const system = repositoryContext(workspaceScope(seeded.workspaceId,{kind:'system',component:'worker'}),a.session);
    const authority = await readBackfillAuthority(system,importId);
    if (!authority) throw new Error('synthetic authority unavailable');
-   const internalDate = Date.now()-1000;
+   // Reproduce slow CI setup after the approved import interval has frozen.
+   clock.mockReturnValue(Date.parse(authority.toAt) + 2000);
+   // The selected original belongs to that interval, not the later wall clock.
+   const internalDate = Number(BigInt(authority.toEpochMicroseconds) / 1000n) - 1000;
+   expect(BigInt(internalDate) * 1000n).toBeGreaterThanOrEqual(BigInt(authority.fromEpochMicroseconds));
+   expect(BigInt(internalDate) * 1000n).toBeLessThan(BigInt(authority.toEpochMicroseconds));
    const messageHash = createHash('sha256').update(JSON.stringify({accountBinding:seeded.binding,providerMessageId:'approved-message'})).digest('hex');
    await fixture.db.query("INSERT INTO crm_mail_import_messages(workspace_id,import_id,message_hash,provider_message_id,provider_thread_id,provider_at,scope,state) VALUES($1,$2,$3,'approved-message','approved-thread',to_timestamp($4::double precision/1000),'historical','available')",[seeded.workspaceId,importId,messageHash,internalDate]);
    const job = {...a.job,payload:{...a.job.payload,acquisitionOrigin:{importId}}};
@@ -72,7 +78,7 @@ for (const mutation of ['missing', 'date', 'thread', 'before-body-date', 'forged
    expect(mutated).toBe(mutation!=='unchanged'&&mutation!=='forged-copy');
    expect((await fixture.db.query('SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1',[seeded.workspaceId])).rows).toHaveLength(mutation==='unchanged'?1:0);
    expect((await fixture.db.query('SELECT method,state FROM crm_mail_import_read_reservations WHERE import_id=$1 ORDER BY reserved_at',[importId])).rows).toEqual(mutation==='before-body-date'?[{method:'metadata',state:'observed'}]:[{method:'metadata',state:'observed'},{method:'body',state:'observed'}]);
-  } finally {await fixture.stop();}
+  } finally {clock.mockRestore();await fixture.stop();}
  });
 }
 async function revokeOwnerApproval(session:SessionQueryable,input:{workspaceId:string;authorityReceiptId:string;reference:string}){

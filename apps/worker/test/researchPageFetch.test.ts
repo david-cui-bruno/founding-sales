@@ -214,6 +214,39 @@ describe('redirects', () => {
     expect(outcome.ok && outcome.value.skipped).toEqual({ url_not_permitted: 1 });
   });
 
+  it('skips a malformed redirect without losing earlier pages or abandoning later safe pages', async () => {
+    const { provider, asked, sent } = harness({
+      answers: { 'example.test': ['93.184.216.34'] },
+      responses: {
+        'https://example.test/robots.txt': robotsAllowing,
+        'https://example.test/': ok(HOME),
+        'https://example.test/about': {
+          statusCode: 302,
+          headers: { location: 'http://[' },
+          body: null,
+          abortedOverCap: false,
+        },
+        'https://example.test/services': ok('<p>Maintenance requests go to our local team.</p>'),
+      },
+    });
+    const outcome = await provider.fetchPages({
+      ...request,
+      maxPagesPerFirm: 3,
+      urls: ['https://example.test/', 'https://example.test/about', 'https://example.test/services'],
+    });
+    expect(outcome.ok && outcome.value.pages.map(page => page.url)).toEqual([
+      'https://example.test/', 'https://example.test/services',
+    ]);
+    expect(outcome.ok && outcome.value.pages[0]?.contentHash).toBe(createHash('sha256').update(bytes(HOME)).digest('hex'));
+    expect(outcome.ok && outcome.value.skipped).toEqual({ malformed_redirect: 1 });
+    expect(asked.every(host => host === 'example.test')).toBe(true);
+    expect(sent.map(entry => entry.url)).toEqual([
+      'https://example.test/robots.txt', 'https://example.test/',
+      'https://example.test/about', 'https://example.test/services',
+    ]);
+    expect(outcome.costCents).toBe(0);
+  });
+
   it('stops after three hops rather than following a loop', async () => {
     const hop = (to: string): RawResponse => ({
       statusCode: 302,

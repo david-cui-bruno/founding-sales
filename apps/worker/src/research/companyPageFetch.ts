@@ -645,7 +645,13 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             // decided again: a same-site hop keeps this URL's permission, anything else
             // gets the ordinary rule. Either way the loop starts over with a new
             // lookup, a new robots answer and a new pin.
-            const target = withoutFragment(new URL(location, url).toString());
+            let target: string;
+            try {
+              target = withoutFragment(new URL(location, url).toString());
+            } catch {
+              skips.bump('malformed_redirect');
+              break;
+            }
             if (new URL(target).search !== '') {
               // A URL that is fetched is stored, as this page's evidence reference. A
               // query string is where a token or an address would be, and retention
