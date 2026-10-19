@@ -38,9 +38,22 @@ locals {
   alert_emails    = ["callie@usecallie.com"]
   sending_enabled = true
 
-  # Adapter construction is independently gated from capability activation.
-  # Changing this needs a reviewed source change and a saved deployment plan.
-  crm_capability_adapters = null
+  # Adapter construction is separate from owner-controlled database activation.
+  # David confirmed model credit coverage on 2026-10-19 at 01:35:53 UTC.
+  # This 24-hour verification-freshness deadline is NOT AWS credit expiry.
+  # No automatic renewal or cash fallback. Changes require review and a saved plan.
+  crm_capability_adapters = jsonencode({
+    capture = true
+    extraction = {
+      region               = "us-east-1"
+      endpointId           = "bedrock-runtime.us-east-1.amazonaws.com"
+      modelVersion         = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+      providerKey          = "aws_bedrock.extraction"
+      accessGrantVersion   = "david-bedrock-cross-us-20261019-v1"
+      dataHandlingVersion  = "david-business-mail-only-20261018-v1"
+      fundingVerifiedUntil = "2026-10-20T01:35:53.000Z"
+    }
+  })
 
   # Lane g86: `FSS_DESKTOP_UPGRADE_URL` on the API task definition alone, the
   # `upgradeUrl` /auth/client-version publishes to a Mac below the minimum client
