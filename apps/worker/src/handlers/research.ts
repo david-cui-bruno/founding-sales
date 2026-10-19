@@ -126,9 +126,9 @@ export function parseResearchFirmPayload(payload: Readonly<Record<string, unknow
   const requestedByUserId = payload['requestedByUserId'];
   const purpose=payload['purpose']??'brief';
   if(purpose!=='brief'&&purpose!=='office_evidence')return null;
-  if(purpose==='office_evidence'&&(trigger!=='user_request'||typeof requestedByUserId!=='string'))return null;
+  if(purpose==='office_evidence'&&(trigger!=='user_request'||typeof requestedByUserId!=='string'||requestedByUserId===''))return null;
   if (typeof firmId !== 'string' || firmId === '') return null;
-  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1) return null;
+  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1 || revision > 2147483647) return null;
   if (typeof trigger !== 'string' || !(RESEARCH_TRIGGERS as readonly string[]).includes(trigger)) return null;
   return {
     purpose,

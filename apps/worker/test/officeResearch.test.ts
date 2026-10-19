@@ -23,6 +23,33 @@ const backoff={baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0};
 function failingOnce(pattern:RegExp):SessionQueryable{let armed=true;return {query:async <R extends QueryResultRowLike>(sql:string,values?:readonly unknown[]):Promise<QueryOutcome<R>>=>{if(armed&&pattern.test(sql)){armed=false;throw Object.assign(new Error('local fixture rollback'),{code:'40001'});}return await db.session.query<R>(sql,values);}};}
 async function queue(){const result=await enqueueFirmResearch(ctx,{firmId:crm.alpha.firmId,trigger:'user_request',requestedByUserId:members.alpha.admin.userId,purpose:'office_evidence'});if(!result.ok)throw new Error(result.reason);return result.value;}
 describe('strict office research through registered worker chunks',()=>{
+ it.each(['brief','office_evidence'] as const)('serializes simultaneous office and %s enqueue commands using one global revision space',async purpose=>{
+  const left=await db.appRuntimeSession(),right=await db.appRuntimeSession();
+  const leftContext=repositoryContext(ctx.scope,left),rightContext=repositoryContext(ctx.scope,right);
+  const request={firmId:crm.alpha.firmId,trigger:'user_request' as const,requestedByUserId:members.alpha.admin.userId};
+  const results=await Promise.all([
+   withTransaction(left,()=>enqueueFirmResearch(leftContext,{...request,purpose:'office_evidence'})),
+   withTransaction(right,()=>enqueueFirmResearch(rightContext,{...request,purpose})),
+  ]);
+  for(const result of results)expect(result.ok).toBe(true);
+  if(!results[0]!.ok||!results[1]!.ok)throw new Error('enqueue refused');
+  if(purpose==='brief'){
+   expect(results.map(r=>r.ok?r.value.revision:0).sort()).toEqual([1,2]);
+   expect(results[0]!.value.jobId).not.toBe(results[1]!.value.jobId);
+  }else{
+   expect(results[0]!.value.jobId).toBe(results[1]!.value.jobId);
+   expect(results.filter(r=>r.ok&&r.value.inserted)).toHaveLength(1);
+  }
+ });
+ it.each(['missing','malformed'] as const)('recovers %s strict progress from immutable durable purpose without opening another attempt',async mode=>{
+  const p=officeProviders(),registry=new HandlerRegistry().register(researchFirmJobHandler(p));await queue();
+  await runOnce(failingOnce(/UPDATE provider_reservations\s+SET state = 'calling'/u),{registry,owner:'strict-cursor-first',limit:1,backoff,random:()=>0});
+  await db.session.query(mode==='missing'?"UPDATE jobs SET payload=payload-'progress' WHERE kind='research.firm'":"UPDATE jobs SET payload=jsonb_set(payload,'{progress}','{}') WHERE kind='research.firm'");
+  expect((await runOnce(db.session,{registry,owner:'strict-cursor-recovered',limit:1,backoff,random:()=>0})).completed).toBe(1);
+  expect(p.stats()).toEqual({fetches:1,counts:1,calls:1});
+  expect((await db.session.query('SELECT purpose FROM research_runs')).rows).toEqual([{purpose:'office_evidence'}]);
+  expect((await db.session.query('SELECT attempt FROM provider_reservations')).rows).toEqual([{attempt:1}]);
+ });
  it('runs an existing manual firm once under stolen lease and rebuilds a source-owned result',async()=>{
   const p=officeProviders(),registry=new HandlerRegistry().register(researchFirmJobHandler(p));
   const report=await runTwiceUnderStolenLease({session:db.session,registry,run:runClaimedJob,workspaceId:members.alpha.workspaceId,kind:'research.firm',idempotencyKey:jobIdempotencyKey.researchFirm(crm.alpha.firmId,1),payload:payload(),countEffects:async()=>Number((await db.session.query<{n:number}>('SELECT count(*)::int n FROM firm_office_assessment_sources')).rows[0]?.n)});
@@ -45,6 +72,8 @@ describe('strict office research through registered worker chunks',()=>{
  });
  it('requires an explicit existing user request and rejects unknown purposes',()=>{
   expect(parseResearchFirmPayload({...payload(),purpose:'other'})).toBeNull();expect(parseResearchFirmPayload({...payload(),trigger:'sweep'})).toBeNull();expect(parseResearchFirmPayload({...payload(),requestedByUserId:null})).toBeNull();expect(parseResearchFirmPayload({firmId:crm.alpha.firmId,revision:1,trigger:'sweep'})?.purpose).toBe('brief');
+  expect(parseResearchFirmPayload({...payload(),requestedByUserId:''})).toBeNull();
+  expect(parseResearchFirmPayload({...payload(),revision:2147483648})).toBeNull();
  });
  it('serializes a body-bearing response before erasure, then erases every copied source after a fresh preview',async()=>{
   const other=await db.appRuntimeSession(),erasingContext=repositoryContext(ctx.scope,other);

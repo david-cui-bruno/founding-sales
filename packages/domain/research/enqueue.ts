@@ -6,6 +6,7 @@ import { nextRevision, runInProgress } from './runs.ts';
 import { readResearchSettings } from './settings.ts';
 import { accept, refuse, type ResearchResult, type ResearchTrigger } from './types.ts';
 import type { ResearchPurpose, ResearchPurposeInput } from './officeAssessmentContract.ts';
+import { VALID_RESEARCH_JOB_INTENT_SQL } from './jobIntent.ts';
 
 /**
  * Materialize one `research.firm` job.
@@ -61,6 +62,7 @@ export async function enqueueFirmResearch(
     WHERE j.workspace_id=$1 AND j.kind='research.firm' AND j.payload->>'firmId'=$2::text
       AND j.state IN ('queued','retryable','running') AND j.payload->>'revision' ~ '^[1-9][0-9]{0,9}$'
       AND j.idempotency_key='research-firm:'||$2::text||':'||(j.payload->>'revision')
+      AND (r.id IS NOT NULL OR ${VALID_RESEARCH_JOB_INTENT_SQL})
       AND (r.id IS NULL OR (r.outcome='running' AND (r.purpose='office_evidence' OR r.started_at>now()-interval '30 minutes')))
       AND COALESCE(r.purpose,j.payload->>'purpose','brief')=$3 ORDER BY revision DESC LIMIT 1`,
     [context.scope.workspaceId,input.firmId,purpose]);

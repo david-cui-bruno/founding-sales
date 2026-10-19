@@ -29,6 +29,30 @@ const read=()=>readFirmOfficeAssessment(ctx,{firmId:crm.alpha.firmId});
 async function assess(options:Parameters<typeof officeProviders>[0]={}){const providers=officeProviders({retrievedAt:await databaseNow(ctx),...options});const result=await runFirmResearch(ctx,{...await input(),...providers});expect(result.ok).toBe(true);return providers;}
 async function sources(){return (await database.session.query<{evidence_id:string;observation:unknown;facts:unknown}>(`SELECT evidence_id,observation,facts FROM firm_office_assessment_sources WHERE workspace_id=$1`,[members.alpha.workspaceId])).rows;}
 describe('existing manual firm strict office assessment',()=>{
+ it.each([
+  ["UPDATE phone_routes SET retired_at=clock_timestamp(),eligibility='retired',version=version+1 WHERE workspace_id=$1"],
+  ["UPDATE phone_routes SET eligibility='invalid',version=version+1 WHERE workspace_id=$1"],
+  ["UPDATE firms SET locality='Boston' WHERE workspace_id=$1"],
+  ["UPDATE firms SET region_code='MA' WHERE workspace_id=$1"],
+  ["UPDATE firms SET website=website||'/branch?office=other' WHERE workspace_id=$1"],
+  ["UPDATE research_settings SET enabled=false WHERE workspace_id=$1"],
+ ])('refuses changed current bindings after counting %#',async sql=>{
+  const p=await assess({beforeCount:async()=>{await database.session.query(sql,[members.alpha.workspaceId]);}});
+  expect(p.stats()).toEqual({fetches:1,counts:1,calls:0});expect(await sources()).toEqual([]);expect((await read()).status).not.toBe('supported');
+ });
+ it('adding a second same-number route during count invalidates the exact sole route rather than collapsing endpoints',async()=>{
+  const p=await assess({beforeCount:async()=>{await database.session.query(`INSERT INTO phone_routes(workspace_id,firm_id,e164,source,retrieved_at,association_confidence,technical_validation,eligibility,eligibility_policy_version)
+   VALUES($1,$2,'+14015550187','research_provider',now(),1,'passed','usable','test')`,[members.alpha.workspaceId,crm.alpha.firmId]);}});
+  expect(p.stats().calls).toBe(0);expect(await sources()).toEqual([]);expect((await read()).status).not.toBe('supported');
+ });
+ it.each(['website','locality','region_code'] as const)('records missing %s identity without fetching or selecting a replacement',async column=>{
+  await database.session.query(`UPDATE firms SET ${column}=NULL WHERE workspace_id=$1 AND id=$2`,[members.alpha.workspaceId,crm.alpha.firmId]);
+  const p=await assess();expect(p.stats()).toEqual({fetches:0,counts:0,calls:0});expect(await read()).toMatchObject({status:'stale',reason:'identity_missing'});
+ });
+ it('records a missing phone target without fetching or choosing an invalid route',async()=>{
+  await database.session.query("UPDATE phone_routes SET eligibility='invalid',version=version+1 WHERE workspace_id=$1",[members.alpha.workspaceId]);
+  const p=await assess();expect(p.stats()).toEqual({fetches:0,counts:0,calls:0});expect(await read()).toMatchObject({status:'stale',reason:'target_missing'});
+ });
  it('rebuilds persisted source-owned proof without ordinary writes or route authority',async()=>{
   const before=(await database.session.query('SELECT * FROM phone_routes WHERE workspace_id=$1',[members.alpha.workspaceId])).rows;
   const providers=await assess();expect(await read()).toMatchObject({status:'supported',sourceCount:1});expect(providers.stats()).toEqual({fetches:1,counts:1,calls:1});expect(providers.requests[0]).toEqual(providers.requests[1]);
@@ -53,6 +77,17 @@ describe('existing manual firm strict office assessment',()=>{
  it('settles incurred cost but never publishes identity changes during model await',async()=>{await assess({beforeExtract:async()=>{await database.session.query("UPDATE firms SET name='Changed identity' WHERE workspace_id=$1 AND id=$2",[members.alpha.workspaceId,crm.alpha.firmId]);}});expect(await sources()).toEqual([]);expect((await read()).status).not.toBe('supported');expect((await database.session.query('SELECT state FROM provider_reservations WHERE workspace_id=$1',[members.alpha.workspaceId])).rows).toEqual([{state:'settled'}]);});
  it('source deletion erases all copied facts and cannot fallback to older support',async()=>{await assess();const source=(await sources())[0]!;await database.session.query('DELETE FROM evidence_items WHERE workspace_id=$1 AND id=$2',[members.alpha.workspaceId,source.evidence_id]);expect(await sources()).toEqual([]);expect(await read()).toMatchObject({status:'stale',reason:'source_lost'});});
  it('source terms invalidate read immediately and expiry sweep erases copied bodies',async()=>{await assess();await database.session.query("UPDATE evidence_items SET retention_expires_at=now()-interval '1 second' WHERE workspace_id=$1",[members.alpha.workspaceId]);expect((await read()).status).toBe('stale');expect(await sweepOfficeSources(ctx,{now:await databaseNow(ctx),limit:10})).toBe(1);expect(await sources()).toEqual([]);});
+ it('permits explicitly finite retention only before its deadline and erases source blocks after expiry',async()=>{
+  await assess();await database.session.query("UPDATE evidence_items SET terms_allow_retention=false,retention_expires_at=clock_timestamp()+interval '1 hour' WHERE workspace_id=$1",[members.alpha.workspaceId]);
+  expect((await read()).status).toBe('supported');await database.session.query("UPDATE evidence_items SET retention_expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1",[members.alpha.workspaceId]);
+  expect((await read()).status).toBe('stale');expect(await sweepOfficeSources(ctx,{now:await databaseNow(ctx),limit:10})).toBe(1);expect(await sources()).toEqual([]);
+ });
+ it('whole-firm deletion previews and removes the proof parent and all copied sources',async()=>{
+  await assess();const preview=await previewDeletion(ctx,{targetKind:'firm',firmId:crm.alpha.firmId});if(!preview.ok)throw new Error(preview.reason);
+  expect(preview.value.removes).toMatchObject({firm_office_assessments:1,firm_office_assessment_sources:1});
+  expect((await commitDeletion(ctx,{requestId:preview.value.requestId,previewHash:preview.value.previewHash,commandId:'office-firm-erasure',journal:recordingSuppressionJournal()})).ok).toBe(true);
+  expect(await sources()).toEqual([]);expect((await database.session.query('SELECT id FROM firm_office_assessments WHERE workspace_id=$1',[members.alpha.workspaceId])).rows).toEqual([]);
+ });
  it('contact deletion preview and actual source erasure agree',async()=>{await assess();const preview=await previewDeletion(ctx,{targetKind:'contact',firmId:crm.alpha.firmId,contactId:crm.alpha.contactId});if(!preview.ok)throw new Error(preview.reason);expect(preview.value.removes['firm_office_assessment_sources']).toBe(1);const result=await commitDeletion(ctx,{requestId:preview.value.requestId,previewHash:preview.value.previewHash,commandId:'office-contact-erasure',journal:recordingSuppressionJournal()});expect(result.ok).toBe(true);expect(await sources()).toEqual([]);expect((await read()).status).not.toBe('supported');});
  it('ordinary pending job gets a different global revision, strict duplicate reuses its job',async()=>{const ordinary=await enqueueFirmResearch(ctx,{firmId:crm.alpha.firmId,trigger:'user_request',requestedByUserId:members.alpha.admin.userId});const strict=await enqueueFirmResearch(ctx,{...await input()});expect(ordinary.ok&&ordinary.value.revision).toBe(1);expect(strict.ok&&strict.value.revision).toBe(2);const duplicate=await enqueueFirmResearch(ctx,{...await input()});expect(duplicate.ok&&duplicate.value).toMatchObject({revision:2,inserted:false,purpose:'office_evidence'});expect(await nextRevision(ctx,crm.alpha.firmId)).toBe(3);});
  it('queued newer strict intent hides prior supported result',async()=>{await assess();expect((await read()).status).toBe('supported');await enqueueFirmResearch(ctx,{...await input()});expect(await read()).toMatchObject({status:'pending',reason:'queued',assessmentId:null});});

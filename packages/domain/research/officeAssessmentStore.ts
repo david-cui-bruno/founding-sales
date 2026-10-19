@@ -3,6 +3,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {OFFICE_SOURCE_MILLISECONDS} from './officeAssessmentContract.ts';
 import {officeNow,readOfficeAssessmentBinding} from './officeAssessmentTarget.ts';
 import {currentOfficeSources,evaluateOfficeAssessment,validOfficeProof} from './officeAssessmentEvidence.ts';
+import {VALID_RESEARCH_JOB_INTENT_SQL} from './jobIntent.ts';
 interface SourceRow extends Record<string,unknown>{id:string;evidence_id:string;observation:SourceObservation;facts:QualificationFact[];expires_at:Date;source_reference:string;content_hash:string;retrieved_at:Date;terms_allow_retention:boolean;retention_expires_at:Date|null;provider:string;contact_id:string|null;firm_id:string;}
 function sourceValid(row:SourceRow,source:SourceObservation,now:number):boolean {
  return row.provider==='company_page'&&row.contact_id===null&&row.source_reference===source.url&&row.content_hash===source.contentHash
@@ -41,6 +42,7 @@ export async function readFirmOfficeAssessment(ctx:RepositoryContext,input:{firm
  SELECT r.id,r.revision,r.outcome,r.refusal_code AS reason FROM research_runs r WHERE r.workspace_id=$1 AND r.firm_id=$2 AND r.purpose='office_evidence'
  UNION ALL SELECT NULL::uuid,(j.payload->>'revision')::bigint,j.state,CASE WHEN j.state='dead' THEN 'job_failed' ELSE 'queued' END
  FROM jobs j WHERE j.workspace_id=$1 AND j.kind='research.firm' AND j.payload->>'firmId'=$2::text AND j.payload->>'purpose'='office_evidence'
+ AND ${VALID_RESEARCH_JOB_INTENT_SQL}
  AND j.payload->>'revision' ~ '^[1-9][0-9]{0,9}$' AND j.idempotency_key='research-firm:'||$2::text||':'||(j.payload->>'revision') AND NOT EXISTS(SELECT 1 FROM research_runs r WHERE r.workspace_id=j.workspace_id AND r.firm_id=$2 AND j.idempotency_key='research-firm:'||r.firm_id::text||':'||r.revision::text)
  ) intents ORDER BY revision DESC LIMIT 1`,[ctx.scope.workspaceId,input.firmId])).rows[0];
  if(!latest)return empty;
