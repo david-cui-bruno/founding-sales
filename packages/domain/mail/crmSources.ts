@@ -2,7 +2,7 @@ import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import {qualifyBusinessMailMetadata} from './businessQualification.ts';
 import {redactBackfillMetadataForSources} from './crmBackfillMetadata.ts';
 import { businessMetadataObservationSchema, mailConversationSchema, type CrmForwardCaptureScope } from '@fss/contracts';
-import {captureProofForControl,forwardMailSourceAllowed,forwardObservationAllowed,isForwardCaptureDateAllowed} from './crmForwardCaptureScope.ts';
+import {captureProofForControl,forwardMailSourceAllowed,observationScopeAllowed,isForwardCaptureDateAllowed} from './crmForwardCaptureScope.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { isSuppressed } from '../suppression/effective.ts';
 import { workspaceScope, repositoryContext } from '../db/workspaceScope.ts';
@@ -12,7 +12,7 @@ import {
 } from '../business/acquisition.ts';
 import { headerValue } from './gmailClient.ts';
 import type { GmailMessageMetadata } from './gmailClient.ts';
-import type { BusinessMailMetadataObserver } from './pipeline.ts';
+import type { BusinessMailMetadataObserver,HistoricalMetadataAdmission } from './pipeline.ts';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -260,7 +260,7 @@ async function lockCaptureAuthority(
   )
     return null;
   const proof=await captureProofForControl(repositoryContext(scope,db),mailbox.id,control);
-  if(!proof.forwardScope||payload.acquisitionOrigin)return null;
+  if(!proof.forwardScope)return null;
   return {conversation,mailboxEmail:mailbox.email_address,proof};
 }
 
@@ -288,6 +288,28 @@ async function validExplicitMailRecapture(
       )
     ).rows.length === 1
   );
+}
+
+function captureAuthorityLocker(
+  deps: Parameters<typeof businessMailCaptureHandler>[0],
+  diagnostic: boolean,
+) {
+  return async (
+    input: JobHandlerInput,
+    payload: CapturePayload,
+    lockConversation = false,
+    beforeConversation?: () => Promise<boolean>,
+  ) => {
+    if (diagnostic) {
+      if (beforeConversation && !(await beforeConversation())) return null;
+      return deps.diagnostic!.lockAuthority(input, payload);
+    }
+    const authority = await lockCaptureAuthority(input, payload, lockConversation, beforeConversation);
+    return !payload.acquisitionOrigin ? authority : authority && deps.historicalProvider?.revalidate &&
+      await deps.historicalProvider.revalidate(repositoryContext(input.scope, input.session), {
+        importId: payload.acquisitionOrigin.importId, expectedProof: authority.proof,
+      }) ? authority : null;
+  };
 }
 
 export function businessMailCaptureHandler(deps: {
@@ -325,23 +347,7 @@ export function businessMailCaptureHandler(deps: {
         ? deps.diagnostic?.proofVerifier
         : deps.proofVerifier;
       if (!verifier) return done('acquisition_disabled');
-      async function lockAuthority(
-        input: JobHandlerInput,
-        payload: CapturePayload,
-        lockConversation = false,
-        beforeConversation?: () => Promise<boolean>,
-      ) {
-        if (diagnostic) {
-          if (beforeConversation && !(await beforeConversation())) return null;
-          return deps.diagnostic!.lockAuthority(input, payload);
-        }
-        return lockCaptureAuthority(
-          input,
-          payload,
-          lockConversation,
-          beforeConversation,
-        );
-      }
+      const lockAuthority = captureAuthorityLocker(deps, diagnostic);
       // Historical reads require the separately reserved import adapter; never fall through to live reads.
       if (payload.acquisitionOrigin && !deps.historicalProvider)
         return done('historical_read_meter_required');
@@ -459,7 +465,7 @@ export function businessMailCaptureHandler(deps: {
       );
       if (!message.success) return done('provider_evidence_invalid');
       const m = message.data;
-      if(!diagnostic&&(!staged.authority.proof.forwardScope||!isForwardCaptureDateAllowed(staged.authority.proof.forwardScope,Date.parse(m.providerAt))))return done('outside_forward_capture_scope');
+      if(!diagnostic&&!payload.acquisitionOrigin&&(!staged.authority.proof.forwardScope||!isForwardCaptureDateAllowed(staged.authority.proof.forwardScope,Date.parse(m.providerAt))))return done('outside_forward_capture_scope');
       if (
         m.providerAccountId !== payload.providerAccountId ||
         m.messageId !== payload.providerMessageId ||
@@ -2263,6 +2269,7 @@ export const approvedBusinessMailObservationSchema = z
 export async function observeApprovedBusinessMail(
   context: RepositoryContext,
   value: unknown,
+  historical?:HistoricalMetadataAdmission,
 ) {
   if (
     context.scope.actor.kind !== 'system' ||
@@ -2273,7 +2280,7 @@ export async function observeApprovedBusinessMail(
   if (!parsed.success)
     return { ok: false as const, reason: 'invalid_metadata' };
   const { ownerUserId, observation } = parsed.data;
-  if(!await forwardObservationAllowed(context,observation.mailboxId,observation.latestProviderAt,parsed.data.acquisitionOrigin))return {ok:false as const,reason:'outside_forward_capture_scope'};
+  if(!await observationScopeAllowed(context,parsed.data,historical))return {ok:false as const,reason:'outside_forward_capture_scope'};
   const mailbox = (
     await context.db.query<Mailbox>(
       'SELECT * FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR NO KEY UPDATE',
@@ -2393,7 +2400,7 @@ export function createApprovedBusinessMailObserver(
   } = {},
 ): BusinessMailMetadataObserver {
   return {
-    async observe(context, input) {
+    async observe(context, input, historical) {
       if(input.metadata.labelIds.includes('DRAFT'))return {ok:false,reason:'metadata_observation_unavailable'};
       if(options.revalidateAuthority&&!await options.revalidateAuthority(context,input))return {ok:false,reason:'metadata_observation_unavailable'};
       const policy = (
@@ -2441,7 +2448,7 @@ export function createApprovedBusinessMailObserver(
           ).toISOString(),
           ...classification,
         },
-      });
+      },historical);
       if(!result.ok)return {ok:false,reason:result.reason==='outside_review_window'?'outside_review_window':result.reason==='metadata_deleted'?'metadata_deleted':'metadata_observation_unavailable'};
       if(result.value.conversationId===null)return {ok:false,reason:'metadata_observation_unavailable'};
       return {ok:true,conversationId:result.value.conversationId};

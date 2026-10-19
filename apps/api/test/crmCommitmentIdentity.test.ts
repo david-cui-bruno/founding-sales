@@ -10,6 +10,7 @@ import {
   CURRENT_CLIENT_VERSION,
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
+import {seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
 
 it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date_zone", "expression", "owner", "cas", "ambiguous", "commercial", "unknown", "undated", "caller_event", "caller_precision", "conflict", "equivalent_open", "identical_open", "open_action", "open_due", "open_overflow"] as const)("preserves completed action identity across %s", async scenario => {
   const fixture = await createAuthFixture();
@@ -97,29 +98,8 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
           )
         ).status,
       ).toBe(200);
-      // Isolated evaluation fixture only; public controls cannot enable processing.
-      await fixture.db.query(
-        "UPDATE crm_extraction_purposes SET enabled=true WHERE workspace_id=$1",
-        [source.workspaceId],
-      );
-      await post("/crm/processing/request", command({ source }));
-      const registry = registerHandlers(new HandlerRegistry(), {
-        classifier: undefined,
-        mail: undefined,
-        send: undefined,
-        research: undefined,
-        crmExtraction: { allowControlledEvaluation:true,
-          adapter: {
-            endpointId: "review-evaluation",
-            modelVersion,
-            accessGrantVersion: "fixture-review-grant",
-            dataHandlingVersion: "fixture-review-policy",
-            providerKey: "fixture.crm_review",
-            fundingVerifiedUntil: "2099-01-01T00:00:00Z",
-            run: async () => ({
-              acceptance: "accepted",
-              usage: { inputTokens: 1, outputTokens: 1 },
-              claims: [
+      // Historical completed native evidence, not newly authorized extraction.
+      await seedHistoricalExtraction(fixture,{source,modelVersion,claims:[
                 {
                   kind: "commitment",
                   status: "stated",
@@ -128,16 +108,7 @@ it.each(["action", "due", "rerun", "restore", "precision", "instant_zone", "date
                   quote:promiseQuote,
                 },
                 ...(scenario==='conflict'?[{kind:'need' as const,status:'inferred' as const,interpretation:'Timing may remain unsettled',locator:`text:0:${promiseQuote.length}`,quote:promiseQuote}]:[]),
-              ],
-            }),
-          },
-        },
-      });
-      await runOnce(fixture.db, {
-        registry,
-        owner: `review-${modelVersion}`,
-        limit: 20,
-      });
+      ]});
       const result = crmProcessingResultSchema.parse(
         (await post("/crm/processing/read", { source })).body,
       );

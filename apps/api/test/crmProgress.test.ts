@@ -1,4 +1,5 @@
 import {changeSelectedSource,recaptureSelectedSource} from '@fss/domain/crm/people.ts';
+import {historicalMailFixtureRegistry} from './support/crmForwardScopeFixture.ts';
 import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 import type {SessionQueryable} from '@fss/domain/db/queryable.ts';
@@ -8,9 +9,7 @@ import {expect,it} from 'vitest';
 import {todayActionsResponseSchema,actionableNotificationsResponseSchema,crmProgressResponseSchema} from '@fss/contracts';
 import {businessAccountBinding} from '@fss/domain/business/acquisition.ts';
 import {enqueueJob,claimJobs} from '@fss/domain/jobs/jobStore.ts';
-import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {workspaceScope} from '@fss/domain/db/workspaceScope.ts';
-import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
 import {runSchedulerPass} from '../../worker/src/scheduler/schedulerPass.ts';
 import {workerDueWorkSources} from '../../worker/src/bootstrap/main.ts';
 import {runOnce} from '../../worker/src/runner/jobRunner.ts';
@@ -52,7 +51,7 @@ it.each(['unique','opt_out','fairness','terminal_delete','copy_delete','schedule
    await enqueueJob(fixture.db,{workspaceId,kind:'crm.mail_capture',idempotencyKey:`capture:${record.providerId}`,payload:{mailboxId:mailbox.id,providerMessageId:record.providerId,providerAccountId:'google-progress',generation:1,conversationId,controlsRevision:1,policyRevision:1,decisionRevision:0}});
   }
   const passage='Yes, let us discuss your request.';
-  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{proofVerifier:{verify:async proof=>proof.accountBinding===binding},provider:{read:async input=>{const record=records.find(r=>r.providerId===input.providerMessageId);if(!record)throw new Error('unexpected controlled provider message');return {providerAccountId:'google-progress',messageId:record.providerId,threadId:record.threadId,labels:record.sent?(scenario==='draft'?['SENT','DRAFT']:['SENT']):['INBOX'],origin:record.sent?'sent':'received',providerAt:new Date(record.providerId==='request-a'&&scenario==='provider_newer_request'?'2026-09-26T14:00:00Z':record.providerId==='request-a'&&scenario==='provider_older_request'?'2026-09-24T14:00:00Z':record.at).toISOString(),rawSenderDate:null,from:record.sent?'owner@example.test':scenario==='mixed_local_case'?'Morgan@example.test':'morgan@example.test',to:[record.sent?(scenario==='wrong_recipient'?'someone-else@example.test':'morgan@example.test'):'owner@example.test'],cc:[],subject:'Request',body:passage,parserVersion:'controlled-authored-mime-v1',representation:'plain_text',completeness:record.sent&&scenario==='partial'?'partial':'complete',ranges:[{start:0,end:passage.length,kind:record.sent&&scenario==='forward_only'?'forwarded':'authored'}]};}}}});
+  const registry=historicalMailFixtureRegistry({classifier:undefined,mail:undefined,send:undefined,research:undefined,retainedMailFixture: { original:{read:async input=>{const record=records.find(r=>r.providerId===input.providerMessageId);if(!record)throw new Error('unexpected controlled provider message');return {providerAccountId:'google-progress',messageId:record.providerId,threadId:record.threadId,labels:record.sent?(scenario==='draft'?['SENT','DRAFT']:['SENT']):['INBOX'],origin:record.sent?'sent':'received',providerAt:new Date(record.providerId==='request-a'&&scenario==='provider_newer_request'?'2026-09-26T14:00:00Z':record.providerId==='request-a'&&scenario==='provider_older_request'?'2026-09-24T14:00:00Z':record.at).toISOString(),rawSenderDate:null,from:record.sent?'owner@example.test':scenario==='mixed_local_case'?'Morgan@example.test':'morgan@example.test',to:[record.sent?(scenario==='wrong_recipient'?'someone-else@example.test':'morgan@example.test'):'owner@example.test'],cc:[],subject:'Request',body:passage,parserVersion:'controlled-authored-mime-v1',representation:'plain_text',completeness:record.sent&&scenario==='partial'?'partial':'complete',ranges:[{start:0,end:passage.length,kind:record.sent&&scenario==='forward_only'?'forwarded':'authored'}]};}}}});
   await runOnce(fixture.db,{registry,owner:'progress-capture-fixture',limit:100});
   const token=(await issueSessionFor(fixture,fixture.alpha,admin)).accessToken;
   const request=(path:string,body?:unknown)=>dispatch({method:body===undefined?'GET':'POST',path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,suppressionJournal:recordingSuppressionJournal()});

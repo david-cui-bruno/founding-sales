@@ -52,7 +52,7 @@ async function setup(){
   const source=(await f.db.query<{source_id:string;source_revision:number;content_hash:string}>('SELECT source_id,source_revision,content_hash FROM crm_mail_sources WHERE workspace_id=$1',[workspaceId])).rows[0]!;
   return {workspaceId,sourceId:source.source_id,revision:source.source_revision,contentHash:source.content_hash,kind:'mail' as const,locator:null};
  }
- async function run(adapter:CrmExtractionAdapter){const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter,mailEvidence,verifyPurpose:verifiers.verifyExtraction,revalidatePurpose:verifiers.revalidateExtraction}));await runOnce(db,{registry,owner:randomUUID(),limit:20});}
+ async function run(adapter:CrmExtractionAdapter,session=db){const registry=new HandlerRegistry();registry.register(crmExtractJobHandler({adapter,mailEvidence,verifyPurpose:verifiers.verifyExtraction,revalidatePurpose:verifiers.revalidateExtraction}));await runOnce(session,{registry,owner:randomUUID(),limit:20});}
  return {f,db,workspaceId,ownerUserId,post,command,mailbox,policy,capture,settings,prepare,activate,captureSource,route,run,context};
 }
 it('requires paired mail scope, exact capture owner binding and new consent protocol without implicit native authority',async()=>{
@@ -111,4 +111,19 @@ it('refuses cash adapter before dispatch even with otherwise current mail and ow
  const h=await setup();await h.prepare();await h.activate();const source=await h.captureSource();await h.post('/crm/processing/request',h.command({source}));let calls=0;
  await h.run({...h.route,providerKey:'anthropic_extraction.fixture',run:async()=>{calls++;return {acceptance:'accepted',usage:{inputTokens:1,outputTokens:1},claims:[]};}});
  expect(calls).toBe(0);expect((await h.f.db.query('SELECT 1 FROM provider_reservations WHERE workspace_id=$1',[h.workspaceId])).rows).toHaveLength(0);
+});
+it('recovers interrupted calling money before current scope refusal, without redispatch or historical publication',async()=>{
+ const h=await setup();await h.prepare();await h.activate();const source=await h.captureSource();await h.post('/crm/processing/request',h.command({source}));
+ let began!:()=>void,release!:()=>void,calls=0;
+ const started=new Promise<void>(resolve=>{began=resolve;}),waiting=new Promise<void>(resolve=>{release=resolve;});
+ const adapter:CrmExtractionAdapter={...h.route,inputBound:()=>({maxInputTokens:1000}),run:async()=>{calls++;began();await waiting;return {acceptance:'accepted',usage:{inputTokens:20,outputTokens:5},claims:[]};}};
+ const first=h.run(adapter);await started;
+ try{
+  expect((await h.post('/crm/business/mail/controls/disable',h.command({capability:'mail_capture',mailboxId:h.mailbox.id,expectedRevision:2}))).body).toMatchObject({status:'accepted'});
+  await h.f.db.query("UPDATE jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND kind='crm.extract' AND state='running'",[h.workspaceId]);
+  const recoverySession=await h.f.database.appRuntimeSession();await h.run(adapter,recoverySession);
+  expect(calls).toBe(1);
+  expect((await h.f.db.query("SELECT f.dispatch_state,p.state FROM crm_extraction_financial_receipts f JOIN provider_reservations p ON p.workspace_id=f.workspace_id AND p.id=f.reservation_id WHERE f.workspace_id=$1",[h.workspaceId])).rows).toEqual([{dispatch_state:'unknown_acceptance',state:'estimated'}]);
+ }finally{release();await first;}
+ expect(calls).toBe(1);expect((await h.f.db.query('SELECT 1 FROM crm_extraction_claims WHERE workspace_id=$1',[h.workspaceId])).rows).toHaveLength(0);
 });

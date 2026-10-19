@@ -49,8 +49,13 @@ import { GmailClientError } from './gmailClient.ts';
  */
 
 export type BusinessMailMetadataReceipt={readonly ok:true;readonly conversationId:string}|{readonly ok:false;readonly reason:'outside_review_window'|'metadata_deleted'|'metadata_observation_unavailable'};
+export interface HistoricalMetadataAdmission {
+ readonly mailboxId:string;readonly ownerUserId:string;readonly providerAccountId:string;readonly generation:number;readonly importId:string;
+ readonly metadata:GmailMessageMetadata;
+ authorizeSelectedMetadata(context:RepositoryContext,metadata:GmailMessageMetadata):Promise<boolean>;
+}
 export interface BusinessMailMetadataObserver {
-  observe(context: RepositoryContext, input: { readonly mailboxId:string; readonly ownerUserId:string; readonly providerAccountId:string; readonly generation:number; readonly metadata:GmailMessageMetadata; readonly acquisitionOrigin?:{readonly importId:string};readonly olderContext?:{readonly conversationId:string;readonly decisionRevision:number} }):Promise<void|BusinessMailMetadataReceipt>;
+  observe(context: RepositoryContext, input: { readonly mailboxId:string; readonly ownerUserId:string; readonly providerAccountId:string; readonly generation:number; readonly metadata:GmailMessageMetadata; readonly acquisitionOrigin?:{readonly importId:string};readonly olderContext?:{readonly conversationId:string;readonly decisionRevision:number} },historical?:HistoricalMetadataAdmission):Promise<void|BusinessMailMetadataReceipt>;
 }
 export interface MessagePipelineDeps {
   /** Absent in production; the observation carries the run's captured binding. */

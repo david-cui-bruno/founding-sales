@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { MailCaptureProof } from './crmSources.ts';
+import type {HistoricalMetadataAdmission} from './pipeline.ts';
 
 /** approvedAt must be the exact DB-observed ISO timestamp used for the immutable
  * owner approval, not an application clock. Date.parse floors submilliseconds;
@@ -102,4 +103,13 @@ export async function forwardObservationAllowed(context: RepositoryContext, mail
   const control = (await context.db.query<Record<string,unknown>>('SELECT * FROM crm_mail_capture_controls WHERE workspace_id=$1 AND mailbox_id=$2 FOR SHARE',[context.scope.workspaceId,mailboxId])).rows[0];
   const scope = control?.['enabled'] ? await forwardScopeForControl(context,control) : null;
   return !!scope && isForwardCaptureDateAllowed(scope,Date.parse(providerAt));
+}
+
+/** A private server composition must still match the exact original, not just
+ * a recent thread date. Arbitrary import IDs and JSON flags cannot enter here. */
+export async function observationScopeAllowed(context:RepositoryContext,input:{ownerUserId:string;acquisitionOrigin?:{importId:string}|undefined;observation:{mailboxId:string;providerAccountId:string;generation:number;providerMessageId:string;providerThreadId:string;latestProviderAt:string}},historical?:HistoricalMetadataAdmission){
+ if(!input.acquisitionOrigin)return forwardObservationAllowed(context,input.observation.mailboxId,input.observation.latestProviderAt);
+ if(!historical||typeof historical.authorizeSelectedMetadata!=='function')return false;
+ const m=historical.metadata,o=input.observation;
+ return historical.importId===input.acquisitionOrigin.importId&&historical.mailboxId===o.mailboxId&&historical.ownerUserId===input.ownerUserId&&historical.providerAccountId===o.providerAccountId&&historical.generation===o.generation&&m.id===o.providerMessageId&&m.threadId===o.providerThreadId&&Number.isSafeInteger(m.internalDateEpochMilliseconds)&&new Date(m.internalDateEpochMilliseconds).toISOString()===o.latestProviderAt&&await historical.authorizeSelectedMetadata(context,m);
 }

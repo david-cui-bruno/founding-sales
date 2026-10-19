@@ -1,8 +1,7 @@
-import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
 import {randomUUID} from 'node:crypto';
 import {expect,it} from 'vitest';
 import {crmProcessingResultSchema,selectedImportPageSchema} from '@fss/contracts';
-import {createCrmCapabilityRuntime,type CrmCapabilityStartupConfiguration} from '@fss/domain/crm/capabilityStartup.ts';
+import {activateForwardFixture,seedHistoricalExtraction} from './support/crmForwardScopeFixture.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {composeCrmCapabilities} from '../../worker/src/bootstrap/crmCapabilities.ts';
 import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
@@ -21,14 +20,13 @@ it.each([
  {observedAt:'2026-11-01T05:30:00Z',dueDate:'2026-11-03'},
 ])('runs selected input through configured extraction, promise review, Today, correction and deletion at $observedAt',async({observedAt,dueDate})=>{
  const passage=`I will prepare the repair summary by ${dueDate}.`;
- const expectedClaim={kind:'commitment',status:'stated',interpretation:'Promise to prepare the repair summary',locator:`text:0:${passage.length}`,quote:passage};
+  const expectedClaim={kind:'commitment' as const,status:'stated' as const,interpretation:'Promise to prepare the repair summary',locator:`text:0:${passage.length}`,quote:passage};
  const fixture=await createAuthFixture();
  try{
-  const db=await fixture.database.appRuntimeSession();
+  const forward=await activateForwardFixture(fixture),{db,runtime}=forward;
   const token=(await issueSessionFor(fixture,fixture.alpha,fixture.alpha.admin)).accessToken;
-  const route={region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const,providerKey:'controlled.crm_journey',accessGrantVersion:'controlled-access',dataHandlingVersion:'controlled-handling',fundingVerifiedUntil:'2099-01-01T00:00:00Z'};
-  const configuration:CrmCapabilityStartupConfiguration={capture:false,extraction:route};
-  const runtime=createCrmCapabilityRuntime(configuration,{implementationCommit:null,imageDigest:null,side:'api',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:false});
+  const route={...forward.route,region:'us-east-1' as const,endpointId:'bedrock-runtime.us-east-1.amazonaws.com' as const,modelVersion:'us.anthropic.claude-haiku-4-5-20251001-v1:0' as const};
+  const configuration={capture:true,extraction:route};
   const request=(method:'POST'|'GET',path:string,body:unknown)=>dispatch({method,path,body,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}},{session:db,auth:{...fixture.deps,db},supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false,crmCapabilityRuntime:runtime});
   const post=(path:string,body:unknown)=>request('POST',path,body);
   const command=(body:object)=>({...body,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
@@ -48,17 +46,22 @@ it.each([
   expect(imported.metadata.directionVerified).toBe(false);
   expect(imported.metadata.opportunityId).toBe(opportunityId);
   const source={workspaceId:imported.source.workspaceId,sourceId:imported.source.sourceId,kind:'selected_note' as const,revision:imported.source.revision,contentHash:imported.source.contentHash,locator:null};
-  expect((await post('/crm/processing/purpose/save',command({expectedRevision:0,enabled:false,endpointId:route.endpointId,modelVersion:route.modelVersion,accessGrantVersion:route.accessGrantVersion,dataHandlingVersion:route.dataHandlingVersion,dailyCeilingCents:20,monthlyCeilingCents:100,inputTokenPriceMicros:1,outputTokenPriceMicros:1}))).status).toBe(200);
-  expect((await post('/crm/processing/purpose/activate',command({capability:'crm_extraction',expectedRevision:1,approval:{consentAcknowledged:true,qualityTier:'provisional_owner',criticalControlsPassed:true,modelIntegrationVerified:true,reviewedEvaluationReference:'controlled-only-not-live-provider-proof',limitations:['representative_quality_unverified']}}))).body).toMatchObject({status:'accepted'});
+  await forward.extraction();
+  expect((await post('/crm/processing/request',command({source}))).status).toBe(409);
+  const mailSource=await forward.original(passage,{direction:'outgoing'});
   let calls=0;
-  const composed=await composeCrmCapabilities({configuration,runtime:{...runtime,side:'worker'},openSession:async()=>({session:await fixture.database.appRuntimeSession(),close:async()=>{}}),loadSurface:async region=>{expect(region).toBe('us-east-1');return {endpointId:route.endpointId,async converse(input){calls++;expect(input.modelId).toBe(route.modelVersion);expect(input.messages[0]!.content[0]!.text).toBe(passage);return {stopReason:'tool_use',usage:{inputTokens:30,outputTokens:20},output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'controlled-output',name:'emit_crm_extraction',input:{claims:[expectedClaim]}}}]}}};}};}});
+  const composed=await composeCrmCapabilities({configuration,runtime:{...runtime,side:'worker'},openSession:async()=>({session:db,close:async()=>{}}),loadSurface:async region=>{expect(region).toBe('us-east-1');return {endpointId:route.endpointId,async converse(input){calls++;expect(input.modelId).toBe(route.modelVersion);expect(JSON.parse(input.messages[0]!.content[0]!.text)).toMatchObject({text:passage});return {stopReason:'tool_use',usage:{inputTokens:30,outputTokens:20},output:{message:{role:'assistant',content:[{toolUse:{toolUseId:'controlled-output',name:'emit_crm_extraction',input:{claims:[expectedClaim]}}}]}}};}};}});
   const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,...composed.handlers});
-  expect((await post('/crm/processing/request',command({source}))).status).toBe(200);
+  expect((await forward.post('/crm/processing/request',command({source:mailSource}))).status).toBe(200);
   const ran=await runOnce(db,{registry,owner:'controlled-configured-extraction',limit:20});
   expect(ran.failed).toBe(0);
-  expect(calls,JSON.stringify((await post('/crm/processing/read',{source})).body)).toBe(1);
+  expect(calls,JSON.stringify((await forward.post('/crm/processing/read',{source:mailSource})).body)).toBe(1);
+  expect((await forward.post('/crm/processing/read',{source:mailSource})).body).toMatchObject({state:'complete',claims:[{kind:expectedClaim.kind,status:expectedClaim.status,interpretation:expectedClaim.interpretation,quote:passage,source:{locator:expectedClaim.locator}}],financial:{dispatchState:'settled',settlementState:'settled'}});
+  // Historical selected opportunity evidence remains reviewable without
+  // acquiring native extraction authority from the new mail-only purpose.
+  await seedHistoricalExtraction(fixture,{source,claims:[expectedClaim]});
   const processed=crmProcessingResultSchema.parse((await post('/crm/processing/read',{source})).body);
-  expect(processed).toMatchObject({state:'complete',claims:[{kind:expectedClaim.kind,status:expectedClaim.status,interpretation:expectedClaim.interpretation,quote:passage,context:{opportunityId,firmIds:[firmId]},source:{locator:expectedClaim.locator}}],financial:{dispatchState:'settled',settlementState:'settled'}});
+  expect(processed).toMatchObject({state:'complete',claims:[{kind:expectedClaim.kind,status:expectedClaim.status,interpretation:expectedClaim.interpretation,quote:passage,context:{opportunityId,firmIds:[firmId]},source:{locator:expectedClaim.locator}}]});
   if(!('generationId' in processed)||!processed.claims[0])throw new Error('Controlled claim missing');
   const claim=processed.claims[0];
   expect((await request('GET','/today/actions/v2',null)).body).toMatchObject({actions:[]});

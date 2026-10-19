@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import {historicalMailFixtureRegistry} from './support/crmForwardScopeFixture.ts';
 import { expect, it } from "vitest";
 import { dispatch } from "../src/server.ts";
 import {
@@ -6,8 +7,6 @@ import {
   CURRENT_CLIENT_VERSION,
 } from "./support/authFixture.ts";
 import { issueSessionFor } from "./support/sessionFixture.ts";
-import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
-import { registerHandlers } from "../../worker/src/bootstrap/main.ts";
 import { enqueueJob, claimJobs } from "@fss/domain/jobs/jobStore.ts";
 import { businessAccountBinding } from "@fss/domain/business/acquisition.ts";
 import { workspaceScope } from "@fss/domain/db/workspaceScope.ts";
@@ -77,18 +76,12 @@ it("retrieves retained mail passages after disconnect without a processing grant
     let reads = 0;
     const text =
       "ordinary context ".repeat(125) + "Drainage coordination is needed.";
-    const registry = registerHandlers(new HandlerRegistry(), {
+    const registry = historicalMailFixtureRegistry({
       classifier: undefined,
       mail: undefined,
       send: undefined,
       research: undefined,
-      crmMailCapture: {
-        proofVerifier: {
-          async verify() {
-            return true;
-          },
-        },
-        provider: {
+      retainedMailFixture: { original: {
           async read() {
             reads++;
             return {
@@ -283,18 +276,12 @@ it("discovers more than ten explicitly associated permitted mail copies within t
       })
     ).body as { result: { personId: string } };
     const text = "Retained original business copy.";
-    const registry = registerHandlers(new HandlerRegistry(), {
+    const registry = historicalMailFixtureRegistry({
       classifier: undefined,
       mail: undefined,
       send: undefined,
       research: undefined,
-      crmMailCapture: {
-        proofVerifier: {
-          async verify() {
-            return true;
-          },
-        },
-        provider: {
+      retainedMailFixture: { original: {
           async read(input) {
             return {
               providerAccountId: "google-business",
@@ -405,18 +392,12 @@ it("keeps useful owned passages when an explicit mixed request also names an ina
   try {
     const approved = await approveCaptureFixture(fixture),
       text = "Private mail drainage staffing.";
-    const registry = registerHandlers(new HandlerRegistry(), {
+    const registry = historicalMailFixtureRegistry({
       classifier: undefined,
       mail: undefined,
       send: undefined,
       research: undefined,
-      crmMailCapture: {
-        proofVerifier: {
-          async verify() {
-            return true;
-          },
-        },
-        provider: {
+      retainedMailFixture: { original: {
           async read(input) {
             return {
               providerAccountId: "google-business",
