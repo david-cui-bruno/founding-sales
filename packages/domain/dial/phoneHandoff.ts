@@ -43,6 +43,11 @@ export async function reservePhoneHandoff(context: RepositoryContext, input: Res
   // Millisecond truncation is conservative. Near a boundary, refuse rather than grant grace.
   const expires = Math.min(Date.parse(at) + PHONE_HANDOFF_MAX_LIFETIME_MS, Date.parse(close), Date.parse(registry.freshUntil));
   if (expires <= Date.parse(at)) return refused('outside_calling_window');
+  if (!await lockHandoffAuthority(context, input.deviceId, actor.userId)) return refused('phone_handoff_unavailable');
+  // Authority locks can themselves wait. Never refresh the original evidence/window
+  // bound to make a delayed reservation actionable. `at` remains the policy test clock.
+  const clock = (await context.db.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]?.at;
+  if (!clock || expires <= (input.at === undefined ? clock.getTime() : Date.parse(input.at))) return refused('phone_handoff_unavailable');
   const row = (await context.db.query<{ id: string }>(`INSERT INTO phone_handoff_attempts
     (workspace_id,firm_id,actor_user_id,device_id,command_id,contact_id,opportunity_id,phone_route_id,route_version,e164,item_id,
      registry_snapshot_id,registry_scrubbed_at,reserved_at,expires_at)
@@ -51,6 +56,20 @@ export async function reservePhoneHandoff(context: RepositoryContext, input: Res
       input.itemId ?? null, registry.snapshotId, registry.scrubbedAt, at, new Date(expires).toISOString()])).rows[0];
   if (!row) throw new Error('phone handoff reservation missing');
   return { ok: true, value: { attemptId: row.id } };
+}
+
+async function lockHandoffAuthority(context: RepositoryContext, deviceId: string, userId: string): Promise<boolean> {
+  // Gate/route/firm/evidence first, then exact device followed by membership (the
+  // auth open-session device-first order). SHARE conflicts with non-key status
+  // updates, unlike KEY SHARE. Read current locked rows and hold through commit.
+  const parameters = [context.scope.workspaceId, deviceId, userId];
+  const device = (await context.db.query<{ status: string }>(
+    'SELECT status FROM devices WHERE workspace_id=$1 AND id=$2 AND user_id=$3 FOR SHARE', parameters)).rows[0];
+  if (device?.status !== 'active') return false;
+  const membership = (await context.db.query<{ status: string }>(
+    'SELECT status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',
+    [context.scope.workspaceId, userId])).rows[0];
+  return membership?.status === 'active';
 }
 
 async function resolveHandoffOpportunity(context: RepositoryContext, input: ReservePhoneHandoffCommand): Promise<{ ok: true; value: string | null } | { ok: false; reason: string }> {

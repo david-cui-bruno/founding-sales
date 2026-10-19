@@ -244,7 +244,10 @@ export async function mergeFirms(
 
   // Identity merging preserves distinct commercial initiatives and their histories.
   await move('opportunities');
-  await move('call_logs', [], ' AND EXISTS (SELECT 1 FROM phone_handoff_attempts h WHERE h.workspace_id=r.workspace_id AND h.call_log_id=r.id)');
+  // Null-contact provider history has no contact cascade. Preserve the full mixed
+  // cadence and its reset/correction logs without changing original ticket identities.
+  await move('call_sessions');
+  await move('call_logs');
   await move('phone_handoff_attempts');
   // Every meeting that named a contact or an opportunity has followed it by now; the
   // key is checked here rather than at commit, so a merge that broke it fails as itself.
