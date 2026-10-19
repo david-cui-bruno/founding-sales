@@ -1,6 +1,6 @@
 # Current operating state
 
-## October 19, 2026, 18:17 UTC
+## October 19, 2026, 18:40 UTC
 
 Times are UTC unless marked Eastern. Observations are dated, not proof of later state.
 
@@ -18,7 +18,7 @@ Follow the [roadmap](../sourcing/roadmap-20261007.md) and [selling guide](how-to
 
 David's current targets: **100+ callable by Friday October 23, 300+ by October 31**, TX then MA/RI. Daily **18:00 Eastern** report is scheduled in the recovered session. October 18 TX30 grading remains historical: 11 useful, six thin, nine unsupported, four failed. It is not today's callable census.
 
-Fresh **17:57:27** research snapshot: TX 31 active firms, 14 latest fact extractions/30 prepared briefs; RI 2 active, one latest fact extraction; MA absent. These raw counts include a test firm and are not verified readiness. A test-excluded, evidence/current-gates census is in progress. Qualification/discovery configuration and scheduler deployment are not proof of new admissions or yield. Verified-first-party intake is research-only, never outreach authority.
+Test-excluded census **18:30:25**: **TX 31 active businesses, RI 1, MA 0**. Only TX 1/RI 1 have current admission-linked first-party office-phone evidence and clear the evaluated internal gates/window. TX's other 30 remain **unknown/not evaluated**, not disqualified. National DNC clearance is unknown. This is not a complete callable-now check: cadence, device, calling identity and reachability were not evaluated. Discovery is scheduled next at 19:30:47; the completed queue is not evidence of a scheduler failure.
 
 ## Budgets and Gmail
 
@@ -28,7 +28,7 @@ Gmail approval: incoming+Sent business-only forward/new originals for `david@use
 
 ## Calling, tools and decisions
 
-Production calling remains **Twilio**. Approved durable iPhone handoff source and Apollo/TREC work are integrated locally through schema 121, not released. Phone review found revocation-wait and mixed-provider merge-cadence blockers; fixes are committed and final reviewer rechecks are pending. Combined API 1,260 tests passed before those fixes. After fixes, six focused files/41 tests and nine catalog/migration/call-history files/2,976 tests passed, including 2,878 constraint cases. No call or Continuity test occurred. Apollo Free account is created, API key unavailable; no paid trial/reveal. Google Places held pending terms/free hard cap. TREC is verification-only; keep the fetcher/parser. LinkedIn manual ledger is delivered, no external actions. Playwright/Twilio CLI installed; **Cal.com MCP stays disconnected**.
+Production calling remains **Twilio**. PR **703** integrates durable iPhone handoff and held Apollo/TREC source through schema 121, not deployed. Three reviewers closed the authority/merge fixes. Local post-fix checks passed 41 focused and 2,976 combined tests. Hosted CI exposed a mismatched fixture clock in the API phone-receipt test. A test-only repair reproduces expiry refusal and fresh success; **merge/release held for new CI**. No call/Continuity test occurred. Apollo Free account exists, API key unavailable; no paid trial/reveal. Google Places held for terms/free hard cap; TREC verification-only. Keep the fetcher/parser. LinkedIn manual ledger delivered, no external actions. Playwright/Twilio CLI installed; **Cal.com MCP disconnected**.
 
 DNC PR 697 merged. SAN and complete current registry download remain missing; national registry matches unknown, not clear. Area-code coverage is not national clearance.
 
