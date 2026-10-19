@@ -19,6 +19,7 @@ import type { ResearchSettingsEdit, ResearchState } from '../researchContract.ts
 export interface ResearchActions {
   open(firmId: string): void;
   run(firmId: string): void;
+  assessOffice(firmId:string):void;
   addLink(input: { readonly firmId: string; readonly url: string }): void;
   saveSettings(edit: ResearchSettingsEdit): void;
   busy(form: string): boolean;
@@ -31,6 +32,7 @@ export interface Research extends ViewState<ResearchState> {
 /** What counts as one form: the smallest thing somebody presses. */
 export const researchForm = {
   run: (firmId: string): string => `research-run:${firmId}`,
+  office:(firmId:string):string=>`research-office:${firmId}`,
   link: (firmId: string): string => `research-link:${firmId}`,
   settings: 'research-settings',
 } as const;
@@ -63,6 +65,7 @@ export function useResearch(options: {
       run: id => {
         view.command(researchForm.run(id), async api => await api.command('research.run', { firmId: id }));
       },
+      assessOffice:id=>{view.command(researchForm.office(id),async api=>await api.command('research.run',{firmId:id,purpose:'office_evidence'}));},
       addLink: input => {
         view.command(
           researchForm.link(input.firmId),

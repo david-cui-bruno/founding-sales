@@ -11,6 +11,9 @@ import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedFirm } from './support/crmSeed.ts';
+import {runFirmResearch} from '@fss/domain/research/enrichment.ts';
+import {officeProviders} from '@fss/domain/test/support/officeProviders.ts';
+import {databaseNow} from '@fss/domain/policy/clock.ts';
 
 /**
  * The four research routes, through the real dispatcher with real sessions.
@@ -111,9 +114,41 @@ describe('the research routes', () => {
     await fixture.db.query('DELETE FROM research_settings');
     await fixture.db.query('DELETE FROM provider_ledger');
     await fixture.db.query('DELETE FROM daily_counters');
+    await fixture.db.query("DELETE FROM jobs WHERE kind='research.firm'");
+    await fixture.db.query('DELETE FROM phone_routes WHERE workspace_id=$1 AND firm_id=$2',[fixture.alpha.workspaceId,firmId]);
   });
 
   afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('queues strict purpose explicitly with replay protection and a separate pending reader',async()=>{
+    const body=command({firmId,purpose:'office_evidence'});
+    const first=await post('/research/firm/run',assigneeToken,body);
+    expect(first).toMatchObject({status:200,body:{replayed:false,result:{purpose:'office_evidence',revision:1}}});
+    expect(await post('/research/firm/run',assigneeToken,body)).toMatchObject({status:200,body:{replayed:true,result:{purpose:'office_evidence',revision:1}}});
+    expect((await post('/research/firm/run',assigneeToken,{...body,purpose:'brief'})).status).toBe(409);
+    const read=await post('/research/firm',assigneeToken,{firmId});
+    expect(read.body['officeAssessment']).toMatchObject({status:'pending',reason:'queued'});expect(read.body['runs']).toEqual([]);expect(read.body['brief']).toBeNull();
+    const ordinary=await post('/research/firm/run',assigneeToken,command({firmId}));
+    expect(ordinary).toMatchObject({status:200,body:{result:{purpose:'brief',revision:2}}});
+    expect((await fixture.db.query("SELECT payload->>'purpose' purpose FROM jobs WHERE kind='research.firm' ORDER BY created_at,id")).rows.map(r=>r['purpose']).sort()).toEqual(['office_evidence',null].sort());
+  });
+
+  it('does not let a completed strict run replace or delay the ordinary brief view',async()=>{
+    await fixture.db.query(`INSERT INTO research_runs(workspace_id,firm_id,revision,trigger,outcome,completed_at) VALUES($1,$2,1,'sweep','completed',now())`,[fixture.alpha.workspaceId,firmId]);
+    await fixture.db.query(`INSERT INTO research_runs(workspace_id,firm_id,revision,trigger,requested_by_user_id,purpose,outcome,completed_at) VALUES($1,$2,2,'user_request',$3,'office_evidence','completed',now())`,[fixture.alpha.workspaceId,firmId,fixture.alpha.salesperson.userId]);
+    const read=await post('/research/firm',assigneeToken,{firmId});
+    expect((read.body['runs'] as {revision:number}[]).map(r=>r.revision)).toEqual([1]);expect(read.body['officeAssessment']).toMatchObject({status:'stale'});
+  });
+
+  it('reads rebuilt strict support independently and invalidates it after actual source deletion',async()=>{
+    await fixture.db.query("UPDATE firms SET locality='Providence' WHERE workspace_id=$1 AND id=$2",[fixture.alpha.workspaceId,firmId]);
+    await fixture.db.query(`INSERT INTO phone_routes(workspace_id,firm_id,e164,source,retrieved_at,association_confidence,technical_validation,eligibility,eligibility_policy_version) VALUES($1,$2,'+14015550187','research_provider',now(),1,'passed','usable','test')`,[fixture.alpha.workspaceId,firmId]);
+    const providers=officeProviders();expect((await runFirmResearch(worker(),{firmId,revision:1,trigger:'user_request',requestedByUserId:fixture.alpha.salesperson.userId,purpose:'office_evidence',at:await databaseNow(worker()),...providers})).ok).toBe(true);
+    const read=await post('/research/firm',assigneeToken,{firmId});expect(read.body['officeAssessment']).toMatchObject({status:'supported',sourceCount:1});expect(read.body['runs']).toEqual([]);expect(read.body['brief']).toBeNull();expect(providers.stats().calls).toBe(1);
+    await fixture.db.query('DELETE FROM evidence_items WHERE workspace_id=$1 AND firm_id=$2',[fixture.alpha.workspaceId,firmId]);
+    expect((await post('/research/firm',assigneeToken,{firmId})).body['officeAssessment']).toMatchObject({status:'stale',reason:'source_lost'});
+    expect((await fixture.db.query('SELECT count(*)::int n FROM firm_office_assessment_sources WHERE workspace_id=$1',[fixture.alpha.workspaceId])).rows).toEqual([{n:0}]);
+  });
 
   it.each([undefined, 'unknown'])('refuses preview when the explicit worker transport is %s', async transport => {
     vi.stubEnv('FSS_MODEL_TRANSPORT', transport);

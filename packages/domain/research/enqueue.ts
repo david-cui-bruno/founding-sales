@@ -61,6 +61,7 @@ export async function enqueueFirmResearch(
     WHERE j.workspace_id=$1 AND j.kind='research.firm' AND j.payload->>'firmId'=$2::text
       AND j.state IN ('queued','retryable','running') AND j.payload->>'revision' ~ '^[1-9][0-9]{0,9}$'
       AND j.idempotency_key='research-firm:'||$2::text||':'||(j.payload->>'revision')
+      AND (r.id IS NULL OR (r.outcome='running' AND (r.purpose='office_evidence' OR r.started_at>now()-interval '30 minutes')))
       AND COALESCE(r.purpose,j.payload->>'purpose','brief')=$3 ORDER BY revision DESC LIMIT 1`,
     [context.scope.workspaceId,input.firmId,purpose]);
   if (pending.rows[0]) return accept({revision:Number(pending.rows[0].revision),jobId:pending.rows[0].id,inserted:false,purpose});

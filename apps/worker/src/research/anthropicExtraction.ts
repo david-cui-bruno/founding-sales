@@ -12,7 +12,6 @@ import {
   extractionUserText,
 } from '@fss/domain/research/extractionPrompt.ts';
 import type {
-  ExtractionAnswer,
   ExtractionProvider,
   ExtractionRequest,
   ProviderOutcome,
@@ -21,6 +20,8 @@ import { MAX_EXTRACTION_OUTPUT_TOKENS, centsOf } from '@fss/domain/research/pric
 import { modelProviderKey } from '@fss/domain/classification/modelTransport.ts';
 import { routeOfTransport } from '@fss/domain/classification/routedTransport.ts';
 import { DEFAULT_RESEARCH_SETTINGS } from '@fss/domain/research/settings.ts';
+import {officeExtractionRequest,parseOfficeExtractionAnswer} from '@fss/domain/research/officeEvidencePrompt.ts';
+import type {ResearchExtractionRequest,ResearchExtractionAnswer} from '@fss/domain/research/officeAssessmentContract.ts';
 
 /**
  * The live extraction: one model call per run, over the transport the reply
@@ -156,7 +157,7 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
   // naming a model whose route differs is refused below before anything is sent.
   const route = routeOfTransport(options.transport);
   const transport = route(DEFAULT_RESEARCH_SETTINGS.modelName) ?? 'anthropic';
-  const sameRoute = (input: ExtractionRequest): boolean => route(input.modelName) === transport;
+  const sameRoute = (input: ResearchExtractionRequest): boolean => route(input.modelName) === transport;
   /**
    * Exactly what `extract` would send, so a count is a count of the real request.
    *
@@ -191,17 +192,17 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
      * Built from the same function, so what is counted and what is sent cannot drift:
      * the whole value of an exact count is that it is a count of *this* request.
      */
-    countInputTokens: async (input: ExtractionRequest): Promise<number> => {
+    countInputTokens: async (input: ResearchExtractionRequest): Promise<number> => {
       // A count that cannot be taken is a call that is not made (the caller releases).
       if (!sameRoute(input)) throw new Error('the model is not routed through this extraction port');
-      return await options.transport.countTokens(requestFor(input));
+      return await options.transport.countTokens(input.purpose==='office_evidence'?officeExtractionRequest(input):requestFor(input));
     },
-    extract: async (input: ExtractionRequest): Promise<ProviderOutcome<ExtractionAnswer>> => {
+    extract: async (input: ResearchExtractionRequest): Promise<ProviderOutcome<ResearchExtractionAnswer>> => {
       // Never one transport against money reserved for the other: refused, nothing sent.
       if (!sameRoute(input)) return { ok: false, failureCode: 'provider_refused', costCents: 0 };
       let response: AnthropicMessageResponse;
       try {
-        response = await options.transport.create(requestFor(input));
+        response = await options.transport.create(input.purpose==='office_evidence'?officeExtractionRequest(input):requestFor(input));
       } catch (error) {
         // The error is deliberately not carried out of here. An SDK error message can
         // quote a request body, and a request body is a firm's published pages plus
@@ -256,6 +257,11 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
       }
       const text = textOf(response);
       if (text === null) return { ok: false, failureCode: 'no_answer', costCents, ...estimated };
+      if(input.purpose==='office_evidence'){
+        const selections=response.stop_reason==='end_turn'?parseOfficeExtractionAnswer(text):null;
+        if(!selections)return {ok:false,failureCode:'malformed_answer',costCents,...estimated};
+        return {ok:true,value:{purpose:'office_evidence',selections,modelName:input.modelName,inputTokens,outputTokens},costCents,...estimated};
+      }
       const parsed = parseExtractionAnswer(text);
       if (parsed === null) return { ok: false, failureCode: 'malformed_answer', costCents, ...estimated };
 

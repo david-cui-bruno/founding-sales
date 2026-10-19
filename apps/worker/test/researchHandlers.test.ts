@@ -296,7 +296,7 @@ describe('the research jobs', () => {
     expect(parseResearchFirmPayload({ firmId, revision: 0, trigger: 'sweep' })).toBeNull();
     expect(parseResearchFirmPayload({ firmId, revision: 1, trigger: 'guesswork' })).toBeNull();
     expect(parseResearchFirmPayload({ firmId, revision: 1, trigger: 'sweep' })).toEqual({
-      firmId,
+      firmId, purpose:'brief',
       revision: 1,
       trigger: 'sweep',
     });
@@ -872,7 +872,7 @@ describe('the research jobs', () => {
     // Chunk 1: the run row, the day's count and the reservation. No provider yet.
     const first = await handler.handle({ session: database.session, scope, job: claimed });
     expect(first).toEqual({
-      progress: { runId: expect.any(String), attempt: 1, step: 'reserved', fencing: '1' },
+      progress: { runId: expect.any(String), attempt: 1, step: 'reserved', fencing: '1', purpose:'brief' },
       done: false,
     });
     expect(pageFetch.calls).toBe(0);
@@ -887,7 +887,7 @@ describe('the research jobs', () => {
       job: { ...claimed, payload: { ...claimed.payload, progress: (first as { progress: unknown }).progress } },
     });
     expect(second).toEqual({
-      progress: { runId: expect.any(String), attempt: 1, step: 'uncalled', fencing: '1' },
+      progress: { runId: expect.any(String), attempt: 1, step: 'uncalled', fencing: '1', purpose:'brief' },
       done: false,
     });
     expect(await reservations()).toEqual([{ attempt: 1, state: 'released', cents: 3, settled: 0 }]);

@@ -1031,7 +1031,7 @@ export const OPERATIONS = {
       { method: 'POST', path: '/research/firm/run' },
       { method: 'POST', path: '/research/firm' },
     ],
-    input: z.strictObject({ firmId: uuid }),
+    input: z.strictObject({ firmId: uuid,purpose:z.enum(['brief','office_evidence']).optional() }),
     output: researchStateSchema,
     transform: 're-reads the firm keeping the command’s notice: a queued run is a running row, not a brief',
   },

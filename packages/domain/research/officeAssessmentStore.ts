@@ -1,8 +1,7 @@
 import {unevaluatedFirmOfficeAssessment,type FirmOfficeAssessmentView,type SourceObservation,type QualificationFact} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {databaseNow} from '../policy/clock.ts';
 import {OFFICE_SOURCE_MILLISECONDS} from './officeAssessmentContract.ts';
-import {readOfficeAssessmentBinding} from './officeAssessmentTarget.ts';
+import {officeNow,readOfficeAssessmentBinding} from './officeAssessmentTarget.ts';
 import {currentOfficeSources,evaluateOfficeAssessment,validOfficeProof} from './officeAssessmentEvidence.ts';
 interface SourceRow extends Record<string,unknown>{id:string;evidence_id:string;observation:SourceObservation;facts:QualificationFact[];expires_at:Date;source_reference:string;content_hash:string;retrieved_at:Date;terms_allow_retention:boolean;retention_expires_at:Date|null;provider:string;contact_id:string|null;firm_id:string;}
 function sourceValid(row:SourceRow,source:SourceObservation,now:number):boolean {
@@ -15,13 +14,13 @@ export async function markOfficeUnavailable(ctx:RepositoryContext,runId:string,r
 export async function retainedOfficeSources(ctx:RepositoryContext,input:{firmId:string;observations:readonly SourceObservation[];evidenceIds:readonly string[]}):Promise<boolean>{
  if(!validOfficeProof(input.observations,[])||input.evidenceIds.length!==input.observations.length)return false;
  const rows=(await ctx.db.query<SourceRow>(`SELECT * FROM evidence_items WHERE workspace_id=$1 AND firm_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR SHARE`,[ctx.scope.workspaceId,input.firmId,input.evidenceIds])).rows;
- const now=Date.parse(await databaseNow(ctx));
+ const now=Date.parse(await officeNow(ctx));
  return input.observations.every((source,index)=>{const evidence=rows.find(r=>r.id===input.evidenceIds[index]);return !!evidence&&sourceValid(evidence,source,now);});
 }
 export async function finishOfficeAssessment(ctx:RepositoryContext,input:{runId:string;observations:readonly SourceObservation[];facts:readonly QualificationFact[];evidenceIds:readonly string[]}):Promise<boolean>{
  const bound=await readOfficeAssessmentBinding(ctx,input.runId,true);
  if('reason' in bound||bound.parent.result!=='pending'||!validOfficeProof(input.observations,input.facts)||input.evidenceIds.length!==input.observations.length)return false;
- const now=await databaseNow(ctx),time=Date.parse(now),expiry:number[]=[];
+ const now=await officeNow(ctx),time=Date.parse(now),expiry:number[]=[];
  if(!currentOfficeSources(bound.candidate,input.observations,now))return false;
  const rows=(await ctx.db.query<SourceRow>(`SELECT * FROM evidence_items WHERE workspace_id=$1 AND firm_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR SHARE`,[ctx.scope.workspaceId,bound.parent.firm_id,input.evidenceIds])).rows;
  for(const [index,source] of input.observations.entries()){
@@ -47,13 +46,14 @@ export async function readFirmOfficeAssessment(ctx:RepositoryContext,input:{firm
  if(!latest)return empty;
  const pending={...empty,status:'pending' as const,researchRunId:latest.id,reason:latest.reason??'research_pending'};
  if(!latest.id)return pending;
+ if(latest.outcome==='refused'||latest.outcome==='failed')return {...pending,reason:latest.reason??'research_failed'};
  const bound=await readOfficeAssessmentBinding(ctx,latest.id);
  if('reason' in bound)return {...pending,status:'stale',reason:bound.reason};
  const {parent}=bound;
  const view:FirmOfficeAssessmentView={...pending,assessmentId:parent.id,routeId:parent.phone_route_id,routeVersion:parent.route_version,assessedAt:parent.assessed_at?.toISOString()??null,expiresAt:parent.expires_at.toISOString(),sourceCount:0,policyVersion:parent.assessment_version};
  if(latest.outcome!=='completed'||!parent.assessed_at)return {...view,reason:latest.reason??parent.reason??'research_pending'};
  const rows=(await ctx.db.query<SourceRow>(`SELECT s.observation,s.facts,s.expires_at,s.evidence_id,e.source_reference,e.content_hash,e.retrieved_at,e.terms_allow_retention,e.retention_expires_at,e.provider,e.contact_id,e.firm_id FROM firm_office_assessment_sources s JOIN evidence_items e ON e.workspace_id=s.workspace_id AND e.firm_id=s.firm_id AND e.id=s.evidence_id WHERE s.workspace_id=$1 AND s.assessment_id=$2 ORDER BY s.ordinal`,[ctx.scope.workspaceId,parent.id])).rows;
- const now=await databaseNow(ctx);
+ const now=await officeNow(ctx);
  if(!rows.length||rows.length!==parent.expected_source_count)return {...view,status:'stale',reason:'source_lost'};
  if(!validOfficeProof(rows.map(r=>r.observation),rows.flatMap(r=>r.facts)))return {...view,status:'stale',reason:'invalid_evidence'};
  if(rows.some(r=>r.expires_at.getTime()<=Date.parse(now)||!sourceValid(r,r.observation,Date.parse(now))))return {...view,status:'stale',reason:'source_expired_or_terms'};

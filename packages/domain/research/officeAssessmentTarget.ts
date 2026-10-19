@@ -1,12 +1,13 @@
 import {createHash} from 'node:crypto';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {databaseNow} from '../policy/clock.ts';
 import {researchEligibility} from './eligibility.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from '../sourcing/qualificationStore.ts';
 import {VERIFIED_FIRM_POLICY_VERSION} from '../sourcing/verifiedFirmPolicy.ts';
 import type {QualificationCandidateContext} from '../sourcing/qualificationCitationRoles.ts';
 import {OFFICE_CAPTURE_MILLISECONDS,OFFICE_IDENTITY_VERSION,OFFICE_TARGET_VERSION,OFFICE_ASSESSMENT_VERSION,OFFICE_SELECTION_VERSION} from './officeAssessmentContract.ts';
 export const officeHash=(value:string):string=>createHash('sha256').update(value).digest('hex');
+/** now() is transaction-stable. Strict capture/source expiry must advance across provider awaits. */
+export async function officeNow(ctx:RepositoryContext):Promise<string>{const row=(await ctx.db.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0];if(!row)throw new Error('Office assessment clock unavailable');return row.now.toISOString();}
 export interface OfficeParent extends Record<string,unknown> {
  id:string;firm_id:string;research_run_id:string;phone_route_id:string;route_version:number;route_endpoint_hash:string;firm_identity_fingerprint:string;
  identity_version:string;target_version:string;assessment_version:string;selection_version:string;qualification_policy_version:string;qualification_prompt_version:string;verified_firm_policy_version:string;
@@ -31,10 +32,10 @@ export async function captureOfficeAssessment(ctx:RepositoryContext,input:{firmI
 }
 export async function readOfficeAssessmentBinding(ctx:RepositoryContext,runId:string,dispatch=false):Promise<{parent:OfficeParent;candidate:QualificationCandidateContext}|{reason:string}>{
  const parent=(await ctx.db.query<OfficeParent>(`SELECT * FROM firm_office_assessments WHERE workspace_id=$1 AND research_run_id=$2`,[ctx.scope.workspaceId,runId])).rows[0];
- if(!parent){const run=(await ctx.db.query<{office_assessment_capture_status:string|null}>(`SELECT office_assessment_capture_status FROM research_runs WHERE workspace_id=$1 AND id=$2 AND purpose='office_evidence'`,[ctx.scope.workspaceId,runId])).rows[0];return {reason:run?.office_assessment_capture_status??'capture_missing'};}
+ if(!parent){const run=(await ctx.db.query<{office_assessment_capture_status:string|null}>(`SELECT office_assessment_capture_status FROM research_runs WHERE workspace_id=$1 AND id=$2 AND purpose='office_evidence'`,[ctx.scope.workspaceId,runId])).rows[0];return {reason:run?.office_assessment_capture_status==='bound'?'capture_lost':run?.office_assessment_capture_status??'capture_missing'};}
  if(parent.result==='stale')return {reason:parent.reason??'binding_stale'};
  if(parent.identity_version!==OFFICE_IDENTITY_VERSION||parent.target_version!==OFFICE_TARGET_VERSION||parent.assessment_version!==OFFICE_ASSESSMENT_VERSION||parent.selection_version!==OFFICE_SELECTION_VERSION||parent.qualification_policy_version!==QUALIFICATION_POLICY_VERSION||parent.qualification_prompt_version!==QUALIFICATION_PROMPT_VERSION||parent.verified_firm_policy_version!==VERIFIED_FIRM_POLICY_VERSION)return {reason:'policy_changed'};
- const now=Date.parse(await databaseNow(ctx));
+ const now=Date.parse(await officeNow(ctx));
  if(now<parent.captured_at.getTime())return {reason:'capture_invalid'};
  if(dispatch&&now-parent.captured_at.getTime()>=OFFICE_CAPTURE_MILLISECONDS)return {reason:'capture_expired'};
  if(!dispatch&&now>=parent.expires_at.getTime())return {reason:'evidence_expired'};

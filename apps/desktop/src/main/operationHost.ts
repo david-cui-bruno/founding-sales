@@ -440,7 +440,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
     'research.state': async () => await deps.research.state(),
     'research.open': async (input: { readonly firmId: string }) => await deps.research.open(input),
-    'research.run': async (input: { readonly firmId: string }) => await deps.research.run(input),
+    'research.run': async (input: { readonly firmId: string; readonly purpose?:'brief'|'office_evidence' }) => await deps.research.run(input),
     'research.addLink': async (input: Parameters<ResearchBridgeHost['addLink']>[0]) =>
       await deps.research.addLink(input),
     'research.saveSettings': async (input: Parameters<ResearchBridgeHost['saveSettings']>[0]) =>

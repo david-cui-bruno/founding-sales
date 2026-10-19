@@ -8,6 +8,7 @@ import {
   researchSettingsSchema,
   researchSpendSchema,
   uuid,
+  firmOfficeAssessmentSchema,
 } from '@fss/contracts';
 
 /**
@@ -29,6 +30,7 @@ import {
 
 export const researchFirmViewSchema = z.strictObject({
   firmId: uuid,
+  officeAssessment:firmOfficeAssessmentSchema.optional(),
   brief: callBriefSchema.nullable(),
   facts: z.array(researchFactSchema),
   judgments: researchJudgmentsSchema.nullable(),
@@ -46,6 +48,7 @@ export const researchStateSchema = z.strictObject({
   spend: researchSpendSchema.nullable(),
   /** A stable code, never a sentence composed here. */
   notice: z.string().max(80).nullable(),
+  officeNotice:z.string().max(80).nullable().optional(),
   /** Whether a mutating command may be attempted at all. */
   mayMutate: z.boolean(),
   role: z.enum(['admin', 'salesperson']).nullable(),
