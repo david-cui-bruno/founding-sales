@@ -374,6 +374,15 @@ describe('the Firm page’s Research section', () => {
     expect((field as HTMLInputElement).value).toBe('');
   });
 
+  it('requests one explicit office purpose without replacing ordinary research actions',async()=>{
+    const run=vi.fn(async(_input:unknown)=>state({officeNotice:'office_evidence_queued'}));
+    install({'research.run':run});mount();await screen.findAllByTestId('research-fact');
+    expect(screen.getByTestId('office-assessment').textContent).toContain('not dial permission or DNC clearance');
+    await userEvent.setup().click(screen.getByTestId('assess-office'));
+    await waitFor(()=>expect(run).toHaveBeenCalledExactlyOnceWith({firmId:FIRM_ID,purpose:'office_evidence'}));
+    expect(screen.getAllByTestId('research-fact')).toHaveLength(3);expect(screen.getByTestId('research-now')).toBeTruthy();
+  });
+
   it('shows an unpriced run as an estimate, and says what stopped it', async () => {
     install({});
     mount();

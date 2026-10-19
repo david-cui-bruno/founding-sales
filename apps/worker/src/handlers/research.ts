@@ -21,6 +21,7 @@ import { readResearchSettings } from '@fss/domain/research/settings.ts';
 import { finaliseAbandonedRuns } from '@fss/domain/research/runs.ts';
 import { selectFirmsForSweep } from '@fss/domain/research/sweep.ts';
 import { RESEARCH_TRIGGERS, type ResearchTrigger } from '@fss/domain/research/types.ts';
+import type {ResearchPurpose} from '@fss/domain/research/officeAssessmentContract.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**
@@ -111,6 +112,7 @@ export class ResearchHandlerError extends Error {
 }
 
 interface FirmPayload {
+  readonly purpose:ResearchPurpose;
   readonly firmId: string;
   readonly revision: number;
   readonly trigger: ResearchTrigger;
@@ -122,10 +124,14 @@ export function parseResearchFirmPayload(payload: Readonly<Record<string, unknow
   const revision = payload['revision'];
   const trigger = payload['trigger'];
   const requestedByUserId = payload['requestedByUserId'];
+  const purpose=payload['purpose']??'brief';
+  if(purpose!=='brief'&&purpose!=='office_evidence')return null;
+  if(purpose==='office_evidence'&&(trigger!=='user_request'||typeof requestedByUserId!=='string'||requestedByUserId===''))return null;
   if (typeof firmId !== 'string' || firmId === '') return null;
-  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1) return null;
+  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1 || revision > 2147483647) return null;
   if (typeof trigger !== 'string' || !(RESEARCH_TRIGGERS as readonly string[]).includes(trigger)) return null;
   return {
+    purpose,
     firmId,
     revision,
     trigger: trigger as ResearchTrigger,
@@ -147,6 +153,7 @@ export function researchHandlers(options: ResearchWorkerOptions | undefined): re
  * holding — the job's own attempt counter cannot, because `requeueDeadJob` resets it.
  */
 export interface ResearchProgress {
+  readonly purpose:ResearchPurpose;
   readonly runId: string;
   readonly attempt: number;
   readonly step: ResearchStep;
@@ -164,11 +171,13 @@ export function parseResearchProgress(progress: unknown): ResearchProgress | nul
   const attempt = row['attempt'];
   const step = row['step'];
   const fencing = row['fencing'];
+  const purpose=row['purpose']??'brief';
+  if(purpose!=='brief'&&purpose!=='office_evidence')return null;
   if (typeof runId !== 'string' || runId === '') return null;
   if (typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt < 1) return null;
   if (typeof step !== 'string' || !STEPS.includes(step as ResearchStep)) return null;
   if (typeof fencing !== 'string' || fencing === '') return null;
-  return { runId, attempt, step: step as ResearchStep, fencing };
+  return { runId, attempt, step: step as ResearchStep, fencing, purpose };
 }
 
 export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandler {
@@ -191,7 +200,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
       // auto-created firm's Today refresh needs exclusive mode from the outset,
       // never a shared-to-exclusive upgrade after taking research locks.
       const autoCreated=(await input.session.query(`SELECT 1 FROM audit_events WHERE workspace_id=$1 AND subject_id=$2 AND action='sourcing.candidate_admitted' AND detail->>'policyVersion'=$3 AND detail->>'createdFirm'='true' LIMIT 1`,[input.scope.workspaceId,payload.firmId,VERIFIED_FIRM_POLICY_VERSION])).rows.length>0;
-      if(autoCreated){await lockSendGateForStopFact(context);await lockTodayForFirmChange(context);}
+      if(autoCreated&&payload.purpose==='brief'){await lockSendGateForStopFact(context);await lockTodayForFirmChange(context);}
       else await lockSendGateForDispatch(context);
       const at = await databaseNow(context);
       const carried = parseResearchProgress(input.job.payload['progress']);
@@ -199,8 +208,10 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
       // A missing or malformed cursor is recovered from the durable rows rather than
       // restarting: the run row of this revision is the same fact the cursor names, and
       // starting again would consume a second unit of the day's count for one firm.
-      const runId =
-        carried?.runId ?? (await recoverResearchCursor(context, { firmId: payload.firmId, revision: payload.revision }))?.runId;
+      const durable=await recoverResearchCursor(context,{firmId:payload.firmId,revision:payload.revision});
+      if(durable&&(durable.purpose!==payload.purpose||carried&&(carried.runId!==durable.runId||carried.purpose!==durable.purpose)))throw new ResearchHandlerError('research purpose or cursor mismatch');
+      if(carried&&!durable)throw new ResearchHandlerError('research cursor has no durable run');
+      const runId=durable?.runId;
 
       if (runId === undefined) {
         // Chunk 1. Nothing here touches a provider, and what it writes — the run row,
@@ -209,6 +220,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
           firmId: payload.firmId,
           revision: payload.revision,
           trigger: payload.trigger,
+          purpose:payload.purpose,
           ...(payload.requestedByUserId === undefined ? {} : { requestedByUserId: payload.requestedByUserId }),
           at,
           // Slice BR1: the reservation carries the extraction port's key, which names its transport.
@@ -219,6 +231,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
         if (!started.ok || started.value.kind === 'done') return;
         const progress: ResearchProgress = {
           runId: started.value.runId,
+          purpose:payload.purpose,
           attempt: 1,
           step: 'reserved',
           fencing: input.job.fencingToken,
@@ -256,6 +269,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
         if (permission.kind === 'closed') return;
         const progress: ResearchProgress = {
           runId,
+          purpose:payload.purpose,
           attempt: permission.attempt,
           step: permission.kind === 'calling' ? 'calling' : 'uncalled',
           fencing: input.job.fencingToken,
@@ -269,6 +283,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
       await finishFirmResearch(context, {
         runId,
         firmId: payload.firmId,
+        purpose:payload.purpose,
         revision: payload.revision,
         at,
         attempt: carried.attempt,
@@ -276,7 +291,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
         pageFetch: options.pageFetch,
         ...(options.extraction === undefined ? {} : { extraction: options.extraction }),
       });
-      if(autoCreated)await refreshTodayForFirm(context,{firmId:payload.firmId});
+      if(autoCreated&&payload.purpose==='brief')await refreshTodayForFirm(context,{firmId:payload.firmId});
       return { progress: { ...carried }, done: true };
     },
   };

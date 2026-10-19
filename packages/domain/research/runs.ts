@@ -2,6 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { jobIdempotencyKey, RESEARCH_FIRM_JOB_KEY_PREFIX } from '../jobs/jobKinds.ts';
 import { finaliseSubjectReservations } from './reservations.ts';
 import type { ResearchOutcome, ResearchTrigger } from './types.ts';
+import type { ResearchPurpose, ResearchPurposeInput } from './officeAssessmentContract.ts';
 
 /**
  * The life of one `research_runs` row.
@@ -33,6 +34,7 @@ import type { ResearchOutcome, ResearchTrigger } from './types.ts';
 export const RUN_IN_PROGRESS_MINUTES = 30;
 
 export interface RunRow {
+  readonly purpose: ResearchPurpose;
   readonly id: string;
   /** The firm the run is of. What chunk 2 clears its retry's reservation against. */
   readonly firmId: string;
@@ -52,6 +54,7 @@ export interface RunRow {
 }
 
 interface RunDbRow {
+  readonly purpose: ResearchPurpose;
   readonly id: string;
   readonly firm_id: string;
   readonly revision: number;
@@ -69,10 +72,11 @@ interface RunDbRow {
   readonly [column: string]: unknown;
 }
 
-const RUN_COLUMNS = `id, firm_id, revision, trigger, started_at, completed_at, outcome, refusal_code,
+const RUN_COLUMNS = `id, firm_id, revision, purpose, trigger, started_at, completed_at, outcome, refusal_code,
   pages_fetched, facts_recorded, cost_cents, cost_estimated, extraction, brief`;
 
 const toRun = (row: RunDbRow): RunRow => ({
+  purpose: row.purpose,
   id: row.id,
   firmId: row.firm_id,
   revision: Number(row.revision),
@@ -91,26 +95,39 @@ const toRun = (row: RunDbRow): RunRow => ({
 
 /** The revision a new run for this firm should carry: one more than its highest. */
 export async function nextRevision(context: RepositoryContext, firmId: string): Promise<number> {
+  const prefix=jobIdempotencyKey.researchFirm(firmId,1).slice(0,-1);
+  const malformed=await context.db.query(`SELECT id FROM jobs WHERE workspace_id=$1 AND kind='research.firm'
+    AND left(idempotency_key,length($2::text))=$2
+    AND NOT substring(idempotency_key FROM length($2::text)+1) ~ '^[1-9][0-9]{0,9}$' LIMIT 1`,[context.scope.workspaceId,prefix]);
+  if(malformed.rows.length)throw new Error('Malformed research revision identity');
   const { rows } = await context.db.query<{ revision: number | null }>(
-    'SELECT max(revision) AS revision FROM research_runs WHERE workspace_id = $1 AND firm_id = $2',
-    [context.scope.workspaceId, firmId],
+    `SELECT max(revision) AS revision FROM (
+       SELECT revision::bigint FROM research_runs WHERE workspace_id=$1 AND firm_id=$2
+       UNION ALL SELECT substring(idempotency_key FROM length($3::text)+1)::bigint
+       FROM jobs WHERE workspace_id=$1 AND kind='research.firm'
+       AND left(idempotency_key,length($3::text))=$3
+       AND substring(idempotency_key FROM length($3::text)+1) ~ '^[1-9][0-9]{0,9}$'
+     ) revisions`,
+    [context.scope.workspaceId, firmId, prefix],
   );
-  return Number(rows[0]?.revision ?? 0) + 1;
+  const revision = Number(rows[0]?.revision ?? 0) + 1;
+  if (!Number.isSafeInteger(revision) || revision > 2147483647) throw new Error('Research revision exhausted');
+  return revision;
 }
 
 /** True when a run for this firm is open and younger than `RUN_IN_PROGRESS_MINUTES`. */
-export async function runInProgress(context: RepositoryContext, firmId: string): Promise<boolean> {
+export async function runInProgress(context: RepositoryContext, firmId: string, purpose: ResearchPurpose = 'brief'): Promise<boolean> {
   const { rows } = await context.db.query<{ present: boolean }>(
     `SELECT true AS present FROM research_runs
       WHERE workspace_id = $1 AND firm_id = $2 AND outcome = 'running'
-        AND started_at > now() - ($3 || ' minutes')::interval
+        AND purpose=$4 AND (purpose='office_evidence' OR started_at > now() - ($3 || ' minutes')::interval)
       LIMIT 1`,
-    [context.scope.workspaceId, firmId, String(RUN_IN_PROGRESS_MINUTES)],
+    [context.scope.workspaceId, firmId, String(RUN_IN_PROGRESS_MINUTES), purpose],
   );
   return rows[0]?.present === true;
 }
 
-export interface OpenRunInput {
+export interface OpenRunInput extends ResearchPurposeInput {
   readonly firmId: string;
   readonly revision: number;
   readonly trigger: ResearchTrigger;
@@ -128,8 +145,8 @@ export interface OpenRunInput {
  */
 export async function openRun(context: RepositoryContext, input: OpenRunInput): Promise<string | null> {
   const { rows } = await context.db.query<{ id: string }>(
-    `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, requested_by_user_id, started_at)
-     VALUES ($1, $2, $3, $4, $5, $6::timestamptz)
+    `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, requested_by_user_id, started_at, purpose)
+     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7)
      ON CONFLICT ON CONSTRAINT research_runs_one_per_revision DO NOTHING
      RETURNING id`,
     [
@@ -139,6 +156,7 @@ export async function openRun(context: RepositoryContext, input: OpenRunInput): 
       input.trigger,
       input.requestedByUserId ?? null,
       input.at,
+      input.purpose ?? 'brief',
     ],
   );
   return rows[0]?.id ?? null;
@@ -432,8 +450,8 @@ export async function recordRefusedRun(
   await context.db.query(
     `INSERT INTO research_runs
        (workspace_id, firm_id, revision, trigger, requested_by_user_id, started_at, completed_at,
-        outcome, refusal_code)
-     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $6::timestamptz, 'refused', $7)
+        outcome, refusal_code, purpose)
+     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $6::timestamptz, 'refused', $7, $8)
      ON CONFLICT ON CONSTRAINT research_runs_one_per_revision DO NOTHING`,
     [
       context.scope.workspaceId,
@@ -443,6 +461,7 @@ export async function recordRefusedRun(
       input.requestedByUserId ?? null,
       input.at,
       input.refusalCode,
+      input.purpose ?? 'brief',
     ],
   );
 }
@@ -501,13 +520,14 @@ export async function listRuns(
   context: RepositoryContext,
   firmId: string,
   limit = 5,
+  purpose: ResearchPurpose = 'brief',
 ): Promise<readonly RunRow[]> {
   const { rows } = await context.db.query<RunDbRow>(
     `SELECT ${RUN_COLUMNS} FROM research_runs
-      WHERE workspace_id = $1 AND firm_id = $2
+      WHERE workspace_id = $1 AND firm_id = $2 AND purpose=$4
       ORDER BY revision DESC
       LIMIT $3`,
-    [context.scope.workspaceId, firmId, Math.trunc(limit)],
+    [context.scope.workspaceId, firmId, Math.trunc(limit), purpose],
   );
   return rows.map(toRun);
 }

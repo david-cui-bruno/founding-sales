@@ -1,6 +1,7 @@
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationStore.ts';
-import {qualificationEvidenceSchema,type CandidateInput,type QualificationFact,type SourceObservation} from '@fss/contracts';
+import {qualificationEvidenceSchema,type QualificationFact,type SourceObservation} from '@fss/contracts';
+import type {QualificationCandidateContext} from './qualificationCitationRoles.ts';
 import {supportsResidentialManagement,type SourcingIdentity} from './qualificationPolicy.ts';
 import {verifiedOfficePhone} from './verifiedOfficePhone.ts';
 import {isDiscoveryDirectory} from './discoveryIdentity.ts';
@@ -36,7 +37,7 @@ function deniesResidential(text:string):boolean {
   || /\b(?:commercial|industrial)\b[^.!?\n]{0,80}\b(?:only|exclusively)\b|\b(?:only|exclusively)\b[^.!?\n]{0,80}\b(?:commercial|industrial)\b/iu.test(text);
 }
 /** Only literal, current, complete first-party citations establish an office. No model-written decisions. */
-export function verifiedFirmEvidence(input:{candidate:CandidateInput;facts:readonly QualificationFact[];observations:readonly SourceObservation[];now:string}):VerifiedFirmEvidence {
+export function verifiedFirmEvidence(input:{candidate:QualificationCandidateContext;facts:readonly QualificationFact[];observations:readonly SourceObservation[];now:string}):VerifiedFirmEvidence {
  const sourceHost=(value:string)=>{try{return verifiedWebsiteKey(value)===null?null:new URL(value).hostname.toLowerCase().replace(/^www\./u,'');}catch{return null;}};
  const {candidate}=input,now=Date.parse(input.now),host=sourceHost(candidate.website);
  if(!Number.isFinite(now)||!host||!qualificationEvidenceSchema.safeParse({facts:input.facts,observations:input.observations}).success)return {kind:'pending',reason:'invalid_evidence'};

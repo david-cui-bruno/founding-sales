@@ -26,6 +26,7 @@ export function ResearchSection({
   enabled,
   busy,
   onResearchNow,
+  onAssessOffice,
   onAddLink,
   readFailed = false,
   reading = false,
@@ -40,6 +41,7 @@ export function ResearchSection({
   /** Whether one named form's own command is on the wire (1.0.13, P1-4). */
   busy(form: string): boolean;
   onResearchNow(): void;
+  onAssessOffice?():void;
   onAddLink(url: string): void;
 }): JSX.Element {
   // Kept above the route: a link half typed is still there after a visit to Today.
@@ -66,6 +68,11 @@ export function ResearchSection({
         </Button>
       }
     >
+      {onAssessOffice===undefined?null:<div className="py-2 text-sm" data-testid="office-assessment">
+        <p>Office evidence: {firm?.officeAssessment?.status??'not_evaluated'}{firm?.officeAssessment?.reason?` (${firm.officeAssessment.reason})`:''}. This is not dial permission or DNC clearance.</p>
+        <Button size="sm" variant="outline" data-testid="assess-office" disabled={!enabled||busy(`research-office:${firmId}`)} onClick={onAssessOffice}>Assess office evidence</Button>
+        {state?.officeNotice?<p role="status">{state.officeNotice==='office_evidence_queued'?'Office evidence assessment queued.':researchNotice(state.officeNotice)}</p>:null}
+      </div>}
       {readFailed ? <div role="alert" className="py-2 text-sm"><p>Saved research could not be loaded. Previously shown research is kept.</p>{onRetryRead === undefined ? null : <Button variant="quiet" size="sm" disabled={reading} onClick={onRetryRead}>Retry reading research</Button>}</div> : null}
       {state?.notice == null ? null : (
         <p data-testid="research-notice" className="py-1 text-sm text-muted-foreground">

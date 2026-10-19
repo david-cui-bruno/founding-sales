@@ -115,7 +115,7 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  await refreshTodayForFirm(ctx,{firmId:firm.id});
  // New firms already enqueue inside createFirm. Reused firms need the same handoff,
  // but do not replace an existing brief or retry a previous/uncertain research run.
- if(exact[0]&&(await ctx.db.query('SELECT id FROM research_runs WHERE workspace_id=$1 AND firm_id=$2 LIMIT 1',[w,firm.id])).rows.length===0){
+ if(exact[0]&&(await ctx.db.query("SELECT id FROM research_runs WHERE workspace_id=$1 AND firm_id=$2 AND purpose='brief' LIMIT 1",[w,firm.id])).rows.length===0){
   await enqueueFirmResearchBestEffort(ctx,{firmId:firm.id,trigger:input.mode==='reviewed'?'user_request':'sweep',...(input.mode==='reviewed'?{requestedByUserId:owner}:{})});
  }
  return {ok:true,value:{firmId:firm.id,routeId:route.value.id,alreadyAdmitted:false}};

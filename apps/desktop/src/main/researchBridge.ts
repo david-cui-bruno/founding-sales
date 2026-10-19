@@ -4,6 +4,8 @@ import {
   researchRunResultSchema,
   researchAddLinkResultSchema,
   researchSettingsResultSchema,
+  unevaluatedFirmOfficeAssessment,
+  type ResearchPurpose,
 } from '@fss/contracts';
 import {
   researchStateSchema,
@@ -67,7 +69,7 @@ export interface ResearchBridgeHost {
   forget(): Promise<ResearchState>;
   state(): Promise<ResearchState>;
   open(input: { readonly firmId: string }): Promise<ResearchState>;
-  run(input: { readonly firmId: string }): Promise<ResearchState>;
+  run(input: { readonly firmId: string; readonly purpose?:ResearchPurpose }): Promise<ResearchState>;
   addLink(input: { readonly firmId: string; readonly url: string }): Promise<ResearchState>;
   saveSettings(input: ResearchSettingsPatch): Promise<ResearchState>;
 }
@@ -78,6 +80,7 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
   let worstCaseRunCents: number | null = null;
   let spend: ResearchState['spend'] = null;
   let notice: string | null = null;
+  let officeNotice:string|null=null;
   let role: ResearchState['role'] = null;
   let finishing: ResearchState['finishing'] = null;
 
@@ -89,6 +92,7 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
     // `settingsBridge.ts` follows for the same reason).
     if (seen !== role) {
       role = seen;
+      officeNotice=null;
       settings = null;
       worstCaseRunCents = null;
       finishing = null;
@@ -99,6 +103,7 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
       worstCaseRunCents,
       spend,
       notice,
+      officeNotice,
       mayMutate: session.mayMutate,
       role,
       finishing,
@@ -122,6 +127,7 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
     }
     firm = {
       firmId,
+      officeAssessment:answer.value.officeAssessment??unevaluatedFirmOfficeAssessment(),
       brief: answer.value.brief,
       facts: answer.value.facts,
       judgments: answer.value.judgments,
@@ -162,12 +168,14 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
       spend = null;
       notice = null;
       role = null;
+      officeNotice=null;
       return await snapshot();
     },
 
     state: snapshot,
 
     async open(input) {
+      if(firm?.firmId!==input.firmId)officeNotice=null;
       await load(input.firmId);
       // The settings ride along for an admin, so the section can show the month's
       // spend beside the firm without a second round trip. A salesperson is not asked.
@@ -181,9 +189,16 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
     },
 
     async run(input) {
-      const answer = await deps.api.command('/research/firm/run', { firmId: input.firmId }, value =>
+      const answer = await deps.api.command('/research/firm/run', { firmId: input.firmId,...(input.purpose===undefined?{}:{purpose:input.purpose}) }, value =>
         researchRunResultSchema.parse(value),
       );
+      if(input.purpose==='office_evidence'){
+        const kept=notice;
+        officeNotice=answer.ok?'office_evidence_queued':answer.reason;
+        if(answer.ok)await load(input.firmId);
+        notice=kept;
+        return await snapshot();
+      }
       if (note(answer, 'research_queued')) {
         // Re-read, keeping the command's notice: the run is queued, so the page gains
         // a `running` row rather than a brief. The server decided, not us.

@@ -1,4 +1,5 @@
 import type { FactSelection } from './facts.ts';
+import type {ResearchExtractionRequest,ResearchExtractionAnswer} from './officeAssessmentContract.ts';
 
 /**
  * The two provider seams, as interfaces.
@@ -171,7 +172,7 @@ export interface ExtractionProvider {
    * Throws as the transport does. A count that cannot be taken is a call that is not
    * made, because the alternative is spending against a number nobody has.
    */
-  countInputTokens(request: ExtractionRequest): Promise<number>;
+  countInputTokens(request: ResearchExtractionRequest): Promise<number>;
   /** Selections, never text. The quote is looked up from the block the selection names. */
-  extract(request: ExtractionRequest): Promise<ProviderOutcome<ExtractionAnswer>>;
+  extract(request: ResearchExtractionRequest): Promise<ProviderOutcome<ResearchExtractionAnswer>>;
 }

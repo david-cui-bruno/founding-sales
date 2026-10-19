@@ -195,7 +195,8 @@ export async function readFirmJudgments(
     `SELECT run_id, fit, problem_evidence, timing, reachability, reasons, call_first,
             likely_contact_id, judged_at
        FROM firm_judgments
-      WHERE workspace_id = $1 AND firm_id = $2`,
+      WHERE workspace_id = $1 AND firm_id = $2 AND EXISTS (
+        SELECT 1 FROM research_runs r WHERE r.workspace_id=$1 AND r.id=firm_judgments.run_id AND r.purpose='brief')`,
     [context.scope.workspaceId, firmId],
   );
   const row = rows[0];
@@ -302,10 +303,10 @@ export async function countFailedTries(context: RepositoryContext, firmId: strin
   const { rows } = await context.db.query<{ tries: string }>(
     `SELECT count(*)::text AS tries
        FROM research_runs r
-      WHERE r.workspace_id = $1 AND r.firm_id = $2 AND r.outcome = 'failed'
+      WHERE r.workspace_id = $1 AND r.firm_id = $2 AND r.purpose='brief' AND r.outcome = 'failed'
         AND r.revision > COALESCE((
           SELECT max(c.revision) FROM research_runs c
-           WHERE c.workspace_id = $1 AND c.firm_id = $2 AND c.outcome = 'completed'
+           WHERE c.workspace_id = $1 AND c.firm_id = $2 AND c.purpose='brief' AND c.outcome = 'completed'
         ), 0)`,
     [context.scope.workspaceId, firmId],
   );
@@ -326,10 +327,11 @@ export async function readCallBrief(
   if (judgments === null) return null;
 
   const { rows } = await context.db.query<{ revision: number; brief: Readonly<Record<string, unknown>> | null }>(
-    'SELECT revision, brief FROM research_runs WHERE workspace_id = $1 AND id = $2',
+    "SELECT revision, brief FROM research_runs WHERE workspace_id = $1 AND id = $2 AND purpose='brief'",
     [context.scope.workspaceId, judgments.runId],
   );
   const run = rows[0];
+  if(!run)return null;
   const facts = await listFirmFacts(context, firmId);
 
   let likelyPerson: BriefPerson | null = null;

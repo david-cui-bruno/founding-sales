@@ -123,7 +123,7 @@ describe('the answer', () => {
     );
     const outcome = await anthropicExtraction({ transport }).extract(request);
     expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
+    if (!outcome.ok || outcome.value.purpose==='office_evidence') return;
     expect(outcome.value.selections).toEqual([
       { key: 'target_fit', sourceReference: 'https://example.test/', blockId: 'b1' },
     ]);
@@ -144,7 +144,7 @@ describe('the answer', () => {
     );
     const outcome = await anthropicExtraction({ transport }).extract(request);
     expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
+    if (!outcome.ok || outcome.value.purpose==='office_evidence') return;
     const { facts } = validateFactSelections(outcome.value.selections, sources);
     expect(facts[0]?.quote).toBe('We manage residential property for owners.');
   });
@@ -159,7 +159,7 @@ describe('the answer', () => {
     );
     const outcome = await anthropicExtraction({ transport }).extract(request);
     expect(outcome.ok && outcome.value.selections.length).toBe(1);
-    const { facts, refused } = validateFactSelections(outcome.ok ? outcome.value.selections : [], sources);
+    const { facts, refused } = validateFactSelections(outcome.ok && outcome.value.purpose!=='office_evidence' ? outcome.value.selections : [], sources);
     expect(facts).toEqual([]);
     expect(refused[0]?.refusal).toBe('unknown_block');
   });

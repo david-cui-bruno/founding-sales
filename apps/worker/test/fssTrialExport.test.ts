@@ -70,6 +70,37 @@ type Exported = {
   }[];
 };
 
+// The hosted failure's exact opaque contact ID, not a spoken phone number.
+const OPAQUE_UUID_WITH_PHONE_FRAGMENT = '18014247-a088-42ec-81b4-36eafaa8031a';
+
+// Exact schema leaf paths, not field-name/subtree exclusions. JSON paths preserve
+// numeric array indexes versus string keys, including unexpected dotted keys.
+const UUID_IDENTITY_PATHS = [
+  /^\["workspaces",\d+,"workspaceId"\]$/u,
+  /^\["workspaces",\d+,"calls",\d+,"(?:callSessionId|firmId|contactId)"\]$/u,
+  /^\["workspaces",\d+,"calls",\d+,"analysis","analysisId"\]$/u,
+  /^\["workspaces",\d+,"calls",\d+,"(?:decisions|corrections)",\d+,"analysisId"\]$/u,
+];
+const SHA_IDENTITY_PATH = /^\["workspaces",\d+,"calls",\d+,"analysis","proposalHash"\]$/u;
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const CANONICAL_SHA256 = /^[0-9a-f]{64}$/u;
+
+function assertNoPhoneFragment(exported: unknown, path: readonly (string | number)[] = []): void {
+  if (typeof exported === 'string') {
+    const location = JSON.stringify(path);
+    const opaqueUuid = exported.length === 36 && UUID_IDENTITY_PATHS.some(pattern => pattern.test(location)) && CANONICAL_UUID.test(exported);
+    const opaqueSha = exported.length === 64 && SHA_IDENTITY_PATH.test(location) && CANONICAL_SHA256.test(exported);
+    if (!opaqueUuid && !opaqueSha) expect(exported, `partial phone fragment at ${location}`).not.toContain('0142');
+  } else if (Array.isArray(exported)) {
+    exported.forEach((value, index) => { assertNoPhoneFragment(value, [...path, index]); });
+  } else if (exported !== null && typeof exported === 'object') {
+    for (const [key, value] of Object.entries(exported)) {
+      expect(key, 'exported key').not.toContain('0142');
+      assertNoPhoneFragment(value, [...path, key]);
+    }
+  }
+}
+
 beforeAll(async () => {
   world = await createApplyWorld();
   await world.setTranscription(true);
@@ -198,7 +229,6 @@ describe('fss admin trial export', () => {
       '401 555 0199',
       'four oh one',
       'five five five',
-      '0142',
       '/Recordings/',
       'recording_path',
       'recordingPath',
@@ -208,6 +238,9 @@ describe('fss admin trial export', () => {
       expect(plaintext, absent).not.toContain(absent);
     }
     const exported = JSON.parse(plaintext) as Exported;
+    // Full sensitive tokens/paths above still scan the entire plaintext. Only the
+    // ambiguous short fragment uses validated opaque identity leaf exemptions.
+    assertNoPhoneFragment(exported);
     const [one, , three] = exported.workspaces[0]?.calls ?? [];
     expect(one?.transcript.turns.map(turn => turn.text)).toEqual([
       'Hi [name], this is David from Callie. Is this [firm]?',
@@ -298,6 +331,46 @@ describe('fss admin trial export', () => {
     const before = await count();
     expect((await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug, '--since', SINCE])).code).toBe(0);
     expect(await count()).toBe(before);
+  });
+});
+
+describe('export privacy assertion', () => {
+  it('accepts the exact opaque UUID containing 0142 at its declared contact identity path', () => {
+    assertNoPhoneFragment({workspaces: [{calls: [{contactId: OPAQUE_UUID_WITH_PHONE_FRAGMENT}]}]});
+  });
+  it('accepts canonical UUID/SHA identities only at the declared export leaves', () => {
+    assertNoPhoneFragment({workspaces: [{workspaceId: OPAQUE_UUID_WITH_PHONE_FRAGMENT, calls: [{
+      callSessionId: OPAQUE_UUID_WITH_PHONE_FRAGMENT, firmId: OPAQUE_UUID_WITH_PHONE_FRAGMENT,
+      contactId: null, analysis: {analysisId: OPAQUE_UUID_WITH_PHONE_FRAGMENT, proposalHash: `0142${'a'.repeat(60)}`},
+      decisions: [{analysisId: OPAQUE_UUID_WITH_PHONE_FRAGMENT}], corrections: [{analysisId: OPAQUE_UUID_WITH_PHONE_FRAGMENT}],
+    }]}]});
+  });
+
+  it.each([
+    ['transcript', {transcript: {turns: [{text: 'call 0142'}]}}],
+    ['proposal params', {analysis: {proposals: [{params: {spokenNumber: '0142'}}]}}],
+    ['proposal reason', {analysis: {proposals: [{reason: 'try 0142'}]}}],
+    ['correction reason', {corrections: [{reason: '0142'}]}],
+    ['unexpected field', {unexpected: '0142'}],
+    ['opaque-looking unexpected content', {unexpected: OPAQUE_UUID_WITH_PHONE_FRAGMENT}],
+    ['opaque-looking transcript', {transcript: {turns: [{text: OPAQUE_UUID_WITH_PHONE_FRAGMENT}]}}],
+    ['opaque-looking proposal content', {analysis: {proposals: [{params: {analysisId: OPAQUE_UUID_WITH_PHONE_FRAGMENT}}]}}],
+    ['opaque-looking reason', {analysis: {proposals: [{reason: `0142${'a'.repeat(60)}`}]}}],
+    ['invalid identity', {contactId: '0142'}],
+    ['noncanonical UUID', {contactId: OPAQUE_UUID_WITH_PHONE_FRAGMENT.replace('-42ec-', '-02ec-')}],
+    ['identity with appended content', {contactId: `${OPAQUE_UUID_WITH_PHONE_FRAGMENT} call me`}],
+    ['UUID with trailing newline', {contactId: `${OPAQUE_UUID_WITH_PHONE_FRAGMENT}\n`}],
+    ['SHA with trailing newline', {analysis: {proposalHash: `0142${'a'.repeat(60)}\n`}}],
+    ['invalid SHA identity', {analysis: {proposalHash: '0142'}}],
+    ['unexpected dotted key', {'analysis.analysisId': OPAQUE_UUID_WITH_PHONE_FRAGMENT}],
+    ['unexpected key containing fragment', {field0142: '[phone]'}],
+  ])('rejects phone fragment in %s without excluding a content subtree', (_label, call) => {
+    expect(() => assertNoPhoneFragment({workspaces: [{calls: [call]}]})).toThrow(/0142/u);
+  });
+
+  it('does not confuse an unexpected string-keyed object with a schema array', () => {
+    expect(() => assertNoPhoneFragment({workspaces: [{calls: {'0': {contactId: OPAQUE_UUID_WITH_PHONE_FRAGMENT}}}]}))
+      .toThrow(/0142/u);
   });
 });
 

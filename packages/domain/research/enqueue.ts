@@ -1,3 +1,5 @@
+import { decideFirmMutation } from '../crm/authorization.ts';
+import { loadFirmForUpdate } from '../crm/firms.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
@@ -5,6 +7,8 @@ import { firmIsResearchable } from './firmState.ts';
 import { nextRevision, runInProgress } from './runs.ts';
 import { readResearchSettings } from './settings.ts';
 import { accept, refuse, type ResearchResult, type ResearchTrigger } from './types.ts';
+import type { ResearchPurpose, ResearchPurposeInput } from './officeAssessmentContract.ts';
+import { VALID_RESEARCH_JOB_INTENT_SQL } from './jobIntent.ts';
 
 /**
  * Materialize one `research.firm` job.
@@ -21,7 +25,7 @@ import { accept, refuse, type ResearchResult, type ResearchTrigger } from './typ
  * claim. This is the cheap early answer, not the authority.
  */
 
-export interface EnqueueResearchInput {
+export interface EnqueueResearchInput extends ResearchPurposeInput {
   readonly firmId: string;
   readonly trigger: ResearchTrigger;
   /** Required by `research_runs_requester_consistent` for `user_request` and `link_added`. */
@@ -29,6 +33,7 @@ export interface EnqueueResearchInput {
 }
 
 export interface EnqueuedResearch {
+  readonly purpose: ResearchPurpose;
   readonly revision: number;
   readonly jobId: string;
   /** False when the key already existed. That is the normal case, not an error. */
@@ -39,6 +44,15 @@ export async function enqueueFirmResearch(
   context: RepositoryContext,
   input: EnqueueResearchInput,
 ): Promise<ResearchResult<EnqueuedResearch>> {
+  const purpose = input.purpose ?? 'brief';
+  if (purpose !== 'brief' && purpose !== 'office_evidence') return refuse('invalid_input');
+  if (purpose === 'office_evidence' && (input.trigger !== 'user_request' || !input.requestedByUserId)) return refuse('invalid_input');
+  const lockedFirm = await loadFirmForUpdate(context, input.firmId);
+  if (lockedFirm === null) return refuse('firm_unknown');
+  // Assignment can change while enqueue waits. Authorize the current locked row,
+  // before either reusing pending work or creating a new paid research intent.
+  const decision = decideFirmMutation(context, lockedFirm);
+  if (!decision.permitted) return refuse(decision.reason === 'firm_merged' ? 'firm_merged' : 'not_assigned');
   const settings = await readResearchSettings(context);
   if (!settings.enabled) return refuse('research_disabled');
 
@@ -47,7 +61,19 @@ export async function enqueueFirmResearch(
 
   // A run already open and younger than half an hour: the work is in flight, and a
   // second revision would read the same pages twice for nothing.
-  if (await runInProgress(context, input.firmId)) return refuse('run_in_progress');
+  if (await runInProgress(context, input.firmId, purpose)) return refuse('run_in_progress');
+
+  const pending = await context.db.query<{id:string;revision:number}>(`SELECT j.id,(j.payload->>'revision')::bigint AS revision
+    FROM jobs j LEFT JOIN research_runs r ON r.workspace_id=j.workspace_id AND r.firm_id=$2
+      AND j.idempotency_key='research-firm:'||r.firm_id::text||':'||r.revision::text
+    WHERE j.workspace_id=$1 AND j.kind='research.firm' AND j.payload->>'firmId'=$2::text
+      AND j.state IN ('queued','retryable','running') AND j.payload->>'revision' ~ '^[1-9][0-9]{0,9}$'
+      AND j.idempotency_key='research-firm:'||$2::text||':'||(j.payload->>'revision')
+      AND (r.id IS NOT NULL OR ${VALID_RESEARCH_JOB_INTENT_SQL})
+      AND (r.id IS NULL OR (r.outcome='running' AND (r.purpose='office_evidence' OR r.started_at>now()-interval '30 minutes')))
+      AND COALESCE(r.purpose,j.payload->>'purpose','brief')=$3 ORDER BY revision DESC LIMIT 1`,
+    [context.scope.workspaceId,input.firmId,purpose]);
+  if (pending.rows[0]) return accept({revision:Number(pending.rows[0].revision),jobId:pending.rows[0].id,inserted:false,purpose});
 
   const revision = await nextRevision(context, input.firmId);
   const outcome = await enqueueJob(context.db, {
@@ -58,11 +84,12 @@ export async function enqueueFirmResearch(
       firmId: input.firmId,
       revision,
       trigger: input.trigger,
+      ...(purpose === 'brief' ? {} : { purpose }),
       ...(input.requestedByUserId === undefined ? {} : { requestedByUserId: input.requestedByUserId }),
     },
     maxAttempts: 3,
   });
-  return accept({ revision, jobId: outcome.jobId, inserted: outcome.inserted });
+  return accept({ revision, jobId: outcome.jobId, inserted: outcome.inserted, purpose });
 }
 
 const ENQUEUE_SAVEPOINT = 'research_enqueue';

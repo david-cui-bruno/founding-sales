@@ -40,6 +40,7 @@ export function FirmResearch({
       onResearchNow={() => {
         research.actions.run(firmId);
       }}
+      onAssessOffice={()=>{research.actions.assessOffice(firmId);}}
       onAddLink={url => {
         research.actions.addLink({ firmId, url });
       }}

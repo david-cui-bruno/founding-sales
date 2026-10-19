@@ -14,6 +14,7 @@ import { readResearchSpend, workspaceBusinessZone } from '@fss/domain/research/l
 import { addFirmLink, listFirmLinks } from '@fss/domain/research/links.ts';
 import { isPricedModel, worstCaseRunCents } from '@fss/domain/research/pricing.ts';
 import { listRuns } from '@fss/domain/research/runs.ts';
+import {readFirmOfficeAssessment} from '@fss/domain/research/officeAssessmentStore.ts';
 import { updateResearchSettings } from '@fss/domain/research/settings.ts';
 import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
@@ -128,10 +129,11 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
       const enqueued = await enqueueFirmResearch(scope, {
         firmId: body.firmId,
         trigger: 'user_request',
+        purpose:body.purpose??'brief',
         ...(actor.kind === 'user' ? { requestedByUserId: actor.userId } : {}),
       });
       if (!enqueued.ok) return { ok: false, reason: enqueued.reason };
-      return { ok: true, value: { revision: enqueued.value.revision, queued: enqueued.value.inserted } };
+      return { ok: true, value: { revision: enqueued.value.revision, queued: enqueued.value.inserted, purpose:enqueued.value.purpose } };
     });
   }
 
@@ -170,6 +172,7 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
     status: 200,
     body: {
       brief: await readCallBrief(context, firmId),
+      officeAssessment:await readFirmOfficeAssessment(context,{firmId}),
       facts: await listFirmFacts(context, firmId),
       judgments:
         judgments === null

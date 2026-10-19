@@ -2,6 +2,8 @@ import type {TableCoverage} from './coverage.ts';
 
 /** Sourcing content follows candidate deletion. Accounting deliberately survives. */
 export const SOURCING_RETENTION_COVERAGE:Readonly<Record<string,TableCoverage>>={
+ firm_office_assessments:{dispositions:['deletion_removes'],note:'Body-free strict route/firm/run/policy binding erased with firm/run/route. Source loss invalidates current result, merges never rebind.'},
+ firm_office_assessment_sources:{dispositions:['deletion_removes','swept'],note:'All copied observations/facts cascade on source/parent deletion, expire at seven days or source terms, and are conservatively erased for affected firms on contact/person deletion. No parent/detail body copy.'},
  sourcing_search_account:{dispositions:['operational'],note:'Shared Tavily search allowance and halt state; no credential material.'},
  sourcing_discovery_settings:{dispositions:['operational'],note:'Workspace discovery schedule and status.'},
  sourcing_discovery_attempts:{dispositions:['retained'],note:'Search dispatch and quota history, containing fixed queries only; required to prevent replay.'},
