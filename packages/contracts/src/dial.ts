@@ -542,12 +542,10 @@ export const logCallOutcomeCommandSchema = z.strictObject({
   contactId: uuid.optional(),
   routeId: uuid.optional(),
   ticketId: uuid.optional(),
-  /**
-   * The Twilio call session this call was placed through (call-to-booking, 0028). The
-   * renderer holds the session id, never the ticket; the server resolves the ticket from
-   * the session and links the session to this log.
-   */
+  /** Twilio session, resolved to its ticket by the server. */
   callSessionId: uuid.optional(),
+  /** Durable phone-app reservation. Never a Twilio session or an inbound call. */
+  phoneHandoffAttemptId: uuid.optional(),
   callingIdentityId: uuid.optional(),
   /** The Today task this call was placed for, when it was placed from one. */
   itemId: uuid.optional(),
