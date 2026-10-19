@@ -93,6 +93,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // Lane PBM: whether a CSV import's firms are in a workspace, five counts, READ ONLY.
   'import-match report': 'database',
   'discovery configure': 'database',
+  'apollo configure': 'database',
   'discovery resume': 'database',
   'qualification configure': 'database',
   'qualification resolve-identity': 'database',
@@ -369,6 +370,12 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     valueFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used','--searches-per-day',...REPORTABLE],
     booleanFlags:[],requiredFlags:['--workspace-id','--enabled','--prior-day','--prior-day-used','--prior-month-used'],
     summary:'Enable or pause discovery and initialize reconciled search allowance without resetting existing counters or halts; audited ECS launcher required.',
+  },
+  {
+    path:['admin','apollo','configure'],
+    valueFlags:['--action','--workspace-id','--account-ref','--key-ref','--enabled','--cycle-start','--cycle-end','--verified-at','--exclusive-attested-at','--prior-used','--exclusive-account-confirmed','--key-account-binding-confirmed','--free-plan-no-trial-no-paid-confirmed','--external-usage-reconciled','--attempt-id','--count-spent-confirmed'],
+    booleanFlags:[],requiredFlags:['--action','--workspace-id','--account-ref','--key-ref'],
+    summary:'Configure, disable or reconcile a Free-only exclusive Apollo allowance through the audited ECS launcher. Opaque references only, no secrets, provider calls or quota refunds.',
   },
   {
     // Lane PBM: a prepared-brief file previewed as every row unmatched in production, and
