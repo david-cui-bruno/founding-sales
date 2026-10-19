@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { TwoWorkspaces } from './fixtures.ts';
 import type { SeededCrm } from './crmFixtures.ts';
+import { testRegistrySnapshotRow } from '../../support/nationalRegistry.ts';
+import { PHONE_OWNER_RISK_CONSTRAINT_CASES } from './phoneOwnerRiskCases.ts';
 type Fixture = { session: SessionQueryable; seeded: TwoWorkspaces; crm: SeededCrm };
 type Row = Record<string, unknown>;
 type Case = { constraint: string; run: (f: Fixture) => Promise<unknown> };
@@ -11,8 +13,10 @@ async function insert(f: Fixture, table: string, row: Row) {
   return await f.session.query(`INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map((_, i) => `$${String(i + 1)}`).join(',')})`, Object.values(row));
 }
 async function snapshot(f: Fixture): Promise<Row> {
-  return { workspace_id: f.seeded.alpha.workspaceId, id: randomUUID(), receipt_reference: 'fixture-only-no-SAN',
-    downloaded_at: '2026-09-01T00:00:00Z', published_at: '2026-09-02T00:00:00Z', complete: true, covered_area_codes: ['401'] };
+  // Only this privileged, rolled-back catalog harness isolates declarative errors.
+  await f.session.query('DROP TRIGGER IF EXISTS national_registry_snapshots_publication_guard ON national_registry_snapshots');
+  await f.session.query('DROP TRIGGER IF EXISTS phone_handoff_owner_risk_guard ON phone_handoff_attempts');
+  return testRegistrySnapshotRow(f.seeded.alpha.workspaceId, { publishedAt: '2026-09-02T00:00:00Z' });
 }
 async function scrub(f: Fixture): Promise<Row> {
   const s = await snapshot(f); await insert(f, 'national_registry_snapshots', s);
@@ -30,10 +34,17 @@ async function attempt(f: Fixture): Promise<Row> {
     reserved_at: '2026-09-02T14:00:00Z', expires_at: '2026-09-02T14:00:15Z' };
 }
 const bad = (table: string, constraint: string, make: (f: Fixture) => Promise<Row>, overrides: Row): Case => ({ constraint,
-  run: async f => { await insert(f, table, { ...await make(f), ...overrides }); return await f.session.query('SET CONSTRAINTS ALL IMMEDIATE'); } });
+  run: async f => { const row = { ...await make(f), ...overrides };
+    if (table === 'national_registry_snapshots' && constraint !== 'national_registry_snapshots_import_metadata') {
+      row['acquisition_id'] = null; row['source_format'] = null; row['validated_at'] = null; row['validation_metadata'] = null;
+    }
+    await insert(f, table, row); return await f.session.query('SET CONSTRAINTS ALL IMMEDIATE'); } });
 const duplicate = (table: string, constraint: string, make: (f: Fixture) => Promise<Row>, changes: (row: Row) => Row): Case => ({ constraint,
   run: async f => { const row = await make(f); await insert(f, table, row); return await insert(f, table, { ...row, ...changes(row) }); } });
 export const PHONE_HANDOFF_CONSTRAINT_CASES: readonly Case[] = [
+  ...PHONE_OWNER_RISK_CONSTRAINT_CASES,
+  bad('national_registry_snapshots', 'national_registry_snapshots_import_metadata', snapshot, { source_format: 'mixed' }),
+  duplicate('national_registry_snapshots', 'national_registry_snapshots_acquisition', snapshot, () => ({ id: randomUUID() })),
   bad('national_registry_snapshots', 'national_registry_snapshots_receipt_reference_check', snapshot, { receipt_reference: ' ' }),
   bad('national_registry_snapshots', 'national_registry_snapshots_check', snapshot, { published_at: '2026-08-01T00:00:00Z' }),
   bad('national_registry_snapshots', 'national_registry_snapshots_check1', snapshot, { revoked_at: '2026-08-01T00:00:00Z' }),
@@ -49,7 +60,7 @@ export const PHONE_HANDOFF_CONSTRAINT_CASES: readonly Case[] = [
   bad('phone_handoff_attempts', 'phone_handoff_attempts_check', attempt, { expires_at: '2026-09-02T14:00:16Z' }),
   bad('phone_handoff_attempts', 'phone_handoff_attempts_check1', attempt, { erased_at: '2026-09-01T00:00:00Z', e164: null,
     phone_route_id: null, route_version: null, registry_snapshot_id: null, registry_scrubbed_at: null, contact_id: null, opportunity_id: null }),
-  bad('phone_handoff_attempts', 'phone_handoff_attempts_check2', attempt, { e164: null }),
+  bad('phone_handoff_attempts', 'phone_handoff_evidence_union', attempt, { e164: null }),
   bad('phone_handoff_attempts', 'phone_handoff_attempts_command_id_check', attempt, { command_id: ' ' }),
   bad('phone_handoff_attempts', 'phone_handoff_attempts_e164_check', attempt, { e164: '4015550187' }),
   bad('phone_handoff_attempts', 'phone_handoff_attempts_route_version_check', attempt, { route_version: 0 }),

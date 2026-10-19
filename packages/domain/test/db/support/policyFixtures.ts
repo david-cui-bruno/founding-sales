@@ -1,3 +1,4 @@
+import { publishTestRegistrySnapshot } from '../../support/nationalRegistry.ts';
 import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { SeededCrm } from './crmFixtures.ts';
 import type { SeededWorkspace, TwoWorkspaces } from './fixtures.ts';
@@ -112,10 +113,21 @@ export async function seedPolicy(
   session: SessionQueryable,
   seeded: TwoWorkspaces,
   crm: SeededCrm,
+  options: { readonly registry?: boolean } = {},
 ): Promise<SeededPolicy> {
+  const alpha = await seedOne(session, seeded.alpha, crm.alpha.firmId);
+  const beta = await seedOne(session, seeded.beta, crm.beta.firmId);
+  if (options.registry !== false) {
+    const clock = (await session.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]!.at.toISOString();
+    for (const [workspace, policy] of [[seeded.alpha, alpha], [seeded.beta, beta]] as const) {
+      await publishTestRegistrySnapshot(session, workspace.workspaceId, {
+        downloadedAt: clock, publishedAt: clock, e164s: [{ e164: policy.e164, result: 'clear' }],
+      });
+    }
+  }
   return {
-    alpha: await seedOne(session, seeded.alpha, crm.alpha.firmId),
-    beta: await seedOne(session, seeded.beta, crm.beta.firmId),
+    alpha,
+    beta,
     insideWindow: INSIDE_WINDOW,
     outsideWindow: OUTSIDE_WINDOW,
   };
