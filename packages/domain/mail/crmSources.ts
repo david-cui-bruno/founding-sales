@@ -101,6 +101,8 @@ export interface MailCaptureProvider {
 }
 /** Separately composed historical provider; every actual metadata/body call is reserved. */
 export interface HistoricalMailCaptureProvider {
+  /** Caller-owned publication transaction, after the last external wait. Raw read identity only. */
+  revalidateOriginal(context:RepositoryContext,original:CapturedMailMessage):Promise<boolean>;
   revalidate?(context:RepositoryContext,input:{importId:string;expectedProof:MailCaptureProof}):Promise<boolean>;
   read(input: Parameters<MailCaptureProvider['read']>[0] & {
     importId: string; conversationId: string; decisionRevision: number;
@@ -457,12 +459,12 @@ export function businessMailCaptureHandler(deps: {
           providerAccountId: payload.providerAccountId,
           generation: payload.generation,
       };
-      const message = providerMessageSchema.safeParse(
+      const providerOriginal =
         payload.acquisitionOrigin===undefined?await (diagnostic?deps.diagnostic!.provider:deps.provider).read(providerInput):await deps.historicalProvider!.read({...providerInput,
           importId:payload.acquisitionOrigin.importId,conversationId:payload.conversationId,decisionRevision:payload.decisionRevision,
           expectedProof:staged.authority.proof,context:repositoryContext(input.scope,input.session),jobId:input.job.id,leaseOwner:input.job.leaseOwner,fencingToken:input.job.fencingToken,
-        }),
-      );
+        });
+      const message = providerMessageSchema.safeParse(providerOriginal);
       if (!message.success) return done('provider_evidence_invalid');
       const m = message.data;
       if(!diagnostic&&!payload.acquisitionOrigin&&(!staged.authority.proof.forwardScope||!isForwardCaptureDateAllowed(staged.authority.proof.forwardScope,Date.parse(m.providerAt))))return done('outside_forward_capture_scope');
@@ -495,7 +497,7 @@ export function businessMailCaptureHandler(deps: {
       if (!(await verifier.verify(staged.authority.proof)))
         return done('verification_unavailable');
       return withTransaction(input.session, async () => {
-        if(payload.acquisitionOrigin&&deps.historicalProvider?.revalidate&&!await deps.historicalProvider.revalidate(repositoryContext(input.scope,input.session),{importId:payload.acquisitionOrigin.importId,expectedProof:staged.authority.proof}))return done('verification_unavailable');
+        if(payload.acquisitionOrigin&&(!deps.historicalProvider?.revalidateOriginal||!await deps.historicalProvider.revalidateOriginal(repositoryContext(input.scope,input.session),providerOriginal)))return done('verification_unavailable');
         if (verifier.revalidate && !await verifier.revalidate(repositoryContext(input.scope,input.session),staged.authority.proof)) return done('verification_unavailable');
         const senderEndpoint = participants[0]!;
         const senderHash = createHash('sha256')

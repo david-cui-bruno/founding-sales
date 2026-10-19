@@ -2,7 +2,7 @@ import {withTransaction} from '../db/queryable.ts';
 import {readBackfillAuthority} from './crmBackfillAuthority.ts';
 import {createGmailMailCaptureProvider} from './crmGmailProvider.ts';
 import {revalidateBackfillPublication,reserveBackfillRead,observeBackfillRead,type BackfillAllocationVerifier} from './crmBackfillBudget.ts';
-import type {HistoricalMailCaptureProvider,MailCaptureProofVerifier,MailCaptureProof} from './crmSources.ts';
+import type {CapturedMailMessage,HistoricalMailCaptureProvider,MailCaptureProofVerifier,MailCaptureProof} from './crmSources.ts';
 import type {GmailMessageMetadata} from './gmailClient.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {HistoricalMetadataAdmission} from './pipeline.ts';
@@ -12,17 +12,23 @@ import type {HistoryRecovery} from './crmHistoryRecovery.ts';
 /** A frozen admitted original is not replaceable by a new date on the same ID. */
 async function selectedHistoricalOriginal(context:RepositoryContext,input:{importId:string;providerMessageId:string;conversationId:string;decisionRevision:number},metadata:GmailMessageMetadata,authority:BackfillAuthority){
  if(metadata.id!==input.providerMessageId||!Number.isSafeInteger(metadata.internalDateEpochMilliseconds)||metadata.internalDateEpochMilliseconds<0)return false;
- const row=(await context.db.query<{scope:string;provider_us:string}>(`SELECT x.scope,(extract(epoch FROM x.provider_at)*1000000)::bigint::text AS provider_us FROM crm_mail_import_messages x JOIN crm_business_conversations c ON c.workspace_id=x.workspace_id AND c.mailbox_id=$3 AND c.owner_user_id=$4 AND c.account_binding=$5 AND c.provider_thread_id=x.provider_thread_id WHERE x.workspace_id=$1 AND x.import_id=$2 AND x.provider_message_id=$6 AND x.provider_thread_id=$7 AND x.state='available' AND c.id=$8 AND c.decision_revision=$9 AND c.metadata_availability='available' AND (c.human_decision='include' OR (c.human_decision IS NULL AND c.category='business')) FOR SHARE OF x,c`,[context.scope.workspaceId,input.importId,authority.proof.mailboxId,authority.proof.ownerUserId,authority.proof.accountBinding,metadata.id,metadata.threadId,input.conversationId,input.decisionRevision])).rows[0];
+ const row=(await context.db.query<{id:string;scope:string;provider_us:string}>(`SELECT x.id,x.scope,(extract(epoch FROM x.provider_at)*1000000)::bigint::text AS provider_us FROM crm_mail_import_messages x JOIN crm_business_conversations c ON c.workspace_id=x.workspace_id AND c.mailbox_id=$3 AND c.owner_user_id=$4 AND c.account_binding=$5 AND c.provider_thread_id=x.provider_thread_id WHERE x.workspace_id=$1 AND x.import_id=$2 AND x.provider_message_id=$6 AND x.provider_thread_id=$7 AND x.state='available' AND c.id=$8 AND c.decision_revision=$9 AND c.metadata_availability='available' AND (c.human_decision='include' OR (c.human_decision IS NULL AND c.category='business')) FOR SHARE OF x,c`,[context.scope.workspaceId,input.importId,authority.proof.mailboxId,authority.proof.ownerUserId,authority.proof.accountBinding,metadata.id,metadata.threadId,input.conversationId,input.decisionRevision])).rows[0];
  if(!row||row.provider_us!==String(BigInt(metadata.internalDateEpochMilliseconds)*1000n))return false;
- return row.scope!=='historical'||BigInt(row.provider_us)>=BigInt(authority.fromEpochMicroseconds)&&BigInt(row.provider_us)<BigInt(authority.toEpochMicroseconds);
+ if(row.scope==='historical'&&(BigInt(row.provider_us)<BigInt(authority.fromEpochMicroseconds)||BigInt(row.provider_us)>=BigInt(authority.toEpochMicroseconds)))return false;
+ return {rowId:row.id,scope:row.scope,providerThreadId:metadata.threadId,providerEpochMicroseconds:row.provider_us};
 }
 /** Explicit historical composition: the native adapter's actual reads, never live fallback. */
 export function createHistoricalGmailMailCaptureProvider(deps:Parameters<typeof createGmailMailCaptureProvider>[0]&{proofVerifier:MailCaptureProofVerifier;allocationVerifier:BackfillAllocationVerifier}):HistoricalMailCaptureProvider{
+ // A copied/serialized body cannot manufacture a selected-original publication capability.
+ const originals=new WeakMap<CapturedMailMessage,(context:RepositoryContext)=>Promise<boolean>>();
  async function revalidate(context:Parameters<typeof readBackfillAuthority>[0],input:{importId:string;expectedProof:MailCaptureProof}){const authority=await readBackfillAuthority(context,input.importId,true);return authority!==null&&JSON.stringify(authority.proof)===JSON.stringify(input.expectedProof)&&await revalidateBackfillPublication(context,authority,deps.allocationVerifier);}
- return {revalidate,async read(input){
+ return {revalidate,revalidateOriginal:async(context,original)=>await originals.get(original)?.(context)??false,async read(input){
+  let selected:GmailMessageMetadata|null=null;
+  let snapshot:Exclude<Awaited<ReturnType<typeof selectedHistoricalOriginal>>,false>|null=null;
   async function metered<T>(method:'metadata'|'body',read:()=>Promise<T>):Promise<T>{
    if(!await deps.proofVerifier.verify(input.expectedProof))throw new Error('historical_capture_verification_required');
-   const reservation=await reserveBackfillRead(input.context,{importId:input.importId,mailboxId:input.mailboxId,ownerUserId:input.expectedProof.ownerUserId,accountBinding:input.expectedProof.accountBinding,generation:input.generation,method,expectedProof:input.expectedProof,expectedCausal:{messageId:input.providerMessageId,conversationId:input.conversationId,decisionRevision:input.decisionRevision},jobId:input.jobId,leaseOwner:input.leaseOwner,fencingToken:input.fencingToken},deps.allocationVerifier);
+   if(method==='body'&&!snapshot)throw new Error('historical_original_changed');
+   const reservation=await reserveBackfillRead(input.context,{importId:input.importId,mailboxId:input.mailboxId,ownerUserId:input.expectedProof.ownerUserId,accountBinding:input.expectedProof.accountBinding,generation:input.generation,method,expectedProof:input.expectedProof,expectedCausal:{messageId:input.providerMessageId,conversationId:input.conversationId,decisionRevision:input.decisionRevision,...method==='body'&&snapshot?{selectedOriginal:snapshot}:{}},jobId:input.jobId,leaseOwner:input.leaseOwner,fencingToken:input.fencingToken},deps.allocationVerifier);
    if(reservation===null)throw new Error('historical_capture_allocation_unavailable');
    let value:T;
    try{value=await read();}catch{throw new Error('historical_capture_provider_unavailable');}
@@ -30,17 +36,25 @@ export function createHistoricalGmailMailCaptureProvider(deps:Parameters<typeof 
    if(!await withTransaction(input.context.db,()=>revalidate(input.context,input)))throw new Error('historical_capture_authority_changed');
    return value;
   }
-  let selected:GmailMessageMetadata|null=null;
   const provider=createGmailMailCaptureProvider({...deps,authorizeRead:proof=>deps.proofVerifier.verify(proof),authorizeSelectedMetadata:async(proof,metadata)=>{
    if(!metadata||JSON.stringify(proof)!==JSON.stringify(input.expectedProof))return false;
    const allowed=await withTransaction(input.context.db,async()=>{const authority=await readBackfillAuthority(input.context,input.importId,true);return authority!==null&&await revalidate(input.context,input)&&await selectedHistoricalOriginal(input.context,input,metadata,authority);});
-   if(allowed)selected=structuredClone(metadata);return allowed;
+   if(allowed){selected=structuredClone(metadata);snapshot=allowed;}return !!allowed;
   },gmail:{...deps.gmail,
    getMetadata:async(access,messageId,headers)=>await metered('metadata',()=>deps.gmail.getMetadata(access,messageId,headers)),
    getBody:async(access,messageId)=>await metered('body',()=>deps.gmail.getBody(access,messageId)),
   }});
   const result=await provider.read(input);
   if(!selected||!await withTransaction(input.context.db,async()=>{const authority=await readBackfillAuthority(input.context,input.importId,true);return authority!==null&&await revalidate(input.context,input)&&await selectedHistoricalOriginal(input.context,input,selected!,authority);}))throw new Error('historical_original_changed');
+  const frozenMetadata=structuredClone(selected),frozenSnapshot=JSON.stringify(snapshot),frozenOriginal=JSON.stringify(result),frozenInput=structuredClone({...input,context:undefined});
+  originals.set(result,async context=>{
+   if(context.scope.workspaceId!==frozenInput.workspaceId||JSON.stringify(result)!==frozenOriginal)return false;
+   const actor=context.scope.actor;if(actor.kind!=='system'||actor.component!=='worker')return false;
+   if(!(await context.db.query("SELECT id FROM jobs WHERE workspace_id=$1 AND id=$2 AND kind='crm.mail_capture' AND state='running' AND lease_owner=$3 AND fencing_token=$4::bigint AND lease_expires_at>clock_timestamp() FOR UPDATE",[context.scope.workspaceId,frozenInput.jobId,frozenInput.leaseOwner,frozenInput.fencingToken])).rows.length)return false;
+   const authority=await readBackfillAuthority(context,frozenInput.importId,true);
+   if(!authority||!await revalidate(context,frozenInput))return false;
+   return JSON.stringify(await selectedHistoricalOriginal(context,frozenInput,frozenMetadata,authority))===frozenSnapshot;
+  });
   return result;
  }};
 }

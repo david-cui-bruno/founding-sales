@@ -15,6 +15,66 @@ import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
 import {storeFixtureCiGateRecord,FIXTURE_CI_COMMIT,FIXTURE_WORKER_DIGEST} from '@fss/domain/test/release/support/releaseRecords.ts';
 import {CRM_OWNER_SCOPE_VERSION,type CrmCapabilityConfiguration} from '@fss/contracts';
+for (const mutation of ['missing', 'date', 'thread', 'before-body-date', 'forged-copy', 'unchanged'] as const) {
+ it(`historical selected original continuity: ${mutation}`, async () => {
+  const fixture = await createAuthFixture();
+  try {
+   const seeded = await seedCapture(fixture), a = await authorize(fixture, seeded);
+   const {requestCrmMailImport} = await import('@fss/domain/mail/crmBackfill.ts');
+   const {readBackfillAuthority} = await import('@fss/domain/mail/crmBackfillAuthority.ts');
+   const {recordBackfillMetadata} = await import('@fss/domain/mail/crmBackfillMetadata.ts');
+   const {createHistoricalGmailMailCaptureProvider} = await import('@fss/domain/mail/crmBackfillCapture.ts');
+   const {createHash} = await import('node:crypto');
+   await fixture.db.query("INSERT INTO crm_mail_import_allocations(workspace_id,mailbox_id,revision,owner_user_id,account_binding,generation,project_hash,user_hash,user_limit_units,project_limit_units,user_headroom_units,project_headroom_units,profile_units,list_units,history_units,metadata_units,body_units,verification_sha256,verified_until) VALUES($1,$2,1,$3,$4,1,repeat('c',64),repeat('d',64),1000,1000,100,100,1,1,1,1,1,repeat('e',64),clock_timestamp()+interval '1 hour')", [seeded.workspaceId,seeded.mailbox.id,seeded.ownerUserId,seeded.binding]);
+   const imported = await withTransaction(a.session, () => requestCrmMailImport(a.context,{mailboxId:seeded.mailbox.id}));
+   if (!imported.ok) throw new Error('synthetic import unavailable');
+   const importId = imported.value.importId;
+   const system = repositoryContext(workspaceScope(seeded.workspaceId,{kind:'system',component:'worker'}),a.session);
+   const authority = await readBackfillAuthority(system,importId);
+   if (!authority) throw new Error('synthetic authority unavailable');
+   const internalDate = Date.now()-1000;
+   const messageHash = createHash('sha256').update(JSON.stringify({accountBinding:seeded.binding,providerMessageId:'approved-message'})).digest('hex');
+   await fixture.db.query("INSERT INTO crm_mail_import_messages(workspace_id,import_id,message_hash,provider_message_id,provider_thread_id,provider_at,scope,state) VALUES($1,$2,$3,'approved-message','approved-thread',to_timestamp($4::double precision/1000),'historical','available')",[seeded.workspaceId,importId,messageHash,internalDate]);
+   const job = {...a.job,payload:{...a.job.payload,acquisitionOrigin:{importId}}};
+   await fixture.db.query('UPDATE jobs SET payload=$3::jsonb WHERE workspace_id=$1 AND id=$2',[seeded.workspaceId,job.id,JSON.stringify(job.payload)]);
+   let metadataReads=0, bodyReads=0, mutated=false;
+   async function changeSelected() {
+    mutated=true;
+    if (mutation==='missing') {
+     await recordBackfillMetadata(repositoryContext(system.scope,fixture.db),{authority:authority!,messageId:'approved-message',metadata:null,scope:'historical'});
+    } else {
+     await fixture.db.query(`UPDATE crm_mail_import_messages SET ${mutation==='thread'?"provider_thread_id='changed-thread'":"provider_at=provider_at+interval '1 millisecond'"} WHERE workspace_id=$1 AND import_id=$2 AND provider_message_id='approved-message'`,[seeded.workspaceId,importId]);
+    }
+   }
+   const proofVerifier = {...a.verifiers.captureVerifier,verify:async (...args:Parameters<typeof a.verifiers.captureVerifier.verify>) => {
+    if (bodyReads>0&&!mutated&&mutation!=='unchanged'&&mutation!=='forged-copy'&&mutation!=='before-body-date') await changeSelected();
+    return a.verifiers.captureVerifier.verify(...args);
+   }};
+   const allocationVerifier = {...a.verifiers.allocationVerifier,verify:async (...args:Parameters<typeof a.verifiers.allocationVerifier.verify>) => {
+    if (metadataReads>0&&bodyReads===0&&!mutated&&mutation==='before-body-date') await changeSelected();
+    return a.verifiers.allocationVerifier.verify(...args);
+   }};
+   const gmail = createGmailHttpClient({apiBaseUrl:'https://gmail.example.test',fetch:async url => {
+    const full=new URL(url).searchParams.get('format')==='full';
+    if(full)bodyReads++;else metadataReads++;
+    return {status:200,headers:{},body:JSON.stringify({id:'approved-message',threadId:'approved-thread',internalDate:String(internalDate),labelIds:['SENT'],payload:{mimeType:'text/plain',headers:[{name:'From',value:'business@example.test'},{name:'To',value:'person@example.test'}],...full?{body:{data:Buffer.from('Historical business reply').toString('base64url')}}:{}}})};
+   }});
+   const deps={gmail,proofVerifier,allocationVerifier,resolveAccess:async()=>({mailboxId:seeded.mailbox.id,providerAccountId:'google-business',generation:1,access:{accessToken:'synthetic-only',expiresAtEpochSeconds:Date.now()/1000+3600}})};
+   const historical=createHistoricalGmailMailCaptureProvider(deps);
+   const historicalProvider=mutation==='forged-copy'?{...historical,read:async (...args:Parameters<typeof historical.read>)=>structuredClone(await historical.read(...args))}:historical;
+   const handler=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{provider:createGmailMailCaptureProvider(deps),proofVerifier,historicalProvider}}).get('crm.mail_capture')!;
+   let failure:unknown;
+   try {await handler.handle({session:a.session,scope:system.scope,job});} catch(error) {failure=error;}
+   if(mutation==='before-body-date')expect(failure).toMatchObject({message:'historical_capture_allocation_unavailable'});
+   else expect(failure).toBeUndefined();
+   expect(metadataReads).toBe(1);
+   expect(bodyReads).toBe(mutation==='before-body-date'?0:1);
+   expect(mutated).toBe(mutation!=='unchanged'&&mutation!=='forged-copy');
+   expect((await fixture.db.query('SELECT source_id FROM crm_mail_sources WHERE workspace_id=$1',[seeded.workspaceId])).rows).toHaveLength(mutation==='unchanged'?1:0);
+   expect((await fixture.db.query('SELECT method,state FROM crm_mail_import_read_reservations WHERE import_id=$1 ORDER BY reserved_at',[importId])).rows).toEqual(mutation==='before-body-date'?[{method:'metadata',state:'observed'}]:[{method:'metadata',state:'observed'},{method:'body',state:'observed'}]);
+  } finally {await fixture.stop();}
+ });
+}
 async function revokeOwnerApproval(session:SessionQueryable,input:{workspaceId:string;authorityReceiptId:string;reference:string}){
  for(const [table,capability] of [['crm_business_policies','metadata_review'],['crm_mail_capture_controls','mail_capture'],['crm_extraction_purposes','crm_extraction'],['crm_ask_purposes','ask_answer']] as const){
   const row=(await session.query<{owner:string;mailbox_id?:string;purpose?:'answer'|'embedding';revision:number}>(`SELECT *,${table==='crm_business_policies'||table==='crm_mail_capture_controls'?'owner_user_id':'approved_by'} AS owner FROM ${table} WHERE workspace_id=$1 AND owner_approval_id=$2`,[input.workspaceId,input.authorityReceiptId])).rows[0];
