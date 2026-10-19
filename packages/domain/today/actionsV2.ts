@@ -13,10 +13,10 @@ function rank(action:TodayActionV2){return action.kind==='reply'?0:action.kind==
 function dateKey(action:TodayActionV2){return action.kind==='promise'?action.due===null?'':action.due.kind==='date'?action.due.date:action.due.at:action.dueAt;}
 
 /** Additive current action projection; V1 and its notifications retain their wire shape. */
-export async function readTodayActionsV2(context:RepositoryContext,input:{now:string}):Promise<TodayActionsV2Response|null>{
+export async function readTodayActionsV2(context:RepositoryContext,input:{now:string;includeFirmAssociations?:boolean}):Promise<TodayActionsV2Response|null>{
  if(!await activeIdentityActor(context))return null;
  const legacy=await readTodayActions(context,input);
- const promises=await readCrmCommitmentActionProofs(context);
+ const promises=await readCrmCommitmentActionProofs(context,input.includeFirmAssociations);
  if(promises===null)return null;
  const replyMessageIds=legacy.actions.flatMap(action=>action.target.kind==='reply'?[action.target.messageId]:[]);
  const actions:TodayActionV2[]=[];
@@ -28,12 +28,12 @@ export async function readTodayActionsV2(context:RepositoryContext,input:{now:st
   actions.push(action);
  }
  for(const blocker of promises.blockers){
-  actions.push({actionId:`crm-promise-blocker:${blocker.target.review.commitmentId}:${blocker.target.review.revision}`,kind:'problem',subject:blocker.subject,reason:'commitment_projection_failed',dueAt:blocker.observedAt,state:'open',target:blocker.target});
+  actions.push({actionId:`crm-promise-blocker:${blocker.target.review.commitmentId}:${blocker.target.review.revision}`,kind:'problem',subject:blocker.subject,...('firms' in blocker?{firms:blocker.firms}:{}),reason:'commitment_projection_failed',dueAt:blocker.observedAt,state:'open',target:blocker.target});
  }
  for(const promise of promises.items){
   const due=promise.due;if(due===null)continue;
   const overdue=due.kind==='instant'?Date.parse(input.now)>=Date.parse(due.at):calendarDate(input.now,due.zone)>due.date;
-  actions.push({actionId:`crm-promise:${promise.target.taskId}:${promise.target.expectedVersion}`,kind:'promise',subject:promise.subject,reason:'dated_promise',due,state:overdue?'overdue':'open',target:promise.target});
+  actions.push({actionId:`crm-promise:${promise.target.taskId}:${promise.target.expectedVersion}`,kind:'promise',subject:promise.subject,...('firms' in promise?{firms:promise.firms}:{}),reason:'dated_promise',due,state:overdue?'overdue':'open',target:promise.target});
  }
  actions.sort((a,b)=>rank(a)-rank(b)||dateKey(a).localeCompare(dateKey(b))||a.actionId.localeCompare(b.actionId));
  if(!await activeIdentityActor(context))return null;

@@ -31,6 +31,9 @@ import type { Generation } from './generation.ts';
 
 export interface ViewState<T> {
   readonly state: T | null;
+  readonly readFailed: boolean;
+  readonly reading: boolean;
+  retryRead(): void;
   /** How many calls are in flight; the view is `aria-busy` while any are. */
   readonly pending: number;
   /** How many of those are commands. */
@@ -68,6 +71,8 @@ export function useViewState<T>(options: {
   const available = api !== undefined;
   const enabled = identity !== null && available;
   const [pending, setPending] = useState(0);
+  const [readFailed, setReadFailed] = useState(false);
+  const readSettled = useRef(0);
   /** The forms whose command is on the wire, each with how many (a press each). */
   const [inFlight, setInFlight] = useState<ReadonlyMap<string, number>>(() => new Map());
   const commands = [...inFlight.values()].reduce((total, count) => total + count, 0);
@@ -171,9 +176,18 @@ export function useViewState<T>(options: {
               // what the person just saw accepted.
               return;
             }
+            if (kind === 'read') {
+              if (ordinal < readSettled.current) return;
+              readSettled.current = ordinal;
+            }
+            setReadFailed(false);
             client.setQueryData([key, identity, started, reason], value);
           },
           (error: unknown) => {
+            if (kind === 'read' && guard.fresh(started) && ordinal > staleBefore.current && ordinal >= readSettled.current) {
+              readSettled.current = ordinal;
+              setReadFailed(true);
+            }
             console.error(error);
           },
         )
@@ -204,9 +218,10 @@ export function useViewState<T>(options: {
   );
 
   const busy = useCallback((form: string): boolean => inFlight.has(form), [inFlight]);
+  const retryRead = useCallback(() => { read(first); }, [first, read]);
 
   return useMemo(
-    () => ({ state: query.data ?? null, pending, commands, available, busy, read, command }),
-    [query.data, pending, commands, available, busy, read, command],
+    () => ({ state: query.data ?? null, readFailed: readFailed || query.isError, reading: query.isFetching || pending > commands, retryRead, pending, commands, available, busy, read, command }),
+    [query.data, query.isError, query.isFetching, readFailed, retryRead, pending, commands, available, busy, read, command],
   );
 }

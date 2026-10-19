@@ -1,0 +1,21 @@
+import {randomUUID} from 'node:crypto';
+import {afterEach,expect,it} from 'vitest';
+import {readCommitmentActionFirms} from '../../crm/commitments.ts';
+import {createClassifierWorld,type ClassifierWorld} from '../classification/support/classifierWorld.ts';
+import {REPLY_CORPUS} from '../corpus/replies/cases.ts';
+let world:ClassifierWorld|null=null;
+afterEach(async()=>{await world?.stop();world=null;});
+it('resolves the complete firm association only within the authorized workspace, never an internal-only subset',async()=>{
+ world=await createClassifierWorld({cases:REPLY_CORPUS.filter(value=>value.id==='terse-human-reply')});
+ const context=world.context(),firmId=world.mail.crm.alpha.firmId;
+ const read=(snapshot:unknown)=>readCommitmentActionFirms(context,snapshot);
+ const firm=await read({firmIds:[firmId]});
+ expect(firm).toEqual([{id:firmId,name:expect.any(String)}]);
+ expect(await read({firmIds:[firmId,firmId]})).toEqual(firm);
+ expect(await read({firmIds:[firmId,randomUUID()]})).toBeNull();
+ const other=(await context.db.query<{id:string}>('SELECT id FROM firms WHERE workspace_id<>$1 LIMIT 1',[context.scope.workspaceId])).rows[0];
+ expect(other).toBeDefined();
+ expect(await read({firmIds:[firmId,other!.id]})).toBeNull();
+ expect(await read({firmIds:[]})).toEqual([]);
+ for(const snapshot of [null,{}, {firmIds:null},{firmIds:[firmId,null]},{firmIds:['not-a-uuid']}])expect(await read(snapshot)).toBeNull();
+});

@@ -181,6 +181,19 @@ afterEach(() => {
   cleanup();
   globalThis.callieApi = undefined;
 });
+it('distinguishes an initial rejected saved-research read and retries only that read',async()=>{
+ const open=vi.fn(async()=>state()).mockRejectedValueOnce(new Error('offline'));
+ const run=vi.fn(async()=>state());
+ install({'research.open':open,'research.run':run});
+ vi.spyOn(console,'error').mockImplementation(()=>undefined);
+ const {guard}=createGeneration();
+ render(<QueryClientProvider client={client()}><FirmResearch firmId={FIRM_ID} identity="owner" generation={0} guard={guard} enabled/></QueryClientProvider>);
+ expect(await screen.findByRole('alert')).toHaveProperty('textContent',expect.stringContaining('Saved research could not be loaded'));
+ expect(screen.queryByText('Loading research…')).toBeNull();
+ await userEvent.click(screen.getByRole('button',{name:'Retry reading research'}));
+ expect((await screen.findByTestId('research-facts')).textContent).toContain('We manage residential property for owners.');
+ expect(screen.queryByRole('alert')).toBeNull();expect(open).toHaveBeenCalledTimes(2);expect(run).not.toHaveBeenCalled();
+});
 
 describe('the call brief on the Today card', () => {
   const noop = (): void => undefined;

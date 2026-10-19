@@ -11,7 +11,7 @@ import { SettingsView } from '../src/renderer/settings/SettingsView.tsx';
 import { StatusSection } from '../src/renderer/settings/StatusSection.tsx';
 import type { AdminState } from '../src/renderer/settingsContract.ts';
 import type { OperationApi, OperationName } from '../src/shared/operations.ts';
-import { adminState } from './e2e/support/adminFixtures.ts';
+import { adminState,diagnostics } from './e2e/support/adminFixtures.ts';
 import { fireEvent } from '@testing-library/react';
 import { PosturesSection } from '../src/renderer/settings/PosturesSection.tsx';
 import { recordedPosture } from './e2e/support/adminFixtures.ts';
@@ -75,6 +75,18 @@ function Shell({ onSettings }: { readonly onSettings: boolean }): JSX.Element {
 beforeEach(() => {
   state = adminState();
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
+});
+it('retains restore, schema and production truth in collapsed Sending recovery safety details',async()=>{
+ state={...adminState(),screen:'diagnostics',diagnostics:diagnostics()};
+ install(()=>state);
+ render(<QueryClientProvider client={new QueryClient()}><DraftsProvider><SettingsView route={{name:'settings',tab:'diagnostics'}} identity="me" generation={0} guard={guard} mailbox={null} mailboxWaiting={false} hasMailboxBridge={false} isAdmin onSwitchMailbox={()=>undefined}/></DraftsProvider></QueryClientProvider>);
+ const summary=await screen.findByText('Sending safety details');
+ expect(summary.closest('details')?.open).toBe(false);
+ fireEvent.click(summary);
+ expect(screen.getByText('Mismatch. Sending and dialling are held until the post-restore protocol completes.')).toBeTruthy();
+ expect(screen.getByText('Database 1, expected 2.')).toBeTruthy();
+ expect(screen.getByText('Schema and client')).toBeTruthy();expect(screen.getByText('Production sending')).toBeTruthy();
+ expect(screen.queryByTestId('panel-jobs')).toBeNull();
 });
 afterEach(() => {
   cleanup();

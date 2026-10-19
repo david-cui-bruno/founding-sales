@@ -129,7 +129,8 @@ export function FirmMeetings({
   const recordings = useRecordings(recordingPorts);
   const successes = memory.successes.get(firmId) ?? 0;
   // R4: the firm's registered recordings, from the server, with the firm they were read for.
-  const [server, setServer] = useState<{ readonly firmId: string; readonly rows: readonly FirmRecording[] | null } | null>(null);
+  const [server, setServer] = useState<{ readonly firmId: string; readonly rows: readonly FirmRecording[] | null; readonly failed: boolean; readonly loading: boolean } | null>(null);
+  const [recordingRead, setRecordingRead] = useState(0);
   const recordingPortsRef = useRef(recordingPorts);
   recordingPortsRef.current = recordingPorts;
   // Read again whenever this Mac's import moves (an item registered leaves the local list).
@@ -138,16 +139,17 @@ export function FirmMeetings({
     let current = true;
     const read = recordingPortsRef.current?.forFirm;
     if (read === undefined) return undefined;
+    setServer(previous => ({ firmId, rows: previous?.firmId === firmId ? previous.rows : null, failed: false, loading: true }));
     void read(firmId).then(
       answer => {
-        if (current) setServer({ firmId, rows: answer.recordings });
+        if (current) setServer(previous => ({ firmId, rows: answer.recordings ?? (previous?.firmId === firmId ? previous.rows : null), failed: answer.recordings === null, loading: false }));
       },
-      () => undefined,
+      () => { if (current) setServer(previous => ({ firmId, rows: previous?.firmId === firmId ? previous.rows : null, failed: true, loading: false })); },
     );
     return () => {
       current = false;
     };
-  }, [firmId, refreshKey, localKey]);
+  }, [firmId, refreshKey, localKey, recordingRead]);
   const serverRows = server !== null && server.firmId === firmId ? server.rows : null;
 
   useEffect(() => {
@@ -239,9 +241,9 @@ export function FirmMeetings({
   // as "no meeting".
   if (meetings.length === 0) {
     return (
-      <p data-testid="firm-meetings-empty" className="text-xs text-muted-foreground">
+      <><p data-testid="firm-meetings-empty" className="text-xs text-muted-foreground">
         No meeting booked yet.
-      </p>
+      </p><FirmRecordings recordings={recordings} meetings={[]} server={serverRows} serverFailed={recordingPorts?.forFirm === undefined || server?.firmId === firmId && server.failed} serverLoading={server?.firmId !== firmId || server.loading} onRetryRead={() => { recordings.read(); setRecordingRead(value => value + 1); }} actionsEnabled={actionsEnabled} /></>
     );
   }
   const canCommand = actionsEnabled && ports.setAttendance !== undefined;
@@ -368,7 +370,7 @@ export function FirmMeetings({
           );
         })}
       </ul>
-      <FirmRecordings recordings={recordings} meetings={meetings} server={serverRows} actionsEnabled={actionsEnabled} />
+      <FirmRecordings recordings={recordings} meetings={meetings} server={serverRows} serverFailed={recordingPorts?.forFirm === undefined || server?.firmId === firmId && server.failed} serverLoading={server?.firmId !== firmId || server.loading} onRetryRead={() => { recordings.read(); setRecordingRead(value => value + 1); }} actionsEnabled={actionsEnabled} />
     </section>
   );
 }

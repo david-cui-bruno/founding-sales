@@ -287,6 +287,10 @@ describe('the brief, shown', () => {
     expect(within(panel).getByTestId('brief-section-whyThisDemo').textContent).toContain('Unknown');
     const firm = within(panel).getByTestId('brief-section-firm');
     expect(firm.textContent).toContain('not verified by Callie');
+    const researched=within(firm).getByText('Researched 20 Sep');
+    expect(researched.closest('details')?.open).toBe(false);
+    await userEvent.click(researched);
+    expect(firm.textContent).toContain('observed 2026-09-20');
     expect(firm.textContent).not.toContain('240 doors.');
     await userEvent.click(within(firm).getByTestId('brief-show-more'));
     expect(firm.textContent).toContain('240 doors.');

@@ -181,6 +181,7 @@ export function FirmsRoute({
       </Page>
     );
   }
+  if (state === null && crm.readFailed) return <Page className="callie-v2"><ViewHeader title={rowHeading} /><p role="alert" className="mt-4 text-sm">{rowHeading} could not be loaded.</p><Button variant="outline" disabled={crm.reading} onClick={crm.retryRead}>Retry loading {rowHeading.toLowerCase()}</Button></Page>;
   if (state === null) {
     // Loading: the shape of what is coming, so nothing jumps when it arrives.
     return onPipelineRow ? (

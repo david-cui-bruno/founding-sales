@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { crmProcessingResultSchema } from "@fss/contracts";
+import { crmProcessingResultSchema,todayPromiseActionSchema } from "@fss/contracts";
 import { HandlerRegistry } from "@fss/domain/jobs/handlerRegistry.ts";
 import { registerHandlers } from "../../worker/src/bootstrap/main.ts";
 import { runOnce } from "../../worker/src/runner/jobRunner.ts";
@@ -39,7 +39,7 @@ it("projects exactly one internal task from an explicit dated human promise revi
           sendingEnabled: false,
         },
       );
-    const get=(path:string)=>dispatch({method:"GET",path,body:null,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`}}, {session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
+    const get=(path:string,include?:string)=>dispatch({method:"GET",path,body:null,query:new URLSearchParams(include===undefined?undefined:{include}),headers:{authorization:`Bearer ${token}`}}, {session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false});
     const command = (fields: object) => ({
       commandId: randomUUID(),
       clientVersion: CURRENT_CLIENT_VERSION,
@@ -136,6 +136,10 @@ it("projects exactly one internal task from an explicit dated human promise revi
     expect((await post('/ask/read',{operation:'tasks',scope:{personId},limit:20})).body).toMatchObject({count:'1',records:[{key:`internal_task:${originalTask}`,personId}]});
     const actionsV1=await get("/today/actions");expect(actionsV1.status).toBe(200);expect(actionsV1.body).toMatchObject({version:1,actions:[]});
     const actionsV2=await get("/today/actions/v2");expect(actionsV2.status).toBe(200);
+    expect(JSON.stringify(actionsV2.body)).not.toContain('"firms":');
+    expect(()=>todayPromiseActionSchema.omit({firms:true}).parse((actionsV2.body as {actions:unknown[]}).actions[0])).not.toThrow();
+    expect((await get('/today/actions/v2','unknownFutureCapability')).body).toMatchObject({actions:(actionsV2.body as {actions:unknown[]}).actions});
+    expect((await get('/today/actions/v2','firmAssociations')).body).toMatchObject({actions:[{kind:'promise',firms:[]}]});
     expect(actionsV2.body).toMatchObject({version:2,actions:[{kind:"promise",reason:"dated_promise",due:{kind:"date",date:promiseDate,zone:"America/Chicago"},target:{kind:"internal_task",taskId:originalTask,expectedVersion:1,review:{commitmentId:receipt.result.commitmentId,revision:1,projectionVersion:1}}}]});
     expect((await get("/today/actions")).body).toMatchObject({version:1,actions:[]});
     const promiseAction=(actionsV2.body as {actions:{actionId:string;target:unknown}[]}).actions[0]!;
@@ -195,6 +199,8 @@ it("projects exactly one internal task from an explicit dated human promise revi
     await runOnce(fixture.db,{registry,owner:"firm-commitment-projector",limit:20});
     const firmCommitments=await post("/crm/commitments/read",{scope:{kind:"person",personId:bridgedId},limit:50});expect(firmCommitments.status).toBe(200);
     const secondTask=(firmCommitments.body as {items:{task:{taskId:string}}[]}).items[0]!.task.taskId;
+    expect((await get('/today/actions/v2','firmAssociations')).body).toMatchObject({actions:[{kind:'promise',firms:[{id:firmId,name:'Original promise authority'}]}]});
+    expect(JSON.stringify((await get('/today/actions/v2')).body)).not.toContain('"firms":');
     expect((await post("/crm/commitments/complete",command({taskId:secondTask,expectedVersion:1}))).status).toBe(200);
     // Controlled current-context drift: original A capture is retained while current source moves to B.
     const movedFirmId=await seedFirm(fixture,{name:"Current promise context B",assignedUserId:fixture.alpha.admin.userId});

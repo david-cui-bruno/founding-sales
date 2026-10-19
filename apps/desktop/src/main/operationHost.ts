@@ -157,7 +157,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     ...linkedinManualOperations({ api: deps.api, generation: () => deps.recordings.identity.current() }),
     'today.actionsV2':async()=>{
       const generation=deps.recordings.identity.current();
-      const answer=await deps.api.read('/today/actions/v2',value=>todayActionsV2ResponseSchema.parse(value));
+      const answer=await deps.api.read('/today/actions/v2?include=firmAssociations',value=>todayActionsV2ResponseSchema.parse(value));
       return generation===deps.recordings.identity.current()&&answer.ok?answer.value:null;
     },
     'today.openActionV2':async(input:OperationInput<'today.openActionV2'>)=>{

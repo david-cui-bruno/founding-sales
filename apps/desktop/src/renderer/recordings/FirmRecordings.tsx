@@ -58,12 +58,18 @@ export function FirmRecordings({
   meetings,
   server = null,
   actionsEnabled = true,
+  serverFailed = false,
+  serverLoading = false,
+  onRetryRead,
 }: {
   readonly recordings: Recordings;
   readonly meetings: readonly { readonly meetingId: string; readonly startsAt: string }[];
   /** The firm's registered recordings from the server, or null when not (yet) read. */
   readonly server?: readonly FirmRecording[] | null;
   readonly actionsEnabled?: boolean;
+  readonly serverFailed?: boolean;
+  readonly serverLoading?: boolean;
+  onRetryRead?(): void;
 }): JSX.Element | null {
   const heading = useRef<HTMLHeadingElement>(null);
   const meetingIds = meetings.map(meeting => meeting.meetingId);
@@ -71,7 +77,8 @@ export function FirmRecordings({
   const registered = meetings
     .map(meeting => ({ meeting, rows: (server ?? []).filter(row => row.meetingId === meeting.meetingId) }))
     .filter(group => group.rows.length > 0);
-  if (items.length === 0 && registered.length === 0) return null;
+  const failed = recordings.memory.readFailed || serverFailed;
+  const loading = serverLoading || recordings.view === null && !recordings.memory.readFailed;
   // K4: a navigation key on one of these buttons moves focus to the heading first; the page's
   // own shortcut still runs.
   const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
@@ -83,6 +90,7 @@ export function FirmRecordings({
       <h3 ref={heading} tabIndex={-1} className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase outline-none">
         Recordings
       </h3>
+      {failed ? <div role="alert" className="py-2 text-sm"><p>Recordings could not be loaded. Previously shown recordings are kept.</p><Button variant="quiet" size="sm" onClick={onRetryRead ?? recordings.read}>Retry reading recordings</Button></div> : loading ? <p role="status" className="py-2 text-sm text-muted-foreground">Loading recordings…</p> : items.length === 0 && registered.length === 0 ? <p className="py-2 text-sm text-muted-foreground">No recordings saved for this firm.</p> : null}
       <ul className="flex flex-col border-t border-border">
         {registered.map(({ meeting, rows }) => {
           const state = meetingServerState(rows, meeting.meetingId) ?? 'uploaded';

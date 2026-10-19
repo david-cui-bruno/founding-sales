@@ -26,8 +26,9 @@ export function Panels({
 }): JSX.Element {
   return (
     <>
-      <div data-testid="panels">
-        {(alertsOnly ? [] : view.panels).map(panel => (
+      <details open={!alertsOnly} data-testid="panels">
+        <summary className="cursor-pointer py-2 text-sm text-muted-foreground">Sending safety details</summary>
+        {(alertsOnly ? view.panels.filter(panel => ['Schema and client', 'Production sending', 'Restore generation'].includes(panel.title)) : view.panels).map(panel => (
           <Section
             key={panel.title}
             data-testid={`panel-${panel.title.toLowerCase().replaceAll(' ', '-')}`}
@@ -45,7 +46,7 @@ export function Panels({
             </div>
           </Section>
         ))}
-      </div>
+      </details>
 
       {onAcknowledge === undefined ? null : (
         <Section data-testid="alerts" title="Alerts" count={view.alerts.length}>

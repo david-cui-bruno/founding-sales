@@ -9,11 +9,10 @@ const value=(extra:Partial<BookingCapacityResponse['provider']>={}):BookingCapac
   provider:{status:'unavailable',reason:'api_key_missing',observedAt:null,bookingUrl:'https://cal.com/callie-founder/intro',eventTypeId:null,weeklyLimit:null,scope:'event_type',...extra},
   recorded:{observedAt:'2026-10-08T12:00:00.000Z',windowStart:'2026-10-01T12:00:00.000Z',windowEnd:'2026-12-07T12:00:00.000Z',truncated:false,bookings:[]},
 });
-it('shows missing calendar access and the unverified three-call preference without claiming free slots',async()=>{
+it('shows actual calendar evidence without the deleted preference essay or free-slot claims',async()=>{
   render(<BookingCapacity ports={{async read(){return {capacity:value()};}}}/>);
-  expect((await screen.findByTestId('booking-capacity-preference')).textContent).toContain('enforcement is not verified');
-  expect(screen.getByTestId('booking-capacity-preference').textContent).toContain('unenforced legacy preference');
-  expect(screen.getByTestId('booking-capacity-preference').textContent).toContain('no daily or weekly call-count ceiling');
+  expect(screen.queryByTestId('booking-capacity-preference')).toBeNull();
+  expect(screen.queryByText('Previous booking preference')).toBeNull();
   expect(await screen.findByText(/Calendar access is missing/)).toBeTruthy();
   expect(screen.queryByText(/slots? (left|available)/i)).toBeNull();
 });
@@ -21,7 +20,7 @@ it('shows a confirmed event-specific limit without promoting it to a global capa
   render(<BookingCapacity ports={{async read(){return {capacity:value({status:'observed',reason:null,observedAt:'2026-10-08T12:00:00.000Z',eventTypeId:73,weeklyLimit:3})};}}}/>);
   expect(await screen.findByText(/limits this booking link to 3 bookings per week/)).toBeTruthy();
   expect(screen.getByTestId('booking-capacity-provider').textContent).toContain('Other event types');
-  expect(screen.getByTestId('booking-capacity-preference').textContent).toContain('enforcement is not verified');
+  expect(screen.queryByTestId('booking-capacity-preference')).toBeNull();
 });
 it('does not turn an observed event without a verified weekly limit into a capacity guarantee',async()=>{
   render(<BookingCapacity ports={{async read(){return {capacity:value({status:'observed',reason:null,observedAt:'2026-10-08T12:00:00.000Z',eventTypeId:73,weeklyLimit:null})};}}}/>);

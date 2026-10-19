@@ -222,8 +222,35 @@ export async function completeCrmCommitment(context:RepositoryContext,input:CrmC
  return {ok:true as const,value:{taskId:input.taskId,version:changed.version,completedAt:changed.completed_at.toISOString()}};
 }
 
+/** Null means the complete authorized firm association could not be established. */
+export async function readCommitmentActionFirms(context:RepositoryContext,snapshot:unknown){
+ if(snapshot===null||typeof snapshot!=='object'||!('firmIds' in snapshot)||!Array.isArray(snapshot.firmIds)||snapshot.firmIds.some(id=>typeof id!=='string'))return null;
+ const ids=[...new Set(snapshot.firmIds as string[])];
+ if(ids.length===0)return [];
+ const rows=(await context.db.query<{id:string;name:string}>('SELECT id,name FROM firms WHERE workspace_id=$1 AND id::text=ANY($2::text[]) ORDER BY id',[context.scope.workspaceId,ids])).rows;
+ return rows.length===ids.length?rows:null;
+}
+async function reviewActionFirms(context:RepositoryContext,row:Review){
+ const tasks=await reviewedOpenTasks(context,row.id);
+ if(tasks.length>100)return null;
+ const snapshots=[...reviewContexts([row],tasks),row.original_access_closure];
+ const firmIds:string[]=[],personIds:string[]=[];
+ for(const snapshot of snapshots){
+  if(snapshot===null||typeof snapshot!=='object'||!('firmIds' in snapshot)||!Array.isArray(snapshot.firmIds)||snapshot.firmIds.some(id=>typeof id!=='string'))return null;
+  firmIds.push(...snapshot.firmIds as string[]);
+  if('personId' in snapshot&&typeof snapshot.personId==='string')personIds.push(snapshot.personId);
+  if('personIds' in snapshot){if(!Array.isArray(snapshot.personIds)||snapshot.personIds.some(id=>typeof id!=='string'))return null;personIds.push(...snapshot.personIds as string[]);}
+  if('mailContexts' in snapshot){
+   if(!Array.isArray(snapshot.mailContexts))return null;
+   for(const entry of snapshot.mailContexts){if(entry===null||typeof entry!=='object'||!('firmId' in entry))return null;if(entry.firmId!==null){if(typeof entry.firmId!=='string')return null;firmIds.push(entry.firmId);}if('personId' in entry&&typeof entry.personId==='string')personIds.push(entry.personId);}
+  }
+ }
+ // Existing legacy-person associations are relational authority, never task-label matches.
+ const current=(await context.db.query<{firm_id:string}>('SELECT c.firm_id FROM crm_legacy_contact_people b JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id WHERE b.workspace_id=$1 AND b.person_id::text=ANY($2::text[])',[context.scope.workspaceId,[...new Set(personIds)]])).rows;
+ return readCommitmentActionFirms(context,{firmIds:[...firmIds,...current.map(value=>value.firm_id)]});
+}
 /** Private action proof is resolved under the same source/context locks as current work. */
-export async function readCrmCommitmentActionProofs(context:RepositoryContext){
+export async function readCrmCommitmentActionProofs(context:RepositoryContext,includeFirmAssociations=false){
  const page=await readCrmCommitments(context,{scope:{kind:'today'},limit:50});
  if(page===null||page.items.some(item=>!('commitmentId' in item)))return null;
  const items=page.items.filter(item=>'commitmentId' in item);
@@ -238,7 +265,7 @@ export async function readCrmCommitmentActionProofs(context:RepositoryContext){
    const target=crmEvidenceClaimTargetSchema.parse(row.target);
    if(!(row.reviewed_at instanceof Date))return null;
    const proof:TodayCommitmentBlockerTarget={kind:'commitment_blocker',review:{commitmentId:row.id,revision:row.revision},support:{sourceKind:target.source.kind,sourceId:target.source.sourceId,sourceRevision:target.source.revision,sourceHash:target.source.contentHash!,contextHash:target.contextHash,decisionRevision:target.expectedDecisionRevision}};
-   blockers.push({target:proof,subject:item.actionLabel,observedAt:row.reviewed_at.toISOString()});
+   blockers.push({target:proof,subject:item.actionLabel,observedAt:row.reviewed_at.toISOString(),...(includeFirmAssociations?{firms:await reviewActionFirms(context,row)}:{})});
    continue;
   }
   if(item.task===null||item.task.status!=='open'||item.due===null||item.actionLabel===null)continue;
@@ -246,7 +273,7 @@ export async function readCrmCommitmentActionProofs(context:RepositoryContext){
   if(row===undefined||row.revision!==item.revision||row.state!=='applied')return null;
   const target=crmEvidenceClaimTargetSchema.parse(row.target);
   const proof:TodayPromiseTarget={kind:'internal_task',taskId:item.task.taskId,expectedVersion:item.task.version,review:{commitmentId:row.id,revision:row.revision,projectionVersion:row.projection_version},support:{sourceKind:target.source.kind,sourceId:target.source.sourceId,sourceRevision:target.source.revision,sourceHash:target.source.contentHash!,contextHash:target.contextHash,decisionRevision:target.expectedDecisionRevision}};
-  result.push({target:proof,subject:item.actionLabel,due:item.due});
+  result.push({target:proof,subject:item.actionLabel,due:item.due,...(includeFirmAssociations?{firms:await reviewActionFirms(context,row)}:{})});
  }
  return {items:result,blockers,coverage:{scope:'current_authorized_work' as const,truncated:page.nextAfterId!==null,nextAfterId:page.nextAfterId}};
 }

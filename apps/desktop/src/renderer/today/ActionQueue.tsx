@@ -224,7 +224,9 @@ export function ActionQueue({
       if (alive.current && ticket === issued.current) setBusy(null);
     }
   };
-  const actions = (read?.actions ?? []).filter(action => isOwnerWorkingFirm(action.subject));
+  const actions = (read?.actions ?? []).filter(action => action.kind === 'promise' || action.reason === 'commitment_projection_failed'
+    ? !('firms' in action) || !action.firms?.length || action.firms.some(firm => isOwnerWorkingFirm(firm.name))
+    : action.target.kind === 'reply' || action.target.kind === 'meeting' ? isOwnerWorkingFirm(action.subject) : true);
   const visible = excludeReplies ? actions.filter(action => action.kind !== 'reply') : actions;
   if (compactReplies) {
     const replies = actions.filter(action => action.kind === 'reply');

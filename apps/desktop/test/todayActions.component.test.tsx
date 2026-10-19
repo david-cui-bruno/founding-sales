@@ -11,7 +11,7 @@ import type { Today, TodayActions } from '../src/renderer/today/useToday.ts';
 import type { TodayState } from '../src/renderer/todayContract.ts';
 import { setNavigator } from '../src/renderer/routes.ts';
 import type { OperationApi } from '../src/shared/operations.ts';
-import type { TodayActionsV2Response } from '@fss/contracts';
+import { todayPromiseActionSchema, todayCommitmentBlockerActionSchema, type TodayActionsV2Response } from '@fss/contracts';
 import { buildTodayView } from '../src/renderer/todayView.ts';
 
 /** Today actions through the public workspace and a controlled Operations adapter. */
@@ -141,6 +141,27 @@ afterEach(() => { globalThis.callieApi = undefined; });
 function show() {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><DraftsProvider><Harness call={callOf({ phase: 'idle' })} /></DraftsProvider></QueryClientProvider>);
 }
+const promise = (subject:string,firms?:{id:string;name:string}[]|null) => todayPromiseActionSchema.parse({actionId:'promise-proof',kind:'promise',subject,...(firms===undefined?{}:{firms}),reason:'dated_promise',due:{kind:'date',date:'2026-10-20',zone:'America/Chicago',expression:'tomorrow'},state:'open',target:{kind:'internal_task',taskId:A,expectedVersion:1,review:{commitmentId:B,revision:1,projectionVersion:1},support:{sourceKind:'selected_note',sourceId:A,sourceRevision:1,sourceHash:'a'.repeat(64),contextHash:'b'.repeat(64),decisionRevision:0}}});
+it.each([
+ ['Callie Internal Test',undefined,true],
+ ['Callie Internal Test',[{id:A,name:'Real firm'}],true],
+ ['Send the requested details',[{id:A,name:'Callie Internal Test'}],false],
+ ['Send the requested details',[{id:A,name:'Callie Internal Test Rentals'}],true],
+ ['Send the requested details',[{id:A,name:'Callie Internal Test'},{id:B,name:'External firm'}],true],
+ ['Send the requested details',null,true],
+ ['Send the requested details',[],true],
+] as const)('uses authoritative firms rather than arbitrary promise label %s',async(subject,firms,visible)=>{
+ currentRead={...read,actions:[promise(subject,firms===undefined||firms===null?firms:[...firms])]};
+ show();
+ await vi.waitFor(()=>expect(screen.queryByTestId('today-actions')!==null).toBe(visible));
+ if(visible)expect(await screen.findByText(subject)).toBeTruthy();
+});
+it.each([undefined,[{id:A,name:'Callie Internal Test'}]] as const)('filters blockers by proven firm identity, never their label',async firms=>{
+ const original=promise('Callie Internal Test');
+ const blocker=todayCommitmentBlockerActionSchema.parse({actionId:'blocker',kind:'problem',subject:original.subject,...(firms===undefined?{}:{firms}),reason:'commitment_projection_failed',dueAt:read.asOf,state:'open',target:{kind:'commitment_blocker',review:{commitmentId:B,revision:1},support:original.target.support}});
+ currentRead={...read,actions:[blocker]};show();
+ if(firms===undefined)expect(await screen.findByText('Callie Internal Test')).toBeTruthy();else await vi.waitFor(()=>expect(screen.queryByTestId('today-actions')).toBeNull());
+});
 it('opens the exact current overdue reply from Today without resolving it', async () => {
   show();
   fireEvent.click(await screen.findByRole('button', { name: /Open reply/ }));
