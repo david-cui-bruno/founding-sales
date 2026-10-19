@@ -76,7 +76,7 @@ export const APOLLO_DISCOVERY_CONSTRAINT_CASES: readonly Case[] = [
   bad(origins, 'sourcing_apollo_candidate_origins_hq_city_check', origin, { hq_city: 'x'.repeat(151) }),
   bad(origins, 'sourcing_apollo_candidate_origins_hq_state_check', origin, { hq_state: 'CA' }),
   bad(origins, 'sourcing_apollo_candidate_origins_employee_count_check', origin, { employee_count: 0 }),
-  bad(origins, 'sourcing_apollo_candidate_origins_workspace_id_candidate_id_fkey', origin, { candidate_id: absent }),
+  bad(origins, 'sourcing_apollo_candidate_origin_workspace_id_candidate_id_fkey', origin, { candidate_id: absent }),
   bad(origins, 'sourcing_apollo_candidate_origins_workspace_id_attempt_id_fkey', origin, { attempt_id: absent }),
   duplicate(origins, 'sourcing_apollo_candidate_origins_pkey', origin, {}),
 ];
