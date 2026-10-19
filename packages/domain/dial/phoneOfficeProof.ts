@@ -33,6 +33,7 @@ export function hasPersonalPhoneEvidence(observations: readonly SourceObservatio
 /** Gate and exact route/firm are held by admission. Advisory callers receive no authority. */
 export async function readPhoneOfficeProof(context: RepositoryContext, input: {
   firmId: string; routeId: string; routeVersion: number; e164: string; at: string;
+  expected?: Pick<PhoneOfficeProof, 'kind' | 'id'>;
 }): Promise<PhoneOfficeProof | null> {
   const w = context.scope.workspaceId;
   const firm = (await context.db.query<{ name: string; website: string | null; locality: string | null; region_code: string | null }>(
@@ -40,15 +41,22 @@ export async function readPhoneOfficeProof(context: RepositoryContext, input: {
   const route = (await context.db.query<{ known_personal_cell_at: Date | null }>(
     'SELECT known_personal_cell_at FROM phone_routes WHERE workspace_id=$1 AND id=$2 AND firm_id=$3 AND version=$4 AND e164=$5 FOR SHARE',
     [w, input.routeId, input.firmId, input.routeVersion, input.e164])).rows[0];
-  if (!firm || !route || route.known_personal_cell_at !== null) return null;
-  // Preserve every retained contrary association, not only the currently selected positive proof.
+  const associations = await context.db.query<{ known_personal_cell_at: Date | null }>(`SELECT known_personal_cell_at FROM phone_routes
+    WHERE workspace_id=$1 AND e164=$2 ORDER BY id FOR SHARE`, [w, input.e164]);
+  if (!firm || !route || route.known_personal_cell_at !== null || associations.rows.some(row => row.known_personal_cell_at !== null)) return null;
+  // Candidate writers lock candidate before run/admission. Include historical
+  // associations used only as restrictive endpoint evidence, in stable ID order.
+  await context.db.query(`SELECT c.id FROM sourcing_candidates c WHERE c.workspace_id=$1 AND EXISTS
+    (SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=c.workspace_id AND a.candidate_id=c.id)
+    ORDER BY c.id FOR SHARE OF c`, [w]);
+  // Preserve every retained contrary exact endpoint association in this workspace.
   const negativeRuns = (await context.db.query<{ observations: SourceObservation[] }>(`SELECT q.observations FROM sourcing_admissions a
     JOIN sourcing_qualification_runs q ON q.workspace_id=a.workspace_id AND q.candidate_id=a.candidate_id
-    WHERE a.workspace_id=$1 AND a.firm_id=$2 ORDER BY q.id FOR SHARE OF a,q`, [w, input.firmId])).rows;
-  await context.db.query('SELECT id FROM firm_office_assessments WHERE workspace_id=$1 AND firm_id=$2 ORDER BY id FOR SHARE', [w, input.firmId]);
+    WHERE a.workspace_id=$1 ORDER BY q.id FOR SHARE OF a,q`, [w])).rows;
+  await context.db.query('SELECT id FROM firm_office_assessments WHERE workspace_id=$1 ORDER BY id FOR SHARE', [w]);
   const sources = (await context.db.query<SourceRow>(`SELECT s.observation FROM firm_office_assessment_sources s
     JOIN evidence_items e ON e.workspace_id=s.workspace_id AND e.id=s.evidence_id AND e.firm_id=s.firm_id
-    WHERE s.workspace_id=$1 AND s.firm_id=$2 ORDER BY s.assessment_id,s.ordinal FOR SHARE OF s,e`, [w, input.firmId])).rows;
+    WHERE s.workspace_id=$1 ORDER BY s.assessment_id,s.ordinal FOR SHARE OF s,e`, [w])).rows;
   if (hasPersonalPhoneEvidence([...negativeRuns.flatMap(row => row.observations), ...sources.map(row => row.observation)], input.e164)) return null;
   const admissions = (await context.db.query<AdmissionRow>(`SELECT q.id,c.payload,q.observations,q.facts,q.policy_version,q.prompt_version
     FROM sourcing_admissions a JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id
@@ -57,6 +65,7 @@ export async function readPhoneOfficeProof(context: RepositoryContext, input: {
       AND NOT c.qualification_blocked AND c.status<>'dismissed' AND c.revision=q.candidate_revision
       AND q.state IN ('eligible','review','admitted') AND q.reason IS NULL ORDER BY q.id FOR SHARE OF a,c,q`, [w, input.firmId, input.routeId])).rows;
   for (const row of admissions) {
+    if (input.expected && (input.expected.kind !== 'admission' || input.expected.id !== row.id)) continue;
     const c = row.payload;
     if (row.policy_version !== QUALIFICATION_POLICY_VERSION || row.prompt_version !== QUALIFICATION_PROMPT_VERSION ||
         fold(c.firmName) !== fold(firm.name) || fold(c.locality) !== fold(firm.locality ?? '') || c.region !== firm.region_code ||
@@ -73,8 +82,10 @@ export async function readPhoneOfficeProof(context: RepositoryContext, input: {
     return { kind: 'admission', id: row.id, expiresAt: new Date(expiry).toISOString() };
   }
   // The reader reconstitutes source-owned literal proof, source count/terms/hash and current binding.
+  if (input.expected?.kind === 'admission') return null;
   const assessment = await readFirmOfficeAssessment(context, { firmId: input.firmId });
   if (assessment.status !== 'supported' || assessment.routeId !== input.routeId || assessment.routeVersion !== input.routeVersion ||
-      !assessment.assessmentId || !assessment.expiresAt || Date.parse(assessment.expiresAt) <= Date.parse(input.at)) return null;
+      !assessment.assessmentId || (input.expected && input.expected.id !== assessment.assessmentId) ||
+      !assessment.expiresAt || Date.parse(assessment.expiresAt) <= Date.parse(input.at)) return null;
   return { kind: 'office_assessment', id: assessment.assessmentId, expiresAt: assessment.expiresAt };
 }

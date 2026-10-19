@@ -3,14 +3,18 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { withTransaction } from '../db/queryable.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { ownerRiskDisclosure, readOwnerRiskReceipt } from './phoneNationalPolicy.ts';
+import { adviseDial } from './advise.ts';
+import { readCallingProvider } from '../settings/integrations.ts';
+import { readPhoneOfficeProof } from './phoneOfficeProof.ts';
 
 interface Attempt {
   [key: string]: unknown; id: string; firm_id: string; phone_route_id: string | null; e164: string | null;
   reserved_at: Date; expires_at: Date; erased_at: Date | null; national_dnc_basis: string;
   owner_risk_receipt_id: string | null; owner_risk_firm_id: string | null; device_id: string; route_version: number | null;
+  office_proof_kind: 'admission' | 'office_assessment' | null; office_proof_id: string | null;
 }
 const attemptSql = `SELECT id,firm_id,phone_route_id,e164,reserved_at,expires_at,erased_at,national_dnc_basis,
-  owner_risk_receipt_id,owner_risk_firm_id,device_id,route_version FROM phone_handoff_attempts
+  owner_risk_receipt_id,owner_risk_firm_id,device_id,route_version,office_proof_kind,office_proof_id FROM phone_handoff_attempts
   WHERE workspace_id=$1 AND id=$2 AND actor_user_id=$3`;
 type Authority = (context: RepositoryContext, deviceId: string, userId: string, ownerRisk: boolean) => Promise<boolean>;
 
@@ -38,13 +42,23 @@ export async function readPublishedPhoneHandoff(context: RepositoryContext, atte
           firm?.status !== 'active' || firm.assigned_user_id !== actor.userId) return false;
       const now = (await context.db.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]?.at;
       if (!now || now.getTime() >= row.expires_at.getTime()) return false;
+      const proof = row.national_dnc_basis === 'office_owner_risk' && row.office_proof_kind && row.office_proof_id
+        ? await readPhoneOfficeProof(context, { firmId: row.firm_id, routeId: row.phone_route_id,
+          routeVersion: row.route_version!, e164: row.e164, at: now.toISOString(),
+          expected: { kind: row.office_proof_kind, id: row.office_proof_id } }) : null;
+      if (row.national_dnc_basis === 'office_owner_risk' && !proof) return false;
       const receipt = await readOwnerRiskReceipt(context, now.toISOString());
       if (!receipt || receipt.id !== row.owner_risk_receipt_id ||
           (row.national_dnc_basis === 'owner_self_test' && (receipt.self_test_erased_at !== null ||
             receipt.self_test_firm_id !== row.owner_risk_firm_id || receipt.self_test_e164 !== row.e164))) return false;
       if (!await authority(context, row.device_id, actor.userId, true)) return false;
       const finalClock = (await context.db.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]?.at;
+      // Current stop/policy predicates after all authority/proof waits. Cadence
+      // admission would count this committed attempt; self-test is already used.
+      if (!finalClock || await readCallingProvider(context) !== 'tel' || !(await adviseDial(context, {
+        firmId: row.firm_id, routeId: row.phone_route_id, at: finalClock.toISOString(), omitNationalDnc: true }))?.callable) return false;
       return !!finalClock && finalClock.getTime() < row.expires_at.getTime() &&
+        (!proof || finalClock.getTime() < Date.parse(proof.expiresAt)) &&
         (!receipt.valid_until || finalClock.getTime() < receipt.valid_until.getTime());
     });
   }
