@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { ciGateReleaseRecordSchema } from '@fss/contracts';
 import { createUpgradeDatabase, MIGRATOR_LOGIN_ROLE, RUNTIME_LOGIN_ROLE } from '../../tools/upgrade/cluster.ts';
 import { applyMigrations, loadMigrations, readAppliedSchemaVersion } from '@fss/domain/db/migrationRunner.ts';
-import { acceptsSchemaVersion } from '@fss/domain/db/schemaRange.ts';
+import { acceptsSchemaVersion, API_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
 import { ensureRuntimeDatabaseUser } from '../../apps/worker/src/tools/fss/databaseUsers.ts';
 import { runVerify } from '../../apps/worker/src/tools/fss/verify.ts';
 import { readToolConfig } from '../../apps/worker/src/tools/fss/config.ts';
@@ -40,6 +40,7 @@ interface IO {
 const modulePath = repositoryPath('infra/scripts/application-release.mjs');
 const release = await import(modulePath) as { runRelease(io: IO, env: Record<string, string>): Promise<Status>; offRead: string };
 const execute = promisify(execFile);
+const CURRENT_SCHEMA = API_SCHEMA_RANGE.maximum, PREVIOUS_SCHEMA = CURRENT_SCHEMA - 1;
 const COMMIT = 'b'.repeat(40), BASE = 'a'.repeat(40), DISPATCH = 'c'.repeat(40);
 const ACCOUNT = '326255650484';
 const subnets = ['subnet-07ae1d846228e9e83', 'subnet-01f53573964548294'];
@@ -284,7 +285,7 @@ describe('application image promotion and child-process pull guard (not Fargate 
 
 describe('application smoke child startup (offline source TypeScript import)', () => {
   it('needs explicit transform argv and passes all six checks without ambient NODE_OPTIONS', async () => {
-    const h = harness();
+    const h = harness({ from: CURRENT_SCHEMA, to: CURRENT_SCHEMA });
     expect(await h.run()).toMatchObject({ outcome: 'completed', migrationStarted: false });
     const smokeCalls = h.calls.filter(call => call.program === 'node' && call.args.includes('scripts/productionSmoke.mjs'));
     expect(smokeCalls).toHaveLength(1);
@@ -297,7 +298,7 @@ describe('application smoke child startup (offline source TypeScript import)', (
       writeFileSync(preload, `
 const bodies = new Map([
   ['https://api.usecallie.com/healthz', { status: 'live' }],
-  ['https://api.usecallie.com/readyz', { ready: true, schema: { declaredRange: { minimum: 118, maximum: 118 }, accepted: true, databaseVersion: 118 } }],
+  ['https://api.usecallie.com/readyz', { ready: true, schema: { declaredRange: { minimum: ${API_SCHEMA_RANGE.minimum}, maximum: ${CURRENT_SCHEMA} }, accepted: true, databaseVersion: ${CURRENT_SCHEMA} } }],
   ['https://api.usecallie.com/health', { sendingEnabled: true }],
 ]);
 const seen = new Set();
@@ -610,21 +611,21 @@ async function prepareRuntimeFixture(db: Awaited<ReturnType<typeof createUpgrade
 }
 
 describe('real disposable PostgreSQL migration and failure boundary (not production acceptance)', () => {
-  it('upgrades actual 117→118 with business data intact and refuses old app range', async () => {
+  it(`upgrades actual ${PREVIOUS_SCHEMA}→${CURRENT_SCHEMA} with business data intact and refuses old app range`, async () => {
     const db = await createUpgradeDatabase();
     try {
       const migrator = await db.connect(MIGRATOR_LOGIN_ROLE);
-      await applyMigrations(migrator.session, { throughVersion: 117 });
+      await applyMigrations(migrator.session, { throughVersion: PREVIOUS_SCHEMA });
       await prepareRuntimeFixture(db, migrator.session);
       await migrator.session.query("INSERT INTO workspaces(slug,display_name) VALUES ('release-test','Preserved relationship history')");
       const runtime = await db.connect(RUNTIME_LOGIN_ROLE);
-      const h = harness({ from: 117, migrate: async () => { await applyMigrations(migrator.session); }, verify: async () => {
+      const h = harness({ from: PREVIOUS_SCHEMA, to: CURRENT_SCHEMA, migrate: async () => { await applyMigrations(migrator.session); }, verify: async () => {
         const actual = await runVerify(runtime.session, readToolConfig({ DATABASE_URL: db.runtimeUrl }));
         expect(actual.ok).toBe(true); return actual.ok ? actual.value : {};
       } });
       const result = await h.run(); expect(result.outcome, result.reason).toBe('completed');
-      expect(await readAppliedSchemaVersion(runtime.session)).toBe(118);
-      expect(acceptsSchemaVersion({ minimum: 117, maximum: 117 }, 118)).toBe(false);
+      expect(await readAppliedSchemaVersion(runtime.session)).toBe(CURRENT_SCHEMA);
+      expect(acceptsSchemaVersion({ minimum: PREVIOUS_SCHEMA, maximum: PREVIOUS_SCHEMA }, CURRENT_SCHEMA)).toBe(false);
       expect((await runtime.session.query('SELECT display_name FROM workspaces')).rows[0]?.['display_name']).toBe('Preserved relationship history');
     } finally { await db.drop(); await db.stop(); }
   }, 120000);
@@ -632,17 +633,17 @@ describe('real disposable PostgreSQL migration and failure boundary (not product
     const db = await createUpgradeDatabase();
     try {
       const migrator = await db.connect(MIGRATOR_LOGIN_ROLE);
-      await applyMigrations(migrator.session, { throughVersion: 117 });
+      await applyMigrations(migrator.session, { throughVersion: PREVIOUS_SCHEMA });
       await migrator.session.query("INSERT INTO workspaces(slug,display_name) VALUES ('release-failure','Never restore away this write')");
-      const migrations = loadMigrations().map(m => m.version === 118 ? { ...m, sql: `${m.sql}\nSELECT 1/0;` } : m);
-      const h = harness({ from: 117, migrate: async () => { await applyMigrations(migrator.session, { migrations }); } });
+      const migrations = loadMigrations().map(m => m.version === CURRENT_SCHEMA ? { ...m, sql: `${m.sql}\nSELECT 1/0;` } : m);
+      const h = harness({ from: PREVIOUS_SCHEMA, to: CURRENT_SCHEMA, migrate: async () => { await applyMigrations(migrator.session, { migrations }); } });
       const result = await h.run();
       expect(result.outcome).toBe('repair-required'); expect(result.observedSchema).toBe('unknown');
-      expect(await readAppliedSchemaVersion(migrator.session)).toBe(117);
+      expect(await readAppliedSchemaVersion(migrator.session)).toBe(PREVIOUS_SCHEMA);
       expect(h.calls.filter(c => c.args[1] === 'run-task' && c.args.join(' ').includes('release-prepare'))).toHaveLength(1);
       expect(h.services.api.desiredCount).toBe(0); expect(h.services.api.deploymentConfiguration.deploymentCircuitBreaker.rollback).toBe(false);
       await applyMigrations(migrator.session);
-      expect(await readAppliedSchemaVersion(migrator.session)).toBe(118);
+      expect(await readAppliedSchemaVersion(migrator.session)).toBe(CURRENT_SCHEMA);
       expect((await migrator.session.query('SELECT display_name FROM workspaces')).rows[0]?.['display_name']).toBe('Never restore away this write');
     } finally { await db.drop(); await db.stop(); }
   }, 120000);
@@ -658,12 +659,12 @@ describe('real disposable PostgreSQL migration and failure boundary (not product
       const read = await runReader();
       const answer = JSON.parse(read.stdout) as Record<string, unknown>;
       expect(answer['releaseOff']).toBe(false); // No setting is NOT permission to assume stored OFF.
-      expect(answer['schema']).toBe(118);
+      expect(answer['schema']).toBe(CURRENT_SCHEMA);
       expect(read.stdout).not.toContain('Private business'); expect(read.stdout).not.toContain(db.runtimeUrl);
       expect(Object.keys(answer).sort()).toEqual(['effectiveOff', 'finishing', 'observedAt', 'releaseOff', 'schema', 'storedOff', 'versions']);
       await owner.session.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value) SELECT id,'sending_enabled',4,'{\"enabled\":false}'::jsonb FROM workspaces");
       const off = JSON.parse((await runReader()).stdout) as Record<string, unknown>;
-      expect(off).toMatchObject({ releaseOff: true, storedOff: true, effectiveOff: true, finishing: 0, schema: 118, versions: [4] });
+      expect(off).toMatchObject({ releaseOff: true, storedOff: true, effectiveOff: true, finishing: 0, schema: CURRENT_SCHEMA, versions: [4] });
       await owner.session.query("UPDATE workspace_settings SET value='{\"enabled\":true}'::jsonb");
       expect(JSON.parse((await runReader()).stdout)).toMatchObject({ releaseOff: false, storedOff: false, effectiveOff: false, versions: [4] });
     } finally { await db.drop(); await db.stop(); }
