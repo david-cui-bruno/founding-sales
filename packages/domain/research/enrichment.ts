@@ -527,12 +527,12 @@ async function finishFirmResearchBody(
 ): Promise<ResearchResult<ResearchRunReport>> {
   const { runId } = input;
   const subject = { subjectKind: 'research_run' as const, subjectId: runId };
-
-  // The firm before the run (slice P1, final round, #5): this chunk's evidence and facts
-  // reference the firm, and the deletion workflow takes the firm row first and then every
-  // active run of it. Taking the firm's KEY SHARE here first keeps one order — firm, then
-  // run — so a page-only run and a firm deletion wait for each other instead of deadlocking.
-  await context.db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR KEY SHARE', [
+  // The registered worker takes the dispatch gate first. Serialize finishes for one
+  // firm at their eventual evidence-write lock strength before locking either run.
+  // Distinct brief/office runs must not hold compatible KEY SHARE locks and later
+  // deadlock while both upgrade in recordEvidence. Deletion uses this same firm,
+  // then run order; purpose-specific outstanding-work and reservation rules stay intact.
+  await context.db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
     context.scope.workspaceId,
     input.firmId,
   ]);

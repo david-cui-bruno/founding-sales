@@ -4,6 +4,7 @@ import {repositoryContext, workspaceScope, type RepositoryContext} from '../../d
 import {seedTwoWorkspaces, type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {seedCrm, type SeededCrm} from '../db/support/crmFixtures.ts';
 import {databaseNow} from '../../policy/clock.ts';
+import {openHold} from '../../policy/holds.ts';
 import {enqueueFirmResearch} from '../../research/enqueue.ts';
 import {listRuns, nextRevision, runInProgress} from '../../research/runs.ts';
 import {runFirmResearch} from '../../research/enrichment.ts';
@@ -48,6 +49,31 @@ async function job(revision: number, patch: Readonly<Record<string, unknown>> = 
 }
 
 describe('global office research revisions and ordinary output isolation', () => {
+  it('keeps ordinary system enqueue authority independent of assignment', async () => {
+    const system = repositoryContext(workspaceScope(members.alpha.workspaceId, {kind: 'system', component: 'scheduler'}), db.session);
+    expect(await enqueueFirmResearch(system, {firmId: crm.alpha.firmId, trigger: 'sweep'}))
+      .toMatchObject({ok: true, value: {purpose: 'brief', inserted: true}});
+  });
+
+  it.each([false, true])('refuses an unassigned user before pending reuse (pending=%s)', async pending => {
+    if (pending) expect(await enqueueFirmResearch(ctx, command())).toMatchObject({ok: true});
+    await db.session.query('UPDATE firms SET assigned_user_id=$2 WHERE id=$1', [crm.alpha.firmId, members.alpha.admin.userId]);
+    const former = repositoryContext(workspaceScope(members.alpha.workspaceId, {
+      kind: 'user', role: 'salesperson', userId: members.alpha.salesperson.userId,
+    }), db.session);
+    expect(await enqueueFirmResearch(former, {...command(), requestedByUserId: members.alpha.salesperson.userId}))
+      .toMatchObject({ok: false, reason: 'not_assigned'});
+    expect((await db.session.query<{n: number}>("SELECT count(*)::int AS n FROM jobs WHERE kind='research.firm'")).rows[0]?.n).toBe(pending ? 1 : 0);
+  });
+
+  it.each(['current_owner', 'requester'] as const)('keeps %s hold authority separate from enqueue actor authorization', async held => {
+    await openHold(ctx, {scopeKind: 'owner',
+      scopeKey: held === 'current_owner' ? members.alpha.salesperson.userId : members.alpha.admin.userId,
+      reasonCode: 'scoped_pause', blockedActionKinds: ['research'], sourceEventKind: 'office_enqueue_hold_test'});
+    expect(await enqueueFirmResearch(ctx, command())).toMatchObject(held === 'current_owner'
+      ? {ok: false, reason: 'research_disabled'} : {ok: true});
+  });
+
   it.each(['done', 'dead', 'archived'] as const)('never reuses a %s durable job revision', async state => {
     const queued = await job(17);
     await db.session.query(`UPDATE jobs SET state=$2,completed_at=CASE WHEN $2='done' THEN now() END,

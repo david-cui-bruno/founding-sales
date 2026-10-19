@@ -1,3 +1,5 @@
+import { decideFirmMutation } from '../crm/authorization.ts';
+import { loadFirmForUpdate } from '../crm/firms.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
@@ -45,7 +47,12 @@ export async function enqueueFirmResearch(
   const purpose = input.purpose ?? 'brief';
   if (purpose !== 'brief' && purpose !== 'office_evidence') return refuse('invalid_input');
   if (purpose === 'office_evidence' && (input.trigger !== 'user_request' || !input.requestedByUserId)) return refuse('invalid_input');
-  await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [context.scope.workspaceId, input.firmId]);
+  const lockedFirm = await loadFirmForUpdate(context, input.firmId);
+  if (lockedFirm === null) return refuse('firm_unknown');
+  // Assignment can change while enqueue waits. Authorize the current locked row,
+  // before either reusing pending work or creating a new paid research intent.
+  const decision = decideFirmMutation(context, lockedFirm);
+  if (!decision.permitted) return refuse(decision.reason === 'firm_merged' ? 'firm_merged' : 'not_assigned');
   const settings = await readResearchSettings(context);
   if (!settings.enabled) return refuse('research_disabled');
 

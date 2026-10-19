@@ -5,6 +5,7 @@ import {
   researchSettingsResultSchema,
   wireDrift,
 } from '@fss/contracts';
+import type {SessionQueryable} from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
@@ -51,6 +52,7 @@ describe('the research routes', () => {
     path: string,
     token: string | null,
     body: unknown,
+    session: SessionQueryable = fixture.db,
   ): Promise<{ status: number; body: Record<string, unknown> }> => {
     const request: ApiRequest = {
       method: 'POST',
@@ -59,7 +61,7 @@ describe('the research routes', () => {
       headers: token === null ? {} : { authorization: `Bearer ${token}` },
       body,
     };
-    const result = await dispatch(request, options());
+    const result = await dispatch(request, {...options(), session, auth: {...fixture.deps, db: session}});
     return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
@@ -107,6 +109,7 @@ describe('the research routes', () => {
 
   beforeEach(async () => {
     vi.stubEnv('FSS_MODEL_TRANSPORT', 'anthropic');
+    await fixture.db.query('UPDATE firms SET assigned_user_id=$2 WHERE id=$1', [firmId, fixture.alpha.salesperson.userId]);
     await fixture.db.query('DELETE FROM firm_judgments');
     await fixture.db.query('DELETE FROM firm_facts');
     await fixture.db.query('DELETE FROM firm_links');
@@ -119,6 +122,38 @@ describe('the research routes', () => {
   });
 
   afterEach(() => { vi.unstubAllEnvs(); });
+
+  it.each(['brief', 'office_evidence'] as const)('refuses a former assignee after the %s public command waits for reassignment', async purpose => {
+    const administrator = await fixture.database.appRuntimeSession();
+    const requester = await fixture.database.appRuntimeSession();
+    const adminPid = (await administrator.query<{pid: number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+    const requestPid = (await requester.query<{pid: number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+    await administrator.query('BEGIN');
+    await administrator.query('UPDATE firms SET assigned_user_id=$2 WHERE id=$1', [firmId, fixture.alpha.admin.userId]);
+    const request = post('/research/firm/run', assigneeToken, command({firmId, purpose}), requester);
+    try {
+      // The public visibility check sees A's old committed assignment. Observe the
+      // subsequent enqueue row-lock wait behind B's uncommitted assignment.
+      await expect.poll(async () => (await fixture.db.query<{blocked: boolean}>(
+        'SELECT $2::int=ANY(pg_blocking_pids($1::int)) AS blocked', [requestPid, adminPid],
+      )).rows[0]?.blocked, {timeout: 2000}).toBe(true);
+    } finally {
+      await administrator.query('COMMIT');
+    }
+    expect(await request).toMatchObject({status: 409, body: {reason: 'not_assigned'}});
+    for (const table of ['jobs', 'research_runs', 'provider_reservations']) {
+      expect((await fixture.db.query<{n: number}>(`SELECT count(*)::int AS n FROM ${table} WHERE workspace_id=$1`, [fixture.alpha.workspaceId])).rows[0]?.n).toBe(0);
+    }
+  });
+
+  it.each(['brief', 'office_evidence'] as const)('keeps assigned-user and admin %s enqueue authority', async purpose => {
+    expect(await post('/research/firm/run', assigneeToken, command({firmId, purpose})))
+      .toMatchObject({status: 200, body: {result: {purpose, queued: true}}});
+    // An administrator retains authority over a firm assigned to somebody else,
+    // including reuse of the existing pending job after the locked decision.
+    expect(await post('/research/firm/run', adminToken, command({firmId, purpose})))
+      .toMatchObject({status: 200, body: {result: {purpose, queued: false}}});
+  });
 
   it('queues strict purpose explicitly with replay protection and a separate pending reader',async()=>{
     const body=command({firmId,purpose:'office_evidence'});
