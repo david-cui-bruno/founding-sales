@@ -1,7 +1,7 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { gmailStatusSchema } from '@fss/contracts';
-import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
 import { verifyExistingGmailGrant } from '@fss/domain/mail/existingGrant.ts';
@@ -12,12 +12,28 @@ import { storeRefreshToken } from '@fss/domain/mail/tokens.ts';
 import { GMAIL_SCOPES } from '@fss/domain/mail/types.ts';
 import type { MailRoutingDeps } from '../src/routes/types.ts';
 import { dispatch } from '../src/server.ts';
-import { createAuthFixture, type AuthFixture } from './support/authFixture.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 
 const TOKEN = 'https://oauth2.googleapis.com/token';
 const PROFILE = 'https://gmail.googleapis.com/gmail/v1/users/me/profile';
 const json = (status: number, body: unknown): HttpResponse => ({ status, headers: {}, body: JSON.stringify(body) });
+const signal = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+};
+const finalMailboxLock = (sql: string) => sql.includes('FROM mailboxes') && sql.includes('FOR UPDATE');
+function watchQueries(session: SessionQueryable, hooks: { before?: (sql: string) => void; after?: (sql: string) => Promise<void> }): SessionQueryable {
+  return {
+    async query<Row extends QueryResultRowLike>(sql: string, values?: readonly unknown[]) {
+      hooks.before?.(sql);
+      const result = await session.query<Row>(sql, values);
+      await hooks.after?.(sql);
+      return result;
+    },
+  };
+}
 
 // Registered API route, real app_runtime privileges and disposable PostgreSQL.
 // Only the Google HTTP transport and local envelope cipher are controlled doubles.
@@ -58,6 +74,7 @@ describe('ordinary existing Gmail grant verification', () => {
       await onProfile?.();
       return json(profileStatus, { emailAddress: profileAddress, historyId: '123' });
     }
+    if (url === 'https://gmail.googleapis.com/gmail/v1/users/me/stop' || url === mail.config.revocationEndpoint) return json(200, {});
     throw new Error('Unexpected provider endpoint, no message reads permitted');
   };
 
@@ -110,6 +127,7 @@ describe('ordinary existing Gmail grant verification', () => {
     };
   });
   beforeEach(async () => {
+    fixture.setNow(new Date());
     await fixture.db.query("UPDATE workspace_memberships SET status='active',deactivated_at=NULL,role='salesperson' WHERE workspace_id=$1 AND user_id=$2",
       [fixture.alpha.workspaceId, fixture.alpha.salesperson.userId]);
     const grant = await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson);
@@ -230,6 +248,82 @@ describe('ordinary existing Gmail grant verification', () => {
     const results = await Promise.all([status(), status(other)]);
     expect(results.map(result => result.status)).toEqual([200, 200]);
     expect(await observations()).toHaveLength(1);
+    await unchangedAuthority();
+  });
+
+  it('lets ordinary disconnect commit after provider revocation when verifier already holds the mailbox', async () => {
+    const mailboxLocked = signal();
+    const tokenDeleted = signal();
+    const verifying = watchQueries(db, { after: async sql => {
+      if (finalMailboxLock(sql)) { mailboxLocked.resolve(); await tokenDeleted.promise; }
+    } });
+    const disconnecting = watchQueries(other, { after: async sql => {
+      if (sql.startsWith('DELETE FROM mailbox_tokens')) tokenDeleted.resolve();
+    } });
+    // Bound the pre-fix inverse-lock failure without risking an indefinite test wait.
+    await db.query("SET lock_timeout='500ms'");
+    const verification = status(verifying).then(value => ({ ok: true as const, value }), () => ({ ok: false as const }));
+    try {
+      await mailboxLocked.promise;
+      const disconnected = await dispatch({
+        method: 'POST', path: '/gmail/disconnect', query: new URLSearchParams(),
+        headers: { authorization: `Bearer ${token}` },
+        body: { commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, mailboxId, reason: 'owner disconnect race' },
+      }, {
+        session: disconnecting, auth: { ...fixture.deps, db: disconnecting }, mail, sendingEnabled: false,
+        supportedClientVersions: fixture.deps.config.supportedClientVersions,
+      });
+      const checked = await verification;
+      expect(checked.ok).toBe(true);
+      if (checked.ok) expect(checked.value.status).toBe(200);
+      expect(disconnected).toMatchObject({ status: 200, body: { status: 'accepted', result: { tokenDeleted: true } } });
+      expect((await fixture.db.query('SELECT 1 FROM mailbox_tokens WHERE workspace_id=$1 AND mailbox_id=$2', [fixture.alpha.workspaceId, mailboxId])).rows).toEqual([]);
+      expect((await fixture.db.query<{ status: string }>('SELECT status FROM mailboxes WHERE workspace_id=$1 AND id=$2', [fixture.alpha.workspaceId, mailboxId])).rows[0]?.status).toBe('disconnected');
+      expect(await observations()).toEqual([]);
+      expect(requests).toEqual([TOKEN, PROFILE, TOKEN, 'https://gmail.googleapis.com/gmail/v1/users/me/stop', mail.config.revocationEndpoint]);
+      await unchangedAuthority();
+    } finally {
+      tokenDeleted.resolve();
+      await verification;
+      await db.query('SET lock_timeout TO DEFAULT');
+    }
+  });
+
+  it('refuses token UPDATE contention promptly without retrying Google or inserting evidence', async () => {
+    await other.query('BEGIN');
+    await other.query('UPDATE mailbox_tokens SET rotated_at=clock_timestamp() WHERE workspace_id=$1 AND mailbox_id=$2', [fixture.alpha.workspaceId, mailboxId]);
+    let finished = false;
+    const verification = status().then(value => { finished = true; return value; });
+    try {
+      await expect.poll(() => finished, { timeout: 1000 }).toBe(true);
+      expect((await verification).status).toBe(200);
+      expect(await observations()).toEqual([]);
+      expect(requests).toEqual([TOKEN, PROFILE]);
+      await unchangedAuthority();
+    } finally {
+      await other.query('ROLLBACK');
+      await verification;
+    }
+  });
+
+  it.each(['session_expired', 'reauthentication_required'] as const)('rechecks %s after a real final mailbox lock wait before any observation', async error => {
+    const pid = (await db.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+    const blocker = (await other.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+    const lockRequested = signal();
+    const verifying = watchQueries(db, { before: sql => { if (finalMailboxLock(sql)) lockRequested.resolve(); } });
+    await other.query('BEGIN');
+    await other.query('SELECT id FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [fixture.alpha.workspaceId, mailboxId]);
+    const verification = status(verifying);
+    try {
+      await lockRequested.promise;
+      await expect.poll(async () => (await fixture.db.query<{ blockers: number[] }>('SELECT pg_blocking_pids($1) AS blockers', [pid])).rows[0]!.blockers).toContain(blocker);
+      fixture.advance((error === 'session_expired' ? fixture.deps.config.sessions.accessSessionSeconds : fixture.deps.config.sessions.fullSignInSeconds) * 1000 + 1);
+    } finally {
+      await other.query('ROLLBACK');
+    }
+    expect(await verification).toMatchObject({ status: 401, body: { error } });
+    expect(await observations()).toEqual([]);
+    expect(requests).toEqual([TOKEN, PROFILE]);
     await unchangedAuthority();
   });
 

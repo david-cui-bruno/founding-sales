@@ -91,11 +91,13 @@ export async function verifyExistingGmailGrant(
     if (!current || current.status !== 'connected' || current.owner_user_id !== before.owner_user_id ||
         current.email_address !== address || current.provider_account_id !== before.provider_account_id ||
         current.generation !== before.generation) return 'unavailable';
-    // Serialize token replacement/deletion through the insert, even without a generation change.
-    await context.db.query('SELECT mailbox_id FROM mailbox_tokens WHERE workspace_id=$1 AND mailbox_id=$2 FOR SHARE',
+    // Disconnect deletes the token before updating the mailbox. Never wait in the inverse order.
+    await context.db.query('SELECT mailbox_id FROM mailbox_tokens WHERE workspace_id=$1 AND mailbox_id=$2 FOR SHARE NOWAIT',
       [context.scope.workspaceId, before.id]);
     const token = await readRefreshTokenEnvelope(context, before.id);
     if (!token || !sameEnvelope(envelope, token)) return 'unavailable';
+    // Revocation locks remain held, but authentication time limits can expire during later lock waits.
+    if (!await input.authorizeObservation()) return 'unavailable';
     // The mailbox lock serializes competing status repairs and normal reconnect callbacks.
     if (await observed(context, current)) return 'already_observed';
     await context.db.query(
@@ -105,5 +107,9 @@ export async function verifyExistingGmailGrant(
       [context.scope.workspaceId, current.id, actor.userId, current.provider_account_id, current.generation, scopes],
     );
     return 'observed';
+  }).catch((error: unknown) => {
+    // withTransaction has rolled back and released every lock before busy becomes a refusal.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '55P03') return 'unavailable' as const;
+    throw error;
   });
 }
