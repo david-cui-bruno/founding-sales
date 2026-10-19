@@ -26,9 +26,11 @@ import {ExperimentsWorkspace} from '../src/renderer/sourcing/ExperimentsWorkspac
 it('prepares a bounded human suggestion from the current query and attributed interval without applying it',async()=>{
  let applied=false;
  render(<ExperimentsWorkspace report={{from:suggestion.interval.from,to:suggestion.interval.to,asOf:suggestion.interval.asOf,cohorts:[],maturity:[],firms:[],coverage:{candidates:0,qualified:0,admitted:0,unavailable:0},search:{attempts:0,creditsReserved:0}}} catalog={{policy:{version:'v1',queries:[{id:'dfw',query:'Dallas residential property management',locality:'Dallas',region:'TX'}],rankOrder:['help_request','operational_burden','investigation','fit_only']},templates:[],sequences:[]}} ports={{save:async()=>({id:'saved',revision:1}),activate:async()=>{applied=true;}}}/>);
+ expect(screen.getByText('Create a suggestion for review from current recorded results. Nothing changes while you prepare it.')).toBeTruthy();
  fireEvent.change(screen.getByLabelText('Existing approved scope'),{target:{value:'dfw'}});
  fireEvent.click(screen.getByRole('button',{name:'Prepare suggestion for review'}));
  expect(screen.getByLabelText('Proposed query')).toHaveProperty('value','Dallas residential property management');
+ expect(screen.getByLabelText('Reason for experiment')).toHaveProperty('value','Review a bounded change using the attributed results below.');
  expect(screen.getByText(/current accepted facts through 2026-10-09/)).toBeTruthy();expect(applied).toBe(false);
 });
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';

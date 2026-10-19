@@ -7,7 +7,11 @@ afterEach(cleanup);
 const report:LearningReport={from:'2026-09-05T00:00:00.000Z',to:'2026-10-05T00:00:00.000Z',asOf:'2026-10-05T00:00:00.000Z',cohorts:[],maturity:[{ageBand:'0–6 days',firms:0}],firms:[],coverage:{candidates:30,qualified:0,admitted:0,unavailable:4},search:{attempts:6,creditsReserved:6}};
 it('shows pre-conversation coverage and missing denominators without declaring a winner',async()=>{
  render(<Learning read={async()=>({view:report,reason:null})}/>);
- expect(await screen.findByText('30 candidates found')).toBeTruthy();expect(screen.getByText(/No contacted firms/)).toBeTruthy();expect(screen.queryByText('0%')).toBeNull();expect(screen.queryByText(/winner/i)).toBeNull();
+ expect(await screen.findByText('30 candidates found')).toBeTruthy();
+ expect(screen.getByText('0 met sourcing requirements at their last check · 0 added as firms · 4 unavailable')).toBeTruthy();
+ expect(screen.getByText('6 searches started · 6 search credits reserved once per search, shared across its results. Includes candidates added by you; results from searches are counted separately below.')).toBeTruthy();
+ expect(screen.getByText(/firms first contacted in the last 30 days.*currently accepted outcomes recorded through the observation date; corrections can change earlier results/)).toBeTruthy();
+ expect(screen.getByText(/No contacted firms/)).toBeTruthy();expect(screen.queryByText('0%')).toBeNull();expect(screen.queryByText(/winner/i)).toBeNull();
 });
 it('keeps unavailable distinct from an empty report and lets the user retry',async()=>{
  const read=vi.fn().mockResolvedValueOnce({view:null,reason:'http_503'}).mockResolvedValueOnce({view:report,reason:null});render(<Learning read={read}/>);
@@ -27,6 +31,8 @@ it('uses held qualified demos, not bookings, as the conversion numerator',async(
  const cohort={hypothesis:'fit_only',policyVersion:'v1',acquisition:'manual',firms:1,contacted:1,reached:1,confirmedPain:0,booked:1,held:0,qualified:0,won:0,unreached:0,unknownQualification:1,interactions:{answeredCalls:1,confirmedPainCalls:0},researchGrossCents:0,researchCashCents:0};
  render(<DraftsProvider><Learning read={async()=>({view:{...report,cohorts:[cohort]},reason:null})}/></DraftsProvider>);
  expect(await screen.findByText(/Held qualified demos per contacted firm: 0 \/ 1 \(0%\)/)).toBeTruthy();
+ expect(screen.getByText('Sourcing rules used for this group: v1')).toBeTruthy();
+ expect(screen.getByText(/Recent firms have had less time to respond. These counts do not establish which signal is better/)).toBeTruthy();
 });
 it('shows disabled automation, unsent admissions, exhausted rechecks and reply handling without recipient approval',async()=>{
  const id='11111111-1111-4111-8111-111111111111';

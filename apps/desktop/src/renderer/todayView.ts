@@ -58,7 +58,7 @@ const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.freeze({
  * The person's own number is what a call should leave on, and Settings is where it goes.
  */
 export const NO_CALLING_NUMBER =
-  'Callie has no attested number of yours to call from. Add it in Settings (⌘,), under Your calling number.';
+  'Add and verify your calling number in Settings (⌘,), under Your calling number.';
 
 /**
  * Why the server will not advise a call, in the words a person can act on.
