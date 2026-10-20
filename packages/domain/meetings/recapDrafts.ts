@@ -1,6 +1,7 @@
 import type { MeetingOutcomesView } from '@fss/contracts';
 import { hasOptOutLink } from '@fss/contracts';
 import { renderTemplateVersion, type TemplateVersionRow } from '../templates/templates.ts';
+import { isReviewedRecapWrapper, REVIEWED_RECAP_SUBJECT, REVIEWED_RECAP_BODY } from './recapFields.ts';
 import { renderedHash } from '../outbound/fence.ts';
 
 const normalize = (value: string) => value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLowerCase();
@@ -19,6 +20,8 @@ export function buildMeetingRecapContent(input: {
   if (outcomes.state !== 'current') reasons.push('notes_incomplete');
   if (!template.requiredVariables.includes('meeting_recap') || !template.body.includes('{meeting_recap}')) reasons.push('recap_template_required');
   if (reminder && !/\b(?:following up|follow[ -]?up|reminder|checking in)\b/iu.test(template.subject + ' ' + template.body)) reasons.push('reminder_template_required');
+  const reviewedRecap = !reminder && template.subject.startsWith('Callie + ');
+  if (reviewedRecap && !isReviewedRecapWrapper(template)) reasons.push('recap_configuration_required');
   const context: string[] = [], next: string[] = [], materialReferences: string[] = [];
   for (const item of outcomes.items) {
     if (item.reviewReasons.length > 0) { reasons.push(...item.reviewReasons); continue; }
@@ -36,6 +39,11 @@ export function buildMeetingRecapContent(input: {
       else if (item.owner === 'prospect') next.push(item.text.replace(/\s+/gu, ' ').trim());
       // An approved host promise already appears in the template; do not duplicate it in a variable.
     }
+  }
+  if (reviewedRecap) {
+    if (reasons.length > 0) return { ok: false, reasons: [...new Set(reasons)].slice(0, 30) };
+    return { ok: true, subject: REVIEWED_RECAP_SUBJECT, body: REVIEWED_RECAP_BODY,
+      renderedHash: renderedHash(REVIEWED_RECAP_SUBJECT, REVIEWED_RECAP_BODY), materialReferences: [] };
   }
   const parts: string[] = [];
   if (context.length > 0) parts.push(`What we discussed:\n${context.map(text => `- ${text}`).join('\n')}`);
