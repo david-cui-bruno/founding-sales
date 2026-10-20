@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {afterEach,expect,it} from 'vitest';
 import {businessPolicySchema,CRM_MAIL_CAPTURE_CONSENT,CRM_OWNER_SCOPE_VERSION,crmCapabilityReadResponseSchema} from '@fss/contracts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
@@ -7,11 +7,21 @@ import {dispatch} from '../src/server.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {claimJobs} from '@fss/domain/jobs/jobStore.ts';
-import {businessMailCaptureHandler,createApprovedBusinessMailObserver} from '@fss/domain/mail/crmSources.ts';
+import {createApprovedBusinessMailObserver} from '@fss/domain/mail/crmSources.ts';
 import {createGmailMailCaptureProvider} from '@fss/domain/mail/crmGmailProvider.ts';
 import {createGmailHttpClient} from '@fss/domain/mail/gmailClientHttp.ts';
 import {createCrmCapabilityVerifiers} from '@fss/domain/crm/capabilityVerifiers.ts';
 import {forwardCaptureScopeForApproval,isForwardCaptureDateAllowed} from '@fss/domain/mail/crmForwardCaptureScope.ts';
+import {processMessageIds} from '@fss/domain/mail/pipeline.ts';
+import {readMailbox} from '@fss/domain/mail/mailboxes.ts';
+import {localEnvelopeCipher} from '@fss/domain/mail/envelope.ts';
+import {recordingSuppressionJournal} from '@fss/domain/suppression/journal.ts';
+import {isSuppressed} from '@fss/domain/suppression/effective.ts';
+import {listApplicableHolds} from '@fss/domain/policy/holds.ts';
+import {promoteReply} from '@fss/domain/today/promotions.ts';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {registerHandlers} from '../../worker/src/bootstrap/main.ts';
+import {seedFirm,seedContact} from './support/crmSeed.ts';
 
 let fixture:AuthFixture|undefined;
 afterEach(async()=>{await fixture?.stop();fixture=undefined;});
@@ -35,19 +45,39 @@ async function setup(){
  const context=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db);
  const verifiers=createCrmCapabilityVerifiers({runtime:{...runtime,side:'worker'},openSession:async()=>({session:await f.database.appRuntimeSession(),close:async()=>{}})});
  const observe=async(messageId:string,at:number,sent=false)=>withTransaction(db,()=>createApprovedBusinessMailObserver({revalidateAuthority:verifiers.revalidateMetadata,categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'test'})}).observe(context,{mailboxId:mailbox.id,ownerUserId,providerAccountId:'google-owner',generation:policy.generation!,metadata:{id:messageId,threadId:'business_thread',internalDateEpochMilliseconds:at,sizeEstimate:100,labelIds:[sent?'SENT':'INBOX'],headers:{From:sent?'owner@example.test':'person@example.test',To:sent?'person@example.test':'owner@example.test',Subject:'Business proposal'},attachments:[]}}));
- async function capture(messageId:string,at:number,sent=false,afterBody?:()=>Promise<void>){
-  let bodyReads=0,metadataReads=0;
-  const gmail=createGmailHttpClient({apiBaseUrl:'https://controlled.invalid',fetch:async url=>{
-   const full=new URL(url).searchParams.get('format')==='full';if(full){bodyReads++;await afterBody?.();}else metadataReads++;
-   return {status:200,headers:{},body:JSON.stringify({id:messageId,threadId:'business_thread',internalDate:String(at),labelIds:[sent?'SENT':'INBOX'],payload:{mimeType:'text/plain',headers:[{name:'From',value:sent?'owner@example.test':'person@example.test'},{name:'To',value:sent?'person@example.test':'owner@example.test'},{name:'Subject',value:'Business proposal'}],body:full?{data:Buffer.from('Controlled current business original.').toString('base64url')}:{}}})};
+ function controlledGmail(messageId:string,at:number,sent:boolean,body:string,onRead:(full:boolean)=>Promise<void>){
+  return createGmailHttpClient({apiBaseUrl:'https://controlled.invalid',fetch:async url=>{
+   const request=new URL(url);
+   // No history, listing, watch, token exchange, draft creation or send is part of this acceptance.
+   expect(request.pathname).toBe(`/gmail/v1/users/me/messages/${messageId}`);
+   const format=request.searchParams.get('format');expect(['metadata','full']).toContain(format);
+   const full=format==='full';await onRead(full);
+   return {status:200,headers:{},body:JSON.stringify({id:messageId,threadId:'business_thread',internalDate:String(at),labelIds:[sent?'SENT':'INBOX'],payload:{mimeType:'text/plain',headers:[{name:'From',value:sent?'owner@example.test':'person@example.test'},{name:'To',value:sent?'person@example.test':'owner@example.test'},{name:'Subject',value:'Business proposal'},{name:'Message-ID',value:`<${messageId}@example.test>`},{name:'Date',value:new Date(at).toUTCString()}],body:full?{data:Buffer.from(body).toString('base64url')}:{}}})};
   }});
+ }
+ const journal=recordingSuppressionJournal();
+ async function ingest(messageId:string,at:number,sent:boolean,body:string){
+  const gmail=controlledGmail(messageId,at,sent,body,async()=>{});
+  const current=await readMailbox(context,mailbox.id);if(!current)throw new Error('missing mailbox');
+  const report=await withTransaction(db,()=>processMessageIds(context,{
+   gmail,oauth:{clientId:'controlled.apps.example.test',clientSecret:randomBytes(24).toString('base64url'),redirectUri:'http://localhost/callback',authorizationEndpoint:'https://controlled.invalid/auth',tokenEndpoint:'https://controlled.invalid/token',revocationEndpoint:'https://controlled.invalid/revoke',apiBaseUrl:'https://controlled.invalid'},
+   cipher:localEnvelopeCipher('controlled-envelope'),journal,replyPromoter:{promoteReply:async(c,p)=>{await promoteReply(c,p);}},
+   businessMailObserver:createApprovedBusinessMailObserver({revalidateAuthority:verifiers.revalidateMetadata,categorizeMetadata:()=>({category:'business',reason:'business_metadata',classifierVersion:'test'})}),
+  },{mailbox:current,access:{accessToken:randomBytes(24).toString('base64url'),expiresAtEpochSeconds:Date.now()/1000+3600},messageIds:[messageId]}));
+  return report;
+ }
+ async function capture(messageId:string,at:number,sent=false,afterBody?:()=>Promise<void>,body='Controlled current business original.'){
+  let bodyReads=0,metadataReads=0;
+  const gmail=controlledGmail(messageId,at,sent,body,async full=>{if(full){bodyReads++;await afterBody?.();}else metadataReads++;});
   const provider=createGmailMailCaptureProvider({gmail,authorizeRead:verifiers.captureVerifier.verify,resolveAccess:async()=>({mailboxId:mailbox.id,providerAccountId:'google-owner',generation:policy.generation!,mailboxEmail:'owner@example.test',access:{accessToken:'controlled-fixture-only',expiresAtEpochSeconds:Date.now()/1000+3600}})});
   const job=(await claimJobs(db,{owner:randomUUID(),kinds:['crm.mail_capture'],limit:1,leaseSeconds:120}))[0];
   expect(job).toBeDefined();
-  const result=await businessMailCaptureHandler({provider,proofVerifier:verifiers.captureVerifier}).handle({session:db,scope:context.scope,job:job!});
+  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined,crmMailCapture:{provider,proofVerifier:verifiers.captureVerifier}});
+  const handler=registry.get('crm.mail_capture');if(!handler)throw new Error('capture handler not registered');
+  const result=await handler.handle({session:db,scope:context.scope,job:job!});
   return {result,bodyReads,metadataReads};
  }
- return {f,db,post,command,mailbox,policy,read,activation,activate,acquisition,context,observe,capture};
+ return {f,db,post,command,mailbox,policy,read,activation,activate,acquisition,context,observe,ingest,capture};
 }
 
 it('requires new scope negotiation, creates a DB-derived immutable epoch and replays without moving it',async()=>{
@@ -75,7 +105,7 @@ it('projects exact legacy outer and nested read fields while scoped readers see 
  expect(Object.keys(legacy.configuration??{})).toEqual(['workspaceId','ownerUserId','revision','mailboxId','providerAccountId','generation','accountBinding','capability','policyRevision','disclosureVersion','disclosureSha256','grantReceipt','providerPolicyReceipt','evaluationReceipt','releaseReceipt','captureVersion']);
 });
 
-it('does not create older CRM metadata or jobs, and captures new incoming and Sent originals through real provider/parser/PG',async()=>{
+it('does not create older CRM metadata or jobs, and captures new incoming and Sent originals through controlled transport/parser/PG',async()=>{
  const h=await setup();await h.activate();
  const view=await h.read();if(view.configuration?.capability!=='mail_capture'||!view.configuration.forwardScope)throw new Error('missing epoch');
  const cutoff=Date.parse(view.configuration.forwardScope.enabledAt);
@@ -92,6 +122,62 @@ it('does not create older CRM metadata or jobs, and captures new incoming and Se
  expect(sources).toEqual([{provider_origin:'received',sent_proof:false},{provider_origin:'sent',sent_proof:false}]);
  const bodyFree=await h.post('/crm/business/mail/list',{mailboxId:h.mailbox.id,limit:20});
  expect(bodyFree.body).toMatchObject({sources:[{},{}]});expect(JSON.stringify(bodyFree.body)).not.toContain('Controlled current business original');
+});
+
+it('arrives from the operational matching pipeline in private CRM reads while reply/refusal stops survive Sent capture and replay',async()=>{
+ const h=await setup();await h.activate();
+ const view=await h.read();if(view.configuration?.capability!=='mail_capture'||!view.configuration.forwardScope)throw new Error('missing epoch');
+ const at=Date.parse(view.configuration.forwardScope.enabledAt)+10,workspaceId=h.f.alpha.workspaceId;
+ const firmId=await seedFirm(h.f,{name:'Controlled business firm',assignedUserId:h.f.alpha.admin.userId});
+ const contactId=await seedContact(h.f,{firmId,fullName:'Controlled business correspondent'});
+ expect((await h.post('/contacts/routes/add',h.command({firmId,contactId,routeKind:'email',value:'person@example.test',source:'salesperson',technicalValidation:'passed',associationConfidence:0.95}))).body).toMatchObject({status:'accepted'});
+ const opportunityId=(await h.f.db.query<{id:string}>(`INSERT INTO opportunities(workspace_id,firm_id,stage_id,control_mode_changed_at)
+  VALUES($1,$2,(SELECT id FROM pipeline_stages WHERE workspace_id=$1 ORDER BY position LIMIT 1),now()) RETURNING id`,[workspaceId,firmId])).rows[0]!.id;
+ const subject={firmId,opportunityId,ownerUserId:h.f.alpha.admin.userId};
+ const originals=[
+  {id:'arriving_reply',sent:false,body:'Can we talk about the business proposal on Tuesday?',rule:'participant'},
+  {id:'arriving_sent',sent:true,body:'Here are the business proposal details we discussed.',rule:'thread'},
+  {id:'arriving_refusal',sent:false,body:'Please remove me from your list. Do not contact me again.',rule:'thread'},
+ ];
+ for(const [index,original] of originals.entries()){
+  const providerAt=at+index;
+  const report=await h.ingest(original.id,providerAt,original.sent,original.body);
+  expect(report).toMatchObject({messagesRecorded:1,matched:1,ambiguous:0,processedMessages:1,readFailure:null});
+  const matches=(await h.f.db.query<{firm_id:string;opportunity_id:string;contact_id:string;match_rule:string}>(`SELECT x.firm_id,x.opportunity_id,x.contact_id,x.match_rule FROM mail_message_matches x
+   JOIN mail_messages m ON m.workspace_id=x.workspace_id AND m.id=x.mail_message_id WHERE m.workspace_id=$1 AND m.mailbox_id=$2 AND m.provider_message_id=$3`,[workspaceId,h.mailbox.id,original.id])).rows;
+  expect(matches).toEqual([{firm_id:firmId,opportunity_id:opportunityId,contact_id:contactId,match_rule:original.rule}]);
+  const captured=await h.capture(original.id,providerAt,original.sent,undefined,original.body);
+  expect(captured).toMatchObject({bodyReads:1,metadataReads:1,result:{done:true,progress:{outcome:'captured',sourceRevision:1}}});
+  const sourceId=captured.result?.progress['sourceId'];expect(typeof sourceId).toBe('string');
+  expect((await h.post('/crm/business/mail/read',{sourceId,sourceRevision:1,contentHash:createHash('sha256').update(original.body).digest('hex')})).body).toMatchObject({
+   state:'available',source:{sourceId,sourceRevision:1,passage:original.body,mailboxId:h.mailbox.id,ownerUserId:h.f.alpha.admin.userId,acquiredGeneration:h.policy.generation,sentProof:false},
+  });
+  // Capturing an already-observed manual Sent original is not a release of a reply hold.
+  for(const actionKind of ['email_send','call_task','enrollment_advance'] as const){
+   expect((await listApplicableHolds(h.context,{...subject,actionKind})).map(hold=>hold.reasonCode)).toContain('uncertain_reply');
+  }
+ }
+ expect((await h.f.db.query("SELECT 1 FROM today_items WHERE workspace_id=$1 AND firm_id=$2 AND kind='reply'",[workspaceId,firmId])).rows).toHaveLength(2);
+ for(const key of [{scope:'handle' as const,canonicalKey:'person@example.test'},{scope:'firm' as const,canonicalKey:firmId}]){
+  expect(await isSuppressed(h.context,key)).toMatchObject({source:'prospect_opt_out',channel:'email'});
+ }
+ const counts=async()=>({
+  sources:(await h.f.db.query('SELECT 1 FROM crm_mail_sources WHERE workspace_id=$1',[workspaceId])).rowCount,
+  jobs:(await h.f.db.query("SELECT 1 FROM jobs WHERE workspace_id=$1 AND kind='crm.mail_capture'",[workspaceId])).rowCount,
+  effects:(await h.f.db.query('SELECT 1 FROM mail_message_effects WHERE workspace_id=$1',[workspaceId])).rowCount,
+  suppressions:(await h.f.db.query('SELECT 1 FROM suppression_events WHERE workspace_id=$1',[workspaceId])).rowCount,
+  replies:(await h.f.db.query("SELECT 1 FROM today_items WHERE workspace_id=$1 AND firm_id=$2 AND kind='reply'",[workspaceId,firmId])).rowCount,
+ });
+ const before=await counts();expect(before.sources).toBe(3);expect(before.jobs).toBe(3);
+ for(const [index,original] of originals.entries()){
+  expect(await h.ingest(original.id,at+index,original.sent,original.body)).toMatchObject({messagesRecorded:0,processedMessages:1,readFailure:null,suppressionsRecorded:0,directSendsRecorded:0});
+ }
+ expect(await counts()).toEqual(before);
+ const listed=await h.post('/crm/business/mail/list',{mailboxId:h.mailbox.id,limit:20});
+ expect(listed.body).toMatchObject({sources:[{},{},{}]});
+ for(const original of originals)expect(JSON.stringify(listed.body)).not.toContain(original.body);
+ expect((await h.f.db.query('SELECT 1 FROM sequence_enrollments WHERE workspace_id=$1',[workspaceId])).rows).toHaveLength(0);
+ expect((await h.f.db.query('SELECT 1 FROM outbound_messages WHERE workspace_id=$1',[workspaceId])).rows).toHaveLength(0);
 });
 
 it('fresh metadata cannot substitute an older original between queue and body fetch',async()=>{
