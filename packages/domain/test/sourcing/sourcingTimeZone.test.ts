@@ -8,6 +8,9 @@ describe('deterministic sourcing timezone, not calling permission',()=>{
  it('retains the actual Moriah service-area refusal without inventing an office city',()=>{
   expect(sourcingTimeZone('TX','Fort Worth area; exact office city not stated')).toBeNull();
  });
+ it('retains the actual EnRenta multi-locality service-area refusal',()=>{
+  expect(sourcingTimeZone('TX','Fort Worth & Mid-Cities service area; office city not stated')).toBeNull();
+ });
  it.each(['Dallas','Fort Worth','DFW','Arlington','Plano','Frisco','Denton','Irving','McKinney','Garland','Mesquite','Richardson','Lewisville','Carrollton','Allen','Grand Prairie','Austin','Houston','San Antonio'])('preserves supported Central lookup %s',locality=>{
   expect(sourcingTimeZone('TX',locality)).toBe('America/Chicago');
  });
