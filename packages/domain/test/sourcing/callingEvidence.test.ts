@@ -132,7 +132,31 @@ describe('calling-only first-party Texas policy', () => {
   });
   it('does not convert commercial-only or sale-only homes into residential rentals', () => {
     expect(reason(fixture([candidate.firmName, 'Commercial leasing', 'Texas', '817-555-0101']))).toBe('residential_rentals_unproven');
-    expect(reason(fixture([candidate.firmName.replace('Property Management', 'Real Estate'), 'Homes for sale in Texas', '817-555-0101']))).toBe('firm_identity_ambiguous');
+    expect(reason(fixture([candidate.firmName, 'Homes for sale in Texas', '817-555-0101']))).toBe('residential_rentals_unproven');
+  });
+  it.each(['Residential homes for sale only', 'Residential homes'])('does not borrow commercial leasing for a consistently identified residential offering: %s', offering => {
+    const name = 'Northwind Real Estate';
+    const input = fixture([name, 'Commercial leasing', offering, 'Dallas, TX', '817-555-0101']);
+    input.candidate = {...candidate, firmName: name};
+    input.facts = [];
+    const result = assess(input);
+    expect(result).toMatchObject({kind: 'held', reason: 'residential_rentals_unproven'});
+    expect(result.audit.map(entry => entry.rule)).toEqual(['positive_firm_identity', 'phone_anywhere_first_party', 'texas_anywhere_first_party']);
+  });
+  it('retains explicit cross-page rentals even alongside separate commercial leasing and residential sales', () => {
+    const name = 'Northwind Real Estate';
+    const input = fixture([name, 'Dallas, TX', '817-555-0101']);
+    input.candidate = {...candidate, firmName: name};
+    input.facts = [];
+    input.observations = [...input.observations, source(['Commercial leasing'], '/commercial'), source(['Residential homes for sale only'], '/sales'), source(['Available apartments for rent'], '/rentals')];
+    const result = assess(input);
+    expect(result.kind).toBe('source_evidence_eligible');
+    expect(result.audit.filter(entry => entry.rule === 'residential_rentals_anywhere_first_party').map(entry => entry.url)).toEqual([`${candidate.website}/rentals`]);
+  });
+  it('retains residential management vocabulary grounded across different pages', () => {
+    const input = fixture([candidate.firmName, 'Dallas', '817-555-0101']);
+    input.observations = [...input.observations, source(['Property management services'], '/services'), source(['Residential homes'], '/homes')];
+    expect(assess(input).kind).toBe('source_evidence_eligible');
   });
   it('does not use candidate Texas region or ambiguous city alone as source proof', () => {
     expect(reason(fixture([candidate.firmName, 'We manage residential homes.', 'Paris', '817-555-0101']))).toBe('texas_unproven');

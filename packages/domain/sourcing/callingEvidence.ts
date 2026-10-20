@@ -71,6 +71,14 @@ function deniesResidential(text: string): boolean {
   return /\b(?:do\s+not|does\s+not|don['’]t|doesn['’]t|never|no\s+longer)\s+(?:\w+\s+){0,3}(?:manage|offer|provide|handle|speciali[sz]e|rent|lease)\b[^.!?\n]{0,120}\b(?:residential|homes|houses|apartments|residences|rentals|single.family|multi.family)\b/iu.test(text)
     || /\b(?:commercial|industrial)\b[^.!?\n]{0,80}\b(?:only|exclusively)\b|\b(?:only|exclusively)\b[^.!?\n]{0,80}\b(?:commercial|industrial)\b/iu.test(text);
 }
+const residentialVocabulary = /\b(?:residential|homes|houses|apartments|residences|rentals|single.family|multi.family|multifamily)\b/iu;
+const rentalManagementVocabulary = /\b(?:manage|manages|managing|property management|rentals?|leasing|for rent|for lease)\b/iu;
+function residentialOffering(text: string): boolean {
+  // Residential sales are not rental evidence. A mixed offering may still cite
+  // its explicit rental/management wording, without borrowing commercial leasing.
+  return residentialVocabulary.test(text) && (!/\b(?:for sale|sales|selling|brokerage)\b/iu.test(text)
+    || rentalManagementVocabulary.test(text));
+}
 
 /** All input sources are checked, including unselected adverse blocks. Fact labels
  * cannot manufacture proof. Output is advisory until normal runtime safety passes. */
@@ -121,10 +129,12 @@ export function assessCallingEvidence(input: CallingEvidenceInput): CallingEvide
   if (!texas) return held('texas_unproven');
   add('texas_anywhere_first_party', texas);
   if (blocks.some(({block}) => deniesResidential(block.text))) return held('residential_fit_conflicts');
-  const management = blocks.find(({block}) => !attributed.test(block.text) && !negative.test(block.text) && /\b(?:manage|manages|managing|rentals?|leasing|for rent)\b/iu.test(block.text))
-    ?? blocks.find(({block}) => !attributed.test(block.text) && !negative.test(block.text) && /\bproperty management\b/iu.test(block.text));
+  const managementBlocks = blocks.filter(({block}) => !attributed.test(block.text) && !negative.test(block.text)
+    && (!/\b(?:commercial|industrial)\b/iu.test(block.text) || residentialOffering(block.text)));
+  const management = managementBlocks.find(({block}) => /\b(?:manage|manages|managing|rentals?|leasing|for rent|for lease)\b/iu.test(block.text))
+    ?? managementBlocks.find(({block}) => /\bproperty management\b/iu.test(block.text));
   const residential = blocks.find(({block}) => !attributed.test(block.text) && !negative.test(block.text)
-    && /\b(?:residential|homes|houses|apartments|residences|rentals|single.family|multi.family|multifamily)\b/iu.test(block.text));
+    && residentialOffering(block.text));
   if (!management || !residential) return held('residential_rentals_unproven');
   add('residential_rentals_anywhere_first_party', residential);
   if (management.block.id !== residential.block.id || management.source.id !== residential.source.id) add('residential_rentals_anywhere_first_party', management);
