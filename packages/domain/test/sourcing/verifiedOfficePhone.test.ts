@@ -181,6 +181,20 @@ it.each(['Fax: 281-807-4701','13805 Jarvis Rd Cypress, TX 77429','12 Example Str
  const {input,identity}=firstClassFixture();input.observations[0]!.blocks.push({id:'contrary',text});
  expect(verifiedOfficePhone({...input,identity}).phone).toBeNull();
 });
+it.each(['full-first','split-first','split-inside-card','split-before-name'] as const)('refuses distinct full/split addresses without discarding original blocks: %s',order=>{
+ const {input,identity}=firstClassFixture(),original=input.observations[0]!.blocks;
+ const split=[{id:'other-street',text:'12 Other Street'},{id:'other-city',text:'Cypress, TX 77429'}];
+ input.observations[0]!.blocks=order==='full-first'?[...original,...split]:order==='split-first'?[original[0]!,...split,...original.slice(2),original[1]!]:order==='split-inside-card'?[original[0]!,...split,...original.slice(1)]:[...split,...original];
+ const before=JSON.stringify(input);
+ expect(verifiedOfficePhone({...input,identity}).phone).toBeNull();
+ expect(JSON.stringify(input)).toBe(before);
+ expect(input.observations[0]!.blocks.filter(block=>/^b[5-8]$/u.test(block.id)).sort((a,b)=>a.id.localeCompare(b.id))).toEqual(firstClassCard);
+});
+it('does not mistake a repeated identical street in split form for another office',()=>{
+ const {input,identity}=firstClassFixture();
+ input.observations[0]!.blocks.push({id:'repeat-street',text:'13803 Jarvis Rd'},{id:'repeat-city',text:'Cypress, TX 77429'});
+ expect(verifiedOfficePhone({...input,identity})).toEqual({phone:'+12818074700',ambiguous:false});
+});
 it('does not normalize vanity Local Leasing phones or bridge distant cards',()=>{
  const vanity=firstClassFixture();vanity.input.facts[0]!.value='(210) 761-HOME';vanity.input.observations[0]!.blocks[2]!.text='(210) 761-HOME';
  expect(verifiedOfficePhone({...vanity.input,identity:vanity.identity}).phone).toBeNull();
