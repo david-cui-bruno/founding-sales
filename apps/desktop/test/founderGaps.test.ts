@@ -4,6 +4,7 @@ import type { HttpAnswer } from '../src/main/apiClient.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { contactPatchBody, createCrmBridge } from '../src/main/crmBridge.ts';
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
+import { OPERATIONS } from '../src/shared/operations.ts';
 import type { DraftStep, SequenceState } from '../src/renderer/sequenceContract.ts';
 import {
   EMPTY_SEQUENCE_STATE,
@@ -290,6 +291,26 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
     expect(calls.map(entry => entry.path)).not.toContain('/templates/approve');
     // A server before lane W1-C answers the version alone: no warnings.
     expect(state.warnings).toEqual([]);
+  });
+
+  it('saves unapproved copy only when explicitly requested and reads it back without claiming approval', async () => {
+    const pending = templateVersionAnswer({ approvedAt: null });
+    const { api, calls } = scriptedApi({
+      ...reads,
+      '/templates/create': accepted(pending),
+      '/templates': { status: 200, body: { templates: [pending] } },
+    });
+    const bridge = sequenceBridge(api);
+    const input = OPERATIONS['sequences.saveTemplate'].input.parse({
+      templateVersionId: null, name: 'First cold draft', subject: 'A question', body: 'Hello,', signOff: 'David', approve: false,
+    });
+    expect(input.approve).toBe(false);
+    const saved = await bridge.saveTemplate({ ...input, approve: input.approve ?? true });
+    expect(calls.find(entry => entry.path === '/templates/create')?.body).toMatchObject({ approve: false });
+    expect(saved.notice).toBe('template_draft_saved');
+    expect(sequenceScreen(saved).notice).toContain('not approved');
+    expect((await bridge.state()).templates[0]?.approvedAt).toBeNull();
+    expect(calls.some(entry => /approve|publish|enrollments\//u.test(entry.path))).toBe(false);
   });
 
   it('edits an unapproved version in place, naming it', async () => {

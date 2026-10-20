@@ -414,7 +414,7 @@ describe('the template lifecycle (11.1, 12.6)', () => {
 });
 
 describe('one draft per sequence (11.1)', () => {
-  it('answers a second draft request with the draft already there, and gives it the steps asked for', async () => {
+  it('returns an existing draft unchanged and refuses explicit replacement steps on creation', async () => {
     const sequence = await createSequence(contextFor('alpha', 'admin'), { name: `Second draft ${String(Date.now())}` });
     if (!sequence.ok) throw new Error(`the sequence was refused: ${sequence.reason}`);
     const first = await createDraftVersion(contextFor('alpha', 'admin'), { sequenceId: sequence.value.id });
@@ -431,11 +431,11 @@ describe('one draft per sequence (11.1)', () => {
       onNoAnswer: 'advance' as const,
     };
     expect(await createDraftVersion(contextFor('alpha', 'admin'), { sequenceId: sequence.value.id, steps: [call] })).toEqual(
-      first,
+      { ok: false, reason: 'draft_exists' },
     );
     const draft = await readSequenceVersion(contextFor('alpha', 'admin'), first.value.sequenceVersionId);
     expect(draft?.state).toBe('draft');
-    expect(draft?.steps.map(step => step.channel)).toEqual(['call_task']);
+    expect(draft?.steps).toEqual([]);
   });
 });
 

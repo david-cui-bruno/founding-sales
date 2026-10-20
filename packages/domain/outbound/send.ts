@@ -1,3 +1,4 @@
+import {regularSequenceThreading} from './sequenceThreading.ts';
 import { prospectingRetryAt } from './pacing.ts';
 import {consumeHumanReplyApproval,humanReplyEnvelope,refuseHumanReplyApproval,humanReplyApprovalIsLive} from '../replies/sendAuthority.ts';
 import {recordHumanReplyDelivery} from '../replies/delivery.ts';
@@ -437,10 +438,14 @@ async function recheckAndClaim(
       }
     }
 
-    if (plan.mailbox.id !== precheck.mailbox.id) {
-      // A `prepared` fence's envelope is still mutable, its mailbox included, and the
-      // token in hand belongs to the mailbox the precheck named. Sending another
-      // mailbox's fence with it would send from the wrong account.
+    if (plan.mailbox.id !== precheck.mailbox.id ||
+        plan.mailbox.generation !== precheck.mailbox.generation ||
+        plan.mailbox.providerAccountId !== precheck.mailbox.providerAccountId ||
+        plan.mailbox.ownerUserId !== precheck.mailbox.ownerUserId ||
+        plan.mailbox.address !== precheck.mailbox.address) {
+      // Reconnecting can replace the account behind the same mailbox row while OAuth
+      // waits. The token in hand belongs to the exact precheck identity/generation,
+      // never merely its mailbox ID. Refuse before capacity or attempt reservation.
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: 'fence_not_ready', detail: 'mailbox_changed' };
     }
@@ -496,6 +501,18 @@ async function recheckAndClaim(
         return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'mailbox_pacing', retryAt };
       }
     }
+
+    const explicitThreading = fence.originKind === 'draft'
+      ? await humanReplyEnvelope(context, fence.id)
+      : await routineReplyThreading(context, fence.id);
+    const sequenceThread = explicitThreading === null
+      ? await regularSequenceThreading(context, fence)
+      : { ok: true as const, value: explicitThreading };
+    if (!sequenceThread.ok) {
+      await context.db.query('ROLLBACK');
+      return { kind: 'not_ready', refusal: 'step_ineligible', detail: sequenceThread.reason };
+    }
+    const threading = sequenceThread.value;
 
     // The reservation: a conditional UPDATE rather than a read-then-write, so two
     // workers racing the last slot of the day cannot both win it (Appendix G 33), on
@@ -559,7 +576,6 @@ async function recheckAndClaim(
       await context.db.query('ROLLBACK');
       return {kind:'not_ready',refusal:'step_ineligible',detail:'human_reply:fresh_approval_required'};
     }
-    const threading = fence.originKind==='draft'?await humanReplyEnvelope(context,fence.id):await routineReplyThreading(context, fence.id);
     await context.db.query('COMMIT');
     return { kind: 'claimed', plan, claim: claim.value, threading };
   } catch (error) {
