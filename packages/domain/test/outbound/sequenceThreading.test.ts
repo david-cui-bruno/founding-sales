@@ -4,7 +4,7 @@ import { mimeOf } from '../../mail/gmailClientHttp.ts';
 
 const fence = { mailboxId: 'mailbox', firmId: 'firm', contactId: 'person', opportunityId: 'deal', recipientAddress: 'robin@example.test', subject: 'Re: Callie + Example' };
 const prior = {
-  execution_state: 'completed', result: 'sent', state: 'sent', admin_resolution: null,
+  execution_state: 'completed', completion_source: 'send', result: 'sent', state: 'sent', admin_resolution: null,
   mailbox_id: 'mailbox', firm_id: 'firm', contact_id: 'person', opportunity_id: 'deal',
   recipient_address: 'robin@example.test', subject: 'Callie + Example',
   provider_message_id_header: '<first@example.test>', provider_thread_id: 'gmail-thread', account_matches: true,
@@ -50,5 +50,16 @@ describe('ordinary sequence lineage decision', () => {
   it('skips explicitly skipped attempts, never unresolved delivered claims', () => {
     expect(sequenceThreadFromHistory(fence, [{ ...prior, state: 'unknown_terminal', admin_resolution: 'skipped' }])).toEqual({ ok: true, value: null });
     expect(sequenceThreadFromHistory(fence, [{ ...prior, state: 'unknown_terminal', admin_resolution: 'delivered' }])).toEqual({ ok: false, reason: 'sequence_thread_prior_unresolved' });
+  });
+
+  it('recognizes durable system cadence skips without exempting unknown delivery attempts', () => {
+    const skipped = { ...prior, state: null, completion_source: 'system', result: 'not_applicable' };
+    expect(sequenceThreadFromHistory(fence, [skipped])).toEqual({ ok: true, value: null });
+    expect(sequenceThreadFromHistory(fence, [prior, skipped])).toEqual(sequenceThreadFromHistory(fence, [prior]));
+    for (const state of ['prepared', 'held', 'dispatching', 'reconciling', 'unknown_terminal']) {
+      expect(sequenceThreadFromHistory(fence, [{ ...skipped, state }])).toEqual({ ok: false, reason: 'sequence_thread_prior_unresolved' });
+    }
+    expect(sequenceThreadFromHistory(fence, [{ ...skipped, execution_state: 'pending' }])).toEqual({ ok: false, reason: 'sequence_thread_prior_unresolved' });
+    expect(sequenceThreadFromHistory(fence, [{ ...skipped, completion_source: 'send' }])).toEqual({ ok: false, reason: 'sequence_thread_prior_unresolved' });
   });
 });

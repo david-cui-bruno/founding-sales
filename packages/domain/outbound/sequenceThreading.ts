@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { OutboundFenceRow } from './fence.ts';
+import { readStepExecution } from '../sequences/rows.ts';
 
 export interface SequenceThreading {
   readonly threadId: string;
@@ -9,6 +10,7 @@ export interface SequenceThreading {
 
 type PriorEmail = {
   execution_state: string;
+  completion_source: string | null;
   result: string | null;
   state: string | null;
   admin_resolution: string | null;
@@ -42,11 +44,15 @@ export async function regularSequenceThreading(
   context: RepositoryContext,
   fence: OutboundFenceRow,
 ): Promise<SequenceThreadResult> {
-  if (fence.originKind !== 'step_execution' || !fence.stepExecutionId || !fence.enrollmentId) {
+  if (fence.originKind !== 'step_execution') {
     return { ok: true, value: null };
   }
+  const execution = fence.stepExecutionId ? await readStepExecution(context, fence.stepExecutionId) : null;
+  if (!execution || (fence.enrollmentId !== null && fence.enrollmentId !== execution.enrollmentId)) {
+    return { ok: false, reason: 'sequence_thread_execution_mismatch' };
+  }
   const { rows } = await context.db.query<PriorEmail>(
-    `SELECT x.state AS execution_state,x.result,f.state,f.admin_resolution,
+    `SELECT x.state AS execution_state,x.completion_source,x.result,f.state,f.admin_resolution,
        f.mailbox_id,f.firm_id,f.contact_id,f.opportunity_id,f.recipient_address,
        f.subject,f.provider_message_id_header,f.provider_thread_id,
        (o.owner_user_id=m.owner_user_id AND o.provider_account_id=m.provider_account_id) AS account_matches
@@ -63,7 +69,7 @@ export async function regularSequenceThreading(
      ) o ON true
      WHERE current.workspace_id=$1 AND current.id=$2 AND current.enrollment_id=$3
      ORDER BY x.ordinal,x.id`,
-    [context.scope.workspaceId, fence.stepExecutionId, fence.enrollmentId],
+    [context.scope.workspaceId, execution.id, execution.enrollmentId],
   );
   return sequenceThreadFromHistory(fence, rows);
 }
@@ -76,7 +82,9 @@ export function sequenceThreadFromHistory(
   const chain: PriorEmail[] = [];
   for (const prior of history) {
     if (prior.admin_resolution === 'skipped' ||
-        (prior.state === null && prior.execution_state === 'completed' && ['skipped', 'no_email'].includes(prior.result ?? ''))) continue;
+        (prior.state === null && prior.execution_state === 'completed' &&
+          (['skipped', 'no_email'].includes(prior.result ?? '') ||
+            (prior.completion_source === 'system' && prior.result === 'not_applicable')))) continue;
     // Even a different subject must not let an unresolved previous attempt advance.
     if (prior.state !== 'sent') return { ok: false, reason: 'sequence_thread_prior_unresolved' };
     if (prior.subject === null || threadSubject(prior.subject) !== threadSubject(fence.subject)) continue;
