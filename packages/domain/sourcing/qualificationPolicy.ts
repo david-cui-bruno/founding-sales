@@ -17,7 +17,7 @@ export function isTargetGeography(region: string, locality: string): boolean {
  return state==='TX'||targetAreas[state]?.includes(city)===true;
 }
 export function supportsResidentialManagement(text: string): boolean {
- return /\b(?:residential|single.family|homes|houses|apartments)\b/iu.test(text)&&/\b(?:property manag|manage)/iu.test(text);
+ return /\b(?:residential|single.family|homes|houses|apartments|residences)\b/iu.test(text)&&/\b(?:property manag|manage)/iu.test(text);
 }
 const stateNames:Record<string,string>={TX:'texas',RI:'rhode island',MA:'massachusetts'};
 export function supportedBusinessPhone(facts:readonly QualificationFact[],identity:SourcingIdentity):string|null {
