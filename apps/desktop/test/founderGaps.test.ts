@@ -305,7 +305,7 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
       templateVersionId: null, name: 'First cold draft', subject: 'A question', body: 'Hello,', signOff: 'David', approve: false,
     });
     expect(input.approve).toBe(false);
-    const saved = await bridge.saveTemplate(input);
+    const saved = await bridge.saveTemplate({ ...input, approve: input.approve ?? true });
     expect(calls.find(entry => entry.path === '/templates/create')?.body).toMatchObject({ approve: false });
     expect(saved.notice).toBe('template_draft_saved');
     expect(sequenceScreen(saved).notice).toContain('not approved');
