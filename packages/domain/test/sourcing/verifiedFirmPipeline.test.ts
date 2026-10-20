@@ -6,7 +6,7 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {saveCandidate,listCandidates,reviewCandidate,deleteCandidate} from '../../sourcing/candidates.ts';
-import {requestQualification,finishQualification} from '../../sourcing/qualificationStore.ts';
+import {requestQualification,finishQualification,QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from '../../sourcing/qualificationStore.ts';
 import {evaluateQualification} from '../../sourcing/qualificationDecision.ts';
 import {advanceVerifiedFirm} from '../../sourcing/verifiedFirmPipeline.ts';
 import {VERIFIED_FIRM_POLICY_VERSION} from '../../sourcing/verifiedFirmPolicy.ts';
@@ -20,7 +20,7 @@ let db:TestDatabase,seed:TwoWorkspaces,serial=200;
 const user=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),db.session);
 const worker=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'worker'}),db.session);
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
-const currentAttestation=()=>({policyVersion:'qualification-v4',promptVersion:'qualification-context-v7',verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0});
+const currentAttestation=()=>({policyVersion:QUALIFICATION_POLICY_VERSION,promptVersion:QUALIFICATION_PROMPT_VERSION,verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0});
 beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);for(const state of ['TX','RI','MA'] as const)await tx(()=>recordStatePosture(user(),{state,effectiveFrom:new Date(Date.now()-60000).toISOString(),confirmedStatements:Object.keys(POSTURE_STATEMENTS)}));});
 afterAll(async()=>db.drop());
 beforeEach(async()=>{
@@ -62,6 +62,22 @@ it.each(['denial','neighbor'] as const)('never auto-Keeps or admits literal %s e
  const queue=await listCandidates(user(),{status:'needs_review',offset:0});if(!queue.ok)throw new Error(queue.reason);
  expect(queue.value.candidates.map(c=>c.id)).toEqual(scenario==='denial'?[]:[d.candidateId]);
 });
+it.each(['selected','unselected'] as const)('never auto-Keeps, admits or enqueues research for a %s residences denial',async selection=>{
+ const d=await draft();
+ const row=(await db.session.query<{observations:SourceObservation[];facts:QualificationFact[]}>('SELECT observations,facts FROM sourcing_qualification_runs WHERE id=$1',[d.runId])).rows[0]!,source=row.observations[0]!;
+ source.blocks.push({id:'residences',text:'We manage residences.'},{id:'contrary',text:'We do not manage residences.'});
+ const residential=row.facts.find(f=>f.kind==='residential_management')!;
+ residential.blockId=selection==='selected'?'contrary':'residences';residential.value=source.blocks.find(b=>b.id===residential.blockId)!.text;
+ await db.session.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb,facts=$3::jsonb WHERE id=$1',[d.runId,JSON.stringify(row.observations),JSON.stringify(row.facts)]);
+ const firms=(await db.session.query('SELECT id FROM firms ORDER BY id')).rows;
+ const jobs=(await db.session.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows;
+ await tx(()=>evaluateQualification(user(),{runId:d.runId}));await advance(d.runId);
+ expect(await admission(d.candidateId)).toBeUndefined();
+ expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
+ expect((await db.session.query('SELECT admission_reason,verdict FROM sourcing_qualification_runs WHERE id=$1',[d.runId])).rows[0]).toMatchObject({admission_reason:'residential_fit_unknown',verdict:{decision:'review',unknowns:expect.arrayContaining(['residential_fit_unknown'])}});
+ expect((await db.session.query('SELECT id FROM firms ORDER BY id')).rows).toEqual(firms);
+ expect((await db.session.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows).toEqual(jobs);
+});
 it('automatically Keeps a split-card bare-phone proof, researches, then exposes a useful sourced call brief without outreach',async()=>{
  const d=await draft({splitOffice:true});
  const untouched=['contacts','opportunities','sequence_enrollments','outbound_messages','outreach_plans','call_sessions','call_logs'];
@@ -98,8 +114,12 @@ it('shows only unresolved identity and leaves temporary unavailable evidence pen
 it('requires new attestation and active owner before any automatic status or CRM change',async()=>{
  const d=await draft();await db.session.query("UPDATE sourcing_discovery_settings SET qualification_evaluation=qualification_evaluation-'verifiedFirmPolicyVersion'");await advance(d.runId);
  expect(await admission(d.candidateId)).toBeUndefined();expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
- await db.session.query('UPDATE sourcing_discovery_settings SET qualification_evaluation=$1::jsonb',[JSON.stringify({...currentAttestation(),verifiedFirmPolicyVersion:'verified-firm-v1'})]);await advance(d.runId);
- expect(await admission(d.candidateId)).toBeUndefined();expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
+ for(const oldVersion of [{policyVersion:'qualification-v4'},{verifiedFirmPolicyVersion:'verified-firm-v2'},{verifiedFirmPolicyVersion:'verified-firm-v1'}]){
+  const attestation={...currentAttestation(),...oldVersion};
+  await db.session.query('UPDATE sourcing_discovery_settings SET qualification_evaluation=$1::jsonb',[JSON.stringify(attestation)]);await advance(d.runId);
+  expect(await admission(d.candidateId)).toBeUndefined();expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
+  expect((await db.session.query('SELECT qualification_evaluation FROM sourcing_discovery_settings')).rows[0]).toEqual({qualification_evaluation:attestation});
+ }
  await db.session.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);await db.session.query('UPDATE sourcing_discovery_settings SET qualification_evaluation=$1::jsonb,owner_user_id=$2',[JSON.stringify(currentAttestation()),seed.alpha.salesperson.userId]);await advance(d.runId);expect(await admission(d.candidateId)).toBeUndefined();await db.session.query("UPDATE workspace_memberships SET status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);
 });
 it('appends linked duplicate evidence idempotently, dismisses only the extra draft, and erases its source safely',async()=>{
@@ -121,9 +141,16 @@ it('refuses stale, dismissed, identity-blocked and changed revision outcomes wit
   if(mutation==='dismissed')await tx(()=>reviewCandidate(user(),{id:d.candidateId,expectedRevision:1,status:'dismissed'}));
   if(mutation==='blocked')await db.session.query('UPDATE sourcing_candidates SET qualification_blocked=true WHERE id=$1',[d.candidateId]);
   if(mutation==='revision')await db.session.query('UPDATE sourcing_candidates SET revision=revision+1 WHERE id=$1',[d.candidateId]);
-  if(mutation==='policy')await db.session.query("UPDATE sourcing_qualification_runs SET policy_version='qualification-old' WHERE id=$1",[d.runId]);
+  if(mutation==='policy')await db.session.query("UPDATE sourcing_qualification_runs SET policy_version='qualification-v4' WHERE id=$1",[d.runId]);
   if(mutation==='prompt')await db.session.query("UPDATE sourcing_qualification_runs SET prompt_version='qualification-old' WHERE id=$1",[d.runId]);
+  const historical=(await db.session.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[d.runId])).rows[0];
+  const jobs=(await db.session.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows;
   await advance(d.runId);expect(await admission(d.candidateId)).toBeUndefined();
+  if(mutation==='policy'){
+   expect((await db.session.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[d.runId])).rows[0]).toEqual(historical);
+   expect((await db.session.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows).toEqual(jobs);
+   expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
+  }
  }
 });
 it('keeps distinct branch paths for human identity review instead of merging on host, name or phone',async()=>{

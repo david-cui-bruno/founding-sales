@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {qualifyCandidate,rankQualifiedLeads} from '../../sourcing/qualificationPolicy.ts';
+import {qualifyCandidate,rankQualifiedLeads,supportsResidentialManagement} from '../../sourcing/qualificationPolicy.ts';
 import type {QualificationFact,SourceObservation} from '@fss/contracts';
 const now='2026-10-05T12:00:00.000Z';
 const identity={status:'resolved' as const,name:'Example PM',website:'https://example.test/',locality:'Dallas',region:'TX'};
@@ -104,6 +104,78 @@ it('requires descriptive residential evidence rather than a property-management 
  expect(qualifyCandidate(input).unknowns).toContain('residential_fit_unknown');
 });
 
+
+// Exact selected original b50 from the retained Blue Crown observation. All
+// remaining evidence below is controlled, not actual-candidate admission proof.
+const residencesDescription='Blue Crown Properties is a full service property management company and real estate brokerage specializing in leasing and management of single and multi-family residences in Dallas and Fort Worth metropolitan areas.';
+function residencesFixture(){
+ const input=fixture('We provide 24/7 maintenance support.','existing_support'),source=input.observations[0]!;
+ source.blocks.push({id:'b50',text:residencesDescription});
+ const residential=input.facts.find(f=>f.kind==='residential_management')!;
+ residential.blockId='b50';residential.value=residencesDescription;
+ return input;
+}
+it('recognizes the exact residences description and removes only the grounded residential unknown',()=>{
+ expect(supportsResidentialManagement(residencesDescription)).toBe(true);
+ const input=residencesFixture();
+ const without=qualifyCandidate({...input,facts:input.facts.filter(f=>f.kind!=='residential_management')});
+ const verdict=qualifyCandidate(input);
+ expect(without.unknowns).toContain('residential_fit_unknown');
+ expect(verdict).toEqual({...without,unknowns:without.unknowns.filter(reason=>reason!=='residential_fit_unknown')});
+ expect(verdict).toMatchObject({decision:'review',rank:'fit_only',unknowns:['maintenance_need_unconfirmed']});
+});
+it.each(['We do not manage residences.',"We don't manage residences.",'We never manage residences.','We no longer manage residences.'])('refuses grounded negated residences fit: %s',text=>{
+ expect(supportsResidentialManagement(text)).toBe(false);
+ const input=fixture('We need help with maintenance coordination.'),source=input.observations[0]!;
+ source.blocks.push({id:'denial',text});
+ const residential=input.facts.find(f=>f.kind==='residential_management')!;residential.blockId='denial';residential.value=text;
+ expect(qualifyCandidate(input)).toMatchObject({decision:'review',unknowns:expect.arrayContaining(['residential_fit_unknown'])});
+});
+it.each(['same','separate'] as const)('does not omit an unselected current first-party residences denial in a %s observation',placement=>{
+ const input=residencesFixture(),source=input.observations[0]!,block={id:'contrary',text:'We do not manage residences.'};
+ if(placement==='same')source.blocks.push(block);
+ else input.observations.push({...source,id:'22222222-2222-4222-8222-222222222222',blocks:[block],publishedAt:null,publishedAtBlockId:null});
+ expect(qualifyCandidate(input)).toMatchObject({decision:'review',unknowns:expect.arrayContaining(['residential_fit_unknown'])});
+});
+it('does not confuse an unrelated negative sentence with a residences management denial',()=>{
+ expect(supportsResidentialManagement('We do not sell commercial real estate. We manage residences.')).toBe(true);
+});
+it.each([{firstParty:false},{truncated:true},{url:'https://other.test/'},{retrievedAt:new Date(Date.parse(now)-7*86400000-1).toISOString()}])('does not treat unusable separate residences denial as current first-party contradiction: %j',patch=>{
+ const input=residencesFixture(),source=input.observations[0]!;
+ input.observations.push({...source,id:'22222222-2222-4222-8222-222222222222',blocks:[{id:'contrary',text:'We do not manage residences.'}],publishedAt:null,publishedAtBlockId:null,...patch});
+ expect(qualifyCandidate(input).unknowns).not.toContain('residential_fit_unknown');
+});
+it.each([
+ 'We manage commercial office buildings and retail centers.',
+ 'Available residences: 123 Main Street, two bedrooms, for lease.',
+ 'Property Management',
+ 'We specialize in leasing and sales of residences.',
+ 'We manage a residence.',
+ 'We manage residenceship services.',
+])('does not expand residences fit to commercial, listing, menu or unsupported vocabulary: %s',text=>{
+ expect(supportsResidentialManagement(text)).toBe(false);
+ const input=residencesFixture();input.observations[0]!.blocks.find(b=>b.id==='b50')!.text=text;
+ input.facts.find(f=>f.kind==='residential_management')!.value=text;
+ expect(qualifyCandidate(input).unknowns).toContain('residential_fit_unknown');
+});
+it.each([
+ {firstParty:false},
+ {truncated:true},
+ {url:'https://other.test/'},
+ {retrievedAt:new Date(Date.parse(now)-7*86400000-1).toISOString()},
+])('keeps residences subject to source, host, truncation and freshness gates: %j',patch=>{
+ const input=residencesFixture();Object.assign(input.observations[0]!,patch);
+ expect(qualifyCandidate(input)).toMatchObject({decision:'review',unknowns:expect.arrayContaining(['residential_fit_unknown','source_incomplete_or_unverified'])});
+ if('retrievedAt' in patch)expect(qualifyCandidate(input).unknowns).toContain('evidence_needs_refresh');
+});
+it('requires original block grounding and preserves unrelated unknowns for residences',()=>{
+ const ungrounded=residencesFixture();ungrounded.observations[0]!.blocks.find(b=>b.id==='b50')!.text='Property Management';
+ expect(qualifyCandidate(ungrounded)).toMatchObject({decision:'review',unknowns:['invalid_evidence']});
+ const input=residencesFixture();
+ input.facts=input.facts.filter(f=>!['firm_identity','service_area','business_phone'].includes(f.kind));
+ const verdict=qualifyCandidate({...input,identity:{...identity,status:'unknown'}});
+ expect(verdict).toMatchObject({decision:'review',rank:'fit_only',unknowns:['identity_unresolved','firm_identity_unsupported','target_geography_unsupported','business_phone_unresolved','maintenance_need_unconfirmed']});
+});
 
 it.each([
  'We plan to grow our team as our portfolio expands.',

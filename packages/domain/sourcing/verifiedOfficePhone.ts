@@ -24,15 +24,18 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
  const {identity}=input,name=fold(identity.name),city=fold(identity.locality),state=fold(identity.region);
  const location=new RegExp(`^(?:${escape(city)}),?\\s+(?:${escape(state)}|${escape(stateNames[identity.region]??'__unknown__')})(?:\\s+\\d{5}(?:-\\d{4})?)?\\.?$`,'u');
  const targetLocationMention=new RegExp(`(?:^|[\\s,:])${escape(city)},?\\s+(?:${escape(state)}|${escape(stateNames[identity.region]??'__unknown__')})\\b`,'u');
- const sameLocation=(text:string)=>{
+ const streetAtLocation=(text:string):string|null=>{
   const normalized=fold(text);
-  if(location.test(normalized))return true;
   // Full street/city on one line is still literal geography, never a service-area guess.
-  if(!/^\d{1,6}\s/u.test(normalized))return false;
+  if(!/^\d{1,6}\s/u.test(normalized))return null;
   const parts=normalized.split(/,\s*/u),locationIndex=parts.findIndex((_,index)=>location.test(parts.slice(index).join(', ')));
-  if(locationIndex<1||locationIndex>2||!streetAddress.test(parts[0]!))return false;
-  return locationIndex===1||/^(?:suite|ste|#)\s*#?[a-z0-9-]+$/u.test(parts[1]!);
+  if(locationIndex>=1&&locationIndex<=2&&streetAddress.test(parts[0]!))return locationIndex===1||/^(?:suite|ste|#)\s*#?[a-z0-9-]+$/u.test(parts[1]!)?parts[0]!:null;
+  // Observed contact-card layout: "13803 Jarvis Rd Cypress, TX 77429".
+  // Match a unique literal city suffix inside this original block, not joined facts.
+  const suffixParts=normalized.split(new RegExp(`\\s+${escape(city)},?\\s+`,'u'));
+  return suffixParts.length===2&&streetAddress.test(suffixParts[0]!)&&new RegExp(`^(?:${escape(state)}|${escape(stateNames[identity.region]??'__unknown__')})\\s+\\d{5}(?:-\\d{4})?$`,'u').test(suffixParts[1]!)?suffixParts[0]!:null;
  };
+ const sameLocation=(text:string)=>location.test(fold(text))||streetAtLocation(text)!==null;
  const named=(text:string)=>{
   const normalized=fold(text);
   return normalized===name||normalized===`${name} ${city} office`||normalized===`${name} ${city} branch`;
@@ -49,6 +52,8 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
   return remainder==='';
  };
  const street=(text:string)=>streetAddress.test(fold(text));
+ // Comparison keys only: every citation remains its original untouched block.
+ const physicalStreet=(text:string)=>street(text)?fold(text):streetAtLocation(text);
  const label=(text:string)=>/^(?:office(?: location| address)?|address|location|contact(?: information)?|suite [a-z0-9-]+):?$/u.test(fold(text));
  const email=(text:string)=>/^(?:e-?mail\s*:?\s*)?[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}$/iu.test(text.trim());
  const facts=input.facts.filter(fact=>fact.kind==='business_phone');
@@ -65,11 +70,15 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
   const blocks=source.blocks;
   const foreignLocation=(text:string)=>!targetLocationMention.test(fold(text))&&(/,?\s+(?:TX|RI|MA|Texas|Rhode Island|Massachusetts)(?:\s+\d{5}(?:-\d{4})?)?\.?$/iu.test(text)||/\b(?:office|branch)\s*:\s*\S/iu.test(text)||(/\b(?:office|branch)\s*:?$/iu.test(text)&&!label(text)&&!named(text)));
   const conflictingContinuation=(start:number,end:number)=>{
+   const cardStreets=new Set(blocks.slice(start,end+1).map(block=>physicalStreet(block.text)).filter(value=>value!==null));
    for(const [edge,direction] of [[start-1,-1],[end+1,1]] as const){
     for(let cursor=edge,seen=0;cursor>=0&&cursor<blocks.length&&seen<8;cursor+=direction,seen++){
      const text=blocks[cursor]!.text;
      if(text.length>240||named(text)||(numbers(text).length===0&&fold(text).startsWith(`${name} office: `)))break;
      if(foreignLocation(text)||numbers(text).some(value=>!allNumbers.has(value)))return true;
+     const continuationStreet=physicalStreet(text);
+     if(continuationStreet!==null&&cardStreets.size>0&&!cardStreets.has(continuationStreet))return true;
+     if(sameLocation(text)&&/^\d/u.test(text)&&blocks.slice(start,end+1).some(block=>sameLocation(block.text)&&/^\d/u.test(block.text)&&fold(block.text)!==fold(text)))return true;
      if(!sameLocation(text)&&!phoneLine(text)&&!street(text)&&!label(text)&&!email(text))break;
     }
    }
@@ -85,6 +94,7 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
    if(!card.some(block=>namedLocation(block.text)||street(block.text)||(sameLocation(block.text)&&/^\d/u.test(block.text))||/^(?:office(?: location| address)?|address|location):?$/u.test(fold(block.text))||fold(block.text)===`${name} ${city} office`||fold(block.text)===`${name} ${city} branch`))continue;
    if(card.filter(block=>named(block.text)||namedLocation(block.text)).length!==1)continue;
    if(card.filter(block=>sameLocation(block.text)||namedLocation(block.text)).length!==1||card.filter(block=>street(block.text)).length>1)continue;
+   if(new Set(card.map(block=>physicalStreet(block.text)).filter(value=>value!==null)).size>1)continue;
    if(!card.every(block=>named(block.text)||namedLocation(block.text)||sameLocation(block.text)||phoneLine(block.text)||street(block.text)||label(block.text)||email(block.text)))continue;
    const cardNumbers=new Set(card.flatMap(block=>numbers(block.text)));
    if(cardNumbers.size!==1||![...cardNumbers].every(value=>allNumbers.has(value)))continue;

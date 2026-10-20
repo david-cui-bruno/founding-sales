@@ -16,8 +16,12 @@ export function isTargetGeography(region: string, locality: string): boolean {
  const state=region.toUpperCase(),city=fold(locality);
  return state==='TX'||targetAreas[state]?.includes(city)===true;
 }
+/** New residences vocabulary cannot turn a literal management denial into fit. */
+export function deniesManagedResidences(text:string):boolean {
+ return /\b(?:do\s+not|does\s+not|don['’]t|doesn['’]t|never|no\s+longer)\s+(?:\w+\s+){0,3}(?:manage|offer|provide|handle|speciali[sz]e)\b[^.!?\n]{0,100}\bresidences\b/iu.test(text);
+}
 export function supportsResidentialManagement(text: string): boolean {
- return /\b(?:residential|single.family|homes|houses|apartments)\b/iu.test(text)&&/\b(?:property manag|manage)/iu.test(text);
+ return !deniesManagedResidences(text)&&/\b(?:residential|single.family|homes|houses|apartments|residences)\b/iu.test(text)&&/\b(?:property manag|manage)/iu.test(text);
 }
 const stateNames:Record<string,string>={TX:'texas',RI:'rhode island',MA:'massachusetts'};
 export function supportedBusinessPhone(facts:readonly QualificationFact[],identity:SourcingIdentity):string|null {
@@ -41,17 +45,22 @@ export function qualifyCandidate(input:{facts:readonly QualificationFact[];obser
  if(input.identity.status!=='resolved')unknowns.push('identity_unresolved');
  const byId=new Map(input.observations.map(o=>[o.id,o]));
  const sourceFor=(fact:QualificationFact)=>byId.get(fact.observationId)!;
+ const usableSource=(source:SourceObservation)=>{
+  const age=now-Date.parse(source.retrievedAt);
+  let matchingHost=false;
+  try{matchingHost=new URL(source.url).hostname.replace(/^www\./u,'')===new URL(input.identity.website).hostname.replace(/^www\./u,'');}catch{/* Unresolved site stays reviewable. */}
+  return age>=0&&age<=7*day&&source.firstParty&&!source.truncated&&matchingHost;
+ };
  const current=input.facts.filter(fact=>{
   const source=sourceFor(fact),age=now-Date.parse(source.retrievedAt);
   if(age<0||age>7*day){unknowns.push('evidence_needs_refresh');return false;}
-  let matchingHost=false;
-  try{matchingHost=new URL(source.url).hostname.replace(/^www\./u,'')===new URL(input.identity.website).hostname.replace(/^www\./u,'');}catch{/* Unresolved site stays reviewable. */}
-  return source.firstParty&&!source.truncated&&matchingHost;
+  return usableSource(source);
  });
  if(current.length<input.facts.length)unknowns.push('source_incomplete_or_unverified');
  const any=(kind:QualificationFact['kind'],test:(text:string)=>boolean)=>current.some(f=>f.kind===kind&&test(fold(f.value)));
  if(!any('firm_identity',text=>text.includes(fold(input.identity.name))))unknowns.push('firm_identity_unsupported');
- if(!any('residential_management',supportsResidentialManagement))unknowns.push('residential_fit_unknown');
+ const residencesDenied=input.observations.some(source=>usableSource(source)&&source.blocks.some(block=>deniesManagedResidences(block.text)));
+ if(residencesDenied||!any('residential_management',supportsResidentialManagement))unknowns.push('residential_fit_unknown');
  const region=input.identity.region.toUpperCase(),city=fold(input.identity.locality);
  const target=isTargetGeography(region,city);
  if(!target||!any('service_area',text=>text.includes(city)&&(text.includes(stateNames[region]??'__unknown__')||new RegExp(`\\b${region.toLowerCase()}\\b`,'u').test(text))))unknowns.push('target_geography_unsupported');

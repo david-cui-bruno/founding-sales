@@ -13,9 +13,9 @@ import {reserveAttempt,markCalling,settleAttempt} from '../research/reservations
 import {centsOf,isPricedModel} from '../research/pricing.ts';
 import {parsePageText} from '../research/pageText.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
-import type {PageFetchProvider,ProviderOutcome} from '../research/providers.ts';
+import type {PageFetchProvider} from '../research/providers.ts';
 import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from './qualificationStore.ts';
-import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionAnswer} from './qualificationPrompt.ts';
+import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome} from './qualificationPrompt.ts';
 import {normalizeQualificationDiagnostic,type QualificationDiagnostic,type QualificationDiagnosticPhase} from './qualificationDiagnostics.ts';
 interface Run extends QualificationRunRow {payload:CandidateInput;current_revision:number;candidate_status:string}
 const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS candidate_status FROM sourcing_qualification_runs r
@@ -38,10 +38,10 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  if(!run)return;
  let observations:SourceObservation[]=[];
  let fetchedPages=0,skipped:unknown={},diagnostic:QualificationDiagnostic|undefined;
- const diagnose=(phase:QualificationDiagnosticPhase)=>{
+ const diagnose=(phase:QualificationDiagnosticPhase,extraction?:unknown)=>{
   diagnostic=normalizeQualificationDiagnostic({version:'qualification-diagnostic-v1',phase,fetchedPages,
    observations:observations.length,completeFirstParty:observations.filter(s=>s.firstParty&&!s.truncated).length,
-   truncatedObservations:observations.filter(s=>s.truncated).length,skipped});
+   truncatedObservations:observations.filter(s=>s.truncated).length,skipped,extraction},observations.filter(s=>s.firstParty&&!s.truncated));
  };
  const finish=async(reason:string|null,facts:unknown[]=[],openingQuestion:string|null=null,supplementedEvidence:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[]=[])=>withTransaction(db,()=>finishQualification(ctx,{runId:run.id,observations,facts,reason,openingQuestion,supplementedEvidence,diagnostic}));
  if(run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION){await finish('qualification_version_changed');return;}
@@ -115,11 +115,15 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
   await withTransaction(db,async()=>settleAttempt(ctx,{reservationId:reservation.id,at:await databaseNow(ctx),outcome:{kind:'released_not_called'}}));
   await finish('research_interrupted');return;
  }
- let result:ProviderOutcome<QualificationExtractionAnswer>;
+ let result:QualificationExtractionOutcome;
  try{result=await extraction.extract(request);}catch{result={ok:false,failureCode:'provider_error',costCents:0,costEstimated:true};}
  await withTransaction(db,async()=>{
   await settleAttempt(ctx,{reservationId:reservation.id,at:await databaseNow(ctx),outcome:result.costEstimated?{kind:'estimated'}:{kind:'settled',cents:result.costCents}});
  });
+ if(!result.ok&&(result.failureCode==='invalid_evidence'||result.failureCode==='malformed_answer')){
+  let detail:unknown;try{detail=result.diagnostic;}catch{/* Auxiliary metadata cannot prevent finishing after settlement. */}
+  diagnose('extraction_rejected',detail);
+ }
  // Settlement has its own commit so even invalid/stale evidence cannot erase spent money.
  if(result.ok&&result.value.facts.some(f=>!offered.some(source=>source.id===f.observationId))){diagnose('unoffered_observation');await finish('invalid_evidence');return;}
  const facts=result.ok?withSupportedOfficeName(run.payload,result.value.facts,observations,await databaseNow(ctx)):[];

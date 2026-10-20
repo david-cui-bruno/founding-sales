@@ -9,10 +9,10 @@ import {requestQualification,readQualification,finishQualification} from '../../
 import {runQualification} from '../../sourcing/qualificationRun.ts';
 import type {PageFetchProvider} from '../../research/providers.ts';
 import type {QualificationExtractionProvider} from '../../sourcing/qualificationPrompt.ts';
-let db:TestDatabase,workspaceId:string;
+let db:TestDatabase,workspaceId:string,betaWorkspaceId:string;
 const ctx=()=>repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
-beforeAll(async()=>{db=await createTestDatabase();workspaceId=(await seedTwoWorkspaces(db.session)).alpha.workspaceId;});
+beforeAll(async()=>{db=await createTestDatabase();const seeded=await seedTwoWorkspaces(db.session);workspaceId=seeded.alpha.workspaceId;betaWorkspaceId=seeded.beta.workspaceId;});
 afterAll(async()=>db.drop());
 beforeEach(async()=>{for(const table of ['sourcing_candidates','provider_reservations','provider_ledger','research_settings','daily_counters'])await db.session.query(`DELETE FROM ${table}`);});
 async function pending(){
@@ -86,4 +86,47 @@ it.each(['finished','corrected','deleted'] as const)('preserves %s caller refusa
  expect(await finish()).toEqual({ok:false,reason:mode==='finished'?'run_finished':mode==='deleted'?'not_found':'candidate_changed'});
  expect(await audit(ids.runId)).toHaveLength(mode==='finished'?1:0);
  expect((await db.session.query('SELECT * FROM provider_reservations')).rows).toHaveLength(0);
+});
+it.each(['invalid_evidence','malformed_answer'] as const)('audits internal extraction rejection while preserving %s settlement, refusal and once-only dispatch',async reason=>{
+ const ids=await pending();let calls=0;
+ const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async input=>{
+  calls++;
+  const diagnostic={stage:'selection' as const,code:'block_missing' as const,selectionIndex:0,selectionCount:1,observationId:input.observations[0]!.id,blockId:'private missing block',stopReason:'max_tokens' as const,payload:'private provider text',schemaPath:['private'],message:'private'};
+  return {ok:false,costCents:1,failureCode:reason,diagnostic};
+ }};
+ await runQualification(ctx(),ids,{pageFetch:fetcher([page()]),extraction});await runQualification(ctx(),ids,{pageFetch:fetcher([page()]),extraction});
+ expect(calls).toBe(1);
+ const view=await readQualification(ctx(),ids);expect(view).toMatchObject({status:'unavailable',reason,facts:[],admission:null});expect(view).not.toHaveProperty('diagnostic');
+ const events=await audit(ids.runId);expect(events).toHaveLength(1);
+ expect(events[0]).toMatchObject({diagnostic:{phase:'extraction_rejected',extraction:{stage:'selection',code:'block_missing',selectionIndex:0,selectionCount:1,observationId:view!.observations[0]!.id,stopReason:'max_tokens'}}});
+ expect(JSON.stringify(events)).not.toContain('private');expect(JSON.stringify(events)).not.toContain('Example PM manages');
+ expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations')).rows).toEqual([{state:'settled',settled_cents:1}]);
+ expect((await db.session.query('SELECT * FROM sourcing_admissions')).rows).toHaveLength(0);
+});
+it('drops hostile extraction metadata after settlement, never changing finish or replay safety',async()=>{
+ const ids=await pending();let calls=0;
+ const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>{
+  calls++;return Object.defineProperty({ok:false as const,failureCode:'invalid_evidence',costCents:1},'diagnostic',{get(){throw Error('private hostile getter');}});
+ }};
+ await runQualification(ctx(),ids,{pageFetch:fetcher([page()]),extraction});await runQualification(ctx(),ids,{pageFetch:fetcher([page()]),extraction});
+ expect(calls).toBe(1);expect(await readQualification(ctx(),ids)).toMatchObject({status:'unavailable',reason:'invalid_evidence',facts:[]});
+ expect((await audit(ids.runId))[0]).toMatchObject({diagnostic:{phase:'extraction_rejected'}});
+ expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations')).rows).toEqual([{state:'settled',settled_cents:1}]);
+});
+it('reconstructs extraction audit only from this run offered observations and refuses another workspace',async()=>{
+ const ids=await pending(),observation={id:randomUUID(),url:'https://example.test/',contentHash:'b'.repeat(64),relevantTextHash:'c'.repeat(64),retrievedAt:new Date().toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'b1',text:'private original source'}]};
+ const raw={...diagnostic,phase:'extraction_rejected',fetchedPages:1,observations:1,completeFirstParty:1,extraction:{stage:'citation_roles',code:'identity_not_literal',observationId:observation.id,blockId:'b1',selectionIndex:0,selectionCount:1,schemaField:'private path',stopReason:'private provider reason',quote:'private'}};
+ const beta=repositoryContext(workspaceScope(betaWorkspaceId,{kind:'system',component:'worker'}),db.session);
+ const finish=(context=ctx())=>tx(()=>finishQualification(context,{runId:ids.runId,observations:[observation],facts:[],reason:'invalid_evidence',diagnostic:raw}));
+ expect(await finish(beta)).toEqual({ok:false,reason:'not_found'});expect(await readQualification(beta,ids)).toBeNull();expect(await audit(ids.runId)).toHaveLength(0);
+ expect(await finish()).toMatchObject({ok:true});
+ expect((await audit(ids.runId))[0]).toMatchObject({diagnostic:{extraction:{stage:'citation_roles',code:'identity_not_literal',observationId:observation.id,blockId:'b1',selectionIndex:0,selectionCount:1}}});
+ expect(JSON.stringify(await audit(ids.runId))).not.toContain('private');
+ expect((await db.session.query("SELECT workspace_id FROM audit_events WHERE action='sourcing.qualification_recorded' AND detail->>'runId'=$1",[ids.runId])).rows).toEqual([{workspace_id:workspaceId}]);
+ // An existing UUID/block pair from another capture is not offered to the next run.
+ await db.session.query('DELETE FROM sourcing_candidates');const next=await pending();
+ expect(await tx(()=>finishQualification(ctx(),{runId:next.runId,observations:[],facts:[],reason:'invalid_evidence',diagnostic:raw}))).toMatchObject({ok:true});
+ const event=(await audit(next.runId))[0]!,text=JSON.stringify(event);
+ expect(text).not.toContain(observation.id);expect(text).not.toContain('private');
+ expect(event).toMatchObject({diagnostic:{extraction:{stage:'citation_roles',code:'identity_not_literal'}}});
 });

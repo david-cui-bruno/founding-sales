@@ -17,7 +17,7 @@ import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
 
 export const QUALIFICATION_PROMPT_VERSION='qualification-context-v7';
-export const QUALIFICATION_POLICY_VERSION='qualification-v4';
+export const QUALIFICATION_POLICY_VERSION='qualification-v5';
 export type SourcingResult<T>={ok:true;value:T}|{ok:false;reason:string};
 export interface QualificationRunRow {
   id:string;candidate_id:string;candidate_revision:number;model_name:string;
@@ -105,7 +105,7 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   await context.db.query(`UPDATE sourcing_qualification_runs SET state=$3,reason=$4,observations=$5::jsonb,facts=$6::jsonb,
     opening_question=$7,finished_at=now() WHERE workspace_id=$1 AND id=$2`,
     [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null]);
-  const diagnostic=input.reason===null?undefined:normalizeQualificationDiagnostic(input.diagnostic);
+  const diagnostic=input.reason===null?undefined:normalizeQualificationDiagnostic(input.diagnostic,evidence.data.observations.filter(s=>s.firstParty&&!s.truncated));
   await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review',policyVersion:run.policy_version,...(input.supplementedEvidence?.length?{evidenceRecovery:{rule:'supported-office-card-v1',citations:input.supplementedEvidence}}:{}),...(diagnostic?{diagnostic}:{})}});
   return {ok:true,value:{runId:run.id}};
 }
