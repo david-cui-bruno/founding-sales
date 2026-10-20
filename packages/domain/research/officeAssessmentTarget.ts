@@ -30,11 +30,22 @@ export async function captureOfficeAssessment(ctx:RepositoryContext,input:{firmI
  qualification_policy_version,qualification_prompt_version,verified_firm_policy_version,captured_at,expires_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::timestamptz,$11::timestamptz+interval '30 minutes')`,[ctx.scope.workspaceId,input.firmId,input.runId,route.id,route.version,officeHash(route.e164),firm.fingerprint,QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,VERIFIED_FIRM_POLICY_VERSION,input.at]);
 }
-export async function readOfficeAssessmentBinding(ctx:RepositoryContext,runId:string,dispatch=false):Promise<{parent:OfficeParent;candidate:QualificationCandidateContext}|{reason:string}>{
+type OfficeBinding = {parent:OfficeParent;candidate:QualificationCandidateContext}|{reason:string};
+/** Strict office research/qualification retains its current-policy lifecycle. */
+export async function readOfficeAssessmentBinding(ctx:RepositoryContext,runId:string,dispatch=false):Promise<OfficeBinding>{
+ return readBinding(ctx,runId,dispatch,'strict');
+}
+/** Calling reassesses current source facts, never the historical qualification verdict. */
+export async function readCallingOfficeAssessmentBinding(ctx:RepositoryContext,runId:string):Promise<OfficeBinding>{
+ return readBinding(ctx,runId,false,'calling');
+}
+async function readBinding(ctx:RepositoryContext,runId:string,dispatch:boolean,purpose:'strict'|'calling'):Promise<OfficeBinding>{
  const parent=(await ctx.db.query<OfficeParent>(`SELECT * FROM firm_office_assessments WHERE workspace_id=$1 AND research_run_id=$2`,[ctx.scope.workspaceId,runId])).rows[0];
  if(!parent){const run=(await ctx.db.query<{office_assessment_capture_status:string|null}>(`SELECT office_assessment_capture_status FROM research_runs WHERE workspace_id=$1 AND id=$2 AND purpose='office_evidence'`,[ctx.scope.workspaceId,runId])).rows[0];return {reason:run?.office_assessment_capture_status==='bound'?'capture_lost':run?.office_assessment_capture_status??'capture_missing'};}
  if(parent.result==='stale')return {reason:parent.reason??'binding_stale'};
- if(parent.identity_version!==OFFICE_IDENTITY_VERSION||parent.target_version!==OFFICE_TARGET_VERSION||parent.assessment_version!==OFFICE_ASSESSMENT_VERSION||parent.selection_version!==OFFICE_SELECTION_VERSION||parent.qualification_policy_version!==QUALIFICATION_POLICY_VERSION||parent.qualification_prompt_version!==QUALIFICATION_PROMPT_VERSION||parent.verified_firm_policy_version!==VERIFIED_FIRM_POLICY_VERSION)return {reason:'policy_changed'};
+ const currentPolicies=parent.qualification_policy_version===QUALIFICATION_POLICY_VERSION&&parent.verified_firm_policy_version===VERIFIED_FIRM_POLICY_VERSION;
+ const retainedCallingPolicies=purpose==='calling'&&parent.qualification_policy_version==='qualification-v4'&&parent.verified_firm_policy_version==='verified-firm-v2';
+ if(parent.identity_version!==OFFICE_IDENTITY_VERSION||parent.target_version!==OFFICE_TARGET_VERSION||parent.assessment_version!==OFFICE_ASSESSMENT_VERSION||parent.selection_version!==OFFICE_SELECTION_VERSION||parent.qualification_prompt_version!==QUALIFICATION_PROMPT_VERSION||(!currentPolicies&&!retainedCallingPolicies))return {reason:'policy_changed'};
  const now=Date.parse(await officeNow(ctx));
  if(now<parent.captured_at.getTime())return {reason:'capture_invalid'};
  if(dispatch&&now-parent.captured_at.getTime()>=OFFICE_CAPTURE_MILLISECONDS)return {reason:'capture_expired'};

@@ -5,8 +5,9 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {QualificationCandidateContext} from '../sourcing/qualificationCitationRoles.ts';
 import type {SourcingResult} from '../sourcing/qualificationStore.ts';
 import {assessCallingEvidence, CALLING_EVIDENCE_POLICY_VERSION, hasKnownPersonalPhoneEvidence} from '../sourcing/callingEvidence.ts';
-import {officeHash, officeNow, readOfficeAssessmentBinding} from './officeAssessmentTarget.ts';
-import {readFirmOfficeAssessment} from './officeAssessmentStore.ts';
+import {officeHash, officeNow, readCallingOfficeAssessmentBinding} from './officeAssessmentTarget.ts';
+import {currentOfficeSources, validOfficeProof} from './officeAssessmentEvidence.ts';
+import {VALID_RESEARCH_JOB_INTENT_SQL} from './jobIntent.ts';
 import {actorKind, actorUserId} from '../crm/types.ts';
 
 export const CALLING_ASSESSMENT_ACTION = 'calling.source_evidence_assessed';
@@ -60,24 +61,55 @@ async function loadParent(ctx: RepositoryContext, reference: CallingAssessmentRe
     if (!Number.isFinite(expiresAt.getTime())) return null;
     return {candidate: c, observations: run.observations, facts: run.facts, expiresAt: expiresAt.toISOString(), sourceVersion: JSON.stringify([run.policy_version, run.prompt_version, run.state, run.reason])};
   }
+  return loadOfficeParent(ctx, reference, input);
+}
+interface OfficeSource extends Record<string, unknown> {
+  observation: SourceObservation; facts: QualificationFact[]; expires_at: Date; observation_id: string; ordinal: number; evidence_id: string;
+  source_reference: string; content_hash: string; retrieved_at: Date; terms_allow_retention: boolean; retention_expires_at: Date | null; provider: string; contact_id: string | null;
+}
+async function loadOfficeParent(ctx: RepositoryContext, reference: CallingAssessmentReference, input: Target): Promise<Parent | null> {
   if (reference.candidateId !== null || reference.candidateRevision !== null) return null;
+  const w = ctx.scope.workspaceId;
   const parent = (await ctx.db.query<{research_run_id: string; expected_source_count: number; expires_at: Date}>(`SELECT research_run_id,expected_source_count,expires_at FROM firm_office_assessments WHERE workspace_id=$1 AND id=$2 AND firm_id=$3 FOR SHARE`, [w, reference.parentId, input.firmId])).rows[0];
   if (!parent) return null;
-  const bound = await readOfficeAssessmentBinding(ctx, parent.research_run_id);
+  const bound = await readCallingOfficeAssessmentBinding(ctx, parent.research_run_id);
   if ('reason' in bound || bound.parent.id !== reference.parentId || bound.parent.phone_route_id !== input.routeId || bound.parent.route_version !== input.routeVersion || bound.parent.route_endpoint_hash !== officeHash(input.e164)) return null;
-  const rows = (await ctx.db.query<{observation: SourceObservation; facts: QualificationFact[]; expires_at: Date}>(`SELECT s.observation,s.facts,s.expires_at FROM firm_office_assessment_sources s JOIN evidence_items e ON e.workspace_id=s.workspace_id AND e.id=s.evidence_id AND e.firm_id=s.firm_id WHERE s.workspace_id=$1 AND s.assessment_id=$2 ORDER BY s.ordinal FOR SHARE OF s,e`, [w, reference.parentId])).rows;
-  // Validate after acquiring source/evidence locks, including any lock waits.
-  // Canonical strict result is inspected, never reclassified or overwritten.
-  const view = await readFirmOfficeAssessment(ctx, {firmId: input.firmId});
-  if (view.assessmentId !== reference.parentId || !['supported', 'pending', 'unclear'].includes(view.status) || view.sourceCount !== parent.expected_source_count || !view.sourceCount) return null;
-  if (rows.length !== parent.expected_source_count || rows.some(row => row.expires_at.getTime() <= Date.parse(input.at))) return null;
-  return {candidate: bound.candidate, observations: rows.map(row => row.observation), facts: rows.flatMap(row => row.facts), sourceVersion: view.policyVersion ?? '', expiresAt: new Date(Math.min(parent.expires_at.getTime(), ...rows.map(row => row.expires_at.getTime()))).toISOString()};
+  const rows = (await ctx.db.query<OfficeSource>(`SELECT s.observation,s.facts,s.expires_at,s.observation_id,s.ordinal,s.evidence_id,e.source_reference,e.content_hash,e.retrieved_at,e.terms_allow_retention,e.retention_expires_at,e.provider,e.contact_id
+    FROM firm_office_assessment_sources s JOIN evidence_items e ON e.workspace_id=s.workspace_id AND e.id=s.evidence_id AND e.firm_id=s.firm_id
+    WHERE s.workspace_id=$1 AND s.assessment_id=$2 AND s.firm_id=$3 ORDER BY s.ordinal LIMIT 9 FOR SHARE OF s,e`, [w, reference.parentId, input.firmId])).rows;
+  // Never fall back to an older parent when a newer run or queued intent exists.
+  const latest = (await ctx.db.query<{id: string | null; outcome: string}>(`SELECT id,outcome FROM (
+    SELECT r.id,r.revision,r.outcome FROM research_runs r WHERE r.workspace_id=$1 AND r.firm_id=$2 AND r.purpose='office_evidence'
+    UNION ALL SELECT NULL::uuid,(j.payload->>'revision')::bigint,j.state FROM jobs j
+    WHERE j.workspace_id=$1 AND j.kind='research.firm' AND j.payload->>'firmId'=$2::text AND j.payload->>'purpose'='office_evidence'
+    AND ${VALID_RESEARCH_JOB_INTENT_SQL} AND j.payload->>'revision' ~ '^[1-9][0-9]{0,9}$'
+    AND j.idempotency_key='research-firm:'||$2::text||':'||(j.payload->>'revision')
+    AND NOT EXISTS(SELECT 1 FROM research_runs r WHERE r.workspace_id=j.workspace_id AND r.firm_id=$2 AND j.idempotency_key='research-firm:'||r.firm_id::text||':'||r.revision::text)
+    ) intents ORDER BY revision DESC LIMIT 1`, [w, input.firmId])).rows[0];
+  // Recheck neutral lifecycle after source/evidence lock waits, without strict reclassification.
+  const fresh = await readCallingOfficeAssessmentBinding(ctx, parent.research_run_id);
+  const now = new Date(Math.max(Date.parse(input.at), Date.parse(await officeNow(ctx)))).toISOString(), time = Date.parse(now);
+  if ('reason' in fresh || !isDeepStrictEqual(fresh, bound) || latest?.id !== parent.research_run_id || latest.outcome !== 'completed' || !fresh.parent.assessed_at) return null;
+  const observations = rows.map(row => row.observation), facts = rows.flatMap(row => row.facts);
+  if (parent.expected_source_count < 1 || parent.expected_source_count > 8 || rows.length !== parent.expected_source_count
+    || !validOfficeProof(observations, facts) || !currentOfficeSources(fresh.candidate, observations, now)) return null;
+  if (rows.some((row, index) => row.ordinal !== index || row.observation_id !== row.observation.id || row.facts.some(fact => fact.observationId !== row.observation_id)
+    || row.expires_at.getTime() <= time || row.provider !== 'company_page' || row.contact_id !== null
+    || row.source_reference !== row.observation.url || row.content_hash !== row.observation.contentHash
+    || row.retrieved_at.getTime() > Date.parse(row.observation.retrievedAt)
+    || (!row.terms_allow_retention && !row.retention_expires_at) || (row.retention_expires_at !== null && row.retention_expires_at.getTime() <= time))) return null;
+  return {candidate: fresh.candidate, observations, facts, sourceVersion: JSON.stringify([fresh.parent, rows.map(({observation: _observation, facts: _facts, ...metadata}) => metadata)]),
+    expiresAt: new Date(Math.min(parent.expires_at.getTime(), ...rows.map(row => Math.min(row.expires_at.getTime(), row.retention_expires_at?.getTime() ?? Infinity)))).toISOString()};
 }
 async function reconstruct(ctx: RepositoryContext, reference: CallingAssessmentReference, input: Target): Promise<CallingAssessmentDetail | null> {
   const firm = await currentTarget(ctx, input);
   if (!firm) return null;
-  const parent = await loadParent(ctx, reference, firm, input);
+  let parent = await loadParent(ctx, reference, firm, input);
   if (!parent || await personalSourceEvidence(ctx, input.e164)) return null;
+  // Personal-source locks can also wait. Recheck current lifecycle after all locks.
+  if (!await currentTarget(ctx, input)) return null;
+  if (reference.parentKind === 'office_assessment') parent = await loadOfficeParent(ctx, reference, input);
+  if (!parent) return null;
   // A source lock may have waited beyond the original request timestamp.
   const now = new Date(Math.max(Date.parse(input.at), Date.parse(await officeNow(ctx)))).toISOString();
   const result = assessCallingEvidence({candidate: parent.candidate, observations: parent.observations, facts: parent.facts, phone: input.e164, knownPersonalCell: false, now});
