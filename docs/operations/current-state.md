@@ -1,6 +1,6 @@
 # Current operating state
 
-## October 20, 2026, 03:29 UTC
+## October 20, 2026, 04:45 UTC
 
 Dated observations are not future authority. Historical reports do not establish current readiness.
 
@@ -22,7 +22,7 @@ David authorized the same 30 after the fix at 02:18. Six manual waves at 03:25:5
 
 Public status at **03:27:41.728** showed 30 new strict research run IDs and **zero verified office lines**: 18 source incomplete, six invalid evidence, one extraction failed, three identity unresolved, one office phone unproven, one phone association ambiguous. Public brief-only runs do not prove strict completion/extraction; null assessment or zero public sources does not prove retained source absence. Today's 44 candidates are terminal: 32 unavailable, 12 review, zero eligible unrun/passed. No new admissions or callable-now claim. Noon Eastern quality report remains due, not another rerun.
 
-David's sourcing order: **Places Text Search TX/DFW → RI/MA, then public NARPM, then Apollo Free**. Explicit Google permission lifts the Places terms hold. Before the first API call, root must tell David the exact project, actual free credits/quota boundary and expected cost for 1,000 firms. Credits only; card spending needs approval. No Places/NARPM requests yet. Apollo key already securely copied and read back in local Keychain; zero Apollo requests, runtime key not configured. #700 awaits actual Free account/scope/cycle/usage verification, not key copying. Daily 18:00 Eastern: per-source found, net new and verified callable counts. Private 32-firm list delivered, not call authority.
+David's sourcing order remains **Places Text Search TX/DFW → RI/MA, then public NARPM, then Apollo Free**; he explicitly unblocked free-source checks while Places waits. Google storage permission is established, not funding. Read-only billing inspection found existing paid Places usage with no credit offset; exact grant terms remain unresolved. **No cash spend, billing link or Places requests authorized.** Require verified funding/no-card boundary and disclose project, quota and cost/1,000 firms first. NARPM's public directory prohibits commercial copying/solicitation, so no entries collected. Apollo verification reached a signed-out page; actual Free plan/scope/cycle/usage remains unverified, key already in Keychain, zero API requests. Daily 18:00 Eastern source counts remain due. Private 32-firm list delivered, not call authority.
 
 Research caps: **400 shared units/day, $40/day credits only, $387.50/month**, Haiku 4.5, four pages/firm, 1 MB/page. Modeled **85¢ day/310¢ month** is not invoice or credit balance. Keep $50/day model guard, not all-AWS. Approved ~$10 total, ~30-firm Vertex comparison unrun; funding unknown, Sonnet cancelled.
 
@@ -30,4 +30,4 @@ Research caps: **400 shared units/day, $40/day credits only, $387.50/month**, Ha
 
 Owner-enabled Gmail incoming+Sent business new originals, no history, Haiku 4.5 cross-US, **$1/day/$20/month credits only**. First real CRM arrival unobserved; daily check remains. Funding-confirmation deadline was not credit expiry. LinkedIn manual only, no actions; Cal.com disconnected.
 
-#701 monthly wording updated privately/remotely; actual unpublished draft not persisted. Ordinary Message-ID/In-Reply-To/References/Gmail threading remains missing. David reviews legal wording before terms link/Stripe and final copy before sending; no Stripe writes. #706 Settings deferred. Targets remain 100+ by October 23, 300+ by October 31 without a supported forecast.
+#701 monthly wording updated privately/remotely; actual unpublished draft not persisted. Ordinary Message-ID/In-Reply-To/References/Gmail threading remains missing; one implementer now owns local implementation, not release or activation. David reviews legal wording before terms link/Stripe and final copy before sending; no Stripe writes. #706 Settings deferred. Targets remain 100+ by October 23, 300+ by October 31 without a supported forecast.
