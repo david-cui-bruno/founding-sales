@@ -1,3 +1,4 @@
+import {regularSequenceThreading} from './sequenceThreading.ts';
 import { prospectingRetryAt } from './pacing.ts';
 import {consumeHumanReplyApproval,humanReplyEnvelope,refuseHumanReplyApproval,humanReplyApprovalIsLive} from '../replies/sendAuthority.ts';
 import {recordHumanReplyDelivery} from '../replies/delivery.ts';
@@ -497,6 +498,18 @@ async function recheckAndClaim(
       }
     }
 
+    const explicitThreading = fence.originKind === 'draft'
+      ? await humanReplyEnvelope(context, fence.id)
+      : await routineReplyThreading(context, fence.id);
+    const sequenceThread = explicitThreading === null
+      ? await regularSequenceThreading(context, fence)
+      : { ok: true as const, value: explicitThreading };
+    if (!sequenceThread.ok) {
+      await context.db.query('ROLLBACK');
+      return { kind: 'not_ready', refusal: 'step_ineligible', detail: sequenceThread.reason };
+    }
+    const threading = sequenceThread.value;
+
     // The reservation: a conditional UPDATE rather than a read-then-write, so two
     // workers racing the last slot of the day cannot both win it (Appendix G 33), on
     // the business date of *this* decision (S05).
@@ -559,7 +572,6 @@ async function recheckAndClaim(
       await context.db.query('ROLLBACK');
       return {kind:'not_ready',refusal:'step_ineligible',detail:'human_reply:fresh_approval_required'};
     }
-    const threading = fence.originKind==='draft'?await humanReplyEnvelope(context,fence.id):await routineReplyThreading(context, fence.id);
     await context.db.query('COMMIT');
     return { kind: 'claimed', plan, claim: claim.value, threading };
   } catch (error) {
