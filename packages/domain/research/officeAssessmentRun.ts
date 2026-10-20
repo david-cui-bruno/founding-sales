@@ -42,7 +42,8 @@ export async function finishOfficeResearch(ctx:RepositoryContext,input:FinishRes
  deferred.push(()=>recordProviderCall(ctx,{providerKey:input.pageFetch.providerKey,at:input.at,businessTimeZone:zone,costCents:fetched.costCents,...(fetched.ok?{}:{failureCode:fetched.failureCode})}));
  if(!fetched.ok)return await done('source_unavailable');
  pagesFetched=fetched.value.pages.length;
- if(pagesFetched>maxPagesPerFirm||Object.values(fetched.value.skipped).some(n=>n>0))return await done('source_incomplete');
+ // The adapter leaves unrequested queue tails at the cap. Actual fetch refusals remain fatal.
+ if(pagesFetched>maxPagesPerFirm||Object.entries(fetched.value.skipped).some(([reason,n])=>reason!=='page_budget_reached'&&n>0))return await done('source_incomplete');
  const observations=buildOfficeObservations(fetched.value.pages);
  if(!observations||!currentOfficeSources(initial.candidate,observations,await officeNow(ctx)))return await done('source_incomplete');
  if('reason' in await allowed())return await done('binding_changed');

@@ -7,7 +7,9 @@ import {previewDeletion,commitDeletion} from '@fss/domain/retention/deletion.ts'
 import {recordingSuppressionJournal} from '@fss/domain/suppression/journal.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
 import {seedCrm,type SeededCrm} from '@fss/domain/test/db/support/crmFixtures.ts';
-import {officeProviders} from '@fss/domain/test/support/officeProviders.ts';
+import {officeProviders,officeHtml} from '@fss/domain/test/support/officeProviders.ts';
+import type {PageFetchProvider} from '@fss/domain/research/providers.ts';
+import {researchPageFetch,type RawResponse} from '../src/research/companyPageFetch.ts';
 import {enqueueFirmResearch} from '@fss/domain/research/enqueue.ts';
 import {readFirmOfficeAssessment} from '@fss/domain/research/officeAssessmentStore.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
@@ -23,6 +25,40 @@ const backoff={baseSeconds:0,factor:1,maximumSeconds:0,jitterFraction:0};
 function failingOnce(pattern:RegExp):SessionQueryable{let armed=true;return {query:async <R extends QueryResultRowLike>(sql:string,values?:readonly unknown[]):Promise<QueryOutcome<R>>=>{if(armed&&pattern.test(sql)){armed=false;throw Object.assign(new Error('local fixture rollback'),{code:'40001'});}return await db.session.query<R>(sql,values);}};}
 async function queue(){const result=await enqueueFirmResearch(ctx,{firmId:crm.alpha.firmId,trigger:'user_request',requestedByUserId:members.alpha.admin.userId,purpose:'office_evidence'});if(!result.ok)throw new Error(result.reason);return result.value;}
 describe('strict office research through registered worker chunks',()=>{
+ it.each(['capped','mixed failure','over cap'] as const)('handles real adapter %s output without weakening source or page bounds',async mode=>{
+  await db.session.query('UPDATE research_settings SET max_pages_per_firm=2 WHERE workspace_id=$1',[members.alpha.workspaceId]);
+  const p=officeProviders(),requested:string[]=[];
+  const html=officeHtml+'<nav><a href="/contact-us">Contact</a><a href="/about-us">About</a></nav>';
+  const response=(body:string,statusCode=200):RawResponse=>({statusCode,headers:{'content-type':'text/html'},body:new TextEncoder().encode(body),abortedOverCap:false});
+  const adapter=researchPageFetch({lookup:async()=>['93.184.216.34'],now:()=>Date.now()-1000,request:async request=>{
+   requested.push(request.url);
+   if(request.url.endsWith('/robots.txt'))return response('User-agent: *\nDisallow:\n');
+   return response(html+`<p>Source page ${request.url}</p>`,mode==='mixed failure'&&request.url.endsWith('/contact-us')?503:200);
+  }});
+  let actualPages=0,actualSkips:Readonly<Record<string,number>>={};
+  const pageFetch:PageFetchProvider={providerKey:adapter.providerKey,fetchPages:async request=>{
+   expect(request.maxPagesPerFirm).toBe(2);expect(request.prioritizeContactPages).toBe(true);
+   const fetched=await adapter.fetchPages(request);if(!fetched.ok)throw new Error('fake adapter failed');
+   actualPages=fetched.value.pages.length;actualSkips=fetched.value.skipped;
+   if(mode!=='over cap')return fetched;
+   return {...fetched,value:{...fetched.value,pages:[...fetched.value.pages,{...fetched.value.pages[0]!,url:'https://northwind.example.test/overflow'}]}};
+  }};
+  const registry=new HandlerRegistry().register(researchFirmJobHandler({pageFetch,extraction:p.extraction}));await queue();
+  expect((await runOnce(db.session,{registry,owner:'strict-page-cap',limit:1})).completed).toBe(1);
+  expect(actualPages).toBe(2);expect(actualSkips['page_budget_reached']).toBeGreaterThan(0);
+  expect(requested.filter(url=>!url.endsWith('/robots.txt'))).toHaveLength(mode==='mixed failure'?3:2);
+  const view=await readFirmOfficeAssessment(ctx,{firmId:crm.alpha.firmId});
+  if(mode==='capped'){
+   expect(actualSkips).toEqual({page_budget_reached:2});expect(p.stats()).toEqual({fetches:0,counts:1,calls:1});
+   expect(view).toMatchObject({status:'supported',sourceCount:2});expect(p.requests[0]?.observations).toHaveLength(2);
+   expect((await db.session.query('SELECT extraction,pages_fetched FROM research_runs')).rows).toEqual([{extraction:'used',pages_fetched:2}]);
+  }else{
+   if(mode==='mixed failure')expect(actualSkips['status_503']).toBe(1);
+   expect(p.stats()).toEqual({fetches:0,counts:0,calls:0});expect(view).toMatchObject({status:'stale',reason:'source_incomplete',sourceCount:0});
+   expect((await db.session.query('SELECT count(*)::int n FROM firm_office_assessment_sources')).rows).toEqual([{n:0}]);
+   expect((await db.session.query('SELECT state FROM provider_reservations')).rows).toEqual([{state:'released'}]);
+  }
+ });
  it.each(['brief','office_evidence'] as const)('serializes simultaneous office and %s enqueue commands using one global revision space',async purpose=>{
   const left=await db.appRuntimeSession(),right=await db.appRuntimeSession();
   const leftContext=repositoryContext(ctx.scope,left),rightContext=repositoryContext(ctx.scope,right);
