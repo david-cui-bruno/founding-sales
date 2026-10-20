@@ -690,6 +690,8 @@ const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   sequence_created: 'Sequence created, with an empty version to fill in.',
   steps_saved: 'Saved.',
   template_saved: 'Template saved and approved.',
+  template_draft_saved: 'Template draft saved, not approved. No sequence was published or enrolled.',
+  draft_exists: 'Not saved: this sequence already has a draft. Open that draft to edit it.',
   version_not_draft: 'That version is published and does not change. Save again to make a new draft.',
   template_already_approved: 'That template version is approved and does not change. Save again to make a new version.',
   published: 'Published. It can be used for new enrolments now.',
@@ -723,6 +725,10 @@ export function sequenceNotice(code: string): string {
   const draft = draftNamedBy(code);
   if (draft !== null) {
     return `Not saved: version ${String(draft.version)} is already a draft of this sequence. Make the change there, or publish it first.`;
+  }
+  const templateDraft = /^template_draft_saved_as_version:(\d{1,4})$/u.exec(code);
+  if (templateDraft !== null) {
+    return `Saved as unapproved template version ${templateDraft[1] ?? ''}. The version you edited is unchanged. No sequence was published or enrolled.`;
   }
   const newVersion = /^(steps|template)_saved_as_version:(\d{1,4})$/u.exec(code);
   if (newVersion !== null) {

@@ -16,12 +16,9 @@ import { Textarea } from '../ui/textarea.tsx';
  * mandatory last line any more (David, 29 September 2026); what is still refused is a
  * visible opt-out link.
  *
- * **One press saves and approves** (D5). `/templates/create` and `/templates/update` take
- * `approve: true` and refuse the whole command, with every issue, when the text does not
- * pass — so a version is never written that cannot be approved, and there is no second
- * button to forget. Editing an approved version writes the template's next version
- * (send-path v2, S2): the approved one, and every sequence that sends it, stay exactly as
- * they were, and the form says so above its Save.
+ * Save draft persists unapproved copy. Save and approve additionally approves the exact
+ * bytes, and refuses the whole command when approval checks fail. Editing an approved
+ * version writes the template's next version without changing existing sequences.
  *
  * What is typed lives in the shell's draft store, so leaving Sequences and coming back
  * does not lose the email somebody was writing.
@@ -78,7 +75,7 @@ export function TemplateForm({
         if (found.length > 0) return;
         // The typed text is let go only once the save is accepted: a refused approval or
         // an offline answer keeps the form and everything in it (PR 335 review, P1-4).
-        void onSave(draft).then(saved => {
+        void onSave({ ...draft, approve: true }).then(saved => {
           if (saved) clear(DRAFTS);
         });
       }}
@@ -166,6 +163,21 @@ export function TemplateForm({
       </div>
 
       <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="template-save-draft"
+          disabled={!enabled || found.length > 0}
+          onClick={() => {
+            if (!enabled || found.length > 0) return;
+            void onSave({ ...draft, approve: false }).then(saved => {
+              if (saved) clear(DRAFTS);
+            });
+          }}
+        >
+          Save draft
+        </Button>
         <Button type="submit" size="sm" data-testid="template-save" disabled={!enabled || found.length > 0}>
           Save and approve
         </Button>

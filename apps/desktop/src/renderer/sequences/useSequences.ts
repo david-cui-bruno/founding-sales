@@ -36,7 +36,7 @@ const first = async (api: OperationApi): Promise<SequenceState> => await api.rea
 
 /** The notices an accepted save answers with (`sequenceBridge.ts`); every other one is not a save. */
 export function savedNotice(notice: string | null): boolean {
-  return notice !== null && /^(steps_saved|template_saved)(_as_version:\d{1,4})?$/u.test(notice);
+  return notice !== null && /^(steps_saved|template_saved|template_draft_saved)(_as_version:\d{1,4})?$/u.test(notice);
 }
 
 /**

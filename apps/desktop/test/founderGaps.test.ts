@@ -292,6 +292,24 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
     expect(state.warnings).toEqual([]);
   });
 
+  it('saves unapproved copy only when explicitly requested and reads it back without claiming approval', async () => {
+    const pending = templateVersionAnswer({ approvedAt: null });
+    const { api, calls } = scriptedApi({
+      ...reads,
+      '/templates/create': accepted(pending),
+      '/templates': { status: 200, body: { templates: [pending] } },
+    });
+    const bridge = sequenceBridge(api);
+    const saved = await bridge.saveTemplate({
+      templateVersionId: null, name: 'First cold draft', subject: 'A question', body: 'Hello,', signOff: 'David', approve: false,
+    });
+    expect(calls.find(entry => entry.path === '/templates/create')?.body).toMatchObject({ approve: false });
+    expect(saved.notice).toBe('template_draft_saved');
+    expect(sequenceScreen(saved).notice).toContain('not approved');
+    expect((await bridge.state()).templates[0]?.approvedAt).toBeNull();
+    expect(calls.some(entry => /approve|publish|enrollments\//u.test(entry.path))).toBe(false);
+  });
+
   it('edits an unapproved version in place, naming it', async () => {
     const { api, calls } = scriptedApi({ ...reads, '/templates/update': accepted(templateVersionAnswer()) });
     const state = await sequenceBridge(api).saveTemplate({

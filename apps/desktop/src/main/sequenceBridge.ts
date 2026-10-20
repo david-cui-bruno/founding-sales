@@ -45,10 +45,9 @@ import type { AuthedClient } from './authedClient.ts';
  *
  * Two things went with wave 2 and are named here so nobody looks for them.
  *
- * **Approval is not a separate press.** `/templates/create` and `/templates/update` take
- * `approve: true` and refuse the whole command with every issue when the text does not
- * pass, so a version is never written that cannot be approved, and `/templates/approve`
- * has no caller.
+ * **Approval is explicit.** Save draft sends `approve: false`; Save and approve sends
+ * `approve: true` and refuses the whole command with every issue when text does not
+ * pass. Omitted approval preserves existing callers. `/templates/approve` has no caller.
  *
  * **The long-hold review is gone.** An enrollment held that long resumes on its own
  * (S4.1), `review_required` is never sent, and `/enrollments/resume/preview` and
@@ -285,7 +284,7 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
         body,
         footerSignOff: input.signOff.trim(),
         requiredVariables: templateVariablesIn(input.subject, body).known,
-        approve: true,
+        approve: input.approve ?? true,
       };
       const parse = (value: unknown) => ({
         ...templateWarningsSchema.parse(value),
@@ -298,10 +297,11 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
       warnings = answer.ok ? answer.value.warnings : [];
       if (answer.ok) {
         const saved = answer.value.saved;
+        const savedNotice = input.approve === false ? 'template_draft_saved' : 'template_saved';
         notice =
           input.templateVersionId !== null && saved !== null && saved.id !== input.templateVersionId
-            ? `template_saved_as_version:${String(saved.version)}`
-            : 'template_saved';
+            ? `${savedNotice}_as_version:${String(saved.version)}`
+            : savedNotice;
       } else {
         const refusal = answer.offline ? null : refusalReasonSchema.safeParse(answer.refusal);
         notice = (refusal?.success === true ? refusal.data.reason : answer.reason).slice(0, NOTICE_LIMIT);

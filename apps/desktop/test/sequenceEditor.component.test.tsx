@@ -296,6 +296,31 @@ describe('a save that is not accepted keeps what was typed (PR 335 review, P1-4)
     expect((screen.getByTestId('template-form-subject') as HTMLInputElement).value).toBe('A better question');
   });
 
+  it('saves an explicit unapproved draft and closes only on accepted persistence', async () => {
+    const calls = install({ 'sequences.saveTemplate': base({ notice: 'template_draft_saved_as_version:2' }) }, base());
+    renderRoute();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('template-edit'));
+    await user.click(screen.getByTestId('template-save-draft'));
+    await waitFor(() => { expect(screen.queryByTestId('template-form')).toBeNull(); });
+    expect(calls.find(call => call.operation === 'sequences.saveTemplate')?.input).toMatchObject({ approve: false });
+    expect(screen.getByTestId('sequence-notice').textContent).toContain('unapproved template version 2');
+    expect(calls.some(call => call.operation === 'sequences.publish')).toBe(false);
+  });
+
+  it('keeps an unapproved draft form and text after a refused save', async () => {
+    const calls = install({ 'sequences.saveTemplate': base({ notice: 'admin_only' }) }, base());
+    renderRoute();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('template-edit'));
+    const subject = screen.getByTestId('template-form-subject');
+    await user.clear(subject);
+    await user.type(subject, 'Unapproved first cold copy');
+    await user.click(screen.getByTestId('template-save-draft'));
+    await waitFor(() => { expect(calls.find(call => call.operation === 'sequences.saveTemplate')).toBeDefined(); });
+    expect((screen.getByTestId('template-form-subject') as HTMLInputElement).value).toBe('Unapproved first cold copy');
+  });
+
   it('closes the template form once the save is accepted', async () => {
     install({ 'sequences.saveTemplate': base({ notice: 'template_saved_as_version:2' }) }, base());
     renderRoute();

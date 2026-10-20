@@ -135,8 +135,8 @@ export interface CreateDraftVersionInput {
  * with the edited steps: that is how an edit of a published version becomes a new one.
  *
  * There is at most one draft per sequence (`sequence_versions_one_draft`), so a second
- * request answers the draft that is already there — with the steps it was given, when
- * it was given any — rather than inserting a second one. Until 26 September 2026 it
+ * request with explicit steps refuses `draft_exists` instead of overwriting unpublished
+ * work. A request without steps returns the existing draft unchanged. Until 26 September 2026 it
  * inserted, the constraint raised, and `runCommand` answered 500. The sequence row is
  * locked first, so two requests racing see the same draft.
  *
@@ -161,10 +161,7 @@ export async function createDraftVersion(
   );
   const draft = drafts[0];
   if (draft !== undefined) {
-    if (input.steps !== undefined) {
-      const written = await replaceDraftSteps(context, { sequenceVersionId: draft.id, steps: input.steps });
-      if (!written.ok) return written;
-    }
+    if (input.steps !== undefined) return refuseSequence('draft_exists');
     return acceptSequence({ sequenceVersionId: draft.id, version: Number(draft.version) });
   }
 

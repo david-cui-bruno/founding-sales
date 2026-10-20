@@ -587,6 +587,58 @@ describe('the sequence, template and enrollment routes', () => {
     expect(sequenceVersionsResponseSchema.parse(versions.body).versions.map(version => version.state)).toEqual(['draft']);
   });
 
+  it('persists five unpublished unapproved cold-email touches, replays safely and refuses a conflicting draft', async () => {
+    const ids: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const template = await post('/templates/create', adminToken, command({
+        name: `Unapproved cold touch ${String(index + 1)}`,
+        subject: index === 0 ? 'Help with maintenance coordination at {firm_name}' : 'Re: Help with maintenance coordination at {firm_name}',
+        body: `Hi,\n\nCold-email draft ${String(index + 1)} for {firm_name}.\n\n${SIGN_OFF}`,
+        footerSignOff: SIGN_OFF,
+        requiredVariables: ['firm_name'],
+        approve: false,
+      }));
+      expect(template.status).toBe(200);
+      ids.push(String(resultOf(template)['id']));
+    }
+    const created = await post('/sequences/create', adminToken, command({ name: 'First cold draft, not agreed post-call' }));
+    const target = String(resultOf(created)['id']);
+    const hours = [0, 72, 168, 312, 480];
+    const steps = ids.map((id, index) => ({
+      ordinal: index + 1, channel: 'email', delay: { unit: 'elapsed', hours: hours[index] }, templateVersionId: id,
+    }));
+    const payload = command({ sequenceId: target, steps });
+    const saved = await post('/sequences/versions/draft', adminToken, payload);
+    expect(saved.status).toBe(200);
+    const replay = await post('/sequences/versions/draft', adminToken, payload);
+    expect(replay.body['replayed']).toBe(true);
+    expect(resultOf(replay)).toEqual(resultOf(saved));
+    const listed = await post('/sequences/versions', adminToken, { sequenceId: target });
+    const versions = sequenceVersionsResponseSchema.parse(listed.body).versions;
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({ state: 'draft', publishedAt: null });
+    expect(versions[0]?.steps.map(step => ({ ordinal: step.ordinal, channel: step.channel,
+      delay: step.delay, templateVersionId: step.templateVersionId }))).toEqual(steps);
+    const templates = templateVersionsResponseSchema.parse((await post('/templates', adminToken, {})).body).templates;
+    expect(templates.filter(template => ids.includes(template.id))).toHaveLength(5);
+    expect(templates.filter(template => ids.includes(template.id)).every(template => template.approvedAt === null)).toBe(true);
+    const conflictPayload = command({ sequenceId: target, steps: [] });
+    const conflict = await post('/sequences/versions/draft', adminToken, conflictPayload);
+    expect(conflict.body['reason']).toBe('draft_exists');
+    const conflictReplay = await post('/sequences/versions/draft', adminToken, conflictPayload);
+    expect(conflictReplay.body).toMatchObject({ replayed: true, reason: 'draft_exists' });
+    expect((await post('/sequences/versions/draft', salespersonToken, command({ sequenceId: target, steps: [] }))).body['reason'])
+      .toBe('admin_only');
+    expect((await post('/sequences/versions/draft', adminToken, command({ sequenceId: target, steps: [{ ordinal: 1, channel: 'fax' }] }))).status)
+      .toBe(400);
+    expect((await post('/sequences/versions', adminToken, { sequenceId: target })).body).toEqual(listed.body);
+    const { rows } = await fixture.db.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM sequence_enrollments WHERE sequence_version_id = $1',
+      [resultOf(saved)['sequenceVersionId']],
+    );
+    expect(rows[0]?.count).toBe('0');
+  });
+
   it('answers a path nobody mounted under these roots with not_found', async () => {
     // The LinkedIn task card's three paths went with LinkedIn on 25 September 2026.
     for (const path of [
