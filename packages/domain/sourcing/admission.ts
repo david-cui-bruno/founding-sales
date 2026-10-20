@@ -24,11 +24,18 @@ interface AdmissionInput {candidateId:string;expectedRevision:number;qualificati
 interface AdmissionResult {firmId:string;routeId:string;alreadyAdmitted:boolean}
 const refused=(reason:string):SourcingResult<AdmissionResult>=>({ok:false,reason});
 const cityKey=(s:string)=>firmNameKey(s).replace(/[^a-z ]/gu,'');
-const centralTexas=new Set(['dallas','fort worth','dfw','arlington','plano','frisco','denton','irving','mckinney','garland','mesquite','richardson','lewisville','carrollton','allen','grand prairie','austin','houston','san antonio']);
+// Duncanville is in Dallas County (city Geography and Climate); 49 CFR 71.7(e)
+// puts the Texas Mountain boundary at eastern Hudspeth County, not statewide.
+const centralTexas=new Set(['dallas','fort worth','dfw','arlington','plano','frisco','denton','irving','mckinney','garland','mesquite','richardson','lewisville','carrollton','allen','grand prairie','austin','houston','san antonio','duncanville']);
 export function sourcingTimeZone(region:string,locality:string):string|null {
  if(region==='RI'||region==='MA')return 'America/New_York';
- if(region==='TX'&&centralTexas.has(cityKey(locality)))return 'America/Chicago';
- if(region==='TX'&&cityKey(locality)==='el paso')return 'America/Denver';
+ // Accept a city or city, TX only. Never extract a nearby city from service-area
+ // prose, conflicting states or multiple localities, or discard arbitrary symbols.
+ const city=/^([a-z]+(?:\s+[a-z]+)*)(?:\s*,\s*TX)?$/iu.exec(locality.trim())?.[1];
+ if(region!=='TX'||!city)return null;
+ const key=cityKey(city);
+ if(centralTexas.has(key))return 'America/Chicago';
+ if(key==='el paso')return 'America/Denver';
  return null;
 }
 /** A transaction/savepoint makes every refused admission leave the CRM unchanged. */

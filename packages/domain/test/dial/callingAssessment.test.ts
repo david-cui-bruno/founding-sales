@@ -12,14 +12,21 @@ import {POSTURE_STATEMENTS} from '../../src/rules/statePosture.ts';
 import {connection,pid,waitsOn} from './phoneOfficeRiskFixtures.ts';
 import {runFirmResearch} from '../../research/enrichment.ts';
 import {officeHtml,officeProviders} from '../support/officeProviders.ts';
+import {readCallingOfficeAssessmentBinding,readOfficeAssessmentBinding} from '../../research/officeAssessmentTarget.ts';
+import {readFirmOfficeAssessment} from '../../research/officeAssessmentStore.ts';
+import {openHold} from '../../policy/holds.ts';
+import {recordSuppression} from '../../suppression/events.ts';
+import {recordingSuppressionJournal} from '../../suppression/journal.ts';
+import {enqueueFirmResearch} from '../../research/enqueue.ts';
 let f:OwnerRiskFixture|undefined;
 afterEach(async()=>{await f?.database.drop();f=undefined;});
-async function fixture(){
+async function fixture(historical=false){
  f=await ownerRiskFixture(false);const value=f;
  await value.database.session.query("UPDATE firms SET locality='Dallas',region_code='TX' WHERE id=$1",[value.crm.alpha.firmId]);
  await withTransaction(value.runtime,()=>recordStatePosture(value.context,{state:'TX',effectiveFrom:new Date(Date.now()-60000).toISOString(),confirmedStatements:Object.keys(POSTURE_STATEMENTS)}));
  await value.assess('<main><h1>Northwind Test Holdings</h1><p>We manage residential properties.</p><p>Dallas, TX</p><p>Office: (212) 555-0187</p></main>'.replace('We manage residential','Northwind Test Holdings manages residential'));
  const parent=(await value.database.session.query<{id:string}>('SELECT id FROM firm_office_assessments WHERE firm_id=$1',[value.crm.alpha.firmId])).rows[0]!;
+ if(historical)await value.database.session.query("UPDATE firm_office_assessments SET qualification_policy_version='qualification-v4',verified_firm_policy_version='verified-firm-v2' WHERE id=$1",[parent.id]);
  const before=(await value.database.session.query('SELECT * FROM firm_office_assessments WHERE id=$1',[parent.id])).rows[0];
  const assessed=await withTransaction(value.runtime,()=>assessCallingOffice(value.context,{firmId:value.crm.alpha.firmId,officeAssessmentId:parent.id}));
  expect(assessed,JSON.stringify(assessed)).toMatchObject({ok:true});if(!assessed.ok)throw new Error(assessed.reason);
@@ -27,6 +34,17 @@ async function fixture(){
  return {value,parentId:parent.id,auditId:assessed.value.assessmentId};
 }
 const proof=(value:OwnerRiskFixture,id?:string)=>withTransaction(value.runtime,()=>readPhoneOfficeProof(value.context,{...value.request(),e164:riskEndpoint,at:new Date().toISOString(),...(id?{expected:{kind:'office_assessment' as const,id}}:{})}));
+it('reassesses known historical v4/v2 sources only for calling while strict admission remains policy_changed',async()=>{
+ const {value,parentId,auditId}=await fixture(true);
+ const parent=(await value.database.session.query<{research_run_id:string}>('SELECT research_run_id FROM firm_office_assessments WHERE id=$1',[parentId])).rows[0]!;
+ expect(await readOfficeAssessmentBinding(value.context,parent.research_run_id)).toEqual({reason:'policy_changed'});
+ expect(await readFirmOfficeAssessment(value.context,{firmId:value.crm.alpha.firmId})).toMatchObject({status:'stale',reason:'policy_changed',sourceCount:0});
+ expect(await readCallingOfficeAssessmentBinding(value.context,parent.research_run_id)).toHaveProperty('parent.id',parentId);
+ expect(await proof(value,auditId)).toMatchObject({auditEventId:auditId,callingPolicyVersion:'calling-first-party-tx-v1'});
+ const reserved=await value.reserve();expect(reserved).toMatchObject({ok:true});
+ if(!reserved.ok)throw new Error(reserved.reason);
+ expect(await readPhoneHandoffResult(value.context,reserved.value.attemptId,false)).toMatchObject({actionable:true});
+});
 it('retains strict result independently, binds audit UUID through real advice, claim and publication',async()=>{
  const {value,parentId,auditId}=await fixture();expect(auditId).not.toBe(parentId);
  expect(await proof(value)).toMatchObject({kind:'office_assessment',id:auditId,callingPolicyVersion:'calling-first-party-tx-v1',auditEventId:auditId});
@@ -49,8 +67,36 @@ it.each([
  "UPDATE phone_routes SET version=version+1 WHERE workspace_id=$1",
  "UPDATE phone_routes SET known_personal_cell_at=clock_timestamp() WHERE workspace_id=$1",
  "UPDATE workspace_memberships SET status='inactive',deactivated_at=clock_timestamp() WHERE workspace_id=$1 AND user_id=(SELECT assigned_user_id FROM firms WHERE workspace_id=$1 AND name='Northwind Test Holdings')",
+ "UPDATE firm_office_assessments SET qualification_policy_version='unknown' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessments SET verified_firm_policy_version='verified-firm-v3' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessments SET qualification_prompt_version='unknown' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessments SET identity_version='unknown' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessments SET target_version='unknown' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessments SET selection_version='unknown' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessments SET result='stale',reason='research_interrupted' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessments SET captured_at=clock_timestamp()-interval '8 days',expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessments SET captured_at=clock_timestamp()+interval '1 day',assessed_at=clock_timestamp()+interval '1 day',expires_at=clock_timestamp()+interval '2 days' WHERE workspace_id=$1",
+ "UPDATE firm_office_assessment_sources SET expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1",
+ "UPDATE evidence_items SET source_reference='https://unrelated.example/' WHERE workspace_id=$1",
+ "UPDATE evidence_items SET content_hash=repeat('e',64) WHERE workspace_id=$1",
+ "UPDATE evidence_items SET retrieved_at=clock_timestamp()+interval '1 day' WHERE workspace_id=$1",
+ "UPDATE evidence_items SET provider='other_provider' WHERE workspace_id=$1",
+ "UPDATE research_settings SET enabled=false WHERE workspace_id=$1",
+ "UPDATE firm_office_assessment_sources SET facts=jsonb_set(facts,'{0,value}',to_jsonb('Invented claim'::text)) WHERE workspace_id=$1",
+ "DELETE FROM evidence_items WHERE workspace_id=$1",
 ])('invalidates the exact calling event on source/safety drift: %s',async(sql)=>{
- const {value,auditId}=await fixture();await value.database.session.query(sql,[value.w]);expect(await proof(value,auditId)).toBeNull();expect((await value.reserve()).ok).toBe(false);
+ const {value,auditId,parentId}=await fixture(true);await value.database.session.query(sql,[value.w]);expect(await proof(value,auditId)).toBeNull();expect((await value.reserve()).ok).toBe(false);
+ expect(await withTransaction(value.runtime,()=>assessCallingOffice(value.context,{firmId:value.crm.alpha.firmId,officeAssessmentId:parentId}))).toMatchObject({ok:false});
+});
+it.each(['research_hold','firm_stop','newer_intent'] as const)('retains normal %s lifecycle refusal for historical sources',async(kind)=>{
+ const {value,parentId,auditId}=await fixture(true);
+ await withTransaction(value.runtime,async()=>{
+  if(kind==='research_hold')await openHold(value.context,{scopeKind:'owner',scopeKey:value.owner.userId,reasonCode:'scoped_pause',blockedActionKinds:['research'],sourceEventKind:'calling-history-test'});
+  if(kind==='firm_stop')expect(await recordSuppression(value.context,{scope:'firm',firmId:value.crm.alpha.firmId,source:'salesperson_manual',channel:'all',journal:recordingSuppressionJournal()})).toMatchObject({ok:true});
+  if(kind==='newer_intent')expect(await enqueueFirmResearch(value.context,{firmId:value.crm.alpha.firmId,trigger:'user_request',requestedByUserId:value.owner.userId,purpose:'office_evidence'})).toMatchObject({ok:true});
+ });
+ expect(await proof(value,auditId)).toBeNull();
+ expect(await withTransaction(value.runtime,()=>assessCallingOffice(value.context,{firmId:value.crm.alpha.firmId,officeAssessmentId:parentId}))).toMatchObject({ok:false});
 });
 it.each(['wrong_action','wrong_version','wrong_parent','missing_selector'] as const)('never falls back from an expected malformed %s audit to legacy proof',async(kind)=>{
  const {value,auditId,parentId}=await fixture();
@@ -60,7 +106,7 @@ it.each(['wrong_action','wrong_version','wrong_parent','missing_selector'] as co
  expect(await proof(value,bad.id)).toBeNull();expect(await proof(value,parentId)).toBeNull();
 });
 it.each(['claim','publication'] as const)('revalidates exact calling sources after an actual %s lock wait',async(stage)=>{
- const {value}=await fixture();
+ const {value}=await fixture(true);
  const initial=stage==='publication'?await value.reserve():null;
  if(initial&&!initial.ok)throw new Error(initial.reason);
  const blocker=await connection(value),waiter=await pid(value.runtime);
@@ -81,7 +127,7 @@ it('never substitutes calling evidence for the explicit uncovered-code owner rec
  expect((await value.database.session.query('SELECT id FROM phone_handoff_attempts')).rows).toEqual([]);
 });
 it.each(['old_route','superseded_parent'] as const)('keeps independent current strict proof discoverable beside %s calling history',async(kind)=>{
- const {value,auditId}=await fixture();
+ const {value,auditId}=await fixture(true);
  const routeVersion=kind==='old_route'?2:value.policy.alpha.phoneRouteVersion;
  if(kind==='old_route')await value.database.session.query('UPDATE phone_routes SET version=$2 WHERE id=$1',[value.policy.alpha.phoneRouteId,routeVersion]);
  const providers=officeProviders({html:officeHtml.replaceAll('Providence','Dallas').replaceAll('RI','TX').replace('02903','75201').replace('(401)','(212)')});
@@ -99,4 +145,15 @@ it.each(['old_route','superseded_parent'] as const)('keeps independent current s
  expect(await readPhoneHandoffResult(value.context,reserved.value.attemptId,false)).toMatchObject({actionable:true});
  await value.database.session.query('UPDATE phone_routes SET known_personal_cell_at=clock_timestamp() WHERE id=$1',[value.policy.alpha.phoneRouteId]);
  expect(await read()).toBeNull();expect((await value.reserve({routeVersion})).ok).toBe(false);
+});
+it('binds historical policy and still-valid retention metadata rather than silently reusing an old calling event',async()=>{
+ const {value,parentId,auditId}=await fixture(true);
+ await value.database.session.query("UPDATE evidence_items SET terms_allow_retention=false,retention_expires_at=clock_timestamp()+interval '1 hour' WHERE workspace_id=$1",[value.w]);
+ expect(await proof(value,auditId)).toBeNull();
+ const assessed=await withTransaction(value.runtime,()=>assessCallingOffice(value.context,{firmId:value.crm.alpha.firmId,officeAssessmentId:parentId}));
+ expect(assessed).toMatchObject({ok:true});if(!assessed.ok)throw new Error(assessed.reason);
+ expect(assessed.value.assessmentId).not.toBe(auditId);
+ expect(await proof(value,assessed.value.assessmentId)).toMatchObject({auditEventId:assessed.value.assessmentId});
+ await value.database.session.query("UPDATE firm_office_assessments SET qualification_policy_version='qualification-v5',verified_firm_policy_version='verified-firm-v3' WHERE id=$1",[parentId]);
+ expect(await proof(value,assessed.value.assessmentId)).toBeNull();
 });
