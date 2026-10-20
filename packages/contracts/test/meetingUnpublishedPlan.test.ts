@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { meetingUnpublishedPlanSchema, saveMeetingUnpublishedPlanSchema, meetingFollowThroughScopeSchema } from '../src/meetingFollowThrough.ts';
+import { meetingUnpublishedPlanSchema, saveMeetingUnpublishedPlanSchema, meetingFollowThroughScopeSchema, meetingFollowThroughViewV2Schema } from '../src/meetingFollowThrough.ts';
 
 const message = { subject: '', body: '', held: true as const, unknownFields: ['subject', 'body'] };
 const plan = {
@@ -28,6 +28,15 @@ describe('unpublished meeting plan boundary', () => {
     expect(saveMeetingUnpublishedPlanSchema.safeParse({ ...input, messages: input.messages.slice(0, 3) }).success).toBe(false);
     expect(saveMeetingUnpublishedPlanSchema.safeParse({ ...input, messages: input.messages.map(m => ({ ...m, held: false })) }).success).toBe(false);
     expect(saveMeetingUnpublishedPlanSchema.safeParse({ ...input, expectedPlanVersion: -1 }).success).toBe(false);
+  });
+  it('exposes optional current draft source without granting send authority', () => {
+    const schema = meetingFollowThroughViewV2Schema.shape.draftSource;
+    expect(schema.parse(undefined)).toBeUndefined();
+    const current = { sourceHash: 'b'.repeat(64), notesRevision: 2 };
+    expect(schema.parse(current)).toEqual(current);
+    expect(schema.safeParse({ ...current, notesRevision: -1 }).success).toBe(false);
+    expect(schema.safeParse({ ...current, approved: true }).success).toBe(false);
+    expect(schema.safeParse({ ...current, sourceHash: 'unknown' }).success).toBe(false);
   });
   it('does not widen the existing send permission limit', () => {
     expect(meetingFollowThroughScopeSchema.shape.maxMessages.safeParse(3).success).toBe(true);

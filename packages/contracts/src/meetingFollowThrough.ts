@@ -64,7 +64,7 @@ export const meetingFollowThroughViewSchema = z.strictObject({
   sentMessages: z.array(z.strictObject({ messageId: uuid, ordinal: z.number().int().min(1).max(3), sentAt: instant })).max(3),
 });
 export type MeetingFollowThroughView = z.infer<typeof meetingFollowThroughViewSchema>;
-export const meetingFollowThroughViewV2Schema=meetingFollowThroughViewSchema.extend({unpublishedPlan:meetingUnpublishedPlanSchema.nullable().optional(),approvalHash:hash.nullable().optional(),approvalRequired:z.boolean().optional(),approvedAt:instant.nullable().optional(),facts:z.array(answerBlockSchema).max(20).optional(),plannedMessages:z.array(z.strictObject({ordinal:z.number().int().min(1).max(3),subject:z.string().max(998),body:z.string().max(4000)})).max(3).optional()});
+export const meetingFollowThroughViewV2Schema=meetingFollowThroughViewSchema.extend({draftSource:z.strictObject({sourceHash:hash,notesRevision:z.number().int().nonnegative()}).optional(),unpublishedPlan:meetingUnpublishedPlanSchema.nullable().optional(),approvalHash:hash.nullable().optional(),approvalRequired:z.boolean().optional(),approvedAt:instant.nullable().optional(),facts:z.array(answerBlockSchema).max(20).optional(),plannedMessages:z.array(z.strictObject({ordinal:z.number().int().min(1).max(3),subject:z.string().max(998),body:z.string().max(4000)})).max(3).optional()});
 export type MeetingFollowThroughViewV2=z.infer<typeof meetingFollowThroughViewV2Schema>;
 const editBase = { planId: uuid, expectedPlanVersion: z.number().int().positive(), expectedDraftVersion: z.number().int().positive() };
 export const meetingDraftEditSchema = z.discriminatedUnion('action', [
