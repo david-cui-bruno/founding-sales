@@ -423,12 +423,9 @@ const saveStepsInput = z.strictObject({
   steps: z.array(draftStepSchema).max(50),
 });
 
-/**
- * A template version, written or edited (wave 2, S3; D5). One press saves and approves:
- * `approve: true` is the same command, refused whole with every issue when the text does
- * not pass, so nothing is written that cannot be approved.
- */
+/** Explicit approve:false saves unapproved copy. Omitted approve preserves legacy save-and-approve. */
 const templateDraftInput = z.strictObject({
+  approve: z.boolean().optional(),
   /** The version being edited in place, or null for a new template. */
   templateVersionId: uuid.nullable(),
   name: z.string().max(200),
@@ -1605,7 +1602,7 @@ export const OPERATIONS = {
     ],
     input: templateDraftInput,
     output: sequenceStateSchema,
-    transform: 'the sign-off appended, the variables the text names declared, and approve in the same command',
+    transform: 'the sign-off appended and variables declared; explicit approve:false saves unapproved copy, omission preserves save-and-approve',
   },
   'sequences.publish': {
     kind: 'command',
