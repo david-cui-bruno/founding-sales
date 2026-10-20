@@ -9,6 +9,8 @@ import {adviseDial} from '../../dial/advise.ts';
 import {recordStatePosture} from '../../policy/postures.ts';
 import {POSTURE_STATEMENTS} from '../../src/rules/statePosture.ts';
 import {connection,pid,waitsOn} from './phoneOfficeRiskFixtures.ts';
+import {runFirmResearch} from '../../research/enrichment.ts';
+import {officeHtml,officeProviders} from '../support/officeProviders.ts';
 let f:OwnerRiskFixture|undefined;
 afterEach(async()=>{await f?.database.drop();f=undefined;});
 async function fixture(){
@@ -76,4 +78,24 @@ it('never substitutes calling evidence for the explicit uncovered-code owner rec
  const {value}=await fixture();
  expect(await value.reserve({expectedNationalDncReceiptId:randomUUID()})).toMatchObject({ok:false});
  expect((await value.database.session.query('SELECT id FROM phone_handoff_attempts')).rows).toEqual([]);
+});
+it.each(['old_route','superseded_parent'] as const)('keeps independent current strict proof discoverable beside %s calling history',async(kind)=>{
+ const {value,auditId}=await fixture();
+ const routeVersion=kind==='old_route'?2:value.policy.alpha.phoneRouteVersion;
+ if(kind==='old_route')await value.database.session.query('UPDATE phone_routes SET version=$2 WHERE id=$1',[value.policy.alpha.phoneRouteId,routeVersion]);
+ const providers=officeProviders({html:officeHtml.replaceAll('Providence','Dallas').replaceAll('RI','TX').replace('02903','75201').replace('(401)','(212)')});
+ const research=await runFirmResearch(value.context,{firmId:value.crm.alpha.firmId,revision:2,trigger:'user_request',requestedByUserId:value.owner.userId,purpose:'office_evidence',at:new Date().toISOString(),...providers});
+ expect(research,JSON.stringify(research)).toMatchObject({ok:true});
+ const strict=(await value.database.session.query<{id:string;result:string}>('SELECT id,result FROM firm_office_assessments WHERE firm_id=$1 ORDER BY captured_at DESC LIMIT 1',[value.crm.alpha.firmId])).rows[0]!;
+ expect(strict.result).toBe('supported');expect(strict.id).not.toBe(auditId);
+ const request={...value.request(),routeVersion};
+ const read=(expected?:string)=>withTransaction(value.runtime,()=>readPhoneOfficeProof(value.context,{...request,e164:riskEndpoint,at:new Date().toISOString(),...(expected?{expected:{kind:'office_assessment' as const,id:expected}}:{})}));
+ expect(await read(auditId)).toBeNull();
+ expect(await read()).toEqual({kind:'office_assessment',id:strict.id,expiresAt:expect.any(String)});
+ expect((await adviseDial(value.context,request))?.nationalDnc).toMatchObject({status:'not_checked_owner_risk',receiptId:value.receiptId});
+ const reserved=await value.reserve({routeVersion});expect(reserved,JSON.stringify(reserved)).toMatchObject({ok:true});if(!reserved.ok)throw new Error(reserved.reason);
+ expect((await value.database.session.query('SELECT office_proof_id FROM phone_handoff_attempts WHERE id=$1',[reserved.value.attemptId])).rows[0]).toEqual({office_proof_id:strict.id});
+ expect(await readPhoneHandoffResult(value.context,reserved.value.attemptId,false)).toMatchObject({actionable:true});
+ await value.database.session.query('UPDATE phone_routes SET known_personal_cell_at=clock_timestamp() WHERE id=$1',[value.policy.alpha.phoneRouteId]);
+ expect(await read()).toBeNull();expect((await value.reserve({routeVersion})).ok).toBe(false);
 });

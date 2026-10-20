@@ -128,7 +128,9 @@ export async function readCallingAssessment(ctx: RepositoryContext, input: Targe
     if (!same) { if (input.expectedAuditId) return {kind: 'invalid'}; continue; }
     return {kind: 'proof', assessmentId: row.id, firmId: input.firmId, routeId: input.routeId, routeVersion: input.routeVersion, policyVersion: CALLING_EVIDENCE_POLICY_VERSION, expiresAt: detail.expiresAt};
   }
-  return {kind: 'invalid'};
+  // Immutable calling history is not a veto over independent current strict
+  // evidence. Only an explicitly expected event forbids trying another proof.
+  return {kind: input.expectedAuditId ? 'invalid' : 'none'};
 }
 
 export async function assessCallingOffice(ctx: RepositoryContext, input: CallingAssessmentInput): Promise<SourcingResult<CallingAssessmentResult>> {
