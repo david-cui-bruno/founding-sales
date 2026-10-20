@@ -5,6 +5,7 @@ import { Input } from '../ui/input.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { noDefiniteAnswer } from '../today/afterCallModel.ts';
 import { useFollowThroughMemory } from './followThroughMemory.ts';
+import { UnpublishedPlan } from './UnpublishedPlan.tsx';
 export interface FollowThroughPorts {
   read(meetingId:string):Promise<{view:MeetingFollowThroughViewV2|null;reason:string|null}>;
   edit(input:MeetingDraftEdit&{commandId:string}):Promise<{view:MeetingFollowThroughViewV2|null;reason:string|null}>;
@@ -91,6 +92,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
         </div>:<div className="space-y-3"><p className="text-sm font-medium break-words">{draft.subject}</p><p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{draft.body}</p></div>}
         {draft!=null&&!terminal?<div className="flex flex-wrap gap-2">{!immutable?<Button size="sm" variant="outline" disabled={disabled} aria-expanded={entry.editingUi} onClick={()=>{if(entry.editingUi){entry.editingUi=false;touch();}else void command('begin_edit');}}>{entry.editingUi?'Hide editor':draft.state==='editing'?'Resume editing':'Edit recap'}</Button>:null}<Button size="sm" variant="quiet" disabled={disabled} onClick={()=>{void command('cancel');}}>{immutable?'Cancel future follow-ups':'Cancel follow-up'}</Button></div>:null}
         {draft?.state==='submitted'?<p className="text-xs text-muted-foreground">The provider is processing this message. Callie will check the result; it cannot recall an accepted email.</p>:null}
+        <UnpublishedPlan view={view} actionsEnabled={actionsEnabled&&!entry.unavailable&&!entry.gone&&!entry.busy} onSaved={saved=>{entry.view=saved;touch();}}/>
       </>}
       {entry.message!==null?<p role="status" className="text-sm text-muted-foreground">{entry.message}</p>:null}
       {entry.pending!==null&&!entry.busy?<Button size="sm" variant="outline" disabled={!actionsEnabled} onClick={()=>{void command(entry.pending!.action);}}>Retry action</Button>:null}

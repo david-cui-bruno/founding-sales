@@ -1,12 +1,13 @@
-import {meetingFollowThroughViewSchema,type MeetingFollowThroughViewV2, meetingDraftEditCommandSchema,uuid } from '@fss/contracts';
+import {saveMeetingUnpublishedPlanCommandSchema,meetingFollowThroughViewSchema,type MeetingFollowThroughViewV2, meetingDraftEditCommandSchema,uuid } from '@fss/contracts';
+import { saveMeetingUnpublishedPlan } from '@fss/domain/meetings/unpublishedPlan.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { lockAnalysisMeeting } from '@fss/domain/meetings/analysisRequests.ts';
 import { readMeetingFollowThrough,editMeetingRecap } from '@fss/domain/meetings/followThrough.ts';
 import { contextForPrincipal,requirePrincipal,runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest,RouteResult,RoutingOptions } from './types.ts';
-export const MEETING_FOLLOW_THROUGH_PATHS: readonly string[]=['/meetings/follow-through','/meetings/recap/edit'];
+export const MEETING_FOLLOW_THROUGH_PATHS: readonly string[]=['/meetings/follow-through','/meetings/recap/edit','/meetings/unpublished-plan'];
 function legacyView(view:MeetingFollowThroughViewV2) {
- const {approvalHash:_hash,approvalRequired:_required,approvedAt:_at,facts:_facts,plannedMessages:_messages,...legacy}=view;return meetingFollowThroughViewSchema.parse(legacy);
+ const {draftSource:_source,unpublishedPlan:_unpublished,approvalHash:_hash,approvalRequired:_required,approvedAt:_at,facts:_facts,plannedMessages:_messages,...legacy}=view;return meetingFollowThroughViewSchema.parse(legacy);
 }
 export async function routeMeetingFollowThrough(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
   if (!MEETING_FOLLOW_THROUGH_PATHS.includes(request.path)) return null;
@@ -22,6 +23,20 @@ export async function routeMeetingFollowThrough(request:ApiRequest,options:Routi
     const view=await readMeetingFollowThrough(scoped.context,{meetingId:id.data});return view===null?missing:{status:200,body:project(view)};
   }
   type Receipt={meetingId:string;planId:string;version:number};
+  if(request.path==='/meetings/unpublished-plan') {
+    const answer=await runRouteCommand<typeof saveMeetingUnpublishedPlanCommandSchema,Receipt>({auth,request,principal:principal.principal},saveMeetingUnpublishedPlanCommandSchema,'meeting_unpublished_plan_save',async(context,body)=>{
+      const {commandId:_id,clientVersion:_client,...input}=body;
+      return await saveMeetingUnpublishedPlan(context,input);
+    });
+    if(answer.status!==200)return answer;
+    const envelope=answer.body as {status:string;replayed:boolean;result:Receipt};
+    return await withTransaction(auth.db,async()=>{
+      const receipt=envelope.result;if(await lockAnalysisMeeting(scoped.context,receipt.meetingId)===null)return missing;
+      const view=await readMeetingFollowThrough(scoped.context,{meetingId:receipt.meetingId});if(view===null)return missing;
+      if(view.planId!==receipt.planId||view.version!==receipt.version)return {status:409,body:{status:'refused',reason:'draft_changed'}};
+      return {status:200,body:{...envelope,result:view}};
+    });
+  }
   const answer=await runRouteCommand<typeof meetingDraftEditCommandSchema,Receipt>({auth,request,principal:principal.principal},meetingDraftEditCommandSchema,'meeting_recap_edit',async(context,body)=>{
     const {commandId:_id,clientVersion:_client,...input}=body;
     const result=await editMeetingRecap(context,input);

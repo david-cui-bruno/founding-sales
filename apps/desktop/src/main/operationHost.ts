@@ -26,7 +26,7 @@ import {sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateListSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema } from '@fss/contracts';
-import { meetingFollowThroughViewV2Schema } from '@fss/contracts';
+import { meetingFollowThroughHandlers } from './meetingFollowThroughHandlers.ts';
 import { meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
 import {
   applyCallProposalsResultSchema,
@@ -847,18 +847,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
       return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
     },
-    'meetings.followThrough': async (input:OperationInput<'meetings.followThrough'>) => {
-      const generation=deps.recordings.identity.current();
-      const answer=await deps.api.read(`/meetings/follow-through?meetingId=${encodeURIComponent(input.meetingId)}&version=2`,value=>meetingFollowThroughViewV2Schema.parse(value));
-      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
-      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
-    },
-    'meetings.editRecap': async (input:OperationInput<'meetings.editRecap'>) => {
-      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
-      const answer=await deps.api.command('/meetings/recap/edit?version=2',body,value=>meetingFollowThroughViewV2Schema.parse(value),{commandId});
-      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
-      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
-    },
+    ...meetingFollowThroughHandlers(deps),
     'meetings.qualification': async (input:OperationInput<'meetings.qualification'>)=>{
       const generation=deps.recordings.identity.current();
       const answer=await deps.api.read(`/meetings/qualification?meetingId=${encodeURIComponent(input.meetingId)}`,value=>meetingQualificationViewSchema.parse(value));

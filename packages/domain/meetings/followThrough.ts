@@ -1,3 +1,4 @@
+import { meetingUnpublishedPlanSchema } from '@fss/contracts';
 import {readApprovedAnswerBlocks} from '../outreach/facts.ts';
 import {meetingApprovalHash,meetingPlannedMessages,meetingPlanSources,verifyMeetingPlanApproval} from './followThroughApproval.ts';
 import { meetingPlanInterruption,requiresExplicitMeetingReview } from './followThroughLifecycle.ts';
@@ -61,6 +62,8 @@ export async function readMeetingFollowThrough(context: RepositoryContext, input
   const draft = plan === undefined ? null : await currentMeetingDraft(context, plan);
   const sendingPaused = await meetingSendingPaused(context, plan?.owner_user_id);
   const blockers = [...(plan?.blockers ?? [])];
+  const unpublishedPlan = plan?.['unpublished_plan'] == null ? null : meetingUnpublishedPlanSchema.parse(plan['unpublished_plan']);
+  if (unpublishedPlan !== null && (unpublishedPlan.sourceHash !== outcomes.sourceHash || unpublishedPlan.notesRevision !== outcomes.notes.revision)) blockers.push('source_changed');
   if (draft !== null && hasUnresolvedMeetingFields(draft.subject, draft.body)) blockers.push(RECAP_FIELDS_UNRESOLVED);
   const approvalReason = plan === undefined ? null : await verifyMeetingPlanApproval(context,plan,draft);
   const approvalRequired = approvalReason !== null;
@@ -78,6 +81,8 @@ export async function readMeetingFollowThrough(context: RepositoryContext, input
     currentDraft: draft === null ? null : { id: draft.id, version: draft.version, ordinal: draft.ordinal, subject: draft.subject, body: draft.body,
       renderedHash: draft.rendered_hash, templateVersionId: draft.template_version_id, sourceHash: draft.source_hash, materialReferences: draft.material_references,
       createdAt: draft.created_at.toISOString(), notBefore: draft.not_before.toISOString(), state: draft.state },
+    draftSource: { sourceHash: outcomes.sourceHash, notesRevision: outcomes.notes.revision },
+    unpublishedPlan,
     scope: plan?.scope ?? null, approvalRequired, approvedAt: plan?.approval?.at ?? null, approvalHash: plan === undefined || draft === null ? null : await meetingApprovalHash(context,plan,draft), facts: plan?.fact_refs ?? [], plannedMessages: plan === undefined || draft === null ? [] : await meetingPlannedMessages(context,plan,draft), blockers: [...new Set(blockers)].slice(0, 30), sendingPaused, plannedSteps: steps.map(s => ({ ordinal: s.ordinal, dueAt: s.due_at.toISOString(), state: s.state })), sentMessages: sent });
 }
 
