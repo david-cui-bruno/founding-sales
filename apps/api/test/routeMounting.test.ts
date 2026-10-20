@@ -344,6 +344,8 @@ describe('what the API mounts', () => {
       '/social/weekly/save',
       '/sourcing/call-need',
       '/sourcing/call-need/save',
+      '/sourcing/calling/admit',
+      '/sourcing/calling/assess',
       '/sourcing/candidates/check',
       '/sourcing/candidates/correct-name',
       '/sourcing/candidates/delete',

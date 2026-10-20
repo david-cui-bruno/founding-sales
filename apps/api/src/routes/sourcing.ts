@@ -10,12 +10,14 @@ import {recordSourcingFeedback} from '@fss/domain/sourcing/feedback.ts';
 import {qualificationReadSchema,qualificationRequestCommandSchema,qualificationAdmissionCommandSchema} from '@fss/contracts';
 import {requestQualification,readQualification} from '@fss/domain/sourcing/qualificationStore.ts';
 import {admitCandidate} from '@fss/domain/sourcing/admission.ts';
+import {callingAdmissionCommandSchema,callingAssessmentCommandSchema} from '@fss/contracts';
+import {admitCallingCandidate,assessCallingOffice} from '@fss/domain/sourcing/callingAdmission.ts';
 import {requestSourceCheck} from '@fss/domain/sourcing/sourceCheck.ts';
 import {candidateCheckCommandSchema,candidateListInputSchema,candidateSaveCommandSchema,candidateReviewCommandSchema,candidateDeleteCommandSchema} from '@fss/contracts';
 import {saveCandidate,listCandidates,reviewCandidate,deleteCandidate} from '@fss/domain/sourcing/candidates.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOURCING_PATHS=['/sourcing/experiments','/sourcing/experiments/save','/sourcing/experiments/activate','/sourcing/experiments/stop','/sourcing/experiments/erase','/sourcing/candidates/correct-name','/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
+export const SOURCING_PATHS=['/sourcing/calling/admit','/sourcing/calling/assess','/sourcing/experiments','/sourcing/experiments/save','/sourcing/experiments/activate','/sourcing/experiments/stop','/sourcing/experiments/erase','/sourcing/candidates/correct-name','/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
 export async function routeSourcing(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
   if(!(SOURCING_PATHS as readonly string[]).includes(request.path))return null;
   if(!options.auth)return {status:404,body:{error:'not_found'}};
@@ -23,6 +25,12 @@ export async function routeSourcing(request:ApiRequest,options:RoutingOptions):P
   const auth=options.auth,authenticated=await requirePrincipal(auth,request);
   if(!authenticated.ok)return authenticated.result;
   const deps={auth,request,principal:authenticated.principal};
+  if(request.path==='/sourcing/calling/admit')return runRouteCommand(deps,callingAdmissionCommandSchema,'sourcing.calling_admit',(context,body)=>{
+    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return admitCallingCandidate(context,input);
+  });
+  if(request.path==='/sourcing/calling/assess')return runRouteCommand(deps,callingAssessmentCommandSchema,'sourcing.calling_assess',(context,body)=>{
+    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return assessCallingOffice(context,input);
+  });
   if(request.path==='/sourcing/experiments'){
     if(!experimentsReadSchema.safeParse(request.body).success)return {status:400,body:{error:'malformed_body'}};
     const scoped=contextForPrincipal(auth,authenticated.principal);if(!scoped.ok)return scoped.result;

@@ -1,34 +1,27 @@
-import { sourceObservationSchema, type QualificationFact, type SourceObservation } from '@fss/contracts';
+import { type QualificationFact, type SourceObservation } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { qualificationCitationRoles, type QualificationCandidateContext } from '../sourcing/qualificationCitationRoles.ts';
 import { verifiedFirmEvidence, verifiedWebsiteKey } from '../sourcing/verifiedFirmPolicy.ts';
 import { QUALIFICATION_POLICY_VERSION, QUALIFICATION_PROMPT_VERSION } from '../sourcing/qualificationStore.ts';
 import { readFirmOfficeAssessment } from '../research/officeAssessmentStore.ts';
 import { OFFICE_SOURCE_MILLISECONDS } from '../research/officeAssessmentContract.ts';
-import { canonicalizePhone } from '../src/rules/suppressionCanonicalization.ts';
+import {hasKnownPersonalPhoneEvidence} from '../sourcing/callingEvidence.ts';
 import { currentOfficeSources, validOfficeProof } from '../research/officeAssessmentEvidence.ts';
+import {readCallingAssessment} from '../research/callingAssessmentStore.ts';
 
-export interface PhoneOfficeProof { kind: 'admission' | 'office_assessment'; id: string; expiresAt: string }
+export interface PhoneOfficeProof {
+  kind: 'admission' | 'office_assessment'; id: string; expiresAt: string;
+  /** Calling-policy assessments use immutable audit event IDs, NEVER strict parent IDs. */
+  callingPolicyVersion?: string; auditEventId?: string;
+}
 interface SourceRow { [key: string]: unknown; observation: SourceObservation }
 interface AdmissionRow {
   [key: string]: unknown; id: string; payload: QualificationCandidateContext; observations: SourceObservation[];
   facts: QualificationFact[]; policy_version: string; prompt_version: string;
 }
 const fold = (value: string) => value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLowerCase();
-const phones = /(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}/gu;
 /** A contrary exact-phone association wins over positive office text, including unselected blocks. */
-export function hasPersonalPhoneEvidence(observations: readonly SourceObservation[], e164: string): boolean {
-  if (observations.some(source => !sourceObservationSchema.safeParse(source).success)) return true;
-  const matches = (text: string) => [...text.matchAll(phones)].some(match => {
-    const value = canonicalizePhone(match[0]);
-    return value.ok && value.handle.value === e164;
-  });
-  return observations.some(source => source.blocks.some((block, index) => {
-    if (!matches(block.text)) return false;
-    const nearby = source.blocks.slice(Math.max(0, index - 1), index + 2);
-    return nearby.some(value => /\b(?:personal|cell|mobile)\b/iu.test(value.text));
-  }));
-}
+export const hasPersonalPhoneEvidence = hasKnownPersonalPhoneEvidence;
 
 /** Gate and exact route/firm are held by admission. Advisory callers receive no authority. */
 export async function readPhoneOfficeProof(context: RepositoryContext, input: {
@@ -58,6 +51,16 @@ export async function readPhoneOfficeProof(context: RepositoryContext, input: {
     JOIN evidence_items e ON e.workspace_id=s.workspace_id AND e.id=s.evidence_id AND e.firm_id=s.firm_id
     WHERE s.workspace_id=$1 ORDER BY s.assessment_id,s.ordinal FOR SHARE OF s,e`, [w])).rows;
   if (hasPersonalPhoneEvidence([...negativeRuns.flatMap(row => row.observations), ...sources.map(row => row.observation)], input.e164)) return null;
+  if (input.expected?.kind !== 'admission') {
+    const calling = await readCallingAssessment(context, {...input,
+      ...(input.expected ? {expectedAuditId: input.expected.id} : {})});
+    // Existing storage kind names the evidence assessment source, not a claim
+    // that its strict parent was supported. Exact audit UUID survives publication.
+    if (calling.kind === 'proof') return {kind: 'office_assessment', id: calling.assessmentId,
+      expiresAt: calling.expiresAt, callingPolicyVersion: calling.policyVersion, auditEventId: calling.assessmentId};
+    // An expected malformed/changed calling event MUST NOT fall through to legacy.
+    if (calling.kind === 'invalid') return null;
+  }
   const admissions = (await context.db.query<AdmissionRow>(`SELECT q.id,c.payload,q.observations,q.facts,q.policy_version,q.prompt_version
     FROM sourcing_admissions a JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id
     JOIN sourcing_qualification_runs q ON q.workspace_id=a.workspace_id AND q.id=a.run_id AND q.candidate_id=a.candidate_id
