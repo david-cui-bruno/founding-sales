@@ -62,6 +62,22 @@ it.each(['denial','neighbor'] as const)('never auto-Keeps or admits literal %s e
  const queue=await listCandidates(user(),{status:'needs_review',offset:0});if(!queue.ok)throw new Error(queue.reason);
  expect(queue.value.candidates.map(c=>c.id)).toEqual(scenario==='denial'?[]:[d.candidateId]);
 });
+it.each(['selected','unselected'] as const)('never auto-Keeps, admits or enqueues research for a %s residences denial',async selection=>{
+ const d=await draft();
+ const row=(await db.session.query<{observations:SourceObservation[];facts:QualificationFact[]}>('SELECT observations,facts FROM sourcing_qualification_runs WHERE id=$1',[d.runId])).rows[0]!,source=row.observations[0]!;
+ source.blocks.push({id:'residences',text:'We manage residences.'},{id:'contrary',text:'We do not manage residences.'});
+ const residential=row.facts.find(f=>f.kind==='residential_management')!;
+ residential.blockId=selection==='selected'?'contrary':'residences';residential.value=source.blocks.find(b=>b.id===residential.blockId)!.text;
+ await db.session.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb,facts=$3::jsonb WHERE id=$1',[d.runId,JSON.stringify(row.observations),JSON.stringify(row.facts)]);
+ const firms=(await db.session.query('SELECT id FROM firms ORDER BY id')).rows;
+ const jobs=(await db.session.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows;
+ await tx(()=>evaluateQualification(user(),{runId:d.runId}));await advance(d.runId);
+ expect(await admission(d.candidateId)).toBeUndefined();
+ expect((await db.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[d.candidateId])).rows[0]).toEqual({status:'needs_review',revision:1});
+ expect((await db.session.query('SELECT admission_reason,verdict FROM sourcing_qualification_runs WHERE id=$1',[d.runId])).rows[0]).toMatchObject({admission_reason:'residential_fit_unknown',verdict:{decision:'review',unknowns:expect.arrayContaining(['residential_fit_unknown'])}});
+ expect((await db.session.query('SELECT id FROM firms ORDER BY id')).rows).toEqual(firms);
+ expect((await db.session.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows).toEqual(jobs);
+});
 it('automatically Keeps a split-card bare-phone proof, researches, then exposes a useful sourced call brief without outreach',async()=>{
  const d=await draft({splitOffice:true});
  const untouched=['contacts','opportunities','sequence_enrollments','outbound_messages','outreach_plans','call_sessions','call_logs'];

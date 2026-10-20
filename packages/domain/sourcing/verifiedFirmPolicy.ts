@@ -2,7 +2,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationStore.ts';
 import {qualificationEvidenceSchema,type QualificationFact,type SourceObservation} from '@fss/contracts';
 import type {QualificationCandidateContext} from './qualificationCitationRoles.ts';
-import {supportsResidentialManagement,type SourcingIdentity} from './qualificationPolicy.ts';
+import {deniesManagedResidences,supportsResidentialManagement,type SourcingIdentity} from './qualificationPolicy.ts';
 import {verifiedOfficePhone} from './verifiedOfficePhone.ts';
 import {isDiscoveryDirectory} from './discoveryIdentity.ts';
 
@@ -33,7 +33,7 @@ export type VerifiedFirmEvidence={kind:'verified';identity:SourcingIdentity;phon
 const stateNames:Record<string,string>={TX:'texas',RI:'rhode island',MA:'massachusetts'};
 /** Literal contrary text beats a model's positive fact label, even if not selected. */
 function deniesResidential(text:string):boolean {
- return /\b(?:do\s+not|does\s+not|don['’]t|doesn['’]t|never|no\s+longer)\s+(?:\w+\s+){0,3}(?:manage|offer|provide|handle|speciali[sz]e)\b[^.!?\n]{0,100}\bresidential\b/iu.test(text)
+ return deniesManagedResidences(text)||/\b(?:do\s+not|does\s+not|don['’]t|doesn['’]t|never|no\s+longer)\s+(?:\w+\s+){0,3}(?:manage|offer|provide|handle|speciali[sz]e)\b[^.!?\n]{0,100}\bresidential\b/iu.test(text)
   || /\b(?:commercial|industrial)\b[^.!?\n]{0,80}\b(?:only|exclusively)\b|\b(?:only|exclusively)\b[^.!?\n]{0,80}\b(?:commercial|industrial)\b/iu.test(text);
 }
 /** Only literal, current, complete first-party citations establish an office. No model-written decisions. */

@@ -73,6 +73,19 @@ it('does not let the model omit a literal contrary first-party residential state
  const input=evidence();input.observations[0]!.blocks.push({id:'contrary',text:'We do not manage residential properties.'});
  expect(verifiedFirmEvidence(input)).toEqual({kind:'pending',reason:'residential_fit_unknown'});
 });
+it.each(['selected','unselected'] as const)('refuses a %s original residences denial despite otherwise valid office proof',selection=>{
+ const input=evidence(),source=input.observations[0]!;
+ source.blocks.push({id:'residences',text:'We manage residences.'},{id:'contrary',text:'We do not manage residences.'});
+ const residential=input.facts.find(f=>f.kind==='residential_management')!;
+ residential.blockId=selection==='selected'?'contrary':'residences';residential.value=source.blocks.find(b=>b.id===residential.blockId)!.text;
+ expect(verifiedFirmEvidence(input)).toEqual({kind:'pending',reason:'residential_fit_unknown'});
+});
+it('preserves legitimate managed residences with otherwise valid office proof',()=>{
+ const input=evidence(),source=input.observations[0]!;
+ source.blocks.push({id:'residences',text:'We manage residences.'});
+ const residential=input.facts.find(f=>f.kind==='residential_management')!;residential.blockId='residences';residential.value='We manage residences.';
+ expect(verifiedFirmEvidence(input)).toMatchObject({kind:'verified',phone:'+12145550190'});
+});
 it('enforces global10/375 modeled credit bounds and never reports a refund or invoice',()=>{
  expect(discoveryQuotaRemaining(9,374)).toEqual({daily:1,monthly:1});
  expect(discoveryQuotaRemaining(10,375)).toEqual({daily:0,monthly:0});

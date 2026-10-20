@@ -124,6 +124,27 @@ it('recognizes the exact residences description and removes only the grounded re
  expect(verdict).toEqual({...without,unknowns:without.unknowns.filter(reason=>reason!=='residential_fit_unknown')});
  expect(verdict).toMatchObject({decision:'review',rank:'fit_only',unknowns:['maintenance_need_unconfirmed']});
 });
+it.each(['We do not manage residences.',"We don't manage residences.",'We never manage residences.','We no longer manage residences.'])('refuses grounded negated residences fit: %s',text=>{
+ expect(supportsResidentialManagement(text)).toBe(false);
+ const input=fixture('We need help with maintenance coordination.'),source=input.observations[0]!;
+ source.blocks.push({id:'denial',text});
+ const residential=input.facts.find(f=>f.kind==='residential_management')!;residential.blockId='denial';residential.value=text;
+ expect(qualifyCandidate(input)).toMatchObject({decision:'review',unknowns:expect.arrayContaining(['residential_fit_unknown'])});
+});
+it.each(['same','separate'] as const)('does not omit an unselected current first-party residences denial in a %s observation',placement=>{
+ const input=residencesFixture(),source=input.observations[0]!,block={id:'contrary',text:'We do not manage residences.'};
+ if(placement==='same')source.blocks.push(block);
+ else input.observations.push({...source,id:'22222222-2222-4222-8222-222222222222',blocks:[block],publishedAt:null,publishedAtBlockId:null});
+ expect(qualifyCandidate(input)).toMatchObject({decision:'review',unknowns:expect.arrayContaining(['residential_fit_unknown'])});
+});
+it('does not confuse an unrelated negative sentence with a residences management denial',()=>{
+ expect(supportsResidentialManagement('We do not sell commercial real estate. We manage residences.')).toBe(true);
+});
+it.each([{firstParty:false},{truncated:true},{url:'https://other.test/'},{retrievedAt:new Date(Date.parse(now)-7*86400000-1).toISOString()}])('does not treat unusable separate residences denial as current first-party contradiction: %j',patch=>{
+ const input=residencesFixture(),source=input.observations[0]!;
+ input.observations.push({...source,id:'22222222-2222-4222-8222-222222222222',blocks:[{id:'contrary',text:'We do not manage residences.'}],publishedAt:null,publishedAtBlockId:null,...patch});
+ expect(qualifyCandidate(input).unknowns).not.toContain('residential_fit_unknown');
+});
 it.each([
  'We manage commercial office buildings and retail centers.',
  'Available residences: 123 Main Street, two bedrooms, for lease.',
