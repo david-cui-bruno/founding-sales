@@ -95,7 +95,13 @@ export interface SendGateDeps {
 
 export interface SendPlan {
   readonly fence: OutboundFenceRow;
-  readonly mailbox: { readonly id: string; readonly address: string; readonly ownerUserId: string };
+  readonly mailbox: {
+    readonly id: string;
+    readonly address: string;
+    readonly ownerUserId: string;
+    readonly providerAccountId: string | null;
+    readonly generation: number;
+  };
   readonly domain: SendingDomainRow;
   readonly ramp: RampRow;
   readonly day: SendDayRow;
@@ -113,6 +119,8 @@ export interface SendPlan {
 type MailboxRow = {
   id: string;
   owner_user_id: string;
+  provider_account_id: string | null;
+  generation: number;
   kind: string;
   email_address: string;
   status: string;
@@ -133,7 +141,7 @@ export async function decideSend(
   const now = deps.now?.() ?? (await decisionInstant(context));
 
   const mailboxRead = await context.db.query<MailboxRow>(
-    'SELECT id, owner_user_id, kind, email_address, status, sync_state FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+    'SELECT id, owner_user_id, provider_account_id, generation, kind, email_address, status, sync_state FROM mailboxes WHERE workspace_id = $1 AND id = $2',
     [context.scope.workspaceId, fence.mailboxId],
   );
   const mailbox = mailboxRead.rows[0];
@@ -278,7 +286,8 @@ export async function decideSend(
 
   return acceptSend({
     fence,
-    mailbox: { id: mailbox.id, address: mailbox.email_address, ownerUserId: mailbox.owner_user_id },
+    mailbox: { id: mailbox.id, address: mailbox.email_address, ownerUserId: mailbox.owner_user_id,
+      providerAccountId: mailbox.provider_account_id, generation: Number(mailbox.generation) },
     domain,
     ramp,
     day,

@@ -4,6 +4,7 @@ import type { HttpAnswer } from '../src/main/apiClient.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { contactPatchBody, createCrmBridge } from '../src/main/crmBridge.ts';
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
+import { OPERATIONS } from '../src/shared/operations.ts';
 import type { DraftStep, SequenceState } from '../src/renderer/sequenceContract.ts';
 import {
   EMPTY_SEQUENCE_STATE,
@@ -300,9 +301,11 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
       '/templates': { status: 200, body: { templates: [pending] } },
     });
     const bridge = sequenceBridge(api);
-    const saved = await bridge.saveTemplate({
+    const input = OPERATIONS['sequences.saveTemplate'].input.parse({
       templateVersionId: null, name: 'First cold draft', subject: 'A question', body: 'Hello,', signOff: 'David', approve: false,
     });
+    expect(input.approve).toBe(false);
+    const saved = await bridge.saveTemplate(input);
     expect(calls.find(entry => entry.path === '/templates/create')?.body).toMatchObject({ approve: false });
     expect(saved.notice).toBe('template_draft_saved');
     expect(sequenceScreen(saved).notice).toContain('not approved');

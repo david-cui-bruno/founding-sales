@@ -438,10 +438,14 @@ async function recheckAndClaim(
       }
     }
 
-    if (plan.mailbox.id !== precheck.mailbox.id) {
-      // A `prepared` fence's envelope is still mutable, its mailbox included, and the
-      // token in hand belongs to the mailbox the precheck named. Sending another
-      // mailbox's fence with it would send from the wrong account.
+    if (plan.mailbox.id !== precheck.mailbox.id ||
+        plan.mailbox.generation !== precheck.mailbox.generation ||
+        plan.mailbox.providerAccountId !== precheck.mailbox.providerAccountId ||
+        plan.mailbox.ownerUserId !== precheck.mailbox.ownerUserId ||
+        plan.mailbox.address !== precheck.mailbox.address) {
+      // Reconnecting can replace the account behind the same mailbox row while OAuth
+      // waits. The token in hand belongs to the exact precheck identity/generation,
+      // never merely its mailbox ID. Refuse before capacity or attempt reservation.
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: 'fence_not_ready', detail: 'mailbox_changed' };
     }
