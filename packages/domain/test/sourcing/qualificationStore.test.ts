@@ -5,7 +5,7 @@ import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { saveCandidate, reviewCandidate, deleteCandidate } from '../../sourcing/candidates.ts';
-import { requestQualification, readQualification, finishQualification } from '../../sourcing/qualificationStore.ts';
+import { requestQualification, readQualification, finishQualification, QUALIFICATION_POLICY_VERSION, QUALIFICATION_PROMPT_VERSION } from '../../sourcing/qualificationStore.ts';
 import { reserveAttempt, markCalling, settleAttempt } from '../../research/reservations.ts';
 
 let database: TestDatabase;
@@ -51,9 +51,24 @@ it('deduplicates a candidate revision and refuses other workspaces and non-admin
   expect(await readQualification(context(),{candidateId})).toMatchObject({runId,status:'pending',candidateId,observations:[],facts:[]});
   const jobs=await database.session.query<{payload:unknown;max_attempts:number}>("SELECT payload,max_attempts FROM jobs WHERE kind='sourcing.qualify'");
   expect(jobs.rows).toHaveLength(1);
-  expect(jobs.rows[0]).toMatchObject({payload:{runId,candidateId,candidateRevision:1,promptVersion:'qualification-context-v7',policyVersion:'qualification-v4'},max_attempts:1});
+  expect(jobs.rows[0]).toMatchObject({payload:{runId,candidateId,candidateRevision:1,promptVersion:QUALIFICATION_PROMPT_VERSION,policyVersion:QUALIFICATION_POLICY_VERSION},max_attempts:1});
   expect(JSON.stringify(jobs.rows)).not.toContain(candidate.evidence);
   expect((await database.session.query('SELECT id FROM firms')).rows).toHaveLength(0);
+});
+
+it('reads a historical v4 run without rewriting evidence, requeueing or configuring admission',async()=>{
+  const candidateId=await create(),runId=await request(candidateId),source=observation();
+  const facts=[{kind:'help_request' as const,value:candidate.evidence,observationId:source.id,blockId:'help'}];
+  await tx(()=>finishQualification(context(),{runId,observations:[source],facts,reason:null}));
+  await database.session.query("UPDATE sourcing_qualification_runs SET policy_version='qualification-v4' WHERE id=$1",[runId]);
+  const historical=(await database.session.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[runId])).rows[0];
+  const jobs=(await database.session.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows;
+  const settings=(await database.session.query('SELECT * FROM sourcing_discovery_settings ORDER BY workspace_id')).rows;
+  expect(await readQualification(context(),{candidateId})).toMatchObject({runId,status:'review',observations:[source],facts,admission:null});
+  expect((await database.session.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[runId])).rows[0]).toEqual(historical);
+  expect((await database.session.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows).toEqual(jobs);
+  expect((await database.session.query('SELECT * FROM sourcing_discovery_settings ORDER BY workspace_id')).rows).toEqual(settings);
+  expect((await database.session.query('SELECT id FROM sourcing_qualification_runs')).rows).toEqual([{id:runId}]);
 });
 
 it('rejects an in-flight result after a candidate changes or is dismissed',async()=>{

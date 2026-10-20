@@ -17,7 +17,7 @@ import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
 
 export const QUALIFICATION_PROMPT_VERSION='qualification-context-v7';
-export const QUALIFICATION_POLICY_VERSION='qualification-v4';
+export const QUALIFICATION_POLICY_VERSION='qualification-v5';
 export type SourcingResult<T>={ok:true;value:T}|{ok:false;reason:string};
 export interface QualificationRunRow {
   id:string;candidate_id:string;candidate_revision:number;model_name:string;

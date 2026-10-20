@@ -1,6 +1,7 @@
 import {it,expect} from 'vitest';
 import type {CandidateInput,QualificationFact,SourceObservation} from '@fss/contracts';
 import {verifiedFirmEvidence,verifiedWebsiteKey,validVerifiedFirmAttestation,VERIFIED_FIRM_POLICY_VERSION} from '../../sourcing/verifiedFirmPolicy.ts';
+import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from '../../sourcing/qualificationStore.ts';
 import {discoveryQuotaRemaining} from '../../sourcing/discoveryQuota.ts';
 const now='2026-10-18T12:00:00.000Z';
 const candidate:CandidateInput={firmName:'Harbor Residential LLC',website:'https://harbor.example.test/dallas',sourceUrl:'https://harbor.example.test/dallas',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unverified search',preparedBy:'Tavily Basic search · not verified',observedOn:'2026-10-18'};
@@ -9,11 +10,16 @@ function evidence(c:CandidateInput=candidate){
  const facts:QualificationFact[]=[...(['firm_identity','residential_management','service_area'] as const).map(kind=>({kind,value:observation.blocks[0]!.text,observationId:observation.id,blockId:'office'})),{kind:'business_phone',value:observation.blocks[1]!.text,observationId:observation.id,blockId:'phone'}];
  return {candidate:c,facts,observations:[observation],now};
 }
+it('pins the combined policy revisions without changing the extraction prompt',()=>{
+ expect(QUALIFICATION_POLICY_VERSION).toBe('qualification-v5');
+ expect(VERIFIED_FIRM_POLICY_VERSION).toBe('verified-firm-v3');
+ expect(QUALIFICATION_PROMPT_VERSION).toBe('qualification-context-v7');
+});
 it('requires a fresh explicit versioned attestation, not a legacy true flag or old reviewed report',()=>{
- const current={policyVersion:'qualification-v4',promptVersion:'qualification-context-v7',verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0};
+ const current={policyVersion:QUALIFICATION_POLICY_VERSION,promptVersion:QUALIFICATION_PROMPT_VERSION,verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0};
  expect(validVerifiedFirmAttestation(current)).toBe(true);
  expect(validVerifiedFirmAttestation({policyVersion:current.policyVersion,promptVersion:current.promptVersion,reportSha256:current.reportSha256,reviewedEligible:3,falseEligible:0})).toBe(false);
- for(const edit of [{promptVersion:'qualification-growth-v6'},{verifiedFirmPolicyVersion:'verified-firm-v1'},{verifiedFirmPolicyVersion:'verified-firm-v0'},{promptVersion:'old'},{policyVersion:'old'},{reportSha256:'invalid'},{reviewedEligible:0},{falseEligible:1}])expect(validVerifiedFirmAttestation({...current,...edit})).toBe(false);
+ for(const edit of [{policyVersion:'qualification-v4'},{verifiedFirmPolicyVersion:'verified-firm-v2'},{promptVersion:'qualification-growth-v6'},{verifiedFirmPolicyVersion:'verified-firm-v1'},{verifiedFirmPolicyVersion:'verified-firm-v0'},{promptVersion:'old'},{policyVersion:'old'},{reportSha256:'invalid'},{reviewedEligible:0},{falseEligible:1}])expect(validVerifiedFirmAttestation({...current,...edit})).toBe(false);
  expect(validVerifiedFirmAttestation(null)).toBe(false);
 });
 it.each([{region:'TX',locality:'Dallas'},{region:'RI',locality:'Newport'},{region:'MA',locality:'Worcester'}] as const)('verifies all-state $region fit without inventing maintenance pain',location=>{

@@ -7,8 +7,8 @@ import {verifiedOfficePhone} from './verifiedOfficePhone.ts';
 import {isDiscoveryDirectory} from './discoveryIdentity.ts';
 
 /** A new owner attestation is required. A historical auto-admission flag is not consent. */
-// V1 reviewed the old single-block phone semantics. It cannot attest this new proof.
-export const VERIFIED_FIRM_POLICY_VERSION='verified-firm-v2';
+// Earlier attestations do not cover the current residential vocabulary and office layouts.
+export const VERIFIED_FIRM_POLICY_VERSION='verified-firm-v3';
 export interface VerifiedFirmAttestation {
  policyVersion?:string;promptVersion?:string;verifiedFirmPolicyVersion?:string;
  reportSha256?:string;reviewedEligible?:number;falseEligible?:number;
