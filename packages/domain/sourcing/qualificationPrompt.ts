@@ -3,13 +3,16 @@ import {qualificationFactSchema,type SourceObservation,type QualificationFact} f
 import type {ClassifierRequest} from '../classification/prompt.ts';
 import type {QualificationCandidateContext} from './qualificationCitationRoles.ts';
 import type {ProviderOutcome} from '../research/providers.ts';
+import type {QualificationExtractionDiagnostic} from './qualificationDiagnostics.ts';
 export const QUALIFICATION_OUTPUT_TOKENS=2048;
 export interface QualificationExtractionRequest {candidate:QualificationCandidateContext;observations:readonly SourceObservation[];modelName:string;maxInputTokens:number;maxOutputTokens:number}
 export interface QualificationExtractionAnswer {facts:QualificationFact[];openingQuestion:string|null}
+/** Internal failure metadata only, never part of qualification views or model output. */
+export type QualificationExtractionOutcome=ProviderOutcome<QualificationExtractionAnswer>&{readonly diagnostic?:QualificationExtractionDiagnostic};
 export interface QualificationExtractionProvider {
  providerKey:string;
  countInputTokens(input:QualificationExtractionRequest):Promise<number>;
- extract(input:QualificationExtractionRequest):Promise<ProviderOutcome<QualificationExtractionAnswer>>;
+ extract(input:QualificationExtractionRequest):Promise<QualificationExtractionOutcome>;
 }
 export const qualificationSelectionSchema=z.strictObject({
  selections:z.array(z.strictObject({kind:qualificationFactSchema.shape.kind,observationId:z.uuid(),blockId:z.string().min(1).max(80)})).max(30),

@@ -11,10 +11,10 @@ it('supplements only unique original literal identity and named descriptive geog
 });
 it.each(['b3','b4'])('refuses nameless or genuinely contradictory selected identity %s rather than dropping it',id=>{
  const facts=[fact('b1','firm_identity'),fact(id,'firm_identity')],before=JSON.stringify(facts);
- expect(qualificationCitationRoles(candidate,facts,[source])).toEqual({ok:false,reason:'invalid_evidence'});expect(JSON.stringify(facts)).toBe(before);
+ expect(qualificationCitationRoles(candidate,facts,[source])).toMatchObject({ok:false,reason:'invalid_evidence'});expect(JSON.stringify(facts)).toBe(before);
 });
 it.each([{truncated:true},{firstParty:false},{url:'https://other.example.test/'}])('refuses selected references from unusable source %j',edit=>{
- expect(qualificationCitationRoles(candidate,[fact('b1','firm_identity')],[{...source,...edit}])).toEqual({ok:false,reason:'invalid_evidence'});
+ expect(qualificationCitationRoles(candidate,[fact('b1','firm_identity')],[{...source,...edit}])).toMatchObject({ok:false,reason:'invalid_evidence'});
  expect(qualificationCitationRoles(candidate,[],[{...source,...edit}])).toEqual({ok:true,facts:[]});
 });
 it('never matches fuzzy names, whole-state geography, missing-state city, or foreign office as target',()=>{
@@ -28,6 +28,25 @@ it('does not choose among multiple candidate citations or synthesize a joined se
  expect(qualificationCitationRoles(candidate,[],[{...source,blocks:[{id:'a',text:'Harbor Example Management manages residential homes in Boston.'},{id:'b',text:'Massachusetts'}]}])).toEqual({ok:true,facts:[]});
 });
 it('refuses invalid literal references and supplementation overflow without dropping existing facts',()=>{
- expect(qualificationCitationRoles(candidate,[{...fact('b1','firm_identity'),value:'invented'}],[source])).toEqual({ok:false,reason:'invalid_evidence'});
- expect(qualificationCitationRoles(candidate,Array.from({length:30},()=>fact('b2','residential_management')),[source])).toEqual({ok:false,reason:'invalid_evidence'});
+ expect(qualificationCitationRoles(candidate,[{...fact('b1','firm_identity'),value:'invented'}],[source])).toMatchObject({ok:false,reason:'invalid_evidence'});
+ expect(qualificationCitationRoles(candidate,Array.from({length:30},()=>fact('b2','residential_management')),[source])).toMatchObject({ok:false,reason:'invalid_evidence'});
+});
+it('distinguishes literal identity, forbidden attribution and overflow without retaining text',()=>{
+ const nameless=qualificationCitationRoles(candidate,[fact('b3','firm_identity')],[source]);
+ expect(nameless).toMatchObject({ok:false,reason:'invalid_evidence',diagnostic:{stage:'citation_roles',code:'identity_not_literal',selectionIndex:0,selectionCount:1,observationId:source.id,blockId:'b3'}});
+ const forbidden={...source,blocks:[{id:'b1',text:`Website by ${candidate.firmName}`} ]};
+ expect(qualificationCitationRoles(candidate,[{kind:'firm_identity',value:forbidden.blocks[0]!.text,observationId:source.id,blockId:'b1'}],[forbidden])).toMatchObject({ok:false,diagnostic:{code:'identity_forbidden'}});
+ expect(qualificationCitationRoles(candidate,Array.from({length:30},()=>fact('b2','residential_management')),[source])).toMatchObject({ok:false,diagnostic:{code:'supplement_over_bound',selectionCount:30}});
+ const overflow=qualificationCitationRoles(candidate,Array.from({length:31},()=>fact('b2','residential_management')),[source]);
+ expect(overflow).toMatchObject({ok:false,diagnostic:{code:'selections_over_bound'}});if(!overflow.ok)expect(overflow.diagnostic).not.toHaveProperty('selectionCount');
+ expect(JSON.stringify(nameless)).not.toContain(source.blocks[2]!.text);
+});
+it('distinguishes unusable source, missing block, mismatched citation and oversized block',()=>{
+ expect(qualificationCitationRoles(candidate,[fact('b1','firm_identity')],[{...source,truncated:true}])).toMatchObject({ok:false,diagnostic:{code:'source_unusable'}});
+ const missing=qualificationCitationRoles(candidate,[{...fact('b1','firm_identity'),blockId:'private missing block'}],[source]);
+ expect(missing).toMatchObject({ok:false,diagnostic:{code:'block_missing',observationId:source.id}});if(!missing.ok)expect(missing.diagnostic).not.toHaveProperty('blockId');
+ expect(qualificationCitationRoles(candidate,[{...fact('b1','firm_identity'),value:'not published'}],[source])).toMatchObject({ok:false,diagnostic:{code:'citation_mismatch'}});
+ const long={...source,blocks:[{id:'long',text:'x'.repeat(2001)}]};
+ expect(qualificationCitationRoles(candidate,[{kind:'firm_identity',value:long.blocks[0]!.text,observationId:source.id,blockId:'long'}],[long])).toMatchObject({ok:false,diagnostic:{code:'block_over_bound'}});
+ expect(qualificationCitationRoles({...candidate,locality:''},[],[source])).toMatchObject({ok:false,diagnostic:{code:'candidate_invalid'}});
 });
