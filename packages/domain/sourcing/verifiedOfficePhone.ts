@@ -30,8 +30,11 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
   // Full street/city on one line is still literal geography, never a service-area guess.
   if(!/^\d{1,6}\s/u.test(normalized))return false;
   const parts=normalized.split(/,\s*/u),locationIndex=parts.findIndex((_,index)=>location.test(parts.slice(index).join(', ')));
-  if(locationIndex<1||locationIndex>2||!streetAddress.test(parts[0]!))return false;
-  return locationIndex===1||/^(?:suite|ste|#)\s*#?[a-z0-9-]+$/u.test(parts[1]!);
+  if(locationIndex>=1&&locationIndex<=2&&streetAddress.test(parts[0]!))return locationIndex===1||/^(?:suite|ste|#)\s*#?[a-z0-9-]+$/u.test(parts[1]!);
+  // Observed contact-card layout: "13803 Jarvis Rd Cypress, TX 77429".
+  // Match a unique literal city suffix inside this original block, not joined facts.
+  const suffixParts=normalized.split(new RegExp(`\\s+${escape(city)},?\\s+`,'u'));
+  return suffixParts.length===2&&streetAddress.test(suffixParts[0]!)&&new RegExp(`^(?:${escape(state)}|${escape(stateNames[identity.region]??'__unknown__')})\\s+\\d{5}(?:-\\d{4})?$`,'u').test(suffixParts[1]!);
  };
  const named=(text:string)=>{
   const normalized=fold(text);
@@ -70,6 +73,7 @@ export function verifiedOfficePhone(input:{identity:SourcingIdentity;facts:reado
      const text=blocks[cursor]!.text;
      if(text.length>240||named(text)||(numbers(text).length===0&&fold(text).startsWith(`${name} office: `)))break;
      if(foreignLocation(text)||numbers(text).some(value=>!allNumbers.has(value)))return true;
+     if(sameLocation(text)&&/^\d/u.test(text)&&blocks.slice(start,end+1).some(block=>sameLocation(block.text)&&/^\d/u.test(block.text)&&fold(block.text)!==fold(text)))return true;
      if(!sameLocation(text)&&!phoneLine(text)&&!street(text)&&!label(text)&&!email(text))break;
     }
    }

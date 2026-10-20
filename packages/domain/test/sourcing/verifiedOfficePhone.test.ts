@@ -1,6 +1,8 @@
 import {it,expect} from 'vitest';
 import type {CandidateInput,QualificationFact,SourceObservation} from '@fss/contracts';
 import {verifiedFirmEvidence} from '../../sourcing/verifiedFirmPolicy.ts';
+import {verifiedOfficePhone} from '../../sourcing/verifiedOfficePhone.ts';
+import {sourcingTimeZone} from '../../sourcing/admission.ts';
 const now='2026-10-18T12:00:00.000Z',name='Cedar Residential LLC',phone='(214) 555-0190';
 const candidate:CandidateInput={firmName:name,website:'https://cedar.example.test/dallas',sourceUrl:'https://cedar.example.test/dallas',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unverified search',preparedBy:'Tavily Basic search · not verified',observedOn:'2026-10-18'};
 /** Fictional data, real extraction shape: a fact contains exactly one original block. */
@@ -134,4 +136,73 @@ it('refuses forged phone values and retains literal residential negative evidenc
  expect(verifiedFirmEvidence(forged)).toEqual({kind:'pending',reason:'invalid_evidence'});
  const denied=fixture(compact);denied.observations[0]!.blocks.push({id:'denied',text:'We do not manage residential properties. Commercial only.'});
  expect(verifiedFirmEvidence(denied)).toEqual({kind:'pending',reason:'residential_fit_unknown'});
+});
+// Literal original b5-b8 from v1-firm-4-request-2-blocks.json, not a joined quote.
+const firstClassCard=[
+ {id:'b5',text:'First Class Realty & Management'},
+ {id:'b6',text:'13803 Jarvis Rd Cypress, TX 77429'},
+ {id:'b7',text:'281-807-4700'},
+ {id:'b8',text:'info@1stclassmgt.com'},
+];
+function firstClassFixture(){
+ const input=fixture([],[]);
+ input.candidate={...input.candidate,firmName:firstClassCard[0]!.text,website:'https://www.1stclassmgt.com/contact',locality:'Cypress'};
+ const source=input.observations[0]!;
+ source.url=input.candidate.website;source.blocks=firstClassCard.map(block=>({...block}));
+ input.facts=[{kind:'business_phone',value:'281-807-4700',observationId:source.id,blockId:'b7'}];
+ const identity={status:'resolved' as const,name:input.candidate.firmName,website:input.candidate.website,locality:'Cypress',region:'TX'};
+ return {input,identity};
+}
+it('recognizes only the literal contiguous First Class office card without rewriting original citations',()=>{
+ const {input,identity}=firstClassFixture(),before=JSON.stringify(input);
+ expect(verifiedOfficePhone({...input,identity})).toEqual({phone:'+12818074700',ambiguous:false});
+ expect(JSON.stringify(input)).toBe(before);
+ expect(input.observations[0]!.blocks).toEqual(firstClassCard);
+ expect(input.facts[0]).toMatchObject({blockId:'b7',value:'281-807-4700'});
+});
+it.each([
+ '13803 Jarvis Rd Austin, TX 77429',
+ '13803 Jarvis Rd Cypress, TX',
+ '13803 Jarvis Rd Cypress, TX 77429 Dallas, TX 75001',
+ '13803 Cypress Rd Cypress, TX 77429',
+ '100 Properties Managed Cypress, TX 77429',
+])('refuses nonunique, incomplete or contrary suffix grammar: %s',address=>{
+ const {input,identity}=firstClassFixture();input.observations[0]!.blocks[1]!.text=address;
+ expect(verifiedOfficePhone({...input,identity}).phone).toBeNull();
+});
+it.each([
+ ['cross-brand RHOME','Specialized - Dallas-Fort Worth'],
+ ['nameless RPM','Headquarters'],
+])('does not borrow a %s office name for an otherwise recognized address',(_label,heading)=>{
+ const {input,identity}=firstClassFixture();input.observations[0]!.blocks[0]!.text=heading;
+ expect(verifiedOfficePhone({...input,identity}).phone).toBeNull();
+});
+it.each(['Fax: 281-807-4701','13805 Jarvis Rd Cypress, TX 77429','12 Example Street Austin, TX 78701'])('keeps contrary adjacent office evidence: %s',text=>{
+ const {input,identity}=firstClassFixture();input.observations[0]!.blocks.push({id:'contrary',text});
+ expect(verifiedOfficePhone({...input,identity}).phone).toBeNull();
+});
+it('does not normalize vanity Local Leasing phones or bridge distant cards',()=>{
+ const vanity=firstClassFixture();vanity.input.facts[0]!.value='(210) 761-HOME';vanity.input.observations[0]!.blocks[2]!.text='(210) 761-HOME';
+ expect(verifiedOfficePhone({...vanity.input,identity:vanity.identity}).phone).toBeNull();
+ const distant=firstClassFixture();distant.input.observations[0]!.blocks.splice(1,0,...Array.from({length:6},(_,n)=>({id:`gap${n}`,text:'Office'})));
+ expect(verifiedOfficePhone({...distant.input,identity:distant.identity}).phone).toBeNull();
+});
+it('leaves Cypress zone and truncated fit barriers intact despite recognized contact evidence',()=>{
+ const {input}=firstClassFixture(),source=input.observations[0]!;
+ input.facts.push({kind:'firm_identity',value:firstClassCard[0]!.text,observationId:source.id,blockId:'b5'},
+  {kind:'service_area',value:firstClassCard[1]!.text,observationId:source.id,blockId:'b6'});
+ // Controlled fit text is not a claim about the actual truncated home page.
+ const fit={...source,id:'00000000-0000-4000-8000-000000000002',truncated:true,blocks:[{id:'fit',text:'First Class Realty & Management provides residential property management.'}]};
+ input.observations.push(fit);input.facts.push({kind:'residential_management',value:fit.blocks[0]!.text,observationId:fit.id,blockId:'fit'});
+ expect(verifiedFirmEvidence(input)).toEqual({kind:'pending',reason:'residential_fit_unknown'});
+ expect(sourcingTimeZone('TX','Cypress')).toBeNull();
+ source.truncated=true;
+ expect(verifiedFirmEvidence(input)).toEqual({kind:'pending',reason:'source_incomplete_or_unverified'});
+});
+it('does not expand to Rollingwood split locality or Bella numbered-highway/fax cards',()=>{
+ const split=fixture([name,'12 Example Street','Dallas','TX, 75001',phone],[4]);
+ expect(verifiedFirmEvidence(split)).not.toMatchObject({phone:'+12145550190'});
+ const bella=fixture(['Bella Real Estate, Inc.','6108 W. Highway 290','Austin, TX 78735','Office Phone: 512.693.4772','Office Fax: 512.693.4773'],[3]);
+ bella.candidate.firmName='Bella Real Estate, Inc.';bella.candidate.locality='Austin';bella.observations[0]!.truncated=true;
+ expect(verifiedFirmEvidence(bella)).toEqual({kind:'pending',reason:'source_incomplete_or_unverified'});
 });
