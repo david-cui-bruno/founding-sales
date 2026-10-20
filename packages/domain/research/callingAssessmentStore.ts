@@ -1,14 +1,12 @@
 import {z} from 'zod';
 import {isDeepStrictEqual} from 'node:util';
-import {callingAssessmentInputSchema, type CallingAssessmentInput, type QualificationFact, type SourceObservation} from '@fss/contracts';
+import {type QualificationFact, type SourceObservation} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {QualificationCandidateContext} from '../sourcing/qualificationCitationRoles.ts';
 import type {SourcingResult} from '../sourcing/qualificationStore.ts';
 import {assessCallingEvidence, CALLING_EVIDENCE_POLICY_VERSION, hasKnownPersonalPhoneEvidence} from '../sourcing/callingEvidence.ts';
 import {officeHash, officeNow, readOfficeAssessmentBinding} from './officeAssessmentTarget.ts';
 import {readFirmOfficeAssessment} from './officeAssessmentStore.ts';
-import {decideAdminOnly} from '../crm/authorization.ts';
-import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {actorKind, actorUserId} from '../crm/types.ts';
 
 export const CALLING_ASSESSMENT_ACTION = 'calling.source_evidence_assessed';
@@ -131,15 +129,4 @@ export async function readCallingAssessment(ctx: RepositoryContext, input: Targe
   // Immutable calling history is not a veto over independent current strict
   // evidence. Only an explicitly expected event forbids trying another proof.
   return {kind: input.expectedAuditId ? 'invalid' : 'none'};
-}
-
-export async function assessCallingOffice(ctx: RepositoryContext, input: CallingAssessmentInput): Promise<SourcingResult<CallingAssessmentResult>> {
-  if (!decideAdminOnly(ctx).permitted || ctx.scope.actor.kind !== 'user') return refused('admin_only');
-  if (!callingAssessmentInputSchema.safeParse(input).success) return refused('invalid_input');
-  await lockSendGateForStopFact(ctx);
-  const row = (await ctx.db.query<{phone_route_id: string; route_version: number}>(`SELECT phone_route_id,route_version FROM firm_office_assessments WHERE workspace_id=$1 AND id=$2 AND firm_id=$3`, [ctx.scope.workspaceId, input.officeAssessmentId, input.firmId])).rows[0];
-  if (!row) return refused('not_found');
-  const route = (await ctx.db.query<{e164: string}>('SELECT e164 FROM phone_routes WHERE workspace_id=$1 AND id=$2 AND firm_id=$3 AND version=$4', [ctx.scope.workspaceId, row.phone_route_id, input.firmId, row.route_version])).rows[0];
-  if (!route) return refused('route_changed');
-  return recordCallingAssessment(ctx, {parentKind: 'office_assessment', parentId: input.officeAssessmentId, candidateId: null, candidateRevision: null}, {firmId: input.firmId, routeId: row.phone_route_id, routeVersion: row.route_version, e164: route.e164, at: await officeNow(ctx)});
 }
