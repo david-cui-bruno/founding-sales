@@ -2141,7 +2141,7 @@ export interface OperationApi {
 
 /** Dialling: its own channel, because it opens a URI rather than answering with one. */
 export interface DialBridge {
-  call(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): Promise<
+  call(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string; readonly expectedNationalDncReceiptId?: string | null }): Promise<
     OperationOutput<'today.state'>
   >;
 }

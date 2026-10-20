@@ -624,7 +624,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       routeId,
       callable: advice.callable,
       reasons: advice.reasons,
-      e164: advice.e164,
+      e164: advice.e164, nationalDnc: advice.nationalDnc ?? { status: 'unknown', basis: null, receiptId: null, warning: null },
       firmLocalTime: advice.firmLocalTime, firmTimeZone: advice.firmTimeZone, callingWindowOpensAt: advice.callingWindowOpensAt ?? null,
     };
   };
@@ -842,7 +842,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       const mine = generation;
       const route = expanded?.firmId === input.firmId ? expanded.routes.find(row => row.routeId === input.routeId) : undefined;
       if (!route) { notice = 'route_missing'; return await answerFor(mine); }
-      const answer = await phoneHandoff.dispatch({ firmId: input.firmId, routeId: route.routeId, routeVersion: route.version, e164: route.e164 }, () => !stale(mine));
+      const answer = await phoneHandoff.dispatch({ firmId: input.firmId, routeId: route.routeId, routeVersion: route.version, e164: route.e164, expectedNationalDncReceiptId: input.expectedNationalDncReceiptId ?? null }, () => !stale(mine));
       if (stale(mine)) return await answerFor(mine);
       notice = answer.notice;
       if (answer.attemptId) lastCall = { firmId: input.firmId, routeId: route.routeId, contactId: route.contactId,

@@ -9,7 +9,7 @@ afterAll(async()=>{await db.drop();});
 describe('0122 forward compatibility and immutable purpose',()=>{
  it('adds body-free source-owned tables and preserves every legacy brief as brief without new jobs',async()=>{
   const before=(await db.session.query('SELECT brief FROM research_runs WHERE id=$1',[runId])).rows;
-  expect((await applyMigrations(db.session)).map(m=>m.version)).toContain(122);expect(await readAppliedSchemaVersion(db.session)).toBe(122);
+  expect((await applyMigrations(db.session,{throughVersion:122})).map(m=>m.version)).toContain(122);expect(await readAppliedSchemaVersion(db.session)).toBe(122);
   expect((await db.session.query('SELECT brief FROM research_runs WHERE id=$1',[runId])).rows).toEqual(before);
   expect((await db.session.query('SELECT purpose,office_assessment_capture_status FROM research_runs WHERE id=$1',[runId])).rows).toEqual([{purpose:'brief',office_assessment_capture_status:null}]);
   expect((await db.session.query("SELECT count(*)::int n FROM jobs WHERE kind='research.firm'")).rows).toEqual([{n:0}]);

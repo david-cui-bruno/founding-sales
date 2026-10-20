@@ -6,6 +6,7 @@ import { dispatch } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedFirm, seedContact } from './support/crmSeed.ts';
+import { publishTestRegistrySnapshot } from '../../../packages/domain/test/support/nationalRegistry.ts';
 let f: AuthFixture;
 let token: string;
 let firmId: string;
@@ -51,10 +52,8 @@ describe('phone handoff dispatcher and durable command receipts', () => {
     expect((await f.db.query('SELECT id FROM phone_handoff_attempts')).rows).toHaveLength(0);
   });
   it('commits one opaque receipt and returns only the original fresh URI, never on replay or a new command', async () => {
-    const snapshot = (await f.db.query<{ id: string }>(`INSERT INTO national_registry_snapshots(workspace_id,receipt_reference,downloaded_at,published_at,complete,covered_area_codes)
-      VALUES($1,'fictional-test-only','2026-09-01','2026-09-15',true,ARRAY['401']) RETURNING id`, [f.alpha.workspaceId])).rows[0]?.id;
-    await f.db.query(`INSERT INTO national_registry_endpoint_scrubs(workspace_id,snapshot_id,e164,scrubbed_at,result)
-      VALUES($1,$2,$3,'2026-09-15','clear')`, [f.alpha.workspaceId, snapshot, e164]);
+    await publishTestRegistrySnapshot(f.db, f.alpha.workspaceId, { downloadedAt: '2026-09-01T00:00:00Z',
+      publishedAt: '2026-09-15T00:00:00Z', e164s: [{ e164, result: 'clear' }] });
     authorityAt = '2026-09-16T14:00:16.000Z';
     const expired = await post(command());
     expect(expired.status).toBe(409);
@@ -66,6 +65,7 @@ describe('phone handoff dispatcher and durable command receipts', () => {
     expect(answer.status, JSON.stringify(answer.body)).toBe(200);
     const envelope = answer.body as { result: unknown };
     const fresh = phoneHandoffResultSchema.parse(envelope.result);
+    expect(fresh).not.toHaveProperty('nationalDnc'); // Older strict fresh-result parsers still work.
     expect(fresh).toMatchObject({ actionable: true, e164, telUri: `tel:${e164}`,
       reservedAt: at, expiresAt: '2026-09-16T14:00:15.000Z', validForMilliseconds: 15000 });
     const receipt = (await f.db.query<{ result: unknown }>('SELECT result FROM command_receipts WHERE command_id=$1', [input.commandId])).rows[0];

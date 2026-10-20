@@ -145,12 +145,13 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
   handleOnce(DIAL_IPC_CHANNELS.call, async argument => {
     // The renderer's word is never taken for a shape: a malformed request is the current
     // state back, not an argument passed on to the API.
-    const input = argument as { firmId?: unknown; routeId?: unknown; contactId?: unknown } | null;
+    const input = argument as { firmId?: unknown; routeId?: unknown; contactId?: unknown; expectedNationalDncReceiptId?: unknown } | null;
     if (typeof input?.firmId !== 'string' || typeof input.routeId !== 'string') return await today.state();
     return await today.dial({
       firmId: input.firmId,
       contactId: typeof input.contactId === 'string' ? input.contactId : null,
       routeId: input.routeId,
+      expectedNationalDncReceiptId: typeof input.expectedNationalDncReceiptId === 'string' ? input.expectedNationalDncReceiptId : null,
     });
   });
 

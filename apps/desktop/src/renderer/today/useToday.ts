@@ -56,7 +56,7 @@ export interface TodayActions {
   /** Slice 3a: a call task marked done; the card and the list are read again. */
   completeTask(input: OperationInput<'today.completeTask'>): void;
   /** Its own channel: it opens a URI on the operating system rather than answering one. */
-  dial(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): void;
+  dial(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string; readonly expectedNationalDncReceiptId?: string | null }): void;
   /**
    * Read this firm's site again (lane R).
    *

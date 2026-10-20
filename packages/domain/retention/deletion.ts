@@ -512,7 +512,7 @@ async function measure(
   readonly redacts: Record<string, number>;
   readonly stops: Record<string, number>;
   readonly retains: Record<string, number>;
-  readonly handles: string[];
+  readonly handles: string[]; readonly phoneReceiptBindings: Awaited<ReturnType<typeof measurePhoneHandoffDeletion>>['receiptBindings'];
   readonly identityVersions: readonly {
     kind: string;
     id: string;
@@ -707,7 +707,7 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
-    phone_handoff_attempts: handoffs.attempts,
+    phone_handoff_attempts: handoffs.attempts, phone_owner_risk_receipts: handoffs.receipts,
     crm_ask_index_work:await countOf(context,`SELECT count(*) AS count FROM crm_ask_index_work a WHERE a.workspace_id=$1 AND ${CRM_ASK_INDEX_IN_SCOPE}`,byContact),
     crm_ask_canonical_windows:await countOf(context,`SELECT count(*) AS count FROM crm_ask_canonical_windows WHERE workspace_id=$1 AND work_id IN(${CRM_ASK_INDEX_IDS}) AND state IN ('pending','current')`,byContact),
     crm_commitment_reviews: await countOf(context,`SELECT count(*) AS count FROM crm_commitment_reviews r WHERE r.workspace_id=$1 AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE}`,byContact),
@@ -1008,7 +1008,7 @@ async function measure(
     redacts,
     stops,
     retains,
-    identityVersions,
+    identityVersions, phoneReceiptBindings: handoffs.receiptBindings,
     handles: [...handles].sort(),
     attendeeKeys: [...attendeeKeys].filter((key) => !handles.has(key)).sort(),
   };
@@ -1026,7 +1026,7 @@ function hashOf(
         removes: measured.removes,
         redacts: measured.redacts,
         stops: measured.stops,
-        identityVersions: measured.identityVersions,
+        identityVersions: measured.identityVersions, phoneReceiptBindings: measured.phoneReceiptBindings,
         handles: measured.handles,
         attendeeKeys: measured.attendeeKeys,
       }),
@@ -1341,7 +1341,7 @@ export async function commitDeletion(
   const removed: Record<string, number> = await eraseOfficeAssessments(context,scope,closure.firms);
   const redacted: Record<string, number> = {};
   const erasedHandoffs = await erasePhoneHandoffs(context, scope);
-  redacted['phone_handoff_attempts'] = erasedHandoffs.attempts;
+  redacted['phone_handoff_attempts'] = erasedHandoffs.attempts; redacted['phone_owner_risk_receipts'] = erasedHandoffs.receipts;
   removed['national_registry_endpoint_scrubs'] = erasedHandoffs.scrubs;
   const indexIds=(await context.db.query<{id:string}>(CRM_ASK_INDEX_IDS,byContact)).rows.map(row=>row.id);
   redacted['crm_ask_canonical_windows']=(await context.db.query("UPDATE crm_ask_canonical_windows SET state='deleted',embedding=NULL,context_snapshot=NULL,original_access_closure=NULL WHERE workspace_id=$1 AND work_id=ANY($2::uuid[]) AND state IN ('pending','current')",[workspace,indexIds])).rowCount??0;

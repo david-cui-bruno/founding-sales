@@ -4,6 +4,7 @@ import type { AuthedClient } from './authedClient.ts';
 import type { DialHandoff } from './dialHandoff.ts';
 
 interface Target {
+  readonly expectedNationalDncReceiptId?: string | null;
   readonly firmId: string;
   readonly routeId: string;
   readonly routeVersion: number;
@@ -19,7 +20,7 @@ export function createPhoneHandoff(deps: { readonly api: AuthedClient; readonly 
   readonly monotonic?: () => number; readonly wallNow?: () => number }) {
   const monotonic = deps.monotonic ?? (() => performance.now());
   const wallNow = deps.wallNow ?? (() => Date.now());
-  const pending = new Map<string, { commandId: string; attemptId?: string }>();
+  const pending = new Map<string, { commandId: string; attemptId?: string; expectedNationalDncReceiptId: string | null }>();
   const opened = new Set<string>();
   let busy = false;
   let generation = 0;
@@ -38,11 +39,12 @@ export function createPhoneHandoff(deps: { readonly api: AuthedClient; readonly 
         if (!live()) return { notice: 'handoff_reconciliation_required' };
         if (!setup.ready) return { notice: setup.reason };
         const key = `${target.firmId}:${target.routeId}`;
-        const entry = pending.get(key) ?? { commandId: randomUUID() };
+        const entry = pending.get(key) ?? { commandId: randomUUID(), expectedNationalDncReceiptId: target.expectedNationalDncReceiptId ?? null };
         pending.set(key, entry);
         const start = monotonic();
         const response = await deps.api.command('/dial/handoff', {
           firmId: target.firmId, routeId: target.routeId, routeVersion: target.routeVersion,
+          ...(entry.expectedNationalDncReceiptId === null ? {} : { expectedNationalDncReceiptId: entry.expectedNationalDncReceiptId }),
         }, value => phoneHandoffResultSchema.parse(value), { commandId: entry.commandId });
         // An ambiguous network/parse failure retains this command for nonactionable reconciliation.
         if (!response.ok) {
@@ -56,6 +58,9 @@ export function createPhoneHandoff(deps: { readonly api: AuthedClient; readonly 
         if (!live()) return { notice: 'handoff_reconciliation_required' };
         const identity = { attemptId: result.attemptId };
         if (!result.actionable || opened.has(result.attemptId)) return { ...identity, notice: 'handoff_reconciliation_required' };
+        if (result.nationalDnc?.status === 'not_checked_owner_risk'
+          ? !entry.expectedNationalDncReceiptId || result.nationalDnc.receiptId !== entry.expectedNationalDncReceiptId
+          : entry.expectedNationalDncReceiptId !== null) return { ...identity, notice: 'handoff_reconciliation_required' };
         if (result.firmId !== target.firmId || result.routeId !== target.routeId || result.e164 !== target.e164 ||
             monotonic() - start >= result.validForMilliseconds || wallNow() >= Date.parse(result.expiresAt)) {
           return { ...identity, notice: 'handoff_reconciliation_required' };

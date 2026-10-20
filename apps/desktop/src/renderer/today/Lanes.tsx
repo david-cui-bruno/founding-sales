@@ -80,11 +80,14 @@ export function DialPanel({
             disabled={!entry.enabled || actions.busy(todayForm.dial(entry.route.routeId))}
             {...(actions.busy(todayForm.dial(entry.route.routeId)) ? { 'aria-busy': true } : {})}
             onClick={() => {
-              actions.dial({ firmId, contactId: entry.route.contactId, routeId: entry.route.routeId });
+              actions.dial({ firmId, contactId: entry.route.contactId, routeId: entry.route.routeId,
+                expectedNationalDncReceiptId: entry.advice?.nationalDnc?.status === 'not_checked_owner_risk' ? entry.advice.nationalDnc.receiptId : null });
             }}
           >
             Call {entry.route.e164}
           </Button>
+          {entry.advice?.nationalDnc?.status === 'not_checked_owner_risk'
+            ? <span data-testid="national-dnc-warning" className="text-xs text-amber-700">{entry.advice.nationalDnc.warning}</span> : null}
           {entry.advice?.firmLocalTime == null ? null : (
             <span className="text-xs text-muted-foreground">It is {entry.advice.firmLocalTime} there.</span>
           )}
