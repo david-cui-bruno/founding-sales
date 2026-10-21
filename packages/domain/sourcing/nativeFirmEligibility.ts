@@ -5,7 +5,8 @@ import {qualificationCitationRoles,type QualificationCandidateContext} from './q
 import {deniesManagedResidences,supportsResidentialManagement,isTargetGeography,type SourcingIdentity} from './qualificationPolicy.ts';
 import {isDiscoveryDirectory} from './discoveryIdentity.ts';
 import {readCurrentDiscoveryResearchFirm} from './discoveryResearchFirm.ts';
-import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
+import type {QualificationRunRow} from './qualificationStore.ts';
+import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationVersions.ts';
 
 export const identityFold=(value:string):string=>value.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 /** Branch paths and only known non-identity tracking queries are supported. */
