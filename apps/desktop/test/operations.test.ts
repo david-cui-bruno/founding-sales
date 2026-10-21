@@ -409,10 +409,10 @@ it('qualification admission is explicitly reviewed and keeps its revision and co
   expect(command).toHaveBeenCalledTimes(1);
 });
 it('qualification discards evidence returned after switching workspace', async()=>{
- const h=hosts();let generation=0;h.recordings.identity.current=()=>generation;
+ let generation=0;const h={...hosts(),nativeSessionGeneration:()=>generation};h.recordings.identity.current=()=>generation;
  let finish!:(value:unknown)=>void;h.api.read=vi.fn(()=>new Promise(resolve=>{finish=resolve;})) as AuthedClient['read'];
- const pending=answerOperation(operationHandlers(h),'read','sourcing.qualification',{candidateId:ITEM_ID});
- generation++;finish({ok:true,value:{}});expect(await pending).toEqual({view:null,reason:'not_found'});
+ const pending=answerOperation(operationHandlers(h),'read','sourcing.qualification',{candidateId:ITEM_ID});expect(h.api.read).toHaveBeenCalledTimes(1);
+ generation++;finish({ok:true,value:{}});expect(await pending).toEqual({view:null,reason:'session_changed'});
 });
 
 it('returns a newly created person through the authenticated operation host without copying a source into the result',async()=>{
