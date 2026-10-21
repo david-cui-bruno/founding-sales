@@ -60,7 +60,7 @@ import { RESEARCH_CONSTRAINT_CASES } from "./support/researchCases.ts";
 import { FOLLOW_UP_CONSTRAINT_CASES } from "./support/followUpCases.ts";
 import { SEND_PATH_V2_CONSTRAINT_CASES } from "./support/sendPathV2Cases.ts";
 import { MAILBOX_ACCOUNTS_CONSTRAINT_CASES } from "./support/mailboxAccountsCases.ts";
-import { CALL_TO_BOOKING_CONSTRAINT_CASES } from "./support/callToBookingCases.ts";
+import { CALL_TO_BOOKING_CONSTRAINT_CASES, meeting } from "./support/callToBookingCases.ts";
 import { MEETING_BOOKING_UIDS_CONSTRAINT_CASES } from "./support/meetingBookingUidsCases.ts";
 import { CALL_TRANSCRIPTS_CONSTRAINT_CASES } from "./support/callTranscriptsCases.ts";
 import { CALL_SUMMARIES_CONSTRAINT_CASES } from "./support/callSummariesCases.ts";
@@ -2287,7 +2287,7 @@ const cases: readonly Case[] = [
   ...MEETING_RECORDINGS_CONSTRAINT_CASES,
   ...MEETING_TRANSCRIPTION_CONSTRAINT_CASES, ...PHONE_HANDOFF_CONSTRAINT_CASES,
   ...MEETING_OUTCOMES_CONSTRAINT_CASES,
-  ...MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES,
+  ...MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES, { constraint: "meeting_unpublished_plan_shape", run: async f => await f.session.query("INSERT INTO meeting_follow_through (workspace_id, meeting_id, firm_id, source_hash, notes_revision, unpublished_plan) SELECT workspace_id, id, firm_id, $2, 0, '{}'::jsonb FROM meetings WHERE id = $1", [await meeting(f), "a".repeat(64)]) },
   ...MEETING_AUTO_RECORDING_CONSTRAINT_CASES,
 ];
 

@@ -58,7 +58,7 @@ import {sourcingFeedbackSchema,sourcingFeedbackSavedSchema} from '@fss/contracts
 import { qualificationReadSchema, qualificationViewSchema, qualificationRequestSchema, qualificationQueuedSchema, qualificationAdmissionSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateInputSchema, candidateListInputSchema, candidateListSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
-import { meetingDraftEditSchema,meetingFollowThroughViewV2Schema } from '@fss/contracts';
+import { MEETING_FOLLOW_THROUGH_OPERATIONS } from './meetingFollowThroughOperations.ts';
 import { z } from 'zod';
 import { saveMeetingNotesSchema, changeMeetingTaskSchema, meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
 import {
@@ -1921,15 +1921,7 @@ export const OPERATIONS = {
     kind:'command',calls:[{method:'POST',path:'/meetings/recording-setup/retry'}],input:retryMeetingRecordingSetupSchema.extend({commandId:uuid}),
     output:z.strictObject({view:meetingRecordingSetupViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'audited versioned retry with retained command identity',
   },
-  'meetings.followThrough': {
-    kind:'read', calls:[{method:'GET',path:'/meetings/follow-through?meetingId={uuid}&version=2'}],input:z.strictObject({meetingId:uuid}),
-    output:z.strictObject({view:meetingFollowThroughViewV2Schema.nullable(),reason:z.string().max(80).nullable()}),transform:'current recap and follow-through, never cached on disk',
-  },
-  'meetings.editRecap': {
-    kind:'command',calls:[{method:'POST',path:'/meetings/recap/edit?version=2'}],
-    input:z.discriminatedUnion('action',[meetingDraftEditSchema.options[0].extend({commandId:uuid}),meetingDraftEditSchema.options[1].extend({commandId:uuid}),meetingDraftEditSchema.options[2].extend({commandId:uuid}),meetingDraftEditSchema.options[3].extend({commandId:uuid}),meetingDraftEditSchema.options[4].extend({commandId:uuid})]),
-    output:z.strictObject({view:meetingFollowThroughViewV2Schema.nullable(),reason:z.string().max(80).nullable()}),transform:'durable edit hold and versioned save, discard or cancellation',
-  },
+  ...MEETING_FOLLOW_THROUGH_OPERATIONS,
   'meetings.qualification': {
     kind:'read',calls:[{method:'GET',path:'/meetings/qualification?meetingId={uuid}'}],input:z.strictObject({meetingId:uuid}),
     output:z.strictObject({view:meetingQualificationViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'current commercial qualification, derived from accepted evidence and attendance',

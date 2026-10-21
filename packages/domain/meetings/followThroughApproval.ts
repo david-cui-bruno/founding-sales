@@ -1,4 +1,5 @@
 import type {AnswerBlock} from '@fss/contracts';
+import { hasUnresolvedMeetingFields, RECAP_FIELDS_UNRESOLVED } from './recapFields.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readSequenceVersion} from '../sequences/rows.ts';
 import {readTemplateVersion,renderTemplateVersion} from '../templates/templates.ts';
@@ -20,6 +21,7 @@ export async function meetingPlanSources(ctx:RepositoryContext,plan:FollowThroug
  return facts.ok?{ok:true,value:{templates,facts:facts.value}}:{ok:false,reason:`facts_${facts.reason}`};
 }
 export async function verifyMeetingPlanApproval(ctx:RepositoryContext,plan:FollowThroughRow,draft:FollowThroughDraftRow|null):Promise<string|null>{
+ if(draft!==null && hasUnresolvedMeetingFields(draft.subject,draft.body))return RECAP_FIELDS_UNRESOLVED;
  if(plan.approval_mode==='legacy_template')return null;
  if(plan.approval===null)return 'approval_required';
  if(draft===null)return 'draft_not_ready';
