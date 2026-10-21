@@ -1,3 +1,5 @@
+import {readCurrentDiscoveryResearchFirm} from './discoveryResearchFirm.ts';
+import {readNativeFirmEligibility} from './nativeFirmEligibility.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   qualificationRequestSchema, qualificationEvidenceSchema, type QualificationView,
@@ -117,6 +119,19 @@ export async function finishQualification(context:RepositoryContext,input:{runId
 /** One explicit admission association, never a domain/name guess. Admin research UI only. */
 export async function readFirmQualification(context:RepositoryContext,firmId:string):Promise<QualificationView|null> {
  if(!decideAdminOnly(context).permitted)return null;
+ const links=(await context.db.query<{candidate_id:string}>(`SELECT p.legacy_candidate_id AS candidate_id FROM sourcing_discovery_research_firms l JOIN sourcing_discovery_promotions p ON p.workspace_id=l.workspace_id AND p.id=l.promotion_id WHERE l.workspace_id=$1 AND l.firm_id=$2`,[context.scope.workspaceId,firmId])).rows;
+ if(links.length){
+  if(links.length!==1)return null;
+  const current=await readCurrentDiscoveryResearchFirm(context,{firmId});if(!current)return null;
+  const admissions=(await context.db.query<{candidate_id:string}>('SELECT candidate_id FROM sourcing_admissions WHERE workspace_id=$1 AND firm_id=$2',[context.scope.workspaceId,firmId])).rows;
+  if(admissions.some(row=>row.candidate_id!==current.candidate.id))return null;
+  const view=await readQualification(context,{candidateId:current.candidate.id});if(!view)return null;
+  const nativeEligibility=await readNativeFirmEligibility(context,firmId);
+  if(nativeEligibility.status==='verified'&&(nativeEligibility.runId!==view.runId||nativeEligibility.candidateRevision!==view.candidateRevision))return null;
+  const final=await readCurrentDiscoveryResearchFirm(context,{firmId});
+  if(!final||JSON.stringify(final)!==JSON.stringify(current))return null;
+  return {...view,nativeEligibility};
+ }
  const row=(await context.db.query<{candidate_id:string}>(`SELECT a.candidate_id FROM sourcing_admissions a JOIN firms f ON f.workspace_id=a.workspace_id AND f.id=a.firm_id JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id WHERE a.workspace_id=$1 AND a.firm_id=$2 AND f.status='active' ORDER BY c.status='dismissed',a.admitted_at DESC,a.candidate_id LIMIT 1`,[context.scope.workspaceId,firmId])).rows[0];
  return row?readQualification(context,{candidateId:row.candidate_id}):null;
 }

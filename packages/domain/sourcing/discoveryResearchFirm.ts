@@ -1,4 +1,4 @@
-import {discoveryResearchFirmLinkInputSchema,discoveryResearchFirmLinkSavedSchema,type CandidateInput} from '@fss/contracts';
+import {candidateInputSchema,discoveryResearchFirmLinkInputSchema,discoveryResearchFirmLinkSavedSchema,type CandidateInput} from '@fss/contracts';
 import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -47,21 +47,27 @@ export async function linkDiscoveryResearchFirm(ctx:RepositoryContext,input:Inpu
 }
 
 export async function readDiscoveryResearchFirm(ctx:RepositoryContext,promotionId:string,alreadyLinked=true):Promise<Saved|null> {
+ const current=await readCurrentDiscoveryResearchFirm(ctx,{promotionId});
+ return current?discoveryResearchFirmLinkSavedSchema.parse({discoveryCandidateId:current.discoveryCandidateId,qualificationCandidateId:current.candidate.id,firmId:current.firm.id,alreadyLinked,nextAction:'review_firm_research',qualified:false,admissionAuthorized:false,runtimeCallable:false}):null;
+}
+
+export async function readCurrentDiscoveryResearchFirm(ctx:RepositoryContext,selection:{promotionId:string}|{firmId:string}) {
  if(!decideAdminOnly(ctx).permitted||ctx.scope.actor.kind!=='user')return null;
- const prepared=await readDiscoveryPreparation(ctx,promotionId);if(!prepared)return null;
- const row=(await ctx.db.query<{firm_id:string;name:string;website:string|null;payload:CandidateInput}>(`SELECT l.firm_id,f.name,f.website,c.payload
+ const rows=(await ctx.db.query<{promotion_id:string;raw_id:string;raw_revision:number;candidate_id:string;revision:number;qualification_blocked:boolean;firm_id:string;assigned_user_id:string;locality:string|null;region_code:string|null;name:string;website:string|null;payload:CandidateInput}>(`SELECT p.id AS promotion_id,p.raw_candidate_id AS raw_id,p.raw_candidate_revision AS raw_revision,c.id AS candidate_id,c.revision,c.qualification_blocked,l.firm_id,f.assigned_user_id,f.locality,f.region_code,f.name,f.website,c.payload
  FROM sourcing_discovery_research_firms l
  JOIN sourcing_discovery_promotions p ON p.workspace_id=l.workspace_id AND p.id=l.promotion_id
  JOIN firms f ON f.workspace_id=l.workspace_id AND f.id=l.firm_id AND f.status='active' AND f.assigned_user_id=$3
+ JOIN workspace_memberships m ON m.workspace_id=f.workspace_id AND m.user_id=f.assigned_user_id AND m.status='active' AND m.role='admin'
  JOIN sourcing_candidates c ON c.workspace_id=p.workspace_id AND c.id=p.legacy_candidate_id AND c.status<>'dismissed'
  JOIN sourcing_candidates r ON r.workspace_id=p.workspace_id AND r.id=p.raw_candidate_id AND r.revision=p.raw_candidate_revision AND r.status<>'dismissed'
  AND r.payload->'row'->>'firmName'=c.payload->>'firmName' AND r.payload->'row'->>'website'=c.payload->>'website'
  AND r.payload->'row'->>'locality'=c.payload->>'locality' AND r.payload->'row'->>'region'=c.payload->>'region'
  JOIN sourcing_candidate_discovery_origins o ON o.workspace_id=p.workspace_id AND o.candidate_id=r.id AND o.provider=p.provider AND o.release=p.release AND o.record_id=p.record_id
- WHERE l.workspace_id=$1 AND l.promotion_id=$2`,[ctx.scope.workspaceId,promotionId,ctx.scope.actor.userId])).rows[0];
- // readDiscoveryPreparation above revalidates raw revision, exact source and seed.
- if(!row||!matchesStoredIdentity(row,row.payload)||!await unambiguous(ctx,{...row,id:row.firm_id}))return null;
- return row?discoveryResearchFirmLinkSavedSchema.parse({discoveryCandidateId:prepared.discoveryCandidateId,qualificationCandidateId:prepared.qualificationCandidateId,firmId:row.firm_id,alreadyLinked,nextAction:'review_firm_research',qualified:false,admissionAuthorized:false,runtimeCallable:false}):null;
+ WHERE l.workspace_id=$1 AND ${'promotionId' in selection?'l.promotion_id':'l.firm_id'}=$2`,[ctx.scope.workspaceId,'promotionId' in selection?selection.promotionId:selection.firmId,ctx.scope.actor.userId])).rows;
+ if(rows.length!==1)return null;
+ const row=rows[0];
+ if(!row||!candidateInputSchema.safeParse(row.payload).success||!matchesStoredIdentity(row,row.payload)||!await unambiguous(ctx,{...row,id:row.firm_id}))return null;
+ return {promotionId:row.promotion_id,discoveryCandidateId:row.raw_id,discoveryRevision:row.raw_revision,candidate:{id:row.candidate_id,revision:row.revision,qualification_blocked:row.qualification_blocked,payload:row.payload},firm:{id:row.firm_id,name:row.name,website:row.website,assigned_user_id:row.assigned_user_id,locality:row.locality,region_code:row.region_code}};
 }
 
 export async function readDiscoveryResearchFirmForCandidate(ctx:RepositoryContext,candidateId:string):Promise<Saved|null> {

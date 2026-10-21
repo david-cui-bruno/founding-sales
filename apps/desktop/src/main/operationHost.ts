@@ -1,5 +1,6 @@
 import {sourcingDiscoveryReviewHandlers} from './sourcingDiscoveryReviewHandlers.ts';
 import {sourcingDiscoverySaveHandlers} from './sourcingDiscoverySaveHandlers.ts';
+import {sourcingFirmQualificationHandlers} from './sourcingFirmQualificationHandlers.ts';
 import { linkedinManualOperations } from './social/linkedinManualOperations.ts';
 import { socialContentOperations } from './social/contentOperations.ts';
 import type {SocialDeliveryStatus,SocialPreparationResult} from '../shared/socialDiagnostics.ts';
@@ -384,12 +385,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
-    'sourcing.firmQualification': async (input:OperationInput<'sourcing.firmQualification'>) => {
-      const generation=deps.recordings.identity.current();
-      const answer=await deps.api.read('/sourcing/qualification/firm',value=>qualificationViewSchema.parse(value),input);
-      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
-      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
-    },
+    ...sourcingFirmQualificationHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
     'sourcing.qualification': async (input:OperationInput<'sourcing.qualification'>) => {
       const generation=deps.recordings.identity.current();
       const answer=await deps.api.read('/sourcing/qualification/read',value=>qualificationViewSchema.parse(value),input);
