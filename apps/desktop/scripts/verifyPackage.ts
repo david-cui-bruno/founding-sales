@@ -109,6 +109,7 @@ export interface VerificationReport {
   readonly secureTimestamp: boolean;
   readonly teamIdentifier: string | null;
   readonly stapled: boolean;
+  readonly notarization: NotarizationValidation | null;
   readonly gatekeeper: string | null;
   /** Read out of the packed JavaScript, not out of the stamp. */
   readonly embeddedUpdatePublicKey: string;
@@ -144,6 +145,59 @@ function run(command: string, args: readonly string[]): Ran {
     env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'C' },
   });
   return { status: result.status ?? -1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+export interface NotarizationCommandResult {
+  readonly status: number | null;
+  readonly signal: string | null;
+  readonly error?: unknown;
+  readonly stdout: string | null;
+  readonly stderr: string | null;
+}
+
+export interface NotarizationValidation {
+  readonly stapled: boolean;
+  readonly status: number | null;
+  readonly signal: string | null;
+  readonly errorCode: string | null;
+  readonly classification: 'success' | 'nonzero_exit' | 'spawn_error' | 'timeout' | 'signal' | 'invalid_status';
+  readonly stdout: { readonly present: boolean; readonly length: number };
+  readonly stderr: { readonly present: boolean; readonly length: number };
+}
+
+type NotarizationRunner = (
+  command: string,
+  args: string[],
+  options: { encoding: 'utf8'; timeout: number; maxBuffer: number; env: { PATH: string; LANG: string } },
+) => NotarizationCommandResult;
+
+/** One read-only attempt. Never retain command output, paths or arbitrary error text. */
+export function validateNotarization(appPath: string, execute: NotarizationRunner = spawnSync): NotarizationValidation {
+  let result: NotarizationCommandResult;
+  try {
+    result = execute('/usr/bin/xcrun', ['stapler', 'validate', appPath], {
+      encoding: 'utf8', timeout: 300_000, maxBuffer: 64 * 1024 * 1024,
+      env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'C' },
+    });
+  } catch {
+    result = { status: null, signal: null, error: { code: 'OTHER' }, stdout: null, stderr: null };
+  }
+  const status = Number.isInteger(result.status) && result.status !== null && result.status >= 0 && result.status <= 255
+    ? result.status : null;
+  const signal = result.signal === null ? null
+    : ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT', 'SIGHUP', 'SIGSEGV', 'SIGPIPE'].includes(result.signal)
+      ? result.signal : 'OTHER';
+  const code = typeof result.error === 'object' && result.error !== null && 'code' in result.error
+    && typeof result.error.code === 'string' ? result.error.code : null;
+  const errorCode = result.error === undefined ? null
+    : code !== null && ['ENOENT', 'EACCES', 'ETIMEDOUT', 'ENOBUFS'].includes(code) ? code : 'OTHER';
+  const classification = errorCode === 'ETIMEDOUT' ? 'timeout' : errorCode !== null ? 'spawn_error'
+    : signal !== null ? 'signal' : status === null ? 'invalid_status' : status === 0 ? 'success' : 'nonzero_exit';
+  const outputFacts = (text: string | null): { present: boolean; length: number } => ({
+    present: (text?.length ?? 0) > 0, length: Math.min(text?.length ?? 0, 64 * 1024 * 1024),
+  });
+  return { stapled: classification === 'success', status, signal, errorCode, classification,
+    stdout: outputFacts(result.stdout), stderr: outputFacts(result.stderr) };
 }
 
 export async function verifyPackagedApp(appPath: string, options: VerifyOptions): Promise<VerificationOutcome> {
@@ -230,7 +284,8 @@ export async function verifyPackagedApp(appPath: string, options: VerifyOptions)
   const entitlements = readEntitlements(appPath);
   if (entitlements === null || !entitlements.ok) fail('entitlements_wrong');
 
-  const stapled = run('/usr/bin/xcrun', ['stapler', 'validate', appPath]).status === 0;
+  const notarization = validateNotarization(appPath);
+  const stapled = notarization.stapled;
   const assessed = run('/usr/sbin/spctl', ['--assess', '--type', 'execute', '-vv', appPath]);
   const gatekeeper = `${assessed.stdout}${assessed.stderr}`.trim() || null;
 
@@ -268,6 +323,7 @@ export async function verifyPackagedApp(appPath: string, options: VerifyOptions)
       secureTimestamp,
       teamIdentifier,
       stapled,
+      notarization,
       gatekeeper,
       embeddedUpdatePublicKey,
       usageDescriptions,
@@ -405,6 +461,7 @@ function emptyReport(appPath: string): VerificationReport {
     secureTimestamp: false,
     teamIdentifier: null,
     stapled: false,
+    notarization: null,
     gatekeeper: null,
     embeddedUpdatePublicKey: '',
     usageDescriptions: [],
