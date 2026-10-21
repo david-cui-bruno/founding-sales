@@ -236,7 +236,6 @@ describe('what the API mounts', () => {
       '/meetings/tasks/change',
       '/meetings/transcript',
       '/meetings/unmatched',
-      '/meetings/unpublished-plan',
       '/messages',
       '/messages/held-outgoing',
       '/messages/resolve-ambiguity',
