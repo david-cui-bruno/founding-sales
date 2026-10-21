@@ -5,6 +5,8 @@ import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/querya
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
 import { verifyExistingGmailGrant } from '@fss/domain/mail/existingGrant.ts';
+import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
+import { REQUIRED_SCHEMA } from '@fss/domain/db/schemaRange.ts';
 import { createGmailHttpClient, type HttpFetch, type HttpResponse } from '@fss/domain/mail/gmailClientHttp.ts';
 import { fixturePushTokens } from '@fss/domain/mail/pushToken.ts';
 import { staticSecretProvider } from '@fss/domain/mail/secretProvider.ts';
@@ -80,11 +82,12 @@ describe('ordinary existing Gmail grant verification', () => {
 
   const context = (session = db) => repositoryContext(workspaceScope(fixture.alpha.workspaceId,
     { kind: 'user', userId: fixture.alpha.salesperson.userId, role: 'salesperson' }), session);
-  const status = (session = db, bearer: string | null = token, path = '/gmail/status', method = 'GET') => dispatch({
+  const status = (session = db, bearer: string | null = token, path = '/gmail/status', method = 'GET', diagnostic?: CrmAcquisitionDiagnosticRuntime) => dispatch({
     method, path, query: new URLSearchParams(), body: undefined,
     headers: bearer === null ? {} : { authorization: `Bearer ${bearer}` },
   }, {
     session, auth: { ...fixture.deps, db: session }, mail, sendingEnabled: false,
+    ...(diagnostic === undefined ? {} : { crmAcquisitionDiagnosticRuntime: diagnostic }),
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
   });
   const observations = async () => (await fixture.db.query<{ granted_scopes: string[] }>(
@@ -150,7 +153,15 @@ describe('ordinary existing Gmail grant verification', () => {
   });
   afterAll(async () => fixture.stop());
 
-  it.each(['GET', 'POST'])('passive %s reads a connected mailbox with missing grant evidence without provider, token unwrap or writes', async method => {
+  it.each([
+    { method: 'GET', mode: 'ordinary' }, { method: 'POST', mode: 'ordinary' },
+    { method: 'GET', mode: 'diagnostic' }, { method: 'POST', mode: 'diagnostic' },
+  ])('$mode passive $method reads a connected mailbox with missing grant evidence without provider, token unwrap or writes', async ({ method, mode }) => {
+    const diagnostic: CrmAcquisitionDiagnosticRuntime | undefined = mode === 'diagnostic' ? {
+      environmentId: randomUUID(), implementationCommit: 'a'.repeat(40), imageDigest: `sha256:${'b'.repeat(64)}`,
+      side: 'api', schemaVersion: REQUIRED_SCHEMA,
+      verifyIsolation: async () => { throw new Error('passive status must not request acquisition isolation'); },
+    } : undefined;
     expect(await observations()).toEqual([]);
     const queries: string[] = [];
     const session = watchQueries(db, { before: sql => { queries.push(sql); } });
@@ -161,7 +172,7 @@ describe('ordinary existing Gmail grant verification', () => {
       throw new Error('passive status must never unwrap a token');
     } } };
     try {
-      const result = await status(session, token, '/gmail/status/passive', method);
+      const result = await status(session, token, '/gmail/status/passive', method, diagnostic);
       expect(result.status).toBe(200);
       expect(gmailStatusSchema.parse(result.body)).toMatchObject({ connected: true, mailbox: { id: mailboxId } });
       expect(requests).toEqual([]);
@@ -172,6 +183,12 @@ describe('ordinary existing Gmail grant verification', () => {
       expect(await observations()).toEqual([]);
       expect(JSON.stringify(result.body)).not.toContain(refresh);
       expect(JSON.stringify(result.body)).not.toContain(access);
+      if (diagnostic !== undefined) {
+        expect((await status(session, null, '/gmail/status/passive', method, diagnostic)).status).toBe(401);
+        expect((await status(session, token, '/crm/business/mail/import/read', method, diagnostic)).status).toBe(404);
+        expect(requests).toEqual([]);
+        expect(decrypts).toBe(0);
+      }
       await unchangedAuthority();
     } finally {
       mail = { ...mail, cipher };
