@@ -130,6 +130,10 @@ export async function readFirmQualification(context:RepositoryContext,firmId:str
   if(nativeEligibility.status==='verified'&&(nativeEligibility.runId!==view.runId||nativeEligibility.candidateRevision!==view.candidateRevision))return null;
   const final=await readCurrentDiscoveryResearchFirm(context,{firmId});
   if(!final||JSON.stringify(final)!==JSON.stringify(current))return null;
+  // Run IDs/revisions survive in-place worker completion. Revalidate the entire
+  // displayed snapshot, including pending/unavailable status and retained evidence.
+  const finalView=await readQualification(context,{candidateId:current.candidate.id});
+  if(!finalView||JSON.stringify(finalView)!==JSON.stringify(view))return null;
   return {...view,nativeEligibility};
  }
  const row=(await context.db.query<{candidate_id:string}>(`SELECT a.candidate_id FROM sourcing_admissions a JOIN firms f ON f.workspace_id=a.workspace_id AND f.id=a.firm_id JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id WHERE a.workspace_id=$1 AND a.firm_id=$2 AND f.status='active' ORDER BY c.status='dismissed',a.admitted_at DESC,a.candidate_id LIMIT 1`,[context.scope.workspaceId,firmId])).rows[0];

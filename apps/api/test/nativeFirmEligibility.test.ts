@@ -5,6 +5,9 @@ import {dispatch,type ApiRequest} from '../src/server.ts';
 import {localNoopSuppressionJournal} from '../src/journal/index.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
+import {readFirmQualification} from '@fss/domain/sourcing/qualificationStore.ts';
+import {workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import type {Queryable,QueryResultRowLike} from '@fss/domain/db/queryable.ts';
 let f:AuthFixture,admin:string,sales:string,beta:string;
 const envelope=<T extends object>(value:T)=>({...value,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
 async function post(path:string,body:unknown,token=admin){return dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body} as ApiRequest,{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,suppressionJournal:localNoopSuppressionJournal()});}
@@ -32,6 +35,24 @@ async function run(r:Awaited<ReturnType<typeof linked>>,changes:{state?:string;r
  return {runId,observations,facts};
 }
 const read=async(firmId:string,token=admin)=>post('/sourcing/qualification/firm',{firmId},token);
+async function readAcrossMutation(firmId:string,mutate:()=>Promise<void>){
+ let changed=false;
+ const db:Queryable={async query<Row extends QueryResultRowLike>(text:string,values?:readonly unknown[]){
+  const result=await f.db.query<Row>(text,values);
+  if(!changed&&text.includes('ORDER BY requested_at DESC,id DESC LIMIT 20')){changed=true;await mutate();}
+  return result;
+ }};
+ const result=await readFirmQualification({db,scope:workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'})},firmId);
+ expect(changed).toBe(true);return result;
+}
+function expectResolvedNativeCitations(body:unknown){
+ const view=qualificationViewSchema.parse(body);expect(view.nativeEligibility?.status).toBe('verified');
+ if(view.nativeEligibility?.status!=='verified')throw new Error('Expected current verified fixture');
+ for(const citation of view.nativeEligibility.citations){
+  const block=view.observations.find(source=>source.id===citation.observationId)?.blocks.find(row=>row.id===citation.blockId);
+  expect(block).toBeDefined();expect(view.facts).toContainEqual(expect.objectContaining({...citation,value:block!.text}));
+ }
+}
 it('reads exact current native evidence on existing owner Firm without phone/location writes, jobs or cache changes',async()=>{
  const r=await linked(),q=await run(r);
  const counts=async()=>({jobs:(await f.db.query('SELECT id,kind,payload FROM jobs ORDER BY id')).rows,firms:(await f.db.query('SELECT id,locality,region_code,time_zone FROM firms ORDER BY id')).rows,runs:(await f.db.query('SELECT * FROM sourcing_qualification_runs ORDER BY id')).rows});
@@ -64,4 +85,15 @@ it('requires current admin owner/membership and refuses corrections, geography c
 it('keeps missing and expired evidence unverified without creating any new run',async()=>{
  const r=await linked();expect((await read(r.firmId)).status).toBe(404);
  await run(r,{age:7*86400000});expect((await read(r.firmId)).body).toMatchObject({nativeEligibility:{status:'unavailable'}});
+});
+it('fails closed on in-flight same-run completion rather than returning verified empty response evidence',async()=>{
+ const r=await linked(),q=await run(r);
+ await f.db.query("UPDATE sourcing_qualification_runs SET state='running',observations='[]'::jsonb,facts='[]'::jsonb WHERE id=$1",[q.runId]);
+ const answer=await readAcrossMutation(r.firmId,async()=>{await f.db.query("UPDATE sourcing_qualification_runs SET state='review',observations=$2::jsonb,facts=$3::jsonb WHERE id=$1",[q.runId,JSON.stringify(q.observations),JSON.stringify(q.facts)]);});
+ expect(answer).toBeNull();expectResolvedNativeCitations((await read(r.firmId)).body);
+});
+it.each(['pending','unavailable'])('fails closed on in-flight latest-run replacement with %s rather than mixing old evidence and new status',async state=>{
+ const r=await linked();await run(r);let newest='';
+ expect(await readAcrossMutation(r.firmId,async()=>{newest=(await run(r,{state,reason:state==='unavailable'?'source_unavailable':null})).runId;})).toBeNull();
+ expect((await read(r.firmId)).body).toMatchObject({runId:newest,nativeEligibility:{status:state}});
 });
