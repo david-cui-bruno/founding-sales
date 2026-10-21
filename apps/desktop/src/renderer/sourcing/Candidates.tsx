@@ -1,4 +1,5 @@
 import {Learning} from './Learning.tsx';
+import {DiscoveryCandidates,discoveryList,type DiscoveryList} from './DiscoveryCandidates.tsx';
 import {navigate} from '../routes.ts';
 import {QualificationPanel} from './QualificationPanel.tsx';
 import {useCallback,useEffect,useRef,useState,type JSX} from 'react';
@@ -22,8 +23,21 @@ const defaultPorts:CandidatePorts={check:async input=>api().command('sourcing.ch
 const signals:Record<SourcingCandidate['signal'],string>={explicit_help:'Asking for help',responsibility_overlap:'Manager handles maintenance too',coordination_hiring:'Hiring a coordinator',manual_handoff:'Manual handoffs',growth:'Expansion',tool_gap:'Gap in their current tools',fit_only:'Potential fit · we do not know whether they need help'};
 const statuses:Record<SourcingCandidate['status'],string>={needs_review:'Needs review',kept:'Kept for research',dismissed:'Dismissed'};
 /** Visibility follows the server count, never a local eligibility decision. */
-export function useCandidateReviewVisibility(enabled:boolean,privacyKey:string,sourceVersion:unknown,list:CandidatePorts['list']=defaultPorts.list):{visible:boolean;onReviewEmpty:(empty:boolean)=>void} {
+export function useCandidateReviewVisibility(enabled:boolean,privacyKey:string,sourceVersion:unknown,list:CandidatePorts['list']=defaultPorts.list,rawList:DiscoveryList=discoveryList):{visible:boolean;onReviewEmpty:(empty:boolean)=>void} {
  const [answer,setAnswer]=useState<{key:string;hidden:boolean}>({key:'',hidden:false});
+ const [raw,setRaw]=useState<{key:string;empty:boolean}>({key:'',empty:false});
+ useEffect(()=>{
+  let current=true,request=0;
+  const load=async()=>{
+   const sequence=++request;
+   try{
+    const views=await Promise.all((['needs_review','kept','dismissed'] as const).map(status=>rawList({status,offset:0})));
+    if(current&&sequence===request)setRaw({key:privacyKey,empty:views.every(result=>result.view!==null&&result.view.candidates.length===0&&!result.view.hasMore)});
+   }catch{if(current&&sequence===request)setRaw({key:privacyKey,empty:false});}
+  };
+  if(enabled){void load();window.addEventListener('focus',load);}
+  return()=>{current=false;window.removeEventListener('focus',load);};
+ },[enabled,privacyKey,sourceVersion,rawList]);
  const sequence=useRef(0);
  const onReviewEmpty=useCallback((empty:boolean)=>{++sequence.current;setAnswer({key:privacyKey,hidden:empty});},[privacyKey]);
  useEffect(()=>{
@@ -36,9 +50,9 @@ export function useCandidateReviewVisibility(enabled:boolean,privacyKey:string,s
   if(enabled){void load();window.addEventListener('focus',load);}
   return ()=>{current=false;window.removeEventListener('focus',load);};
  },[enabled,privacyKey,sourceVersion,onReviewEmpty,list]);
- return {visible:answer.key!==privacyKey||!answer.hidden,onReviewEmpty};
+ return {visible:answer.key!==privacyKey||!answer.hidden||raw.key!==privacyKey||!raw.empty,onReviewEmpty};
 }
-export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty}:{ports?:CandidatePorts;enabled?:boolean;onReviewEmpty?:((empty:boolean)=>void)|undefined}):JSX.Element {
+export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty,privacyKey='',rawList=discoveryList}:{ports?:CandidatePorts;enabled?:boolean;onReviewEmpty?:((empty:boolean)=>void)|undefined;privacyKey?:string;rawList?:DiscoveryList}):JSX.Element {
   const {memory:m,touch}=useCandidateMemory(),portsRef=useRef(ports);portsRef.current=ports;
   const countRef=useRef(onReviewEmpty);countRef.current=onReviewEmpty;
   const load=useCallback(async()=>{
@@ -86,6 +100,7 @@ export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty}:{port
   const tabs=<div className="flex gap-2" aria-label="Sourcing views"><Button variant={m.tab==='candidates'?'outline':'quiet'} onClick={()=>{m.tab='candidates';touch();}}>Candidates</Button><Button variant={m.tab==='results'?'outline':'quiet'} onClick={()=>{m.tab='results';touch();}}>Results</Button></div>;
   if(m.tab==='results')return <section className="space-y-5">{tabs}<Learning enabled={enabled}/></section>;
   return <section className="space-y-5" aria-label="Candidate review">{tabs}
+    <DiscoveryCandidates list={rawList} enabled={enabled} privacyKey={privacyKey}/>
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Unclear firm identities remain here for review. Research never contacts anyone.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>
     {m.view?.discovery?<p className="text-sm text-muted-foreground">Discovery {m.view.discovery.halted?'needs attention':m.view.discovery.enabled?'enabled':'paused'} · next scheduled {m.view.discovery.nextRunAt.slice(0,10)} · {m.view.discovery.dailyRemaining} searches left today, {m.view.discovery.monthlyRemaining} this month. Last result: {m.view.discovery.lastResult??'not run'}. Research holds and settings also apply.</p>:null}
     {m.view?.qualificationWaitReason?<p role="status" className="text-sm text-muted-foreground">{m.view.qualificationWaitReason==='daily_firm_ceiling'?'Waiting for research budget':m.view.qualificationWaitReason==='research_disabled'?'Qualification waits while research is paused.':'Qualification waits while research is on hold.'}</p>:null}

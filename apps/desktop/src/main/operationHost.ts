@@ -1,3 +1,4 @@
+import {sourcingCandidateReadHandlers} from './sourcingCandidateReadHandlers.ts';
 import { linkedinManualOperations } from './social/linkedinManualOperations.ts';
 import { socialContentOperations } from './social/contentOperations.ts';
 import type {SocialDeliveryStatus,SocialPreparationResult} from '../shared/socialDiagnostics.ts';
@@ -24,7 +25,7 @@ import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
 import {meetingQualificationViewSchema} from '@fss/contracts';
 import {sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
-import { candidateListSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
+import { candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema } from '@fss/contracts';
 import { meetingFollowThroughHandlers } from './meetingFollowThroughHandlers.ts';
 import { meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
@@ -408,12 +409,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
-    'sourcing.list': async (input:OperationInput<'sourcing.list'>) => {
-      const generation=deps.recordings.identity.current();
-      const answer=await deps.api.read('/sourcing/candidates/list',value=>candidateListSchema.parse(value),input);
-      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
-      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
-    },
+    ...sourcingCandidateReadHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
     'sourcing.save': async (input:OperationInput<'sourcing.save'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/sourcing/candidates/save',body,value=>candidateSavedSchema.parse(value),{commandId});
