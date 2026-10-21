@@ -92,6 +92,39 @@ it.each(["write", "sync", "rename"] as const)("preserves the previous status and
   }
 });
 
+it.each(["write", "sync"] as const)("removes owned temporary bytes when %s and cleanup close both reject", async (failure) => {
+  const directory = await mkdtemp(join(tmpdir(), "callie-status-close-failure-"));
+  const path = join(directory, "status.json");
+  const previous = { state: "cleanup_unknown", runFailure: "runtime_failed" };
+  const publicationError = new Error(`controlled_${failure}_failure`);
+  const closeError = new Error("controlled_close_failure");
+  let closeHandle: (() => Promise<void>) | undefined;
+  try {
+    await writeFile(path, JSON.stringify(previous), { mode: 0o600 });
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const file = await actual.open(...args);
+      closeHandle = file.close.bind(file);
+      const write = file.writeFile.bind(file);
+      vi.spyOn(file, "close").mockImplementation(async () => {
+        await closeHandle!();
+        throw closeError;
+      });
+      if (failure === "sync") vi.spyOn(file, "sync").mockRejectedValueOnce(publicationError);
+      else vi.spyOn(file, "writeFile").mockImplementationOnce(async () => {
+        await write("{\"state\":");
+        throw publicationError;
+      });
+      return file;
+    });
+    await expect(writeLocalDiagnosticStatus(directory, { state: "cleaned" })).rejects.toBe(publicationError);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(previous);
+    expect(await readdir(directory)).toEqual(["status.json"]);
+  } finally {
+    await closeHandle?.();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it("creates the first complete private status snapshot", async () => {
   const directory = await mkdtemp(join(tmpdir(), "callie-status-first-"));
   try {

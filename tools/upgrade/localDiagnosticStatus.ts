@@ -7,14 +7,27 @@ export async function writeLocalDiagnosticStatus(directory: string, value: unkno
   const bytes = JSON.stringify(value);
   const temporary = join(directory, `.status-${randomUUID()}.tmp`);
   const file = await open(temporary, "wx", 0o600);
+  let publicationFailed = false;
+  let publicationError: unknown;
   try {
     await file.writeFile(bytes);
     await file.sync();
     await file.close();
     // Same-directory rename keeps the old complete snapshot visible until this one is ready.
     await rename(temporary, join(directory, "status.json"));
-  } finally {
-    await file.close();
-    await rm(temporary, { force: true });
+  } catch (error) {
+    publicationFailed = true;
+    publicationError = error;
   }
+  try {
+    try {
+      await file.close();
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  } catch (error) {
+    // Retain the original publication failure if cleanup also fails.
+    if (!publicationFailed) throw error;
+  }
+  if (publicationFailed) throw publicationError;
 }
