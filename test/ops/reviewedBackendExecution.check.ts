@@ -41,7 +41,7 @@ function execute(mode: string) {
         else if(a.includes('output'))console.log(JSON.stringify({api:{declared_desired_count:1},worker:{declared_desired_count:1},operations_task_definition:'arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-operations:1'}));
         else if(a.includes('apply'))fs.writeFileSync(process.env.LOG+'.applied','yes');else process.exit(99);`);
       executable(join(scripts, 'stop.sh'), `const fs=require('fs');fs.appendFileSync(process.env.LOG,'stop\\n');fs.writeFileSync(process.env.LOG+'.stopped','yes');`);
-      executable(join(scripts, 'deploy.sh'), `const fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(process.env.LOG,'deploy '+a.join(' ')+'\\n');if(a[0]==='ci'&&a[1]==='gate'){if(process.env.MODE==='schema-stale-finalgate'&&fs.existsSync(process.env.LOG+'.off-count')&&Number(fs.readFileSync(process.env.LOG+'.off-count','utf8'))===3){fs.writeFileSync(process.env.LOG+'.clock',String(Date.now()+181000));fs.appendFileSync(process.env.LOG,'final-gate advanced 181s\\n');}process.exit(0);}if(a[0]==='ci'&&a[1]==='canary')console.log('canary_age=1');else if(a[0]==='release')fs.writeFileSync(process.env.LOG+'.migrated','yes');else process.exit(99);`);
+      executable(join(scripts, 'deploy.sh'), `const fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(process.env.LOG,'deploy '+a.join(' ')+'\\n');if(a[0]==='ci'&&a[1]==='gate'){if(process.env.MODE==='schema-postrestart-gate'&&fs.existsSync(process.env.LOG+'.migrated'))process.exit(1);if(process.env.MODE==='schema-stale-finalgate'&&fs.existsSync(process.env.LOG+'.off-count')&&Number(fs.readFileSync(process.env.LOG+'.off-count','utf8'))===3){fs.writeFileSync(process.env.LOG+'.clock',String(Date.now()+181000));fs.appendFileSync(process.env.LOG,'final-gate advanced 181s\\n');}process.exit(0);}if(a[0]==='ci'&&a[1]==='canary')console.log('canary_age=1');else if(a[0]==='release'){fs.writeFileSync(process.env.LOG+'.migrated','yes');if(process.env.MODE==='schema-release-unknown')process.exit(1);}else process.exit(99);`);
       executable(join(bin, 'curl'), `const fs=require('fs'),m=fs.existsSync(process.env.LOG+'.migrated');console.log(JSON.stringify({status:'serving',build:{commit:(m?'b':'a').repeat(40)},schema:{accepted:true,databaseVersion:m&&process.env.MODE.startsWith('schema-')?89:88}}));`);
       for (const name of ['record.sh', 'images.sh']) executable(join(scripts, name), `require('fs').appendFileSync(process.env.LOG,'${name} '+process.argv.slice(2).join(' ')+'\\n');`);
       mkdirSync(join(directory, 'scripts'));
@@ -74,12 +74,13 @@ function execute(mode: string) {
     delete env['FSS_REHEARSAL_AWS_COMMAND'];
     delete env['NODE_OPTIONS'];
     const clock = join(directory, 'controlled-clock.mjs');
-    writeFileSync(clock, `import { existsSync, readFileSync } from 'node:fs';const realNow=Date.now;Date.now=()=>existsSync(process.env.LOG+'.clock')?Number(readFileSync(process.env.LOG+'.clock','utf8')):realNow();`);
+    writeFileSync(clock, `import { existsSync, readFileSync } from 'node:fs';const realNow=Date.now;Date.now=()=>existsSync(process.env.LOG+'.clock')?Number(readFileSync(process.env.LOG+'.clock','utf8')):realNow();if(['schema-containment-stuck','schema-postrestart-unknown'].includes(process.env.MODE))globalThis.setTimeout=callback=>setImmediate(callback);`);
     const result = spawnSync(process.execPath, ['--import', clock, repositoryPath('infra/scripts/reviewed-release.mjs'), 'execute', manifestPath, hash(readFileSync(manifestPath)), envelope, privatePath, join(directory, 'images.json'), output], { cwd: directory, env, encoding: 'utf8' });
     const commands = readFileSync(log, 'utf8');
     if (!smoke) expect(commands).not.toMatch(/(?:^|\s)(?:apply|put|promote)(?:\s|$)/mu);
-    const status = JSON.parse(readFileSync(join(output, 'status.json'), 'utf8')) as { writesStarted: boolean; outcome: string; reason: string; recoveryPoint?: { timestamp: string; earliest: string; latest: string; restoreTested: boolean }; quiescedAt?: string };
-    return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr, commands, status };
+    const status = JSON.parse(readFileSync(join(output, 'status.json'), 'utf8')) as { writesStarted: boolean; outcome: string; reason: string; recoveryPoint?: { timestamp: string; earliest: string; latest: string; restoreTested: boolean }; containment?: { outcome: string; reason: string; stopRequests: { service: string; outcome: string }[] }; currentTaskArn?: string; currentTaskOwner?: string; temporaryReaderDefinition?: string; lastStoppedTaskArn?: string; quiescedAt?: string };
+    const runtimeStopped = ['api', 'worker'].map(name => { try { readFileSync(log + '.contained-fss-prod-' + name); return true; } catch { return false; } });
+    return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr, commands, status, runtimeStopped };
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
@@ -113,8 +114,8 @@ describe('reviewed schema release native safety integration', () => {
     expect(result.status).toMatchObject({ outcome: 'refused', writesStarted: false, reason });
     expect(result.commands).not.toMatch(/register-task-definition|run-task|record.sh put| apply |deploy release/u);
   });
-  it('pins covered quiescence before immutable apply/migration and checks OFF at four boundaries', () => {
-    const result = execute('schema-pass');
+  it.each(['schema-pass', 'schema-terminal-writer'])('pins covered quiescence before immutable apply/migration and checks OFF at four boundaries (%s)', mode => {
+    const result = execute(mode);
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.status).toMatchObject({ outcome: 'completed', schema: 89, recoveryPoint: { restoreTested: false } });
     const point = result.status.recoveryPoint!;
@@ -140,6 +141,9 @@ describe('reviewed schema release native safety integration', () => {
   });
   it.each([
     ['schema-stale-finalgate', 'sending_not_fresh_off', true, false],
+    ['schema-stale-quiescence', 'sending_not_fresh_off', true, false],
+    ['schema-stopping-writer', 'writers_still_running', false, false],
+    ['schema-stopped-page', 'writers_still_running', false, false],
     ['schema-off-initial', 'sending_not_fresh_off', false, false],
     ['schema-off-poststop', 'sending_not_fresh_off', false, false],
     ['schema-off-premigrate', 'sending_not_fresh_off', true, false],
@@ -154,8 +158,51 @@ describe('reviewed schema release native safety integration', () => {
     expect(result.commands.includes(' apply ')).toBe(applied);
     expect(result.commands.includes('deploy release')).toBe(migrated);
     if (mode === 'schema-stale-finalgate') expect(result.commands).toContain('final-gate advanced 181s');
+    if (mode === 'schema-stale-quiescence') expect(result.commands).toContain('final-quiescence advanced 181s');
+    if (mode === 'schema-off-postrestart') {
+      expect(result.runtimeStopped).toEqual([true, true]);
+      expect(result.status.containment).toMatchObject({ outcome: 'stopped', reason: 'zero_services_and_no_writers' });
+    } else expect(result.status.containment).toBeUndefined();
     if (mode === 'schema-off-initial') expect(result.commands).not.toContain('record.sh put');
     expect(result.commands).not.toContain('smoke ');
+  });
+});
+
+describe('reviewed post-restart runtime containment', () => {
+  it.each([
+    ['schema-postrestart-setting', 'owner_setting_changed'],
+    ['schema-postrestart-finishing', 'sending_not_fresh_off'],
+    ['schema-postrestart-gate', 'deploy_failed'],
+    ['schema-release-unknown', 'deploy_failed'],
+  ])('stops both exact services on %s without replay or normal gate authority', (mode, reason) => {
+    const result = execute(mode);
+    expect(result.exitCode, result.stderr).toBe(1);
+    expect(result.status).toMatchObject({ outcome: 'repair-required', reason, containment: { outcome: 'stopped', reason: 'zero_services_and_no_writers', stopRequests: [
+      { service: 'fss-prod-worker', outcome: 'accepted' }, { service: 'fss-prod-api', outcome: 'accepted' },
+    ] } });
+    expect(result.runtimeStopped).toEqual([true, true]);
+    expect(result.commands).toContain('contain verify services');
+    expect(result.commands.split('\n').filter(line => line.startsWith('deploy release'))).toHaveLength(1);
+    expect(result.commands).not.toContain('smoke ');
+    expect(result.commands.slice(result.commands.indexOf('contain stop'))).not.toContain('deploy ci gate');
+  });
+  it.each([
+    ['schema-postrestart-unknown', 'task_outcome_unknown', 'writers_still_running', [true, true]],
+    ['schema-containment-unknown', 'sending_not_fresh_off', 'containment_observation_unknown', [true, false]],
+    ['schema-containment-stuck', 'sending_not_fresh_off', 'services_not_stopped', [false, false]],
+  ] satisfies readonly (readonly [string, string, string, boolean[]])[])('preserves original failure and explicit unproven containment for %s', (mode, reason, containmentReason, stopped) => {
+    const result = execute(mode);
+    expect(result.exitCode, result.stderr).toBe(1);
+    expect(result.status).toMatchObject({ outcome: 'repair-required', reason, containment: { outcome: 'unknown', reason: containmentReason } });
+    expect(result.status.containment?.stopRequests.map(request => request.service)).toEqual(['fss-prod-worker', 'fss-prod-api']);
+    expect(result.runtimeStopped).toEqual(stopped);
+    expect(result.commands).not.toContain('smoke ');
+    if (mode === 'schema-postrestart-unknown') {
+      expect(result.status.currentTaskArn).toContain('/reader');
+      expect(result.status.currentTaskOwner).toContain('-off-4');
+      expect(result.status.temporaryReaderDefinition).toContain(':99');
+    }
+    if (mode === 'schema-containment-stuck') expect(result.commands.split('\n').filter(line => line === 'contain verify services')).toHaveLength(40);
   });
 });
 

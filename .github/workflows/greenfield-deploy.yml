@@ -501,7 +501,7 @@ jobs:
         if: always()
         run: |
           if [ -f "$RUNNER_TEMP/reviewed-apply/status.json" ]; then
-            jq '{phase,outcome,writesStarted,schema,observedSchema,reason,recovery,quiescedAt,recoveryPoint,off,currentTaskArn,currentTaskOwner,lastStoppedTaskArn,lastTaskExitCode,temporaryReaderDefinition}' "$RUNNER_TEMP/reviewed-apply/status.json" >> "$GITHUB_STEP_SUMMARY"
+            jq '{phase,outcome,writesStarted,schema,observedSchema,reason,recovery,quiescedAt,recoveryPoint,off,currentTaskArn,currentTaskOwner,lastStoppedTaskArn,lastTaskExitCode,temporaryReaderDefinition,containment}' "$RUNNER_TEMP/reviewed-apply/status.json" >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'Reviewed release stopped at prerequisites; no application outcome claimed.' >> "$GITHUB_STEP_SUMMARY"
           fi

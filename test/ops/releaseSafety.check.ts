@@ -20,7 +20,13 @@ function harness(fault = '') {
     async aws(service: string, action: string, args: string[] = []) {
       calls.push(`${service} ${action}`);
       if (action === 'describe-services') return { failures: fault === 'services-unreadable' ? [{}] : [], services: ['api', 'worker'].map(n => ({ serviceName: `fss-prod-${n}`, status: 'ACTIVE', desiredCount: fault === 'service-active' ? 1 : 0, runningCount: 0, pendingCount: fault === 'service-pending' ? 1 : 0 })) };
-      if (action === 'list-tasks') return { taskArns: fault === 'running-writer' || fault === 'pending-writer' && args.includes('PENDING') ? ['writer'] : [], ...(fault === 'task-pagination' ? { nextToken: 'more' } : {}) };
+      if (action === 'list-tasks') {
+        expect(args).toContain('--no-paginate');
+        expect(args[args.indexOf('--max-results') + 1]).toBe('100');
+        const stopped = args.includes('STOPPED');
+        return { taskArns: fault === 'running-writer' || stopped && fault.startsWith('stopped-') ? ['writer'] : [], ...(fault === 'task-pagination' || stopped && fault === 'stopped-pagination' ? { nextToken: 'more' } : {}) };
+      }
+      if (action === 'describe-tasks') return { failures: fault === 'stopped-failure' ? [{}] : [], tasks: fault === 'stopped-missing' ? [] : [{ taskArn: fault === 'stopped-foreign' ? 'foreign' : 'writer', clusterArn: fault === 'stopped-cluster' ? 'foreign' : 'cluster', lastStatus: fault === 'stopped-running' ? 'RUNNING' : fault === 'stopped-stopping' ? 'STOPPING' : fault === 'stopped-unknown' ? undefined : 'STOPPED' }] };
       if (action === 'describe-db-instances') return { DBInstances: [{ ...database, ...(fault === 'database-drift' ? { Endpoint: { Address: 'foreign.invalid' } } : {}), ...(fault === 'retention' ? { BackupRetentionPeriod: 1 } : {}) }] };
       if (action === 'describe-db-instance-automated-backups') return {
         ...(fault === 'backup-pagination' ? { Marker: 'more' } : {}),
@@ -52,10 +58,15 @@ describe('shared release stored OFF validation', () => {
 });
 
 describe('shared migration quiescence and exact pinned recovery', () => {
-  it.each(['services-unreadable', 'service-active', 'service-pending', 'running-writer', 'pending-writer', 'task-pagination'])('refuses %s before pin or migration', async fault => {
+  it.each(['services-unreadable', 'service-active', 'service-pending', 'running-writer', 'task-pagination', 'stopped-pagination', 'stopped-running', 'stopped-stopping', 'stopped-unknown', 'stopped-failure', 'stopped-missing', 'stopped-foreign', 'stopped-cluster'])('refuses %s before pin or migration', async fault => {
     const h = harness(fault);
     await expect(h.guard.quiescent()).rejects.toThrow(/services_not_stopped|writers_still_running/u);
     expect(h.state['recoveryPoint']).toBeUndefined();
+  });
+  it('accepts enumerated desired STOPPED tasks only after exact actual terminal descriptions', async () => {
+    const h = harness('stopped-terminal');
+    await expect(h.guard.quiescent()).resolves.toBeUndefined();
+    expect(h.calls).toContain('ecs describe-tasks');
   });
   it('pins exactly the post-quiescence instant after a bounded backup lag', async () => {
     const h = harness('eventually-covered');

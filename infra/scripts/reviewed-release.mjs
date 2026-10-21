@@ -9,7 +9,8 @@ import { createReleaseSafety, validateOff } from './release-safety.mjs';
 const [mode, ...args] = process.argv.slice(2);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
-let status, statusPath, preparationDirectory;
+let status, statusPath, preparationDirectory, releaseSafety;
+let restartMayBeActive = false;
 function save() { if (statusPath) writeFileSync(statusPath, JSON.stringify(status, null, 2) + '\n', { mode: 0o600 }); }
 function command(name, values, options = {}) {
   const result = spawnSync(name, values, { encoding: 'utf8', env: process.env, cwd: options.cwd, maxBuffer: 20_000_000, timeout: options.timeout || 600_000 });
@@ -36,6 +37,27 @@ function phase(name, action, write = false) {
   const result = action();
   const completed = value => { status.outcome = 'completed'; save(); return value; };
   return result && typeof result.then === 'function' ? result.then(completed) : completed(result);
+}
+async function containRestartedRuntime() {
+  // Emergency runtime stop is not another release attempt. A failed CI/hold
+  // gate must never prevent pausing these exact services after an unsafe restart.
+  const cluster = 'arn:aws:ecs:us-east-1:326255650484:cluster/fss-prod-cluster';
+  status.containment = { outcome: 'unknown', reason: 'runtime_stop_unverified', stopRequests: [] }; save();
+  for (const service of ['fss-prod-worker', 'fss-prod-api']) {
+    let outcome = 'unknown';
+    try { aws(['ecs', 'update-service', '--cluster', cluster, '--service', service, '--desired-count', '0']); outcome = 'accepted'; } catch { /* Inspect actual state even if the reply was lost. */ }
+    status.containment.stopRequests.push({ service, outcome }); save();
+  }
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      await releaseSafety.quiescent();
+      status.containment.outcome = 'stopped'; status.containment.reason = 'zero_services_and_no_writers'; save(); return;
+    } catch (error) {
+      status.containment.reason = ['services_not_stopped', 'writers_still_running'].includes(error.message) ? error.message : 'containment_observation_unknown'; save();
+      if (!['services_not_stopped', 'writers_still_running'].includes(error.message) || attempt === 39) return;
+      await new Promise(done => setTimeout(done, 15000));
+    }
+  }
 }
 function identity(kind) {
   const value = aws(['sts', 'get-caller-identity']);
@@ -178,7 +200,7 @@ try {
     const configuration = JSON.parse(terraform(['output', '-json', 'deployment_plan'], 'reviewed_current_plan_unavailable'));
     const workerDefinition = aws(['ecs', 'describe-task-definition', '--task-definition', baseline.bindings.workerTaskDefinition]).taskDefinition;
     if (workerDefinition.containerDefinitions?.[0]?.environment?.find(entry => entry.name === 'FSS_SENDING_ENABLED')?.value === 'true') recordArgs.push('--enables-sending');
-    const safety = reviewedSafety(configuration, baseline);
+    const safety = reviewedSafety(configuration, baseline); releaseSafety = safety;
     await phase('observe-stored-off', () => safety.off(safety.initialSource, manifest.fromSchema));
     phase('build-release-record', () => script('record.sh', recordArgs));
     phase('store-release-record', () => {
@@ -203,10 +225,13 @@ try {
     await phase('migrate-verify-restart', async () => {
       validateOff(status.off, manifest.fromSchema, Date.now(), status.settingVersions);
       if (schemaChange) await safety.quiescent();
+      validateOff(status.off, manifest.fromSchema, Date.now(), status.settingVersions);
+      restartMayBeActive = true;
       return script('deploy.sh', ['release', 'infra/roots/production', 'fss-prod', ...(schemaChange ? ['--schema-change'] : []), '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker]);
     }, true);
     status.schema = manifest.toSchema; save();
     await phase('post-restart-off', () => safety.off(candidateSource, manifest.toSchema));
+    restartMayBeActive = false;
     phase('release-record-readback', () => script('record.sh', ['read-back', 'infra/roots/production', 'fss-prod', '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker, '--release-record', record]), true);
     phase('smoke', () => {
       const age = /^canary_age=([0-9.]+)$/mu.exec(script('deploy.sh', ['ci', 'canary']))?.[1]; if (!age) throw new Error('reviewed_canary_unavailable');
@@ -222,5 +247,6 @@ try {
     rmSync(join(preparationDirectory, 'public'), { recursive: true, force: true });
   }
   if (status) { status.outcome = error.message === 'release_held' ? 'held' : status.writesStarted ? 'repair-required' : 'refused'; status.reason = error.message; if (status.phase === 'migrate-verify-restart') status.schema = 'unknown-after-migration-attempt'; save(); }
+  if (restartMayBeActive) await containRestartedRuntime();
   console.error(`Reviewed release refused: ${error.message}. No automatic retry or schema rollback.`); process.exitCode = 1;
 }

@@ -132,13 +132,13 @@ describe('reviewed workflow preparation provenance', () => {
       const state = { phase: 'pre-migrate-off', outcome: 'repair-required', writesStarted: true, schema: 124,
         quiescedAt: '2026-10-21T09:30:00Z', recoveryPoint: { timestamp: '2026-10-21T09:30:00Z', restoreTested: false },
         off: { storedOff: true, effectiveOff: true, finishing: 0, schema: 124, versions: [4] },
-        currentTaskArn: 'owned-task', currentTaskOwner: 'owned-run', temporaryReaderDefinition: 'owned-reader', privateBusinessBody: 'must-not-leave-status' };
+        currentTaskArn: 'owned-task', currentTaskOwner: 'owned-run', temporaryReaderDefinition: 'owned-reader', containment: { outcome: 'unknown', reason: 'containment_observation_unknown', stopRequests: [{ service: 'fss-prod-api', outcome: 'unknown' }] }, privateBusinessBody: 'must-not-leave-status' };
       writeFileSync(join(directory, 'reviewed-apply/status.json'), JSON.stringify(state));
       const summary = join(directory, 'summary');
       const result = spawnSync('bash', ['-eu', '-c', body!], { encoding: 'utf8', env: { ...process.env, RUNNER_TEMP: directory, GITHUB_STEP_SUMMARY: summary } });
       expect(result.status, result.stderr).toBe(0);
       const output = readFileSync(summary, 'utf8');
-      expect(JSON.parse(output)).toMatchObject({ quiescedAt: state.quiescedAt, recoveryPoint: state.recoveryPoint, off: state.off, currentTaskArn: 'owned-task', currentTaskOwner: 'owned-run', temporaryReaderDefinition: 'owned-reader' });
+      expect(JSON.parse(output)).toMatchObject({ quiescedAt: state.quiescedAt, recoveryPoint: state.recoveryPoint, off: state.off, currentTaskArn: 'owned-task', currentTaskOwner: 'owned-run', temporaryReaderDefinition: 'owned-reader', containment: state.containment });
       expect(output).not.toContain('must-not-leave-status');
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
