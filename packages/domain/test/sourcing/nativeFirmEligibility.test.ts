@@ -40,3 +40,18 @@ it('does not convert a role-supplemented human-shaped seed into retained native 
  const i=input();i.facts=i.facts.filter(f=>f.kind!=='firm_identity');i.observations[0]!.blocks.push({id:'name',text:i.candidate.firmName});
  expect(nativeFirmCitations(i)).toMatchObject({status:'unavailable',reason:'identity_unresolved'});
 });
+it.each(['Synthetic Harbor LLC does not serve Dallas, TX.','We no longer provide services in Dallas, TX.','Dallas, TX is outside our service area.','Our services are not available in Dallas, TX.','We have discontinued service in Dallas, TX.'])('refuses native target-area contradiction even alongside positive full blocks: %s',text=>{
+ const i=input();i.observations[0]!.blocks.push({id:'contrary-area',text});
+ expect(nativeFirmEvidence(i)).toMatchObject({kind:'verified'});expect(verifiedFirmEvidence(i)).toMatchObject({kind:'verified',phone:null});
+ expect(nativeFirmCitations(i)).toMatchObject({status:'unavailable',reason:'service_area_unresolved'});
+});
+it('refuses the exact retained denial citation with separate positive identity and residential blocks',()=>{
+ const i=input(),texts=['Synthetic Harbor LLC','Synthetic Harbor LLC does not serve Dallas, TX.','We manage residential properties.'];
+ i.observations[0]!.blocks=texts.map((text,index)=>({id:`role-${index}`,text}));i.facts=i.facts.map((fact,index)=>({...fact,value:texts[index]!,blockId:`role-${index}`}));
+ expect(nativeFirmCitations(i)).toMatchObject({status:'unavailable',reason:'service_area_unresolved'});
+});
+it('does not treat unrelated-area denial or unusable contrary sources as current target-area contradiction',()=>{
+ const i=input();i.observations[0]!.blocks.push({id:'other-area',text:'We do not serve Austin, TX.'});
+ i.observations.push({...i.observations[0]!,id:randomUUID(),firstParty:false,blocks:[{id:'unusable',text:'We do not serve Dallas, TX.'}]});
+ expect(nativeFirmCitations(i)).toHaveProperty('citations');
+});

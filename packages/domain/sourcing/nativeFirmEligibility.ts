@@ -39,6 +39,14 @@ export function nativeFirmEvidence(input:NativeEvidenceInput):Core {
  return {kind:'verified',identity:{status:'resolved',name:candidate.firmName,website:candidate.website,locality:candidate.locality,region:candidate.region}};
 }
 const literal=(value:string,part:string)=>` ${identityFold(value).replace(/[^\p{L}\p{N}]+/gu,' ')} `.includes(` ${identityFold(part).replace(/[^\p{L}\p{N}]+/gu,' ')} `);
+function contradictsServiceArea(value:string,candidate:QualificationCandidateContext):boolean {
+ return value.split(/[.!?\n]+/u).some(sentence=>literal(sentence,candidate.locality)
+  &&(literal(sentence,candidate.firmName)||/\b(?:we|our|us)\b/iu.test(sentence))
+  &&(/\b(?:do\s+not|does\s+not|don['’]t|doesn['’]t|never|no\s+longer|not\s+currently|cannot|can['’]t|ceased|stopped)\b[^.!?\n]{0,120}\b(?:serv\w*|manag\w*|operat\w*|cover\w*|offer\w*|provid\w*)\b/iu.test(sentence)
+   ||/\b(?:not|no\s+longer)\b[^.!?\n]{0,80}\b(?:available|offered|provided|supported|served|covered)\b/iu.test(sentence)
+   ||/\b(?:outside|excluded\s+from|not\s+(?:in|within|part\s+of))\b[^.!?\n]{0,80}\b(?:service|coverage|operating)\s+area\b/iu.test(sentence)
+   ||/\b(?:withdrawn|discontinued|ended|ceased|stopped)\b[^.!?\n]{0,80}\b(?:service|operations|coverage)\b/iu.test(sentence)));
+}
 function serviceArea(value:string,candidate:QualificationCandidateContext):boolean {
  return literal(value,candidate.locality)&&(literal(value,candidate.region)||literal(value,stateNames[candidate.region]??'__unknown__'))
   &&! /\b(?:utility|vendor|testimonial|customer review|powered by|web design)\b/iu.test(value)
@@ -56,6 +64,7 @@ export function nativeFirmCitations(input:NativeEvidenceInput):{citations:Extrac
  if(core.kind!=='verified')return unavailable(core.reason==='residential_fit_unknown'?'residential_fit_unresolved':core.reason==='firm_identity_ambiguous'?'identity_ambiguous':core.reason==='source_incomplete_or_unverified'?'evidence_expired':'identity_unresolved');
  const now=Date.parse(input.now),host=sourceHost(input.candidate.website);
  const usable=input.observations.filter(s=>s.firstParty&&!s.truncated&&sourceHost(s.url)===host&&now>=Date.parse(s.retrievedAt)&&now-Date.parse(s.retrievedAt)<7*86400000);
+ if(usable.some(source=>source.blocks.some(block=>contradictsServiceArea(block.text,input.candidate))))return unavailable('service_area_unresolved');
  // Use only retained facts, not role validator's optional supplements.
  const selected=input.facts.filter(f=>['firm_identity','service_area','residential_management'].includes(f.kind)&&usable.some(s=>s.id===f.observationId));
  const citations:Extract<NativeFirmEligibility,{status:'verified'}>['citations']=[];
