@@ -1,4 +1,4 @@
-import {discoveryCandidatePayloadSchema,discoveryReviewInputSchema,discoveryReviewSavedSchema,discoveryUsefulListInputSchema,discoveryUsefulListSchema,type DiscoveryReviewInput} from '@fss/contracts';
+import {discoveryCandidatePayloadSchema,discoveryReviewInputSchema,type discoveryReviewSavedSchema,discoveryUsefulListInputSchema,discoveryUsefulListSchema,type DiscoveryReviewInput} from '@fss/contracts';
 import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';

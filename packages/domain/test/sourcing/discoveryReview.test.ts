@@ -110,7 +110,7 @@ it('hides known terms expiry before sweep, clears review copies before original 
   const evidence=async(workspace:'alpha'|'beta')=>database.session.query("INSERT INTO evidence_items(workspace_id,firm_id,provider,source_reference,content_hash,terms_allow_retention,retention_expires_at) VALUES($1,$2,'website',$3,$4,false,now()-interval '1 second')",[seeded[workspace].workspaceId,crm[workspace].firmId,url,'e'.repeat(64)]);
   await evidence('beta');expect((await useful()).candidates[0]?.band).toBe('review_first');await evidence('alpha');
   expect((await useful()).candidates[0]).toMatchObject({review:null,band:'unreviewed'});expect(await readVisibleDiscoveryReview(context(),saved.value.review.id)).toBeNull();expect(await record(input)).toMatchObject({ok:false,reason:'source_unavailable'});
-  const sweep=retentionTargetFor('research_evidence').sweep;if(!sweep)throw Error('sweep');
+  const sweep=retentionTargetFor('research_evidence')?.sweep;if(!sweep)throw Error('sweep');
   const result=await withTransaction(runtime,()=>sweep(context(),{now:new Date().toISOString(),boundaryAt:null,limit:50}));expect(result.detail['sourcing_candidate_discovery_reviews']).toBe(1);
   expect((await database.session.query('SELECT count(*)::int n FROM sourcing_candidate_discovery_reviews')).rows[0]?.['n']).toBe(0);expect((await useful()).candidates[0]?.review).toBeNull();
 });

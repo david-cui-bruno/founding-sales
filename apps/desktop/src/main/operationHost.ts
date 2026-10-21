@@ -1,4 +1,4 @@
-import {sourcingCandidateReadHandlers} from './sourcingCandidateReadHandlers.ts';
+import {sourcingDiscoveryReviewHandlers} from './sourcingDiscoveryReviewHandlers.ts';
 import { linkedinManualOperations } from './social/linkedinManualOperations.ts';
 import { socialContentOperations } from './social/contentOperations.ts';
 import type {SocialDeliveryStatus,SocialPreparationResult} from '../shared/socialDiagnostics.ts';
@@ -409,7 +409,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
-    ...sourcingCandidateReadHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
+    ...sourcingDiscoveryReviewHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
     'sourcing.save': async (input:OperationInput<'sourcing.save'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/sourcing/candidates/save',body,value=>candidateSavedSchema.parse(value),{commandId});

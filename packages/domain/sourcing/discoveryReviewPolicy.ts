@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {discoveryReviewSchema,type DiscoveryReviewInput,discoveryPriorityBandSchema} from '@fss/contracts';
+import {discoveryReviewSchema,type DiscoveryReviewInput,type discoveryPriorityBandSchema} from '@fss/contracts';
 import type {z} from 'zod';
 
 export type DiscoveryReview=z.infer<typeof discoveryReviewSchema>;
