@@ -77,8 +77,12 @@ export async function listDiscoveryCandidates(ctx:RepositoryContext,input:z.infe
  if(!decideAdminOnly(ctx).permitted)return refused('admin_only');
  const parsed=discoveryIntakeListInputSchema.safeParse(input);if(!parsed.success)return refused('invalid_input');
  const w=ctx.scope.workspaceId;
- const rows=(await ctx.db.query<CandidateRow>(`SELECT id,payload,status,revision,created_at FROM sourcing_candidates WHERE workspace_id=$1 AND status=$2 AND payload->>'kind'='discovery-v1' ORDER BY created_at DESC,id DESC LIMIT 51 OFFSET $3`,[w,parsed.data.status,parsed.data.offset])).rows;
- const candidates=[];
- for(const row of rows.slice(0,50)){const origins=(await ctx.db.query<OriginRow>(originSelect,[w,row.id])).rows.map(originValue);candidates.push({id:row.id,status:row.status,revision:row.revision,createdAt:row.created_at.toISOString(),payload:discoveryCandidatePayloadSchema.parse(row.payload),origins});}
+ // One statement snapshot binds each revision/observation set to its origins,
+ // including when another command attaches or deletes immediately after this read.
+ const rows=(await ctx.db.query<CandidateRow & {origins:unknown}>(`SELECT c.id,c.payload,c.status,c.revision,c.created_at,
+  (SELECT jsonb_agg(jsonb_build_object('source',o.source,'sourceMetadata',o.source_metadata,'licenses',o.licenses,'notices',o.notices) ORDER BY o.provider,o.release,o.record_id)
+   FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=c.workspace_id AND o.candidate_id=c.id) AS origins
+  FROM sourcing_candidates c WHERE c.workspace_id=$1 AND c.status=$2 AND c.payload->>'kind'='discovery-v1' ORDER BY c.created_at DESC,c.id DESC LIMIT 51 OFFSET $3`,[w,parsed.data.status,parsed.data.offset])).rows;
+ const candidates=rows.slice(0,50).map(row=>({id:row.id,status:row.status,revision:row.revision,createdAt:row.created_at.toISOString(),payload:row.payload,origins:row.origins}));
  return {ok:true,value:discoveryIntakeListSchema.parse({candidates,hasMore:rows.length>50})};
 }

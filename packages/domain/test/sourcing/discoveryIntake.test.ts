@@ -3,7 +3,7 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {discoveryIntakeSaveInputSchema} from '@fss/contracts';
 import type {DiscoveryIntakeSaveInput} from '@fss/contracts';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
-import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
+import {withTransaction,type SessionQueryable,type QueryResultRowLike} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveDiscoveryCandidate,listDiscoveryCandidates} from '../../sourcing/discoveryIntake.ts';
@@ -111,6 +111,25 @@ it('checks PostgreSQL metadata byte expansion before any write',async()=>{
  expect(discoveryIntakeSaveInputSchema.safeParse(input).success).toBe(true);
  expect(await save(input)).toMatchObject({ok:false,reason:'origin_payload_too_large'});
  expect((await database.session.query('SELECT count(*)::int n FROM sourcing_candidates')).rows[0]?.['n']).toBe(0);
+});
+it.each(['attach','delete'] as const)('returns one coherent list snapshot when %s commits before response',async operation=>{
+ const first=await save();if(!first.ok)throw Error('save');const writer=await database.appRuntimeSession();let interleaved=false,reads=0;
+ const readSession:SessionQueryable={query:async<Row extends QueryResultRowLike>(text:string,values?:readonly unknown[])=>{
+  reads++;const result=await runtime.query<Row>(text,values);
+  if(text.includes('FROM sourcing_candidates')&&text.includes('LIMIT 51')&&!interleaved){
+   interleaved=true;
+   if(operation==='attach'){const input=discoveryFixture('attached-during-list');input.attachTo={candidateId:first.value.id,expectedRevision:1};expect(await save(input,writer)).toMatchObject({ok:true,value:{revision:2}});}
+   else expect(await withTransaction(writer,()=>deleteCandidate(context('alpha','admin',writer),{id:first.value.id,expectedRevision:1}))).toMatchObject({ok:true});
+  }
+  return result;
+ }};
+ const listed=await listDiscoveryCandidates(context('alpha','admin',readSession),{status:'needs_review',offset:0});
+ expect(interleaved).toBe(true);expect(reads).toBe(1);
+ expect(listed).toMatchObject({ok:true,value:{candidates:[{id:first.value.id,revision:1,payload:{row:{observations:[discoveryFixture().row.source]}},origins:discoveryFixture().origins}]}});
+ if(listed.ok){expect(listed.value.candidates[0]?.origins).toHaveLength(1);expect(listed.value.candidates[0]?.payload.row.observations).toHaveLength(1);}
+ const current=await listDiscoveryCandidates(context(),{status:'needs_review',offset:0});
+ if(operation==='delete')expect(current).toMatchObject({ok:true,value:{candidates:[]}});
+ else if(current.ok){expect(current.value.candidates[0]?.revision).toBe(2);expect(current.value.candidates[0]?.origins).toHaveLength(2);}
 });
 it('fences queued historical runs and all owner admission/correction commands without providers',async()=>{
  const legacy=await withTransaction(runtime,()=>saveCandidate(context(),{firmName:'Synthetic PM',website:'https://example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Synthetic',sourceUrl:'https://example.test/',observedOn:'2026-10-01',preparedBy:'Fixture'}));if(!legacy.ok)throw Error('legacy');
