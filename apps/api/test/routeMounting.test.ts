@@ -203,6 +203,7 @@ describe('what the API mounts', () => {
       '/gmail/connect',
       '/gmail/disconnect',
       '/gmail/status',
+      '/gmail/status/passive',
       '/health',
       '/healthz',
       '/import/commit',

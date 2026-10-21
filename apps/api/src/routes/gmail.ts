@@ -23,7 +23,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 /**
  * The Gmail grant surface (specification 5.1, 12.1, 12.6, 14.1).
  *
- * Four exact paths. `/oauth/gmail/callback` is spelled the way it is because Google
+ * Exact paths. `/oauth/gmail/callback` is spelled the way it is because Google
  * holds the registered redirect URI and it is
  * `https://api.usecallie.com/oauth/gmail/callback`: the path is a fact about a
  * console setting, not a choice this file gets to make, and a mistyped one is a
@@ -43,6 +43,7 @@ export const GMAIL_PATHS: readonly string[] = [
   '/gmail/connect',
   '/gmail/disconnect',
   '/gmail/status',
+  '/gmail/status/passive',
   '/oauth/gmail/callback',
 ];
 
@@ -121,14 +122,16 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
   if (!prepared.ok) return prepared.result;
   const deps = prepared.deps;
 
-  if (request.path === '/gmail/status') {
+  if (request.path === '/gmail/status' || request.path === '/gmail/status/passive') {
     if (request.method !== 'GET' && request.method !== 'POST') {
       return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
     }
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
     const own = await readOwnMailbox(scoped.context, deps.principal.userId);
-    if (own?.status === 'connected' && options.crmAcquisitionDiagnosticRuntime === undefined) {
+    // Passive reads must not unwrap tokens, contact Google or repair grant observations.
+    // The legacy status path retains explicit repair and its after-wait authorization checks.
+    if (request.path === '/gmail/status' && own?.status === 'connected' && options.crmAcquisitionDiagnosticRuntime === undefined) {
       await verifyExistingGmailGrant(scoped.context, mail, {
         mailboxId: own.id,
         authorizeObservation: async () => {

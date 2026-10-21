@@ -398,7 +398,7 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   '/ask/actions/read':{items:[],nextAfterId:null},
   '/ask/actions/change':{status:'accepted',replayed:false,result:{actionId:'11111111-1111-4111-8111-111111111111',version:2,status:'done',completedAt:'2026-10-09T12:00:00Z'}},
   '/ask/read':{operation:'records',selection:'none',records:[],nextAfterId:null,scanComplete:true,coverage:{scope:'current_permitted_crm_state',acquisition:'unverified',semantic:'not_requested'}},
-  '/gmail/status': {
+  '/gmail/status/passive': {
     connected: true,
     mailbox: {
       id: FIXTURE_IDS.message,

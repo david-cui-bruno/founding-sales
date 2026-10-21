@@ -44,12 +44,13 @@ export const MAILBOX_IPC_CHANNELS = {
 export type MailboxIpcChannel = (typeof MAILBOX_IPC_CHANNELS)[keyof typeof MAILBOX_IPC_CHANNELS];
 
 /**
- * The two API paths the row calls. Both are in `GMAIL_PATHS` in
+ * The API paths the row calls. They are in `GMAIL_PATHS` in
  * `apps/api/src/routes/gmail.ts`, and `test/release/desktopMailbox.check.ts` fails if
  * either stops being a path the API mounts.
  */
 export const MAILBOX_API_PATHS = Object.freeze({
-  status: '/gmail/status',
+  status: '/gmail/status/passive',
+  repairStatus: '/gmail/status',
   connect: '/gmail/connect',
 } as const);
 
@@ -168,8 +169,8 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
     });
   };
 
-  const read = async (): Promise<ApiOutcome<GmailStatus>> => {
-    const answer = await deps.api.read(MAILBOX_API_PATHS.status, value => gmailStatusSchema.parse(value));
+  const read = async (repair = false): Promise<ApiOutcome<GmailStatus>> => {
+    const answer = await deps.api.read(repair ? MAILBOX_API_PATHS.repairStatus : MAILBOX_API_PATHS.status, value => gmailStatusSchema.parse(value));
     if (answer.ok) {
       status = rowOf(answer.value);
       readNotice = null;
@@ -308,7 +309,8 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
       connecting = false;
       switchingTo = null;
       connectNotice = null;
-      await read();
+      // Only the owner's explicit Refresh action may repair an existing grant.
+      await read(true);
       return await snapshot();
     },
 

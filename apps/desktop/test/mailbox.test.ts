@@ -11,6 +11,7 @@ import {
   type MailboxBridgeDeps,
 } from '../src/main/mailboxBridge.ts';
 import { mailboxStateSchema, type MailboxState } from '../src/shared/contract.ts';
+import { OPERATIONS } from '../src/shared/operations.ts';
 import {
   CONNECT_GMAIL_LABEL,
   MAILBOX_WAITING_LABEL,
@@ -133,7 +134,7 @@ describe('the Mailbox bridge: connect', () => {
     const answer = await mac.bridge.connect();
 
     // The command first, then the browser, then one status read per wake-up.
-    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status', '/gmail/status']);
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status/passive', '/gmail/status/passive', '/gmail/status/passive']);
     expect(mac.calls[0]?.method).toBe('POST');
     expect(mac.calls[1]?.method).toBe('GET');
     expect(mac.opened).toEqual([consentUrl]);
@@ -185,6 +186,7 @@ describe('the Mailbox bridge: connect', () => {
     const mac = world({
       [MAILBOX_API_PATHS.connect]: [{ status: 409, body: { status: 'refused', replayed: false, reason: 'invalid_input' } }],
       [MAILBOX_API_PATHS.status]: [status(false)],
+      [MAILBOX_API_PATHS.repairStatus]: [status(false)],
     });
     await mac.bridge.connect();
     // A focus read answers, and the refusal is still there to be read.
@@ -219,7 +221,7 @@ describe('the Mailbox bridge: connect', () => {
   it('stops waiting when Refresh is pressed', async () => {
     let refreshed: MailboxState | null = null;
     const mac = world(
-      { [MAILBOX_API_PATHS.connect]: [started()], [MAILBOX_API_PATHS.status]: [status(false)] },
+      { [MAILBOX_API_PATHS.connect]: [started()], [MAILBOX_API_PATHS.status]: [status(false)], [MAILBOX_API_PATHS.repairStatus]: [status(false)] },
       {
         onSleep: async count => {
           // The person abandoned the consent screen and pressed Refresh on the second wait.
@@ -233,7 +235,7 @@ describe('the Mailbox bridge: connect', () => {
     expect(answer.notice).toBeNull();
     expect(answer.mayConnect).toBe(true);
     // One read by the first wake-up, one by Refresh, and none after: the wait stopped.
-    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status']);
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status/passive', '/gmail/status']);
   });
 
   it('gives up when the grant’s signed state has expired', async () => {
@@ -245,7 +247,7 @@ describe('the Mailbox bridge: connect', () => {
     expect(answer.notice).toBe('mailbox_connect_timed_out');
     expect(answer.connecting).toBe(false);
     // Three two-second waits reach the six-second expiry.
-    expect(mac.paths().filter(path => path === '/gmail/status')).toHaveLength(3);
+    expect(mac.paths().filter(path => path === '/gmail/status/passive')).toHaveLength(3);
   });
 
   it('never waits longer than ten minutes, whatever the expiry says', async () => {
@@ -255,7 +257,7 @@ describe('the Mailbox bridge: connect', () => {
     });
     const answer = await mac.bridge.connect();
     expect(answer.notice).toBe('mailbox_connect_timed_out');
-    expect(mac.paths().filter(path => path === '/gmail/status')).toHaveLength(MAXIMUM_MAILBOX_WAIT_MS / 2_000);
+    expect(mac.paths().filter(path => path === '/gmail/status/passive')).toHaveLength(MAXIMUM_MAILBOX_WAIT_MS / 2_000);
   });
 
   it('waits through an offline read, and stops at a refusal', async () => {
@@ -266,7 +268,7 @@ describe('the Mailbox bridge: connect', () => {
     const answer = await mac.bridge.connect();
     expect(answer.notice).toBe('device_revoked');
     expect(answer.connecting).toBe(false);
-    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status']);
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status/passive', '/gmail/status/passive']);
   });
 
   it('does not start a second grant while the first consent screen is open', async () => {
@@ -299,19 +301,30 @@ describe('the Mailbox bridge: connect', () => {
     await mac.bridge.state();
     const answer = await mac.bridge.connect();
     expect(answer.notice).toBe('mailbox_already_connected');
-    expect(mac.paths()).toEqual(['/gmail/status']);
+    expect(mac.paths()).toEqual(['/gmail/status/passive']);
   });
 });
 
 describe('the Mailbox bridge: status', () => {
-  it('reads /gmail/status and passes on only the address, the status and the baseline state', async () => {
+  it('declares passive state and consent polling, keeping only explicit refresh on repair', () => {
+    expect(OPERATIONS['mailbox.state'].calls).toEqual([{ method: 'GET', path: '/gmail/status/passive' }]);
+    for (const name of ['mailbox.connect', 'mailbox.switch'] as const) {
+      expect(OPERATIONS[name].calls).toEqual([
+        { method: 'POST', path: '/gmail/connect' },
+        { method: 'GET', path: '/gmail/status/passive' },
+      ]);
+    }
+    expect(OPERATIONS['mailbox.refresh'].calls).toEqual([{ method: 'GET', path: '/gmail/status' }]);
+  });
+
+  it('reads passive status and passes on only the address, the status and the baseline state', async () => {
     const mac = world({
       [MAILBOX_API_PATHS.status]: [
         status(true, { syncState: 'ready', lastSyncedAt: '2026-09-24T15:00:00.000Z', lastSyncError: 'a diagnostic' }),
       ],
     });
     const answer = await mac.bridge.state();
-    expect(mac.calls).toEqual([{ method: 'GET', path: '/gmail/status', body: null }]);
+    expect(mac.calls).toEqual([{ method: 'GET', path: '/gmail/status/passive', body: null }]);
     expect(answer.status).toEqual({
       connected: true,
       mailbox: {
@@ -323,6 +336,18 @@ describe('the Mailbox bridge: status', () => {
       },
       lastGrantRefusal: null,
     });
+  });
+
+  it('never falls back to repair on passive errors and repairs only on explicit Refresh', async () => {
+    const mac = world({
+      [MAILBOX_API_PATHS.status]: [{ status: 404, body: { error: 'not_found' } }, status(true)],
+      [MAILBOX_API_PATHS.repairStatus]: [status(true)],
+    });
+    expect((await mac.bridge.state()).status).toBeNull();
+    expect((await mac.bridge.state()).status?.connected).toBe(true);
+    expect(mac.paths()).toEqual(['/gmail/status/passive', '/gmail/status/passive']);
+    expect((await mac.bridge.refresh()).status?.connected).toBe(true);
+    expect(mac.paths()).toEqual(['/gmail/status/passive', '/gmail/status/passive', '/gmail/status']);
   });
 
   it('reports a revoked mailbox with its address, as not connected', async () => {
@@ -383,7 +408,7 @@ describe('the Mailbox bridge: status', () => {
       'callie:mailbox:connect',
       'callie:mailbox:switch',
     ]);
-    expect(Object.values(MAILBOX_API_PATHS)).toEqual(['/gmail/status', '/gmail/connect']);
+    expect(Object.values(MAILBOX_API_PATHS)).toEqual(['/gmail/status/passive', '/gmail/status', '/gmail/connect']);
   });
 });
 
@@ -517,7 +542,7 @@ describe('the Mailbox bridge: switch', () => {
       [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS), statusOf(ADDRESS), statusOf(NEW_ADDRESS, { syncState: 'baseline_pending' })],
     });
     const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
-    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status', '/gmail/status']);
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status/passive', '/gmail/status/passive', '/gmail/status/passive']);
     expect(mac.calls[0]?.body).toMatchObject({ switchTo: NEW_ADDRESS });
     expect(connectMailboxCommandSchema.safeParse(mac.calls[0]?.body).success).toBe(true);
     expect(mac.opened).toEqual([consentUrl]);
@@ -534,7 +559,7 @@ describe('the Mailbox bridge: switch', () => {
     });
     // The clock moves two seconds per poll; the grant lives ten minutes.
     const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
-    expect(mac.paths().filter(path => path === '/gmail/status').length).toBeGreaterThan(100);
+    expect(mac.paths().filter(path => path === '/gmail/status/passive').length).toBeGreaterThan(100);
     expect(answer.notice).toBe('mailbox_switch_timed_out');
     expect(answer.status?.mailbox?.emailAddress).toBe(ADDRESS);
     expect(buildMailboxView(answer).notice).toBe(`Google didn’t confirm the switch. Your mailbox is still ${ADDRESS}.`);
@@ -546,7 +571,7 @@ describe('the Mailbox bridge: switch', () => {
       [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS)],
     });
     const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
-    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status', '/gmail/status']);
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status/passive', '/gmail/status/passive', '/gmail/status/passive']);
     expect(answer.notice).toBe('mailbox_switch_timed_out');
     expect(answer.connecting).toBe(false);
   });
@@ -561,7 +586,7 @@ describe('the Mailbox bridge: switch', () => {
     });
     const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
     expect(answer.notice).toBe('mailbox_switch_address_mismatch');
-    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status']);
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status/passive', '/gmail/status/passive']);
     const text = buildMailboxView(answer).notice ?? '';
     expect(text).toContain('different Google account');
     expect(text).not.toContain('mailbox_switch');
@@ -578,7 +603,7 @@ describe('the Mailbox bridge: switch', () => {
     });
     const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
     // Two polls with the old refusal passed over, then the expected address wins.
-    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status', '/gmail/status']);
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status/passive', '/gmail/status/passive', '/gmail/status/passive']);
     expect(answer.notice).toBeNull();
     expect(answer.status?.mailbox?.emailAddress).toBe(NEW_ADDRESS);
   });

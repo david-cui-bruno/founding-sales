@@ -1868,7 +1868,7 @@ export const OPERATIONS = {
   // --- The Mailbox row on This Mac ---------------------------------------
   'mailbox.state': {
     kind: 'read',
-    calls: [{ method: 'GET', path: '/gmail/status' }],
+    calls: [{ method: 'GET', path: '/gmail/status/passive' }],
     input: nothing,
     output: mailboxStateSchema,
     transform: 'the status as last read, without the consent URL, which never crosses this boundary',
@@ -1884,7 +1884,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/gmail/connect' },
-      { method: 'GET', path: '/gmail/status' },
+      { method: 'GET', path: '/gmail/status/passive' },
     ],
     input: nothing,
     output: mailboxStateSchema,
@@ -1894,7 +1894,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/gmail/connect' },
-      { method: 'GET', path: '/gmail/status' },
+      { method: 'GET', path: '/gmail/status/passive' },
     ],
     input: z.strictObject({ switchTo: z.email().max(320) }),
     output: mailboxStateSchema,

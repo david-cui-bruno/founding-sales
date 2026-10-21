@@ -101,7 +101,7 @@ describe('8.0x: the Mac client connects the mailbox', () => {
               },
             });
           }
-          if (path === '/gmail/status') {
+          if (path === '/gmail/status/passive') {
             return await Promise.resolve(statuses.length > 1 ? (statuses.shift() as HttpAnswer) : (statuses[0] as HttpAnswer));
           }
           return await Promise.resolve({ status: 404, body: { error: 'not_found' } });
@@ -127,10 +127,10 @@ describe('8.0x: the Mac client connects the mailbox', () => {
     const after = await bridge.connect();
 
     expect(calls.map(call => `${call.method} ${call.path}`)).toEqual([
-      'GET /gmail/status',
+      'GET /gmail/status/passive',
       'POST /gmail/connect',
-      'GET /gmail/status',
-      'GET /gmail/status',
+      'GET /gmail/status/passive',
+      'GET /gmail/status/passive',
     ]);
     expect(connectMailboxCommandSchema.safeParse(calls[1]?.body).success).toBe(true);
     expect(opened).toEqual([CONSENT]);
