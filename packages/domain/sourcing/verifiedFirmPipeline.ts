@@ -10,6 +10,7 @@ import {admitCandidate} from './admission.ts';
 import {attachSourcingAttribution} from './attribution.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {verifiedFirmOwner,verifiedFirmEvidence,VERIFIED_FIRM_POLICY_VERSION} from './verifiedFirmPolicy.ts';
+import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 
 /** Caller owns the transaction. No providers, contacts, enrollment or send authority. */
 export async function advanceVerifiedFirm(ctx:RepositoryContext,input:{runId:string}):Promise<void> {
@@ -20,6 +21,7 @@ export async function advanceVerifiedFirm(ctx:RepositoryContext,input:{runId:str
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${w}`]);
  const candidate=(await ctx.db.query<{id:string;revision:number;status:string;qualification_blocked:boolean;payload:CandidateInput}>(`SELECT c.* FROM sourcing_candidates c JOIN sourcing_qualification_runs r ON r.workspace_id=c.workspace_id AND r.candidate_id=c.id WHERE c.workspace_id=$1 AND r.id=$2 FOR UPDATE OF c`,[w,input.runId])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.runId])).rows[0];
+ if(candidate&&!isLegacyCandidatePayload(candidate.payload))return;
  if(!candidate||!run||candidate.qualification_blocked||candidate.status==='dismissed'||run.candidate_revision!==candidate.revision||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.reason||!['review','eligible','admitted'].includes(run.state))return;
  const proof=verifiedFirmEvidence({candidate:candidate.payload,facts:run.facts,observations:run.observations,now:await databaseNow(ctx)});
  const record=async(reason:string|null)=>ctx.db.query('UPDATE sourcing_qualification_runs SET admission_reason=$3,admission_checked_at=now() WHERE workspace_id=$1 AND id=$2',[w,run.id,reason]);

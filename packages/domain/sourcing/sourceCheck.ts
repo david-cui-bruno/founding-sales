@@ -14,6 +14,7 @@ import {workspaceBusinessZone} from '../research/ledger.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
 import {parsePageText} from '../research/pageText.ts';
 import type {PageFetchProvider} from '../research/providers.ts';
+import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 
 interface Row {id:string;revision:number;status:string;payload:CandidateInput;source_check:unknown;check_job_state:string|null;[key:string]:unknown}
 const select=`SELECT id,revision,status,payload,source_check,(SELECT state FROM jobs j WHERE j.workspace_id=sourcing_candidates.workspace_id AND j.id::text=source_check->>'jobId') AS check_job_state FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2`;
@@ -34,6 +35,7 @@ export async function requestSourceCheck(context:RepositoryContext,input:{id:str
   if(!candidateDeleteInputSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
   const row=(await context.db.query<Row>(`${select} FOR UPDATE`,[context.scope.workspaceId,input.id])).rows[0];
   if(!row)return {ok:false,reason:'not_found'};
+  if(!isLegacyCandidatePayload(row.payload))return {ok:false,reason:'candidate_format_not_supported'};
   if(row.revision!==input.expectedRevision)return {ok:false,reason:'candidate_changed'};
   if(options.scheduled && row.status!=='kept')return {ok:false,reason:'candidate_not_monitored'};
   if(row.status==='dismissed')return {ok:false,reason:'candidate_dismissed'};
@@ -53,6 +55,7 @@ export async function requestSourceCheck(context:RepositoryContext,input:{id:str
 }
 export async function runSourceCheck(context:RepositoryContext,input:{candidateId:string;checkId:string;scheduled?:boolean|undefined},fetcher:PageFetchProvider):Promise<void>{
   const row=(await context.db.query<Row>(select,[context.scope.workspaceId,input.candidateId])).rows[0];if(!row)return;
+  if(!isLegacyCandidatePayload(row.payload))return;
   const parsed=candidateSourceCheckSchema.safeParse(row.source_check);
   if(!parsed.success || parsed.data.checkId!==input.checkId || parsed.data.state!=='pending')return;
   const prior=parsed.data;let reason:CandidateSourceCheck['reason']=row.status==='dismissed'?'candidate_dismissed':input.scheduled && row.status!=='kept'?'candidate_not_monitored':await blocked(context);
