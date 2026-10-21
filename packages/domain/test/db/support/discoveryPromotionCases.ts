@@ -29,20 +29,3 @@ export const DISCOVERY_PROMOTION_CONSTRAINT_CASES:readonly Case[]=[
  {constraint:'sourcing_discovery_research_firm_workspace_id_promotion_id_fkey',run:async f=>insert(f,'sourcing_discovery_research_firms',{...await researchLink(f),promotion_id:absent})},
  {constraint:'sourcing_discovery_research_firms_workspace_id_firm_id_fkey',run:async f=>insert(f,'sourcing_discovery_research_firms',{...await researchLink(f),firm_id:absent})},
 ];
-
-// Exact reviewed127 SQL is a prerequisite to local128. These storage-only cases
-// do not import its runtime, interpretation rules, contracts or renderer lane.
-async function review(f:Fixture){return {workspace_id:f.seeded.alpha.workspaceId,candidate_id:await candidate(f),id:randomUUID(),candidate_revision:1,review_version:'discovery-review-v1',evidence:'[]',assessment:'{"serviceSignal":"unknown","websiteAssociation":"unknown","unknowns":[]}',content_digest:'a'.repeat(64),reviewed_by:randomUUID()};}
-const badReview=(constraint:string,changes:Row):Case=>({constraint,run:async f=>insert(f,'sourcing_candidate_discovery_reviews',{...await review(f),...changes})});
-export const DISCOVERY_REVIEW_PREDECESSOR_CONSTRAINT_CASES:readonly Case[]=[
- badReview('sourcing_discovery_review_revision',{candidate_revision:0}),
- badReview('sourcing_discovery_review_version',{review_version:'wrong'}),
- badReview('sourcing_discovery_review_digest',{content_digest:'bad'}),
- badReview('sourcing_discovery_review_evidence',{evidence:'{}'}),
- badReview('sourcing_discovery_review_assessment',{assessment:'{}'}),
- badReview('sourcing_candidate_discovery_rev_workspace_id_candidate_id_fkey',{candidate_id:absent}),
- {constraint:'sourcing_candidate_discovery_reviews_pkey',run:async f=>{const r=await review(f);await insert(f,'sourcing_candidate_discovery_reviews',r);return insert(f,'sourcing_candidate_discovery_reviews',r);}},
- {constraint:'sourcing_candidate_discovery__workspace_id_candidate_id_can_key',run:async f=>{const r=await review(f);await insert(f,'sourcing_candidate_discovery_reviews',r);return insert(f,'sourcing_candidate_discovery_reviews',{...r,id:randomUUID()});}},
- {constraint:'sourcing_candidate_discovery_review_decisions_pkey',run:async f=>{const r={workspace_id:f.seeded.alpha.workspaceId,candidate_id:await candidate(f),review_id:randomUUID(),reviewed_at:'2026-10-21T00:00:00Z'};await insert(f,'sourcing_candidate_discovery_review_decisions',r);return insert(f,'sourcing_candidate_discovery_review_decisions',r);}},
- {constraint:'sourcing_candidate_discovery_re_workspace_id_candidate_id_fkey1',run:async f=>insert(f,'sourcing_candidate_discovery_review_decisions',{workspace_id:f.seeded.alpha.workspaceId,candidate_id:absent,review_id:randomUUID(),reviewed_at:'2026-10-21T00:00:00Z'})},
-];
