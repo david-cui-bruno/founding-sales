@@ -1,5 +1,6 @@
 import {APOLLO_DISCOVERY_CONSTRAINT_CASES} from './apolloDiscoveryCases.ts';
 import {DISCOVERY_INTAKE_CONSTRAINT_CASES} from './discoveryIntakeCases.ts';
+import {DISCOVERY_REVIEW_CONSTRAINT_CASES} from './discoveryReviewCases.ts';
 import {OFFICE_ASSESSMENT_CONSTRAINT_CASES} from './officeAssessmentCases.ts';
 import type {SeededCrm} from './crmFixtures.ts';
 import type {SessionQueryable} from '../../../db/queryable.ts';
@@ -10,6 +11,7 @@ const insert=(f:Fixture,overrides:Record<string,unknown>={})=>{
 };
 export const SOURCING_CONSTRAINT_CASES=[
  ...DISCOVERY_INTAKE_CONSTRAINT_CASES,
+ ...DISCOVERY_REVIEW_CONSTRAINT_CASES,
  ...OFFICE_ASSESSMENT_CONSTRAINT_CASES,
  ...APOLLO_DISCOVERY_CONSTRAINT_CASES,
  {constraint:'sourcing_search_account_id_check',run:async(f:Fixture)=>{return f.session.query('INSERT INTO sourcing_search_account(id) VALUES(false)');}},

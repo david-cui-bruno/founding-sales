@@ -15,6 +15,7 @@ import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
 import {parsePageText} from '../research/pageText.ts';
 import type {PageFetchProvider} from '../research/providers.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
 
 interface Row {id:string;revision:number;status:string;payload:CandidateInput;source_check:unknown;check_job_state:string|null;[key:string]:unknown}
 const select=`SELECT id,revision,status,payload,source_check,(SELECT state FROM jobs j WHERE j.workspace_id=sourcing_candidates.workspace_id AND j.id::text=source_check->>'jobId') AS check_job_state FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2`;
@@ -91,6 +92,11 @@ export async function runSourceCheck(context:RepositoryContext,input:{candidateI
   let check=candidateSourceCheckSchema.parse({...prior,state:reason?'unavailable':'checked',reason,checkedAt:await databaseNow(context),lastSuccess});
   if(Buffer.byteLength(JSON.stringify(check),'utf8')>16000)check={...check,state:'unavailable',reason:'source_unavailable',lastSuccess:prior.lastSuccess};
   // Review edits do not invalidate a snapshot. A newer check or deletion does.
+  // The business_uniqueness worker and direct callers own this transaction.
+  await lockDiscoveryReviewSources(context);
   const changed=await context.db.query(`UPDATE sourcing_candidates SET source_check=$4::jsonb,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND source_check->>'checkId'=$3 AND source_check->>'state'='pending' RETURNING id`,[context.scope.workspaceId,input.candidateId,input.checkId,JSON.stringify(check)]);
-  if(changed.rows.length)await recordCrmAuditEvent(context,{action:'sourcing.source_checked',subjectKind:'sourcing_candidate',subjectId:input.candidateId,detail:{state:check.state,reason:check.reason}});
+  if(changed.rows.length){
+    if(check.state==='unavailable'&&['source_unavailable','source_not_permitted','no_readable_text'].includes(check.reason??''))await eraseDiscoveryReviewsForSources(context,[source,...(prior.lastSuccess?[prior.lastSuccess.url]:[])]);
+    await recordCrmAuditEvent(context,{action:'sourcing.source_checked',subjectKind:'sourcing_candidate',subjectId:input.candidateId,detail:{state:check.state,reason:check.reason}});
+  }
 }

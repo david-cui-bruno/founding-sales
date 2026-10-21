@@ -1,4 +1,5 @@
 import {sweepOfficeSources} from './officeAssessments.ts';
+import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources,sweepDiscoveryReviews} from '../sourcing/discoveryReviewVisibility.ts';
 import {expireHistoryRecoveries} from '../mail/crmHistoryRecovery.ts';
 import {expireUnavailableBackfillMetadata} from '../mail/crmBackfillMetadata.ts';
 import { redactBusinessMetadata } from '../business/acquisition.ts';
@@ -206,19 +207,23 @@ const rawMime: RetentionTarget = {
 const researchEvidence: RetentionTarget = {
   dataKind: 'research_evidence',
   state: 'implemented',
-  tables: ['evidence_items','firm_office_assessment_sources'],
+  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews'],
   note: 'Evidence whose provider terms have expired is deleted at its own expiry; evidence whose terms permit retention stays with the firm.',
   sweep: async (context, input) => {
+    await lockDiscoveryReviewSources(context);
+    const discoveryDeleted=await sweepDiscoveryReviews(context,input);
     const officeDeleted=await sweepOfficeSources(context,input);
-    const expiring = await context.db.query<{ id: string }>(
-      `SELECT id FROM evidence_items
+    const expiring = await context.db.query<{ id: string;source_reference:string }>(
+      `SELECT id,source_reference FROM evidence_items
         WHERE workspace_id = $1 AND retention_expires_at IS NOT NULL AND retention_expires_at < $2::timestamptz
         ORDER BY retention_expires_at
         LIMIT $3`,
       [context.scope.workspaceId, input.now, input.limit],
     );
     const ids = expiring.rows.map(row => row.id);
-    if (ids.length === 0) return {boundaryAt:input.now,rowsDeleted:officeDeleted,rowsRedacted:0,detail:{firm_office_assessment_sources:officeDeleted}};
+    const sourceDeleted=await eraseDiscoveryReviewsForSources(context,expiring.rows.map(row=>row.source_reference));
+    const discoveryTotal=discoveryDeleted+sourceDeleted;
+    if (ids.length === 0) return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:0,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal}};
 
     const deleted = await context.db.query(
       'DELETE FROM evidence_items WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
@@ -226,9 +231,9 @@ const researchEvidence: RetentionTarget = {
     );
     return {
       boundaryAt: input.now,
-      rowsDeleted: (deleted.rowCount ?? 0)+officeDeleted,
+      rowsDeleted: (deleted.rowCount ?? 0)+officeDeleted+discoveryTotal,
       rowsRedacted: 0,
-      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted },
+      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal },
     };
   },
 };
