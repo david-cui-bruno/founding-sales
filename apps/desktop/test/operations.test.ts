@@ -30,6 +30,16 @@ import {
 const ITEM_ID = '11111111-1111-4111-8111-111111111111';
 const FIRM_ID = '22222222-2222-4222-8222-222222222222';
 
+it.each(['meetings.followThrough','meetings.saveUnpublishedPlan'] as const)('drops late private meeting content for %s after identity changes',async name=>{
+  const deps=hosts();let generation=1;deps.recordings.identity.current=()=>generation;
+  let finish!:()=>void;const waiting=new Promise<void>(resolve=>{finish=resolve;});
+  deps.api.read=async()=>{await waiting;return {ok:false,reason:'offline',offline:true};};
+  deps.api.command=async()=>{await waiting;return {ok:false,reason:'offline',offline:true};};
+  const input=name==='meetings.followThrough'?{meetingId:ITEM_ID}:{meetingId:ITEM_ID,commandId:FIRM_ID,expectedSourceHash:'a'.repeat(64),expectedNotesRevision:0,expectedPlanVersion:0,expectedUnpublishedRevision:0,messages:[{subject:'',body:''},{subject:'',body:''},{subject:'',body:''},{subject:'',body:''}]};
+  const pending=answerOperation(operationHandlers(deps),name==='meetings.followThrough'?'read':'command',name,input);
+  generation++;finish();await expect(pending).resolves.toEqual({view:null,reason:'not_found'});
+});
+
 const todayState = (notice: string | null = null): TodayState => ({
   snapshotDate: '2026-09-27',
   businessTimeZone: 'America/New_York',
@@ -132,7 +142,7 @@ describe('the operation registry', () => {
       'firms.briefImportReset',
     ]);
     // Slice M1: the firm page's meetings and the bookings to match, straight through the client.
-    expect(OPERATION_NAMES.filter(name => name.startsWith('meetings.'))).toEqual(['meetings.forFirm', 'meetings.recordingSetup', 'meetings.retryRecordingSetup', 'meetings.followThrough', 'meetings.editRecap', 'meetings.qualification', 'meetings.saveQualification', 'meetings.outcomes', 'meetings.saveNotes', 'meetings.changeTask', 'meetings.bookingCapacity', 'meetings.brief', 'meetings.unmatched', 'meetings.match', 'meetings.setAttendance', 'meetings.transcript']);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('meetings.'))).toEqual(['meetings.forFirm', 'meetings.recordingSetup', 'meetings.retryRecordingSetup', 'meetings.followThrough', 'meetings.editRecap', 'meetings.saveUnpublishedPlan', 'meetings.qualification', 'meetings.saveQualification', 'meetings.outcomes', 'meetings.saveNotes', 'meetings.changeTask', 'meetings.bookingCapacity', 'meetings.brief', 'meetings.unmatched', 'meetings.match', 'meetings.setAttendance', 'meetings.transcript']);
     // Slice C1: placing a call from Callie, when `calling_provider = twilio`.
     expect(OPERATION_NAMES.filter(name => name.startsWith('calling.'))).toEqual([
       'calling.status',

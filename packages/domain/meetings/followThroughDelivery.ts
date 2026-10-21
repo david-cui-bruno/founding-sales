@@ -1,3 +1,4 @@
+import { hasUnresolvedMeetingFields } from './recapFields.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { readFence, readFenceByStepExecution, renderedHash, rewritePreparedBody, holdFence } from '../outbound/fence.ts';
 import { composeBodyForWorkspace } from '../outbound/footer.ts';
@@ -66,6 +67,8 @@ export async function markMeetingDraftSubmitted(context: RepositoryContext, fenc
   if (fence?.stepExecutionId == null) return true;
   const plan = await meetingPlanForExecution(context, fence.stepExecutionId);
   if (plan === null) return true;
+  const draft = await currentMeetingDraft(context, plan);
+  if (draft === null || hasUnresolvedMeetingFields(draft.subject, draft.body)) return false;
   const result = await context.db.query(`UPDATE meeting_follow_through_drafts SET state='submitted' WHERE workspace_id=$1 AND plan_id=$2 AND version=$3
     AND outbound_message_id=$4 AND rendered_hash=$5 AND state='ready'`, [context.scope.workspaceId, plan.id, plan.current_draft_version, fenceId, fence.renderedHash]);
   return result.rowCount === 1;

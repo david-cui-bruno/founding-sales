@@ -6,6 +6,34 @@ import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { followThroughView } from './support/meetingFollowThroughFixture.ts';
 import { MID } from './support/meetingTranscriptFixture.ts';
 afterEach(cleanup);
+it('keeps unknown fields human-entered and saves a held partial without approving or sending',async()=>{
+  // Controlled UI fixture, not actual prospect notes or a live persistence claim.
+  const base=followThroughView();
+  let stored={...base,approvalRequired:true,approvalHash:'a'.repeat(64),blockers:['recap_fields_unresolved','reply_received'],
+    currentDraft:{...base.currentDraft!,state:'held' as const,subject:'Callie + {Firm}',body:'Hi {Name},\nKnown fixture note. Next step: {day} at {time}.'}};
+  const p:FollowThroughPorts={
+    read:vi.fn(async()=>({view:stored,reason:null})),
+    edit:vi.fn<FollowThroughPorts['edit']>(async input=>{
+      if(input.action==='begin_edit')return {view:{...stored,version:2,currentDraft:{...stored.currentDraft,state:'editing'}},reason:null};
+      if(input.action==='save')stored={...stored,version:3,currentDraft:{...stored.currentDraft,version:2,subject:input.subject,body:input.body}};
+      return {view:stored,reason:null};
+    }),
+  };
+  render(<DraftsProvider><MeetingFollowThrough meetingId={MID} ports={p}/></DraftsProvider>);open();
+  expect(await screen.findByText(/Leave unknown details for human entry/)).toBeTruthy();
+  expect((screen.getByRole('button',{name:'Approve recap and plan'}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button',{name:'Edit recap'}));
+  const input=await screen.findByLabelText('Recap message');
+  fireEvent.change(input,{target:{value:'Hi Pat,\nKnown fixture note. Next step: {day} at {time}.'}});
+  fireEvent.click(screen.getByRole('button',{name:'Save recap'}));
+  expect(await screen.findByText('Draft saved. Unknown fields remain held for human entry.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Refresh follow-up'}));
+  await waitFor(()=>expect(p.read).toHaveBeenCalledTimes(2));
+  expect(screen.getByText(/Hi Pat,\s+Known fixture note\. Next step: \{day\} at \{time\}\./)).toBeTruthy();
+  expect(screen.getByText('A reply arrived. Review it in Replies.')).toBeTruthy();
+  expect(vi.mocked(p.edit).mock.calls.map(([command])=>command.action)).toEqual(['begin_edit','save']);
+  expect((screen.getByRole('button',{name:'Approve recap and plan'}) as HTMLButtonElement).disabled).toBe(true);
+});
 const ports=():FollowThroughPorts=>({read:vi.fn(async()=>({view:followThroughView(),reason:null})),edit:vi.fn(async()=>({view:{...followThroughView(),version:2,currentDraft:{...followThroughView().currentDraft!,state:'editing' as const}},reason:null}))});
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'Follow-up'}));
 it('shows a paused draft without a countdown and collapses on second click',async()=>{

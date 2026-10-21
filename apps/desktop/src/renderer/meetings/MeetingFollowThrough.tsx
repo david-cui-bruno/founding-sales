@@ -5,6 +5,7 @@ import { Input } from '../ui/input.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { noDefiniteAnswer } from '../today/afterCallModel.ts';
 import { useFollowThroughMemory } from './followThroughMemory.ts';
+import { UnpublishedPlan } from './UnpublishedPlan.tsx';
 export interface FollowThroughPorts {
   read(meetingId:string):Promise<{view:MeetingFollowThroughViewV2|null;reason:string|null}>;
   edit(input:MeetingDraftEdit&{commandId:string}):Promise<{view:MeetingFollowThroughViewV2|null;reason:string|null}>;
@@ -14,6 +15,7 @@ const defaultPorts:FollowThroughPorts={
   edit:async input=>await globalThis.callieApi?.command('meetings.editRecap',input)??{view:null,reason:'offline'},
 };
 const reasons:Record<string,string>={
+  recap_fields_unresolved:'Leave unknown details for human entry. Edit only from actual meeting notes. You can save a partial draft, but unresolved fields keep it held and cannot be approved.',
   approval_changed:'The plan or shared facts changed. Refresh and review before approving.',approval_required:'Review this exact recap and the bounded follow-up plan, then approve once. Changed claims or commitments need another approval.',
   facts_block_changed:'An approved shared fact changed. Update this recap and review the plan.',facts_block_retired:'A shared fact was retired. Remove or replace that claim before approving.',facts_block_unapproved:'A shared claim needs approval in Facts.',content_changed:'The approved message changed. Review and approve the exact current plan.',facts_changed:'This plan uses different shared facts. Review and approve again.',
   nudge_obsolete:'This follow-up is too late for the original plan. Review the conversation before arranging another follow-up.',
@@ -59,7 +61,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
         if(pending.action==='begin_edit'&&answer.view.currentDraft!==null){
           const current=answer.view.currentDraft;
           entry.form={planId:answer.view.planId!,expectedPlanVersion:answer.view.version,expectedDraftVersion:current.version,subject:entry.form?.subject??current.subject,body:entry.form?.body??current.body};entry.editingUi=true;
-        } else {entry.form=null;entry.editingUi=false;entry.message=pending.action==='approve'?(draft.state==='sent'?'Remaining follow-up plan approved.':'Recap and follow-up plan approved.'):pending.action==='save'?'Recap saved.':pending.action==='cancel'?'Follow-up cancelled.':null;}
+        } else {entry.form=null;entry.editingUi=false;entry.message=pending.action==='approve'?(draft.state==='sent'?'Remaining follow-up plan approved.':'Recap and follow-up plan approved.'):pending.action==='save'?(answer.view.blockers.includes('recap_fields_unresolved')?'Draft saved. Unknown fields remain held for human entry.':'Recap saved.'):pending.action==='cancel'?'Follow-up cancelled.':null;}
       } else if(noDefiniteAnswer(answer.reason))entry.message='The answer was lost. Retry uses the same request.';
       else if(answer.reason==='not_found'){entry.view=null;entry.form=null;entry.pending=null;entry.editingUi=false;entry.gone=true;entry.unavailable=true;}
       else {entry.pending=null;entry.message=['draft_changed','source_changed'].includes(answer.reason??'')?'The meeting or draft changed. Your draft is kept. Refresh to compare.':'This action could not finish. Your draft is kept.';}
@@ -70,6 +72,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
   const terminal=view?.status==='cancelled'||view?.status==='completed',immutable=draft?.state==='submitted'||draft?.state==='sent';
   const recordedSent=draft?.state==='sent'&&view?.sentMessages.some(m=>m.ordinal===draft.ordinal)===true;
   const disabled=entry.busy||entry.pending!==null||entry.gone||!actionsEnabled;
+  const unresolvedFields=view?.blockers.includes('recap_fields_unresolved')===true;
   return <div className="min-w-0" data-testid="meeting-follow-through">
     <Button size="sm" variant="quiet" aria-expanded={entry.open} onClick={()=>{entry.open=!entry.open;touch();}}>Follow-up</Button>
     {entry.open?<section aria-label="Meeting follow-up" className="mt-2 space-y-4 rounded-lg border border-border bg-background p-4">
@@ -81,7 +84,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
         {[...new Set(view.blockers.filter(r=>!['sending_paused','editing'].includes(r)).map(r=>reasons[r]??'Review this follow-up before sending.'))].map(text=><p key={text} className="text-sm text-muted-foreground">{text}</p>)}
         {view.facts?.length?<div aria-label="Shared facts used" className="space-y-2 text-sm"><h5>Shared facts used</h5>{view.facts.map(f=><p key={f.id}>{f.text} <span className="text-muted-foreground">Version {f.version}</span></p>)}</div>:null}
         {view.plannedMessages?.filter(m=>m.ordinal>1).map(m=><details key={m.ordinal} className="text-sm"><summary>Follow-up {m.ordinal-1}</summary><p>{m.subject}</p><p className="whitespace-pre-wrap">{m.body}</p></details>)}
-        {view.approvalRequired&&draft!=null&&!terminal&&(!immutable||recordedSent)&&!entry.editingUi?<div className="space-y-2"><p className="text-sm">{recordedSent?'Review only the remaining follow-up messages. The sent recap stays in history and will not be sent again.':'Approve this recap and up to three messages under the existing cadence. Replies, bookings and stops interrupt the plan. Approval does not resume paused sending.'}</p><Button size="sm" disabled={disabled||view.approvalHash==null} onClick={()=>{void command('approve');}}>{recordedSent?'Approve remaining follow-up plan':'Approve recap and plan'}</Button></div>:null}
+        {view.approvalRequired&&draft!=null&&!terminal&&(!immutable||recordedSent)&&!entry.editingUi?<div className="space-y-2"><p className="text-sm">{recordedSent?'Review only the remaining follow-up messages. The sent recap stays in history and will not be sent again.':'Approve this recap and up to three messages under the existing cadence. Replies, bookings and stops interrupt the plan. Approval does not resume paused sending.'}</p><Button size="sm" disabled={disabled||view.approvalHash==null||unresolvedFields} onClick={()=>{void command('approve');}}>{recordedSent?'Approve remaining follow-up plan':'Approve recap and plan'}</Button></div>:null}
         {draft==null?<p className="text-sm text-muted-foreground">Add sufficient notes in Notes & tasks and choose an approved recap sequence in Calling & calendar. Callie prepares the draft when those are ready.</p>:entry.editingUi&&form!==null?<div className="space-y-3">
           <label className="block space-y-1 text-sm"><span>Subject</span><Input aria-label="Recap subject" maxLength={998} value={form.subject} disabled={entry.busy||!actionsEnabled} onChange={e=>{entry.form={...form,subject:e.target.value};touch();}}/></label>
           <label className="block space-y-1 text-sm"><span>Message</span><Textarea aria-label="Recap message" rows={8} maxLength={4000} value={form.body} disabled={entry.busy||!actionsEnabled} onChange={e=>{entry.form={...form,body:e.target.value};touch();}}/></label>
@@ -89,6 +92,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
         </div>:<div className="space-y-3"><p className="text-sm font-medium break-words">{draft.subject}</p><p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{draft.body}</p></div>}
         {draft!=null&&!terminal?<div className="flex flex-wrap gap-2">{!immutable?<Button size="sm" variant="outline" disabled={disabled} aria-expanded={entry.editingUi} onClick={()=>{if(entry.editingUi){entry.editingUi=false;touch();}else void command('begin_edit');}}>{entry.editingUi?'Hide editor':draft.state==='editing'?'Resume editing':'Edit recap'}</Button>:null}<Button size="sm" variant="quiet" disabled={disabled} onClick={()=>{void command('cancel');}}>{immutable?'Cancel future follow-ups':'Cancel follow-up'}</Button></div>:null}
         {draft?.state==='submitted'?<p className="text-xs text-muted-foreground">The provider is processing this message. Callie will check the result; it cannot recall an accepted email.</p>:null}
+        <UnpublishedPlan view={view} actionsEnabled={actionsEnabled&&!entry.unavailable&&!entry.gone&&!entry.busy} onSaved={saved=>{entry.view=saved;touch();}}/>
       </>}
       {entry.message!==null?<p role="status" className="text-sm text-muted-foreground">{entry.message}</p>:null}
       {entry.pending!==null&&!entry.busy?<Button size="sm" variant="outline" disabled={!actionsEnabled} onClick={()=>{void command(entry.pending!.action);}}>Retry action</Button>:null}

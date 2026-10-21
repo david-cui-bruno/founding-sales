@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { editMeetingRecap, readMeetingFollowThrough } from '../../meetings/followThrough.ts';
-import { meetingDraftForExecution, verifyMeetingFence, recordMeetingDelivery } from '../../meetings/followThroughDelivery.ts';
+import { meetingDraftForExecution, verifyMeetingFence, recordMeetingDelivery, markMeetingDraftSubmitted } from '../../meetings/followThroughDelivery.ts';
 import { saveMeetingNotes } from '../../meetings/notes.ts';
 import { dispatchOutboundMessage } from '../../outbound/send.ts';
 import { readFence } from '../../outbound/fence.ts';
@@ -61,6 +61,21 @@ describe('recaps use the real provider boundary', () => {
     expect(await meetingDraftForExecution(f.context, { executionId: f.executionId, at: later })).toMatchObject({ ok: true, value: { subject: 'Corrected next steps', draftVersion: 2 } });
     expect(await verifyMeetingFence(f.context, { fenceId: fence.id, at: later })).toMatchObject({ ok: true });
     expect((await readFence(f.context, fence.id))!.subject).toBe('Corrected next steps');
+  });
+  it('holds a named-field edit before provider submission even with stale ready state', async () => {
+    const fence = await f.prepare();
+    await edit('begin_edit');
+    const view = (await readMeetingFollowThrough(f.admin, { meetingId: f.meetingId }))!;
+    const saved = await withTransaction(f.db, () => editMeetingRecap(f.admin, { planId: f.planId, expectedPlanVersion: view.version,
+      expectedDraftVersion: view.currentDraft!.version, action: 'save', subject: 'Callie + {Firm}', body: 'Hi {Name},\n\nSigned off' }, f.at));
+    expect(saved).toMatchObject({ ok: true, value: { currentDraft: { state: 'held' }, blockers: expect.arrayContaining(['recap_fields_unresolved']) } });
+    await f.db.query("UPDATE meeting_follow_through_drafts SET state='ready' WHERE plan_id=$1 AND version=(SELECT current_draft_version FROM meeting_follow_through WHERE id=$1)", [f.planId]);
+    expect(await withTransaction(f.db, () => markMeetingDraftSubmitted(f.context, fence.id))).toBe(false);
+    expect(await meetingDraftForExecution(f.context, { executionId: f.executionId, at: f.at })).toMatchObject({ ok: false, reason: 'recap_fields_unresolved' });
+    const gmail = f.world.clientWith(f.world.alpha, {});
+    const result = await dispatchOutboundMessage(f.context, f.world.sendDeps(f.world.alpha, { gmail, now: () => new Date(f.at) }), { outboundMessageId: fence.id });
+    expect(result.outcome).not.toBe('sent');
+    expect(gmail.sends).toHaveLength(0);
   });
   it('an ambiguous provider result prevents editing and resend until reconciliation proves delivery', async () => {
     const fence = await f.prepare();

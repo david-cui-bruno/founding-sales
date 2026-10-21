@@ -22,6 +22,25 @@ describe('manual Gmail recap fulfillment', () => {
     expect(await readMeetingFollowThrough(x.admin,{meetingId:x.meetingId})).toMatchObject({currentDraft:{state:'sent'}});
     expect(x.world.alpha.gmail.bodyReads).toContain('manual-recap');
   });
+  it('never treats an exact outgoing partial with unknown fields as fulfilled', async () => {
+    f = await meetingDispatchFixture({ steps: 3 }); const x = f;
+    const subject = 'Callie + {Firm}', body = 'Hi {Name},\n\nSigned off';
+    expect(await withTransaction(x.db, async () => appendMeetingDraft(x.context, (await readMeetingPlan(x.context, x.planId))!, {
+      subject, body, templateVersionId: x.templateVersionId, sourceHash: x.draft.sourceHash, materialReferences: [], at: x.at,
+    }))).toMatchObject({ ok: true });
+    const messageId = (await x.db.query<{ id: string }>(`INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date,header_from,header_to,header_cc,subject,matched)
+      VALUES($1,$2,$3,$3,'outgoing',$4,$5,$6::text[],'{}',$7,true) RETURNING id`,
+    [x.workspace, x.world.alpha.mailboxId, randomUUID(), x.at, x.world.alpha.address, [x.address], subject])).rows[0]!.id;
+    await x.db.query('INSERT INTO mail_message_bodies(workspace_id,mail_message_id,body_text,truncated) VALUES($1,$2,$3,false)', [x.workspace, messageId, body]);
+    const message = (await readMessage(x.context, messageId))!;
+    await withTransaction(x.db, () => applyDirectSendEffects(x.context, { message, candidate: {
+      firmId: x.firmId, contactId: x.contactId, opportunityId: x.opportunityId, rule: 'thread', viaClosedOpportunity: false,
+    } }));
+    expect(await readMeetingFollowThrough(x.admin, { meetingId: x.meetingId })).toMatchObject({
+      status: 'needs_review', currentDraft: { state: 'held' }, blockers: expect.arrayContaining(['manual_email_review', 'recap_fields_unresolved']),
+    });
+    expect(await meetingDeliveryHistory(x.context, x.planId)).toEqual([]);
+  });
   it.each(['exact','different','truncated','extra_recipient'])('uses actual %s mail without a duplicate recap', async kind => {
     const url = 'https://example.test/guide';
     f = await meetingDispatchFixture({ steps: 3, material: url }); const x = f;

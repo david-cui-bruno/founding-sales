@@ -1,3 +1,4 @@
+import { hasUnresolvedMeetingFields } from './recapFields.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { MailMessageRow } from '../mail/types.ts';
 import { readMessageBody } from '../mail/messages.ts';
@@ -19,7 +20,7 @@ export async function applyManualMeetingSend(context: RepositoryContext, input: 
     const draft = await currentMeetingDraft(context,plan), body = await readMessageBody(context,input.message.id);
     const mailbox = (await context.db.query<{ owner_user_id: string }>('SELECT owner_user_id FROM mailboxes WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.message.mailboxId])).rows[0];
     const fence = draft?.outbound_message_id == null ? null : await readFence(context,draft.outbound_message_id);
-    const exact = !requiresExplicitMeetingReview(plan.blockers) && draft !== null && ['ready','held','editing'].includes(draft.state) && draft.created_at.getTime() <= Date.parse(input.at)
+    const exact = !requiresExplicitMeetingReview(plan.blockers) && draft !== null && !hasUnresolvedMeetingFields(draft.subject, draft.body) && ['ready','held','editing'].includes(draft.state) && draft.created_at.getTime() <= Date.parse(input.at)
       && body !== null && !body.truncated && input.message.subject !== null && renderedHash(input.message.subject,body.text) === draft.rendered_hash
       && input.message.direction === 'outgoing' && input.message.headerTo.length + input.message.headerCc.length === 1
       && input.contactIds.length === 1 && input.contactIds[0] === plan.contact_id && mailbox?.owner_user_id === plan.owner_user_id

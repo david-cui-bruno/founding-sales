@@ -6,6 +6,40 @@ import { answerBlockSchema } from './outreach.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
+// Draft-only, never accepted by legacy enrollment, permission or dispatch schemas.
+const unpublishedMeetingMessageSchema = z.strictObject({
+  subject: z.string().max(998).refine(value => !/[\r\n]/u.test(value)),
+  body: z.string().max(4000), held: z.literal(true),
+  unknownFields: z.array(z.string().min(1).max(200)).max(30),
+});
+export const meetingUnpublishedPlanSchema = z.strictObject({
+  schemaVersion: z.literal(1), state: z.literal('unpublished'),
+  cadence: z.literal('post_demo_3_7_14'), sourceHash: hash,
+  notesRevision: z.number().int().nonnegative(), revision: z.number().int().positive(), savedAt: instant,
+  messages: z.tuple([
+    unpublishedMeetingMessageSchema.extend({ ordinal: z.literal(1), elapsedDays: z.literal(0) }),
+    unpublishedMeetingMessageSchema.extend({ ordinal: z.literal(2), elapsedDays: z.literal(3) }),
+    unpublishedMeetingMessageSchema.extend({ ordinal: z.literal(3), elapsedDays: z.literal(7) }),
+    unpublishedMeetingMessageSchema.extend({ ordinal: z.literal(4), elapsedDays: z.literal(14) }),
+  ]),
+});
+export type MeetingUnpublishedPlan = z.infer<typeof meetingUnpublishedPlanSchema>;
+// Empty user text explicitly preserves unknowns. Hold status is server-derived.
+const unpublishedMeetingInputMessageSchema = z.strictObject({
+  subject: z.string().max(998).refine(value => !/[\r\n]/u.test(value)), body: z.string().max(4000),
+});
+export const saveMeetingUnpublishedPlanSchema = z.strictObject({
+  meetingId: uuid, expectedSourceHash: hash, expectedNotesRevision: z.number().int().nonnegative(),
+  expectedPlanVersion: z.number().int().nonnegative(), expectedUnpublishedRevision: z.number().int().nonnegative(),
+  messages: z.tuple([
+    unpublishedMeetingInputMessageSchema, unpublishedMeetingInputMessageSchema,
+    unpublishedMeetingInputMessageSchema, unpublishedMeetingInputMessageSchema,
+  ]),
+});
+export type SaveMeetingUnpublishedPlan = z.infer<typeof saveMeetingUnpublishedPlanSchema>;
+export const saveMeetingUnpublishedPlanCommandSchema = saveMeetingUnpublishedPlanSchema.extend({
+  commandId: commandIdSchema, clientVersion: semanticVersionSchema,
+});
 export const meetingFollowThroughScopeSchema = z.strictObject({
   contactId: uuid, meetingId: uuid, bookingReference: z.string().min(1).max(200),
   purposes: z.array(z.enum(['recap', 'nudge', 'reminder'])).min(1).max(3), maxMessages: z.number().int().min(1).max(3),
@@ -30,7 +64,7 @@ export const meetingFollowThroughViewSchema = z.strictObject({
   sentMessages: z.array(z.strictObject({ messageId: uuid, ordinal: z.number().int().min(1).max(3), sentAt: instant })).max(3),
 });
 export type MeetingFollowThroughView = z.infer<typeof meetingFollowThroughViewSchema>;
-export const meetingFollowThroughViewV2Schema=meetingFollowThroughViewSchema.extend({approvalHash:hash.nullable().optional(),approvalRequired:z.boolean().optional(),approvedAt:instant.nullable().optional(),facts:z.array(answerBlockSchema).max(20).optional(),plannedMessages:z.array(z.strictObject({ordinal:z.number().int().min(1).max(3),subject:z.string().max(998),body:z.string().max(4000)})).max(3).optional()});
+export const meetingFollowThroughViewV2Schema=meetingFollowThroughViewSchema.extend({draftSource:z.strictObject({sourceHash:hash,notesRevision:z.number().int().nonnegative()}).optional(),unpublishedPlan:meetingUnpublishedPlanSchema.nullable().optional(),approvalHash:hash.nullable().optional(),approvalRequired:z.boolean().optional(),approvedAt:instant.nullable().optional(),facts:z.array(answerBlockSchema).max(20).optional(),plannedMessages:z.array(z.strictObject({ordinal:z.number().int().min(1).max(3),subject:z.string().max(998),body:z.string().max(4000)})).max(3).optional()});
 export type MeetingFollowThroughViewV2=z.infer<typeof meetingFollowThroughViewV2Schema>;
 const editBase = { planId: uuid, expectedPlanVersion: z.number().int().positive(), expectedDraftVersion: z.number().int().positive() };
 export const meetingDraftEditSchema = z.discriminatedUnion('action', [
