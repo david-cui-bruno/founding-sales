@@ -3,6 +3,7 @@ import {semanticVersionSchema} from './clientVersion.ts';
 import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
 import { sourcingUrlSchema } from './sourcing.ts';
+import { nativeFirmEligibilitySchema, type NativeFirmEligibility } from './nativeFirmEligibility.ts';
 
 export const qualificationStatusSchema = z.enum(['pending','running','review','eligible','admitted','unavailable']);
 export const qualificationRequestSchema = z.strictObject({candidateId:uuid,expectedRevision:z.number().int().positive()});
@@ -55,6 +56,7 @@ export interface QualificationView {
   requestedAt:string;deadlineAt:string;observations:SourceObservation[];facts:QualificationFact[];
   verdict:QualificationVerdict|null;openingQuestion:string|null;
   admission:{firmId:string;routeId:string}|null;
+  nativeEligibility?:NativeFirmEligibility;
   history:{runId:string;observations:SourceObservation[];facts:QualificationFact[]}[];
 }
 
@@ -66,6 +68,7 @@ export const qualificationViewSchema=z.object({
  candidateId:uuid,runId:uuid,candidateRevision:z.number().int().positive(),status:qualificationStatusSchema,reason:z.string().nullable(),admissionReason:z.string().nullable().default(null),requestedAt:instant,deadlineAt:instant,
  observations:z.array(sourceObservationSchema),facts:z.array(qualificationFactSchema),verdict:qualificationVerdictSchema.nullable(),openingQuestion:z.string().nullable(),
  admission:z.object({firmId:uuid,routeId:uuid}).nullable(),history:z.array(z.object({runId:uuid,observations:z.array(sourceObservationSchema),facts:z.array(qualificationFactSchema)})),
+ nativeEligibility:nativeFirmEligibilitySchema.optional(),
 });
 
 const envelope={commandId:commandIdSchema,clientVersion:semanticVersionSchema};

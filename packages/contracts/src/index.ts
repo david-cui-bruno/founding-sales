@@ -47,6 +47,7 @@ export * from './discoveryReview.ts';
 export * from './discoveryPromotion.ts';
 
 export * from './sourcingQualification.ts';
+export * from './nativeFirmEligibility.ts';
 export * from './sourcingLearning.ts';
 
 export * from './outreach.ts';
