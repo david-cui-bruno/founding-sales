@@ -9,6 +9,7 @@ import {
 import { ASK_TASK_DEPENDENCY_CONSTRAINT_CASES } from "./support/askTaskDependencyCases.ts";
 import { ASK_EXECUTION_EVIDENCE_CONSTRAINT_CASES } from "./support/askExecutionEvidenceCases.ts";
 import { ASK_SESSION_CONSTRAINT_CASES } from "./support/askSessionCases.ts";
+import { CRM_CAPTURE_READ_CONSTRAINT_CASES } from './support/crmCaptureReadCases.ts';
 import { CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES } from "./support/crmAcquisitionDiagnosticCases.ts";
 import { CRM_CAPABILITY_CONSTRAINT_CASES } from "./support/crmCapabilityCases.ts";
 import { ROADMAP_ACTIVATION_CONSTRAINT_CASES } from "./support/roadmapActivationCases.ts";
@@ -82,7 +83,6 @@ import {
   seedOutbound,
   type SeededOutbound,
 } from "./support/outboundFixtures.ts";
-
 /**
  * A failing insert for every foundation constraint.
  *
@@ -2248,6 +2248,7 @@ const cases: readonly Case[] = [
   ...OUTREACH_CONSTRAINT_CASES,
   ...ROADMAP_ACTIVATION_CONSTRAINT_CASES,
   ...CRM_CAPABILITY_CONSTRAINT_CASES,
+  ...CRM_CAPTURE_READ_CONSTRAINT_CASES,
   ...CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES,
   ...SOCIAL_CONSTRAINT_CASES,
   ...LINKEDIN_POLICY_CONSTRAINT_CASES,
@@ -2290,7 +2291,6 @@ const cases: readonly Case[] = [
   ...MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES, { constraint: "meeting_unpublished_plan_shape", run: async f => await f.session.query("INSERT INTO meeting_follow_through (workspace_id, meeting_id, firm_id, source_hash, notes_revision, unpublished_plan) SELECT workspace_id, id, firm_id, $2, 0, '{}'::jsonb FROM meetings WHERE id = $1", [await meeting(f), "a".repeat(64)]) },
   ...MEETING_AUTO_RECORDING_CONSTRAINT_CASES,
 ];
-
 describe("foundation constraints", () => {
   let database: TestDatabase;
   let fixture: Fixture;
