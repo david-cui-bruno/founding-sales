@@ -53,10 +53,10 @@ import {outreachControlSchema,outreachSenderStandingResponseSchema,outreachCohor
 import {callNeedReadSchema,callNeedSaveSchema,callNeedViewSchema} from '@fss/contracts';
 import {learningInputSchema,learningReportSchema,targetingViewSchema,targetingProposalSchema,targetingApplySchema} from '@fss/contracts';
 import {meetingQualificationViewSchema,saveMeetingQualificationSchema} from '@fss/contracts';
-import {firmQualificationReadSchema} from '@fss/contracts';
+import {firmQualificationReadSchema,firmQualificationViewSchema} from '@fss/contracts';
 import {sourcingFeedbackSchema,sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationReadSchema, qualificationViewSchema, qualificationRequestSchema, qualificationQueuedSchema, qualificationAdmissionSchema, qualificationAdmittedSchema } from '@fss/contracts';
-import {sourcingCandidateReadOperations} from './sourcingCandidateReadOperations.ts';
+import {sourcingDiscoveryOperations} from './sourcingDiscoveryReviewOperations.ts';
 import {sourcingDiscoverySaveOperation} from './sourcingDiscoverySaveOperation.ts';
 import { candidateInputSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
@@ -953,7 +953,7 @@ export const OPERATIONS = {
   },
   'sourcing.firmQualification': {
     kind:'read',calls:[{method:'POST',path:'/sourcing/qualification/firm'}],input:firmQualificationReadSchema,
-    output:z.object({view:qualificationViewSchema.nullable(),reason:z.string().nullable()}),
+    output:z.object({view:firmQualificationViewSchema.nullable(),reason:z.string().nullable()}),
     transform:'Sourcing evidence attached explicitly to this firm',
   },
   'sourcing.qualification': {
@@ -974,7 +974,7 @@ export const OPERATIONS = {
     output: z.object({result:qualificationAdmittedSchema.nullable(),reason:z.string().nullable()}),
     transform: 'Explicit reviewed admission without starting outreach',
   },
-  ...sourcingCandidateReadOperations,
+  ...sourcingDiscoveryOperations,
   ...sourcingDiscoverySaveOperation,
   'sourcing.save': {
     kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/save'}],

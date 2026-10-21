@@ -170,7 +170,14 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'linkedinManual.record': {commandId:UUID,ledgerId:UUID,entryId:UUID,expectedRevision:0,kind:'reply',connectionState:null,occurredAt:'2026-10-01T13:00:00.000Z',voided:false,correction:null},
   'sourcing.list': {status:'needs_review',offset:0},
   'sourcing.discoveryList': {status:'needs_review',offset:0},
+  'sourcing.discoveryUsefulList': {status:'needs_review',offset:0},
+  'sourcing.discoveryReview': {candidateId:UUID,expectedRevision:1,reviewVersion:'discovery-review-v1',evidence:[],assessment:{serviceSignal:'unknown',websiteAssociation:'unknown',unknowns:['Service evidence not reviewed.']},commandId:UUID},
   'sourcing.discoverySave': {...rawDiscoveryEntry(),commandId:'discovery126:fixture'},
+  'sourcing.discoveryCreateResearchFirm':{commandId:UUID,firm:{name:'Example research draft',website:'https://example.test/'}},
+  'sourcing.discoveryPrepare':{commandId:UUID,discoveryCandidateId:UUID,expectedRevision:1,source:{provider:'overture_places',release:'2026-09-23.1',recordId:'example'},candidate:{firmName:'Example research draft',website:'https://example.test/',locality:'Austin',region:'TX',signal:'fit_only',evidence:'Human unverified service seed.',sourceUrl:'https://example.test/',observedOn:'2026-10-21',preparedBy:'Owner'}},
+  'sourcing.discoveryPreparationRead':{candidateId:UUID},
+  'sourcing.discoveryLinkResearchFirm':{commandId:UUID,discoveryCandidateId:UUID,expectedRevision:1,qualificationCandidateId:UUID,firmId:UUID},
+  'sourcing.discoveryResearchFirmRead':{candidateId:UUID},
   'sourcing.save': {firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Example duties',sourceUrl:'https://example.test/team',observedOn:'2026-10-01',preparedBy:'Fixture',commandId:UUID},
   'sourcing.review': {id:UUID,expectedRevision:1,status:'kept',commandId:UUID},
   'sourcing.check': {id:UUID,expectedRevision:1,commandId:UUID},
@@ -496,8 +503,8 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
     }]))} as Host;})(),
     outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','senderStanding','senderStandingV2','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
-      const handlers=operationHandlers({api,sessionGeneration:()=>0,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
-      return Object.fromEntries(['experiments','saveExperiment','activateExperiment','stopExperiment','eraseExperiment','list','discoveryList','discoverySave','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
+      const handlers=operationHandlers({api,sessionGeneration:()=>0,nativeSessionGeneration:()=>0,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
+      return Object.fromEntries(['experiments','saveExperiment','activateExperiment','stopExperiment','eraseExperiment','list','discoveryList','discoveryUsefulList','discoveryReview','discoverySave','discoveryPrepare','discoveryPreparationRead','discoveryCreateResearchFirm','discoveryLinkResearchFirm','discoveryResearchFirmRead','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
     crm: (() => {const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});
@@ -627,6 +634,9 @@ describe('the registry records the traffic the bridges actually make', () => {
       seen.length = 0;
       const call = host?.[method];
       if (call === undefined) throw new Error(`no host method for ${name}`);
+      if (name === 'sourcing.discoveryUsefulList' || name === 'sourcing.discoveryReview') {
+        expect(OPERATIONS[name].input.safeParse(INPUTS[name]).success, `${name} fixture input is invalid`).toBe(true);
+      }
       await call(INPUTS[name] ?? {});
       if (seen.length > 0) asked.add(name);
       const declared = new Set(OPERATIONS[name].calls.map(entry => `${entry.method} ${entry.path}`));

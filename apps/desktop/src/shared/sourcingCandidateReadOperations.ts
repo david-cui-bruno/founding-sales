@@ -1,9 +1,11 @@
+import {sourcingDiscoveryPromotionOperations} from './sourcingDiscoveryPromotionOperations.ts';
 import {z} from 'zod';
 import {candidateListInputSchema,candidateListSchema,discoveryIntakeListInputSchema,discoveryIntakeListSchema} from '@fss/contracts';
 import type {Operation} from './operations.ts';
 
 /** Candidate reads stay separate from research, admission and contact commands. */
 export const sourcingCandidateReadOperations={
+  ...sourcingDiscoveryPromotionOperations,
   'sourcing.list': {
     kind:'read',calls:[{method:'POST',path:'/sourcing/candidates/list'}],
     input:candidateListInputSchema,output:z.object({view:candidateListSchema.nullable(),reason:z.string().nullable()}),

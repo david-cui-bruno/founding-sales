@@ -1,6 +1,6 @@
 import {qualificationEvidenceSchema,type QualificationFact,type SourceObservation,type QualificationVerdict} from '@fss/contracts';
 import {canonicalizePhone} from '../src/rules/suppressionCanonicalization.ts';
-import {QUALIFICATION_POLICY_VERSION} from './qualificationStore.ts';
+import {QUALIFICATION_POLICY_VERSION} from './qualificationVersions.ts';
 export interface SourcingIdentity {status:'resolved'|'ambiguous'|'unknown';name:string;website:string;locality:string;region:string;existingFirmId?:string}
 const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 const day=86400000;

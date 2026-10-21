@@ -355,7 +355,7 @@ export function FirmsRoute({
           </>
         }
         research={<>
-          {state.role === 'admin' ? <FirmQualification key={`qualification:${firm.read.firm.id}`} firmId={firm.read.firm.id} enabled={view.actionsEnabled} /> : null}
+          {state.role === 'admin' ? <FirmQualification key={`qualification:${firm.read.firm.id}`} firmId={firm.read.firm.id} enabled={view.actionsEnabled} online={state.online} /> : null}
           <RecordProgress firmId={firm.read.firm.id} enabled={view.actionsEnabled} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion}/>
           <EmailTimeline processing={processingPorts} workspaceId={workspaceId} key={`email:${identity}:${generation}:${firm.read.firm.id}`} enabled={view.actionsEnabled} ports={emailTimelinePorts} privacyKey={`${identity}:${generation}`} sourceVersion={mailSourceVersion} onSourceChange={mailSourceChanged} firmId={firm.read.firm.id} firms={state.pipeline ? firmsOf(state.pipeline).map(value => ({id:value.id,name:value.name})) : [{id:firm.read.firm.id,name:firm.read.firm.name}]} />
           </>

@@ -43,8 +43,11 @@ export * from './meetingAutoRecording.ts';
 
 export * from './sourcing.ts';
 export * from './discoveryIntake.ts';
+export * from './discoveryReview.ts';
+export * from './discoveryPromotion.ts';
 
 export * from './sourcingQualification.ts';
+export * from './nativeFirmEligibility.ts';
 export * from './sourcingLearning.ts';
 
 export * from './outreach.ts';

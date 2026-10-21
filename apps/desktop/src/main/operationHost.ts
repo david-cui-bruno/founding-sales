@@ -1,5 +1,6 @@
-import {sourcingCandidateReadHandlers} from './sourcingCandidateReadHandlers.ts';
+import {sourcingDiscoveryReviewHandlers} from './sourcingDiscoveryReviewHandlers.ts';
 import {sourcingDiscoverySaveHandlers} from './sourcingDiscoverySaveHandlers.ts';
+import {sourcingFirmQualificationHandlers} from './sourcingFirmQualificationHandlers.ts';
 import { linkedinManualOperations } from './social/linkedinManualOperations.ts';
 import { socialContentOperations } from './social/contentOperations.ts';
 import type {SocialDeliveryStatus,SocialPreparationResult} from '../shared/socialDiagnostics.ts';
@@ -25,7 +26,7 @@ import {callNeedViewSchema} from '@fss/contracts';
 import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
 import {meetingQualificationViewSchema} from '@fss/contracts';
 import {sourcingFeedbackSavedSchema} from '@fss/contracts';
-import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
+import { qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema } from '@fss/contracts';
 import { meetingFollowThroughHandlers } from './meetingFollowThroughHandlers.ts';
@@ -96,6 +97,7 @@ import type { TodayBridgeHost } from './todayBridge.ts';
  */
 export interface OperationHostDeps {
   readonly sessionGeneration:()=>number; // Authenticated manager, before asynchronous bridge cleanup.
+  readonly nativeSessionGeneration?:()=>number;
   readonly notifications?:{status():NotificationRuntimeStatus};
   readonly socialHandoff?:ReturnType<typeof createSocialManualHandoffBridge>;
   readonly socialDelivery?:{status():SocialDeliveryStatus;checkPreparation?(accountId:string):Promise<SocialPreparationResult>};
@@ -114,7 +116,6 @@ export interface OperationHostDeps {
   /** Lane M4: the demo recording import the main process holds. */
   readonly recordings: RecordingImportHost;
 }
-
 type Handler = (input: never) => Promise<unknown>;
 
 /**
@@ -384,25 +385,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
-    'sourcing.firmQualification': async (input:OperationInput<'sourcing.firmQualification'>) => {
-      const generation=deps.recordings.identity.current();
-      const answer=await deps.api.read('/sourcing/qualification/firm',value=>qualificationViewSchema.parse(value),input);
-      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
-      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
-    },
-    'sourcing.qualification': async (input:OperationInput<'sourcing.qualification'>) => {
-      const generation=deps.recordings.identity.current();
-      const answer=await deps.api.read('/sourcing/qualification/read',value=>qualificationViewSchema.parse(value),input);
-      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
-      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
-    },
-    'sourcing.qualify': async (input:OperationInput<'sourcing.qualify'>) => {
-      const generation=deps.recordings.identity.current();
-      const {commandId,...body}=input;
-      const answer=await deps.api.command('/sourcing/qualification/request',body,value=>qualificationQueuedSchema.parse(value),{commandId});
-      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
-      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
-    },
+    ...sourcingFirmQualificationHandlers({api:deps.api,generation:()=>deps.nativeSessionGeneration?.()}),
     'sourcing.admit': async (input:OperationInput<'sourcing.admit'>) => {
       const generation=deps.recordings.identity.current();
       const {commandId,...body}=input;
@@ -410,7 +393,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
-    ...sourcingCandidateReadHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
+    ...sourcingDiscoveryReviewHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
     ...sourcingDiscoverySaveHandlers({api:deps.api,generation:()=>deps.sessionGeneration()}),
     'sourcing.save': async (input:OperationInput<'sourcing.save'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;

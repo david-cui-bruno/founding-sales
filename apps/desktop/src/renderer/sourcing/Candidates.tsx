@@ -1,6 +1,7 @@
 import {Learning} from './Learning.tsx';
 import {DiscoveryImport,type DiscoveryImportAuthority} from './DiscoveryImport.tsx';
 import {DiscoveryCandidates,discoveryList,type DiscoveryList} from './DiscoveryCandidates.tsx';
+import {DiscoveryUsefulCandidates} from './DiscoveryUsefulCandidates.tsx';
 import {navigate} from '../routes.ts';
 import {QualificationPanel} from './QualificationPanel.tsx';
 import {useCallback,useEffect,useRef,useState,type JSX} from 'react';
@@ -104,6 +105,7 @@ export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty,onRawO
   const tabs=<div className="flex gap-2" aria-label="Sourcing views"><Button variant={m.tab==='candidates'?'outline':'quiet'} onClick={()=>{m.tab='candidates';touch();}}>Candidates</Button><Button variant={m.tab==='results'?'outline':'quiet'} onClick={()=>{m.tab='results';touch();}}>Results</Button></div>;
   if(m.tab==='results')return <section className="space-y-5">{tabs}<Learning enabled={enabled}/></section>;
   return <section className="space-y-5" aria-label="Candidate review">{tabs}
+    <DiscoveryUsefulCandidates enabled={enabled} privacyKey={privacyKey}/>
     {importAuthority?<DiscoveryImport authority={importAuthority} enabled={enabled} privacyKey={privacyKey} list={rawList}/>:null}
     <DiscoveryCandidates list={rawList} enabled={enabled} privacyKey={privacyKey} onObserved={onRawObserved}/>
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Unclear firm identities remain here for review. Research never contacts anyone.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>

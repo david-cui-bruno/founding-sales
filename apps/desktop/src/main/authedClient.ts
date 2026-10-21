@@ -59,7 +59,7 @@ export interface AuthedClientOptions {
 
 export interface AuthedClient {
   /** A read. No command id, no receipt. */
-  read<T>(path: string, parse: (value: unknown) => T, body?: Readonly<Record<string, unknown>>): Promise<ApiOutcome<T>>;
+  read<T>(path: string, parse: (value: unknown) => T, body?: Readonly<Record<string, unknown>>, options?: { readonly current?: () => boolean }): Promise<ApiOutcome<T>>;
   /** A mutation. The envelope of 5.3 is added here so no caller can forget it. */
   command<T>(
     path: string,
@@ -143,8 +143,10 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
   };
 
   return {
-    async read(path, parse, body) {
-      return parsed(await call(path, body === undefined ? 'GET' : 'POST', body), parse);
+    async read(path, parse, body, readOptions = {}) {
+      const answer = await call(path, body === undefined ? 'GET' : 'POST', body, readOptions.current);
+      if (readOptions.current && !readOptions.current()) return { ok: false, reason: !answer.ok && answer.reason === 'session_changed_before_dispatch' ? answer.reason : 'session_changed_after_dispatch', offline: false };
+      return parsed(answer, parse);
     },
     async command(path, payload, parse, commandOptions = {}) {
       const answer = await call(path, 'POST', {

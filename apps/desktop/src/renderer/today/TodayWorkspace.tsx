@@ -752,7 +752,7 @@ export function TodayWorkspace({
                     onCorrected={reload}
                   />
                 </div>
-                {state?.role==='admin'?<FirmQualification key={`qualification:${expanded.firmId}`} firmId={expanded.firmId} enabled={state.mayMutate&&!live}/>:null}
+                {state?.role==='admin'?<FirmQualification key={`qualification:${expanded.firmId}`} firmId={expanded.firmId} enabled={state.mayMutate&&!live} online={state.online&&!state.stale}/>:null}
                 {todayView.tasks.length === 0 ? null : (
                   <Block className="mt-4">
                     <Label>On today’s list</Label>
