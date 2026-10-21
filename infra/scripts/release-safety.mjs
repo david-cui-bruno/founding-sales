@@ -85,19 +85,25 @@ export function createReleaseSafety({ aws, waitFor, now, state, save, cluster, n
     return read;
   }
   async function quiescent() {
-    const services = await aws('ecs', 'describe-services', ['--cluster', cluster, '--services', 'fss-prod-api', 'fss-prod-worker']);
-    requireThat(!services.failures?.length && services.services?.length === 2 && ['fss-prod-api', 'fss-prod-worker'].every(name => services.services.some(s => s.serviceName === name && s.status === 'ACTIVE' && s.desiredCount === 0 && s.runningCount === 0 && s.pendingCount === 0)), 'services_not_stopped');
-    const running = await aws('ecs', 'list-tasks', ['--cluster', cluster, '--desired-status', 'RUNNING', '--max-results', '100', '--no-paginate']);
-    requireThat(Array.isArray(running.taskArns) && running.taskArns.length === 0 && !running.nextToken, 'writers_still_running');
-    // desired STOPPED includes containers still executing during shutdown. Only
-    // actual terminal tasks are safe, and incomplete enumeration is not proof.
-    const stopped = await aws('ecs', 'list-tasks', ['--cluster', cluster, '--desired-status', 'STOPPED', '--max-results', '100', '--no-paginate']);
-    const arns = stopped.taskArns;
-    requireThat(Array.isArray(arns) && arns.length <= 100 && arns.every(arn => typeof arn === 'string' && arn.length > 0) && new Set(arns).size === arns.length && !stopped.nextToken, 'writers_still_running');
-    if (arns.length) {
-      const result = await aws('ecs', 'describe-tasks', ['--cluster', cluster, '--tasks', ...arns]);
-      requireThat(!result.failures?.length && Array.isArray(result.tasks) && result.tasks.length === arns.length && new Set(result.tasks.map(task => task.taskArn)).size === arns.length && result.tasks.every(task => arns.includes(task.taskArn) && task.clusterArn === cluster && task.lastStatus === 'STOPPED'), 'writers_still_running');
-    }
+    // Re-observe the entire boundary on each attempt. The existing injectable
+    // waiter bounds shutdown readiness to 12 observations (165s between polls).
+    await waitFor(async () => {
+      const services = await aws('ecs', 'describe-services', ['--cluster', cluster, '--services', 'fss-prod-api', 'fss-prod-worker']);
+      requireThat(!services.failures?.length && services.services?.length === 2 && ['fss-prod-api', 'fss-prod-worker'].every(name => services.services.some(s => s.serviceName === name && s.status === 'ACTIVE' && s.desiredCount === 0 && s.runningCount === 0 && s.pendingCount === 0)), 'services_not_stopped');
+      const running = await aws('ecs', 'list-tasks', ['--cluster', cluster, '--desired-status', 'RUNNING', '--max-results', '100', '--no-paginate']);
+      requireThat(Array.isArray(running.taskArns) && running.taskArns.length === 0 && !running.nextToken, 'writers_still_running');
+      // desired STOPPED includes containers still executing during shutdown. Only
+      // actual terminal tasks are safe, and incomplete enumeration is not proof.
+      const stopped = await aws('ecs', 'list-tasks', ['--cluster', cluster, '--desired-status', 'STOPPED', '--max-results', '100', '--no-paginate']);
+      const arns = stopped.taskArns;
+      requireThat(Array.isArray(arns) && arns.length <= 100 && arns.every(arn => typeof arn === 'string' && arn.length > 0) && new Set(arns).size === arns.length && !stopped.nextToken, 'writers_still_running');
+      if (arns.length) {
+        const result = await aws('ecs', 'describe-tasks', ['--cluster', cluster, '--tasks', ...arns]);
+        requireThat(!result.failures?.length && Array.isArray(result.tasks) && result.tasks.length === arns.length && new Set(result.tasks.map(task => task.taskArn)).size === arns.length && result.tasks.every(task => arns.includes(task.taskArn) && task.clusterArn === cluster && ['RUNNING', 'DEACTIVATING', 'STOPPING', 'DEPROVISIONING', 'STOPPED'].includes(task.lastStatus)), 'writers_still_running');
+        return result.tasks.every(task => task.lastStatus === 'STOPPED');
+      }
+      return true;
+    }, 'writers_still_running', 12);
   }
   async function pinRecovery(database, after) {
     requireThat(Number.isFinite(after) && after <= now(), 'quiescence_time_invalid');
