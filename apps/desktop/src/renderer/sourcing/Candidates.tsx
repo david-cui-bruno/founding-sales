@@ -1,4 +1,5 @@
 import {Learning} from './Learning.tsx';
+import {DiscoveryImport,type DiscoveryImportAuthority} from './DiscoveryImport.tsx';
 import {DiscoveryCandidates,discoveryList,type DiscoveryList} from './DiscoveryCandidates.tsx';
 import {DiscoveryUsefulCandidates} from './DiscoveryUsefulCandidates.tsx';
 import {navigate} from '../routes.ts';
@@ -53,9 +54,10 @@ export function useCandidateReviewVisibility(enabled:boolean,privacyKey:string,s
   if(enabled){void load();window.addEventListener('focus',load);}
   return ()=>{current=false;window.removeEventListener('focus',load);};
  },[enabled,privacyKey,sourceVersion,onReviewEmpty,list]);
- return {visible:answer.key!==privacyKey||!answer.hidden||raw.key!==privacyKey||!raw.empty,onReviewEmpty,onRawObserved};
+ // The enabled admin surface must remain reachable for explicit file intake, even empty.
+ return {visible:enabled||answer.key!==privacyKey||!answer.hidden||raw.key!==privacyKey||!raw.empty,onReviewEmpty,onRawObserved};
 }
-export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty,onRawObserved,privacyKey='',rawList=discoveryList}:{ports?:CandidatePorts;enabled?:boolean;onReviewEmpty?:((empty:boolean)=>void)|undefined;onRawObserved?:(()=>void)|undefined;privacyKey?:string;rawList?:DiscoveryList}):JSX.Element {
+export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty,onRawObserved,privacyKey='',rawList=discoveryList,importAuthority}:{ports?:CandidatePorts;enabled?:boolean;onReviewEmpty?:((empty:boolean)=>void)|undefined;onRawObserved?:(()=>void)|undefined;privacyKey?:string;rawList?:DiscoveryList;importAuthority?:DiscoveryImportAuthority}):JSX.Element {
   const {memory:m,touch}=useCandidateMemory(),portsRef=useRef(ports);portsRef.current=ports;
   const countRef=useRef(onReviewEmpty);countRef.current=onReviewEmpty;
   const load=useCallback(async()=>{
@@ -104,6 +106,7 @@ export function Candidates({ports=defaultPorts,enabled=true,onReviewEmpty,onRawO
   if(m.tab==='results')return <section className="space-y-5">{tabs}<Learning enabled={enabled}/></section>;
   return <section className="space-y-5" aria-label="Candidate review">{tabs}
     <DiscoveryUsefulCandidates enabled={enabled} privacyKey={privacyKey}/>
+    {importAuthority?<DiscoveryImport authority={importAuthority} enabled={enabled} privacyKey={privacyKey} list={rawList}/>:null}
     <DiscoveryCandidates list={rawList} enabled={enabled} privacyKey={privacyKey} onObserved={onRawObserved}/>
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Unclear firm identities remain here for review. Research never contacts anyone.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>
     {m.view?.discovery?<p className="text-sm text-muted-foreground">Discovery {m.view.discovery.halted?'needs attention':m.view.discovery.enabled?'enabled':'paused'} · next scheduled {m.view.discovery.nextRunAt.slice(0,10)} · {m.view.discovery.dailyRemaining} searches left today, {m.view.discovery.monthlyRemaining} this month. Last result: {m.view.discovery.lastResult??'not run'}. Research holds and settings also apply.</p>:null}

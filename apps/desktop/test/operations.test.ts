@@ -103,6 +103,7 @@ const hosts = () => {
     Object.fromEntries(methods.map(name => [name, vi.fn(async () => await Promise.resolve(answer()))])) as T;
   return {
     api: api as unknown as AuthedClient,
+    sessionGeneration:()=>0,
     today: today as unknown as TodayBridgeHost,
     replies: replies as unknown as ReplyBridgeHost,
     crm: stub<CrmBridgeHost>(

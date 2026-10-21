@@ -65,7 +65,7 @@ export interface AuthedClient {
     path: string,
     payload: Readonly<Record<string, unknown>>,
     parse: (value: unknown) => T,
-    options?: { readonly commandId?: string },
+    options?: { readonly commandId?: string; readonly current?: () => boolean },
   ): Promise<ApiOutcome<T>>;
 }
 
@@ -89,20 +89,27 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
     path: string,
     method: 'GET' | 'POST',
     body: Readonly<Record<string, unknown>> | undefined,
+    current?: () => boolean,
   ): Promise<ApiOutcome<unknown>> => {
     // The token and the session it belongs to, from one snapshot. Everything this call
     // reports about being refused is reported about *that* session.
+    if (current && !current()) return { ok: false, reason: 'session_changed_before_dispatch', offline: false };
     const access = await options.accessToken();
+    if (current && !current()) return { ok: false, reason: 'session_changed_before_dispatch', offline: false };
     if (access === null) return { ok: false, reason: 'not_signed_in', offline: false };
     const startedUnder = access.generation;
     const headers: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${access.token}` };
     if (body !== undefined) headers['content-type'] = 'application/json';
     try {
+      if (current && !current()) return { ok: false, reason: 'session_changed_before_dispatch', offline: false };
       const answer = await options.send(new URL(path, options.baseUrl).toString(), {
         method,
         headers,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      // A dispatched command may have committed. Do not expose the old body or apply
+      // old-session connection/auth side effects to the replacement session.
+      if (current && !current()) return { ok: false, reason: 'session_changed_after_dispatch', offline: false };
       options.onConnection?.(true);
       // 426 too (lane M1, review M1F finding 4): a running session whose build the server
       // no longer admits is refused on its first command, and that is when it learns it.
@@ -118,6 +125,7 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
       }
       return { ok: true, value: answer.body };
     } catch {
+      if (current && !current()) return { ok: false, reason: 'session_changed_after_dispatch', offline: false };
       // The network, the DNS, the load balancer: all one thing from here. The window
       // shows its unexpired cache marked stale, with a banner; nothing is disabled for it.
       options.onConnection?.(false);
@@ -143,7 +151,8 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
         commandId: commandOptions.commandId ?? randomUUID(),
         clientVersion: options.clientVersion,
         ...payload,
-      });
+      }, commandOptions.current);
+      if (commandOptions.current && !commandOptions.current()) return { ok: false, reason: !answer.ok && answer.reason === 'session_changed_before_dispatch' ? answer.reason : 'session_changed_after_dispatch', offline: false };
       if (!answer.ok) return answer;
       // Every command answers `{ status, replayed, result | reason }` (routeSupport).
       // A refusal arrives with status 409 and is caught above; this is the accepted

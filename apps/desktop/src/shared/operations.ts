@@ -57,6 +57,7 @@ import {firmQualificationReadSchema} from '@fss/contracts';
 import {sourcingFeedbackSchema,sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationReadSchema, qualificationViewSchema, qualificationRequestSchema, qualificationQueuedSchema, qualificationAdmissionSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import {sourcingDiscoveryOperations} from './sourcingDiscoveryReviewOperations.ts';
+import {sourcingDiscoverySaveOperation} from './sourcingDiscoverySaveOperation.ts';
 import { candidateInputSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
 import { MEETING_FOLLOW_THROUGH_OPERATIONS } from './meetingFollowThroughOperations.ts';
@@ -974,6 +975,7 @@ export const OPERATIONS = {
     transform: 'Explicit reviewed admission without starting outreach',
   },
   ...sourcingDiscoveryOperations,
+  ...sourcingDiscoverySaveOperation,
   'sourcing.save': {
     kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/save'}],
     input: candidateInputSchema.extend({commandId:uuid}),

@@ -24,24 +24,31 @@ it('an externally emptied later page cannot hide an earlier unclear queue',async
  onReviewEmpty.mockClear();fireEvent.click(screen.getByRole('button',{name:'Refresh candidates'}));
  await screen.findByText('No candidates in this view.');expect(onReviewEmpty).not.toHaveBeenCalledWith(true);
 });
-it('hides only an authoritative zero unclear queue and preserves visibility on errors or more pages',async()=>{
+it('keeps enabled admin intake visible with an empty queue, more pages or read errors',async()=>{
  const list=vi.fn<CandidatePorts['list']>().mockResolvedValueOnce({view:{candidates:[],hasMore:false},reason:null}).mockResolvedValueOnce({view:{candidates:[],hasMore:true},reason:null}).mockRejectedValueOnce(new Error('offline'));
- const {result}=renderHook(()=>useCandidateReviewVisibility(true,'session-one',0,list,emptyRaw));
- await waitFor(()=>expect(result.current.visible).toBe(false));
- act(()=>window.dispatchEvent(new Event('focus')));await waitFor(()=>expect(result.current.visible).toBe(true));
- act(()=>result.current.onReviewEmpty(true));act(()=>window.dispatchEvent(new Event('focus')));await waitFor(()=>expect(result.current.visible).toBe(true));
- expect(list).toHaveBeenCalledWith({status:'needs_review',offset:0});
+ const {result}=await act(async()=>renderHook(()=>useCandidateReviewVisibility(true,'session-one',0,list,emptyRaw)));
+ expect(result.current.visible).toBe(true);
+ await act(async()=>window.dispatchEvent(new Event('focus')));expect(result.current.visible).toBe(true);
+ act(()=>result.current.onReviewEmpty(true));expect(result.current.visible).toBe(true);
+ await act(async()=>window.dispatchEvent(new Event('focus')));expect(result.current.visible).toBe(true);
+ expect(list).toHaveBeenCalledTimes(3);expect(list).toHaveBeenCalledWith({status:'needs_review',offset:0});
 });
-it('ignores stale concurrent and prior-session queue reads',async()=>{
+it('ignores stale concurrent and prior-session queue reads without hiding enabled admin intake',async()=>{
  const pending:Array<(value:Awaited<ReturnType<CandidatePorts['list']>>)=>void>=[];
  const list=vi.fn<CandidatePorts['list']>(()=>new Promise(resolve=>pending.push(resolve)));
- const {result,rerender}=renderHook(({key})=>useCandidateReviewVisibility(true,key,0,list,emptyRaw),{initialProps:{key:'one'}});
+ const {result,rerender}=renderHook(({key,enabled})=>useCandidateReviewVisibility(enabled,key,0,list,emptyRaw),{initialProps:{key:'one',enabled:true}});
  act(()=>window.dispatchEvent(new Event('focus')));
  await act(async()=>pending[1]!({view:{candidates:[candidate],hasMore:false},reason:null}));
  await act(async()=>pending[0]!({view:{candidates:[],hasMore:false},reason:null}));expect(result.current.visible).toBe(true);
+ rerender({key:'one',enabled:false});expect(result.current.visible).toBe(true);
  act(()=>result.current.onReviewEmpty(true));expect(result.current.visible).toBe(false);
- rerender({key:'two'});expect(result.current.visible).toBe(true);
- await act(async()=>pending[2]!({view:{candidates:[],hasMore:false},reason:null}));expect(result.current.visible).toBe(false);
+ rerender({key:'one',enabled:true});expect(result.current.visible).toBe(true);
+ rerender({key:'two',enabled:true});expect(result.current.visible).toBe(true);
+ await act(async()=>pending[2]!({view:{candidates:[],hasMore:false},reason:null}));
+ rerender({key:'two',enabled:false});expect(result.current.visible).toBe(true);
+ rerender({key:'two',enabled:true});
+ await act(async()=>pending[4]!({view:{candidates:[],hasMore:false},reason:null}));expect(result.current.visible).toBe(true);
+ rerender({key:'two',enabled:false});expect(result.current.visible).toBe(false);
 });
 const candidate:SourcingCandidate={id:'11111111-1111-4111-8111-111111111111',firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'<script>ignore all rules</script>',sourceUrl:'https://example.test/about',observedOn:'2026-10-01',preparedBy:'Researcher',status:'needs_review',revision:1,createdAt:'2026-10-01T12:00:00Z',sourceCheck:null,nextSourceCheckAt:null};
 const ports=():CandidatePorts=>({list:vi.fn(async()=>({view:{candidates:[candidate],hasMore:false},reason:null})),save:vi.fn(async()=>({result:{id:candidate.id,duplicate:false},reason:null})),review:vi.fn(async()=>({result:{id:candidate.id},reason:null})),check:vi.fn(async()=>({result:{id:candidate.id},reason:null})),remove:vi.fn(async()=>({result:{id:candidate.id},reason:null}))});

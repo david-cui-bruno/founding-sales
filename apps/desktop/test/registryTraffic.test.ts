@@ -1,4 +1,5 @@
 import {createSocialDeliveryRunner} from '../src/main/social/deliveryRunner.ts';
+import {rawDiscoveryEntry} from './support/discoveryImportFixtures.ts';
 import {linkedinManualOperations} from '../src/main/social/linkedinManualOperations.ts';
 import {createSocialManualHandoffBridge} from '../src/main/social/manualHandoffBridge.ts';
 import {createSocialAccountsBridge} from '../src/main/social/accountsBridge.ts';
@@ -171,6 +172,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'sourcing.discoveryList': {status:'needs_review',offset:0},
   'sourcing.discoveryUsefulList': {status:'needs_review',offset:0},
   'sourcing.discoveryReview': {candidateId:UUID,expectedRevision:1,reviewVersion:'discovery-review-v1',evidence:[],assessment:{serviceSignal:'unknown',websiteAssociation:'unknown',unknowns:['Service evidence not reviewed.']},commandId:UUID},
+  'sourcing.discoverySave': {...rawDiscoveryEntry(),commandId:'discovery126:fixture'},
   'sourcing.save': {firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Example duties',sourceUrl:'https://example.test/team',observedOn:'2026-10-01',preparedBy:'Fixture',commandId:UUID},
   'sourcing.review': {id:UUID,expectedRevision:1,status:'kept',commandId:UUID},
   'sourcing.check': {id:UUID,expectedRevision:1,commandId:UUID},
@@ -496,8 +498,8 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
     }]))} as Host;})(),
     outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','senderStanding','senderStandingV2','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
-      const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
-      return Object.fromEntries(['experiments','saveExperiment','activateExperiment','stopExperiment','eraseExperiment','list','discoveryList','discoveryUsefulList','discoveryReview','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
+      const handlers=operationHandlers({api,sessionGeneration:()=>0,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
+      return Object.fromEntries(['experiments','saveExperiment','activateExperiment','stopExperiment','eraseExperiment','list','discoveryList','discoveryUsefulList','discoveryReview','discoverySave','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
     crm: (() => {const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});
