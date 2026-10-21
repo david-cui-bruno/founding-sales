@@ -1,4 +1,4 @@
--- changes: sourcing_candidate_discovery_origins, sourcing_discovery_promotions
+-- changes: sourcing_candidate_discovery_origins, sourcing_discovery_promotions, sourcing_discovery_research_firms
 -- Preparation lineage only. No source bodies, native observations or contact authority.
 ALTER TABLE sourcing_candidate_discovery_origins ADD CONSTRAINT sourcing_discovery_origin_candidate_identity
   UNIQUE(workspace_id,candidate_id,provider,release,record_id);
@@ -28,3 +28,16 @@ CREATE TABLE sourcing_discovery_promotions (
 CREATE INDEX sourcing_discovery_promotions_legacy ON sourcing_discovery_promotions(workspace_id,legacy_candidate_id);
 -- Append-only lineage. Parent/source deletion cascades, no independent evidence cache.
 GRANT SELECT,INSERT,DELETE ON sourcing_discovery_promotions TO app_runtime,migration;
+
+-- Ordinary Firm creation remains a separate explicit command. Immutable link only.
+CREATE TABLE sourcing_discovery_research_firms (
+  workspace_id uuid NOT NULL,
+  promotion_id uuid NOT NULL,
+  firm_id uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(workspace_id,promotion_id),
+  FOREIGN KEY(workspace_id,promotion_id) REFERENCES sourcing_discovery_promotions(workspace_id,id) ON DELETE CASCADE,
+  FOREIGN KEY(workspace_id,firm_id) REFERENCES firms(workspace_id,id) ON DELETE CASCADE
+);
+CREATE INDEX sourcing_discovery_research_firm_identity ON sourcing_discovery_research_firms(workspace_id,firm_id);
+GRANT SELECT,INSERT,DELETE ON sourcing_discovery_research_firms TO app_runtime,migration;

@@ -33,3 +33,25 @@ export const discoveryPromotionSavedSchema = z.strictObject({
   admissionAuthorized: z.literal(false),
   runtimeCallable: z.literal(false),
 });
+
+// Links an explicitly created ordinary CRM research draft, never an admission.
+export const discoveryResearchFirmLinkInputSchema = z.strictObject({
+  discoveryCandidateId: uuid,
+  expectedRevision: z.number().int().positive(),
+  qualificationCandidateId: uuid,
+  firmId: uuid,
+});
+export const discoveryResearchFirmLinkCommandSchema = discoveryResearchFirmLinkInputSchema.extend({
+  commandId: commandIdSchema,
+  clientVersion: semanticVersionSchema,
+});
+export const discoveryResearchFirmLinkSavedSchema = z.strictObject({
+  discoveryCandidateId: uuid,
+  qualificationCandidateId: uuid,
+  firmId: uuid,
+  alreadyLinked: z.boolean(),
+  nextAction: z.literal('review_firm_research'),
+  qualified: z.literal(false),
+  admissionAuthorized: z.literal(false),
+  runtimeCallable: z.literal(false),
+});
