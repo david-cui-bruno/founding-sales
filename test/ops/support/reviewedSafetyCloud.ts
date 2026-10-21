@@ -7,10 +7,17 @@ const arn=n=>'arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-'+n+':
 const cluster='arn:aws:ecs:us-east-1:326255650484:cluster/fss-prod-cluster';
 const registry='326255650484.dkr.ecr.us-east-1.amazonaws.com';
 const image=(candidate=false)=>registry+'/fss-prod-worker@sha256:'+(candidate?'2':'3').repeat(64);
+const readerImage=(name,candidate)=>{
+ if(name!=='operations')return image(candidate);
+ if(mode==='schema-reader-image')return registry+'/foreign-worker@sha256:'+'4'.repeat(64);
+ if(candidate)return mode==='schema-candidate-image'?image(false):image(true);
+ const stale=registry+'/fss-prod-worker@sha256:'+'4'.repeat(64);
+ return ({'schema-template-stale':stale,'schema-template-account':stale.replace('326255650484','999999999999'),'schema-template-region':stale.replace('us-east-1','us-west-2'),'schema-template-repository':stale.replace('fss-prod-worker','fss-rh-worker'),'schema-template-tag':registry+'/fss-prod-worker:latest','schema-template-digest':stale.slice(0,-1)})[mode]||image(false);
+};
 const tags=[{key:'NamePrefix',value:'fss-prod'}];
 const definition=(name,candidate=false)=>({taskDefinitionArn:arn(name),status:'ACTIVE',family:'fss-prod-'+name,
  taskRoleArn:mode==='schema-reader-role'&&name==='operations'?'foreign-role':'arn:aws:iam::326255650484:role/fss-prod-worker-task',executionRoleArn:'arn:aws:iam::326255650484:role/fss-prod-worker-exec',
- containerDefinitions:[{name,image:mode==='schema-reader-image'&&name==='operations'?image(true):image(candidate),environment:[{name:'FSS_DATABASE_HOST',value:'private.invalid'},{name:'FSS_SENDING_ENABLED',value:'false'}],
+ containerDefinitions:[{name,image:readerImage(name,candidate),environment:[{name:'FSS_DATABASE_HOST',value:mode==='schema-reader-host'&&name==='operations'?'foreign.invalid':'private.invalid'},{name:'FSS_SENDING_ENABLED',value:'false'}],
  secrets:[{name:'DATABASE_SECRET_ARN',valueFrom:'arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-test'},{name:'google-gmail-oauth-client',valueFrom:'arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/google-gmail-oauth-client-test'},...(mode==='schema-reader-credential'&&name==='operations'?[{name:'MIGRATION_DATABASE_SECRET',valueFrom:'foreign-credential'}]:[])],
  logConfiguration:{options:{'awslogs-group':'/fss/fss-prod/worker','awslogs-stream-prefix':'operations'}}}]});
 const db={DBInstanceIdentifier:'fss-prod-pg',DBInstanceArn:mode==='schema-database-binding'?'foreign-database':'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg',DbiResourceId:'db-identifier',Endpoint:{Address:'private.invalid'},DBInstanceStatus:'available',BackupRetentionPeriod:35,LatestRestorableTime:new Date().toISOString()};
@@ -29,13 +36,14 @@ else if(a.startsWith('ecs update-service')) {
 else if(a.startsWith('ec2 ')) out={SecurityGroups:[{GroupId:'sg-11111111',GroupName:'fss-prod-worker-task',IpPermissions:[]}]};
 else if(a.startsWith('ecs register-task-definition')) {
  const d=JSON.parse(value('--cli-input-json'));d.taskDefinitionArn=arn('operations').replace(':1',':99');
+ fs.appendFileSync(log,'reader image '+d.containerDefinitions[0].image+'\\n');
  fs.writeFileSync(log+'.reader',JSON.stringify(d));out={taskDefinition:d};
 } else if(a.startsWith('ecs deregister-task-definition')) out={};
 else if(a.startsWith('ecs describe-task-definition')) {
  const id=value('--task-definition');let d;
- if(id.endsWith(':99'))d=JSON.parse(fs.readFileSync(log+'.reader','utf8'));
+ if(id.endsWith(':99')){d=JSON.parse(fs.readFileSync(log+'.reader','utf8'));if(mode==='schema-reader-readback-image')d.containerDefinitions[0].image=image(true);}
  else d=definition(id.startsWith('api')?'api':id.startsWith('worker')?'worker':'operations',flag('applied'));
- out={taskDefinition:d,tags};
+ out={taskDefinition:d,tags:mode==='schema-reader-tag'&&d.family==='fss-prod-operations'?[]:tags};
 } else if(a.startsWith('ecs run-task')) {
  const count=flag('off-count')?Number(fs.readFileSync(log+'.off-count','utf8'))+1:1;
  fs.writeFileSync(log+'.off-count',String(count));
@@ -45,7 +53,7 @@ else if(a.startsWith('ecs describe-task-definition')) {
 } else if(a.startsWith('ecs describe-tasks')) {
  if(mode==='schema-postrestart-unknown'&&flag('migrated')){out={failures:[{reason:'unknown'}]};console.log(JSON.stringify(out));process.exit(0);}
  const d=JSON.parse(fs.readFileSync(log+'.reader','utf8'));
- out={tasks:[{taskArn:cluster.replace(':cluster/',':task/')+'/reader',clusterArn:cluster,startedBy:fs.readFileSync(log+'.owner','utf8'),taskDefinitionArn:d.taskDefinitionArn,lastStatus:'STOPPED',containers:[{name:'operations',exitCode:0,imageDigest:d.containerDefinitions[0].image.split('@')[1]}]}]};
+ out={tasks:[{taskArn:cluster.replace(':cluster/',':task/')+'/reader',clusterArn:cluster,startedBy:fs.readFileSync(log+'.owner','utf8'),taskDefinitionArn:d.taskDefinitionArn,lastStatus:'STOPPED',containers:[{name:'operations',exitCode:0,imageDigest:mode==='schema-reader-task-digest'?'sha256:'+'9'.repeat(64):d.containerDefinitions[0].image.split('@')[1]}]}]};
 } else if(a.startsWith('ecs list-tasks')) {
  const stopped=value('--desired-status')==='STOPPED';
  if(mode==='schema-stale-quiescence'&&stopped&&flag('off-count')&&Number(fs.readFileSync(log+'.off-count','utf8'))===3){fs.writeFileSync(log+'.clock',String(Date.now()+181000));fs.appendFileSync(log,'final-quiescence advanced 181s\\n');}

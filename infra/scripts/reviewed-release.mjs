@@ -100,12 +100,17 @@ function reviewedSafety(configuration, baseline) {
   const apiDefinition = readDefinition(baseline.bindings.apiTaskDefinition).taskDefinition;
   const runtimeSecret = runtime(workerDefinition);
   if (!runtimeSecret?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-') || runtime(apiDefinition) !== runtimeSecret || value(workerDefinition, 'FSS_DATABASE_HOST') !== database.Endpoint.Address || value(apiDefinition, 'FSS_DATABASE_HOST') !== database.Endpoint.Address) throw new Error('baseline_binding_incompatible');
-  function source(plan, image) {
+  function source(plan, image, initialTemplate = false) {
     const response = readDefinition(plan.operations_task_definition), d = response.taskDefinition, c = d?.containerDefinitions?.[0];
-    if (!/^arn:aws:ecs:us-east-1:326255650484:task-definition\/fss-prod-operations:[1-9][0-9]*$/u.test(plan.operations_task_definition || '') || d?.taskDefinitionArn !== plan.operations_task_definition || d.status !== 'ACTIVE' || d.family !== 'fss-prod-operations' || d.containerDefinitions?.length !== 1 || c?.name !== 'operations' || c.image !== image || !/^326255650484\.dkr\.ecr\.us-east-1\.amazonaws\.com\/fss-prod-worker@sha256:[0-9a-f]{64}$/u.test(image || '') || d.taskRoleArn !== 'arn:aws:iam::326255650484:role/fss-prod-worker-task' || d.executionRoleArn !== 'arn:aws:iam::326255650484:role/fss-prod-worker-exec' || !response.tags?.some(t => t.key === 'NamePrefix' && t.value === 'fss-prod') || value(d, 'FSS_DATABASE_HOST') !== database.Endpoint.Address || runtime(d) !== runtimeSecret || c.secrets?.filter(e => ['DATABASE_SECRET_ARN', 'MIGRATION_DATABASE_SECRET', 'FSS_RUNTIME_DATABASE_SECRET_ARN'].includes(e.name)).length !== 1 || c.environment?.some(e => /SECRET|DATABASE_URL|PASSWORD/u.test(e.name)) || c.logConfiguration?.options?.['awslogs-group'] !== '/fss/fss-prod/worker' || c.logConfiguration?.options?.['awslogs-stream-prefix'] !== 'operations') throw new Error('off_reader_binding_changed');
-    return { definition: d, tags: response.tags };
+    const productionWorkerImage = /^326255650484\.dkr\.ecr\.us-east-1\.amazonaws\.com\/fss-prod-worker@sha256:[0-9a-f]{64}$/u;
+    if (!/^arn:aws:ecs:us-east-1:326255650484:task-definition\/fss-prod-operations:[1-9][0-9]*$/u.test(plan.operations_task_definition || '') || d?.taskDefinitionArn !== plan.operations_task_definition || d.status !== 'ACTIVE' || d.family !== 'fss-prod-operations' || d.containerDefinitions?.length !== 1 || c?.name !== 'operations' || (!initialTemplate && c.image !== image) || !productionWorkerImage.test(c.image || '') || !productionWorkerImage.test(image || '') || d.taskRoleArn !== 'arn:aws:iam::326255650484:role/fss-prod-worker-task' || d.executionRoleArn !== 'arn:aws:iam::326255650484:role/fss-prod-worker-exec' || !response.tags?.some(t => t.key === 'NamePrefix' && t.value === 'fss-prod') || value(d, 'FSS_DATABASE_HOST') !== database.Endpoint.Address || runtime(d) !== runtimeSecret || c.secrets?.filter(e => ['DATABASE_SECRET_ARN', 'MIGRATION_DATABASE_SECRET', 'FSS_RUNTIME_DATABASE_SECRET_ARN'].includes(e.name)).length !== 1 || c.environment?.some(e => /SECRET|DATABASE_URL|PASSWORD/u.test(e.name)) || c.logConfiguration?.options?.['awslogs-group'] !== '/fss/fss-prod/worker' || c.logConfiguration?.options?.['awslogs-stream-prefix'] !== 'operations') throw new Error('off_reader_binding_changed');
+    // Initial readers borrow only validated template metadata, never its older image.
+    // Candidate readers still require the native definition's exact approved image.
+    const definition = initialTemplate ? structuredClone(d) : d;
+    if (initialTemplate) definition.containerDefinitions[0].image = image;
+    return { definition, tags: response.tags };
   }
-  const initialSource = source(configuration, workerDefinition.containerDefinitions[0].image);
+  const initialSource = source(configuration, workerDefinition.containerDefinitions[0].image, true);
   const safety = createReleaseSafety({
     aws: async (service, action, args = [], write = false) => {
       if (write) { gate(); status.writesStarted = true; save(); }
