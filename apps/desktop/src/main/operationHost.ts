@@ -94,8 +94,8 @@ import type { TodayBridgeHost } from './todayBridge.ts';
  * it should not have — a token, a `tel:` URI, a message body on a Today card — fails at
  * the boundary instead of reaching the page.
  */
-
 export interface OperationHostDeps {
+  readonly sessionGeneration:()=>number; // Authenticated manager, before asynchronous bridge cleanup.
   readonly notifications?:{status():NotificationRuntimeStatus};
   readonly socialHandoff?:ReturnType<typeof createSocialManualHandoffBridge>;
   readonly socialDelivery?:{status():SocialDeliveryStatus;checkPreparation?(accountId:string):Promise<SocialPreparationResult>};
@@ -411,7 +411,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
     ...sourcingCandidateReadHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
-    ...sourcingDiscoverySaveHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
+    ...sourcingDiscoverySaveHandlers({api:deps.api,generation:()=>deps.sessionGeneration()}),
     'sourcing.save': async (input:OperationInput<'sourcing.save'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/sourcing/candidates/save',body,value=>candidateSavedSchema.parse(value),{commandId});

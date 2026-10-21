@@ -22,7 +22,7 @@ export interface DiscoveryImportController {
   cancel():void;
 }
 let savePending=false;
-const ambiguous=(reason:string|null)=>reason===null||['offline','unavailable','unreadable_answer','refused','http_408','http_429'].includes(reason)||/^http_5\d\d$/u.test(reason);
+const ambiguous=(reason:string|null)=>reason===null||['offline','unavailable','unreadable_answer','internal_error','session_changed_after_dispatch','refused','http_408','http_429'].includes(reason)||/^http_5\d\d$/u.test(reason);
 const safeRefusals=new Set(['not_signed_in','not_authorized','forbidden','device_revoked','upgrade_required','session_changed','source_conflict','source_identity_conflict','candidate_identity_conflict','candidate_changed','candidate_format_not_supported','command_mismatch','command_id_conflict']);
 
 /** Memory only. No automatic retry. Each explicit resume uses the unchanged command object. */

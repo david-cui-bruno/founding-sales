@@ -2,14 +2,39 @@ import {expect,it,vi} from 'vitest';
 import {createAuthedClient,type AccessSession,type AuthedClient} from '../src/main/authedClient.ts';
 import type {HttpAnswer,HttpSend} from '../src/main/apiClient.ts';
 import {registerOperations,type OperationHostDeps} from '../src/main/operationHost.ts';
-import {OPERATION_IPC_CHANNELS} from '../src/shared/operations.ts';
-import {rawDiscoveryEntry,discoveryReceipt} from './support/discoveryImportFixtures.ts';
+import {OPERATION_IPC_CHANNELS,OPERATIONS} from '../src/shared/operations.ts';
+import {rawDiscoveryEntry,discoveryReceipt,emptyDiscoveryList} from './support/discoveryImportFixtures.ts';
 import {prepareDiscoveryBatch} from '../src/renderer/sourcing/discoveryImportBatch.ts';
+import {createDiscoveryImportController,type DiscoverySavePort} from '../src/renderer/sourcing/discoveryImportController.ts';
 const accepted={status:200,body:{status:'accepted',replayed:false,result:discoveryReceipt}};
+it('normal internal_error pauses registered transport and explicitly resumes the identical immutable command',async()=>{
+  const bodies:unknown[]=[];
+  const send=vi.fn<HttpSend>(async(_url,init)=>{bodies.push(JSON.parse(init.body!));return bodies.length===1?{status:500,body:{error:'internal_error'}}:accepted;});
+  const api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:'1.0.56',accessToken:async()=>({token:'synthetic',generation:0}),send});
+  const invoke=registered(api),batch=await prepareDiscoveryBatch(JSON.stringify([rawDiscoveryEntry()]));
+  const save=vi.fn<DiscoverySavePort>(async input=>OPERATIONS['sourcing.discoverySave'].output.parse(await invoke(input)));
+  const controller=createDiscoveryImportController(batch,{save,list:async()=>emptyDiscoveryList},()=>true,()=>{});
+  await controller.run();
+  expect(controller.state()).toMatchObject({phase:'paused',uncertain:true,refusal:false,acknowledged:0});
+  expect(send).toHaveBeenCalledTimes(1);
+  await Promise.resolve();expect(send).toHaveBeenCalledTimes(1);
+  await controller.run();
+  expect(save.mock.calls[1]![0]).toBe(save.mock.calls[0]![0]);
+  expect(Object.isFrozen(save.mock.calls[0]![0])).toBe(true);
+  expect(bodies[1]).toEqual(bodies[0]);expect(controller.state().acknowledged).toBe(1);
+});
+it('controller treats already-dispatched transition as unknown if renderer invalidation has not arrived yet',async()=>{
+  const batch=await prepareDiscoveryBatch(JSON.stringify([rawDiscoveryEntry()]));
+  const save=vi.fn<DiscoverySavePort>(async()=>({result:null,reason:'session_changed_after_dispatch'}));
+  const controller=createDiscoveryImportController(batch,{save,list:async()=>emptyDiscoveryList},()=>true,()=>{});
+  await controller.run();
+  expect(controller.state()).toMatchObject({phase:'paused',uncertain:true,refusal:false,acknowledged:0});
+  expect(save).toHaveBeenCalledTimes(1);
+});
 function registered(api:AuthedClient,generation:()=>number=()=>0){
   const channels=new Map<string,(input:unknown)=>Promise<unknown>>();
-  // Same API + recordings identity seam used by registryTraffic and bookingCapacity tests.
-  const deps={api,recordings:{identity:{current:generation}}} as unknown as OperationHostDeps;
+  // The authenticated manager lifetime is independent of delayed bridge cleanup.
+  const deps={api,sessionGeneration:generation,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps;
   registerOperations(deps,(channel,listener)=>channels.set(channel,listener));
   return (input:unknown)=>channels.get(OPERATION_IPC_CHANNELS.command)!({operation:'sourcing.discoverySave',input});
 }
