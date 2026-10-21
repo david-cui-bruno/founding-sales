@@ -22,3 +22,14 @@ export const DISCOVERY_REVIEW_CONSTRAINT_CASES:readonly Case[]=[
   {constraint:'sourcing_candidate_discovery_reviews_pkey',run:async f=>{const value=await row(f);await insert(f,value);return insert(f,{...value,content_digest:'b'.repeat(64)});}},
   {constraint:'sourcing_candidate_discovery__workspace_id_candidate_id_can_key',run:async f=>{const value=await row(f);await insert(f,value);return insert(f,{...value,id:randomUUID()});}},
 ];
+
+export const DISCOVERY_REVIEW_DECISION_CONSTRAINT_CASES:readonly Case[]=[
+  {constraint:'sourcing_candidate_discovery_re_workspace_id_candidate_id_fkey1',run:async f=>f.session.query(
+    'INSERT INTO sourcing_candidate_discovery_review_decisions(workspace_id,candidate_id,review_id,reviewed_at) VALUES($1,$2,$3,now())',
+    [f.seeded.alpha.workspaceId,randomUUID(),randomUUID()])},
+  {constraint:'sourcing_candidate_discovery_review_decisions_pkey',run:async f=>{
+    const value=await row(f),params=[value.workspace_id,value.candidate_id,value.id];
+    const sql='INSERT INTO sourcing_candidate_discovery_review_decisions(workspace_id,candidate_id,review_id,reviewed_at) VALUES($1,$2,$3,now())';
+    await f.session.query(sql,params);return f.session.query(sql,params);
+  }},
+];
