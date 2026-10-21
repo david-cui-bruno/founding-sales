@@ -510,11 +510,13 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>,
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
     crm: (() => {const bridge=createCrmBridge({api,session,clientVersion:'1.0.13'});
-      const handlers = operationHandlers({ api, recordings: { identity: { current: () => 0 } } } as unknown as OperationHostDeps);
+      const handlers = operationHandlers({ api, nativeSessionGeneration:()=>0, recordings: { identity: { current: () => 0 } } } as unknown as OperationHostDeps);
       return {...bridge,
         ...
         Object.fromEntries(
           [
+            'captureReadRecoveryRead',
+            'captureReadRecoveryRequest',
             "capabilityRead",
             "metadataReviewActivate",
             "metadataReviewDisable",
