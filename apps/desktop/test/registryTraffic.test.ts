@@ -123,6 +123,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'ask.actionChange':{actionId:UUID,expectedVersion:1,action:'complete_task'},
   'crm.businessMailList': {limit:50},
   'crm.businessMailReadV2': {sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},
+  'crm.captureReadRecoveryRead':{mailboxId:UUID},
+  'crm.captureReadRecoveryRequest':{mailboxId:UUID,expectedGeneration:1,incidentId:UUID,expectedRecoveryBinding:'a'.repeat(64),commandId:UUID},
   'crm.businessMailImportHealth':{mailboxId:UUID},
   'crm.businessMailImportRequest':{mailboxId:UUID},
   'crm.businessMailRead': {sourceId:UUID,sourceRevision:1,contentHash:'a'.repeat(64)},
