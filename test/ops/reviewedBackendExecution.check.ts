@@ -34,7 +34,10 @@ function execute(mode: string) {
     const terraform = executable(join(bin, 'terraform'), `const fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(process.env.LOG,'terraform '+a.join(' ')+'\\n'); if(a.includes('init')) {if(['lock-denied','read-denied'].includes(process.env.MODE))process.exit(1);} else if(a.includes('state'))console.log(JSON.stringify({lineage:process.env.MODE==='lineage'?'foreign':'lineage',serial:process.env.MODE==='serial'?8:7}));else if(a.includes('show'))console.log(JSON.stringify({variables:{assume_deployment_role:{value:process.env.MODE==='provider'},api_image:{value:'326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@${API}'},worker_image:{value:'326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${WORKER}'}}}));else if(process.env.MODE.startsWith('smoke-')&&a.includes('output'))console.log(JSON.stringify({api:{declared_desired_count:1},worker:{declared_desired_count:1}}));else if(!(process.env.MODE.startsWith('smoke-')&&a.includes('apply')))process.exit(99);`);
     executable(join(scripts, 'deploy.sh'), `const fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(process.env.LOG,'deploy '+a.join(' ')+'\\n');if(a[0]==='ci'&&a[1]==='gate')process.exit(0);if(!process.env.MODE.startsWith('smoke-'))process.exit(99);if(a[0]==='ci'&&a[1]==='canary')console.log('canary_age=1');else if(a[0]!=='release')process.exit(99);`);
     if (smoke) {
-      executable(join(bin, 'aws'), reviewedSafetyCloud);
+      const cloud = reviewedSafetyCloud
+        .replace("mode==='schema-stopping-writer'?'STOPPING':'STOPPED'", "mode==='schema-stopping-writer'?'STOPPING':mode==='schema-shutdown-progress'?(flag('shutdown-observed')?'STOPPED':(fs.writeFileSync(log+'.shutdown-observed','yes'),'STOPPING')):'STOPPED'")
+        .replace("['schema-stopping-writer','schema-terminal-writer']", "['schema-stopping-writer','schema-terminal-writer','schema-shutdown-progress']");
+      executable(join(bin, 'aws'), cloud);
       executable(terraform, `const fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(process.env.LOG,'terraform '+a.join(' ')+'\\n');
         if(a.includes('init')){}else if(a.includes('state'))console.log(JSON.stringify({lineage:'lineage',serial:7}));
         else if(a.includes('show'))console.log(JSON.stringify({variables:{assume_deployment_role:{value:false},api_image:{value:'326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@${API}'},worker_image:{value:'326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${WORKER}'}}}));
@@ -74,7 +77,7 @@ function execute(mode: string) {
     delete env['FSS_REHEARSAL_AWS_COMMAND'];
     delete env['NODE_OPTIONS'];
     const clock = join(directory, 'controlled-clock.mjs');
-    writeFileSync(clock, `import { existsSync, readFileSync } from 'node:fs';const realNow=Date.now;Date.now=()=>existsSync(process.env.LOG+'.clock')?Number(readFileSync(process.env.LOG+'.clock','utf8')):realNow();if(['schema-containment-stuck','schema-postrestart-unknown'].includes(process.env.MODE))globalThis.setTimeout=callback=>setImmediate(callback);`);
+    writeFileSync(clock, `import { existsSync, readFileSync } from 'node:fs';const realNow=Date.now;Date.now=()=>existsSync(process.env.LOG+'.clock')?Number(readFileSync(process.env.LOG+'.clock','utf8')):realNow();if(['schema-containment-stuck','schema-postrestart-unknown','schema-stopping-writer','schema-shutdown-progress'].includes(process.env.MODE))globalThis.setTimeout=callback=>setImmediate(callback);`);
     if (mode === 'schema-template-stale') {
       // Freeze the native template container: success must clone, never mutate it.
       writeFileSync(clock, readFileSync(clock, 'utf8') + `const parse=JSON.parse;JSON.parse=(...args)=>{const value=parse(...args),d=value?.taskDefinition;if(d?.family==='fss-prod-operations'&&d.taskDefinitionArn.endsWith(':1'))Object.freeze(d.containerDefinitions[0]);return value;};`);
@@ -140,7 +143,7 @@ describe('reviewed schema release native safety integration', () => {
     expect(result.commands.includes(' apply ')).toBe(applied);
     expect(result.commands).not.toMatch(/deploy release|smoke /u);
   });
-  it.each(['schema-pass', 'schema-terminal-writer'])('pins covered quiescence before immutable apply/migration and checks OFF at four boundaries (%s)', mode => {
+  it.each(['schema-pass', 'schema-terminal-writer', 'schema-shutdown-progress'])('pins covered quiescence before immutable apply/migration and checks OFF at four boundaries (%s)', mode => {
     const result = execute(mode);
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.status).toMatchObject({ outcome: 'completed', schema: 89, recoveryPoint: { restoreTested: false } });
@@ -159,6 +162,12 @@ describe('reviewed schema release native safety integration', () => {
     expect(reads[0]).toBeLessThan(put);
     expect(stop).toBeLessThan(reads[1]!);
     expect(reads[1]).toBeLessThan(backup);
+    if (mode === 'schema-shutdown-progress') {
+      const postStop = commands.slice(reads[1]! + 1, backup);
+      expect(postStop.filter(line => line === 'aws ecs describe-tasks')).toHaveLength(2);
+      expect(postStop.filter(line => line === 'aws ecs describe-services')).toHaveLength(2);
+      expect(postStop.some(line => line.includes(' apply ') || line.startsWith('deploy release'))).toBe(false);
+    }
     expect(backup).toBeLessThan(apply);
     expect(apply).toBeLessThan(reads[2]!);
     expect(reads[2]).toBeLessThan(migrate);
@@ -183,6 +192,10 @@ describe('reviewed schema release native safety integration', () => {
     expect(result.status).toMatchObject({ outcome: 'repair-required', reason });
     expect(result.commands.includes(' apply ')).toBe(applied);
     expect(result.commands.includes('deploy release')).toBe(migrated);
+    if (mode === 'schema-stopping-writer') {
+      expect(result.commands.split('\n').filter(line => line === 'aws ecs describe-tasks')).toHaveLength(14);
+      expect(result.status.recoveryPoint).toBeUndefined();
+    }
     if (mode === 'schema-stale-finalgate') expect(result.commands).toContain('final-gate advanced 181s');
     if (mode === 'schema-stale-quiescence') expect(result.commands).toContain('final-quiescence advanced 181s');
     if (mode === 'schema-off-postrestart') {
