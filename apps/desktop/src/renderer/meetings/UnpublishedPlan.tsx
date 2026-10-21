@@ -4,7 +4,7 @@ import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { noDefiniteAnswer } from '../today/afterCallModel.ts';
-import { unpublishedForm, useUnpublishedPlanMemory } from './unpublishedPlanMemory.ts';
+import { unpublishedSavedForm, useUnpublishedPlanMemory } from './unpublishedPlanMemory.ts';
 export type UnpublishedSave = (input: SaveMeetingUnpublishedPlan & {commandId:string}) => Promise<{view:MeetingFollowThroughViewV2|null;reason:string|null}>;
 const defaultSave: UnpublishedSave = async input => await globalThis.callieApi?.command('meetings.saveUnpublishedPlan',input) ?? {view:null,reason:'offline'};
 export function UnpublishedPlan({view,onSaved,save=defaultSave,actionsEnabled=true}:{view:MeetingFollowThroughViewV2;onSaved:(view:MeetingFollowThroughViewV2)=>void;save?:UnpublishedSave;actionsEnabled?:boolean}):JSX.Element {
@@ -21,7 +21,7 @@ export function UnpublishedPlan({view,onSaved,save=defaultSave,actionsEnabled=tr
     entry.busy=true;entry.message=null;touch();
     try{
       const answer=await save(entry.pending);
-      if(answer.view?.meetingId===view.meetingId){entry.form=unpublishedForm(answer.view);entry.pending=null;entry.dirty=false;entry.message='Four unpublished drafts saved. All remain held. Nothing was scheduled or sent.';onSaved(answer.view);}
+      if(answer.view?.meetingId===view.meetingId){entry.form=unpublishedSavedForm(answer.view);entry.pending=null;entry.dirty=false;entry.message='Four unpublished drafts saved. All remain held. Nothing was scheduled or sent.';onSaved(answer.view);}
       else if(noDefiniteAnswer(answer.reason))entry.message='The answer was lost. Retry uses the same request. Your text is kept.';
       else {entry.pending=null;entry.message=answer.reason==='source_changed'?'Meeting notes changed. Your text is kept. Review the current notes before saving again.':answer.reason==='draft_changed'?'The saved plan changed. Your text is kept. Refresh and compare before saving again.':'This save could not finish. Your text is kept.';}
     }catch{entry.message='The answer was lost. Retry uses the same request. Your text is kept.';}

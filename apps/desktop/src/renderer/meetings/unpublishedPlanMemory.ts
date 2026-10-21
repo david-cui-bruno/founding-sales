@@ -12,13 +12,17 @@ export function unpublishedForm(view: MeetingFollowThroughViewV2): SaveMeetingUn
     messages: plan === null || plan === undefined ? [{subject:'',body:''},{subject:'',body:''},{subject:'',body:''},{subject:'',body:''}]
       : plan.messages.map(({subject,body}) => ({subject,body})) as SaveMeetingUnpublishedPlan['messages'] };
 }
+export function unpublishedSavedForm(view: MeetingFollowThroughViewV2): SaveMeetingUnpublishedPlan {
+  const form = unpublishedForm(view);
+  if (view.unpublishedPlan != null) { form.expectedSourceHash = view.unpublishedPlan.sourceHash; form.expectedNotesRevision = view.unpublishedPlan.notesRevision; }
+  return form;
+}
 export function useUnpublishedPlanMemory(view: MeetingFollowThroughViewV2) {
   const epoch = useSessionEpoch(), [, bump] = useReducer((n: number) => n + 1, 0);
   if (memory.epoch !== epoch) memory = { epoch, entries: new Map() };
   let entry = memory.entries.get(view.meetingId);
   if (entry === undefined) {
-    const form = unpublishedForm(view);
-    if (view.unpublishedPlan != null) { form.expectedSourceHash = view.unpublishedPlan.sourceHash; form.expectedNotesRevision = view.unpublishedPlan.notesRevision; }
+    const form = unpublishedSavedForm(view);
     entry = {form,pending:null,busy:false,dirty:false,message:null}; memory.entries.set(view.meetingId,entry);
   }
   const current = unpublishedForm(view);
