@@ -75,6 +75,10 @@ function execute(mode: string) {
     delete env['NODE_OPTIONS'];
     const clock = join(directory, 'controlled-clock.mjs');
     writeFileSync(clock, `import { existsSync, readFileSync } from 'node:fs';const realNow=Date.now;Date.now=()=>existsSync(process.env.LOG+'.clock')?Number(readFileSync(process.env.LOG+'.clock','utf8')):realNow();if(['schema-containment-stuck','schema-postrestart-unknown'].includes(process.env.MODE))globalThis.setTimeout=callback=>setImmediate(callback);`);
+    if (mode === 'schema-template-stale') {
+      // Freeze the native template container: success must clone, never mutate it.
+      writeFileSync(clock, readFileSync(clock, 'utf8') + `const parse=JSON.parse;JSON.parse=(...args)=>{const value=parse(...args),d=value?.taskDefinition;if(d?.family==='fss-prod-operations'&&d.taskDefinitionArn.endsWith(':1'))Object.freeze(d.containerDefinitions[0]);return value;};`);
+    }
     const result = spawnSync(process.execPath, ['--import', clock, repositoryPath('infra/scripts/reviewed-release.mjs'), 'execute', manifestPath, hash(readFileSync(manifestPath)), envelope, privatePath, join(directory, 'images.json'), output], { cwd: directory, env, encoding: 'utf8' });
     const commands = readFileSync(log, 'utf8');
     if (!smoke) expect(commands).not.toMatch(/(?:^|\s)(?:apply|put|promote)(?:\s|$)/mu);
@@ -108,11 +112,33 @@ describe('reviewed schema release native safety integration', () => {
     ['schema-database-binding', 'database_binding_changed'], ['schema-network', 'network_binding_changed'],
     ['schema-reader-role', 'off_reader_binding_changed'], ['schema-reader-image', 'off_reader_binding_changed'],
     ['schema-reader-credential', 'off_reader_binding_changed'],
+    ['schema-reader-host', 'off_reader_binding_changed'], ['schema-reader-tag', 'off_reader_binding_changed'],
+    ...['account', 'region', 'repository', 'tag', 'digest'].map(suffix => [`schema-template-${suffix}`, 'off_reader_binding_changed']),
   ])('refuses %s before any reader launch or release write', (mode, reason) => {
     const result = execute(mode);
     expect(result.exitCode).toBe(1);
     expect(result.status).toMatchObject({ outcome: 'refused', writesStarted: false, reason });
     expect(result.commands).not.toMatch(/register-task-definition|run-task|record.sh put| apply |deploy release/u);
+  });
+  it('clones a stale state-bound template and executes only baseline then exact candidate images', () => {
+    const result = execute('schema-template-stale');
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.status).toMatchObject({ outcome: 'completed', schema: 89 });
+    const images = result.commands.split('\n').filter(line => line.startsWith('reader image '));
+    const repository = 'reader image 326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@sha256:';
+    expect(images).toEqual([repository + '3'.repeat(64), repository + '3'.repeat(64), repository + '2'.repeat(64), repository + '2'.repeat(64)]);
+    expect(result.commands).not.toContain(repository + '4'.repeat(64));
+  });
+  it.each([
+    ['schema-candidate-image', 'off_reader_binding_changed', true],
+    ['schema-reader-readback-image', 'registered_definition_changed', false],
+    ['schema-reader-task-digest', 'task_failed_or_foreign', false],
+  ] as const)('keeps %s fail-closed without migration or replay', (mode, reason, applied) => {
+    const result = execute(mode);
+    expect(result.exitCode).toBe(1);
+    expect(result.status).toMatchObject({ outcome: 'repair-required', reason });
+    expect(result.commands.includes(' apply ')).toBe(applied);
+    expect(result.commands).not.toMatch(/deploy release|smoke /u);
   });
   it.each(['schema-pass', 'schema-terminal-writer'])('pins covered quiescence before immutable apply/migration and checks OFF at four boundaries (%s)', mode => {
     const result = execute(mode);
