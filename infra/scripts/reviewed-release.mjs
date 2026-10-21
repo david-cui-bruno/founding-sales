@@ -200,8 +200,11 @@ try {
     const applied = JSON.parse(terraform(['output', '-json', 'deployment_plan'], 'reviewed_current_plan_unavailable'));
     const candidateSource = safety.source(applied, `${process.env.FSS_PRODUCTION_ACCOUNT_ID || '326255650484'}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${manifest.digests.worker}`);
     await phase('pre-migrate-off', () => safety.off(candidateSource, manifest.fromSchema));
-    if (schemaChange) await safety.quiescent();
-    phase('migrate-verify-restart', () => script('deploy.sh', ['release', 'infra/roots/production', 'fss-prod', ...(schemaChange ? ['--schema-change'] : []), '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker]), true);
+    await phase('migrate-verify-restart', async () => {
+      validateOff(status.off, manifest.fromSchema, Date.now(), status.settingVersions);
+      if (schemaChange) await safety.quiescent();
+      return script('deploy.sh', ['release', 'infra/roots/production', 'fss-prod', ...(schemaChange ? ['--schema-change'] : []), '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker]);
+    }, true);
     status.schema = manifest.toSchema; save();
     await phase('post-restart-off', () => safety.off(candidateSource, manifest.toSchema));
     phase('release-record-readback', () => script('record.sh', ['read-back', 'infra/roots/production', 'fss-prod', '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker, '--release-record', record]), true);

@@ -41,7 +41,7 @@ function execute(mode: string) {
         else if(a.includes('output'))console.log(JSON.stringify({api:{declared_desired_count:1},worker:{declared_desired_count:1},operations_task_definition:'arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-operations:1'}));
         else if(a.includes('apply'))fs.writeFileSync(process.env.LOG+'.applied','yes');else process.exit(99);`);
       executable(join(scripts, 'stop.sh'), `const fs=require('fs');fs.appendFileSync(process.env.LOG,'stop\\n');fs.writeFileSync(process.env.LOG+'.stopped','yes');`);
-      executable(join(scripts, 'deploy.sh'), `const fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(process.env.LOG,'deploy '+a.join(' ')+'\\n');if(a[0]==='ci'&&a[1]==='gate')process.exit(0);if(a[0]==='ci'&&a[1]==='canary')console.log('canary_age=1');else if(a[0]==='release')fs.writeFileSync(process.env.LOG+'.migrated','yes');else process.exit(99);`);
+      executable(join(scripts, 'deploy.sh'), `const fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(process.env.LOG,'deploy '+a.join(' ')+'\\n');if(a[0]==='ci'&&a[1]==='gate'){if(process.env.MODE==='schema-stale-finalgate'&&fs.existsSync(process.env.LOG+'.off-count')&&Number(fs.readFileSync(process.env.LOG+'.off-count','utf8'))===3){fs.writeFileSync(process.env.LOG+'.clock',String(Date.now()+181000));fs.appendFileSync(process.env.LOG,'final-gate advanced 181s\\n');}process.exit(0);}if(a[0]==='ci'&&a[1]==='canary')console.log('canary_age=1');else if(a[0]==='release')fs.writeFileSync(process.env.LOG+'.migrated','yes');else process.exit(99);`);
       executable(join(bin, 'curl'), `const fs=require('fs'),m=fs.existsSync(process.env.LOG+'.migrated');console.log(JSON.stringify({status:'serving',build:{commit:(m?'b':'a').repeat(40)},schema:{accepted:true,databaseVersion:m&&process.env.MODE.startsWith('schema-')?89:88}}));`);
       for (const name of ['record.sh', 'images.sh']) executable(join(scripts, name), `require('fs').appendFileSync(process.env.LOG,'${name} '+process.argv.slice(2).join(' ')+'\\n');`);
       mkdirSync(join(directory, 'scripts'));
@@ -73,7 +73,9 @@ function execute(mode: string) {
     env['GITHUB_RUN_ID'] = '33'; env['TASK_SUBNETS'] = 'subnet-11111111,subnet-22222222'; env['TASK_SECURITY_GROUP'] = 'sg-11111111';
     delete env['FSS_REHEARSAL_AWS_COMMAND'];
     delete env['NODE_OPTIONS'];
-    const result = spawnSync(process.execPath, [repositoryPath('infra/scripts/reviewed-release.mjs'), 'execute', manifestPath, hash(readFileSync(manifestPath)), envelope, privatePath, join(directory, 'images.json'), output], { cwd: directory, env, encoding: 'utf8' });
+    const clock = join(directory, 'controlled-clock.mjs');
+    writeFileSync(clock, `import { existsSync, readFileSync } from 'node:fs';const realNow=Date.now;Date.now=()=>existsSync(process.env.LOG+'.clock')?Number(readFileSync(process.env.LOG+'.clock','utf8')):realNow();`);
+    const result = spawnSync(process.execPath, ['--import', clock, repositoryPath('infra/scripts/reviewed-release.mjs'), 'execute', manifestPath, hash(readFileSync(manifestPath)), envelope, privatePath, join(directory, 'images.json'), output], { cwd: directory, env, encoding: 'utf8' });
     const commands = readFileSync(log, 'utf8');
     if (!smoke) expect(commands).not.toMatch(/(?:^|\s)(?:apply|put|promote)(?:\s|$)/mu);
     const status = JSON.parse(readFileSync(join(output, 'status.json'), 'utf8')) as { writesStarted: boolean; outcome: string; reason: string; recoveryPoint?: { timestamp: string; earliest: string; latest: string; restoreTested: boolean }; quiescedAt?: string };
@@ -137,6 +139,7 @@ describe('reviewed schema release native safety integration', () => {
     expect(result.commands).not.toMatch(/terraform .* plan |sending.*enable|put-role-policy/u);
   });
   it.each([
+    ['schema-stale-finalgate', 'sending_not_fresh_off', true, false],
     ['schema-off-initial', 'sending_not_fresh_off', false, false],
     ['schema-off-poststop', 'sending_not_fresh_off', false, false],
     ['schema-off-premigrate', 'sending_not_fresh_off', true, false],
@@ -150,6 +153,7 @@ describe('reviewed schema release native safety integration', () => {
     expect(result.status).toMatchObject({ outcome: 'repair-required', reason });
     expect(result.commands.includes(' apply ')).toBe(applied);
     expect(result.commands.includes('deploy release')).toBe(migrated);
+    if (mode === 'schema-stale-finalgate') expect(result.commands).toContain('final-gate advanced 181s');
     if (mode === 'schema-off-initial') expect(result.commands).not.toContain('record.sh put');
     expect(result.commands).not.toContain('smoke ');
   });
