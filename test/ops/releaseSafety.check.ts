@@ -7,8 +7,8 @@ const safety = await import(repositoryPath('infra/scripts/release-safety.mjs')) 
 const NOW = Date.parse('2026-10-21T09:30:00Z');
 const off = () => ({ releaseOff: true, storedOff: true, effectiveOff: true, finishing: 0, schema: 124, versions: [4], observedAt: new Date(NOW).toISOString() });
 const database = { DBInstanceArn: 'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg', DbiResourceId: 'db-test', Endpoint: { Address: 'private.invalid' }, DBInstanceStatus: 'available', BackupRetentionPeriod: 35 };
-function harness(fault = '') {
-  let clock = NOW, attempts = 0;
+function harness(fault = '', shutdown: string[] = []) {
+  let clock = NOW, attempts = 0, descriptions = 0;
   const state: Record<string, unknown> = {};
   const calls: string[] = [];
   const guard = safety.createReleaseSafety({
@@ -19,14 +19,25 @@ function harness(fault = '') {
     },
     async aws(service: string, action: string, args: string[] = []) {
       calls.push(`${service} ${action}`);
-      if (action === 'describe-services') return { failures: fault === 'services-unreadable' ? [{}] : [], services: ['api', 'worker'].map(n => ({ serviceName: `fss-prod-${n}`, status: 'ACTIVE', desiredCount: fault === 'service-active' ? 1 : 0, runningCount: 0, pendingCount: fault === 'service-pending' ? 1 : 0 })) };
+      if (action === 'describe-services') return { failures: fault === 'services-unreadable' ? [{}] : [], services: ['api', 'worker'].map(n => ({ serviceName: `fss-prod-${n}`, status: 'ACTIVE', desiredCount: fault === 'service-active' || fault === 'stopped-service-regression' && descriptions > 0 ? 1 : 0, runningCount: 0, pendingCount: fault === 'service-pending' ? 1 : 0 })) };
       if (action === 'list-tasks') {
         expect(args).toContain('--no-paginate');
         expect(args[args.indexOf('--max-results') + 1]).toBe('100');
         const stopped = args.includes('STOPPED');
+        if (stopped && fault === 'stopped-malformed-list') return { taskArns: 'writer' };
+        if (stopped && fault === 'stopped-malformed-arn') return { taskArns: [null] };
+        if (stopped && fault === 'stopped-duplicate-arns') return { taskArns: ['writer', 'writer'] };
+        if (stopped && fault === 'stopped-overflow') return { taskArns: Array.from({ length: 101 }, (_, n) => `writer-${n}`) };
         return { taskArns: fault === 'running-writer' || stopped && fault.startsWith('stopped-') ? ['writer'] : [], ...(fault === 'task-pagination' || stopped && fault === 'stopped-pagination' ? { nextToken: 'more' } : {}) };
       }
-      if (action === 'describe-tasks') return { failures: fault === 'stopped-failure' ? [{}] : [], tasks: fault === 'stopped-missing' ? [] : [{ taskArn: fault === 'stopped-foreign' ? 'foreign' : 'writer', clusterArn: fault === 'stopped-cluster' ? 'foreign' : 'cluster', lastStatus: fault === 'stopped-running' ? 'RUNNING' : fault === 'stopped-stopping' ? 'STOPPING' : fault === 'stopped-unknown' ? undefined : 'STOPPED' }] };
+      if (action === 'describe-tasks') {
+        descriptions++;
+        if (fault === 'stopped-throws') throw new Error('describe_unavailable');
+        if (fault === 'stopped-malformed-description') return { tasks: {} };
+        if (fault === 'stopped-null-description') return { tasks: [null] };
+        const task = { taskArn: fault === 'stopped-foreign' ? 'foreign' : 'writer', clusterArn: fault === 'stopped-cluster' ? 'foreign' : 'cluster', lastStatus: shutdown.length ? shutdown[Math.min(descriptions - 1, shutdown.length - 1)] : fault === 'stopped-running' ? 'RUNNING' : fault === 'stopped-stopping' ? 'STOPPING' : fault === 'stopped-unknown' ? undefined : 'STOPPED' };
+        return { failures: fault === 'stopped-failure' ? [{}] : [], tasks: fault === 'stopped-missing' ? [] : fault === 'stopped-duplicate' ? [task, task] : [task] };
+      }
       if (action === 'describe-db-instances') return { DBInstances: [{ ...database, ...(fault === 'database-drift' ? { Endpoint: { Address: 'foreign.invalid' } } : {}), ...(fault === 'retention' ? { BackupRetentionPeriod: 1 } : {}) }] };
       if (action === 'describe-db-instance-automated-backups') return {
         ...(fault === 'backup-pagination' ? { Marker: 'more' } : {}),
@@ -62,6 +73,37 @@ describe('shared migration quiescence and exact pinned recovery', () => {
     const h = harness(fault);
     await expect(h.guard.quiescent()).rejects.toThrow(/services_not_stopped|writers_still_running/u);
     expect(h.state['recoveryPoint']).toBeUndefined();
+  });
+  it('waits through shutdown and rechecks the full exact boundary before downstream work', async () => {
+    const h = harness('stopped-terminal', ['RUNNING', 'DEACTIVATING', 'STOPPING', 'DEPROVISIONING', 'STOPPED']);
+    let applied = false;
+    const ready = h.guard.quiescent().then(() => { applied = true; });
+    expect(applied).toBe(false);
+    await ready;
+    expect(applied).toBe(true);
+    expect(h.attempts()).toBe(5);
+    expect(h.calls.filter(call => call === 'ecs describe-services')).toHaveLength(5);
+    expect(h.calls.filter(call => call === 'ecs list-tasks')).toHaveLength(10);
+    expect(h.calls.filter(call => call === 'ecs describe-tasks')).toHaveLength(5);
+  });
+  it.each(['stopped-running', 'stopped-stopping'])('exhausts exactly 12 observations for %s without downstream work', async fault => {
+    const h = harness(fault);
+    let applied = false;
+    await expect(h.guard.quiescent().then(() => { applied = true; })).rejects.toThrow('writers_still_running');
+    expect(applied).toBe(false);
+    expect(h.attempts()).toBe(12);
+    expect(h.calls).not.toContain('rds describe-db-instances');
+  });
+  it.each(['stopped-unknown', 'stopped-failure', 'stopped-missing', 'stopped-foreign', 'stopped-cluster', 'stopped-pagination', 'stopped-duplicate', 'stopped-throws', 'stopped-malformed-list', 'stopped-malformed-arn', 'stopped-duplicate-arns', 'stopped-overflow', 'stopped-malformed-description', 'stopped-null-description'])('does not retry invalid evidence %s as shutdown readiness', async fault => {
+    const h = harness(fault);
+    await expect(h.guard.quiescent()).rejects.toThrow();
+    expect(h.attempts()).toBe(1);
+  });
+  it('revalidates service zero after waiting rather than caching a safe observation', async () => {
+    const h = harness('stopped-service-regression', ['STOPPING', 'STOPPED']);
+    await expect(h.guard.quiescent()).rejects.toThrow('services_not_stopped');
+    expect(h.attempts()).toBe(2);
+    expect(h.calls.filter(call => call === 'ecs describe-tasks')).toHaveLength(1);
   });
   it('accepts enumerated desired STOPPED tasks only after exact actual terminal descriptions', async () => {
     const h = harness('stopped-terminal');
