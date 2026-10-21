@@ -16,7 +16,19 @@ import {qualificationConfigureCommand} from '../src/tools/fss/qualificationConfi
 import {sourcingQualificationHandler} from '../src/handlers/sourcingQualification.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {runOnce} from '../src/runner/jobRunner.ts';
+import {sourcingMonitorSource} from '../src/handlers/sourcingMonitor.ts';
 let db:TestDatabase;let workspaceId:string;
+it('never schedules tagged raw discovery even if historical state says kept or ready',async()=>{
+ const f=await versionFixture();try{
+  const candidate=await f.candidate('discovery-fence',{prompt:'qualification-context-v6'});
+  await f.session.query(`UPDATE sourcing_candidates SET payload='{"kind":"discovery-v1"}'::jsonb,next_source_check_at=now()-interval '1 day' WHERE id=$1`,[candidate.id]);
+  const before=(await f.session.query('SELECT * FROM sourcing_qualification_runs')).rows;
+  expect(await f.pass()).toMatchObject({inserted:0,externalActions:0});
+  expect(await runSchedulerPass(f.session,{sources:[sourcingMonitorSource(true)],now:new Date().toISOString()})).toMatchObject({inserted:0,externalActions:0});
+  expect((await f.session.query('SELECT * FROM sourcing_qualification_runs')).rows).toEqual(before);
+  expect((await f.session.query('SELECT id FROM jobs')).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
 
 /** Real migrated PostgreSQL and normal scheduler enqueue, isolated from the legacy scenarios below. */
 async function versionFixture(){

@@ -20,6 +20,7 @@ import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
 import {qualifyCandidate,supportedBusinessPhone} from './qualificationPolicy.ts';
 import {candidateIdentity} from './qualificationDecision.ts';
 import {verifiedFirmOwner,verifiedFirmEvidence,verifiedWebsiteKey,VERIFIED_FIRM_POLICY_VERSION} from './verifiedFirmPolicy.ts';
+import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 interface AdmissionInput {candidateId:string;expectedRevision:number;qualificationRunId:string;mode:'automatic'|'reviewed'}
 interface AdmissionResult {firmId:string;routeId:string;alreadyAdmitted:boolean}
 const refused=(reason:string):SourcingResult<AdmissionResult>=>({ok:false,reason});
@@ -56,12 +57,14 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${w}`]);
  const peek=(await ctx.db.query<{payload:CandidateInput}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,input.candidateId])).rows[0];
  if(!peek)return refused('not_found');
+ if(!isLegacyCandidatePayload(peek.payload))return refused('candidate_format_not_supported');
  const domain=websiteDomain(peek.payload.website),name=firmNameKey(peek.payload.firmName);
  const matches=(await ctx.db.query<{id:string;name:string;website:string|null;locality:string|null;region_code:string|null}>(
   `SELECT id,name,website,locality,region_code FROM firms WHERE workspace_id=$1 AND (lower(regexp_replace(trim(name),'\\s+',' ','g'))=$2 OR regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$3) ORDER BY id FOR UPDATE`,[w,name,domain])).rows;
  const candidate=(await ctx.db.query<{revision:number;status:string;qualification_blocked:boolean;payload:CandidateInput}>('SELECT revision,status,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 AND candidate_id=$3 FOR UPDATE',[w,input.qualificationRunId,input.candidateId])).rows[0];
  if(!candidate||!run)return refused('not_found');
+ if(!isLegacyCandidatePayload(candidate.payload))return refused('candidate_format_not_supported');
  if(candidate.qualification_blocked)return refused('identity_review_required');
  if(candidate.revision!==input.expectedRevision||candidate.revision!==run.candidate_revision||candidate.status==='dismissed')return refused('candidate_changed');
  const already=(await ctx.db.query<{firm_id:string;route_id:string}>('SELECT firm_id,route_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2',[w,input.candidateId])).rows[0];

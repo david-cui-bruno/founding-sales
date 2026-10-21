@@ -351,6 +351,8 @@ describe('what the API mounts', () => {
       '/sourcing/candidates/check',
       '/sourcing/candidates/correct-name',
       '/sourcing/candidates/delete',
+      '/sourcing/candidates/discovery/list-v1',
+      '/sourcing/candidates/discovery/save-v1',
       '/sourcing/candidates/list',
       '/sourcing/candidates/review',
       '/sourcing/candidates/save',

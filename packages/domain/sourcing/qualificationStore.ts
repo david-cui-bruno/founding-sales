@@ -15,6 +15,7 @@ import { workspaceBusinessZone } from '../research/ledger.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
+import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 
 export const QUALIFICATION_PROMPT_VERSION='qualification-context-v7';
 export const QUALIFICATION_POLICY_VERSION='qualification-v5';
@@ -25,8 +26,8 @@ export interface QualificationRunRow {
   observations:SourceObservation[];facts:QualificationFact[];verdict:QualificationVerdict|null;
   opening_question:string|null;requested_at:Date;deadline_at:Date;[key:string]:unknown;
 }
-interface CandidateRow {id:string;revision:number;status:string;qualification_blocked:boolean;[key:string]:unknown}
-const candidateRead='SELECT id,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2';
+interface CandidateRow {id:string;revision:number;status:string;qualification_blocked:boolean;payload:unknown;[key:string]:unknown}
+const candidateRead='SELECT id,revision,status,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2';
 const refused=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
 
 /** Caller transaction holds the candidate before runs, matching triage/admission. */
@@ -36,6 +37,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   const workspaceId=context.scope.workspaceId;
   const candidate=(await context.db.query<CandidateRow>(`${candidateRead} FOR UPDATE`,[workspaceId,input.candidateId])).rows[0];
   if(!candidate)return refused('not_found');
+  if(!isLegacyCandidatePayload(candidate.payload))return refused('candidate_format_not_supported');
   if(candidate.revision!==input.expectedRevision)return refused('candidate_changed');
   if(candidate.status==='dismissed')return refused('candidate_dismissed');
   if(candidate.qualification_blocked)return refused('identity_review_required');
@@ -64,6 +66,7 @@ export async function readQualification(context:RepositoryContext,input:{candida
   if(!decideAdminOnly(context).permitted)return null;
   const candidate=(await context.db.query<CandidateRow>(candidateRead,[context.scope.workspaceId,input.candidateId])).rows[0];
   if(!candidate)return null;
+  if(!isLegacyCandidatePayload(candidate.payload))return null;
   const rows=(await context.db.query<QualificationRunRow>(`SELECT * FROM sourcing_qualification_runs
     WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 20`,[context.scope.workspaceId,candidate.id])).rows;
   const current=rows[0];if(!current)return null;
@@ -91,6 +94,7 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   if(!identity)return refused('not_found');
   const candidate=(await context.db.query<CandidateRow>(`${candidateRead} FOR UPDATE`,[workspaceId,identity.candidate_id])).rows[0];
   if(!candidate)return refused('not_found');
+  if(!isLegacyCandidatePayload(candidate.payload))return refused('candidate_format_not_supported');
   const run=(await context.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[workspaceId,input.runId])).rows[0];
   if(!run)return refused('not_found');
   if(!['pending','running'].includes(run.state))return refused('run_finished');
