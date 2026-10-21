@@ -33,7 +33,7 @@ export function backendPolicy(stage) {
     allow('BackendTable', ['dynamodb:DescribeTable'], TABLE),
     allow('BackendLockRow', ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:DeleteItem'], TABLE, rows([ROW])),
     allow('BackendChecksum', apply ? ['dynamodb:GetItem', 'dynamodb:PutItem'] : ['dynamodb:GetItem'], TABLE, rows([`${ROW}-md5`])),
-    ...(stage === 'prepare' ? [allow('BackendStateBucketKeyDecrypt', ['kms:Decrypt'], LOCK_TABLE_KMS_KEY, { StringEquals: STATE_BUCKET_KMS_CONTEXT })] : []),
+    ...(stage !== 'local-plan' ? [allow('BackendStateBucketKeyDecrypt', ['kms:Decrypt'], LOCK_TABLE_KMS_KEY, { StringEquals: STATE_BUCKET_KMS_CONTEXT })] : []),
     allow('BackendLockTableDecrypt', ['kms:Decrypt'], LOCK_TABLE_KMS_KEY, { StringEquals: LOCK_KMS_CONTEXT }),
   ] };
 }
@@ -90,7 +90,7 @@ const touchesKmsData = statement => statement.NotAction || list(statement.Action
 function validateKmsScope(policy, { lockKeyNamePrefix } = {}, stage) {
   for (const statement of policy.Statement.filter(s => s.Effect === 'Allow' && touchesKmsData(s))) {
     // Observed existing state uses this bucket key. Object reads remain separately scoped.
-    if (stage === 'prepare' && !statement.NotAction && !statement.NotResource && same(list(statement.Action), ['kms:Decrypt']) && same(list(statement.Resource), [LOCK_TABLE_KMS_KEY]) && same(statement.Condition, { StringEquals: STATE_BUCKET_KMS_CONTEXT })) continue;
+    if (stage !== 'local-plan' && !statement.NotAction && !statement.NotResource && same(list(statement.Action), ['kms:Decrypt']) && same(list(statement.Resource), [LOCK_TABLE_KMS_KEY]) && same(statement.Condition, { StringEquals: STATE_BUCKET_KMS_CONTEXT })) continue;
     // This independent provider refresh grant cannot authorize the backend key.
     // Recognize only its exact existing key, action, service and function context.
     if (!statement.NotAction && !statement.NotResource && same(list(statement.Action), ['kms:Decrypt']) && same(list(statement.Resource), [DIGEST_KMS_KEY]) && same(statement.Condition, { StringEquals: DIGEST_KMS_CONTEXT })) continue;

@@ -33,22 +33,20 @@ function syntheticBaseline() {
   return { roleArn: 'arn:aws:iam::326255650484:role/fss-prod-deploy', policyName: 'fss-prod-deploy-scope', lockKeyNamePrefix: null as string | null, maxSessionDuration: 3600, policy: JSON.parse(rendered.stdout) as Policy };
 }
 
-describe('planner existing S3 state bucket-key read contract', () => {
+describe.each(['prepare', 'execute'])('%s existing S3 state bucket-key read contract', stage => {
   const bucket = 'arn:aws:s3:::callie-sourcing-tfstate-326255650484';
   const stateDecrypt = (): Statement => ({ Sid: 'BackendStateBucketKeyDecrypt', Effect: 'Allow', Action: ['kms:Decrypt'], Resource: [KEY], Condition: { StringEquals: { 'kms:ViaService': 's3.us-east-1.amazonaws.com', 'kms:EncryptionContext:aws:s3:arn': bucket } } });
 
-  it('requires only the exact observed existing bucket-key read for prepare, never executor or local-plan', () => {
-    const value = policy('prepare');
+  it('requires only the exact observed existing bucket-key read, never local-plan', () => {
+    const value = policy(stage);
     expect(value.Statement.find(s => s.Sid === 'BackendStateBucketKeyDecrypt')).toEqual(stateDecrypt());
-    expect(check(value, 'prepare').status).toBe(0);
+    expect(check(value, stage).status).toBe(0);
     value.Statement = value.Statement.filter(s => s.Sid !== 'BackendStateBucketKeyDecrypt');
-    expect(check(value, 'prepare').stderr).toContain('backend_required_permission_denied');
-    for (const stage of ['execute', 'local-plan']) {
-      const other = policy(stage);
-      expect(other.Statement.some(s => s.Sid === 'BackendStateBucketKeyDecrypt')).toBe(false);
-      other.Statement.push(stateDecrypt());
-      expect(check(other, stage).stderr).toContain('backend_kms_permission_scope');
-    }
+    expect(check(value, stage).stderr).toContain('backend_required_permission_denied');
+    const local = policy('local-plan');
+    expect(local.Statement.some(s => s.Sid === 'BackendStateBucketKeyDecrypt')).toBe(false);
+    local.Statement.push(stateDecrypt());
+    expect(check(local, 'local-plan').stderr).toContain('backend_kms_permission_scope');
   });
 
   it.each([
@@ -70,15 +68,15 @@ describe('planner existing S3 state bucket-key read contract', () => {
     ['GenerateDataKey', (s: Statement) => { s.Action = ['kms:Decrypt', 'kms:GenerateDataKey']; }],
     ['CreateGrant', (s: Statement) => { s.Action = ['kms:CreateGrant']; }],
   ] as const)('rejects %s even beside the exact required grant', (_name, mutate) => {
-    const value = policy('prepare'), extra = stateDecrypt(); mutate(extra); value.Statement.push(extra);
-    expect(check(value, 'prepare').stderr).toContain('backend_kms_permission_scope');
+    const value = policy(stage), extra = stateDecrypt(); mutate(extra); value.Statement.push(extra);
+    expect(check(value, stage).stderr).toContain('backend_kms_permission_scope');
   });
 
   it('honors explicit bucket-key denial and leaves exact S3 state access unchanged', () => {
-    const value = policy('prepare');
-    expect(value.Statement.find(s => s.Sid === 'BackendState')).toEqual({ Sid: 'BackendState', Effect: 'Allow', Action: ['s3:GetObject'], Resource: [`${bucket}/fss/greenfield/production/terraform.tfstate`] });
+    const value = policy(stage);
+    expect(value.Statement.find(s => s.Sid === 'BackendState')).toEqual({ Sid: 'BackendState', Effect: 'Allow', Action: stage === 'execute' ? ['s3:GetObject', 's3:PutObject'] : ['s3:GetObject'], Resource: [`${bucket}/fss/greenfield/production/terraform.tfstate`] });
     value.Statement.push({ ...stateDecrypt(), Effect: 'Deny' });
-    expect(check(value, 'prepare').stderr).toContain('backend_required_permission_denied');
+    expect(check(value, stage).stderr).toContain('backend_required_permission_denied');
   });
 });
 
@@ -202,15 +200,15 @@ describe('ordinary backend CLI existing DynamoDB lock-table CMK contract', () =>
       expect(validateWithMetadata({ lockKeyNamePrefix: 'unrelated-bootstrap' }).status).toBe(0);
       expect(validateWithMetadata({}).stderr).toContain('backend_lock_key_tag_required');
       for (const tag of ['fss-prod', 'fss-prod-locks', '*', 42, [], {}]) expect(validateWithMetadata({ lockKeyNamePrefix: tag }).status).toBe(1);
-      // Root's already-authorized backend projection has the previous six backend
-      // statements. A private delta may append only this new one, not re-render it.
+      // Preserve every existing statement, including the independent S3 bucket
+      // decrypt, when adding the separate DynamoDB lock-table decrypt.
       const current = structuredClone(proposal.proposed.policy); current.Statement = current.Statement.filter(s => s.Sid !== SID);
-      expect(current.Statement).toHaveLength(25); const preserved = structuredClone(current.Statement);
+      expect(current.Statement).toHaveLength(26); const preserved = structuredClone(current.Statement);
       writeFileSync(proposedFile, JSON.stringify(current));
       expect(validateWithMetadata({ lockKeyNamePrefix: null }).stderr).toContain('backend_required_permission_denied');
       current.Statement.push(decrypt()); writeFileSync(proposedFile, JSON.stringify(current));
       expect(validateWithMetadata({ lockKeyNamePrefix: null }).status).toBe(0);
-      expect(current.Statement.slice(0, 25)).toEqual(preserved);
+      expect(current.Statement.slice(0, 26)).toEqual(preserved);
       Reflect.deleteProperty(original, 'lockKeyNamePrefix'); writeFileSync(file, JSON.stringify(original));
       expect(cli(['backend-proposal', file]).stderr).toContain('backend_lock_key_tag_required');
       for (const tag of ['fss-prod', 'fss-prod-locks', '*']) {

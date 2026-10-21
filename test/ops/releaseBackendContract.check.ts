@@ -81,7 +81,7 @@ describe('ordinary reviewed release backend contract CLI', () => {
       expect(plan.Statement.find(s => s.Sid === 'BackendChecksum')?.Action).toEqual(['dynamodb:GetItem']);
       expect(apply.Statement.find(s => s.Sid === 'BackendChecksum')?.Action).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem']);
       expect(apply.Statement.filter(s => s.Sid === 'BackendLockTableDecrypt').map(s => s.Action)).toEqual([['kms:Decrypt']]);
-      expect(check(apply, 'prepare', directory).stderr).toContain('backend_required_permission_denied');
+      expect(check(apply, 'prepare', directory).stderr).toContain('backend_excess_state_permission');
       const writingPlan = structuredClone(plan);
       writingPlan.Statement.find(s => s.Sid === 'BackendState')!.Action = ['s3:GetObject', 's3:PutObject'];
       expect(check(writingPlan, 'prepare', directory).stderr).toContain('backend_excess_state_permission');
