@@ -97,6 +97,7 @@ import type { TodayBridgeHost } from './todayBridge.ts';
  */
 export interface OperationHostDeps {
   readonly sessionGeneration:()=>number; // Authenticated manager, before asynchronous bridge cleanup.
+  readonly nativeSessionGeneration?:()=>number;
   readonly notifications?:{status():NotificationRuntimeStatus};
   readonly socialHandoff?:ReturnType<typeof createSocialManualHandoffBridge>;
   readonly socialDelivery?:{status():SocialDeliveryStatus;checkPreparation?(accountId:string):Promise<SocialPreparationResult>};
@@ -115,7 +116,6 @@ export interface OperationHostDeps {
   /** Lane M4: the demo recording import the main process holds. */
   readonly recordings: RecordingImportHost;
 }
-
 type Handler = (input: never) => Promise<unknown>;
 
 /**
@@ -385,7 +385,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
-    ...sourcingFirmQualificationHandlers({api:deps.api,generation:()=>deps.recordings.identity.current()}),
+    ...sourcingFirmQualificationHandlers({api:deps.api,generation:()=>deps.nativeSessionGeneration?.()}),
     'sourcing.qualification': async (input:OperationInput<'sourcing.qualification'>) => {
       const generation=deps.recordings.identity.current();
       const answer=await deps.api.read('/sourcing/qualification/read',value=>qualificationViewSchema.parse(value),input);
