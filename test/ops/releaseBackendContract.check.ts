@@ -81,8 +81,11 @@ describe('ordinary reviewed release backend contract CLI', () => {
       expect(plan.Statement.find(s => s.Sid === 'BackendChecksum')?.Action).toEqual(['dynamodb:GetItem']);
       expect(apply.Statement.find(s => s.Sid === 'BackendChecksum')?.Action).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem']);
       expect(apply.Statement.filter(s => s.Sid === 'BackendLockTableDecrypt').map(s => s.Action)).toEqual([['kms:Decrypt']]);
-      expect(check(apply, 'prepare', directory).stderr).toContain('backend_excess_state_permission');
-      for (const sid of ['BackendNativeLock', 'BackendLockRow', 'BackendChecksum', 'BackendList', 'BackendTable', 'BackendLockTableDecrypt']) {
+      expect(check(apply, 'prepare', directory).stderr).toContain('backend_required_permission_denied');
+      const writingPlan = structuredClone(plan);
+      writingPlan.Statement.find(s => s.Sid === 'BackendState')!.Action = ['s3:GetObject', 's3:PutObject'];
+      expect(check(writingPlan, 'prepare', directory).stderr).toContain('backend_excess_state_permission');
+      for (const sid of ['BackendNativeLock', 'BackendLockRow', 'BackendChecksum', 'BackendList', 'BackendTable', 'BackendStateBucketKeyDecrypt', 'BackendLockTableDecrypt']) {
         const missing = structuredClone(plan); missing.Statement = missing.Statement.filter(s => s.Sid !== sid);
         expect(check(missing, 'prepare', directory).stderr, sid).toContain('backend_required_permission_denied');
       }

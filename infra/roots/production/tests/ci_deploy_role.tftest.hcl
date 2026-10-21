@@ -380,6 +380,12 @@ run "saved_plan_preparation_is_read_only_except_existing_backend_locks" {
       && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "BackendState"] == [["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate"]]
       && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "BackendChecksum"] == [["dynamodb:GetItem"]]
       && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "BackendLockRow"] == [["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "BackendStateBucketKeyDecrypt"] == [["arn:aws:kms:us-east-1:326255650484:key/a321a083-4058-4130-b060-b950e4aa1404"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "BackendStateBucketKeyDecrypt"] == [["kms:Decrypt"]]
+      && [for statement in local.ci_plan_policy.Statement : statement.Condition if statement.Sid == "BackendStateBucketKeyDecrypt"] == [{ StringEquals = {
+        "kms:ViaService"                   = "s3.us-east-1.amazonaws.com"
+        "kms:EncryptionContext:aws:s3:arn" = "arn:aws:s3:::callie-sourcing-tfstate-326255650484"
+      } }]
       && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "BackendLockTableDecrypt"] == [["arn:aws:kms:us-east-1:326255650484:key/a321a083-4058-4130-b060-b950e4aa1404"]]
       && [for statement in local.ci_plan_policy.Statement : statement.Condition if statement.Sid == "BackendLockTableDecrypt"] == [{ StringEquals = {
         "kms:ViaService"                                  = "dynamodb.us-east-1.amazonaws.com"
@@ -410,7 +416,7 @@ run "planner_refreshes_only_observed_database_tags_and_digest_environment" {
   command = plan
   assert {
     condition = (
-      length(local.ci_plan_policy.Statement) == 18
+      length(local.ci_plan_policy.Statement) == 19
       && [for s in local.ci_plan_policy.Statement : s if s.Sid == "ReadProductionDatabaseGroupTags"] == [{
         Sid = "ReadProductionDatabaseGroupTags", Effect = "Allow", Action = ["rds:ListTagsForResource"], Resource = [
           "arn:aws:rds:us-east-1:326255650484:subgrp:fss-prod-db",
@@ -426,7 +432,7 @@ run "planner_refreshes_only_observed_database_tags_and_digest_environment" {
         } }
       }]
     )
-    error_message = "Refresh additions must be only exact RDS group tag reads and existing Lambda key Decrypt bound to its service and function context."
+    error_message = "Refresh grants remain exact RDS group tags and Lambda environment Decrypt, plus the separately asserted existing S3 bucket-key state read."
   }
 }
 
