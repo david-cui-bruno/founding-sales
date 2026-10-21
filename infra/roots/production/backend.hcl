@@ -4,9 +4,10 @@
 # created them once for the shared account; this root does not provision,
 # modify or grant access to them.
 #
-# Explicit SSE-S3/AES256 for state AND native locks: encrypt=true, no kms_key_id.
-# Use only -backend-config=backend.hcl. A KMS change requires a separately reviewed
-# exact key/caller contract, not an optional init flag. This is not live approval.
+# Future state/native-lock writes explicitly request SSE-S3/AES256: no kms_key_id.
+# Existing state is SSE-KMS with BucketKeyEnabled=true; planner reads use the exact
+# existing key and S3 bucket context, not an encryption/state rewrite.
+# Use only -backend-config=backend.hcl. No optional KMS override or live approval.
 #
 # Never point this root at the legacy sourcing key cloud/terraform.tfstate or
 # at the delegated-worker key cloud/delegated-worker/terraform.tfstate.

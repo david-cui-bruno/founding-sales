@@ -33,6 +33,55 @@ function syntheticBaseline() {
   return { roleArn: 'arn:aws:iam::326255650484:role/fss-prod-deploy', policyName: 'fss-prod-deploy-scope', lockKeyNamePrefix: null as string | null, maxSessionDuration: 3600, policy: JSON.parse(rendered.stdout) as Policy };
 }
 
+describe('planner existing S3 state bucket-key read contract', () => {
+  const bucket = 'arn:aws:s3:::callie-sourcing-tfstate-326255650484';
+  const stateDecrypt = (): Statement => ({ Sid: 'BackendStateBucketKeyDecrypt', Effect: 'Allow', Action: ['kms:Decrypt'], Resource: [KEY], Condition: { StringEquals: { 'kms:ViaService': 's3.us-east-1.amazonaws.com', 'kms:EncryptionContext:aws:s3:arn': bucket } } });
+
+  it('requires only the exact observed existing bucket-key read for prepare, never executor or local-plan', () => {
+    const value = policy('prepare');
+    expect(value.Statement.find(s => s.Sid === 'BackendStateBucketKeyDecrypt')).toEqual(stateDecrypt());
+    expect(check(value, 'prepare').status).toBe(0);
+    value.Statement = value.Statement.filter(s => s.Sid !== 'BackendStateBucketKeyDecrypt');
+    expect(check(value, 'prepare').stderr).toContain('backend_required_permission_denied');
+    for (const stage of ['execute', 'local-plan']) {
+      const other = policy(stage);
+      expect(other.Statement.some(s => s.Sid === 'BackendStateBucketKeyDecrypt')).toBe(false);
+      other.Statement.push(stateDecrypt());
+      expect(check(other, stage).stderr).toContain('backend_kms_permission_scope');
+    }
+  });
+
+  it.each([
+    ['wrong key', (s: Statement) => { s.Resource = [OTHER_KEY]; }],
+    ['wrong account', (s: Statement) => { s.Resource = [KEY.replace('326255650484', '123456789012')]; }],
+    ['wildcard key', (s: Statement) => { s.Resource = ['*']; }],
+    ['wrong bucket', (s: Statement) => { s.Condition!['StringEquals']!['kms:EncryptionContext:aws:s3:arn'] = `${bucket}-other`; }],
+    ['object context instead of bucket key', (s: Statement) => { s.Condition!['StringEquals']!['kms:EncryptionContext:aws:s3:arn'] = `${bucket}/fss/greenfield/production/terraform.tfstate`; }],
+    ['wrong region', (s: Statement) => { s.Condition!['StringEquals']!['kms:ViaService'] = 's3.us-west-2.amazonaws.com'; }],
+    ['wrong service', (s: Statement) => { s.Condition!['StringEquals']!['kms:ViaService'] = 'dynamodb.us-east-1.amazonaws.com'; }],
+    ['missing context', (s: Statement) => { delete s.Condition; }],
+    ['missing service', (s: Statement) => { delete s.Condition!['StringEquals']!['kms:ViaService']; }],
+    ['missing bucket', (s: Statement) => { delete s.Condition!['StringEquals']!['kms:EncryptionContext:aws:s3:arn']; }],
+    ['wildcard bucket', (s: Statement) => { s.Condition!['StringEquals']!['kms:EncryptionContext:aws:s3:arn'] = '*'; }],
+    ['StringLike', (s: Statement) => { s.Condition = { StringLike: s.Condition!['StringEquals']! }; }],
+    ['IfExists', (s: Statement) => { s.Condition = { StringEqualsIfExists: s.Condition!['StringEquals']! }; }],
+    ['wildcard actions', (s: Statement) => { s.Action = ['kms:*']; }],
+    ['Encrypt', (s: Statement) => { s.Action = ['kms:Decrypt', 'kms:Encrypt']; }],
+    ['GenerateDataKey', (s: Statement) => { s.Action = ['kms:Decrypt', 'kms:GenerateDataKey']; }],
+    ['CreateGrant', (s: Statement) => { s.Action = ['kms:CreateGrant']; }],
+  ] as const)('rejects %s even beside the exact required grant', (_name, mutate) => {
+    const value = policy('prepare'), extra = stateDecrypt(); mutate(extra); value.Statement.push(extra);
+    expect(check(value, 'prepare').stderr).toContain('backend_kms_permission_scope');
+  });
+
+  it('honors explicit bucket-key denial and leaves exact S3 state access unchanged', () => {
+    const value = policy('prepare');
+    expect(value.Statement.find(s => s.Sid === 'BackendState')).toEqual({ Sid: 'BackendState', Effect: 'Allow', Action: ['s3:GetObject'], Resource: [`${bucket}/fss/greenfield/production/terraform.tfstate`] });
+    value.Statement.push({ ...stateDecrypt(), Effect: 'Deny' });
+    expect(check(value, 'prepare').stderr).toContain('backend_required_permission_denied');
+  });
+});
+
 describe('ordinary backend CLI existing DynamoDB lock-table CMK contract', () => {
   const digestDecrypt = (): Statement => ({
     Sid: 'DecryptExistingProductionDigestEnvironment', Effect: 'Allow', Action: ['kms:Decrypt'],

@@ -10,6 +10,7 @@ export const LOCK = `${STATE}.tflock`;
 export const TABLE = `arn:aws:dynamodb:${REGION}:${ACCOUNT}:table/callie-sourcing-tflock`;
 export const LOCK_TABLE_KMS_KEY = `arn:aws:kms:${REGION}:${ACCOUNT}:key/a321a083-4058-4130-b060-b950e4aa1404`;
 const LOCK_KMS_CONTEXT = { 'kms:ViaService': `dynamodb.${REGION}.amazonaws.com`, 'kms:EncryptionContext:aws:dynamodb:tableName': 'callie-sourcing-tflock', 'kms:EncryptionContext:aws:dynamodb:subscriberId': ACCOUNT };
+const STATE_BUCKET_KMS_CONTEXT = { 'kms:ViaService': `s3.${REGION}.amazonaws.com`, 'kms:EncryptionContext:aws:s3:arn': `arn:aws:s3:::${BUCKET}` };
 const DIGEST_KMS_KEY = `arn:aws:kms:${REGION}:${ACCOUNT}:key/d9328328-4988-4608-9aa8-601d4af61073`;
 const DIGEST_KMS_CONTEXT = { 'kms:ViaService': `lambda.${REGION}.amazonaws.com`, 'kms:EncryptionContext:aws:lambda:FunctionArn': `arn:aws:lambda:${REGION}:${ACCOUNT}:function:fss-prod-alarm-digest` };
 const NAMESPACE_KMS_CONDITION = { StringLike: { 'aws:ResourceTag/NamePrefix': 'fss-prod*' } };
@@ -32,6 +33,7 @@ export function backendPolicy(stage) {
     allow('BackendTable', ['dynamodb:DescribeTable'], TABLE),
     allow('BackendLockRow', ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:DeleteItem'], TABLE, rows([ROW])),
     allow('BackendChecksum', apply ? ['dynamodb:GetItem', 'dynamodb:PutItem'] : ['dynamodb:GetItem'], TABLE, rows([`${ROW}-md5`])),
+    ...(stage === 'prepare' ? [allow('BackendStateBucketKeyDecrypt', ['kms:Decrypt'], LOCK_TABLE_KMS_KEY, { StringEquals: STATE_BUCKET_KMS_CONTEXT })] : []),
     allow('BackendLockTableDecrypt', ['kms:Decrypt'], LOCK_TABLE_KMS_KEY, { StringEquals: LOCK_KMS_CONTEXT }),
   ] };
 }
@@ -85,8 +87,10 @@ const namespaceKms = statement => same(statement.Condition, NAMESPACE_KMS_CONDIT
 const kmsDataActions = ['kms:Decrypt', 'kms:Encrypt', 'kms:GenerateDataKey', 'kms:GenerateDataKeyWithoutPlaintext', 'kms:GenerateDataKeyPair', 'kms:GenerateDataKeyPairWithoutPlaintext', 'kms:ReEncryptFrom', 'kms:ReEncryptTo', 'kms:CreateGrant'];
 const touchesKmsData = statement => statement.NotAction || list(statement.Action).some(pattern => kmsDataActions.some(action => matches(pattern, action, true)));
 
-function validateKmsScope(policy, { lockKeyNamePrefix } = {}) {
+function validateKmsScope(policy, { lockKeyNamePrefix } = {}, stage) {
   for (const statement of policy.Statement.filter(s => s.Effect === 'Allow' && touchesKmsData(s))) {
+    // Observed existing state uses this bucket key. Object reads remain separately scoped.
+    if (stage === 'prepare' && !statement.NotAction && !statement.NotResource && same(list(statement.Action), ['kms:Decrypt']) && same(list(statement.Resource), [LOCK_TABLE_KMS_KEY]) && same(statement.Condition, { StringEquals: STATE_BUCKET_KMS_CONTEXT })) continue;
     // This independent provider refresh grant cannot authorize the backend key.
     // Recognize only its exact existing key, action, service and function context.
     if (!statement.NotAction && !statement.NotResource && same(list(statement.Action), ['kms:Decrypt']) && same(list(statement.Resource), [DIGEST_KMS_KEY]) && same(statement.Condition, { StringEquals: DIGEST_KMS_CONTEXT })) continue;
@@ -111,7 +115,7 @@ function applies(statement, action, resource, context) {
   // validateKmsScope already required explicit nonproduction tag evidence for this
   // exact key before a preserved namespace-conditioned allow can be excluded.
   if (resource === LOCK_TABLE_KMS_KEY && statement.Effect === 'Allow' && namespaceKms(statement)) return false;
-  const supported = ['s3:prefix', 'dynamodb:LeadingKeys', ...Object.keys(LOCK_KMS_CONTEXT)];
+  const supported = ['s3:prefix', 'dynamodb:LeadingKeys', ...Object.keys(LOCK_KMS_CONTEXT), ...Object.keys(STATE_BUCKET_KMS_CONTEXT)];
   for (const [operator, entries] of Object.entries(statement.Condition || {})) {
     if (!['StringEquals', 'StringLike', 'ForAllValues:StringEquals'].includes(operator) || !entries || typeof entries !== 'object' || Array.isArray(entries)) fail('unsupported_relevant_condition');
     for (const [key, values] of Object.entries(entries)) if (!supported.includes(key) || !list(values).length || list(values).some(value => typeof value !== 'string')) fail('unsupported_relevant_condition');
@@ -146,7 +150,7 @@ export function validatePolicy(policy, stage, metadata = {}) {
       if (resource === `arn:aws:s3:::${BUCKET}` && !same(s.Condition, required.Condition)) fail('permission_scope');
     }
   }
-  validateKmsScope(policy, metadata);
+  validateKmsScope(policy, metadata, stage);
   const decision = (action, resource, context = {}) => {
     const applicable = policy.Statement.filter(s => applies(s, action, resource, context));
     return applicable.some(s => s.Effect === 'Allow') && !applicable.some(s => s.Effect === 'Deny');
@@ -164,6 +168,8 @@ export function validatePolicy(policy, stage, metadata = {}) {
   if (['s3:DeleteObject', 's3:DeleteObjectVersion'].some(action => decision(action, STATE)) || (stage !== 'execute' && decision('s3:PutObject', STATE)) || forbiddenChecksumMutation) fail('excess_state_permission');
   const wrongContexts = [{}, ...Object.keys(LOCK_KMS_CONTEXT).map(key => ({ ...LOCK_KMS_CONTEXT, [key]: 'outside-reviewed-lock-scope' }))];
   if (wrongContexts.some(context => decision('kms:Decrypt', LOCK_TABLE_KMS_KEY, context)) || kmsDataActions.filter(action => action !== 'kms:Decrypt').some(action => decision(action, LOCK_TABLE_KMS_KEY, LOCK_KMS_CONTEXT))) fail('excess_kms_permission');
+  const wrongBucketContexts = [{}, ...Object.keys(STATE_BUCKET_KMS_CONTEXT).map(key => ({ ...STATE_BUCKET_KMS_CONTEXT, [key]: 'outside-reviewed-state-bucket' }))];
+  if (wrongBucketContexts.some(context => decision('kms:Decrypt', LOCK_TABLE_KMS_KEY, context)) || kmsDataActions.filter(action => action !== 'kms:Decrypt').some(action => decision(action, LOCK_TABLE_KMS_KEY, STATE_BUCKET_KMS_CONTEXT))) fail('excess_kms_permission');
   return true;
 }
 
