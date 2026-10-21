@@ -1,3 +1,5 @@
+import {updateFirm} from '@fss/domain/crm/firms.ts';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {readFileSync} from 'node:fs';
 import {discoveryIntakeSaveInputSchema} from '@fss/contracts';
 import {randomUUID} from 'node:crypto';
@@ -36,6 +38,50 @@ async function prepareAndCreate(name:string,site:string){
  expect((await request('/crm/firms/add',admin,create)).body).toMatchObject({replayed:true,result:{firmId}});
  return {...r,firmId,linkCommand:envelope({discoveryCandidateId:r.id,expectedRevision:1,qualificationCandidateId,firmId})};
 }
+
+it('recovers an unknown ordinary creation by its original command while current source and owner still gate linking',async()=>{
+ const r=await prepareAndCreate('Synthetic recovery  normalized','HTTPS://recovery-current.example.test/');
+ // prepareAndCreate executes the real normal Add firm command and exact receipt replay.
+ // Losing the response does not require another create identity or a new Firm.
+ expect((await f.db.query('SELECT count(*)::int AS n FROM firms WHERE workspace_id=$1 AND id=$2',[f.alpha.workspaceId,r.firmId])).rows[0]).toEqual({n:1});
+ await f.db.query('UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2',[f.alpha.workspaceId,r.firmId,f.alpha.salesperson.userId]);
+ expect((await request(link,admin,r.linkCommand)).body).toMatchObject({reason:'firm_assigned_elsewhere'});
+ await f.db.query('UPDATE firms SET assigned_user_id=$3 WHERE workspace_id=$1 AND id=$2',[f.alpha.workspaceId,r.firmId,f.alpha.admin.userId]);
+ await f.db.query('DELETE FROM sourcing_candidate_discovery_origins WHERE workspace_id=$1 AND candidate_id=$2',[f.alpha.workspaceId,r.id]);
+ expect((await request(link,admin,{...r.linkCommand,commandId:randomUUID()})).body).toMatchObject({reason:'preparation_unavailable'});
+ expect((await request(researchRead,admin,{candidateId:r.id})).status).toBe(404);
+ expect((await request('/today',admin,undefined,'GET')).body).toMatchObject({cards:expect.arrayContaining([expect.objectContaining({firmId:r.firmId})])});
+});
+
+it('normalizes ordinary CRM storage while retaining exact raw and seed identity',async()=>{
+ const name='Synthetic  normalized\tmanagement',site='HTTPS://Normalized.example.test/services';
+ const r=await prepareAndCreate(name,site);
+ expect((await f.db.query('SELECT name,website FROM firms WHERE workspace_id=$1 AND id=$2',[f.alpha.workspaceId,r.firmId])).rows[0]).toEqual({name:'Synthetic normalized management',website:'https://Normalized.example.test/services'});
+ expect((await request(link,admin,r.linkCommand)).body).toMatchObject({status:'accepted',result:{firmId:r.firmId}});
+ expect((await request(researchRead,admin,{candidateId:r.id})).body).toMatchObject({firmId:r.firmId});
+ for(const candidateId of [r.id,r.linkCommand.qualificationCandidateId]){
+  const payload=(await f.db.query<{payload:{row?:{firmName:string;website:string};firmName?:string;website?:string}}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[f.alpha.workspaceId,candidateId])).rows[0]!.payload;
+  expect(payload.row??payload).toMatchObject({firmName:name,website:site});
+ }
+});
+
+it('refuses domain ambiguity after ordinary Firm edits on both link and current read',async()=>{
+ const r=await prepareAndCreate('Synthetic domain boundary','https://domain-boundary.example.test/');
+ const other=await request('/crm/firms/add',admin,envelope({firm:{name:'Different ordinary Firm',website:'https://different-domain.example.test/'}}));
+ expect(other.body).toMatchObject({status:'accepted'});
+ const otherId=(other.body as {result:{firmId:string}}).result.firmId;
+ const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db);
+ const edit=async(website:string)=>{expect(await updateFirm(ctx,{firmId:otherId,patch:{website}})).toMatchObject({ok:true});};
+ for(const website of ['https://www.domain-boundary.example.test/about','https://DOMAIN-BOUNDARY.example.test/path']){
+  await edit(website);
+  expect((await request(link,admin,{...r.linkCommand,commandId:randomUUID()})).body).toMatchObject({reason:'firm_identity_ambiguous'});
+ }
+ await edit('https://different-domain.example.test/');
+ expect((await request(link,admin,r.linkCommand)).body).toMatchObject({status:'accepted'});
+ await edit('https://WWW.DOMAIN-BOUNDARY.example.test/changed');
+ expect((await request(researchRead,admin,{candidateId:r.id})).status).toBe(404);
+ expect((await request(link,admin,r.linkCommand)).body).toMatchObject({replayed:true,reason:'research_firm_unavailable'});
+});
 
 it('links an ordinary owner research draft and reads actual Today without phone, zone or DNC prerequisites',async()=>{
  const r=await prepareAndCreate('Synthetic research draft','https://research-draft.example.test');

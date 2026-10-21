@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import {DraftsProvider,useDrafts} from '../src/renderer/app/drafts.tsx';
 import {afterEach,expect,it,vi} from 'vitest';
 import {cleanup,render,screen,fireEvent,waitFor,act} from '@testing-library/react';
 import {DiscoveryResearchDraft,type ResearchDraftPorts} from '../src/renderer/sourcing/DiscoveryResearchDraft.tsx';
@@ -11,6 +12,49 @@ const linked={discoveryCandidateId:id,qualificationCandidateId:legacy,firmId:id,
 const source={provider:'overture_places' as const,release:'fixture',recordId:'synthetic',retrievedAt:null,sourceUrl:'https://example.test/source'};
 const candidate:NonNullable<OperationOutput<'sourcing.discoveryList'>['view']>['candidates'][number]={id,status:'needs_review',revision:1,createdAt:'2026-10-21T00:00:00Z',payload:{kind:'discovery-v1',row:{source,observations:[source],firmName:'Synthetic retained name',website:'https://example.test/',locality:'Austin',region:'TX',sourceConfidence:null,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'unknown',probableGroupKey:null}},origins:[]};
 const ports=():ResearchDraftPorts=>({create:vi.fn(async()=>({result:{firmId:id,contactId:null,routeIds:[]},reason:null})),link:vi.fn(async()=>({result:linked,reason:null})),read:vi.fn(async()=>({view:null,reason:'not_found'}))});
+it('retains completed create identity across same-owner remount with exact raw command and disclosed CRM normalization',async()=>{
+ const p=ports(),name='Synthetic  name',website='HTTPS://Example.test/path';
+ const view=(show:boolean)=><DraftsProvider>{show?<DiscoveryResearchDraft prepared={prepared} name={name} website={website} enabled ports={p}/>:null}</DraftsProvider>;
+ const mounted=render(view(true));expect(screen.getByText(/existing best-effort research/)).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Confirm Add firm research draft'}));await screen.findByRole('button',{name:'Confirm link created research draft'});
+ expect(p.create).toHaveBeenCalledWith(expect.objectContaining({firm:{name,website}}));
+ mounted.rerender(view(false));mounted.rerender(view(true));
+ expect(screen.queryByRole('button',{name:'Confirm Add firm research draft'})).toBeNull();
+ fireEvent.click(screen.getByRole('button',{name:'Confirm link created research draft'}));await screen.findByRole('button',{name:'Open owner Today'});
+ expect(p.create).toHaveBeenCalledTimes(1);expect(p.link).toHaveBeenCalledWith(expect.objectContaining({firmId:id}));
+});
+
+function StoredIdentity(){const {values}=useDrafts();return <output data-testid="stored">{JSON.stringify(values)}</output>;}
+it('recovers unknown commit using same command after remount and fences late responses and owner changes',async()=>{
+ const p=ports();let resolve!:(value:OperationOutput<'sourcing.discoveryCreateResearchFirm'>)=>void;
+ const create=vi.fn<ResearchDraftPorts['create']>().mockImplementationOnce(()=>new Promise(done=>{resolve=done;})).mockResolvedValue({result:{firmId:id,contactId:null,routeIds:[]},reason:null});p.create=create;
+ const view=(show:boolean,owner='first')=><DraftsProvider key={owner}><StoredIdentity/>{show?<DiscoveryResearchDraft prepared={prepared} name="Private raw name" website="HTTPS://Private.example.test/" enabled ports={p}/>:null}</DraftsProvider>;
+ const mounted=render(view(true));fireEvent.click(screen.getByRole('button',{name:'Confirm Add firm research draft'}));
+ const original=create.mock.calls[0]![0];expect(screen.getByTestId('stored').textContent).not.toContain('Private');
+ mounted.rerender(view(false));await act(async()=>resolve({result:{firmId:id,contactId:null,routeIds:[]},reason:null}));mounted.rerender(view(true));
+ expect(screen.queryByRole('button',{name:'Confirm link created research draft'})).toBeNull();
+ fireEvent.click(screen.getByRole('button',{name:'Retry same research draft action'}));await screen.findByRole('button',{name:'Confirm link created research draft'});
+ expect(create.mock.calls[1]![0]).toEqual(original);
+ mounted.rerender(view(true,'second'));expect(screen.queryByRole('button',{name:'Confirm link created research draft'})).toBeNull();expect(screen.queryByRole('button',{name:'Retry same research draft action'})).toBeNull();expect(screen.getByTestId('stored').textContent).toBe('{}');
+});
+
+it('clears pending command identity on an owner change before a late result arrives',async()=>{
+ const p=ports();let resolve!:(value:OperationOutput<'sourcing.discoveryCreateResearchFirm'>)=>void;
+ p.create=()=>new Promise(done=>{resolve=done;});
+ const view=(owner:string)=><DraftsProvider key={owner}><StoredIdentity/><DiscoveryResearchDraft prepared={prepared} name="Synthetic" website="https://example.test/" enabled ports={p}/></DraftsProvider>;
+ const mounted=render(view('first'));fireEvent.click(screen.getByRole('button',{name:'Confirm Add firm research draft'}));mounted.rerender(view('second'));
+ await act(async()=>resolve({result:{firmId:id,contactId:null,routeIds:[]},reason:null}));
+ expect(screen.getByTestId('stored').textContent).toBe('{}');expect(screen.queryByRole('button',{name:'Retry same research draft action'})).toBeNull();expect(screen.queryByRole('button',{name:'Confirm link created research draft'})).toBeNull();
+});
+
+it('retains recovered Firm after source-loss refusal without silently binding or recreating',async()=>{
+ const p=ports();p.link=vi.fn(async()=>({result:null,reason:'preparation_unavailable'}));
+ const view=(show:boolean)=><DraftsProvider>{show?<DiscoveryResearchDraft prepared={prepared} name="Synthetic" website="https://example.test/" enabled ports={p}/>:null}</DraftsProvider>;
+ const mounted=render(view(true));fireEvent.click(screen.getByRole('button',{name:'Confirm Add firm research draft'}));await screen.findByRole('button',{name:'Confirm link created research draft'});
+ mounted.rerender(view(false));mounted.rerender(view(true));fireEvent.click(screen.getByRole('button',{name:'Confirm link created research draft'}));await screen.findByText(/Source link refused/);
+ expect(screen.queryByRole('button',{name:'Confirm Add firm research draft'})).toBeNull();expect(p.create).toHaveBeenCalledTimes(1);expect(screen.queryByRole('button',{name:'Open owner Today'})).toBeNull();
+});
+
 it('prefills exact raw identity and requires explicit ordinary preparation without inferred evidence',async()=>{
  const prepare=vi.fn<DiscoveryPrepare>().mockResolvedValue({result:prepared,reason:null});
  render(<DiscoveryPreparation candidate={candidate} enabled prepare={prepare}/>);expect(prepare).not.toHaveBeenCalled();
