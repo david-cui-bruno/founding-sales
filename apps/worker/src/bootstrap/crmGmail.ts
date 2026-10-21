@@ -33,12 +33,12 @@ export function createServerCrmGmailAccessResolver(options: AccessDeps & { openS
  * The resolver acquires one dedicated server session for each token exchange.
  * Defaults remain unavailable and this factory does not enable any database control.
  */
-export function composeCrmGmail(deps: CrmMailBackfillDeps): Pick<HandlerComposition, 'crmMailCapture' | 'crmMailBackfill'> {
+export function composeCrmGmail(deps: CrmMailBackfillDeps, forwardProvider?: ReturnType<typeof createGmailMailCaptureProvider>): Pick<HandlerComposition, 'crmMailCapture' | 'crmMailBackfill'> {
   return {
     crmMailBackfill: deps,
     crmMailCapture: {
       proofVerifier: deps.proofVerifier,
-      provider: createGmailMailCaptureProvider({...deps,authorizeRead:proof=>deps.proofVerifier.verify(proof)}),
+      provider: forwardProvider??createGmailMailCaptureProvider({...deps,authorizeRead:proof=>deps.proofVerifier.verify(proof)}),
       historicalProvider: createHistoricalGmailMailCaptureProvider(deps),
     },
   };

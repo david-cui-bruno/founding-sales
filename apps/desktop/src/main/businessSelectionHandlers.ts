@@ -1,0 +1,9 @@
+import { OPERATIONS, type OperationInput } from '../shared/operations.ts';
+import type { AuthedClient } from './authedClient.ts';
+/** Existing selection and rules bridge, extracted without changing its behavior. */
+export function businessSelectionHandlers(deps:{api:AuthedClient;generation():number}){return {
+ 'crm.businessSelectionRead':async(input:OperationInput<'crm.businessSelectionRead'>)=>{const generation=deps.generation();const answer=await deps.api.read('/crm/business/selection/read',value=>OPERATIONS['crm.businessSelectionRead'].output.parse(value),input);if(generation!==deps.generation())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+ 'crm.businessSelectionRequest':async(input:OperationInput<'crm.businessSelectionRequest'>)=>{const generation=deps.generation();const answer=await deps.api.command('/crm/business/selection/request',input,value=>OPERATIONS['crm.businessSelectionRequest'].output.parse(value));if(generation!==deps.generation())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+ 'crm.businessRulesRead':async(input:OperationInput<'crm.businessRulesRead'>)=>{const generation=deps.generation();const answer=await deps.api.read('/crm/business/rules/read',value=>OPERATIONS['crm.businessRulesRead'].output.parse(value),input);if(generation!==deps.generation())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+ 'crm.businessRuleSave':async(input:OperationInput<'crm.businessRuleSave'>)=>{const generation=deps.generation();const answer=await deps.api.command('/crm/business/rules/save',input,value=>OPERATIONS['crm.businessRuleSave'].output.parse(value));if(generation!==deps.generation())throw new Error('identity_changed');if(!answer.ok)throw new Error(answer.reason);return answer.value;},
+};}

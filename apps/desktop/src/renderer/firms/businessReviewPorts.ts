@@ -4,6 +4,7 @@ import type { BusinessReviewPorts } from './BusinessReview.tsx';
 function api() { const value = operations(); if (value === undefined)
   throw new Error('unavailable'); return value; }
 export const businessReviewPorts: BusinessReviewPorts = {
+ captureRecovery:{read:input=>api().read('crm.captureReadRecoveryRead',input),request:input=>api().command('crm.captureReadRecoveryRequest',input)},
  selectionStatus:async input=>api().read("crm.businessSelectionRead",input),
  selectMessage:async input=>api().command("crm.businessSelectionRequest",input),
  rules:async mailboxId=>api().read("crm.businessRulesRead",{mailboxId}),saveRule:async input=>api().command("crm.businessRuleSave",input),
