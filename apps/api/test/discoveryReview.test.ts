@@ -32,6 +32,20 @@ it('uses ordinary command replay/conflicting-payload handling, content dedupe an
   expect(receipt).toEqual({reviewId:saved,alreadyRecorded:false});expect(JSON.stringify(receipt)).not.toContain(input.evidence[0]!.blocks[0]!.text);
   expect((await request(listPath,admin,{status:'needs_review',offset:0,band:'review_first'})).body).toMatchObject({candidates:[{candidate:{id,revision:1},band:'review_first',admissionAuthorized:false,runtimeCallable:false}],hasMore:false});
 });
+it('supersession boundary refuses authenticated A/B/A rather than claiming a historical save applied',async()=>{
+  const id=await candidate(),a=discoveryHumanReview(id),first=envelope(a);
+  expect((await request(reviewPath,admin,first)).body).toMatchObject({status:'accepted'});
+  const b={...a,assessment:{...a.assessment,serviceSignal:'contradicted' as const}},second=await request(reviewPath,admin,envelope(b));
+  expect(second.body).toMatchObject({status:'accepted',result:{alreadyRecorded:false}});
+  const third=envelope(a),refusal=await request(reviewPath,admin,third);
+  expect(refusal.body).toMatchObject({status:'refused',reason:'review_superseded',replayed:false});
+  expect((await request(reviewPath,admin,third)).body).toMatchObject({status:'refused',reason:'review_superseded',replayed:true});
+  expect((await request(listPath,admin,{status:'needs_review',offset:0})).body).toMatchObject({candidates:[{band:'contradicted',review:{assessment:{serviceSignal:'contradicted'}}}]});
+  expect((await request(reviewPath,admin,envelope(b))).body).toMatchObject({status:'accepted',result:{alreadyRecorded:true}});
+  const receipts=await f.db.query<{result:unknown}>('SELECT result FROM command_receipts WHERE command_id=ANY($1::text[])',[ [first.commandId,third.commandId] ]);
+  expect(JSON.stringify(receipts.rows)).not.toContain(a.evidence[0]!.blocks[0]!.text);
+  expect((await f.db.query('SELECT count(*)::int n FROM sourcing_candidate_discovery_review_decisions')).rows[0]?.['n']).toBe(2);
+});
 it('never replays copied text after candidate deletion, revision change, dismissal or evidence expiry',async()=>{
   for(const change of ['delete','revision','dismiss','expiry'] as const){
     await f.db.query('DELETE FROM sourcing_candidates');const id=await candidate(),input=envelope(discoveryHumanReview(id));expect((await request(reviewPath,admin,input)).status).toBe(200);

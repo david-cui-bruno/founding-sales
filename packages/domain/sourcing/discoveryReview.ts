@@ -48,11 +48,16 @@ export async function recordDiscoveryReview(ctx:RepositoryContext,input:Discover
   const bounds=(await ctx.db.query<{evidence_bytes:number;assessment_bytes:number}>('SELECT octet_length(($1::jsonb)::text) evidence_bytes,octet_length(($2::jsonb)::text) assessment_bytes',[JSON.stringify(content.evidence),JSON.stringify(content.assessment)])).rows[0];
   if(!bounds||bounds.evidence_bytes>32768||bounds.assessment_bytes>8192)return refused('review_payload_too_large');
   const previous=(await ctx.db.query<DiscoveryReviewRow>(`SELECT * FROM sourcing_candidate_discovery_reviews WHERE workspace_id=$1 AND candidate_id=$2 AND candidate_revision=$3 AND review_version=$4 AND content_digest=$5`,[w,candidate.id,candidate.revision,value.reviewVersion,content.digest])).rows[0];
-  if(previous)return {ok:true,value:{review:discoveryReviewValue(previous),alreadyRecorded:true}};
+  if(previous){
+    const current=(await ctx.db.query<{review_id:string}>(`SELECT review_id FROM sourcing_candidate_discovery_review_decisions WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY reviewed_at DESC,review_id DESC LIMIT 1`,[w,candidate.id])).rows[0];
+    if(current?.review_id!==previous.id)return refused('review_superseded');
+    return {ok:true,value:{review:discoveryReviewValue(previous),alreadyRecorded:true}};
+  }
   const row=(await ctx.db.query<DiscoveryReviewRow>(`INSERT INTO sourcing_candidate_discovery_reviews
     (workspace_id,candidate_id,candidate_revision,review_version,evidence,assessment,content_digest,reviewed_by)
     VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8) RETURNING *`,[w,candidate.id,candidate.revision,value.reviewVersion,JSON.stringify(content.evidence),JSON.stringify(content.assessment),content.digest,ctx.scope.actor.userId])).rows[0];
   if(!row)throw Error('Discovery review insert returned no identity');
+  await ctx.db.query(`INSERT INTO sourcing_candidate_discovery_review_decisions(workspace_id,candidate_id,review_id,reviewed_at) VALUES($1,$2,$3,$4)`,[w,candidate.id,row.id,row.reviewed_at]);
   await recordCrmAuditEvent(ctx,{action:'sourcing.discovery_review_saved',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{reviewId:row.id,candidateRevision:candidate.revision}});
   return {ok:true,value:{review:discoveryReviewValue(row),alreadyRecorded:false}};
 }
@@ -69,14 +74,15 @@ export async function listUsefulDiscoveryCandidates(ctx:RepositoryContext,input:
   if(!decideAdminOnly(ctx).permitted)return refused('admin_only');
   const parsed=discoveryUsefulListInputSchema.safeParse(input);if(!parsed.success)return refused('invalid_input');
   const value=parsed.data;
-  // Latest review first, then visibility. An expired correction never revives older
-  // interpretations. One statement binds revision, origin membership, and evidence.
+  // Latest source-free decision first, then retained content and visibility. Erasing
+  // a correction cannot promote an earlier interpretation or its copied excerpts.
   const rows=(await ctx.db.query<Record<string,unknown>&{review:unknown}>(`WITH current_rows AS (
     SELECT c.id,c.status,c.revision,c.created_at,c.payload,
       (SELECT jsonb_agg(jsonb_build_object('source',o.source,'sourceMetadata',o.source_metadata,'licenses',o.licenses,'notices',o.notices) ORDER BY o.provider,o.release,o.record_id)
        FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=c.workspace_id AND o.candidate_id=c.id) origins,
       CASE WHEN (${DISCOVERY_REVIEW_VISIBLE_SQL}) THEN jsonb_build_object('id',r.id,'candidateId',r.candidate_id,'candidateRevision',r.candidate_revision,'reviewVersion',r.review_version,'contentDigest',r.content_digest,'evidence',r.evidence,'assessment',r.assessment,'reviewedAt',r.reviewed_at) ELSE NULL END review
-    FROM sourcing_candidates c LEFT JOIN LATERAL(SELECT r.* FROM sourcing_candidate_discovery_reviews r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY r.reviewed_at DESC,r.id DESC LIMIT 1) r ON true
+    FROM sourcing_candidates c LEFT JOIN LATERAL(SELECT d.review_id FROM sourcing_candidate_discovery_review_decisions d WHERE d.workspace_id=c.workspace_id AND d.candidate_id=c.id ORDER BY d.reviewed_at DESC,d.review_id DESC LIMIT 1) d ON true
+    LEFT JOIN sourcing_candidate_discovery_reviews r ON r.workspace_id=c.workspace_id AND r.candidate_id=c.id AND r.id=d.review_id
     WHERE c.workspace_id=$1 AND c.status=$2 AND c.payload->>'kind'='discovery-v1'
   ), ranked AS (SELECT *,CASE
     WHEN review IS NULL OR jsonb_array_length(review->'evidence')=0 OR review->'assessment'->>'serviceSignal'='unknown' THEN 'unreviewed'

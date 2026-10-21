@@ -55,6 +55,42 @@ it('deduplicates canonical content across fresh commands and concurrent sessions
   expect((await database.session.query('SELECT count(*)::int n FROM sourcing_candidate_discovery_reviews')).rows[0]?.['n']).toBe(2);
   expect((await useful()).candidates[0]?.band).toBe('tentative');
 });
+it('supersession boundary refuses A/B/A while retaining canonical current dedupe',async()=>{
+  const id=await create(),a=discoveryHumanReview(id),first=await record(a);if(!first.ok)throw Error(first.reason);
+  const b={...a,assessment:{...a.assessment,serviceSignal:'contradicted' as const}},second=await record(b);if(!second.ok)throw Error(second.reason);
+  expect(await record(a)).toEqual({ok:false,reason:'review_superseded'});
+  expect(await record(b)).toMatchObject({ok:true,value:{alreadyRecorded:true,review:{id:second.value.review.id}}});
+  expect((await useful()).candidates[0]).toMatchObject({band:'contradicted',review:{id:second.value.review.id}});
+  expect((await runtime.query('SELECT count(*)::int n FROM sourcing_candidate_discovery_review_decisions')).rows[0]?.['n']).toBe(2);
+});
+it('supersession boundary survives differential current expiry and bounded post-sweep erasure',async()=>{
+  const id=await create(),a=discoveryHumanReview(id),first=await record(a);if(!first.ok)throw Error(first.reason);
+  const b=structuredClone(a);b.assessment.serviceSignal='contradicted';b.evidence[0]!.retrievedAt=new Date(Date.now()-7*86400000+60000).toISOString();
+  const second=await record(b);if(!second.ok)throw Error(second.reason);
+  expect((await useful()).candidates[0]?.band).toBe('contradicted');
+  await database.session.query("UPDATE sourcing_candidate_discovery_reviews SET evidence=jsonb_set(evidence,'{0,retrievedAt}',to_jsonb((now()-interval '7 days')::text)) WHERE id=$1",[second.value.review.id]);
+  expect((await useful()).candidates[0]).toMatchObject({review:null,band:'unreviewed'});
+  expect(await withTransaction(runtime,()=>sweepDiscoveryReviews(context(),{now:new Date().toISOString(),limit:1}))).toBe(1);
+  expect((await useful()).candidates[0]).toMatchObject({review:null,band:'unreviewed'});
+  expect(await readVisibleDiscoveryReview(context(),second.value.review.id)).toBeNull();
+  expect((await runtime.query('SELECT id FROM sourcing_candidate_discovery_reviews')).rows).toEqual([{id:first.value.review.id}]);
+  expect(await record(a)).toEqual({ok:false,reason:'review_superseded'});
+});
+it('supersession boundary survives selective source loss without retaining erased content',async()=>{
+  const id=await create(),a=discoveryHumanReview(id),first=await record(a);if(!first.ok)throw Error(first.reason);
+  const b=structuredClone(a);b.assessment.serviceSignal='contradicted';b.evidence[0]!.url='https://example.test/correction';
+  const second=await record(b);if(!second.ok)throw Error(second.reason);
+  expect(await withTransaction(runtime,()=>eraseDiscoveryReviewsForSources(context(),[b.evidence[0]!.url]))).toBe(1);
+  expect((await useful()).candidates[0]).toMatchObject({review:null,band:'unreviewed'});
+  expect(await readVisibleDiscoveryReview(context(),second.value.review.id)).toBeNull();
+  expect((await runtime.query('SELECT id FROM sourcing_candidate_discovery_reviews')).rows).toEqual([{id:first.value.review.id}]);
+  const columns=await runtime.query<{column_name:string}>("SELECT column_name FROM information_schema.columns WHERE table_name='sourcing_candidate_discovery_review_decisions' ORDER BY ordinal_position");
+  expect(columns.rows.map(row=>row.column_name)).toEqual(['workspace_id','candidate_id','review_id','reviewed_at']);
+  await expect(runtime.query('UPDATE sourcing_candidate_discovery_review_decisions SET review_id=review_id')).rejects.toMatchObject({code:'42501'});
+  await expect(runtime.query('DELETE FROM sourcing_candidate_discovery_review_decisions')).rejects.toMatchObject({code:'42501'});
+  await withTransaction(runtime,()=>deleteCandidate(context(),{id,expectedRevision:1}));
+  expect((await runtime.query('SELECT count(*)::int n FROM sourcing_candidate_discovery_review_decisions')).rows[0]?.['n']).toBe(0);
+});
 it('checks admin/workspace/current revision/status/origin before writes and rejects duplicate or conflicting page claims',async()=>{
   const id=await create(),input=discoveryHumanReview(id);
   expect(await recordDiscoveryReview(context('alpha','salesperson'),input)).toMatchObject({ok:false,reason:'admin_only'});

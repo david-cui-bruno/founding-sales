@@ -1,4 +1,4 @@
--- changes: sourcing_candidate_discovery_reviews
+-- changes: sourcing_candidate_discovery_reviews, sourcing_candidate_discovery_review_decisions
 -- Human-reviewed service signals only. No qualification, admission or outreach authority.
 CREATE TABLE sourcing_candidate_discovery_reviews (
   workspace_id uuid NOT NULL,
@@ -34,3 +34,17 @@ CREATE INDEX sourcing_discovery_reviews_current
   ON sourcing_candidate_discovery_reviews(workspace_id,candidate_id,candidate_revision,reviewed_at DESC,id DESC);
 -- Append-only. Candidate deletion erases excerpts. No independent evidence cache.
 GRANT SELECT,INSERT,DELETE ON sourcing_candidate_discovery_reviews TO app_runtime,migration;
+
+-- Source-free supersession identities survive copied-content erasure. Deliberately
+-- no FK to review content: removing an excerpt must not remove its decision boundary.
+CREATE TABLE sourcing_candidate_discovery_review_decisions (
+  workspace_id uuid NOT NULL,
+  candidate_id uuid NOT NULL,
+  review_id uuid NOT NULL,
+  reviewed_at timestamptz NOT NULL,
+  PRIMARY KEY (workspace_id,review_id),
+  FOREIGN KEY (workspace_id,candidate_id) REFERENCES sourcing_candidates(workspace_id,id) ON DELETE CASCADE
+);
+CREATE INDEX sourcing_discovery_review_decisions_current
+  ON sourcing_candidate_discovery_review_decisions(workspace_id,candidate_id,reviewed_at DESC,review_id DESC);
+GRANT SELECT,INSERT ON sourcing_candidate_discovery_review_decisions TO app_runtime,migration;
