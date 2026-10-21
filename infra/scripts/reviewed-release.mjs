@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { validateConfiguration, backendPolicy, validatePolicy, proposeExistingPolicy, stageMapping } from './release-backend-contract.mjs';
+import { createReleaseSafety, validateOff } from './release-safety.mjs';
 const [mode, ...args] = process.argv.slice(2);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
@@ -32,7 +33,9 @@ function gate() {
 function phase(name, action, write = false) {
   status.phase = name; status.outcome = 'started'; save();
   if (write) { gate(); status.writesStarted = true; save(); }
-  const result = action(); status.outcome = 'completed'; save(); return result;
+  const result = action();
+  const completed = value => { status.outcome = 'completed'; save(); return value; };
+  return result && typeof result.then === 'function' ? result.then(completed) : completed(result);
 }
 function identity(kind) {
   const value = aws(['sts', 'get-caller-identity']);
@@ -55,6 +58,44 @@ function backupReadiness() {
   const instance = aws(['rds', 'describe-db-instances', '--db-instance-identifier', 'fss-prod-pg']).DBInstances?.[0];
   if (instance?.DBInstanceIdentifier !== 'fss-prod-pg' || instance.DBInstanceStatus !== 'available' || instance.BackupRetentionPeriod !== 35 || typeof instance.LatestRestorableTime !== 'string' || !Number.isFinite(Date.parse(instance.LatestRestorableTime))) throw new Error('reviewed_backup_unavailable');
   return { retentionDays: instance.BackupRetentionPeriod, earliestRestorableTime: null, latestRestorableTime: instance.LatestRestorableTime, restoreTested: false };
+}
+function reviewedSafety(configuration, baseline) {
+  const cluster = 'arn:aws:ecs:us-east-1:326255650484:cluster/fss-prod-cluster';
+  const database = aws(['rds', 'describe-db-instances', '--db-instance-identifier', 'fss-prod-pg']).DBInstances?.[0];
+  if (database?.DBInstanceArn !== 'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg' || !database.DbiResourceId || !database.Endpoint?.Address || database.DBInstanceStatus !== 'available' || database.BackupRetentionPeriod !== 35) throw new Error('database_binding_changed');
+  const services = aws(['ecs', 'describe-services', '--cluster', cluster, '--services', 'fss-prod-api', 'fss-prod-worker']);
+  const worker = services.services?.find(s => s.serviceName === 'fss-prod-worker');
+  const network = worker?.networkConfiguration?.awsvpcConfiguration;
+  const subnets = process.env.TASK_SUBNETS?.split(',');
+  const validSubnet = value => /^subnet-[0-9a-f]{8}([0-9a-f]{9})?$/u.test(value || '');
+  if (services.failures?.length || services.services?.length !== 2 || worker?.taskDefinition !== baseline.bindings.workerTaskDefinition || !Array.isArray(subnets) || subnets.length !== 2 || !subnets.every(validSubnet) || new Set(subnets).size !== 2 || !/^sg-[0-9a-f]{8}([0-9a-f]{9})?$/u.test(process.env.TASK_SECURITY_GROUP || '') || network?.assignPublicIp !== 'ENABLED' || network.securityGroups?.length !== 1 || network.securityGroups[0] !== process.env.TASK_SECURITY_GROUP || !Array.isArray(network.subnets) || network.subnets.length !== 2 || [...network.subnets].sort().join() !== [...subnets].sort().join()) throw new Error('network_binding_changed');
+  const group = aws(['ec2', 'describe-security-groups', '--group-ids', network.securityGroups[0]]).SecurityGroups;
+  if (group?.length !== 1 || group[0].GroupId !== network.securityGroups[0] || group[0].GroupName !== 'fss-prod-worker-task' || group[0].IpPermissions?.length !== 0) throw new Error('network_group_binding_changed');
+  const readDefinition = arn => aws(['ecs', 'describe-task-definition', '--task-definition', arn, '--include', 'TAGS']);
+  const value = (d, name) => d?.containerDefinitions?.[0]?.environment?.find(e => e.name === name)?.value;
+  const runtime = d => d?.containerDefinitions?.[0]?.secrets?.find(e => e.name === 'DATABASE_SECRET_ARN')?.valueFrom;
+  const workerDefinition = readDefinition(baseline.bindings.workerTaskDefinition).taskDefinition;
+  const apiDefinition = readDefinition(baseline.bindings.apiTaskDefinition).taskDefinition;
+  const runtimeSecret = runtime(workerDefinition);
+  if (!runtimeSecret?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-') || runtime(apiDefinition) !== runtimeSecret || value(workerDefinition, 'FSS_DATABASE_HOST') !== database.Endpoint.Address || value(apiDefinition, 'FSS_DATABASE_HOST') !== database.Endpoint.Address) throw new Error('baseline_binding_incompatible');
+  function source(plan, image) {
+    const response = readDefinition(plan.operations_task_definition), d = response.taskDefinition, c = d?.containerDefinitions?.[0];
+    if (!/^arn:aws:ecs:us-east-1:326255650484:task-definition\/fss-prod-operations:[1-9][0-9]*$/u.test(plan.operations_task_definition || '') || d?.taskDefinitionArn !== plan.operations_task_definition || d.status !== 'ACTIVE' || d.family !== 'fss-prod-operations' || d.containerDefinitions?.length !== 1 || c?.name !== 'operations' || c.image !== image || !/^326255650484\.dkr\.ecr\.us-east-1\.amazonaws\.com\/fss-prod-worker@sha256:[0-9a-f]{64}$/u.test(image || '') || d.taskRoleArn !== 'arn:aws:iam::326255650484:role/fss-prod-worker-task' || d.executionRoleArn !== 'arn:aws:iam::326255650484:role/fss-prod-worker-exec' || !response.tags?.some(t => t.key === 'NamePrefix' && t.value === 'fss-prod') || value(d, 'FSS_DATABASE_HOST') !== database.Endpoint.Address || runtime(d) !== runtimeSecret || c.secrets?.filter(e => ['DATABASE_SECRET_ARN', 'MIGRATION_DATABASE_SECRET', 'FSS_RUNTIME_DATABASE_SECRET_ARN'].includes(e.name)).length !== 1 || c.environment?.some(e => /SECRET|DATABASE_URL|PASSWORD/u.test(e.name)) || c.logConfiguration?.options?.['awslogs-group'] !== '/fss/fss-prod/worker' || c.logConfiguration?.options?.['awslogs-stream-prefix'] !== 'operations') throw new Error('off_reader_binding_changed');
+    return { definition: d, tags: response.tags };
+  }
+  const initialSource = source(configuration, workerDefinition.containerDefinitions[0].image);
+  const safety = createReleaseSafety({
+    aws: async (service, action, args = [], write = false) => {
+      if (write) { gate(); status.writesStarted = true; save(); }
+      return aws([service, action, ...args]);
+    },
+    async waitFor(check, reason, attempts = 60) {
+      for (let n = 0; n < attempts; n++) { if (await check()) return; if (n + 1 < attempts) await new Promise(done => setTimeout(done, 15000)); }
+      throw new Error(reason);
+    },
+    now: () => Date.now(), state: status, save, cluster, network, owner: `fss-reviewed-${process.env.GITHUB_RUN_ID}`,
+  });
+  return { ...safety, database, initialSource, source };
 }
 function imageDocument(file) {
   const value = read(file);
@@ -137,15 +178,32 @@ try {
     const configuration = JSON.parse(terraform(['output', '-json', 'deployment_plan'], 'reviewed_current_plan_unavailable'));
     const workerDefinition = aws(['ecs', 'describe-task-definition', '--task-definition', baseline.bindings.workerTaskDefinition]).taskDefinition;
     if (workerDefinition.containerDefinitions?.[0]?.environment?.find(entry => entry.name === 'FSS_SENDING_ENABLED')?.value === 'true') recordArgs.push('--enables-sending');
+    const safety = reviewedSafety(configuration, baseline);
+    await phase('observe-stored-off', () => safety.off(safety.initialSource, manifest.fromSchema));
     phase('build-release-record', () => script('record.sh', recordArgs));
-    phase('store-release-record', () => script('record.sh', ['put', 'infra/roots/production', 'fss-prod', '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker, '--release-record', record]), true);
+    phase('store-release-record', () => {
+      validateOff(status.off, manifest.fromSchema, Date.now(), status.settingVersions);
+      return script('record.sh', ['put', 'infra/roots/production', 'fss-prod', '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker, '--release-record', record]);
+    }, true);
     phase('promote', () => script('images.sh', ['promote', digestsFile, '--gate-run-id', process.env.GATE_RUN_ID]), true);
     const schemaChange = manifest.toSchema !== manifest.fromSchema;
-    if (schemaChange) phase('drain-idle-stop', () => script('stop.sh', ['infra/roots/production', 'fss-prod', '--environment', 'production', '--worker-digest', manifest.digests.worker]), true);
+    if (schemaChange) {
+      phase('drain-idle-stop', () => script('stop.sh', ['infra/roots/production', 'fss-prod', '--environment', 'production', '--worker-digest', manifest.digests.worker]), true);
+      await phase('post-stop-off', () => safety.off(safety.initialSource, manifest.fromSchema));
+      await safety.quiescent();
+      status.quiescedAt = new Date().toISOString(); save();
+      await phase('recovery-pinned', () => safety.pinRecovery(safety.database, Date.parse(status.quiescedAt)));
+      await safety.quiescent();
+    }
     // Terraform itself rejects a changed state serial; exact encrypted saved bytes are applied.
     phase('apply-saved-plan', () => terraform(['apply', '-input=false', '-no-color', plan], 'reviewed_apply_unknown'), true);
+    const applied = JSON.parse(terraform(['output', '-json', 'deployment_plan'], 'reviewed_current_plan_unavailable'));
+    const candidateSource = safety.source(applied, `${process.env.FSS_PRODUCTION_ACCOUNT_ID || '326255650484'}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${manifest.digests.worker}`);
+    await phase('pre-migrate-off', () => safety.off(candidateSource, manifest.fromSchema));
+    if (schemaChange) await safety.quiescent();
     phase('migrate-verify-restart', () => script('deploy.sh', ['release', 'infra/roots/production', 'fss-prod', ...(schemaChange ? ['--schema-change'] : []), '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker]), true);
     status.schema = manifest.toSchema; save();
+    await phase('post-restart-off', () => safety.off(candidateSource, manifest.toSchema));
     phase('release-record-readback', () => script('record.sh', ['read-back', 'infra/roots/production', 'fss-prod', '--api-digest', manifest.digests.api, '--worker-digest', manifest.digests.worker, '--release-record', record]), true);
     phase('smoke', () => {
       const age = /^canary_age=([0-9.]+)$/mu.exec(script('deploy.sh', ['ci', 'canary']))?.[1]; if (!age) throw new Error('reviewed_canary_unavailable');

@@ -120,6 +120,28 @@ else {console.error('Unexpected GitHub command');process.exit(1);}`);
 }
 
 describe('reviewed workflow preparation provenance', () => {
+  it('retains pinned recovery, aggregate OFF and owned task identities in the existing always-summary', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'reviewed-summary-'));
+    try {
+      const reviewed = job('reviewed');
+      const step = reviewed.split('      - name: Actual reviewed release result and repair state\n')[1];
+      expect(step).toContain('if: always()');
+      const body = step?.split('        run: |\n')[1]?.split('\n').map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n');
+      expect(body).toBeTruthy();
+      mkdirSync(join(directory, 'reviewed-apply'));
+      const state = { phase: 'pre-migrate-off', outcome: 'repair-required', writesStarted: true, schema: 124,
+        quiescedAt: '2026-10-21T09:30:00Z', recoveryPoint: { timestamp: '2026-10-21T09:30:00Z', restoreTested: false },
+        off: { storedOff: true, effectiveOff: true, finishing: 0, schema: 124, versions: [4] },
+        currentTaskArn: 'owned-task', currentTaskOwner: 'owned-run', temporaryReaderDefinition: 'owned-reader', privateBusinessBody: 'must-not-leave-status' };
+      writeFileSync(join(directory, 'reviewed-apply/status.json'), JSON.stringify(state));
+      const summary = join(directory, 'summary');
+      const result = spawnSync('bash', ['-eu', '-c', body!], { encoding: 'utf8', env: { ...process.env, RUNNER_TEMP: directory, GITHUB_STEP_SUMMARY: summary } });
+      expect(result.status, result.stderr).toBe(0);
+      const output = readFileSync(summary, 'utf8');
+      expect(JSON.parse(output)).toMatchObject({ quiescedAt: state.quiescedAt, recoveryPoint: state.recoveryPoint, off: state.off, currentTaskArn: 'owned-task', currentTaskOwner: 'owned-run', temporaryReaderDefinition: 'owned-reader' });
+      expect(output).not.toContain('must-not-leave-status');
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
   it('accepts the same main dispatch definition with older exact source images after a docs-only main update', () => {
     const result = verify();
     expect(result.status, result.stderr).toBe(0);
