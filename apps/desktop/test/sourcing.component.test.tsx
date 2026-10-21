@@ -5,10 +5,11 @@ import {Candidates,useCandidateReviewVisibility,type CandidatePorts} from '../sr
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
 import type {SourcingCandidate} from '@fss/contracts';
 afterEach(cleanup);
+const emptyRaw=async()=>({view:{candidates:[],hasMore:false},reason:null});
 it('a newer child queue acknowledgement invalidates an earlier parent visibility read',async()=>{
  let finish!:(value:Awaited<ReturnType<CandidatePorts['list']>>)=>void;
  const list=vi.fn<CandidatePorts['list']>(()=>new Promise(resolve=>{finish=resolve;}));
- const {result}=renderHook(()=>useCandidateReviewVisibility(true,'one',0,list));
+ const {result}=renderHook(()=>useCandidateReviewVisibility(true,'one',0,list,emptyRaw));
  act(()=>result.current.onReviewEmpty(false));
  await act(async()=>finish({view:{candidates:[],hasMore:false},reason:null}));
  expect(result.current.visible).toBe(true);
@@ -25,7 +26,7 @@ it('an externally emptied later page cannot hide an earlier unclear queue',async
 });
 it('hides only an authoritative zero unclear queue and preserves visibility on errors or more pages',async()=>{
  const list=vi.fn<CandidatePorts['list']>().mockResolvedValueOnce({view:{candidates:[],hasMore:false},reason:null}).mockResolvedValueOnce({view:{candidates:[],hasMore:true},reason:null}).mockRejectedValueOnce(new Error('offline'));
- const {result}=renderHook(()=>useCandidateReviewVisibility(true,'session-one',0,list));
+ const {result}=renderHook(()=>useCandidateReviewVisibility(true,'session-one',0,list,emptyRaw));
  await waitFor(()=>expect(result.current.visible).toBe(false));
  act(()=>window.dispatchEvent(new Event('focus')));await waitFor(()=>expect(result.current.visible).toBe(true));
  act(()=>result.current.onReviewEmpty(true));act(()=>window.dispatchEvent(new Event('focus')));await waitFor(()=>expect(result.current.visible).toBe(true));
@@ -34,7 +35,7 @@ it('hides only an authoritative zero unclear queue and preserves visibility on e
 it('ignores stale concurrent and prior-session queue reads',async()=>{
  const pending:Array<(value:Awaited<ReturnType<CandidatePorts['list']>>)=>void>=[];
  const list=vi.fn<CandidatePorts['list']>(()=>new Promise(resolve=>pending.push(resolve)));
- const {result,rerender}=renderHook(({key})=>useCandidateReviewVisibility(true,key,0,list),{initialProps:{key:'one'}});
+ const {result,rerender}=renderHook(({key})=>useCandidateReviewVisibility(true,key,0,list,emptyRaw),{initialProps:{key:'one'}});
  act(()=>window.dispatchEvent(new Event('focus')));
  await act(async()=>pending[1]!({view:{candidates:[candidate],hasMore:false},reason:null}));
  await act(async()=>pending[0]!({view:{candidates:[],hasMore:false},reason:null}));expect(result.current.visible).toBe(true);
@@ -83,7 +84,7 @@ it('retries an uncertain save with the same command and prevents double submissi
 it('shows a failed read instead of an empty queue and retries; paginates',async()=>{
  const p=ports();p.list=vi.fn().mockResolvedValueOnce({view:null,reason:'http_503'}).mockResolvedValue({view:{candidates:[candidate],hasMore:true},reason:null});
  render(<DraftsProvider><Candidates ports={p}/></DraftsProvider>);
- expect(await screen.findByText(/could not load/)).toBeTruthy();expect(screen.queryByText('No candidates in this view.')).toBeNull();
+ expect(await screen.findByText('Candidates could not load. Your saved research has not been cleared.')).toBeTruthy();expect(screen.queryByText('No candidates in this view.')).toBeNull();
  fireEvent.click(screen.getByRole('button',{name:'Retry loading'}));await screen.findByText(candidate.evidence);
  fireEvent.click(screen.getByRole('button',{name:'Next page'}));await waitFor(()=>expect(p.list).toHaveBeenLastCalledWith({status:'needs_review',offset:50}));
 });

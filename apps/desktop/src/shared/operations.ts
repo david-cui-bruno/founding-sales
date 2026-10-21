@@ -56,7 +56,8 @@ import {meetingQualificationViewSchema,saveMeetingQualificationSchema} from '@fs
 import {firmQualificationReadSchema} from '@fss/contracts';
 import {sourcingFeedbackSchema,sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationReadSchema, qualificationViewSchema, qualificationRequestSchema, qualificationQueuedSchema, qualificationAdmissionSchema, qualificationAdmittedSchema } from '@fss/contracts';
-import { candidateInputSchema, candidateListInputSchema, candidateListSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
+import {sourcingCandidateReadOperations} from './sourcingCandidateReadOperations.ts';
+import { candidateInputSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
 import { MEETING_FOLLOW_THROUGH_OPERATIONS } from './meetingFollowThroughOperations.ts';
 import { z } from 'zod';
@@ -972,12 +973,7 @@ export const OPERATIONS = {
     output: z.object({result:qualificationAdmittedSchema.nullable(),reason:z.string().nullable()}),
     transform: 'Explicit reviewed admission without starting outreach',
   },
-  'sourcing.list': {
-    kind: 'read', calls: [{method:'POST',path:'/sourcing/candidates/list'}],
-    input: candidateListInputSchema,
-    output: z.object({view:candidateListSchema.nullable(),reason:z.string().nullable()}),
-    transform: 'workspace-scoped candidate drafts; source evidence remains unverified',
-  },
+  ...sourcingCandidateReadOperations,
   'sourcing.save': {
     kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/save'}],
     input: candidateInputSchema.extend({commandId:uuid}),

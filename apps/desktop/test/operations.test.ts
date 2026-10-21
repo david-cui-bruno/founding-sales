@@ -1,4 +1,5 @@
 import {mailImportHealth} from './support/mailImportFixture.ts';
+import {createAuthedClient} from '../src/main/authedClient.ts';
 import { describe, expect, it, vi } from 'vitest';
 import {
   answerOperation,
@@ -360,6 +361,32 @@ it('sourcing rejects a late read after the workspace identity changes', async ()
   generation = 1;
   finish({ok:true,value:{candidates:[],hasMore:false}});
   expect(await pending).toEqual({view:null,reason:'not_found'});
+});
+it('discovery is a schema-validated read-only host operation with no command receipt',async()=>{
+ const h=hosts(),seen:Array<{path:string;method:string;body:unknown}>=[];
+ h.api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:'1.0.13',accessToken:async()=>({token:'example',generation:0}),send:async(url,init)=>{
+  seen.push({path:new URL(url).pathname,method:init.method,body:JSON.parse(init.body??'{}')});
+  return {status:200,body:{candidates:[],hasMore:false}};
+ }});
+ const handlers=operationHandlers(h);
+ expect(await answerOperation(handlers,'read','sourcing.discoveryList',{status:'kept',offset:50})).toEqual({view:{candidates:[],hasMore:false},reason:null});
+ expect(seen).toEqual([{path:'/sourcing/candidates/discovery/list-v1',method:'POST',body:{status:'kept',offset:50}}]);
+ await expect(answerOperation(handlers,'command','sourcing.discoveryList',{status:'kept',offset:50})).rejects.toThrow();
+ await expect(answerOperation(handlers,'read','sourcing.discoveryList',{status:'kept',offset:-1})).rejects.toThrow();
+ expect(seen).toHaveLength(1);
+});
+it('discovery drops a previous owner response, preserves refusals and does not treat malformed data as empty',async()=>{
+ const h=hosts();let generation=0;h.recordings.identity.current=()=>generation;
+ let finish!:(value:unknown)=>void;
+ h.api.read=vi.fn(()=>new Promise(resolve=>{finish=resolve;})) as AuthedClient['read'];
+ const pending=answerOperation(operationHandlers(h),'read','sourcing.discoveryList',{status:'needs_review',offset:0});
+ generation++;finish({ok:true,value:{candidates:[],hasMore:false}});
+ expect(await pending).toEqual({view:null,reason:'session_changed'});
+ h.api.read=vi.fn().mockResolvedValue({ok:false,reason:'forbidden'});
+ expect(await answerOperation(operationHandlers(h),'read','sourcing.discoveryList',{status:'needs_review',offset:0})).toEqual({view:null,reason:'forbidden'});
+ h.api=createAuthedClient({baseUrl:'https://api.example.test',clientVersion:'1.0.13',accessToken:async()=>({token:'example',generation}),send:async()=>({status:200,body:{candidates:[{unexpected:'raw body'}],hasMore:false}})});
+ const malformed=await answerOperation(operationHandlers(h),'read','sourcing.discoveryList',{status:'needs_review',offset:0});
+ expect(malformed).toEqual(expect.objectContaining({view:null}));
 });
 it('sourcing preserves the supplied command ID and validates evidence before reaching the API', async () => {
   const h = hosts();
