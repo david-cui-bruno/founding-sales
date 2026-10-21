@@ -11,12 +11,12 @@ export const discoveryList:DiscoveryList=async input=>{
 const statuses={needs_review:'Needs review',kept:'Kept',dismissed:'Dismissed'} as const;
 
 /** Session-local read state. Source strings are rendered as text, never links or HTML. */
-export function DiscoveryCandidates({list=discoveryList,enabled=true,privacyKey=''}:{list?:DiscoveryList;enabled?:boolean;privacyKey?:string}):JSX.Element {
+export function DiscoveryCandidates({list=discoveryList,enabled=true,privacyKey='',onObserved}:{list?:DiscoveryList;enabled?:boolean;privacyKey?:string;onObserved?:(()=>void)|undefined}):JSX.Element {
   const epoch=useSessionEpoch();
   // A new owner or generation remounts all state before any old rows can render.
-  return <DiscoveryPage key={privacyKey} epoch={epoch} list={list} enabled={enabled}/>;
+  return <DiscoveryPage key={privacyKey} epoch={epoch} list={list} enabled={enabled} onObserved={onObserved}/>;
 }
-function DiscoveryPage({list,enabled,epoch}:{list:DiscoveryList;enabled:boolean;epoch:object|null}):JSX.Element {
+function DiscoveryPage({list,enabled,epoch,onObserved}:{list:DiscoveryList;enabled:boolean;epoch:object|null;onObserved:(()=>void)|undefined}):JSX.Element {
   const [filter,setFilter]=useState<OperationInput<'sourcing.discoveryList'>>({status:'needs_review',offset:0});
   const [answer,setAnswer]=useState<OperationOutput<'sourcing.discoveryList'>|null>(null);
   const [loading,setLoading]=useState(false),[refresh,setRefresh]=useState(0);
@@ -27,12 +27,12 @@ function DiscoveryPage({list,enabled,epoch}:{list:DiscoveryList;enabled:boolean;
     if(!enabled)return;
     setLoading(true);setAnswer(null);
     void list(filter).then(result=>{
-      if(active&&request===sequence.current&&currentEpoch.current===epoch){setAnswer(result);setAnswerEpoch(epoch);}
+      if(active&&request===sequence.current&&currentEpoch.current===epoch){setAnswer(result);setAnswerEpoch(epoch);if(result.view===null||result.view.candidates.length>0||result.view.hasMore)onObserved?.();}
     }).catch(()=>{
-      if(active&&request===sequence.current&&currentEpoch.current===epoch){setAnswer({view:null,reason:'unavailable'});setAnswerEpoch(epoch);}
+      if(active&&request===sequence.current&&currentEpoch.current===epoch){setAnswer({view:null,reason:'unavailable'});setAnswerEpoch(epoch);onObserved?.();}
     }).finally(()=>{if(active&&request===sequence.current&&currentEpoch.current===epoch)setLoading(false);});
     return()=>{active=false;};
-  },[list,filter,refresh,enabled,epoch]);
+  },[list,filter,refresh,enabled,epoch,onObserved]);
   const view=enabled&&answerEpoch===epoch?answer?.view:null;
   const change=(status:OperationInput<'sourcing.discoveryList'>['status'],offset=0)=>{setAnswer(null);setFilter({status,offset});};
   return <section aria-label="Raw discovery" className="space-y-3 rounded-lg border border-border p-4">

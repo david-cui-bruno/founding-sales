@@ -11,6 +11,7 @@ import {createGeneration} from '../src/renderer/app/generation.ts';
 import {FirmsRoute} from '../src/renderer/firms/FirmsRoute.tsx';
 import {resetCrmMemory} from '../src/renderer/firms/crmMemory.ts';
 import {crmState,pipelineView} from './e2e/support/crmFixtures.ts';
+import type {SourcingCandidate} from '@fss/contracts';
 afterEach(cleanup);
 const source={provider:'overture_places' as const,recordId:'record-example',release:'2026-10-01',retrievedAt:null,sourceUrl:'https://example.test/source'};
 const candidate:NonNullable<OperationOutput<'sourcing.discoveryList'>['view']>['candidates'][number]={id:'11111111-1111-4111-8111-111111111111',status:'needs_review',revision:1,createdAt:'2026-10-01T12:00:00Z',payload:{kind:'discovery-v1',row:{source,observations:[source],firmName:'<script>untrusted firm</script>',website:'http://example.test/raw',locality:null,region:null,sourceConfidence:0.99,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'unknown',probableGroupKey:null}},origins:[{source,sourceMetadata:{sourcesJson:'[{"resource":"PRIVATE RAW BODY"}]'},licenses:['Example'],notices:[{label:'Notice',url:'https://example.test/notice',sha256:'a'.repeat(64)}]}]};
@@ -59,10 +60,11 @@ it.each(['refused','thrown'] as const)('distinguishes %s reads from empty and pe
 it('does not read disabled views and discards old-owner pending reads immediately',async()=>{
  const finishes:Array<(value:OperationOutput<'sourcing.discoveryList'>)=>void>=[];
  const list=vi.fn<DiscoveryList>(()=>new Promise(resolve=>finishes.push(resolve)));
- const {rerender}=render(<DiscoveryCandidates list={list} privacyKey="one" enabled={false}/>);expect(list).not.toHaveBeenCalled();
- rerender(<DiscoveryCandidates list={list} privacyKey="one"/>);await screen.findByText('Loading raw discovery…');
- rerender(<DiscoveryCandidates list={list} privacyKey="two"/>);
- await act(async()=>finishes[0]!(populated));expect(screen.queryByText(candidate.payload.row.firmName)).toBeNull();
+ const onObserved=vi.fn();
+ const {rerender}=render(<DiscoveryCandidates list={list} privacyKey="one" enabled={false} onObserved={onObserved}/>);expect(list).not.toHaveBeenCalled();
+ rerender(<DiscoveryCandidates list={list} privacyKey="one" onObserved={onObserved}/>);await screen.findByText('Loading raw discovery…');
+ rerender(<DiscoveryCandidates list={list} privacyKey="two" onObserved={onObserved}/>);
+ await act(async()=>finishes[0]!(populated));expect(screen.queryByText(candidate.payload.row.firmName)).toBeNull();expect(onObserved).not.toHaveBeenCalled();
  await act(async()=>finishes[1]!(empty));await screen.findByText('No raw discovery observations in this status.');
 });
 it('clears displayed rows synchronously when privacy identity changes',async()=>{
@@ -111,5 +113,36 @@ it.each(['admin','salesperson'] as const)('exposes raw discovery only to the %s 
    expect(read.mock.calls.some(([name])=>name==='sourcing.discoveryList')).toBe(false);
   }
   expect(command).not.toHaveBeenCalled();
+ }finally{cleanup();globalThis.callieApi=undefined;resetCrmMemory();}
+});
+it.each([{delayed:false,unknown:false},{delayed:true,unknown:false},{delayed:true,unknown:true}])('retains newer child raw knowledge after legacy empties (delayed parent $delayed, unknown $unknown)',async({delayed,unknown})=>{
+ resetCrmMemory();let dismissed=false,rawReads=0;
+ const pending:Array<()=>void>=[];
+ const legacy:SourcingCandidate={id:candidate.id,firmName:'Legacy review firm',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Legacy source',sourceUrl:'https://example.test/about',observedOn:'2026-10-01',preparedBy:'Fixture',status:'needs_review',revision:1,createdAt:candidate.createdAt,sourceCheck:null,nextSourceCheckAt:null};
+ const read=vi.fn(async(name:string)=>{
+  if(name==='crm.state')return crmState({screen:'pipeline',firm:null,pipeline:pipelineView(),role:'admin'});
+  if(name==='sourcing.list')return dismissed?empty:{view:{candidates:[legacy],hasMore:false},reason:null};
+  if(name==='sourcing.discoveryList'){
+   const index=rawReads++;
+   if(index<3&&delayed)return new Promise<typeof empty>(resolve=>pending.push(()=>resolve(empty)));
+   if(index<4)return empty;
+   return unknown?{view:null,reason:'unavailable'}:populated;
+  }
+  return {view:null,reason:'unavailable'};
+ });
+ const command=vi.fn(async()=>{dismissed=true;return {result:{id:legacy.id},reason:null};});
+ globalThis.callieApi={read,command} as unknown as OperationApi;const {guard}=createGeneration();
+ try{
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><DraftsProvider><FirmsRoute route={{name:'firms'}} identity="same-owner" generation={0} guard={guard}/></DraftsProvider></QueryClientProvider>);
+  fireEvent.click(await screen.findByRole('button',{name:'Candidates'}));
+  await screen.findByText('No raw discovery observations in this status.');await screen.findByText('Legacy source');
+  fireEvent.click(screen.getByRole('button',{name:'Refresh raw discovery'}));
+  if(unknown)await screen.findByText(/Raw discovery could not load or was refused/);else await screen.findByText(candidate.payload.row.firmName);
+  fireEvent.click(screen.getByRole('button',{name:'Dismiss'}));
+  await waitFor(()=>expect(command).toHaveBeenCalledTimes(1));
+  await act(async()=>{for(const finish of pending)finish();});
+  await screen.findByText('No candidates in this view.');
+  expect(screen.getByRole('region',{name:'Raw discovery'})).toBeTruthy();
+  if(!unknown)expect(screen.getByText(candidate.payload.row.firmName)).toBeTruthy();
  }finally{cleanup();globalThis.callieApi=undefined;resetCrmMemory();}
 });
