@@ -5,6 +5,8 @@ import { promisify } from 'node:util';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createReleaseSafety } from './release-safety.mjs';
+export { offRead } from './release-safety.mjs';
 
 const execute = promisify(execFile);
 const names = ['api', 'worker', 'migration', 'operations'];
@@ -26,23 +28,6 @@ const credentialNames = ['DATABASE_SECRET_ARN', 'MIGRATION_DATABASE_SECRET', 'FS
 const imageSide = name => name === 'api' ? 'api' : 'worker';
 const accepted = (definition, schema) => Number(envValue(definition, 'FSS_SCHEMA_MIN')) <= schema && Number(envValue(definition, 'FSS_SCHEMA_MAX')) >= schema;
 
-// Runs only inside the existing operations image, using its existing runtime identity.
-// No mailbox, business rows, credential values or workspace identifiers leave this read.
-export const offRead = `
-import pg from 'pg';
-import {readToolConfig} from './apps/worker/src/tools/fss/config.ts';
-const c=new pg.Client({connectionString:readToolConfig(process.env).database.connectionString,connectionTimeoutMillis:10000,query_timeout:10000});
-try {
- await c.connect(); await c.query('BEGIN READ ONLY');
- const schema=Number((await c.query('SELECT max(version)::int AS version FROM schema_versions')).rows[0].version);
- const rows=(await c.query("SELECT s.version,s.value,(SELECT count(*)::int FROM outbound_messages o WHERE o.workspace_id=w.id AND o.state='dispatching') AS finishing FROM workspaces w LEFT JOIN workspace_settings s ON s.workspace_id=w.id AND s.setting_key='sending_enabled' AND s.superseded_at IS NULL ORDER BY w.id LIMIT 101")).rows;
- const storedOff=rows.length>0&&rows.length<=100&&rows.every(r=>Number.isInteger(r.version)&&r.value?.enabled===false);
- const effectiveOff=storedOff||process.env.FSS_SENDING_ENABLED!=='true';
- const finishing=rows.reduce((n,r)=>n+r.finishing,0);
- await c.query('ROLLBACK');
- console.log(JSON.stringify({releaseOff:storedOff&&effectiveOff&&finishing===0,schema,storedOff,effectiveOff,finishing,versions:rows.slice(0,100).map(r=>r.version),observedAt:new Date().toISOString()}));
-} catch { process.exitCode=1; } finally { await c.end(); }
-`;
 
 /** io supplies ordinary process/files/clock operations. Tests replace cloud transport, not policy. */
 export async function runRelease(io, environment) {
@@ -100,7 +85,7 @@ export async function runRelease(io, environment) {
     requireThat(io.equal(normalize(readback.taskDefinition), normalize(document)) && io.equal(readback.tags, document.tags), 'registered_definition_changed');
     return { definition: readback.taskDefinition, tags: readback.tags };
   }
-  function nextDefinition(name, source, candidate, reader = false) {
+  function nextDefinition(name, source, candidate) {
     const next = structuredClone(source.definition);
     for (const key of ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt']) delete next[key];
     next.tags = source.tags;
@@ -112,7 +97,6 @@ export async function runRelease(io, environment) {
         container.environment.find(item => item.name === key).value = String(state.targetSchema);
       }
     }
-    if (reader) { container.entryPoint = ['node', '--experimental-transform-types', '--input-type=module', '--eval', offRead]; container.command = []; }
     return next;
   }
   async function oneOff(name, source, words, inline = false) {
@@ -146,23 +130,8 @@ export async function runRelease(io, environment) {
     }, 'task_report_unavailable', 8);
     return answer;
   }
-  async function off(source, expected) {
-    const reader = await register('operations', nextDefinition('operations', source, false, true));
-    state.temporaryReaderDefinition = reader.definition.taskDefinitionArn; save();
-    let read;
-    try { read = await oneOff('operations', reader, [], true); }
-    finally {
-      // Only a positively stopped owned task permits deregistration, including known nonzero exit.
-      if (state.currentTaskArn === null && state.lastStoppedTaskArn) {
-        await aws('ecs', 'deregister-task-definition', ['--task-definition', reader.definition.taskDefinitionArn], true);
-        state.temporaryReaderDefinition = null; save();
-      }
-    }
-    requireThat(read.releaseOff === true && read.storedOff === true && read.effectiveOff === true && read.finishing === 0 && read.schema === expected && Array.isArray(read.versions) && read.versions.length > 0 && read.versions.every(Number.isInteger) && Number.isFinite(Date.parse(read.observedAt)) && Math.abs(io.now() - Date.parse(read.observedAt)) <= 180000, 'sending_not_fresh_off');
-    if (state.settingVersions) requireThat(io.equal(read.versions, state.settingVersions), 'owner_setting_changed');
-    state.settingVersions = read.versions; state.observedSchema = read.schema; save();
-    return read;
-  }
+  let safety;
+  const off = (source, expected) => safety.off(source, expected);
   async function update(name, values, definition = state.candidateDefinitions[name] || baseline[name].taskDefinition) {
     return await aws('ecs', 'update-service', ['--cluster', cluster, '--service', `fss-prod-${name}`, '--task-definition', definition, ...values], true);
   }
@@ -194,24 +163,7 @@ export async function runRelease(io, environment) {
     }
     await verifyDefinitions(current);
   }
-  async function pinRecovery(after) {
-    await waitFor(async () => {
-      const result = await aws('rds', 'describe-db-instances', ['--db-instance-identifier', 'fss-prod-pg']);
-      requireThat(result.DBInstances?.length === 1, 'database_unavailable');
-      const db = result.DBInstances[0];
-      requireThat(db.DBInstanceArn === database.DBInstanceArn && db.DbiResourceId === database.DbiResourceId && db.Endpoint?.Address === database.Endpoint.Address && db.DBInstanceStatus === 'available' && db.BackupRetentionPeriod === 35, 'backup_binding_changed');
-      const backups = await aws('rds', 'describe-db-instance-automated-backups', ['--dbi-resource-id', database.DbiResourceId]);
-      requireThat(backups.DBInstanceAutomatedBackups?.length === 1, 'backup_window_missing');
-      const backup = backups.DBInstanceAutomatedBackups[0];
-      requireThat(backup.DBInstanceArn === database.DBInstanceArn && backup.DbiResourceId === database.DbiResourceId && backup.DBInstanceIdentifier === 'fss-prod-pg' && backup.Status === 'active', 'backup_window_binding_changed');
-      // AWS CLI describe-db-instance-automated-backups: RestoreWindow.{EarliestTime,LatestTime}.
-      const earliest = Date.parse(backup.RestoreWindow?.EarliestTime), latest = Date.parse(backup.RestoreWindow?.LatestTime);
-      requireThat(Number.isFinite(earliest) && Number.isFinite(latest) && earliest <= latest, 'backup_window_missing');
-      if (earliest > after || latest < after) return false;
-      state.recoveryPoint = { databaseArn: db.DBInstanceArn, resourceId: db.DbiResourceId, timestamp: new Date(after).toISOString(), earliest: backup.RestoreWindow.EarliestTime, latest: backup.RestoreWindow.LatestTime, restoreTested: false }; save();
-      return true;
-    }, 'pitr_not_covering_quiescence', 100);
-  }
+  const pinRecovery = after => safety.pinRecovery(database, after);
   async function credentialVersion() {
     const result = await aws('secretsmanager', 'describe-secret', ['--secret-id', secret(definitions.migration.definition, 'MIGRATION_DATABASE_SECRET')]);
     const versions = Object.entries(result.VersionIdsToStages || {}).filter(([, stages]) => stages.includes('AWSCURRENT'));
@@ -310,6 +262,7 @@ export async function runRelease(io, environment) {
     }
     requireThat(['api', 'worker'].every(name => accepted(definitions[name].definition, state.fromSchema)) && secret(definitions.api.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.operations.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.migration.definition, 'FSS_RUNTIME_DATABASE_SECRET_ARN') === secret(definitions.api.definition, 'DATABASE_SECRET_ARN'), 'baseline_binding_incompatible');
     requireThat(['migration', 'operations'].every(name => definitions[name].definition.containerDefinitions[0].image === definitions.worker.definition.containerDefinitions[0].image), 'oneoff_baseline_image_changed');
+    safety = createReleaseSafety({ aws, waitFor, now: io.now, state, save, cluster, network, owner: `fss-app-${e.GITHUB_RUN_ID}` });
     phase('observe-stored-off');
     await off(definitions.operations, state.fromSchema);
     const record = { schema: 'fss.release-record.v1', source: 'ci-gate', releaseGateReference: `ci-gate-${e.GATE_RUN_ID}-${e.COMMIT.slice(0, 12)}`, recordedAt: gate.updated_at, suite: 'pass', commit: e.COMMIT, gateRunId: e.GATE_RUN_ID, gateRunUrl: `https://github.com/${e.GITHUB_REPOSITORY}/actions/runs/${e.GATE_RUN_ID}`, imagesRunId: e.RUN_ID, artifacts: { api: images.images.api.digest, worker: images.images.worker.digest, desktopCommitStamp: e.COMMIT }, enablesSending: false };
