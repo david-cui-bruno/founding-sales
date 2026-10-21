@@ -2,7 +2,7 @@ import {readCurrentDiscoveryResearchFirm} from './discoveryResearchFirm.ts';
 import {readNativeFirmEligibility} from './nativeFirmEligibility.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
-  qualificationRequestSchema, qualificationEvidenceSchema, type QualificationView,
+  qualificationRequestSchema, qualificationEvidenceSchema, type QualificationView, type FirmQualificationView,
   type SourceObservation, type QualificationFact, type QualificationVerdict, type QualificationStatus,
 } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -19,8 +19,8 @@ import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 
-export const QUALIFICATION_PROMPT_VERSION='qualification-context-v7';
-export const QUALIFICATION_POLICY_VERSION='qualification-v5';
+import {QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from './qualificationVersions.ts';
+export {QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from './qualificationVersions.ts';
 export type SourcingResult<T>={ok:true;value:T}|{ok:false;reason:string};
 export interface QualificationRunRow {
   id:string;candidate_id:string;candidate_revision:number;model_name:string;
@@ -117,7 +117,7 @@ export async function finishQualification(context:RepositoryContext,input:{runId
 }
 
 /** One explicit admission association, never a domain/name guess. Admin research UI only. */
-export async function readFirmQualification(context:RepositoryContext,firmId:string):Promise<QualificationView|null> {
+export async function readFirmQualification(context:RepositoryContext,firmId:string):Promise<FirmQualificationView|null> {
  if(!decideAdminOnly(context).permitted)return null;
  const links=(await context.db.query<{candidate_id:string}>(`SELECT p.legacy_candidate_id AS candidate_id FROM sourcing_discovery_research_firms l JOIN sourcing_discovery_promotions p ON p.workspace_id=l.workspace_id AND p.id=l.promotion_id WHERE l.workspace_id=$1 AND l.firm_id=$2`,[context.scope.workspaceId,firmId])).rows;
  if(links.length){
@@ -125,7 +125,12 @@ export async function readFirmQualification(context:RepositoryContext,firmId:str
   const current=await readCurrentDiscoveryResearchFirm(context,{firmId});if(!current)return null;
   const admissions=(await context.db.query<{candidate_id:string}>('SELECT candidate_id FROM sourcing_admissions WHERE workspace_id=$1 AND firm_id=$2',[context.scope.workspaceId,firmId])).rows;
   if(admissions.some(row=>row.candidate_id!==current.candidate.id))return null;
-  const view=await readQualification(context,{candidateId:current.candidate.id});if(!view)return null;
+  const view=await readQualification(context,{candidateId:current.candidate.id});
+  if(!view){
+   const final=await readCurrentDiscoveryResearchFirm(context,{firmId});
+   if(!final||JSON.stringify(final)!==JSON.stringify(current)||await readQualification(context,{candidateId:current.candidate.id}))return null;
+   return {candidateId:current.candidate.id,candidateRevision:current.candidate.revision,status:'not_started',nativeEligibility:{status:'pending',reason:'evidence_pending',channelAuthority:'not_granted'}};
+  }
   const nativeEligibility=await readNativeFirmEligibility(context,firmId);
   if(nativeEligibility.status==='verified'&&(nativeEligibility.runId!==view.runId||nativeEligibility.candidateRevision!==view.candidateRevision))return null;
   const final=await readCurrentDiscoveryResearchFirm(context,{firmId});

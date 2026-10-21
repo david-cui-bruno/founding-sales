@@ -18,22 +18,23 @@ export function FirmQualification({firmId,enabled=true,online=true,read=readFirm
   return()=>{active=false;};
  },[firmId,epoch,online,read,refresh]);
  const view=online&&value?.firmId===firmId&&value.epoch===epoch?value.view:null;
- const native=view?.nativeEligibility;
+ const evidence=view?.status==='not_started'?null:view,native=evidence?.nativeEligibility??view?.nativeEligibility;
  useEffect(()=>{
   if(native?.status!=='verified')return;
   const remaining=Math.min(Date.parse(native.validUntil)-Date.now(),Date.parse(native.validUntil)-Date.parse(native.checkedAt));
   const timer=setTimeout(()=>setExpired(true),Math.max(0,remaining));
   return()=>clearTimeout(timer);
  },[native]);
- const verified=native?.status==='verified'&&!expired&&Date.parse(native.validUntil)>Date.now()&&native.firmId===firmId&&native.runId===view?.runId&&native.candidateRevision===view.candidateRevision;
+ const verified=native?.status==='verified'&&!expired&&Date.parse(native.validUntil)>Date.now()&&native.firmId===firmId&&native.runId===evidence?.runId&&native.candidateRevision===evidence.candidateRevision;
  return <section aria-label="Current native Firm eligibility" className="space-y-2">
   <p>Native firm eligibility: {verified?'verified':!online?'unavailable offline':native?.status==='pending'?'pending':'unavailable'}</p>
   <p>Channel authority: not granted. Native evidence concerns Firm identity and residential management service area, not a verified physical office, phone, calling or email permission.</p>
   {verified?<><p>Current native source evidence, valid until {native.validUntil}.</p><details><summary>Native identity, service area and residential citations</summary>{native.citations.map(citation=>{
-   const source=view.observations.find(s=>s.id===citation.observationId),block=source?.blocks.find(b=>b.id===citation.blockId);
+   const source=evidence.observations.find(s=>s.id===citation.observationId),block=source?.blocks.find(b=>b.id===citation.blockId);
    return source&&block?<div key={`${citation.kind}:${citation.observationId}:${citation.blockId}`}><p>{citation.kind.replaceAll('_',' ')} · run {native.runId} · block {citation.blockId}</p><a href={source.url} target="_blank" rel="noreferrer">{source.url}</a><blockquote>{block.text}</blockquote></div>:null;
   })}</details></>:null}
   <Button variant="quiet" disabled={!online} onClick={()=>{setValue(null);setRefresh(n=>n+1);}}>Refresh current Firm evidence</Button>
-  {view?<QualificationPanel candidateId={view.candidateId} revision={view.candidateRevision} enabled={enabled}/>:null}
+  {view?.status==='not_started'?<p>Qualification has not started. Open evidence and call readiness to request the first check.</p>:null}
+  {view?<QualificationPanel key={`${firmId}:${view.candidateId}:${view.candidateRevision}`} candidateId={view.candidateId} revision={view.candidateRevision} enabled={enabled&&online}/>:null}
  </section>;
 }

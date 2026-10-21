@@ -12,6 +12,11 @@ it('sends existing authenticated read with no receipt and carries additive nativ
  const f=fixture(),answer=await f.handler({firmId:nativeId});expect(answer.view?.nativeEligibility).toMatchObject({status:'verified',channelAuthority:'not_granted'});
  expect(JSON.parse(f.send.mock.calls[0]![1]!.body!)).toEqual({firmId:nativeId});expect(f.onConnection).toHaveBeenCalledWith(true);
 });
+it('parses the locked zero-run response without inventing evidence and refuses mixed run fields',async()=>{
+ const f=fixture(),view={candidateId:nativeId,candidateRevision:2,status:'not_started',nativeEligibility:{status:'pending',reason:'evidence_pending',channelAuthority:'not_granted'}};
+ f.send.mockResolvedValueOnce({status:200,body:view});expect(await f.handler({firmId:nativeId})).toEqual({view,reason:null});
+ f.send.mockResolvedValueOnce({status:200,body:{...view,runId:nativeId,observations:[]}});expect(await f.handler({firmId:nativeId})).toEqual({view:null,reason:'unreadable_answer'});
+});
 it('token-await generation change sends zero reads and no stale connection/auth side effects',async()=>{
  let resolve!:(value:AccessSession)=>void;const f=fixture(()=>new Promise(done=>{resolve=done;}));const pending=f.handler({firmId:nativeId});f.change();resolve({token:'replacement',generation:2});
  expect(await pending).toEqual({view:null,reason:'session_changed'});expect(f.send).not.toHaveBeenCalled();expect(f.onConnection).not.toHaveBeenCalled();expect(f.onAuthRefusal).not.toHaveBeenCalled();

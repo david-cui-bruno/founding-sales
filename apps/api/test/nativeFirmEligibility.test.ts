@@ -1,6 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,expect,it} from 'vitest';
-import {qualificationViewSchema,type QualificationFact,type SourceObservation} from '@fss/contracts';
+import {firmQualificationViewSchema,qualificationViewSchema,type QualificationFact,type SourceObservation} from '@fss/contracts';
 import {dispatch,type ApiRequest} from '../src/server.ts';
 import {localNoopSuppressionJournal} from '../src/journal/index.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
@@ -35,6 +35,48 @@ async function run(r:Awaited<ReturnType<typeof linked>>,changes:{state?:string;r
  return {runId,observations,facts};
 }
 const read=async(firmId:string,token=admin)=>post('/sourcing/qualification/firm',{firmId},token);
+it('zero-run Firm route exposes only current linkage and invokes the existing guarded first request idempotently',async()=>{
+ const r=await linked();
+ const before=(await f.db.query('SELECT id FROM jobs ORDER BY id')).rows;
+ const answer=await read(r.firmId);expect(answer.status).toBe(200);
+ expect(firmQualificationViewSchema.parse(answer.body)).toEqual({candidateId:r.candidateId,candidateRevision:1,status:'not_started',nativeEligibility:{status:'pending',reason:'evidence_pending',channelAuthority:'not_granted'}});
+ expect((await f.db.query('SELECT id FROM jobs ORDER BY id')).rows).toEqual(before);
+ expect((await f.db.query('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[r.candidateId])).rows).toEqual([]);
+ const input=envelope({candidateId:r.candidateId,expectedRevision:1});
+ const request=await post('/sourcing/qualification/request',input);expect(request.body).toMatchObject({status:'accepted',result:{runId:expect.any(String)}});
+ expect((await post('/sourcing/qualification/request',input)).body).toEqual({...request.body as object,replayed:true});
+ expect((await post('/sourcing/qualification/request',envelope({candidateId:r.candidateId,expectedRevision:1}))).body).toMatchObject({status:'accepted',result:(request.body as {result:unknown}).result});
+ expect((await f.db.query('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[r.candidateId])).rows).toHaveLength(1);
+ expect(qualificationViewSchema.parse((await read(r.firmId)).body)).toMatchObject({status:'pending',observations:[],facts:[],verdict:null,admission:null,nativeEligibility:{channelAuthority:'not_granted'}});
+});
+it('zero-run first request retains admin, revision, identity, disabled, hold and daily budget refusals',async()=>{
+ const r=await linked(),request=(token=admin,expectedRevision=1)=>post('/sourcing/qualification/request',envelope({candidateId:r.candidateId,expectedRevision}),token);
+ expect((await request(sales)).body).toMatchObject({reason:'admin_only'});
+ expect((await request(admin,2)).body).toMatchObject({reason:'candidate_changed'});
+ await f.db.query('UPDATE sourcing_candidates SET qualification_blocked=true WHERE id=$1',[r.candidateId]);
+ expect((await request()).body).toMatchObject({reason:'identity_review_required'});
+ await f.db.query('UPDATE sourcing_candidates SET qualification_blocked=false WHERE id=$1',[r.candidateId]);
+ await f.db.query('INSERT INTO research_settings(workspace_id,enabled,daily_firm_ceiling) VALUES($1,false,1) ON CONFLICT(workspace_id) DO UPDATE SET enabled=false,daily_firm_ceiling=1',[f.alpha.workspaceId]);
+ expect((await read(r.firmId)).status).toBe(200);expect((await request()).body).toMatchObject({reason:'research_disabled'});
+ await f.db.query('UPDATE research_settings SET enabled=true WHERE workspace_id=$1',[f.alpha.workspaceId]);
+ const hold=(await f.db.query<{id:string}>("INSERT INTO active_holds(workspace_id,scope_kind,reason_code,blocked_action_kinds,source_event_kind) VALUES($1,'workspace','scoped_pause',ARRAY['research'],'test') RETURNING id",[f.alpha.workspaceId])).rows[0]!;
+ expect((await request()).body).toMatchObject({reason:'research_held'});
+ await f.db.query('DELETE FROM active_holds WHERE id=$1',[hold.id]);
+ await f.db.query('DELETE FROM daily_counters WHERE workspace_id=$1',[f.alpha.workspaceId]);
+ const other=await linked();expect((await post('/sourcing/qualification/request',envelope({candidateId:other.candidateId,expectedRevision:1}))).body).toMatchObject({status:'accepted'});
+ expect((await request()).body).toMatchObject({reason:'daily_firm_ceiling'});
+ expect((await f.db.query('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[r.candidateId])).rows).toEqual([]);
+ await f.db.query('DELETE FROM research_settings WHERE workspace_id=$1',[f.alpha.workspaceId]);
+});
+it('zero-run response disappears for wrong owner/workspace, source loss and a changed linkage snapshot',async()=>{
+ const r=await linked();expect((await read(r.firmId,sales)).status).toBe(404);expect((await read(r.firmId,beta)).status).toBe(404);
+ expect(await readAcrossMutation(r.firmId,async()=>{await f.db.query('UPDATE sourcing_candidates SET revision=revision+1 WHERE id=$1',[r.candidateId]);})).toBeNull();
+ expect(firmQualificationViewSchema.parse((await read(r.firmId)).body)).toMatchObject({status:'not_started',candidateRevision:2});
+ expect(await readAcrossMutation(r.firmId,async()=>{await f.db.query('UPDATE firms SET assigned_user_id=$2 WHERE id=$1',[r.firmId,f.alpha.salesperson.userId]);})).toBeNull();
+ expect((await read(r.firmId)).status).toBe(404);
+ const source=await linked();await f.db.query('DELETE FROM sourcing_candidate_discovery_origins WHERE candidate_id=$1',[source.rawId]);expect((await read(source.firmId)).status).toBe(404);
+ const started=await linked();expect(await readAcrossMutation(started.firmId,async()=>{await run(started);})).toBeNull();
+});
 async function readAcrossMutation(firmId:string,mutate:()=>Promise<void>){
  let changed=false;
  const db:Queryable={async query<Row extends QueryResultRowLike>(text:string,values?:readonly unknown[]){
@@ -83,7 +125,8 @@ it('requires current admin owner/membership and refuses corrections, geography c
  expect((await f.db.query('SELECT id FROM firms WHERE id=$1',[r.firmId])).rows).toHaveLength(1);
 });
 it('keeps missing and expired evidence unverified without creating any new run',async()=>{
- const r=await linked();expect((await read(r.firmId)).status).toBe(404);
+ const r=await linked();expect((await read(r.firmId)).body).toMatchObject({status:'not_started',nativeEligibility:{status:'pending',channelAuthority:'not_granted'}});
+ expect((await f.db.query('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[r.candidateId])).rows).toEqual([]);
  await run(r,{age:7*86400000});expect((await read(r.firmId)).body).toMatchObject({nativeEligibility:{status:'unavailable'}});
 });
 it('fails closed on in-flight same-run completion rather than returning verified empty response evidence',async()=>{
