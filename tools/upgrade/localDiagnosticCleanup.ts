@@ -1,4 +1,5 @@
 /** Recovery only for the private diagnostic process identities witnessed at launch. */
+import { writeLocalDiagnosticStatus } from "./localDiagnosticStatus.ts";
 import { execFileSync } from "node:child_process";
 import { access, lstat, readFile, rm, writeFile } from "node:fs/promises";
 import { join, basename } from "node:path";
@@ -244,8 +245,6 @@ export async function recoverLocalDiagnostic(directory: string) {
     googleRevocation: "not_attested",
     productionActivationAllowed: false,
   };
-  await writeFile(join(directory, "status.json"), JSON.stringify(status), {
-    mode: 0o600,
-  });
+  await writeLocalDiagnosticStatus(directory, status);
   return status;
 }

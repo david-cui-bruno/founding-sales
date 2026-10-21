@@ -1,4 +1,5 @@
 /** Disposable local controller. No cloud authority, provider calls, consent or secrets printed. */
+import { writeLocalDiagnosticStatus } from "./localDiagnosticStatus.ts";
 import {
   processIdentity,
   processIsResponsive,
@@ -126,7 +127,7 @@ if (command === "start") {
     if (controllerFailure) {
       status.state = "runtime_unknown";
       status.controllerFailure = controllerFailure;
-      await write(join(directory, "status.json"), status);
+      await writeLocalDiagnosticStatus(directory, status);
     }
   }
   if (command === "verify" && status.state === "running") {
@@ -183,7 +184,7 @@ if (command === "start") {
       databaseName = `fss_diagnostic_${runId.replaceAll("-", "")}`,
       keyPath = join(directory, "key");
     await writeFile(keyPath, randomBytes(32), { mode: 0o600 });
-    await write(join(directory, "status.json"), {
+    await writeLocalDiagnosticStatus(directory, {
       state: "preparing",
       supervisorPid: process.pid,
       runId,
@@ -390,7 +391,7 @@ if (command === "start") {
         storagePath: cluster.storagePath,
         runId,
       });
-      await write(join(directory, "status.json"), {
+      await writeLocalDiagnosticStatus(directory, {
         state: "running",
         runId,
         supervisorPid: process.pid,
@@ -461,7 +462,7 @@ if (command === "start") {
           worker.signalCode !== null
         ) {
           runFailure = "runtime_failed";
-          await write(join(directory, "status.json"), {
+          await writeLocalDiagnosticStatus(directory, {
             state: "runtime_failed",
             runId,
             apiExit,
@@ -536,7 +537,7 @@ if (command === "start") {
       } catch {
         /* retain uncertain cleanup evidence */
       }
-      await write(join(directory, "status.json"), {
+      await writeLocalDiagnosticStatus(directory, {
         state:
           processesAbsent && databaseStorageAbsent && localCopiesAndKeysRemoved
             ? "cleaned"
@@ -563,7 +564,7 @@ if (command === "start") {
         process.exit(1);
     }
   } catch {
-    await write(join(directory, "status.json"), {
+    await writeLocalDiagnosticStatus(directory, {
       state: "preparation_failed",
       runFailure: "configuration_refused",
       productionActivationAllowed: false,
