@@ -1,6 +1,7 @@
 import {APOLLO_DISCOVERY_CONSTRAINT_CASES} from './apolloDiscoveryCases.ts';
 import {DISCOVERY_INTAKE_CONSTRAINT_CASES} from './discoveryIntakeCases.ts';
 import {DISCOVERY_REVIEW_CONSTRAINT_CASES,DISCOVERY_REVIEW_DECISION_CONSTRAINT_CASES} from './discoveryReviewCases.ts';
+import {DISCOVERY_PROMOTION_CONSTRAINT_CASES} from './discoveryPromotionCases.ts';
 import {OFFICE_ASSESSMENT_CONSTRAINT_CASES} from './officeAssessmentCases.ts';
 import type {SeededCrm} from './crmFixtures.ts';
 import type {SessionQueryable} from '../../../db/queryable.ts';
@@ -10,6 +11,7 @@ const insert=(f:Fixture,overrides:Record<string,unknown>={})=>{
  return f.session.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload,status,revision) VALUES($1,$2,$3,$4::jsonb,$5,$6)',Object.values(row));
 };
 export const SOURCING_CONSTRAINT_CASES=[
+ ...DISCOVERY_PROMOTION_CONSTRAINT_CASES,
  ...DISCOVERY_INTAKE_CONSTRAINT_CASES,
  ...DISCOVERY_REVIEW_CONSTRAINT_CASES,
  ...DISCOVERY_REVIEW_DECISION_CONSTRAINT_CASES,

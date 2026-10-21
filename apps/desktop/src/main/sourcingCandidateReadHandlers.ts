@@ -1,3 +1,4 @@
+import {sourcingDiscoveryPromotionHandlers} from './sourcingDiscoveryPromotionHandlers.ts';
 import {candidateListSchema,discoveryIntakeListSchema} from '@fss/contracts';
 import type {OperationInput,OperationOutput} from '../shared/operations.ts';
 import type {AuthedClient} from './authedClient.ts';
@@ -5,6 +6,7 @@ import type {AuthedClient} from './authedClient.ts';
 /** Reads retained observations only, with no command receipt or acquisition authority. */
 export function sourcingCandidateReadHandlers(deps:{api:AuthedClient;generation():number}) {
   return {
+    ...sourcingDiscoveryPromotionHandlers(deps),
     'sourcing.list':async(input:OperationInput<'sourcing.list'>):Promise<OperationOutput<'sourcing.list'>>=>{
       const generation=deps.generation();
       const answer=await deps.api.read('/sourcing/candidates/list',value=>candidateListSchema.parse(value),input);

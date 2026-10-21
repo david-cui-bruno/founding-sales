@@ -1,3 +1,4 @@
+import {DiscoveryPreparation} from './DiscoveryPreparation.tsx';
 import {useEffect,useRef,useState,type JSX} from 'react';
 import type {OperationInput,OperationOutput} from '../../shared/operations.ts';
 import {operations} from '../app/bridges.ts';
@@ -47,6 +48,7 @@ function DiscoveryPage({list,enabled,epoch,onObserved}:{list:DiscoveryList;enabl
         <p>Provider: {row.source.provider} · Release: {row.source.release}</p><p>Source (unverified text): {row.source.sourceUrl}</p><p>Source record: {row.source.recordId}</p><p>Observed: {row.source.retrievedAt??'Unknown'} · Observations: {row.observations.length}</p>
         <p>Source confidence (not fit): {row.sourceConfidence===null?'Unknown':row.sourceConfidence}</p>
         <p>Residential fit: {row.residentialFit} · Website association: {row.websiteAssociation} · Office phone evidence: {row.officePhoneEvidence}. Not admitted.</p>
+        <DiscoveryPreparation key={`${candidate.id}:${candidate.revision}`} candidate={candidate} enabled={enabled}/>
       </li>;
     })}</ul>{view.candidates.length===0?<p>No raw discovery observations in this status.</p>:null}
     <div className="flex gap-2"><Button variant="quiet" disabled={loading||filter.offset===0} onClick={()=>change(filter.status,Math.max(0,filter.offset-50))}>Previous raw page</Button><Button variant="quiet" disabled={loading||!view.hasMore||filter.offset>=1000000} onClick={()=>change(filter.status,filter.offset+50)}>Next raw page</Button></div></>:null}
