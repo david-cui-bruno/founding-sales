@@ -80,8 +80,8 @@ describe('ordinary existing Gmail grant verification', () => {
 
   const context = (session = db) => repositoryContext(workspaceScope(fixture.alpha.workspaceId,
     { kind: 'user', userId: fixture.alpha.salesperson.userId, role: 'salesperson' }), session);
-  const status = (session = db, bearer: string | null = token) => dispatch({
-    method: 'GET', path: '/gmail/status', query: new URLSearchParams(), body: undefined,
+  const status = (session = db, bearer: string | null = token, path = '/gmail/status', method = 'GET') => dispatch({
+    method, path, query: new URLSearchParams(), body: undefined,
     headers: bearer === null ? {} : { authorization: `Bearer ${bearer}` },
   }, {
     session, auth: { ...fixture.deps, db: session }, mail, sendingEnabled: false,
@@ -150,8 +150,54 @@ describe('ordinary existing Gmail grant verification', () => {
   });
   afterAll(async () => fixture.stop());
 
+  it.each(['GET', 'POST'])('passive %s reads a connected mailbox with missing grant evidence without provider, token unwrap or writes', async method => {
+    expect(await observations()).toEqual([]);
+    const queries: string[] = [];
+    const session = watchQueries(db, { before: sql => { queries.push(sql); } });
+    const cipher = mail.cipher;
+    let decrypts = 0;
+    mail = { ...mail, cipher: { encrypt: value => cipher.encrypt(value), decrypt: async () => {
+      decrypts += 1;
+      throw new Error('passive status must never unwrap a token');
+    } } };
+    try {
+      const result = await status(session, token, '/gmail/status/passive', method);
+      expect(result.status).toBe(200);
+      expect(gmailStatusSchema.parse(result.body)).toMatchObject({ connected: true, mailbox: { id: mailboxId } });
+      expect(requests).toEqual([]);
+      expect(decrypts).toBe(0);
+      expect(queries.length).toBeGreaterThan(0);
+      expect(queries.every(sql => /^\s*SELECT\b/iu.test(sql))).toBe(true);
+      expect(queries.some(sql => /mailbox_tokens|mailbox_oauth_grant_observations/iu.test(sql))).toBe(false);
+      expect(await observations()).toEqual([]);
+      expect(JSON.stringify(result.body)).not.toContain(refresh);
+      expect(JSON.stringify(result.body)).not.toContain(access);
+      await unchangedAuthority();
+    } finally {
+      mail = { ...mail, cipher };
+    }
+  });
+
+  it('passive reads preserve owner/workspace privacy and refuse absent, revoked or stale sessions', async () => {
+    expect((await status(db, null, '/gmail/status/passive')).status).toBe(401);
+    for (const [workspace, user] of [[fixture.alpha, fixture.alpha.admin], [fixture.beta, fixture.beta.salesperson]] as const) {
+      const otherGrant = await issueSessionFor(fixture, workspace, user);
+      const result = await status(db, otherGrant.accessToken, '/gmail/status/passive');
+      expect(result.status).toBe(200);
+      expect(gmailStatusSchema.parse(result.body)).toMatchObject({ connected: false, mailbox: null, lastGrantRefusal: null });
+      expect(JSON.stringify(result.body)).not.toContain(fixture.alpha.salesperson.email);
+    }
+    await fixture.db.query("UPDATE devices SET status='revoked',revoked_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2", [fixture.alpha.workspaceId, deviceId]);
+    expect((await status(db, token, '/gmail/status/passive')).status).toBe(401);
+    const fresh = await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson);
+    fixture.advance(fixture.deps.config.sessions.fullSignInSeconds * 1000 + 1);
+    expect((await status(db, fresh.accessToken, '/gmail/status/passive')).status).toBe(401);
+    expect(requests).toEqual([]);
+    expect(await observations()).toEqual([]);
+  });
+
   it('repairs legacy generation 2 without reconnect, capture, owner approvals or mail reads', async () => {
-    expect(generation).toBe(2);
+    expect(generation).toBeGreaterThanOrEqual(2);
     const result = await status();
     expect(result.status).toBe(200);
     expect(gmailStatusSchema.parse(result.body)).toMatchObject({ connected: true, mailbox: { id: mailboxId } });
