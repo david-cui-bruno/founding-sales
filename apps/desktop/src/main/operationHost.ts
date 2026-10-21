@@ -26,7 +26,7 @@ import {callNeedViewSchema} from '@fss/contracts';
 import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
 import {meetingQualificationViewSchema} from '@fss/contracts';
 import {sourcingFeedbackSavedSchema} from '@fss/contracts';
-import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
+import { qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema } from '@fss/contracts';
 import { meetingFollowThroughHandlers } from './meetingFollowThroughHandlers.ts';
@@ -386,19 +386,6 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
     ...sourcingFirmQualificationHandlers({api:deps.api,generation:()=>deps.nativeSessionGeneration?.()}),
-    'sourcing.qualification': async (input:OperationInput<'sourcing.qualification'>) => {
-      const generation=deps.recordings.identity.current();
-      const answer=await deps.api.read('/sourcing/qualification/read',value=>qualificationViewSchema.parse(value),input);
-      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
-      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
-    },
-    'sourcing.qualify': async (input:OperationInput<'sourcing.qualify'>) => {
-      const generation=deps.recordings.identity.current();
-      const {commandId,...body}=input;
-      const answer=await deps.api.command('/sourcing/qualification/request',body,value=>qualificationQueuedSchema.parse(value),{commandId});
-      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
-      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
-    },
     'sourcing.admit': async (input:OperationInput<'sourcing.admit'>) => {
       const generation=deps.recordings.identity.current();
       const {commandId,...body}=input;
