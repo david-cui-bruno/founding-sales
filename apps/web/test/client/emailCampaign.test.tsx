@@ -5,6 +5,7 @@ import { type EmailCampaignPolicy } from '@fss/contracts';
 import { BrowserClient, type InvalidationChannel } from '../../src/client/BrowserClient.ts';
 import { EmailCampaignClient } from '../../src/client/EmailCampaignClient.ts';
 import { BrowserEmailCampaigns } from '../../src/client/BrowserEmailCampaigns.tsx';
+import { BrowserApp } from '../../src/client/BrowserApp.tsx';
 import { CAMPAIGN_PENDING_KEY, campaignPendingSchema } from '../../src/client/CampaignPending.ts';
 
 const id = '00000000-0000-4000-8000-000000000001';
@@ -102,6 +103,19 @@ describe('campaign exact command custody over actual BrowserClient', () => {
     const manager = new EmailCampaignClient(replacement, scope.storage, () => id); resources.push(replacement, manager);
     expect(manager.pending()).toBeNull(); expect(scope.storage.getItem(CAMPAIGN_PENDING_KEY)).not.toBeNull();
     await replacement.refresh(); expect(manager.pending()).toEqual(held); expect(scope.commands).toHaveLength(0);
+  });
+  it('actual BrowserApp cold signed-out discovery clears retained command without mounting private campaign controls', async () => {
+    const scope = setup(); await scope.browser.refresh();
+    scope.client.prepare({ kind: 'approve', policy: policy() });
+    scope.client.dispose();
+    const send = vi.fn<typeof fetch>(async () => json({ status: 'signed_out', csrfToken: 'c'.repeat(40) }));
+    const replacement = new BrowserClient({ fetch: send, storage: scope.storage, navigate: vi.fn(), randomUUID: () => id }); resources.push(replacement);
+    render(<BrowserApp client={replacement} />);
+    await screen.findByLabelText('Workspace ID');
+    await vi.waitFor(() => { expect(scope.storage.getItem(CAMPAIGN_PENDING_KEY)).toBeNull(); });
+    expect(screen.queryByRole('region', { name: 'Email campaigns' })).toBeNull();
+    expect(scope.commands).toHaveLength(0);
+    expect(send.mock.calls.every(([url]) => url === '/browser/session')).toBe(true);
   });
   it('policy expiry fences a late accepted response without reconstituting custody', async () => {
     vi.useFakeTimers(); const scope = setup(); await scope.browser.refresh();

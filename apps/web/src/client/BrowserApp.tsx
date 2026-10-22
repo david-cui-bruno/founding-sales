@@ -81,6 +81,7 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     <header className="flex items-center justify-between gap-4"><div><h1>Callie</h1><p>Local browser workspace</p></div>{session?.status === 'signed_in' ? <Button onClick={() => { void logout(); }}>Sign out</Button> : null}</header>
     <aside className="rounded-md border p-3">Calling, Gmail capture, LinkedIn outreach, provider setup and native features: OFF / unavailable in this browser. No outreach is performed.</aside>
     {notice ? <p role="status">{notice}</p> : null}
+    <BrowserEmailCampaigns client={client} />
     {session?.status !== 'signed_in' ? <section aria-label="Sign in" className="space-y-3"><h2>Sign in</h2>
       <label>Workspace ID<Input aria-label="Workspace ID" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); }} /></label>
       <label>Browser label<Input aria-label="Browser label" value={deviceLabel} onChange={event => { setDeviceLabel(event.target.value); }} /></label>
@@ -88,7 +89,6 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
       <Button disabled={busy} variant="outline" onClick={() => { void run(async () => { await client.refresh(); }); }}>Refresh access</Button>
     </section> : <div key={generation} className="space-y-5">
       <nav className="flex gap-3"><Button disabled={busy} onClick={() => { void run(loadToday); }}>Today</Button><span>{session.role} · Workspace {session.workspaceId}</span></nav>
-      <BrowserEmailCampaigns client={client} />
       {firm === null ? <section aria-label="Today" className="space-y-3"><h2>Today</h2><BrowserResearchQueue client={client} />{today !== null ? <p>{today.snapshotDate} · {today.businessTimeZone}</p> : null}
         {today?.cards.length === 0 ? <p>No firms need attention today.</p> : null}
         {today?.cards.map(card => <article key={card.firmId} className="rounded-md border p-4"><h3>{card.firmName}</h3><p>{card.lane.replaceAll('_', ' ')} · {countsLabel(card.counts)}</p><Button disabled={busy} onClick={() => { void run(async () => { await openFirm(card.firmId); }); }}>Open firm</Button></article>)}
