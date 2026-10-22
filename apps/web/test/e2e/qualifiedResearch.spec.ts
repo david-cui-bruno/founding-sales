@@ -120,7 +120,7 @@ test('current source/candidate/run/owner changes refuse exact opens and replay w
       const open = await browserRequest(page, '/today/actions/open/v3', { body: { actionId: action.actionId, target: action.target } });
       expect(todayActionOpenV3ResponseSchema.parse(open.body)).toEqual({ version: 3, target: null, research: null });
       const replay = await browserRequest(page, createPath, { body: command });
-      expect(replay.status).toBe(409);
+      expect(replay.status).toBe(404);
       expect(replay.body).toEqual({ error: 'browser_request_refused' });
       // A failed current read does not mean the committed mutation never happened.
       expect((await db.query('SELECT id FROM firms WHERE id=$1', [firm.firmId])).rows).toEqual([{ id: firm.firmId }]);
@@ -263,5 +263,91 @@ test('actual committed response loss retains exact UUID/payload and explicit rec
   expect((await browserRequest(page, '/sourcing/research-firms/read', { body: { firmId: firm.firmId } })).status).toBe(404);
   await page.getByRole('button', { name: 'Refresh action queue', exact: true }).click();
   expect((await pendingIsIdsOnly(page, seed)).createdFirmId).toBe(firm.firmId);
+  expect(mutations).toBe(1);
+});
+
+test('R740-1 source loss before exact uncertain retry preserves UUID across 404 and reload until actual auth refusal', async ({ researchPage: page }) => {
+  const app = owned.app;
+  const seed = await seedQualifiedResearch(app, 'Source-Lost-Before-Retry');
+  await loginQualifiedResearch(page, app);
+  await load(page);
+  let committed = () => {};
+  const committedResponse = new Promise<void>(resolve => { committed = resolve; });
+  await page.route(`**/browser/api${createPath}`, async route => {
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    committed();
+    await route.abort('failed');
+  }, { times: 1 });
+  const sent = page.waitForRequest(request => request.url().endsWith(`/browser/api${createPath}`));
+  await card(page, seed).getByRole('button', { name: 'Create research Firm', exact: true }).click();
+  const original = (await sent).postDataJSON() as { commandId: string };
+  await committedResponse;
+  await expect(page.getByRole('button', { name: 'Retry exact research command', exact: true })).toBeEnabled();
+  const initialPending = await pendingIsIdsOnly(page, seed);
+  expect(initialPending.commandId).toBe(original.commandId);
+  expect(initialPending.createdFirmId).toBeUndefined();
+  expect(original).toEqual({ ...seed.selection, commandId: original.commandId });
+  const receipt = (await app.fixture.db.query<{ result: { firmId: string } }>('SELECT result FROM command_receipts WHERE command_id=$1', [original.commandId])).rows;
+  expect(receipt).toHaveLength(1);
+  const firmId = receipt[0]!.result.firmId;
+  expect(firmId).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(receipt).toEqual([{ result: { firmId } }]);
+  const queueBefore = todayActionsV3ResponseSchema.parse((await browserRequest(page, '/today/actions/v3')).body);
+  const action = queueBefore.actions.find(row => row.target.kind === 'qualified_research' && row.target.firmId === firmId)!;
+  expect(action).toBeDefined();
+  expect((await app.fixture.db.query('SELECT firm_id FROM sourcing_discovery_research_firms WHERE workspace_id=$1 AND promotion_id=$2', [app.fixture.alpha.workspaceId, seed.promotionId])).rows).toEqual([{ firm_id: firmId }]);
+  // Missing-order regression: source disappears AFTER commit but BEFORE any retry.
+  await app.fixture.db.query('DELETE FROM sourcing_candidate_discovery_origins WHERE candidate_id=$1', [seed.selection.discoveryCandidateId]);
+  expect((await browserRequest(page, '/sourcing/research-firms/read', { body: { firmId } })).status).toBe(404);
+  const queueAfter = todayActionsV3ResponseSchema.parse((await browserRequest(page, '/today/actions/v3')).body);
+  expect(queueAfter.actions.some(row => row.target.kind === 'qualified_research' && row.target.firmId === firmId)).toBe(false);
+  const staleOpen = await browserRequest(page, '/today/actions/open/v3', { body: { actionId: action.actionId, target: action.target } });
+  expect(todayActionOpenV3ResponseSchema.parse(staleOpen.body)).toEqual({ version: 3, target: null, research: null });
+  let mutations = 0;
+  page.on('request', request => { if (request.url().endsWith(`/browser/api${createPath}`)) mutations += 1; });
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Retry exact research command', exact: true })).toBeEnabled();
+  expect(mutations).toBe(0);
+  expect(await pendingIsIdsOnly(page, seed)).toEqual(initialPending);
+  let unavailableBody: unknown;
+  await page.route(`**/browser/api${createPath}`, async route => {
+    const response = await route.fetch();
+    unavailableBody = await response.json() as unknown;
+    await route.fulfill({ response });
+  }, { times: 1 });
+  const replay = page.waitForResponse(response => response.url().endsWith(`/browser/api${createPath}`));
+  await page.getByRole('button', { name: 'Retry exact research command', exact: true }).click();
+  const unavailable = await replay;
+  expect(unavailable.request().postDataJSON()).toEqual(original);
+  expect(unavailable.status()).toBe(404);
+  expect(unavailableBody).toEqual({ error: 'browser_request_refused' });
+  await expect(page.getByRole('button', { name: 'Retry exact research command', exact: true })).toBeEnabled();
+  expect(await pendingIsIdsOnly(page, seed)).toEqual(initialPending);
+  await expect(page.getByRole('heading', { name: 'Current research proof', exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Retry exact research command', exact: true })).toBeEnabled();
+  expect(mutations).toBe(1);
+  expect(await pendingIsIdsOnly(page, seed)).toEqual(initialPending);
+  expect((await browserSession(page)).status).toBe('signed_in');
+  expect((await app.fixture.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2', [app.fixture.alpha.workspaceId, firmId])).rows).toEqual([{ id: firmId }]);
+  // Origin deletion legitimately cascades promotion/link removal (migration0128).
+  // Preserve command uncertainty, not a stale source association or a replacement.
+  expect((await app.fixture.db.query('SELECT firm_id FROM sourcing_discovery_research_firms WHERE workspace_id=$1 AND firm_id=$2', [app.fixture.alpha.workspaceId, firmId])).rows).toEqual([]);
+  expect((await app.fixture.db.query('SELECT result FROM command_receipts WHERE command_id=$1', [original.commandId])).rows).toEqual(receipt);
+  for (const text of [seed.name, seed.text, seed.email, seed.website, 'citations', 'quote']) expect(JSON.stringify(receipt)).not.toContain(text);
+  await assertNoAuthority(firmId);
+  const session = await browserSession(page);
+  if (session.status !== 'signed_in') throw new Error('Expected unchanged valid owner session before actual revocation');
+  await app.fixture.db.query("UPDATE devices SET status='revoked',revoked_at=now() WHERE workspace_id=$1 AND id=$2", [session.workspaceId, session.deviceId]);
+  const refused = page.waitForResponse(response => response.url().endsWith('/browser/session'), { timeout: 10_000 });
+  await page.getByRole('button', { name: 'Refresh action queue', exact: true }).click();
+  expect((await refused).status()).toBe(200);
+  // Session refresh authenticates the revoked device first and blocks API dispatch.
+  expect((await browserSession(page)).status).toBe('signed_out');
+  await expect.poll(() => stored(page)).toBeNull();
+  await expect(page.getByLabel('Workspace ID', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry exact research command', exact: true })).toHaveCount(0);
+  expect((await browserRequest(page, '/today/actions/v3')).status).toBe(401);
   expect(mutations).toBe(1);
 });
