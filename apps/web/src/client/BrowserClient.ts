@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { saveMeetingNotesSchema, uuid, type SaveMeetingNotes } from '@fss/contracts';
+import { saveMeetingNotesSchema, qualifiedResearchSelectionSchema, uuid, type QualifiedResearchSelection, type SaveMeetingNotes } from '@fss/contracts';
+import { RESEARCH_PENDING_KEY, researchPendingSchema, type PendingResearch } from './ResearchPending.ts';
 import { BROWSER_CSRF_HEADER, BROWSER_PATHS, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema, type BrowserSession } from '../shared/browserContract.ts';
 
 export const PENDING_KEY = 'callie.browser.pending-notes.v1';
@@ -28,6 +29,7 @@ export class BrowserBoundaryError extends Error {
 
 /** Per mounted browser app only. No credentials, private projection cache or global bridge. */
 export class BrowserClient {
+  private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private session: BrowserSession | null = null;
   private generation = 0;
   private listeners = new Set<() => void>();
@@ -37,15 +39,20 @@ export class BrowserClient {
   }
   get current(): BrowserSession | null { return this.session; }
   get epoch(): number { return this.generation; }
-  isCurrent(epoch: number): boolean { return epoch === this.generation; }
+  isCurrent(epoch: number): boolean {
+    if (this.session?.status === 'signed_in' && Date.parse(this.session.expiresAt) <= Date.now()) this.invalidate();
+    return epoch === this.generation;
+  }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   private emit(): void { for (const listener of this.listeners) listener(); }
   private removePending(): void {
     try { this.options.storage.removeItem(PENDING_KEY); } catch { /* Fail closed: no persisted value is trusted without current identity. */ }
   }
   invalidate(broadcast = true): void {
+    clearTimeout(this.expiryTimer);
     this.generation += 1;
     this.session = null;
+    try { this.options.storage.removeItem(RESEARCH_PENDING_KEY); } catch { /* Invalid identity cannot use retained custody. */ }
     this.removePending();
     this.emit();
     if (broadcast) this.options.channel?.postMessage({ type: 'invalidate' });
@@ -81,15 +88,25 @@ export class BrowserClient {
     try { next = browserSessionSchema.parse(await response.json()); }
     catch { this.check(epoch); this.invalidate(); throw new BrowserBoundaryError('invalid_response'); }
     this.check(epoch);
+    if (next.status === 'signed_in' && Date.parse(next.expiresAt) <= Date.now()) {
+      this.invalidate(); throw new BrowserBoundaryError('session_changed');
+    }
     const previous = identityOf(this.session), identity = identityOf(next);
     if (previous !== identity && this.session !== null) {
       this.invalidate();
-      this.session = next;
-      this.emit();
       throw new BrowserBoundaryError('session_changed');
     }
     if (next.status === 'signed_out') this.removePending();
     this.session = next;
+    clearTimeout(this.expiryTimer);
+    if (next.status === 'signed_in') {
+      const remaining = Date.parse(next.expiresAt) - Date.now();
+      if (remaining <= 0) { this.invalidate(); throw new BrowserBoundaryError('session_changed'); }
+      this.expiryTimer = setTimeout(() => { this.invalidate(); }, Math.min(remaining, 2_147_483_647));
+      this.pendingResearch();
+    } else {
+      try { this.options.storage.removeItem(RESEARCH_PENDING_KEY); } catch { /* No signed-in custody. */ }
+    }
     this.emit();
     return next;
   }
@@ -134,6 +151,42 @@ export class BrowserClient {
     const result = schema.safeParse(raw);
     if (!result.success) throw new BrowserBoundaryError('invalid_response');
     return result.data;
+  }
+  pendingResearch(): PendingResearch | null {
+    const epoch = this.generation;
+    if (!this.isCurrent(epoch) || this.session?.status !== 'signed_in') return null;
+    try {
+      const raw = this.options.storage.getItem(RESEARCH_PENDING_KEY);
+      if (raw === null) return null;
+      const value = researchPendingSchema.parse(JSON.parse(raw));
+      if (value.identity !== identityOf(this.session) || Date.parse(value.expiresAt) <= Date.now()
+        || Date.parse(value.expiresAt) > Date.parse(this.session.expiresAt)) throw new Error('Expired custody');
+      return value;
+    } catch {
+      try { this.options.storage.removeItem(RESEARCH_PENDING_KEY); } catch { /* Fail closed. */ }
+      return null;
+    }
+  }
+  prepareResearch(selection: QualifiedResearchSelection): PendingResearch {
+    const parsed = qualifiedResearchSelectionSchema.parse(selection);
+    this.check(this.generation);
+    if (this.session?.status !== 'signed_in') throw new BrowserBoundaryError('session_changed');
+    const prior = this.pendingResearch();
+    if (prior !== null) {
+      if (JSON.stringify(prior.selection) !== JSON.stringify(parsed)) throw new BrowserBoundaryError('refused');
+      return prior;
+    }
+    const pending = researchPendingSchema.parse({ identity: identityOf(this.session), commandId: this.options.randomUUID(),
+      selection: parsed, expiresAt: this.session.expiresAt });
+    this.retainResearch(pending);
+    return pending;
+  }
+  retainResearch(pending: PendingResearch): void {
+    this.check(this.generation);
+    if (this.session?.status !== 'signed_in' || pending.identity !== identityOf(this.session)
+      || Date.parse(pending.expiresAt) <= Date.now() || Date.parse(pending.expiresAt) > Date.parse(this.session.expiresAt)) throw new BrowserBoundaryError('session_changed');
+    try { this.options.storage.setItem(RESEARCH_PENDING_KEY, JSON.stringify(researchPendingSchema.parse(pending))); }
+    catch { throw new BrowserBoundaryError('storage_unavailable'); }
   }
   pending(): PendingNotes | null {
     const identity = identityOf(this.session);
