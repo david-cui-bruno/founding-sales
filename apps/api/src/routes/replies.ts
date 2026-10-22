@@ -6,6 +6,7 @@ import { CLASSIFIER_EFFORTS, CLASSIFIER_MODELS, REPLY_DISPOSITIONS } from '@fss/
 import { businessDateOf } from '@fss/domain/today/snapshots.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand, type RouteDeps } from './routeSupport.ts';
+import { privateAuthorityRefusal, privateFirmIsCurrent, privatePrincipalIsCurrent, unchangedPrivateProjection } from './privateReadAuthority.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -155,16 +156,24 @@ export async function routeReplies(request: ApiRequest, options: RoutingOptions)
     const parsed = replyCardRequestSchema.safeParse(request.body);
     if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const card = await readReplyCard(context, { messageId: parsed.data.messageId });
-    if (card === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+    const stable = card === null || await unchangedPrivateProjection(card, () => readReplyCard(context, { messageId: parsed.data.messageId }));
+    const accessible = card === null || card.visibility !== 'assigned_or_admin' || await privateFirmIsCurrent(context, card.firmId);
+    if (!await privatePrincipalIsCurrent(deps) || !accessible) return privateAuthorityRefusal();
+    if (card === null || !stable) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
     return { status: 200, body: card };
   }
 
   const parsed = listRepliesRequestSchema.safeParse(request.body ?? {});
   if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
   const businessDate = parsed.data.businessDate ?? (await businessDateOf(context, new Date().toISOString()));
-  const cards = await listReplyCards(context, {
-    businessDate,
-    ...(parsed.data.limit === undefined ? {} : { limit: parsed.data.limit }),
-  });
+  const selection = { businessDate, ...(parsed.data.limit === undefined ? {} : { limit: parsed.data.limit }) };
+  const cards = await listReplyCards(context, selection);
+  const stable = await unchangedPrivateProjection(cards, () => listReplyCards(context, selection));
+  let accessible = true;
+  for (const card of cards) {
+    if (card.visibility === 'assigned_or_admin' && !await privateFirmIsCurrent(context, card.firmId)) accessible = false;
+  }
+  if (!await privatePrincipalIsCurrent(deps) || !accessible) return privateAuthorityRefusal();
+  if (!stable) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   return { status: 200, body: { businessDate, cards } };
 }

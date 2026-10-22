@@ -15,6 +15,7 @@ import { readMeetingBrief, readMeetingPreparation } from '@fss/domain/meetings/b
 import { listFirmMeetings, listUnmatchedMeetings, matchMeetingToFirm, readFirmStageSuggestion } from '@fss/domain/meetings/match.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
+import { privateAuthorityRefusal, privateFirmIsCurrent, privatePrincipalIsCurrent, unchangedPrivateProjection } from './privateReadAuthority.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -83,6 +84,7 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
 
   const scoped = contextForPrincipal(auth, authenticated.principal);
   if (!scoped.ok) return scoped.result;
+  const deps = { auth, request, principal: authenticated.principal };
 
   // A session opened by 1.0.35 reads the shape it parses (review M1F, finding 4).
   const legacy = readsLegacyMeetings(authenticated.principal);
@@ -94,8 +96,12 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
     const version = request.query.get('version');
     if (version !== null && version !== '1' && version !== '2') return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const read = version === '2' ? readMeetingPreparation : readMeetingBrief;
-    const brief = await read(scoped.context, meetingId.data, { includeMeetingTasks: request.query.getAll('include').includes('meeting_tasks') });
-    if (brief === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+    const selection = { includeMeetingTasks: request.query.getAll('include').includes('meeting_tasks') };
+    const brief = await read(scoped.context, meetingId.data, selection);
+    const stable = brief === null || await unchangedPrivateProjection(brief, () => read(scoped.context, meetingId.data, selection), value => value === null ? null : { ...value, generatedAt: null });
+    const accessible = brief === null || await privateFirmIsCurrent(scoped.context, brief.firmId);
+    if (!await privatePrincipalIsCurrent(deps) || !accessible) return privateAuthorityRefusal();
+    if (brief === null || !stable) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
     return { status: 200, body: version === '2' ? meetingPreparationResponseSchema.parse(brief) : meetingBriefResponseSchema.parse(brief) };
   }
   if (request.path === '/meetings/unmatched') {
@@ -109,6 +115,12 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
   const meetings = await listFirmMeetings(scoped.context, firmId.data);
   if (meetings === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   const stageSuggestion = await readFirmStageSuggestion(scoped.context, firmId.data);
+  const stable = await unchangedPrivateProjection({ meetings, stageSuggestion }, async () => ({
+    meetings: await listFirmMeetings(scoped.context, firmId.data),
+    stageSuggestion: await readFirmStageSuggestion(scoped.context, firmId.data),
+  }));
+  if (!await privatePrincipalIsCurrent(deps)) return privateAuthorityRefusal();
+  if (!stable) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   const body = firmMeetingsResponseSchema.parse({ meetings, stageSuggestion });
   return { status: 200, body: legacy ? legacyFirmMeetings(body) : body };
 }

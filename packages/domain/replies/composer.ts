@@ -56,5 +56,15 @@ export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDra
  const source={messageId:message.id,firmId:firm.id,contactId:target.contactId,authorUserId:actor.userId,mailboxId:message.mailboxId,mailboxOwnerUserId:mailbox.owner_user_id,authorAddress:mailbox.email_address,authorizationRevision:auth.revision,subject:message.subject??'',senderAddress:message.headerFrom,providerThreadId:message.providerThreadId,inReplyTo:message.rfcMessageId,references:[...new Set([...message.referenceMessageIds,message.rfcMessageId])],observedTo:[...message.headerTo],observedCc:[...message.headerCc],replyToMetadata:'unavailable' as const,envelope,recipientOptions,messageText:body.text,priorContext:thread.filter(m=>m.id!==message.id).map(m=>({direction:m.direction,text:m.body_text!})),facts:selected.value};
  const sourceRevision=createHash('sha256').update(JSON.stringify({source,bookings,plan,opportunity,confirmation,sourceZone:firm.time_zone??await workspaceBusinessZone(ctx),assignedUserId:firm.assigned_user_id,matchId:target.id,mailboxAccountId:mailbox.provider_account_id,mailboxGeneration:mailbox.generation,threadIds:thread.map(m=>m.id),routes,holds})).digest('hex');
  if(firmReadIsAudited(ctx,firm))await recordCrmAuditEvent(ctx,{action:'reply_composer.context_read',subjectKind:'mail_message',subjectId:message.id});
+ // Assembly above waits on facts, bookings and audits. Do not expose an original
+ // or prior message from a source/assignment snapshot that disappeared meanwhile.
+ const currentMessage=await readMessage(ctx,message.id);
+ const currentTarget=await directSendTargetOf(ctx,message.id);
+ const currentAuth=await authorizationForMailbox(ctx,message.mailboxId);
+ const currentThread=(await ctx.db.query<{id:string;direction:'incoming'|'outgoing';internal_date:Date;body_text:string|null;truncated:boolean|null}>(`SELECT m.id,m.direction,m.internal_date,b.body_text,b.truncated FROM mail_messages m LEFT JOIN mail_message_bodies b ON b.workspace_id=m.workspace_id AND b.mail_message_id=m.id WHERE m.workspace_id=$1 AND m.mailbox_id=$2 AND m.provider_thread_id=$3 ORDER BY m.internal_date,m.id LIMIT 21`,[ctx.scope.workspaceId,message.mailboxId,message.providerThreadId])).rows;
+ const currentFirm=await readFirm(ctx,firm.id);
+ if(!currentFirm||currentFirm.status!=='active'||decideFirmRead(ctx,currentFirm)!=='assigned_or_admin')return {ok:false,reason:'not_assigned'};
+ if(currentFirm.assigned_user_id!==firm.assigned_user_id||!currentAuth.allowed||currentAuth.revision!==auth.revision)return {ok:false,reason:'owner_changed'};
+ if(thread.find(m=>m.id===message.id)?.body_text!==body.text||JSON.stringify(currentMessage)!==JSON.stringify(message)||JSON.stringify(currentTarget)!==JSON.stringify(target)||JSON.stringify(currentThread)!==JSON.stringify(thread))return {ok:false,reason:'source_changed'};
  return {ok:true,value:{...source,bookings,sourceRevision,availableFacts}};
 }

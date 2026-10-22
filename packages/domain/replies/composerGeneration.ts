@@ -29,10 +29,14 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
  if(!await currentAuthorization())return {ok:false,reason:'session_changed'};
  const selection={messageId:input.messageId,factRefs:input.factRefs,envelope:input.envelope};
  const source=await readReplyDraftContext(ctx,selection);if(!source.ok)return source;
+ // Reading original/thread/fact context can wait. Re-pin identity before any port
+ // sees it, including token counting, which may itself cross a provider boundary.
+ if(!await currentAuthorization())return {ok:false,reason:'session_changed'};
  if(source.value.sourceRevision!==input.sourceRevision)return {ok:false,reason:'source_changed'};
  const attempt={subjectKind:'outreach_reply' as const,subjectId:input.commandId,attempt:1};
  if(await readAttempt(ctx,attempt))return {ok:false,reason:'generation_already_attempted'};
  if(!port||port.providerKey!=='aws_bedrock.outreach_reply')return {ok:false,reason:'generation_unavailable'};
+ if(!await currentAuthorization())return {ok:false,reason:'session_changed'};
  let tokens:number;try{tokens=await port.countInputTokens(source.value);}catch{return {ok:false,reason:'token_count_unavailable'};}
  if(!Number.isSafeInteger(tokens)||tokens<=0||tokens>100000)return {ok:false,reason:'input_over_budget'};
  const inputTokens=countedWithHeadroom(tokens);
@@ -65,6 +69,7 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
  await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:answer.costEstimated||!Number.isSafeInteger(answer.costCents)||answer.costCents<0?{kind:'estimated'}:{kind:'settled',cents:answer.costCents}}));
  if(!await currentAuthorization())return {ok:false,reason:'session_changed'};
  const current=await withTransaction(db,async()=>{await lockSendGateForDispatch(ctx);return readReplyDraftContext(ctx,selection);});
+ if(!await currentAuthorization())return {ok:false,reason:'session_changed'};
  if(!current.ok)return current;
  if(current.value.sourceRevision!==input.sourceRevision)return {ok:false,reason:'source_changed'};
  let parsed:unknown;try{parsed=JSON.parse(answer.raw);}catch{return {ok:false,reason:'generation_invalid'};}
