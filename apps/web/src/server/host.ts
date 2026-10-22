@@ -4,16 +4,7 @@ import { MAX_REQUEST_BYTES } from '../../../api/src/limits.ts';
 import { BROWSER_PATHS, browserApiPathAllowed } from '../shared/browserContract.ts';
 import { createBrowserHandler } from './browser.ts';
 import type { BrowserHostOptions, BrowserStaticAsset } from './hostContract.ts';
-
-const HEADERS = Object.freeze({
-  'cache-control': 'private, no-store',
-  'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-  'x-content-type-options': 'nosniff',
-  'referrer-policy': 'no-referrer',
-  'cross-origin-resource-policy': 'same-origin',
-  'x-frame-options': 'DENY',
-  'permissions-policy': 'camera=(), microphone=(), geolocation=()',
-});
+import { BROWSER_SECURITY_HEADERS, BROWSER_REFUSAL_BODY, BROWSER_JSON_CONTENT_TYPE } from './httpPolicy.ts';
 class Refusal extends Error {
   constructor(readonly status: number) { super('browser_request_refused'); }
 }
@@ -77,7 +68,7 @@ function send(response: ServerResponse, status: number, body: Buffer, head: bool
   if (response.destroyed) return;
   response.statusCode = status;
   for (const [name, value] of Object.entries(headers)) response.setHeader(name, typeof value === 'string' ? value : [...value]);
-  for (const [name, value] of Object.entries(HEADERS)) response.setHeader(name, value);
+  for (const [name, value] of Object.entries(BROWSER_SECURITY_HEADERS)) response.setHeader(name, value);
   response.setHeader('content-length', body.byteLength);
   response.end(head ? undefined : body);
 }
@@ -131,11 +122,11 @@ export function createBrowserHostHandler(options: BrowserHostOptions): RequestLi
         }
         const result = await browser({ method, path, query, headers, body });
         if (result === null) throw new Refusal(404);
-        send(response, result.status, Buffer.from(JSON.stringify(result.body)), false, { ...result.headers, 'content-type': 'application/json; charset=utf-8' });
+        send(response, result.status, Buffer.from(JSON.stringify(result.body)), false, { ...result.headers, 'content-type': BROWSER_JSON_CONTENT_TYPE });
       } catch (error) {
         // Close refused uploads instead of retaining unread bytes on a reusable socket.
         response.setHeader('connection', 'close');
-        send(response, error instanceof Refusal ? error.status : 503, Buffer.from('{"error":"browser_request_refused"}'), request.method === 'HEAD', { 'content-type': 'application/json; charset=utf-8' });
+        send(response, error instanceof Refusal ? error.status : 503, Buffer.from(BROWSER_REFUSAL_BODY), request.method === 'HEAD', { 'content-type': BROWSER_JSON_CONTENT_TYPE });
       }
     })();
   };
