@@ -17,6 +17,15 @@ export interface BrowserHostOptions {
   readonly bodyTimeoutMs?: number;
 }
 
+/** Reusable server composition. TLS/key material is supplied, never read or generated. */
+export interface BrowserServerOptions {
+  readonly settings: BrowserHostSettings;
+  readonly withRequest: BrowserRuntime['withRequest'];
+  readonly tls: { readonly key: string | Buffer; readonly cert: string | Buffer };
+  readonly assets?: BrowserAssets;
+  readonly bodyTimeoutMs?: number;
+}
+
 /** Transport implementations must cap raw bytes at the existing API MAX_REQUEST_BYTES
  * before parsing or entering withRequest. No proxy-derived origin or shared auth state.
  * Production-shaped handler: createBrowserHostHandler(options): RequestListener.
