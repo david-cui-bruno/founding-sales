@@ -3,23 +3,34 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { access, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer } from 'node:https';
-import type { AddressInfo } from 'node:net';
+import type { RequestListener } from 'node:http';
+import type { Server } from 'node:https';
+import { createServer as reserveServer, type AddressInfo } from 'node:net';
 import pg from 'pg';
 import { asSession, CLUSTER_URL_ENVIRONMENT_VARIABLE } from '@fss/domain/db/testing/testDatabase.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type SeededMember } from '../../../api/test/support/authFixture.ts';
 import { seedFirm } from '../../../api/test/support/crmSeed.ts';
-import { createBrowserHostHandler } from '../../src/server/host.ts';
+import { createBrowserServer } from '../../src/server/server.ts';
 import { buildBrowserAssets } from '../../src/server/assets.ts';
 import { readBrowserHostSettings } from '../../src/server/settings.ts';
 import type { BrowserRuntime } from '../../src/server/runtime.ts';
 import { localCertificate } from './tls.ts';
 
+/** Reserve once, then bind the factory to this exact origin. A collision fails,
+ * never silently substitutes another port after cookies/settings are pinned. */
+async function reservePort(): Promise<number> {
+  const reservation = reserveServer();
+  await new Promise<void>((resolve, reject) => { reservation.once('error', reject); reservation.listen(0, 'localhost', resolve); });
+  const port = (reservation.address() as AddressInfo).port;
+  await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+  return port;
+}
+
 /** Only provider navigation is synthetic. Every product byte uses the exported host. */
 export async function startThinHostApp() {
   const fixture = await createAuthFixture();
   const certificate = await localCertificate().catch(async error => { await fixture.stop(); throw error; });
-  let server: ReturnType<typeof createServer> | undefined;
+  let server: Server | undefined;
   try {
     const directory = await fixture.db.query<{ data_directory: string }>('SHOW data_directory');
     const storagePath = directory.rows[0]!.data_directory;
@@ -39,23 +50,9 @@ export async function startThinHostApp() {
     await fixture.db.query("INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,$4,$4,'booked',now(),now(),now())", [fixture.alpha.workspaceId, meetingId, alphaFirmId, `thin-${meetingId}`]);
     const assets = await buildBrowserAssets();
     let identity: SeededMember = fixture.alpha.salesperson;
-    let origin = '';
+    const port = await reservePort();
+    const origin = `https://localhost:${String(port)}`;
     let requestConnections = 0;
-    server = createServer(certificate, (request, response) => {
-      const url = new URL(request.url ?? '/', origin);
-      if (url.pathname !== '/__local/provider') return handler(request, response);
-      const code = `thin-${randomUUID()}`;
-      fixture.google.issueCode(code);
-      const now = Math.floor(fixture.deps.now().getTime() / 1000);
-      fixture.google.nextIdToken(fixture.google.signIdToken({ sub: identity.googleSub, email: identity.email, hd: fixture.hostedDomain, nonce: url.searchParams.get('nonce') ?? '', iat: now, exp: now + 3600 }));
-      const callback = new URL('/browser/callback', origin);
-      callback.searchParams.set('code', code);
-      callback.searchParams.set('state', url.searchParams.get('state') ?? '');
-      response.writeHead(302, { location: callback.toString(), 'cache-control': 'no-store' });
-      response.end();
-    });
-    await new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(0, 'localhost', resolve); });
-    origin = `https://localhost:${String((server.address() as AddressInfo).port)}`;
     const settings = readBrowserHostSettings({ FSS_BROWSER_ORIGIN: origin, FSS_BROWSER_CLIENT_VERSION: CURRENT_CLIENT_VERSION, FSS_BROWSER_COOKIE_KEY_HEX: randomBytes(32).toString('hex') });
     const config = { ...fixture.deps.config, oidc: { ...fixture.deps.config.oidc, redirectUri: `${origin}/browser/callback` } };
     const runtime: BrowserRuntime = {
@@ -73,7 +70,31 @@ export async function startThinHostApp() {
         } finally { await client.end(); }
       },
     };
-    const handler = createBrowserHostHandler({ runtime, assets, bodyTimeoutMs: 150 });
+    server = await createBrowserServer({ settings, withRequest: runtime.withRequest, tls: certificate, assets, bodyTimeoutMs: 150 });
+    assert.equal(server.headersTimeout, 10_000);
+    assert.equal(server.requestTimeout, 30_000);
+    assert.equal(server.keepAliveTimeout, 5_000);
+    // Fixture-only outer router. Preserve the factory's original request listener
+    // for every product path, with no source hook or duplicate HTTP adapter.
+    const listeners = server.listeners('request');
+    assert.equal(listeners.length, 1);
+    const product = listeners[0] as RequestListener;
+    server.removeListener('request', product);
+    server.on('request', (request, response) => {
+      const url = new URL(request.url ?? '/', origin);
+      if (url.pathname !== '/__local/provider') return product(request, response);
+      const code = `thin-${randomUUID()}`;
+      fixture.google.issueCode(code);
+      const now = Math.floor(fixture.deps.now().getTime() / 1000);
+      fixture.google.nextIdToken(fixture.google.signIdToken({ sub: identity.googleSub, email: identity.email, hd: fixture.hostedDomain, nonce: url.searchParams.get('nonce') ?? '', iat: now, exp: now + 3600 }));
+      const callback = new URL('/browser/callback', origin);
+      callback.searchParams.set('code', code);
+      callback.searchParams.set('state', url.searchParams.get('state') ?? '');
+      response.writeHead(302, { location: callback.toString(), 'cache-control': 'no-store' });
+      response.end();
+    });
+    await new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(port, 'localhost', resolve); });
+    console.log('THIN_HOST_REAL_SERVER_FACTORY: TLS minimum/header limit and server deadlines preserved');
     return {
       origin, fixture, alphaFirmId, betaFirmId, meetingId, assets, storagePath, postgresPid,
       connections: () => requestConnections,

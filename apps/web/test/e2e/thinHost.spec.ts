@@ -215,6 +215,7 @@ test('new HTTPS host allowlists built assets, paths, methods, Host and secure he
   for (const path of ['/missing.js', '/assets/missing.css']) expect((await wire(path)).status).toBe(404);
   for (const path of ['/../package.json', '/%2e%2e/package.json', '/assets\\secret', '//elsewhere']) expect((await wire(path)).status).toBe(400);
   expect((await wire('/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(405);
+  expect((await wire('/', { headers: { 'x-thin-large-header': 'x'.repeat(20_000) } })).status).toBe(431);
   expect((await wire('/', { headers: { host: 'other.example.test' } })).status).toBe(400);
   expect((await wire('/', { headers: { 'x-thin-duplicate': ['one', 'two'] } })).status).toBe(400);
   expect((await wire('/', { headers: { 'content-encoding': 'gzip' } })).status).toBe(415);
