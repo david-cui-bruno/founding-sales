@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { BrowserApp } from '../../src/client/BrowserApp.tsx';
 import { BrowserClient, PENDING_KEY } from '../../src/client/BrowserClient.ts';
+import { REPLY_PENDING_KEY } from '../../src/client/ReplyAttempt.ts';
 
 const id = '00000000-0000-4000-8000-000000000001';
 const session = { status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'revision-one', csrfToken: 'c'.repeat(40), expiresAt: '2026-10-23T00:00:00.000Z' };
@@ -33,7 +34,7 @@ function setup() {
   const client = new BrowserClient({ fetch: send, storage, navigate: vi.fn(), randomUUID: () => id });
   return { client, storage, commands, send, lose: () => { loseResponse = true; }, recover: () => { loseResponse = false; } };
 }
-afterEach(cleanup);
+afterEach(() => { cleanup(); sessionStorage.clear(); });
 async function openNotes(): Promise<void> {
   fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
   await screen.findByText('Fixture Person · Owner');
@@ -43,17 +44,28 @@ async function openNotes(): Promise<void> {
 }
 
 describe('BrowserApp real shared presentation', () => {
+  it('clears valid prior reply custody when cold-start authentication is refused', async () => {
+    const { client, send } = setup();
+    sessionStorage.setItem(REPLY_PENDING_KEY, JSON.stringify({ identity: JSON.stringify([id, id, id, 'admin', session.revision]),
+      expiresAt: session.expiresAt, messageId: id, commandId: id, sourceRevision: 'a'.repeat(64), factRefs: [], envelopeSHA256: 'b'.repeat(64) }));
+    send.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+    render(<BrowserApp client={client} />);
+    await waitFor(() => { expect(sessionStorage.getItem(REPLY_PENDING_KEY)).toBeNull(); });
+    expect(send).toHaveBeenCalledWith('/browser/session', expect.anything());
+    expect(screen.queryByRole('heading', { name: 'Replies' })).toBeNull();
+  });
+
   it('mounts reviewed replies in Today and existing preparation on the selected Firm without automatic generation', async () => {
     const { client, commands, send } = setup();
     render(<BrowserApp client={client} />);
-    await screen.findByRole('heading', { name: 'Replies', exact: true });
+    await screen.findByRole('heading', { name: 'Replies' });
     expect(screen.getByRole('button', { name: 'Refresh replies' })).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
-    await screen.findByRole('heading', { name: 'Meeting preparation', exact: true });
+    await screen.findByRole('heading', { name: 'Meeting preparation' });
     expect(screen.getByRole('button', { name: 'Load existing meetings' })).toBeTruthy();
     expect(commands).toHaveLength(0);
     expect(send.mock.calls.some(([url]) => String(url).includes('/replies/composer/generate'))).toBe(false);
-    expect(screen.queryByRole('button', { name: 'Send', exact: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
   });
 
   it('shows Today, existing Firm and actual notes receipt, then clears all private views on logout', async () => {
