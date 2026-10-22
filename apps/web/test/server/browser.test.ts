@@ -49,7 +49,7 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
-  it.each(['generation_already_attempted', 'generation_outcome_unknown', 'source_changed', 'generation_held'])('preserves authenticated generation refusal %s without invalidating custody', async reason => {
+  it.each(['generation_already_attempted', 'generation_outcome_unknown', 'source_changed', 'context_incomplete', 'generation_held'])('preserves authenticated generation refusal %s without invalidating custody', async reason => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const body = { status: 'refused', replayed: true, reason };
     mocks.route.mockResolvedValueOnce({ status: 409, body });
