@@ -6,6 +6,19 @@ Approved October22 2026 at05:39UTC. This is local synthetic-data implementation,
 
 ## Sequence and exclusive ownership
 
+### Active local continuation: issue741 approved email campaign admission
+
+Issue740 qualified research Firm plus Today preparation is CLOSED, not automatic campaign or real selling acceptance. Next local outcome741 uses ADR0013 and committed boundary93953b90a: explicit campaign approval once, then current canonical qualified Firms admit automatically into the exact approved email sequence. No live enrollment/send/provider/hosting/data-route action. Original production/main/client881/schema129/OFF remains a dated checkpoint, not a fresh read. New schema130 is local implementation only. Approval does not change sending, contact or provider authority.
+
+| Whole piece | Exclusive owner/files | Dependency and done means |
+| --- | --- | --- |
+| Shared contract and integration | Hatchling: contracts/index, browser shared allowlist, ADR0013, this plan/current docs/tracker | Boundary93953b90a committed; three contract tests/types/workflow passed. Final reviews and scoped delivery remain OPEN |
+| Campaign authority/admission/API | Crocodile: new domain campaign modules, narrow email admission/assessment/plan/qualified-Firm hooks, migration0130/schemaRange/constraint registration, new API route/registration and focused tests | Locked boundary; immutable explicit policy, existing enrollment composition and current safety gates, no invented per-recipient human review |
+| Browser approval/current view | Cricket: new campaign panel/client/pending helpers, minimal BrowserApp placement, new client tests | Locked boundary; IDs-only session-bound exact command custody, no automatic replay, auth/generation fences |
+| New composed acceptance | Dog: new campaign web support/e2e, domain campaign admission/constraint-case tests | Server/schema and browser ready before execution; sole disposable PG, maxWorkers1, actual HTTPS/OIDC/PG/Chrome workflow and owned resource absence |
+
+One shared workspace, one writer per owned path. No worker spawns or live operations. Other closed ownership tables below are historical, not active builders. Approval targets only the current supported geography and source-backed unambiguous email fit, caps1..25 lifetime/1..5 daily and expiry within30days; templates, mailbox authorization revision, owner/session, suppression/reply/refusal/unknown states are rechecked. Existing manual cohorts, technical-validation/send gates and OFF remain. No phone route, AI opening or new scheduler. Local acceptance must observe new canonical Firm admission after campaign approval without a per-recipient click, exact reload/response-loss recovery and zero sends. Hosted rollout, actual approved originals/useful replies/briefs, real useful lead and later social remain separate retained outcomes.
+
 | Outcome | Owner | Exclusive files | Waits |
 | --- | --- | --- | --- |
 | Shared platform/session contract | Hatchling | `src/shared/browserContract.ts`, `src/server/runtime.ts`, ADR0012, workspace configuration | Committed7dac0db29/e85ccde08, focused tests/types/workflow passed |

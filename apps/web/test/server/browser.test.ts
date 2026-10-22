@@ -140,6 +140,18 @@ describe('browser request boundary', () => {
     expect((await handler(post('/browser/api/sourcing/research-firms/create', { ...body, clientVersion: '9.9.9' }, headers)))?.status).toBe(400);
     expect(mocks.route).toHaveBeenCalledTimes(1);
   });
+  it('pins approved email campaign command versions without adding recipient or sending authority', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    for (const action of ['approve', 'revoke']) {
+      const body = { commandId: id, id, expectedRevision: 1 };
+      await handler(post(`/browser/api/outreach/email-campaigns/${action}`, body, headers));
+      expect(mocks.route.mock.calls.at(-1)?.[3]).toMatchObject({ body: { ...body, clientVersion: '1.4.0' } });
+      expect((await handler(post(`/browser/api/outreach/email-campaigns/${action}`, { ...body, clientVersion: '9.9.9' }, headers)))?.status).toBe(400);
+    }
+    expect(mocks.route).toHaveBeenCalledTimes(2);
+  });
+
   it('calls real logout seam, clears local cookies but never reports success on uncertain failure', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };

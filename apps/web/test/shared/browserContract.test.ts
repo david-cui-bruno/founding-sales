@@ -24,6 +24,17 @@ describe('browser boundary', () => {
     for (const path of ['/sourcing/research-firms/delete', '/sourcing/admit', '/sourcing/research-firms/create/extra']) expect(browserApiPathAllowed('POST', path)).toBe(false);
   });
 
+  it('admits only current email campaign control and approval/revoke paths', () => {
+    for (const action of ['control', 'approve', 'revoke']) {
+      const path = `/outreach/email-campaigns/${action}`;
+      expect(browserApiPathAllowed('POST', path)).toBe(true);
+      expect(browserApiPathAllowed('GET', path)).toBe(false);
+    }
+    for (const action of ['send', 'enable', 'enroll', 'process', 'approve/extra']) expect(browserApiPathAllowed('POST', `/outreach/email-campaigns/${action}`)).toBe(false);
+    expect(browserApiPathAllowed('POST', '/outreach/cohort/enable')).toBe(false);
+    expect(browserApiPathAllowed('POST', '/outreach/authorization/save')).toBe(false);
+  });
+
   it('never accepts credentials as presentation metadata', () => {
     expect(browserSessionSchema.safeParse({ status: 'signed_out', csrfToken: 'x'.repeat(43) }).success).toBe(true);
     expect(browserSessionSchema.safeParse({ status: 'signed_out', csrfToken: 'x'.repeat(43), accessToken: 'secret' }).success).toBe(false);
