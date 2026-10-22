@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { NotarizationWrapperError, observeNotarizationWrapper, type NotarizationWrapperReceipt } from './notarizationDiagnostics.ts';
 import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -43,6 +44,7 @@ export interface PackagedApp {
   readonly appPath: string;
   readonly stamp: ReleaseStamp;
   readonly mode: 'release' | 'local-smoke';
+  readonly notarizationReceipt: NotarizationWrapperReceipt | null;
 }
 
 export class PackagingError extends Error {
@@ -91,9 +93,9 @@ export async function packageDesktop(options: PackageOptions): Promise<PackagedA
     trimInfoPlist(appPath);
     await burnFuses(appPath);
     await signBundle(appPath, entitlementsPath, plan);
-    if (plan.kind === 'release') await notarizeBundle(appPath, plan);
+    const notarizationReceipt = plan.kind === 'release' ? await notarizeBundle(appPath, plan) : null;
 
-    return { appPath, stamp, mode: channel };
+    return { appPath, stamp, mode: channel, notarizationReceipt };
   } finally {
     await rm(staging, { recursive: true, force: true });
     await rm(entitlementsPath, { force: true });
@@ -269,15 +271,16 @@ async function signBundle(appPath: string, entitlementsPath: string, plan: Signi
   ]);
 }
 
-async function notarizeBundle(appPath: string, plan: Extract<SigningPlan, { kind: 'release' }>): Promise<void> {
-  const { notarize } = await import('@electron/notarize');
-  // `notarize` submits with notarytool and staples the ticket on success. Neither
-  // the Apple ID nor the app-specific password is written anywhere by this call.
-  await notarize({
-    appPath,
-    appleId: plan.appleId,
-    appleIdPassword: plan.appSpecificPassword,
-    teamId: plan.teamId,
+async function notarizeBundle(appPath: string, plan: Extract<SigningPlan, { kind: 'release' }>): Promise<NotarizationWrapperReceipt> {
+  return observeNotarizationWrapper(appPath, async () => {
+    const { notarize } = await import('@electron/notarize');
+    // Observe only wrapper completion. Do not infer per-attempt internal staple receipts.
+    await notarize({
+      appPath,
+      appleId: plan.appleId,
+      appleIdPassword: plan.appSpecificPassword,
+      teamId: plan.teamId,
+    });
   });
 }
 
@@ -303,7 +306,7 @@ async function main(): Promise<void> {
     apiBaseUrl: process.env['FSS_API_BASE_URL'] ?? 'https://api.usecallie.com',
     updateChannelUrl: process.env['FSS_UPDATE_CHANNEL_URL'] ?? 'https://updates.usecallie.com/',
   });
-  process.stdout.write(`${JSON.stringify({ appPath: built.appPath, mode: built.mode, stamp: built.stamp }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ appPath: built.appPath, mode: built.mode, stamp: built.stamp, notarizationReceipt: built.notarizationReceipt }, null, 2)}\n`);
 }
 
 async function readPackageVersion(root: string): Promise<string> {
@@ -313,7 +316,9 @@ async function readPackageVersion(root: string): Promise<string> {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(error instanceof NotarizationWrapperError
+      ? JSON.stringify({ error: 'notarization_wrapper_failed', receipt: error.receipt })
+      : error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });
 }
