@@ -36,8 +36,13 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
  const attempt={subjectKind:'outreach_reply' as const,subjectId:input.commandId,attempt:1};
  if(await readAttempt(ctx,attempt))return {ok:false,reason:'generation_already_attempted'};
  if(!port||port.providerKey!=='aws_bedrock.outreach_reply')return {ok:false,reason:'generation_unavailable'};
+ // The attempt lookup can wait through source deletion or Firm reassignment while
+ // the same principal remains valid. Count only the freshly authorized exact source.
+ const countSource=await readReplyDraftContext(ctx,selection);
  if(!await currentAuthorization())return {ok:false,reason:'session_changed'};
- let tokens:number;try{tokens=await port.countInputTokens(source.value);}catch{return {ok:false,reason:'token_count_unavailable'};}
+ if(!countSource.ok)return countSource;
+ if(countSource.value.sourceRevision!==input.sourceRevision)return {ok:false,reason:'source_changed'};
+ let tokens:number;try{tokens=await port.countInputTokens(countSource.value);}catch{return {ok:false,reason:'token_count_unavailable'};}
  if(!Number.isSafeInteger(tokens)||tokens<=0||tokens>100000)return {ok:false,reason:'input_over_budget'};
  const inputTokens=countedWithHeadroom(tokens);
  const cents=centsOf(HUMAN_REPLY_DRAFT_MODEL,{inputTokens,outputTokens:HUMAN_REPLY_DRAFT_MAX_OUTPUT_TOKENS},'bedrock');
@@ -61,8 +66,16 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
   await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}}));
   return {ok:false,reason:'session_changed'};
  }
+ // Reservation, settings, holds and budget reads also wait. The committed attempt
+ // stays opaque and consumed if source access disappears before provider dispatch.
+ const dispatchSource=await readReplyDraftContext(ctx,selection);
+ const dispatchAuthorized=await currentAuthorization();
+ if(!dispatchAuthorized||!dispatchSource.ok||dispatchSource.value.sourceRevision!==input.sourceRevision){
+  await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}}));
+  return !dispatchAuthorized?{ok:false,reason:'session_changed'}:!dispatchSource.ok?dispatchSource:{ok:false,reason:'source_changed'};
+ }
  let answer:{raw:string;costCents:number;costEstimated:boolean};
- try{answer=await port.prepareReplyDraft(source.value);}catch{
+ try{answer=await port.prepareReplyDraft(dispatchSource.value);}catch{
   await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:{kind:'estimated'}}));
   return {ok:false,reason:'generation_outcome_unknown'};
  }
