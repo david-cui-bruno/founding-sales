@@ -100,3 +100,4 @@ export * from './bookingPolicy.ts';
 export * from './phoneHandoff.ts';
 export * from './nationalDnc.ts';
 export * from './crmCaptureReadRecovery.ts';
+export * from './qualifiedResearch.ts';

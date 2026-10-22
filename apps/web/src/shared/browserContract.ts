@@ -29,10 +29,15 @@ export const BROWSER_REVISION_HEADER = 'x-callie-session';
 
 /** Deliberately not a generic proxy. Existing API handlers own all product policy. */
 export const BROWSER_READ_PATHS = Object.freeze([
-  '/today', '/firms', '/meetings/outcomes',
+  '/today', '/firms', '/meetings/outcomes', '/today/actions/v3',
 ] as const);
-export const BROWSER_POST_READ_PATHS = Object.freeze(['/today/firm', '/crm/firm-page-v3'] as const);
-export const BROWSER_COMMAND_PATHS = Object.freeze(['/meetings/notes'] as const);
+export const BROWSER_POST_READ_PATHS = Object.freeze([
+  '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3',
+  '/sourcing/research-firms/list', '/sourcing/research-firms/read',
+] as const);
+export const BROWSER_COMMAND_PATHS = Object.freeze([
+  '/meetings/notes', '/sourcing/research-firms/create',
+] as const);
 
 export const browserSignInSchema = z.strictObject({
   workspaceId: uuid,
