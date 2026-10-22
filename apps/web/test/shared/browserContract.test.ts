@@ -15,6 +15,15 @@ describe('browser boundary', () => {
     expect(browserApiPathAllowed('GET', '/today/../admin')).toBe(false);
   });
 
+  it('admits only closed qualified research and Today V3 method pairs', () => {
+    expect(browserApiPathAllowed('GET', '/today/actions/v3')).toBe(true);
+    for (const path of ['/today/actions/open/v3', '/sourcing/research-firms/list', '/sourcing/research-firms/read', '/sourcing/research-firms/create']) {
+      expect(browserApiPathAllowed('POST', path)).toBe(true);
+      expect(browserApiPathAllowed('GET', path)).toBe(false);
+    }
+    for (const path of ['/sourcing/research-firms/delete', '/sourcing/admit', '/sourcing/research-firms/create/extra']) expect(browserApiPathAllowed('POST', path)).toBe(false);
+  });
+
   it('never accepts credentials as presentation metadata', () => {
     expect(browserSessionSchema.safeParse({ status: 'signed_out', csrfToken: 'x'.repeat(43) }).success).toBe(true);
     expect(browserSessionSchema.safeParse({ status: 'signed_out', csrfToken: 'x'.repeat(43), accessToken: 'secret' }).success).toBe(false);
