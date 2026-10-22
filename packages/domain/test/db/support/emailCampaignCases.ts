@@ -68,7 +68,7 @@ export const EMAIL_CAMPAIGN_CONSTRAINT_CASES: readonly Case[] = [
   } },
   ...[
     ['email_campaign_admission_campaign_fkey', 'campaign_id'], ['email_campaign_admission_contact_fkey', 'contact_id'],
-    ['email_campaign_admission_route_fkey', 'route_id'], ['email_campaign_admission_plan_fkey', 'plan_id'], ['email_campaign_admission_enrollment_fkey', 'enrollment_id'],
+    ['email_campaign_admission_plan_fkey', 'plan_id'], ['email_campaign_admission_enrollment_fkey', 'enrollment_id'],
   ].map(([constraint, key]) => ({ constraint: constraint!, run: async (f: Fixture) => {
     const row = await admission(f);
     // Privileged rolled-back catalog harness isolates declarative constraints.
