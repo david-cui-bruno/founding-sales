@@ -1,4 +1,4 @@
-import { PHONE_HANDOFF_CONSTRAINT_CASES } from './support/phoneHandoffCases.ts'; import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
+import { AUTOMATIC_SUPPLY_CONSTRAINT_CASES } from './support/automaticSupplyCases.ts'; import { PHONE_HANDOFF_CONSTRAINT_CASES } from './support/phoneHandoffCases.ts'; import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {BOOKING_CHANGE_CONSTRAINT_CASES} from './support/bookingChangeConstraints.ts';
 import {BOOKING_MESSAGE_CONSTRAINT_CASES,BOOKING_MESSAGE_GUARD_CASES} from './support/bookingMessageCases.ts';
 import {BOOKING_CONVERSATION_CONSTRAINT_CASES} from './support/bookingConversationCases.ts';
@@ -2244,7 +2244,7 @@ const cases: readonly Case[] = [
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
   ...linkedinRefusalConstraintCases,
-  ...SOURCING_CONSTRAINT_CASES,
+  ...SOURCING_CONSTRAINT_CASES, ...AUTOMATIC_SUPPLY_CONSTRAINT_CASES,
   ...OUTREACH_CONSTRAINT_CASES,
   ...ROADMAP_ACTIVATION_CONSTRAINT_CASES,
   ...CRM_CAPABILITY_CONSTRAINT_CASES,
