@@ -10,7 +10,7 @@ Issue741 LOCAL campaign acceptance CLOSED at17ac4804d/docs16fc3ac36, source130 N
 
 **Issue742 LOCAL automatic supply:** source5f5466148 plus acceptance112990536, schema131 NOT deployed129. Existing completed search/Apollo→registered qualification→canonical research Firm/current-proof TodayV4, no per-candidate create/link. Original NEW7browserPASS24.1s/catalog15PASS3030skipped; separate P1NEW4holdcasesPASS10.1s and29noPG. Owned resources absent, earlier failures retained. SPEC/standards/privacy CLEAN after same-finding proof closure. Exact owner/Firm research holds checked after waits. Existing targeting/discovery-v1/calling unchanged, no new-source-kind campaign enrollment/live acquisition. Composed types/workflow PASS. Local delivery is not hosted selling.
 
-**Issue744 LOCAL reviewed:** sourcec4416b053/acceptance81a46eefc, schema132 NOT deployed. Automatic-source→approved-campaign retains system identity/OFF. Browser split3PASS/1fixtureFAIL/3notrun then4PASS; catalog10PASS, noPG68PASS. Three reviews CLEAN; owned resources absent. Accidental defaultPG teardown/absence limits retained. Root delivery pending.
+**Issue744 LOCAL closed:** sourcec4416b053/acceptance81a46eefc, schema132 NOT deployed. Automatic-source→approved-campaign retains system identity/OFF. Browser split3PASS/1fixtureFAIL/3notrun then4PASS; catalog10PASS, noPG68PASS. Three reviews CLEAN; owned resources absent. Accidental defaultPG teardown/absence limits retained. Delivered2a6f52138; CLOSED23:41:11.
 
 ## Qualified research preparation, issue740 closed locally
 

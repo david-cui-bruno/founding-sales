@@ -6,13 +6,13 @@ Approved October22 2026 at05:39UTC. This is local synthetic-data implementation,
 
 ## Sequence and exclusive ownership
 
-### Issue744 LOCAL automatic-source campaign composition, reviewed
+### Issue744 LOCAL automatic-source campaign composition, closed
 
 Root locked ADR0016/internal source-selection boundary2386021de before delegation. No public browser/API authority input or new sending engine. Reuse exact existing automatic publication/current owner proof and approved campaign; no fabricated promotion, human review or user impersonation.
 
 | Whole outcome | Exclusive owner/files | Waits and acceptance |
 | --- | --- | --- |
-| Shared boundary/integration/tracker | Hatchling: ADR0016, emailCampaignSource.ts, PLAN/current docs | Boundary2386021de, sourcec4416b053 and acceptance81a46eefc; composed contracts/domain/API/web/worker types and workflow PASS; three finished reviews CLEAN, documentation/tracker delivery pending |
+| Shared boundary/integration/tracker | Hatchling: ADR0016, emailCampaignSource.ts, PLAN/current docs | Boundary2386021de, sourcec4416b053 and acceptance81a46eefc; composed contracts/domain/API/web/worker types and workflow PASS; three finished reviews/docs CLEAN; delivery2a6f52138, issue CLOSED23:41:11 |
 | Domain/worker composition | Kitten, finished: outreach campaign/selection/admission/plan owners, narrow automaticResearch hook, migration0132/schema/constraint registration and new no-PG tests | c4416b053,68 focused noPG PASS; internal selection is never authority, actual system identity/current proof and approved campaign, ordered locks, immutable source-kind lineage, honest savepoints/recovery |
 | New composed acceptance | Poodle, finished: NEW web support/e2e and NEW domain constraint-case module | 81a46eefc: actual browser run1 3PASS/1fixtureFAIL/3notrun, corrected remaining4PASS; catalog10PASS/3044skipped. Exact owned resources absent, solePG released. No single-run7PASS claim |
 
