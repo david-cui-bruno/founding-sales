@@ -1,6 +1,7 @@
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {evaluateQualification} from '@fss/domain/sourcing/qualificationDecision.ts';
 import {advanceVerifiedFirm} from '@fss/domain/sourcing/verifiedFirmPipeline.ts';
+import {advanceAutomaticResearchFirm} from '@fss/domain/sourcing/automaticResearch.ts';
 import {verifiedFirmOwner,VERIFIED_FIRM_POLICY_VERSION,IDENTITY_REVIEW_REASONS} from '@fss/domain/sourcing/verifiedFirmPolicy.ts';
 import {lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
 import {lockTodayForFirmChange} from '@fss/domain/today/build.ts';
@@ -23,6 +24,7 @@ export function sourcingQualificationHandler(deps:{pageFetch:PageFetchProvider;e
    await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
    await evaluateQualification(ctx,{runId});
    await advanceVerifiedFirm(ctx,{runId});
+   await advanceAutomaticResearchFirm(ctx,{runId});
   });
  }};
 }
@@ -45,8 +47,8 @@ export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
    if(automatic){
     // Recover only committed evidence, never replay a provider dispatch. Publication
     // refusals stay pending and are checked at most hourly without spending again.
-    const ready=(await session.query<{id:string}>(`SELECT r.id FROM sourcing_qualification_runs r JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND c.payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND c.status<>'dismissed' AND NOT c.qualification_blocked AND c.revision=r.candidate_revision AND r.state IN ('review','eligible') AND r.reason IS NULL AND (r.admission_checked_at IS NULL OR r.admission_checked_at<$2::timestamptz-interval '1 hour') AND NOT EXISTS(SELECT 1 FROM sourcing_qualification_runs newer WHERE newer.workspace_id=r.workspace_id AND newer.candidate_id=r.candidate_id AND (newer.requested_at,newer.id)>(r.requested_at,r.id)) ORDER BY r.requested_at,r.id LIMIT 25`,[workspace.id,now])).rows;
-    for(const run of ready)await advanceVerifiedFirm(ctx,{runId:run.id});
+    const ready=(await session.query<{id:string}>(`SELECT r.id FROM sourcing_qualification_runs r JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND c.payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND c.status<>'dismissed' AND NOT c.qualification_blocked AND c.revision=r.candidate_revision AND r.state IN ('review','eligible','admitted') AND r.reason IS NULL AND (r.admission_checked_at IS NULL OR r.admission_checked_at<$2::timestamptz-interval '1 hour') AND NOT EXISTS(SELECT 1 FROM sourcing_qualification_runs newer WHERE newer.workspace_id=r.workspace_id AND newer.candidate_id=r.candidate_id AND (newer.requested_at,newer.id)>(r.requested_at,r.id)) ORDER BY r.requested_at,r.id LIMIT 25`,[workspace.id,now])).rows;
+    for(const run of ready){await advanceVerifiedFirm(ctx,{runId:run.id});await advanceAutomaticResearchFirm(ctx,{runId:run.id});}
    }
    // Old evidence versions are due now, but a version bump is not an identity
    // correction: the same-revision review stop remains outside every due alternative.

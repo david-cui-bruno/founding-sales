@@ -1,5 +1,7 @@
 import {todayActionOpenV3RequestSchema,todayActionsV3ResponseSchema,todayActionOpenV3ResponseSchema,todayActionOpenV2RequestSchema,todayActionsV2ResponseSchema,todayActionOpenV2ResponseSchema} from '@fss/contracts';
 import {readTodayActionsV3,openTodayActionV3} from '@fss/domain/today/actionsV3.ts';
+import {todayActionOpenV4RequestSchema,todayActionsV4ResponseSchema,todayActionOpenV4ResponseSchema} from '@fss/contracts';
+import {readTodayActionsV4,openTodayActionV4} from '@fss/domain/today/actionsV4.ts';
 import {isDeepStrictEqual} from 'node:util';
 import {readTodayActionsV2,openTodayActionV2} from '@fss/domain/today/actionsV2.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -40,7 +42,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * from the scope's own role, because 8.2's "Admins see all entries; salespeople see their
  * own" is a property of the read and not of the transport.
  */
-export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed', '/today/tasks/complete', '/today/actions', '/today/actions/open', '/today/actions/v2', '/today/actions/open/v2', '/today/actions/v3', '/today/actions/open/v3'];
+export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed', '/today/tasks/complete', '/today/actions', '/today/actions/open', '/today/actions/v2', '/today/actions/open/v2', '/today/actions/v3', '/today/actions/open/v3', '/today/actions/v4', '/today/actions/open/v4'];
 
 /**
  * Slice 3a: `GET /today?include=tasks` (repeated or comma-separated; an unknown value is
@@ -74,6 +76,21 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
   if (!scoped.ok) return scoped.result;
   const context = scoped.context;
 
+  if(request.path==='/today/actions/v4'){
+    if(request.method!=='GET')return {status:405,body:redactError('method_not_allowed')};
+    const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV4(context,{now:await databaseNow(context),includeFirmAssociations:includesTasks(request.query,'firmAssociations')}));
+    const current=await requirePrincipal(deps.auth,request);if(!current.ok)return current.result;
+    if(!isDeepStrictEqual(current.principal,deps.principal))return {status:401,body:redactError('unauthenticated')};
+    return result===null?{status:404,body:redactError('not_found')}:{status:200,body:todayActionsV4ResponseSchema.parse(result)};
+  }
+  if(request.path==='/today/actions/open/v4'){
+    if(request.method!=='POST')return {status:405,body:redactError('method_not_allowed')};
+    const parsed=todayActionOpenV4RequestSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:redactError('malformed_body')};
+    const result=await withTransaction(deps.auth.db,async()=>openTodayActionV4(context,{...parsed.data,now:await databaseNow(context)}));
+    const current=await requirePrincipal(deps.auth,request);if(!current.ok)return current.result;
+    if(!isDeepStrictEqual(current.principal,deps.principal))return {status:401,body:redactError('unauthenticated')};
+    return result===null?{status:404,body:redactError('not_found')}:{status:200,body:todayActionOpenV4ResponseSchema.parse(result)};
+  }
   if(request.path==='/today/actions/v3'){
     if(request.method!=='GET')return {status:405,body:redactError('method_not_allowed')};
     const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV3(context,{now:await databaseNow(context),includeFirmAssociations:includesTasks(request.query,'firmAssociations')}));

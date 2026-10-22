@@ -73,6 +73,8 @@ export interface CreateFirmInput {
   /** Carried from an import or an old system; preserved through merges as an alias. */
   readonly externalId?: string | undefined;
   readonly commandId?: string | undefined;
+  /** Retained automatic qualification already owns the evidence. Do not dispatch another job. */
+  readonly researchAlreadyQualified?: boolean | undefined;
 }
 
 /**
@@ -170,7 +172,9 @@ export async function createFirm(
   // table refusing an insert, is not a reason a firm cannot be created; a `createFirm`
   // that failed because of the research settings would be the tail wagging the dog.
   // The sweep reaches a firm whose enqueue did not happen.
-  await enqueueFirmResearchBestEffort(context, { firmId: created.id, trigger: 'firm_created' });
+  const retainedSystemResearch = input.researchAlreadyQualified === true && actor.kind === 'system'
+    && (actor.component === 'worker' || actor.component === 'scheduler');
+  if (!retainedSystemResearch) await enqueueFirmResearchBestEffort(context, { firmId: created.id, trigger: 'firm_created' });
 
   // Slice S2: the firm is on today's list now, not at tomorrow's 05:00 build. The build's
   // own sources, asked about this one firm, in this transaction — so an import that rolls
