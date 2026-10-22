@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { test, expect, type Page } from 'playwright/test';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE } from '@fss/domain/db/testing/testDatabase.ts';
@@ -12,6 +13,7 @@ import { browserRequest, browserSession } from '../support/browser.ts';
 let app: ReplyBriefApp;
 let release: (() => Promise<void>) | undefined;
 const pendingKey = 'callie.browser.pending-reply.v1';
+let browserResourceRecorded = false;
 test.beforeAll(async () => {
   release = await reserveLocalBrowserDatabase();
   const cluster = new URL(process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE] ?? '');
@@ -60,6 +62,16 @@ async function login(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Reply Brief Synthetic Firm', exact: true })).toBeVisible();
+  if (!browserResourceRecorded) {
+    const processes = execFileSync('/bin/ps', ['-axo', 'pid,command'], { encoding: 'utf8' }).split('\n')
+      .filter(line => line.includes('--remote-debugging-pipe') && line.includes('--user-data-dir=') && line.includes('playwright_chromiumdev_profile-'));
+    expect(processes).toHaveLength(1);
+    const process = processes[0]!;
+    const profilePath = /--user-data-dir=([^ ]+)/u.exec(process)?.[1];
+    if (!profilePath) throw new Error('Owned browser profile not found');
+    console.log('REPLY_BRIEF_BROWSER_RESERVED', JSON.stringify({ pid: Number(process.trim().split(/\s+/u)[0]), profilePath }));
+    browserResourceRecorded = true;
+  }
 }
 async function selectReply(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
