@@ -19,12 +19,14 @@ function setup() {
   let session = { status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 60000).toISOString() };
   let lose = false, readStatus = 200, commandStatus = 200;
   let waitCommand: (() => Promise<void>) | undefined;
+  let waitControl: (() => Promise<Response>) | undefined;
   let broadcast: (() => void) | undefined;
   const channel: InvalidationChannel = { postMessage: vi.fn(), addEventListener: (_type, listener) => { broadcast = listener; }, removeEventListener: () => {}, close: () => {} };
   const commands: unknown[] = [];
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json(session);
-    if (url === '/browser/api/outreach/email-campaigns/control') return json(control, readStatus);
+    if (String(url).startsWith('/browser/api/today?')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [] });
+    if (url === '/browser/api/outreach/email-campaigns/control') return waitControl ? await waitControl() : json(control, readStatus);
     if (String(url).match(/\/email-campaigns\/(approve|revoke)$/u)) {
       expect(storage.getItem(CAMPAIGN_PENDING_KEY)).not.toBeNull();
       commands.push(JSON.parse(String(init?.body)));
@@ -40,11 +42,49 @@ function setup() {
   resources.push(browser, client);
   return { browser, client, storage, commands, send, uuid, broadcast: () => { broadcast?.(); },
     lose: (value: boolean) => { lose = value; }, readStatus: (value: number) => { readStatus = value; }, commandStatus: (value: number) => { commandStatus = value; },
-    change: (value: Partial<typeof session>) => { session = { ...session, ...value }; }, wait: (value: () => Promise<void>) => { waitCommand = value; } };
+    change: (value: Partial<typeof session>) => { session = { ...session, ...value }; }, wait: (value: () => Promise<void>) => { waitCommand = value; },
+    waitControl: (value: () => Promise<Response>) => { waitControl = value; } };
 }
 afterEach(() => { cleanup(); for (const resource of resources.splice(0)) resource.dispose(); sessionStorage.clear(); vi.useRealTimers(); });
 
 describe('campaign exact command custody over actual BrowserClient', () => {
+  it('same-mounted BrowserApp recovers enabled campaign controls after command 409 and Refresh access without replay', async () => {
+    const scope = setup(); await scope.browser.refresh();
+    scope.client.prepare({ kind: 'revoke', id, expectedRevision: 1 }); scope.commandStatus(409);
+    render(<BrowserApp client={scope.browser} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry same campaign command' }));
+    await vi.waitFor(() => { expect(scope.browser.current).toBeNull(); });
+    expect(scope.commands).toHaveLength(1); expect(scope.storage.getItem(CAMPAIGN_PENDING_KEY)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh access' }));
+    const refresh = await screen.findByRole('button', { name: 'Refresh campaigns' });
+    expect(refresh.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(refresh);
+    await screen.findByRole('option', { name: /Published five-email/u });
+    expect(scope.commands).toHaveLength(1);
+  });
+  it('cross-tab recovery permits a new operation while late old completion cannot publish or unlock it', async () => {
+    const scope = setup(); await scope.browser.refresh();
+    const releases: ((response: Response) => void)[] = [];
+    scope.waitControl(() => new Promise<Response>(resolve => { releases.push(resolve); }));
+    render(<BrowserApp client={scope.browser} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh campaigns' }));
+    await vi.waitFor(() => { expect(releases).toHaveLength(1); });
+    await act(async () => { scope.broadcast(); });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh access' }));
+    const refresh = await screen.findByRole('button', { name: 'Refresh campaigns' });
+    expect(refresh.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(refresh);
+    await vi.waitFor(() => { expect(releases).toHaveLength(2); });
+    await act(async () => { releases[0]?.(json({ ...control, sequences: [{ id: other, label: 'Stale old sequence' }] })); });
+    expect(screen.getByRole('button', { name: 'Refresh campaigns' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByRole('option', { name: 'Stale old sequence' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh campaigns' }));
+    expect(releases).toHaveLength(2);
+    await act(async () => { releases[1]?.(json({ ...control, sequences: [{ id: other, label: 'Current replacement sequence' }] })); });
+    expect(screen.getByRole('button', { name: 'Refresh campaigns' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByRole('option', { name: 'Current replacement sequence' })).toBeTruthy();
+    expect(scope.commands).toHaveLength(0);
+  });
   it('persists before dispatch, retains lost response and reload never replays, explicit retry is identical', async () => {
     const scope = setup(); await scope.browser.refresh(); scope.lose(true);
     scope.client.prepare({ kind: 'approve', policy: policy() });

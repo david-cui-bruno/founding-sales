@@ -11,6 +11,7 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const lock = useRef(false), live = useRef(true);
+  const operation = useRef(0);
   const [mailboxId, setMailboxId] = useState('');
   const [sequenceVersionId, setSequenceVersionId] = useState('');
   const [regions, setRegions] = useState<('TX' | 'RI' | 'MA')[]>([]);
@@ -18,11 +19,18 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
   const [expiry, setExpiry] = useState('');
   useEffect(() => {
     live.current = true;
+    let generation = client.epoch;
     const unsubscribe = client.subscribe(() => {
+      if (generation !== client.epoch) {
+        generation = client.epoch;
+        operation.current += 1;
+        lock.current = false;
+        setBusy(false); setNotice('');
+      }
       setPending(manager.pending());
       if (client.current?.status !== 'signed_in') { setControl(null); setMailboxId(''); setSequenceVersionId(''); setRegions([]); setExpiry(''); }
     });
-    return () => { live.current = false; unsubscribe(); manager.dispose(); };
+    return () => { live.current = false; operation.current += 1; unsubscribe(); manager.dispose(); };
   }, [client, manager]);
   useEffect(() => {
     if (pending === null) return;
@@ -37,16 +45,19 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
   }, [control]);
   const run = async (work: () => Promise<EmailCampaignControl>): Promise<void> => {
     if (lock.current) return;
+    const owner = ++operation.current;
     lock.current = true; setBusy(true); setControl(null); setNotice('');
     const epoch = client.epoch;
     try {
       const value = await work();
-      if (live.current && client.isCurrent(epoch)) { setControl(value); setNotice('Current campaign control loaded.'); }
+      if (live.current && operation.current === owner && client.isCurrent(epoch)) { setControl(value); setNotice('Current campaign control loaded.'); }
     } catch {
-      if (live.current && client.isCurrent(epoch)) setNotice('Campaign control unavailable or refused. No automatic retry. Retained commands require explicit same-payload retry.');
+      if (live.current && operation.current === owner && client.isCurrent(epoch)) setNotice('Campaign control unavailable or refused. No automatic retry. Retained commands require explicit same-payload retry.');
     } finally {
-      lock.current = false;
-      if (live.current && client.isCurrent(epoch)) { setBusy(false); setPending(manager.pending()); }
+      if (live.current && operation.current === owner && client.isCurrent(epoch)) {
+        lock.current = false;
+        setBusy(false); setPending(manager.pending());
+      }
     }
   };
   const command = (action: CampaignAction): void => { void run(async () => { manager.prepare(action); setPending(manager.pending()); return manager.retry(); }); };
