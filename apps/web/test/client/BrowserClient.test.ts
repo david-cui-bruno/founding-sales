@@ -122,8 +122,8 @@ describe('real browser manager generation and custody', () => {
     await expect(client.signOut()).rejects.toMatchObject({ reason: 'unavailable' });
     expect(client.current).toBeNull(); expect(store.getItem(PENDING_KEY)).toBeNull();
   });
-  it('auth refusal clears pending and never replays mutation', async () => {
-    const send = vi.fn<typeof fetch>().mockResolvedValueOnce(response(session)).mockResolvedValueOnce(response(session)).mockResolvedValueOnce(response({ error: 'refused' }, 401));
+  it.each([401, 403, 409])('auth or revision refusal %s clears pending and never replays mutation', async status => {
+    const send = vi.fn<typeof fetch>().mockResolvedValueOnce(response(session)).mockResolvedValueOnce(response(session)).mockResolvedValueOnce(response({ error: 'refused' }, status));
     const { client, store } = setup(send);
     await client.refresh(); const held = client.prepareNotes(draft);
     await expect(client.request('/meetings/notes', z.unknown(), draft, () => { client.retainPending(held); })).rejects.toMatchObject({ reason: 'refused' });
