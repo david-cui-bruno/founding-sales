@@ -1,6 +1,6 @@
 # Current operating state
 
-## October 22, 2026, 23:08 UTC retained local-workflow checkpoint
+## October 22, 2026, 23:15 UTC retained local-workflow checkpoint
 
 Retained dated evidence, not fresh runtime authority. See [roadmap](../sourcing/roadmap-20261007.md). Root owns integration. LOCAL web-first work grants no hosting/spend, production routing/deploy, provider registration or live reads/sends. Desktop fallback and parked outcomes remain.
 
@@ -10,6 +10,8 @@ Issue741 LOCAL campaign acceptance CLOSED at17ac4804d/docs16fc3ac36, source130 N
 
 **Issue742 LOCAL automatic supply:** source5f5466148 plus acceptance112990536, schema131 NOT deployed129. Existing completed search/Apollo→registered qualification→canonical research Firm/current-proof TodayV4, no per-candidate create/link. Original NEW7browserPASS24.1s/catalog15PASS3030skipped; separate P1NEW4holdcasesPASS10.1s and29noPG. Owned resources absent, earlier failures retained. SPEC/standards/privacy CLEAN after same-finding proof closure. Exact owner/Firm research holds checked after waits. Existing targeting/discovery-v1/calling unchanged, no new-source-kind campaign enrollment/live acquisition. Composed types/workflow PASS. Local delivery is not hosted selling.
 
+**Issue744 LOCAL active:** ADR0016/internal boundary2386021de. Kitten owns domain composition; Poodle new acceptance/solePG after source readiness. Exact automatic-source→approved-campaign provenance, no impersonation or activation. Root integration/reviews.
+
 ## Qualified research preparation, issue740 closed locally
 
 Source18b15efd4 completes qualified research Firm plus current-proof Today research-preparation action. Original NEW5/5 actual-host/OIDC/PG/Chrome PASS16.4seconds; R740-1 fixed70ce8ca1b, NEW missing-order1PASS5.2seconds plus affected case separately PASS, not full6. Exact pending custody survives source loss; real auth refusal clears it. Three finished reviews CLEAN after same-finding closure, owned resources absent. Types/workflow/scoped scan PASS. No automatic supply/campaign, hosted, model-quality or real selling acceptance.
@@ -18,7 +20,7 @@ Source18b15efd4 completes qualified research Firm plus current-proof Today resea
 
 Issue738 source966c9819f/docs5ff947097 is CLOSED: actual isolated HTTPS/Chrome/signed-OIDC/PG final10PASS,43unit checks, three finished reviews/docs CLEAN and owned cleanup accepted. Initial7/8 and9/10 observation failures remain retained separately. Request-owned API/auth, encrypted Secure/HttpOnly host cookies, exact Origin/CSRF/session revision, membership/revocation/expiry, generation fences and exact-UUID meeting-note recovery remain authoritative. No JavaScript credentials or shared private projection. This is controlled local acceptance, not hosted/business usefulness.
 
-**Issue743:** original actual-host/OIDC/PG/Chrome NEW13 PASS15.7s at1a32f7b07; five initial failures retained. Risk CLEAN. Corrections69f61ef0a/cf472ed52 pass16/10 focused tests separately, source findings statically closed. Targeted51f594066 NEW1PASS4.7s proves authenticated incomplete-context refusal preserves exact custody/session, no paid replacement, reload no replay and real auth clearing. Four fixture failures retained, owned resources absent. Original sessions/Scorpion unavailable after restart; Hog finding-proof closure CLEAN, root docs/tracker delivery. No original13 replay, source/Firm actual-wait, hosted, real inference or usefulness claim.
+**Issue743:** original actual-host/OIDC/PG/Chrome NEW13 PASS15.7s at1a32f7b07; five initial failures retained. Risk CLEAN. Corrections69f61ef0a/cf472ed52 pass16/10 focused tests separately, source findings statically closed. Targeted51f594066 NEW1PASS4.7s proves authenticated incomplete-context refusal preserves exact custody/session, no paid replacement, reload no replay and real auth clearing. Four fixture failures retained, owned resources absent. Original sessions/Scorpion unavailable after restart; Hog finding-proof/docs CLEAN; delivered36dc142cf, issue CLOSED23:10. No original13 replay, source/Firm actual-wait, hosted, real inference or usefulness claim.
 
 ## Accepted production and installed fallback
 

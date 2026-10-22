@@ -6,6 +6,18 @@ Approved October22 2026 at05:39UTC. This is local synthetic-data implementation,
 
 ## Sequence and exclusive ownership
 
+### Issue744 LOCAL automatic-source campaign composition, active
+
+Root locked ADR0016/internal source-selection boundary2386021de before delegation. No public browser/API authority input or new sending engine. Reuse exact existing automatic publication/current owner proof and approved campaign; no fabricated promotion, human review or user impersonation.
+
+| Whole outcome | Exclusive owner/files | Waits and acceptance |
+| --- | --- | --- |
+| Shared boundary/integration/tracker | Hatchling: ADR0016, emailCampaignSource.ts, PLAN/current docs | Boundary committed, domain types/lint/workflow PASS; finished source/proof before normal three reviews |
+| Domain/worker composition | Kitten: outreach campaign/selection/admission/plan owners, narrow automaticResearch hook, migration0132/schema/constraint registration and new no-PG tests | Locked internal selection is never authority; current proof and explicit admin owner/campaign checks, gate→Today→identity→campaign→Firm→candidate lock order, immutable source-kind lineage, honest savepoints/recovery |
+| New composed acceptance | Poodle: NEW web support/e2e and NEW domain constraint-case module | Builds independently against boundary, sole disposablePG only after server readiness; actual registered qualification→Firm/Today→exact one campaign admission, backlog/race/current refusal/deletion/caps/rollback, no send |
+
+No shared file has two writers. Domain owner owns constraint registry, acceptance supplies its new module name. Existing browser controls are reused, no extra UI feature ticket. Unknown outcomes reconcile before relaunch. Original closed suites stay closed, no replay. Preserve source/geography/email/calling separation, research/enrollment holds and OFF. This is synthetic local implementation only; existing hosted/private-data and real usefulness outcomes remain separate.
+
 ### Issue743 LOCAL reviewed replies and sourced meeting preparation, accepted
 
 Shared boundary6142227c5/ADR0015 is committed. Original API/domain, reply UI and brief UI implementations are finished. Actual HTTPS/OIDC/PG/Chrome acceptance1a32f7b07 passed NEW13 in15.7seconds with owned resources absent. Initial five failures remain retained, including the real strict-context projection defect correctedb0387d0ee. This is controlled synthetic proof, not hosted or real-business acceptance.
