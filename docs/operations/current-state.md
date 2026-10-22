@@ -1,12 +1,12 @@
 # Current operating state
 
-## October 22, 2026, 17:35 UTC local-workflow checkpoint
+## October 22, 2026, 18:32 UTC local-workflow checkpoint
 
 Retained dated evidence, not fresh runtime authority. See [roadmap](../sourcing/roadmap-20261007.md). Root owns the product, shared interfaces and integration. David approved the LOCAL web-first first slice05:39. No hosting, new service/spend, production data routing/deploy, provider registration change or live business reads/sends were authorized. Accepted desktop fallback and all parked selling outcomes remain intact.
 
 Product interview COMPLETE: qualified leads→Firm/Today→approved outreach→actual replies/drafts/briefs, social review-first NEXT, coaching parked. Promise: maintenance-coordination time saved. Replies/social final-review-first; LinkedIn permission settled, Facebook research-only. [Canonical plan](../../apps/web/PLAN.md) retains decisions. LOCAL host2394c3ac0 plus parser fix768d9944a is CLOSED: actual HTTPS factory NEW5/5, focused checks, three CLEAN reviews and owned cleanup accepted. Raw streaming limits, exact assets, pinned origin, strict CSP/security headers/server-only settings remain. This is not hosted/business acceptance. External capacity/cost/key/callback/private-data staging and guarded rollout remain separate.
 
-Issue741 LOCAL approved-campaign admission ACTIVE under existing reversible-local authority, not new production approval. Boundary93953b90a/ADR0013 committed, three new contract checks/types/workflow PASS. Crocodile owns domain/API/schema130; Cricket browser approval/custody; Dog new actual acceptance and sole disposable PG. Root owns integration/docs/reviews. Approval once then future canonical qualified Firms auto-enroll under exact content/target/caps/expiry, no per-recipient review or invented human attestation. Existing OFF and all send/eligibility/stop gates remain. No live enrollment/send/provider/hosting action. Implementation and actual acceptance OPEN; source130 is not deployed129. Owners/resources tracked in PLAN.
+Issue741 LOCAL campaign acceptance CLOSED at17ac4804d, source130 NOT deployed129. Explicit owner/mailbox/content/target/caps/expiry approval then canonical qualified Firms auto-enroll without per-recipient review or invented attestation; OFF unchanged. Original NEW21:20PASS/1FAIL, cold-auth fix851 separately1PASS; original constraints+catalog29PASS. Targeted deletion2PASS, corrected expiry2PASS separately; first NEW4:2PASS/1fixtureFAIL/1notrun retained. Exact catalog1PASS. Four findings CLOSED; three finished reviews CLEAN. Private routes erase while opaque cap history survives; expiry after waits and generation recovery verified. Owned resources absent. No live enrollment/provider/hosting. Automatic approved-source→qualified Firm→eligible Today supply remains separate, including discovery-v1 exclusions.
 
 ## Qualified research preparation, issue740 closed locally
 
