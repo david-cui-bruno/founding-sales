@@ -15,7 +15,7 @@ export async function automaticResearchNow(ctx:RepositoryContext):Promise<string
 export async function automaticResearchOwner(ctx:RepositoryContext):Promise<string|null>{
  const owner=await verifiedFirmOwner(ctx);if(!owner)return null;
  const member=(await ctx.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,owner])).rows[0];
- if(member?.role!=='admin'||member.status!=='active'||!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return null;
+ if(member?.role!=='admin'||member.status!=='active'||!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research',ownerUserId:owner})).length)return null;
  return owner;
 }
 export type AutomaticSource={kind:'search_hit'|'apollo_organization';attemptId:string;sourceUrl:string};

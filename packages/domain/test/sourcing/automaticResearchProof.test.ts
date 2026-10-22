@@ -59,6 +59,13 @@ it('requires active administrator, enabled research and no applicable holds',asy
  mocks.holds.mockResolvedValue([{id}]);expect(await automaticResearchProof(ctx,id)).toBeNull();mocks.holds.mockResolvedValue([]);
  mocks.owner.mockResolvedValue(null);expect(await automaticResearchProof(ctx,id)).toBeNull();
 });
+it('supplies the resolved owner to research hold matching, not an unrelated owner',async()=>{
+ mocks.holds.mockImplementation(async(_ctx,subject)=>subject.actionKind==='research'&&subject.ownerUserId===id?[{id}]:[]);
+ expect(await automaticResearchProof(ctx,id)).toBeNull();
+ expect(mocks.holds).toHaveBeenCalledWith(ctx,{actionKind:'research',channel:'research',ownerUserId:id});
+ mocks.holds.mockImplementation(async(_ctx,subject)=>subject.ownerUserId===other?[{id}]:[]);
+ expect(await automaticResearchProof(ctx,id)).not.toBeNull();
+});
 it('accepts exact completed Apollo origin and refuses changed site, locality or owner-independent metadata',async()=>{
  f.hits=[];f.origins=[{attempt_id:id,candidate_revision:1,organization_name:candidate.firmName,domain:'harbor.example.test',hq_city:candidate.locality,hq_state:'TX',region:'TX'}];
  expect(await automaticResearchProof(ctx,id)).toMatchObject({source:{source:{kind:'apollo_organization'},originRevision:1}});
