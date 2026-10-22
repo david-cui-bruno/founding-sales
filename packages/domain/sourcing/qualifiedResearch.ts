@@ -1,4 +1,6 @@
 import {qualifiedResearchFirmSchema,type QualifiedResearchSelection,type QualifiedResearchFirm} from '@fss/contracts';
+import {admitQualifiedResearchFirmToCampaign} from '../outreach/emailCampaignAdmission.ts';
+import {lockCurrentEmailCampaign} from '../outreach/emailCampaignAuthority.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {createFirm,loadFirmForUpdate} from '../crm/firms.ts';
 import {canonicalWebsite} from '../crm/import.ts';
@@ -26,6 +28,7 @@ export async function createQualifiedResearchFirm(ctx:RepositoryContext,input:Qu
 async function create(ctx:RepositoryContext,input:QualifiedResearchSelection,currentAuthority:()=>Promise<boolean>):Promise<Result>{
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${ctx.scope.workspaceId}`]);
+ await lockCurrentEmailCampaign(ctx);
  if(!await currentAuthority())return {ok:false,reason:'authority_changed'};
  const initial=await readQualifiedResearchCandidate(ctx,input.discoveryCandidateId);
  if(!initial||canonicalResearchValue(initial.selection)!==canonicalResearchValue(input))return {ok:false,reason:'qualification_changed'};
@@ -45,5 +48,6 @@ async function create(ctx:RepositoryContext,input:QualifiedResearchSelection,cur
  const linked=await linkDiscoveryResearchFirm(ctx,{discoveryCandidateId:input.discoveryCandidateId,expectedRevision:input.discoveryRevision,qualificationCandidateId:input.candidateId,firmId:firm.id});
  if(!linked.ok)return linked;
  const view=await readQualifiedResearchFirm(ctx,firm.id);if(!view)return {ok:false,reason:'research_firm_unavailable'};
+ await admitQualifiedResearchFirmToCampaign(ctx,firm.id,currentAuthority);
  return {ok:true,value:{firmId:firm.id}};
 }

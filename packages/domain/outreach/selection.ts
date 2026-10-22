@@ -1,4 +1,5 @@
 import {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
+import {campaignCandidateProvenance,campaignDatabaseNow} from './emailCampaignAuthority.ts';
 export {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
 import {existingEmailRoute} from './existingEmail.ts';
 import {officeContactContext} from './contactContext.ts';
@@ -69,7 +70,7 @@ export function qualifyEmailCandidate(input: Parameters<typeof qualifyCandidate>
 // send/identity locks. It does not itself create a prospect or authorize contact.
 
 export interface EmailAssessment {firmId:string|null;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';emailRank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean;verifiedFit:boolean}
-export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string}):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
+export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string;campaignId?:string}):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
  if(!decideAdminOnly(ctx).permitted)return {ok:false,reason:'admin_required'};
  const w=ctx.scope.workspaceId;
  const candidate=(await ctx.db.query<{payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>('SELECT payload,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,input.candidateId])).rows[0];
@@ -77,7 +78,9 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  if(!candidate||!run)return {ok:false,reason:'not_found'};
  if(candidate.qualification_blocked||candidate.status==='dismissed'||candidate.revision!==run.candidate_revision)return {ok:false,reason:'candidate_changed'};
  if(!['eligible','review','admitted'].includes(run.state)||run.reason)return {ok:false,reason:'evidence_unavailable'};
- const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=await databaseNow(ctx);
+ const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=await (input.campaignId?campaignDatabaseNow(ctx):databaseNow(ctx));
+ const campaign=input.campaignId?await campaignCandidateProvenance(ctx,{...input,campaignId:input.campaignId}):null;
+ if(input.campaignId&&!campaign)return {ok:false,reason:'campaign_authority_unavailable'};
  const verdict=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now});
  const emailVerdict=qualifyEmailCandidate({identity,facts:run.facts,observations:run.observations,now});
  if(emailVerdict.unknowns.includes('need_evidence_conflicts'))return {ok:false,reason:'need_evidence_conflicts'};
@@ -89,6 +92,7 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  const exact=matches.filter(f=>firmNameKey(f.name)===name&&fold(f.locality??'')===fold(candidate.payload.locality)&&f.region_code===candidate.payload.region&&websiteDomain(f.website)===domain);
  if(exact.length>1||(exact.length===0&&matches.length>0))return {ok:false,reason:'firm_identity_ambiguous'};
  const firm=exact[0];if(firm?.status==='merged')return {ok:false,reason:'firm_merged'};
+ if(campaign&&(campaign.firmId!==firm?.id||emailVerdict.decision!=='eligible'))return {ok:false,reason:'campaign_source_changed'};
  if(ctx.scope.actor.kind==='user'&&firm&&firm.assigned_user_id!==ctx.scope.actor.userId)return {ok:false,reason:'firm_assigned_elsewhere'};
  if(await firstSuppressed(ctx,[{scope:'handle',canonicalKey:route.address},...(firm?[{scope:'firm' as const,canonicalKey:firm.id}]:[])],'email'))return {ok:false,reason:'email_or_firm_stopped'};
  if(firm&&(await ctx.db.query('SELECT id FROM sequence_enrollments WHERE workspace_id=$1 AND firm_id=$2 AND ended_at IS NULL LIMIT 1',[w,firm.id])).rows.length)return {ok:false,reason:'firm_already_enrolled'};
@@ -96,5 +100,5 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  const existing=firm?await existingEmailRoute(ctx,firm.id,route.address,input):{ok:true as const,value:null};
  if(!existing.ok)return existing;
  const phone=supportedBusinessPhone(run.facts,identity);
- return {ok:true,value:{firmId:firm?.id??null,route,verifiedFit:emailVerdict.decision==='eligible',lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,emailRank:emailVerdict.rank,reviewRequired:(existing.value!==null&&!existing.value.attributed)||verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
+ return {ok:true,value:{firmId:firm?.id??null,route,verifiedFit:emailVerdict.decision==='eligible',lane:!campaign&&phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,emailRank:emailVerdict.rank,reviewRequired:(existing.value!==null&&!existing.value.attributed)||(!campaign&&verdict.unknowns.some(r=>r!=='business_phone_unresolved'))}};
 }
