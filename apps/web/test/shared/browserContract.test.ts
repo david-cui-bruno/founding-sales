@@ -45,6 +45,20 @@ describe('browser boundary', () => {
     }
   });
 
+  it('admits reviewed reply preparation and existing meeting reads but never sending or booking', () => {
+    for (const path of ['/replies', '/replies/card', '/replies/composer/context', '/replies/composer/preview', '/replies/composer/generate']) {
+      expect(browserApiPathAllowed('POST', path)).toBe(true);
+      expect(browserApiPathAllowed('GET', path)).toBe(false);
+    }
+    for (const path of ['/meetings/firm', '/meetings/brief']) {
+      expect(browserApiPathAllowed('GET', path)).toBe(true);
+      expect(browserApiPathAllowed('POST', path)).toBe(false);
+    }
+    for (const path of ['/replies/confirm', '/replies/settings/update', '/replies/composer/send', '/replies/composer/send-status', '/replies/composer/generate/extra', '/meetings/match', '/meetings/attendance']) {
+      expect(browserApiPathAllowed('POST', path)).toBe(false);
+    }
+  });
+
   it('never accepts credentials as presentation metadata', () => {
     expect(browserSessionSchema.safeParse({ status: 'signed_out', csrfToken: 'x'.repeat(43) }).success).toBe(true);
     expect(browserSessionSchema.safeParse({ status: 'signed_out', csrfToken: 'x'.repeat(43), accessToken: 'secret' }).success).toBe(false);
