@@ -1,10 +1,12 @@
 # Current operating state
 
-## October 22, 2026, 06:01 UTC handoff
+## October 22, 2026, 07:10 UTC plan handoff
 
 Retained dated evidence, not fresh runtime authority. See [roadmap](../sourcing/roadmap-20261007.md). Root owns the product, shared interfaces and integration. David approved the LOCAL web-first first slice05:39. No hosting, new service/spend, production data routing/deploy, provider registration change or live business reads/sends were authorized. Accepted desktop fallback and all parked selling outcomes remain intact.
 
-## Current priority: local browser workflow
+Product interview COMPLETE: desired outcome order is qualified leads→Firm/Today→approved outreach→actual replies/drafts/meeting briefs, social review-first drafts NEXT, coaching parked. Promise: time saved on PM maintenance coordination. Auto-qualified email admission/verified opening variations and confirmed-note Today tasks are desired, not implemented/live authorized. Replies/social require final review; LinkedIn platform permission is settled, Facebook research-only. [Canonical plan](../../apps/web/PLAN.md) retains all decisions and next same-origin AWS thin-host proposal. Waiting on concrete next-slice disposition, not product preferences; no new builders or provider actions.
+
+## Accepted local browser workflow, closed
 
 Issue738, isolated `codex/local-web-first-20261022` from exact main881. Shared boundary7dac/e85/e66, server1b14, UI fbc1/8c9, acceptance966c9819f:28 paths,+1654/-3. Reuses existing React presentation, API/domain/auth and meeting-note command, not another product backend. Per-request connections/private state, encrypted HttpOnly Secure host cookies, exact Origin/CSRF/session revision, membership/revocation/expiry and client-generation fences. No JavaScript device/access secret, shared private projection or automatic mutation replay. Discovery/link custody migration deferred.
 

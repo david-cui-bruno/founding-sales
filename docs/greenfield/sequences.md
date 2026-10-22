@@ -2,6 +2,10 @@
 
 Regular sequences remain part of daily selling. Automatic email admission was removed; it is not the same thing as a human choosing an existing regular sequence for an authorized contact. Begin with the [selling guide](../operations/how-to-sell.md) and retain every [sending safeguard](sending.md).
 
+## Desired direction versus retained implementation
+
+October22 product decisions explicitly change desired scope: newly qualified leads should auto-enroll into an already-approved EMAIL campaign with approved targeting/messages/limits. Short prospect-specific AI openings may use verified research without per-variation review, keeping approved offers/pricing/promises unchanged and never inventing familiarity. The manual admission described below is retained implementation, not a settled future restriction. Replies and other one-off external/social messages remain drafts for final review. This requires future implementation and actual acceptance under the [canonical plan](../../apps/web/PLAN.md), not live sending authority. Effective OFF, eligibility, suppression, reply stops, caps, uncertainty and current consent remain authoritative; no campaigns or provider actions are created by this plan.
+
 ## Definition, enrollment and permission
 
 `packages/domain/sequences/definitions.ts`, `enrollments.ts`, `followUpPermissions.ts` and `eligibility.ts` separate immutable sequence versions, an actual enrollment and the evidence supporting its follow-up permission. An origin label, permission-row id or successful import is not enough. The verifier re-reads the supporting call/message/meeting evidence, actual firm/contact, scope, version, expiry and revocation state.
