@@ -131,6 +131,15 @@ describe('browser request boundary', () => {
     const refused = await handler(post('/browser/api/today/firm', { firmId: id }, headers));
     expect(refused?.body).toEqual({ error: 'browser_request_refused' });
   });
+  it('pins qualified research command versions without replacing source identity', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const body = { commandId: id, discoveryCandidateId: id, discoveryRevision: 2, candidateId: id, candidateRevision: 3, runId: id };
+    await handler(post('/browser/api/sourcing/research-firms/create', body, headers));
+    expect(mocks.route.mock.calls[0]?.[3]).toMatchObject({ body: { ...body, clientVersion: '1.4.0' } });
+    expect((await handler(post('/browser/api/sourcing/research-firms/create', { ...body, clientVersion: '9.9.9' }, headers)))?.status).toBe(400);
+    expect(mocks.route).toHaveBeenCalledTimes(1);
+  });
   it('calls real logout seam, clears local cookies but never reports success on uncertain failure', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };

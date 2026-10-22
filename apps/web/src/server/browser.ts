@@ -4,7 +4,7 @@ import { authenticate, endSession, type AuthenticatedPrincipal } from '../../../
 import { route } from '../../../api/src/server.ts';
 import { MAX_REQUEST_BYTES } from '../../../api/src/limits.ts';
 import type { ApiRequest } from '../../../api/src/routes/types.ts';
-import { BROWSER_PATHS, BROWSER_CSRF_HEADER, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema } from '../shared/browserContract.ts';
+import { BROWSER_PATHS, BROWSER_COMMAND_PATHS, BROWSER_CSRF_HEADER, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema } from '../shared/browserContract.ts';
 import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestContext } from './runtime.ts';
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
 
@@ -156,7 +156,7 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
       if (['authorization', 'cookie', 'headers', 'origin'].includes(name.toLowerCase())) throw new Refusal(400);
     }
   }
-  if (path === '/meetings/notes') {
+  if ((BROWSER_COMMAND_PATHS as readonly string[]).includes(path)) {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new Refusal(400);
     const command = body as Record<string, unknown>;
     if (command['clientVersion'] !== undefined && command['clientVersion'] !== clientVersion) throw new Refusal(400);
