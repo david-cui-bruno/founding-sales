@@ -8,6 +8,8 @@ describe('single-attempt stapled-ticket validation diagnostics', () => {
     const execute = vi.fn(() => success);
     expect(validateNotarization('/private/example.app', execute)).toEqual({
       stapled: true, status: 0, signal: null, errorCode: null, classification: 'success',
+      reason: { reason: 'unknown', reportedErrorCode: null },
+      target: { requestedPathIsCanonical: null, canonicalTargetUnchanged: null, filesystemObjectUnchanged: null, directoryBefore: null, directoryAfter: null },
       stdout: { present: true, length: 9 }, stderr: { present: false, length: 0 },
     });
     expect(execute).toHaveBeenCalledExactlyOnceWith('/usr/bin/xcrun', ['stapler', 'validate', '/private/example.app'], {
@@ -18,6 +20,7 @@ describe('single-attempt stapled-ticket validation diagnostics', () => {
 
   it.each([
     { status: 65, signal: null, classification: 'nonzero_exit' },
+    { status: 68, signal: null, classification: 'nonzero_exit' },
     { status: null, signal: null, classification: 'invalid_status' },
     { status: -1, signal: null, classification: 'invalid_status' },
     { status: 256, signal: null, classification: 'invalid_status' },
@@ -62,7 +65,7 @@ describe('single-attempt stapled-ticket validation diagnostics', () => {
     expect(checked.stdout).toEqual({ present: true, length: secret.length * 100 });
     expect(checked.stderr).toEqual({ present: true, length: secret.length });
     expect(JSON.stringify(checked)).not.toContain(secret);
-    expect(JSON.stringify(checked).length).toBeLessThan(300);
+    expect(JSON.stringify(checked).length).toBeLessThan(600);
   });
 
   it('caps output length facts without retaining output', () => {
@@ -70,6 +73,6 @@ describe('single-attempt stapled-ticket validation diagnostics', () => {
       ...success, stdout: 'x'.repeat(64 * 1024 * 1024 + 1),
     }));
     expect(checked.stdout).toEqual({ present: true, length: 64 * 1024 * 1024 });
-    expect(JSON.stringify(checked).length).toBeLessThan(300);
+    expect(JSON.stringify(checked).length).toBeLessThan(600);
   });
 });

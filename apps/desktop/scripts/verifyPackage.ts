@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { classifyValidationReason, observeTargetEquivalence, type ValidationReason, type TargetEquivalence } from './notarizationDiagnostics.ts';
 import { existsSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
@@ -156,6 +157,8 @@ export interface NotarizationCommandResult {
 }
 
 export interface NotarizationValidation {
+  readonly reason: ValidationReason;
+  readonly target: TargetEquivalence;
   readonly stapled: boolean;
   readonly status: number | null;
   readonly signal: string | null;
@@ -173,6 +176,7 @@ type NotarizationRunner = (
 
 /** One read-only attempt. Never retain command output, paths or arbitrary error text. */
 export function validateNotarization(appPath: string, execute: NotarizationRunner = spawnSync): NotarizationValidation {
+  const finishTarget = observeTargetEquivalence(appPath);
   let result: NotarizationCommandResult;
   try {
     result = execute('/usr/bin/xcrun', ['stapler', 'validate', appPath], {
@@ -197,6 +201,7 @@ export function validateNotarization(appPath: string, execute: NotarizationRunne
     present: (text?.length ?? 0) > 0, length: Math.min(text?.length ?? 0, 64 * 1024 * 1024),
   });
   return { stapled: classification === 'success', status, signal, errorCode, classification,
+    reason: classifyValidationReason(result.stdout, result.stderr), target: finishTarget(),
     stdout: outputFacts(result.stdout), stderr: outputFacts(result.stderr) };
 }
 
