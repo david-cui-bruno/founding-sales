@@ -32,5 +32,5 @@ export async function automaticResearchProof(ctx:RepositoryContext,candidateId:s
  if(Date.parse(now)>=Date.parse(validUntil))return null;
  const citations=native.citations.map(c=>{const observation=run.observations.find(s=>s.id===c.observationId)!;return {...c,url:observation.url,contentHash:observation.contentHash,retrievedAt:observation.retrievedAt,quote:observation.blocks.find(b=>b.id===c.blockId)!.text};});
  const fingerprint=researchFingerprint({candidateId,candidateRevision:row.revision,runId:run.id,owner,candidate,source,policyVersion:run.policy_version,promptVersion:run.prompt_version,facts:run.facts,observations:run.observations,policy:'automatic-research-v1'});
- return {candidateId,candidateRevision:row.revision,candidate,runId:run.id,owner,source,fingerprint,citations,validUntil};
+ return {candidateId,candidateRevision:row.revision,candidate,runId:run.id,owner,source,fingerprint,citations,validUntil,route:email.route};
 }

@@ -1,5 +1,6 @@
 import {existingEmailRoute} from './existingEmail.ts';
-import type {CandidateInput} from '@fss/contracts';
+import type {AutomaticResearchTarget,CandidateInput} from '@fss/contracts';
+import {campaignCandidateProvenance} from './emailCampaignAuthority.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {lockTodayForFirmChange,refreshTodayForFirm} from '../today/build.ts';
@@ -13,25 +14,32 @@ import {assessEmailCandidate} from './selection.ts';
 type Input={candidateId:string;qualificationRunId:string;expectedRevision:number;expectedOwnerUserId:string;reviewed:boolean;campaignId?:string};
 type Value={firmId:string;contactId:string;routeId:string;identityKind:'named'|'role';alreadyAdmitted:boolean};
 type Result={ok:true;value:Value}|{ok:false;reason:string};
-export async function admitEmailCandidate(ctx:RepositoryContext,input:Input):Promise<Result>{
- const actor=ctx.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'admin_required'};
- if(actor.userId!==input.expectedOwnerUserId)return {ok:false,reason:'owner_changed'};
+export async function admitEmailCandidate(ctx:RepositoryContext,input:Input,automaticSource?:AutomaticResearchTarget):Promise<Result>{
+ const actor=ctx.scope.actor;
+ if(automaticSource){
+  if(!input.campaignId||input.reviewed)return {ok:false,reason:'campaign_authority_unavailable'};
+  const proof=await campaignCandidateProvenance(ctx,{...input,campaignId:input.campaignId},automaticSource);
+  if(!proof||proof.campaign.owner_user_id!==input.expectedOwnerUserId||proof.firmId!==automaticSource.firmId)return {ok:false,reason:'campaign_authority_unavailable'};
+ }else{
+  if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'admin_required'};
+  if(actor.userId!==input.expectedOwnerUserId)return {ok:false,reason:'owner_changed'};
+ }
  if(input.campaignId&&input.reviewed)return {ok:false,reason:'campaign_is_not_human_review'};
  await ctx.db.query('SAVEPOINT outreach_email_admission');
- try{const result=await admit(ctx,input);if(!result.ok)await ctx.db.query('ROLLBACK TO SAVEPOINT outreach_email_admission');await ctx.db.query('RELEASE SAVEPOINT outreach_email_admission');return result;}
+ try{const result=await admit(ctx,input,automaticSource);if(!result.ok)await ctx.db.query('ROLLBACK TO SAVEPOINT outreach_email_admission');await ctx.db.query('RELEASE SAVEPOINT outreach_email_admission');return result;}
  catch(e){await ctx.db.query('ROLLBACK TO SAVEPOINT outreach_email_admission');await ctx.db.query('RELEASE SAVEPOINT outreach_email_admission');throw e;}
 }
-async function admit(ctx:RepositoryContext,input:Input):Promise<Result>{
+async function admit(ctx:RepositoryContext,input:Input,automaticSource?:AutomaticResearchTarget):Promise<Result>{
  const w=ctx.scope.workspaceId;
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${w}`]);
  // Lock firms before candidate/run, matching phone admission and merge ordering.
- const preliminary=await assessEmailCandidate(ctx,input);if(!preliminary.ok)return preliminary;
+ const preliminary=await assessEmailCandidate(ctx,input,automaticSource);if(!preliminary.ok)return preliminary;
  let firm=preliminary.value.firmId?await loadFirmForUpdate(ctx,preliminary.value.firmId):null;
  const candidate=(await ctx.db.query<{payload:CandidateInput;revision:number}>('SELECT payload,revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
  await ctx.db.query('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.qualificationRunId]);
  if(!candidate||candidate.revision!==input.expectedRevision)return {ok:false,reason:'candidate_changed'};
- const assessment=await assessEmailCandidate(ctx,input);if(!assessment.ok)return assessment;
+ const assessment=await assessEmailCandidate(ctx,input,automaticSource);if(!assessment.ok)return assessment;
  if(assessment.value.firmId!==(firm?.id??null))return {ok:false,reason:'firm_changed'};
  if(assessment.value.reviewRequired&&!input.reviewed)return {ok:false,reason:'qualification_requires_review'};
  const existing=(await ctx.db.query<{firm_id:string;contact_id:string;route_id:string;identity_kind:'named'|'role';association_review_required:boolean}>(`SELECT firm_id,contact_id,route_id,identity_kind,association_review_required FROM outreach_email_sources WHERE workspace_id=$1 AND candidate_id=$2`,[w,input.candidateId])).rows[0];

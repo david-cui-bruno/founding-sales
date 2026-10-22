@@ -1,3 +1,4 @@
+import {lockEmailCampaignAdmission} from '@fss/domain/outreach/emailCampaignAdmission.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {evaluateQualification} from '@fss/domain/sourcing/qualificationDecision.ts';
 import {advanceVerifiedFirm} from '@fss/domain/sourcing/verifiedFirmPipeline.ts';
@@ -22,6 +23,9 @@ export function sourcingQualificationHandler(deps:{pageFetch:PageFetchProvider;e
   await runQualification(ctx,{runId},deps);
   await withTransaction(input.session,async()=>{
    await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
+   // Acquire campaign -> canonical Firm -> candidate/run before the legacy
+   // owners lock candidate rows. Their revision refresh is published before admission.
+   await advanceAutomaticResearchFirm(ctx,{runId},'prepare_before_legacy');
    await evaluateQualification(ctx,{runId});
    await advanceVerifiedFirm(ctx,{runId});
    await advanceAutomaticResearchFirm(ctx,{runId});
@@ -39,17 +43,21 @@ export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
   // batches from taking the same workspace gates in opposite orders.
   for(const workspace of [...workspaces].sort((a,b)=>a.id.localeCompare(b.id))){
    const ctx=repositoryContext(workspaceScope(workspace.id,{kind:'system',component:'scheduler'}),session);
-   await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
+   await lockEmailCampaignAdmission(ctx);
    await session.query('INSERT INTO sourcing_discovery_settings(workspace_id,qualification_last_pass_at) VALUES($1,$2) ON CONFLICT(workspace_id) DO UPDATE SET qualification_last_pass_at=$2',[workspace.id,now]);
-   await expireQualificationsInTransaction(ctx);
-   if(!enabled)continue;
+   if(!enabled){await expireQualificationsInTransaction(ctx);continue;}
    const automatic=await verifiedFirmOwner(ctx)!==null;
    if(automatic){
     // Recover only committed evidence, never replay a provider dispatch. Publication
     // refusals stay pending and are checked at most hourly without spending again.
     const ready=(await session.query<{id:string}>(`SELECT r.id FROM sourcing_qualification_runs r JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND c.payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND c.status<>'dismissed' AND NOT c.qualification_blocked AND c.revision=r.candidate_revision AND r.state IN ('review','eligible','admitted') AND r.reason IS NULL AND (r.admission_checked_at IS NULL OR r.admission_checked_at<$2::timestamptz-interval '1 hour') AND NOT EXISTS(SELECT 1 FROM sourcing_qualification_runs newer WHERE newer.workspace_id=r.workspace_id AND newer.candidate_id=r.candidate_id AND (newer.requested_at,newer.id)>(r.requested_at,r.id)) ORDER BY r.requested_at,r.id LIMIT 25`,[workspace.id,now])).rows;
-    for(const run of ready){await advanceVerifiedFirm(ctx,{runId:run.id});await advanceAutomaticResearchFirm(ctx,{runId:run.id});}
+    for(const run of ready){
+     await advanceAutomaticResearchFirm(ctx,{runId:run.id},'prepare_before_legacy');
+     await advanceVerifiedFirm(ctx,{runId:run.id});
+     await advanceAutomaticResearchFirm(ctx,{runId:run.id});
+    }
    }
+   await expireQualificationsInTransaction(ctx);
    // Old evidence versions are due now, but a version bump is not an identity
    // correction: the same-revision review stop remains outside every due alternative.
    const due=(await session.query<{id:string;revision:number}>(`SELECT c.id,c.revision FROM sourcing_candidates c LEFT JOIN LATERAL

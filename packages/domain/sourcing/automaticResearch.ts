@@ -1,3 +1,5 @@
+import {admitAutomaticResearchRunToCampaign} from '../outreach/emailCampaignAdmission.ts';
+import {lockCurrentEmailCampaign} from '../outreach/emailCampaignAuthority.ts';
 import {automaticResearchFirmSchema,type AutomaticResearchFirm} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from '../crm/identityAccess.ts';
@@ -15,13 +17,16 @@ const researchHeld=async(ctx:RepositoryContext,ownerUserId:string,firmId:string)
 const publication=async(ctx:RepositoryContext,id:string)=>(await ctx.db.query<Publication>('SELECT * FROM sourcing_automatic_research_firms WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,id])).rows[0]??null;
 const sourceMatches=(row:Publication,proof:NonNullable<Awaited<ReturnType<typeof automaticResearchProof>>>)=>row.owner_user_id===proof.owner&&row.source_kind===proof.source.source.kind&&row.source_attempt_id===proof.source.source.attemptId&&row.source_url===proof.source.source.sourceUrl;
 /** Caller owns the transaction. Atomic refusal rolls back even canonical Firm creation. */
-export async function advanceAutomaticResearchFirm(ctx:RepositoryContext,input:{runId:string}):Promise<void>{
+export async function advanceAutomaticResearchFirm(ctx:RepositoryContext,input:{runId:string},completion:'publish_and_admit'|'prepare_before_legacy'='publish_and_admit'):Promise<void>{
  if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))return;
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${ctx.scope.workspaceId}`]);
+ // Approval/backlog takes campaign before Firm/candidate. Publication must do so too.
+ await lockCurrentEmailCampaign(ctx);
  await ctx.db.query('SAVEPOINT automatic_research_publication');
+ let published=false;
  try{
-  const ok=await publish(ctx,input.runId);if(!ok)await ctx.db.query('ROLLBACK TO SAVEPOINT automatic_research_publication');
+  published=await publish(ctx,input.runId);if(!published)await ctx.db.query('ROLLBACK TO SAVEPOINT automatic_research_publication');
   await ctx.db.query('RELEASE SAVEPOINT automatic_research_publication');
  }catch(error){
   await ctx.db.query('ROLLBACK TO SAVEPOINT automatic_research_publication');await ctx.db.query('RELEASE SAVEPOINT automatic_research_publication');
@@ -30,6 +35,9 @@ export async function advanceAutomaticResearchFirm(ctx:RepositoryContext,input:{
   if(error!==null&&typeof error==='object'&&'code' in error&&['23503','23505'].includes(String(error.code)))return;
   throw error;
  }
+ // Outside publication's known deletion/identity-error handling. Unknown admission
+ // failure must reach the caller transaction, never masquerade as source refusal.
+ if(published&&completion==='publish_and_admit')await admitAutomaticResearchRunToCampaign(ctx,input.runId);
 }
 async function publish(ctx:RepositoryContext,runId:string):Promise<boolean>{
  const w=ctx.scope.workspaceId;

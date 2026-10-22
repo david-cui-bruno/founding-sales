@@ -11,7 +11,7 @@ import {qualifyCandidate,supportedBusinessPhone} from '../sourcing/qualification
 import type {QualificationRunRow} from '../sourcing/qualificationStore.ts';
 import {firmNameKey,websiteDomain} from '../crm/import.ts';
 import {firstSuppressed} from '../suppression/effective.ts';
-import {qualificationEvidenceSchema,type CandidateInput,type QualificationFact,type SourceObservation} from '@fss/contracts';
+import {qualificationEvidenceSchema,type AutomaticResearchTarget,type CandidateInput,type QualificationFact,type SourceObservation} from '@fss/contracts';
 import type {SourcingIdentity} from '../sourcing/qualificationPolicy.ts';
 export interface EmailEvidenceRoute {address:string;sourceObservationId:string;blockId:string;identityKind:'named'|'role';displayName:string}
 const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
@@ -70,7 +70,7 @@ export function qualifyEmailCandidate(input: Parameters<typeof qualifyCandidate>
 // send/identity locks. It does not itself create a prospect or authorize contact.
 
 export interface EmailAssessment {firmId:string|null;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';emailRank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean;verifiedFit:boolean}
-export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string;campaignId?:string}):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
+export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string;campaignId?:string},automaticSource?:AutomaticResearchTarget):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
  if(!decideAdminOnly(ctx).permitted)return {ok:false,reason:'admin_required'};
  const w=ctx.scope.workspaceId;
  const candidate=(await ctx.db.query<{payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>('SELECT payload,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,input.candidateId])).rows[0];
@@ -79,7 +79,8 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  if(candidate.qualification_blocked||candidate.status==='dismissed'||candidate.revision!==run.candidate_revision)return {ok:false,reason:'candidate_changed'};
  if(!['eligible','review','admitted'].includes(run.state)||run.reason)return {ok:false,reason:'evidence_unavailable'};
  const identity=candidateIdentity(candidate.payload,run.facts,run.observations);
- const campaign=input.campaignId?await campaignCandidateProvenance(ctx,{...input,campaignId:input.campaignId}):null;
+ const campaign=input.campaignId?await campaignCandidateProvenance(ctx,{...input,campaignId:input.campaignId},automaticSource):null;
+ if(automaticSource&&!campaign)return {ok:false,reason:'campaign_authority_unavailable'};
  if(input.campaignId&&!campaign)return {ok:false,reason:'campaign_authority_unavailable'};
  const now=await (input.campaignId?campaignDatabaseNow(ctx):databaseNow(ctx));
  const verdict=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now});
