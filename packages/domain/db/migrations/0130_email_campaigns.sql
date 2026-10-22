@@ -19,7 +19,7 @@ CREATE TABLE outreach_email_campaigns (
  CONSTRAINT email_campaign_mailbox_fkey FOREIGN KEY(workspace_id,mailbox_id) REFERENCES mailboxes(workspace_id,id),
  CONSTRAINT email_campaign_sequence_fkey FOREIGN KEY(workspace_id,sequence_version_id) REFERENCES sequence_versions(workspace_id,id),
  CONSTRAINT email_campaign_expiry CHECK(expires_at>approved_at AND expires_at<=approved_at+interval '30 days'),
- CONSTRAINT email_campaign_revocation CHECK((revoked_at IS NULL AND revision=1) OR (revoked_at>=approved_at AND revision=2))
+ CONSTRAINT email_campaign_revocation CHECK((revoked_at IS NULL AND revision=1) OR (revoked_at IS NOT NULL AND revoked_at>=approved_at AND revision=2))
 );
 CREATE UNIQUE INDEX email_campaign_one_unrevoked ON outreach_email_campaigns(workspace_id,owner_user_id) WHERE revoked_at IS NULL;
 GRANT SELECT,INSERT ON outreach_email_campaigns TO app_runtime,migration;
