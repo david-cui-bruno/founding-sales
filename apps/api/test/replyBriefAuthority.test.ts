@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { replyDraftContextInputSchema } from '../../../packages/contracts/src/replyComposer.ts';
 import type { AuthenticatedPrincipal } from '../src/auth/sessions.ts';
 import type { RoutingOptions } from '../src/routes/types.ts';
 import { routeReplyComposer } from '../src/routes/replyComposer.ts';
@@ -31,14 +32,26 @@ beforeEach(() => {
   mocks.principal.mockResolvedValue({ ok: true, principal });
   mocks.context.mockReturnValue({ ok: true, context: { scope: { workspaceId: id, actor: { kind: 'user', userId: id, role: 'salesperson' } } } });
   mocks.firm.mockResolvedValue({ id, status: 'active', assigned_user_id: id });
-  mocks.composer.mockResolvedValue(source);
+  mocks.composer.mockImplementation(async (_context: unknown, input: unknown) => replyDraftContextInputSchema.safeParse(input).success ? source : { ok: false, reason: 'invalid_input' });
 });
 
 it('retains existing successful context and preview response shapes', async () => {
   expect(await routeReplyComposer(request('/replies/composer/context'), options)).toEqual({ status: 200, body: source });
   const preview = { ok: true, value: { sourceRevision: source.value.sourceRevision, body: 'Reviewed preview', draftRevision: 'b'.repeat(64) } };
   mocks.preview.mockResolvedValue(preview);
-  expect(await routeReplyComposer(request('/replies/composer/preview', { messageId: id, text: 'Review this', factRefs: [], envelope: { to: ['person@example.test'], cc: [] } }), options)).toEqual({ status: 200, body: preview });
+  const input = { messageId: id, text: 'Review this', factRefs: [], envelope: { to: ['person@example.test'], cc: [] } };
+  expect(replyDraftContextInputSchema.safeParse(input).success).toBe(false);
+  expect(await routeReplyComposer(request('/replies/composer/preview', input), options)).toEqual({ status: 200, body: preview });
+  expect(mocks.composer).toHaveBeenLastCalledWith(expect.anything(), { messageId: id, factRefs: input.factRefs, envelope: input.envelope });
+});
+
+it('projects successful generation rechecks through the actual strict context contract', async () => {
+  const input = { messageId: id, sourceRevision: source.value.sourceRevision, commandId: id, clientVersion: '1.0.0', factRefs: [], envelope: { to: ['person@example.test'], cc: [] } };
+  const generated = { ok: true, value: { text: 'Reviewed suggestion', sourceRevision: source.value.sourceRevision, reviewRequired: true } };
+  mocks.generate.mockResolvedValue(generated);
+  expect(replyDraftContextInputSchema.safeParse(input).success).toBe(false);
+  expect(await routeReplyComposer(request('/replies/composer/generate', input), options)).toEqual({ status: 200, body: { status: 'accepted', replayed: false, result: generated } });
+  expect(mocks.composer).toHaveBeenLastCalledWith(expect.anything(), { messageId: id, factRefs: input.factRefs, envelope: input.envelope });
 });
 
 it('preserves desktop generation409 and replay metadata while refusing late identity loss', async () => {

@@ -23,7 +23,7 @@ export async function routeReplyComposer(request:ApiRequest,options:RoutingOptio
   const read=()=>previewHumanReply(scoped.context,input.data);
   const preview=await read();
   const stable=!preview.ok||await unchangedPrivateProjection(preview,read);
-  const context=preview.ok?await readReplyDraftContext(scoped.context,input.data):null;
+  const context=preview.ok?await readReplyDraftContext(scoped.context,{messageId:input.data.messageId,factRefs:input.data.factRefs,envelope:input.data.envelope}):null;
   const accessible=context?.ok!==true||await privateFirmIsCurrent(scoped.context,context.value.firmId);
   if(!await currentAuthorization())return privateAuthorityRefusal();
   if(!accessible||!preview.ok&&['not_assigned','owner_changed'].includes(preview.reason)||context?.ok===false&&['not_assigned','owner_changed'].includes(context.reason))return privateAuthorityRefusal();
@@ -51,7 +51,7 @@ export async function routeReplyComposer(request:ApiRequest,options:RoutingOptio
  if(clientCompatibility(options.auth.config.supportedClientVersions,input.data.clientVersion).kind!=='supported')return {status:426,body:{status:'refused',replayed:false,reason:'client_upgrade_required'}};
  let generated=await generateReplyDraft(scoped.context,input.data,port,currentAuthorization);
  if(generated.ok){
-  const current=await readReplyDraftContext(scoped.context,input.data);
+  const current=await readReplyDraftContext(scoped.context,{messageId:input.data.messageId,factRefs:input.data.factRefs,envelope:input.data.envelope});
   if(!current.ok)generated=current;
   else if(current.value.sourceRevision!==input.data.sourceRevision)generated={ok:false,reason:'source_changed'};
  }
