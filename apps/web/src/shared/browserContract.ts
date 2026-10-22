@@ -34,9 +34,11 @@ export const BROWSER_READ_PATHS = Object.freeze([
 export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3',
   '/sourcing/research-firms/list', '/sourcing/research-firms/read',
+  '/outreach/email-campaigns/control',
 ] as const);
 export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/meetings/notes', '/sourcing/research-firms/create',
+  '/outreach/email-campaigns/approve', '/outreach/email-campaigns/revoke',
 ] as const);
 
 export const browserSignInSchema = z.strictObject({
