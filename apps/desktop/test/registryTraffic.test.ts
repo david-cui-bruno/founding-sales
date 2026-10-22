@@ -75,7 +75,11 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
        * that is how `today.expand`'s `/dial/check` and `replies.refresh`'s
        * `/replies/settings` stayed undeclared through the first review.
        */
-      const body = at.pathname==='/crm/linkedin/manual/read'?MANUAL_LEDGER:at.pathname==='/crm/linkedin/manual/bind'||at.pathname==='/crm/linkedin/manual/record'?{status:'accepted',replayed:false,result:{ledgerId:UUID,entryId:null,revision:0}}:at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname];
+      const recoveryAnswers: Readonly<Record<string, unknown>> = {
+        '/crm/business/capture-read-recovery/read': {mailboxId:UUID,generation:1,eligible:true,incidentId:UUID,recoveryBinding:'a'.repeat(64),reason:null,attempt:null,sendingUnchanged:true,holdsUnchanged:true,providerCoverage:'unproven'},
+        '/crm/business/capture-read-recovery/request': {status:'accepted',replayed:false,result:{attemptId:UUID,state:'queued',sendingUnchanged:true,holdsUnchanged:true}},
+      };
+      const body = recoveryAnswers[at.pathname] ?? (at.pathname==='/crm/linkedin/manual/read'?MANUAL_LEDGER:at.pathname==='/crm/linkedin/manual/bind'||at.pathname==='/crm/linkedin/manual/record'?{status:'accepted',replayed:false,result:{ledgerId:UUID,entryId:null,revision:0}}:at.pathname==='/social/manual-handoff/read'?{view:MANUAL_HANDOFF}:at.pathname==='/social/manual-handoff/confirm'?{status:'accepted',replayed:false,result:{approvalId:UUID}}:BRIDGE_ANSWERS[at.pathname]);
       return await Promise.resolve({
         status: 200,
         body: body ?? { status: 'accepted', replayed: false, result: {} },
