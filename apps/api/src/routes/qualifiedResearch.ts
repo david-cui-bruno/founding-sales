@@ -30,5 +30,7 @@ export async function routeQualifiedResearch(deps:RouteDeps):Promise<RouteResult
  if(outcome.status!=='accepted')return commandReply(outcome);
  const view=await withTransaction(auth.db,()=>readQualifiedResearchFirm(scoped.context,outcome.result.firmId));
  if(!await currentAuthority())return {status:401,body:{error:'unauthenticated'}};
- return view?commandReply({...outcome,result:view}):commandReply({status:'refused',reason:'research_firm_unavailable',replayed:outcome.replayed});
+ // An accepted receipt remains accepted. Missing current proof is not an auth
+ // refusal and must not erase the caller's still-uncertain command identity.
+ return view?commandReply({...outcome,result:view}):{status:404,body:{error:'research_firm_unavailable'}};
 }
