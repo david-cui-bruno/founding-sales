@@ -49,6 +49,28 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it.each(['generation_already_attempted', 'generation_outcome_unknown', 'source_changed', 'generation_held'])('preserves authenticated generation refusal %s without invalidating custody', async reason => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const body = { status: 'refused', replayed: true, reason };
+    mocks.route.mockResolvedValueOnce({ status: 409, body });
+    const result = await handler(post('/browser/api/replies/composer/generate', { commandId: id }, { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision }));
+    expect(result?.status).toBe(200);
+    expect(result?.body).toEqual(body);
+    expect(result?.headers['cache-control']).toBe('private, no-store');
+  });
+  it.each([
+    [{ status: 'refused', replayed: false, reason: 'session_changed' }, 401],
+    [{ status: 'refused', replayed: false, reason: 'not_assigned' }, 401],
+    [{ status: 'refused', replayed: false, reason: 'owner_changed' }, 401],
+    [{ status: 'refused', replayed: false, reason: 'unknown_reason' }, 409],
+    [{ status: 'refused', replayed: false, reason: 'source_changed', private: 'never expose' }, 409],
+  ])('keeps authority and unknown generation refusals fail-closed %#', async (body, status) => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    mocks.route.mockResolvedValueOnce({ status: 409, body });
+    const result = await handler(post('/browser/api/replies/composer/generate', { commandId: id }, { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision }));
+    expect(result?.status).toBe(status);
+    expect(result?.body).toEqual({ error: 'browser_request_refused' });
+  });
   it('establishes only public signed-out CSRF and hardened cookie/response headers', async () => {
     const result = await handler(request('/browser/session'));
     expect(result?.body).toEqual({ status: 'signed_out', csrfToken: expect.any(String) });
