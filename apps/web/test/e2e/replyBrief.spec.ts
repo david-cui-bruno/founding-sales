@@ -108,7 +108,9 @@ test('actual reply cards and context require explicit generation, adoption, huma
   await expect(page.getByLabel('Reply draft', { exact: true })).toHaveValue('');
   await page.getByRole('button', { name: 'Use suggestion in draft', exact: true }).click();
   await page.getByLabel('Reply draft', { exact: true }).fill('Human edited exact synthetic reply.');
+  const previewRequest = page.waitForRequest(request => request.url().endsWith('/replies/composer/preview'));
   await page.getByRole('button', { name: 'Preview exact reply', exact: true }).click();
+  expect((await previewRequest).postDataJSON()).toEqual({ messageId: app.seed.messageId, text: 'Human edited exact synthetic reply.', factRefs: [app.seed.factRef], envelope: { to: [app.seed.recipient], cc: [] } });
   const preview = page.getByRole('article', { name: 'Final reply preview', exact: true });
   await expect(preview).toContainText('Human edited exact synthetic reply.');
   await expect(preview).toContainText(app.seed.recipient);
@@ -160,6 +162,7 @@ test('committed generation response loss retains exact UUID across reload withou
   const held = await custody(page);
   expect(held?.commandId).toMatch(/^[a-f0-9-]{36}$/u);
   expect(original).toMatchObject({ commandId: held?.commandId });
+  expect((await app.fixture.db.query('SELECT attempt,state FROM provider_reservations WHERE workspace_id=$1 AND subject_kind=\'outreach_reply\' AND subject_id=$2', [app.fixture.alpha.workspaceId, held?.commandId])).rows).toEqual([{ attempt: 1, state: 'settled' }]);
   expect(app.calls()).toBe(baseline + 1);
   await app.fixture.db.query('UPDATE mail_message_bodies SET truncated=true WHERE mail_message_id=$1', [app.seed.messageId]);
   try {
@@ -181,6 +184,7 @@ test('committed generation response loss retains exact UUID across reload withou
   expect(await custody(page)).toEqual(held);
   expect(app.calls()).toBe(baseline + 1);
   await expect(page.getByRole('button', { name: 'Generate suggestion', exact: true })).toBeDisabled();
+  expect((await app.fixture.db.query('SELECT attempt,state FROM provider_reservations WHERE workspace_id=$1 AND subject_kind=\'outreach_reply\' AND subject_id=$2', [app.fixture.alpha.workspaceId, held?.commandId])).rows).toEqual([{ attempt: 1, state: 'settled' }]);
   await privateStorageIsIdsOnly(page); await noOutbound();
 });
 
