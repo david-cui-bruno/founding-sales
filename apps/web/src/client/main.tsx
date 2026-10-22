@@ -1,3 +1,4 @@
+import './schemaRuntime.ts';
 import { createRoot } from 'react-dom/client';
 import { BrowserApp } from './BrowserApp.tsx';
 import './browser.css';
