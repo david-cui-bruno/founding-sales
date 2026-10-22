@@ -172,7 +172,7 @@ test('new host authenticates revocation and protects generation after delayed re
   await expect(page.getByLabel('Workspace ID', { exact: true })).toBeVisible();
 });
 
-async function wire(path: string, options: { method?: string; headers?: Record<string, string>; body?: string; unfinished?: boolean } = {}) {
+async function wire(path: string, options: { method?: string; headers?: Record<string, string | string[]>; body?: string; unfinished?: boolean } = {}) {
   return await new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((resolve, reject) => {
     const url = new URL(app.origin);
     const request = httpsRequest({ hostname: 'localhost', port: url.port, path, method: options.method ?? 'GET', rejectUnauthorized: false, agent: false, headers: options.headers }, response => {
@@ -216,6 +216,9 @@ test('new HTTPS host allowlists built assets, paths, methods, Host and secure he
   for (const path of ['/../package.json', '/%2e%2e/package.json', '/assets\\secret', '//elsewhere']) expect((await wire(path)).status).toBe(400);
   expect((await wire('/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(405);
   expect((await wire('/', { headers: { host: 'other.example.test' } })).status).toBe(400);
+  expect((await wire('/', { headers: { 'x-thin-duplicate': ['one', 'two'] } })).status).toBe(400);
+  expect((await wire('/', { headers: { 'content-encoding': 'gzip' } })).status).toBe(415);
+  expect((await wire('/browser/sign-in', { method: 'POST', headers: { 'content-type': 'text/plain', origin: app.origin }, body: '{}' })).status).toBe(415);
   expect((await wire('/browser/session', { method: 'PUT' })).status).toBe(405);
   expect((await wire('/browser/session', { headers: { origin: 'https://other.example.test' } })).status).toBe(403);
   expect(app.connections()).toBe(baseline);
