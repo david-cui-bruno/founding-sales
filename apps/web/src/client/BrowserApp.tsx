@@ -8,6 +8,8 @@ import { BrowserClient } from './BrowserClient.ts';
 import { BrowserResearchQueue } from './BrowserResearchQueue.tsx';
 import { BrowserEmailCampaigns } from './BrowserEmailCampaigns.tsx';
 import { BrowserMeetingNotes } from './BrowserMeetingNotes.tsx';
+import { BrowserReplies } from './BrowserReplies.tsx';
+import { BrowserMeetingPreparation } from './BrowserMeetingPreparation.tsx';
 
 type Today = z.infer<typeof todayListResponseSchema>;
 export function createBrowserClient(): BrowserClient {
@@ -89,12 +91,12 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
       <Button disabled={busy} variant="outline" onClick={() => { void run(async () => { await client.refresh(); }); }}>Refresh access</Button>
     </section> : <div key={generation} className="space-y-5">
       <nav className="flex gap-3"><Button disabled={busy} onClick={() => { void run(loadToday); }}>Today</Button><span>{session.role} · Workspace {session.workspaceId}</span></nav>
-      {firm === null ? <section aria-label="Today" className="space-y-3"><h2>Today</h2><BrowserResearchQueue client={client} />{today !== null ? <p>{today.snapshotDate} · {today.businessTimeZone}</p> : null}
+      {firm === null ? <section aria-label="Today" className="space-y-3"><h2>Today</h2><BrowserReplies client={client} /><BrowserResearchQueue client={client} />{today !== null ? <p>{today.snapshotDate} · {today.businessTimeZone}</p> : null}
         {today?.cards.length === 0 ? <p>No firms need attention today.</p> : null}
         {today?.cards.map(card => <article key={card.firmId} className="rounded-md border p-4"><h3>{card.firmName}</h3><p>{card.lane.replaceAll('_', ' ')} · {countsLabel(card.counts)}</p><Button disabled={busy} onClick={() => { void run(async () => { await openFirm(card.firmId); }); }}>Open firm</Button></article>)}
       </section> : <section aria-label="Firm" className="space-y-4"><h2>{firm.read.firm.name}</h2><p>{firm.read.firm.timeZone ?? 'Time zone unknown'}</p>
         {firm.read.visibility === 'assigned_or_admin' ? <><h3>People at this firm</h3><ul>{firm.read.firm.contacts.map(contact => <li key={contact.id}>{contact.fullName}{contact.title ? ` · ${contact.title}` : ''}</li>)}</ul></> : <p>Firm detail is restricted to the assigned person or administrator.</p>}
-        {firm.visibility === 'assigned_or_admin' ? <><h3>Opportunities</h3><ul>{firm.opportunities.map(entry => <li key={entry.opportunity.id}>{entry.displayName ?? 'Opportunity'} · {entry.opportunity.status}</li>)}</ul><BrowserMeetingNotes key={firm.read.firm.id} client={client} firmId={firm.read.firm.id} /></> : null}
+        {firm.visibility === 'assigned_or_admin' ? <><h3>Opportunities</h3><ul>{firm.opportunities.map(entry => <li key={entry.opportunity.id}>{entry.displayName ?? 'Opportunity'} · {entry.opportunity.status}</li>)}</ul><BrowserMeetingPreparation key={`brief:${firm.read.firm.id}`} client={client} firmId={firm.read.firm.id} /><BrowserMeetingNotes key={firm.read.firm.id} client={client} firmId={firm.read.firm.id} /></> : null}
       </section>}
     </div>}
   </main>;

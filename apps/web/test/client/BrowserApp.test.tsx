@@ -31,7 +31,7 @@ function setup() {
     throw new Error('Unexpected route');
   });
   const client = new BrowserClient({ fetch: send, storage, navigate: vi.fn(), randomUUID: () => id });
-  return { client, storage, commands, lose: () => { loseResponse = true; }, recover: () => { loseResponse = false; } };
+  return { client, storage, commands, send, lose: () => { loseResponse = true; }, recover: () => { loseResponse = false; } };
 }
 afterEach(cleanup);
 async function openNotes(): Promise<void> {
@@ -43,6 +43,19 @@ async function openNotes(): Promise<void> {
 }
 
 describe('BrowserApp real shared presentation', () => {
+  it('mounts reviewed replies in Today and existing preparation on the selected Firm without automatic generation', async () => {
+    const { client, commands, send } = setup();
+    render(<BrowserApp client={client} />);
+    await screen.findByRole('heading', { name: 'Replies', exact: true });
+    expect(screen.getByRole('button', { name: 'Refresh replies' })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+    await screen.findByRole('heading', { name: 'Meeting preparation', exact: true });
+    expect(screen.getByRole('button', { name: 'Load existing meetings' })).toBeTruthy();
+    expect(commands).toHaveLength(0);
+    expect(send.mock.calls.some(([url]) => String(url).includes('/replies/composer/generate'))).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Send', exact: true })).toBeNull();
+  });
+
   it('shows Today, existing Firm and actual notes receipt, then clears all private views on logout', async () => {
     const { client, storage } = setup();
     render(<BrowserApp client={client} />);
