@@ -78,9 +78,10 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  if(!candidate||!run)return {ok:false,reason:'not_found'};
  if(candidate.qualification_blocked||candidate.status==='dismissed'||candidate.revision!==run.candidate_revision)return {ok:false,reason:'candidate_changed'};
  if(!['eligible','review','admitted'].includes(run.state)||run.reason)return {ok:false,reason:'evidence_unavailable'};
- const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=await (input.campaignId?campaignDatabaseNow(ctx):databaseNow(ctx));
+ const identity=candidateIdentity(candidate.payload,run.facts,run.observations);
  const campaign=input.campaignId?await campaignCandidateProvenance(ctx,{...input,campaignId:input.campaignId}):null;
  if(input.campaignId&&!campaign)return {ok:false,reason:'campaign_authority_unavailable'};
+ const now=await (input.campaignId?campaignDatabaseNow(ctx):databaseNow(ctx));
  const verdict=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now});
  const emailVerdict=qualifyEmailCandidate({identity,facts:run.facts,observations:run.observations,now});
  if(emailVerdict.unknowns.includes('need_evidence_conflicts'))return {ok:false,reason:'need_evidence_conflicts'};

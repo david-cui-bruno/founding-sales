@@ -26,13 +26,16 @@ export async function approveEmailCampaign(ctx:RepositoryContext,input:EmailCamp
  if(await campaignKind(ctx,policy.sequenceVersionId)!=='email_first')return {ok:false,reason:'approved_five_email_sequence_required'};
  return policySavepoint(ctx,async()=>{
   if(!await currentAuthority()||!await researchActor(ctx))return {ok:false,reason:'authority_changed'};
-  const row=(await ctx.db.query<EmailCampaignRow>(`INSERT INTO outreach_email_campaigns(workspace_id,owner_user_id,mailbox_id,sequence_version_id,authorization_revision,regions,max_enrollments,daily_admission_limit,approved_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,[ctx.scope.workspaceId,owner,policy.mailboxId,policy.sequenceVersionId,policy.authorizationRevision,policy.regions,policy.maxEnrollments,policy.dailyAdmissionLimit,now,policy.expiresAt])).rows[0]!;
+  const approvedAt=await campaignDatabaseNow(ctx);
+  if(!campaignExpiryAllowed(policy.expiresAt,approvedAt))return {ok:false,reason:'campaign_expiry_invalid'};
+  const row=(await ctx.db.query<EmailCampaignRow>(`INSERT INTO outreach_email_campaigns(workspace_id,owner_user_id,mailbox_id,sequence_version_id,authorization_revision,regions,max_enrollments,daily_admission_limit,approved_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,[ctx.scope.workspaceId,owner,policy.mailboxId,policy.sequenceVersionId,policy.authorizationRevision,policy.regions,policy.maxEnrollments,policy.dailyAdmissionLimit,approvedAt,policy.expiresAt])).rows[0]!;
   // At most25 canonical Firms, never unqualified raw rows or provider acquisition.
   const backlog=(await ctx.db.query<{firm_id:string}>(`SELECT DISTINCT l.firm_id FROM sourcing_discovery_research_firms l JOIN firms f ON f.workspace_id=l.workspace_id AND f.id=l.firm_id WHERE l.workspace_id=$1 AND f.assigned_user_id=$2 AND f.status='active' ORDER BY l.firm_id LIMIT 25`,[ctx.scope.workspaceId,owner])).rows;
   for(const firm of backlog){const result=await admitQualifiedResearchFirmToCampaign(ctx,firm.firm_id,currentAuthority);if(!result.ok&&result.reason==='campaign_limit')break;}
   if(!await currentAuthority()||!await researchActor(ctx))return {ok:false,reason:'authority_changed'};
   await recordCrmAuditEvent(ctx,{action:'outreach.email_campaign_approved',subjectKind:'email_campaign',subjectId:row.id,detail:{revision:row.revision,mailboxId:policy.mailboxId,sequenceVersionId:policy.sequenceVersionId,authorizationRevision:policy.authorizationRevision}});
   if(!await currentAuthority())return {ok:false,reason:'authority_changed'};
+  if(!campaignExpiryAllowed(policy.expiresAt,await campaignDatabaseNow(ctx)))return {ok:false,reason:'campaign_expiry_invalid'};
   return {ok:true,value:{campaignId:row.id,revision:row.revision}};
  });
 }

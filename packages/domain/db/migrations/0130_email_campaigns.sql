@@ -39,6 +39,7 @@ CREATE TABLE outreach_email_campaign_admissions (
  campaign_id uuid NOT NULL,
  firm_id uuid NOT NULL,
  contact_id uuid NOT NULL,
+ -- Opaque history, not a deletion dependency on the private email route.
  route_id uuid NOT NULL,
  plan_id uuid NOT NULL,
  enrollment_id uuid NOT NULL,
@@ -52,7 +53,6 @@ CREATE TABLE outreach_email_campaign_admissions (
  CONSTRAINT email_campaign_admission_one_enrollment UNIQUE(workspace_id,enrollment_id),
  CONSTRAINT email_campaign_admission_campaign_fkey FOREIGN KEY(workspace_id,campaign_id) REFERENCES outreach_email_campaigns(workspace_id,id),
  CONSTRAINT email_campaign_admission_contact_fkey FOREIGN KEY(workspace_id,contact_id,firm_id) REFERENCES contacts(workspace_id,id,firm_id) ON UPDATE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
- CONSTRAINT email_campaign_admission_route_fkey FOREIGN KEY(workspace_id,route_id) REFERENCES email_addresses(workspace_id,id),
  CONSTRAINT email_campaign_admission_plan_fkey FOREIGN KEY(workspace_id,plan_id,firm_id) REFERENCES outreach_plans(workspace_id,id,firm_id) ON UPDATE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
  CONSTRAINT email_campaign_admission_enrollment_fkey FOREIGN KEY(workspace_id,enrollment_id,firm_id) REFERENCES sequence_enrollments(workspace_id,id,firm_id) ON UPDATE CASCADE DEFERRABLE INITIALLY IMMEDIATE
 );

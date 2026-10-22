@@ -66,5 +66,7 @@ async function admit(ctx:RepositoryContext,firmId:string,campaign:EmailCampaignR
  if(!await campaignCandidateProvenance(ctx,input)||!await currentAuthority())return {ok:false,reason:'authority_changed'};
  const row=(await ctx.db.query<{admitted_at:Date}>(`INSERT INTO outreach_email_campaign_admissions(workspace_id,campaign_id,firm_id,contact_id,route_id,plan_id,enrollment_id,candidate_id,qualification_run_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING admitted_at`,[w,campaign.id,firmId,admitted.value.contactId,admitted.value.routeId,plan.value.id,enrolled.value.enrollmentId,lineage.candidate.id,run.id])).rows[0]!;
  if(!await currentAuthority()||!await campaignAuthorityCurrent(ctx,campaign))return {ok:false,reason:'authority_changed'};
+ const finalProof=await campaignCandidateProvenance(ctx,input);
+ if(!finalProof||finalProof.route.address!==assessment.value.route.address||finalProof.route.sourceObservationId!==assessment.value.route.sourceObservationId||finalProof.route.blockId!==assessment.value.route.blockId||finalProof.route.identityKind!==assessment.value.route.identityKind)return {ok:false,reason:'campaign_source_changed'};
  return {ok:true,value:{campaignId:campaign.id,firmId,contactId:admitted.value.contactId,routeId:admitted.value.routeId,planId:plan.value.id,enrollmentId:enrolled.value.enrollmentId,candidateId:lineage.candidate.id,qualificationRunId:run.id,admittedAt:row.admitted_at.toISOString()}};
 }
