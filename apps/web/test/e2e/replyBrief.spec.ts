@@ -58,13 +58,9 @@ test.beforeEach(async ({ context }) => {
 async function login(page: Page): Promise<void> {
   app.chooseIdentity(app.fixture.alpha.salesperson);
   await page.goto(app.origin);
-  await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Reply Brief Synthetic Firm', exact: true })).toBeVisible();
   if (!browserResourceRecorded) {
     const processes = execFileSync('/bin/ps', ['-axo', 'pid,command'], { encoding: 'utf8' }).split('\n')
-      .filter(line => line.includes('--remote-debugging-pipe') && line.includes('--user-data-dir=') && line.includes('playwright_chromiumdev_profile-'));
+      .filter(line => line.includes('--remote-debugging-pipe') && line.includes('--user-data-dir=') && line.includes('playwright_chromiumdev_profile-') && !line.includes('--type='));
     expect(processes).toHaveLength(1);
     const process = processes[0]!;
     const profilePath = /--user-data-dir=([^ ]+)/u.exec(process)?.[1];
@@ -72,6 +68,10 @@ async function login(page: Page): Promise<void> {
     console.log('REPLY_BRIEF_BROWSER_RESERVED', JSON.stringify({ pid: Number(process.trim().split(/\s+/u)[0]), profilePath }));
     browserResourceRecorded = true;
   }
+  await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Reply Brief Synthetic Firm', exact: true, level: 3 })).toBeVisible();
 }
 async function selectReply(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
@@ -80,7 +80,7 @@ async function selectReply(page: Page): Promise<void> {
   await expect(page.getByText('Could we discuss the synthetic maintenance plan?', { exact: true })).toBeVisible();
 }
 async function prepare(page: Page): Promise<void> {
-  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Reply Brief Synthetic Firm', exact: true }) }).getByRole('button', { name: 'Open firm', exact: true }).click();
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Reply Brief Synthetic Firm', exact: true, level: 3 }) }).getByRole('button', { name: 'Open firm', exact: true }).click();
   await page.getByRole('button', { name: 'Load existing meetings', exact: true }).click();
   await page.getByRole('button', { name: 'Open preparation', exact: true }).click();
   await expect(page.getByRole('article', { name: 'Current meeting brief', exact: true })).toBeVisible();
@@ -114,7 +114,10 @@ test('actual reply cards and context require explicit generation, adoption, huma
   const oidc = await app.fixture.db.query<{ code_challenge: string }>('SELECT code_challenge FROM oidc_authorization_requests ORDER BY created_at DESC LIMIT 1');
   expect(createHash('sha256').update(exchange?.codeVerifier ?? '').digest('base64url')).toBe(oidc.rows[0]?.code_challenge);
   expect((await browserRequest(page, '/replies/card', { body: { messageId: app.seed.messageId } })).status).toBe(200);
+  const generatedResponse = page.waitForResponse(response => response.url().endsWith('/replies/composer/generate'));
   await page.getByRole('button', { name: 'Generate suggestion', exact: true }).click();
+  const observedGeneration = await generatedResponse;
+  expect(observedGeneration.status()).toBe(200);
   await expect(page.getByRole('complementary', { name: 'Reply suggestion', exact: true })).toContainText('Thank you for your question.');
   expect(app.calls()).toBe(baseline + 1);
   await expect(page.getByLabel('Reply draft', { exact: true })).toHaveValue('');
