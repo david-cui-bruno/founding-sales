@@ -152,6 +152,19 @@ describe('browser request boundary', () => {
     expect(mocks.route).toHaveBeenCalledTimes(2);
   });
 
+  it('pins only explicit reply generation to the server version and cannot dispatch a send', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const body = { commandId: id, messageId: id, sourceRevision: 'a'.repeat(64), factRefs: [], envelope: { to: ['synthetic@example.test'], cc: [] } };
+    await handler(post('/browser/api/replies/composer/generate', body, headers));
+    expect(mocks.route.mock.calls[0]?.[3]).toMatchObject({ body: { ...body, clientVersion: '1.4.0' } });
+    expect((await handler(post('/browser/api/replies/composer/generate', { ...body, clientVersion: '9.9.9' }, headers)))?.status).toBe(400);
+    for (const path of ['/replies/composer/send', '/replies/confirm', '/meetings/match']) {
+      expect((await handler(post(`/browser/api${path}`, body, headers)))?.status).toBe(404);
+    }
+    expect(mocks.route).toHaveBeenCalledTimes(1);
+  });
+
   it('calls real logout seam, clears local cookies but never reports success on uncertain failure', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
