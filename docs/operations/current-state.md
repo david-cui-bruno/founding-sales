@@ -1,6 +1,6 @@
 # Current operating state
 
-## October 22, 2026, 19:50 UTC local-workflow checkpoint
+## October 22, 2026, 23:08 UTC retained local-workflow checkpoint
 
 Retained dated evidence, not fresh runtime authority. See [roadmap](../sourcing/roadmap-20261007.md). Root owns integration. LOCAL web-first work grants no hosting/spend, production routing/deploy, provider registration or live reads/sends. Desktop fallback and parked outcomes remain.
 
@@ -16,9 +16,9 @@ Source18b15efd4 completes qualified research Firm plus current-proof Today resea
 
 ## Accepted local browser workflow, closed
 
-Issue738, isolated `codex/local-web-first-20261022` from exact main881. Shared boundary7dac/e85/e66, server1b14, UI fbc1/8c9, acceptance966c9819f:28 paths,+1654/-3. Reuses existing React presentation, API/domain/auth and meeting-note command, not another product backend. Per-request connections/private state, encrypted HttpOnly Secure host cookies, exact Origin/CSRF/session revision, membership/revocation/expiry and client-generation fences. No JavaScript device/access secret, shared private projection or automatic mutation replay. Discovery/link custody migration deferred.
+Issue738 source966c9819f/docs5ff947097 is CLOSED: actual isolated HTTPS/Chrome/signed-OIDC/PG final10PASS,43unit checks, three finished reviews/docs CLEAN and owned cleanup accepted. Initial7/8 and9/10 observation failures remain retained separately. Request-owned API/auth, encrypted Secure/HttpOnly host cookies, exact Origin/CSRF/session revision, membership/revocation/expiry, generation fences and exact-UUID meeting-note recovery remain authoritative. No JavaScript credentials or shared private projection. This is controlled local acceptance, not hosted/business usefulness.
 
-Actual isolated HTTPS/Chrome/signed-local-OIDC/disposable-PG final10 workflows PASS05:59,12.1seconds: login→Today→existing synthetic Firm→reload→logout, identity isolation, CSRF/origin/stale refusal, four revocation/expiry cases, late-response logout and durable meeting-note save/readback/lost-response exact-UUID replay. Initial7/8 and subsequent9/10 test-observation failures remain retained; corrected final result is separate evidence. Root43 unit tests, web types/source lint/workflow/diff PASS. PG fixture/template/cluster teardown and owned process/scratch absence confirmed in Swan's final handback; three finished spec/standards/privacy reviews are CLEAN for exact881→966, with the normal docs addendum CLEAN. This is local controlled acceptance, not hosted or useful live-business acceptance. Server/UI/acceptance owners and reviewers READY after completed handbacks, not active builders. Issue739 supplies the reusable local HTTPS composition; real target-host capacity, callback/key configuration and approved business routing remain external boundaries.
+**Issue743:** original actual-host/OIDC/PG/Chrome NEW13 PASS15.7s at1a32f7b07; five initial failures retained. Risk CLEAN. Corrections69f61ef0a/cf472ed52 pass16/10 focused tests separately, source findings statically closed. Targeted51f594066 NEW1PASS4.7s proves authenticated incomplete-context refusal preserves exact custody/session, no paid replacement, reload no replay and real auth clearing. Four fixture failures retained, owned resources absent. Original sessions/Scorpion unavailable after restart; Hog finding-proof closure CLEAN, root docs/tracker delivery. No original13 replay, source/Firm actual-wait, hosted, real inference or usefulness claim.
 
 ## Accepted production and installed fallback
 
@@ -38,6 +38,6 @@ TX1,600+CA/FL1,200 raw observations retained October21, duplicates0, two matchin
 
 David October21 17:40 normal install/auth/business capture/eligible-sending scope remains accepted, no per-step permission ask. OwnerOFF/newer stops/consent/privacy/cap5/lower ramps/local weekday mornings/reply/refusal/suppression remain. Gmail incoming+Sent/new originals/no history,Haiku4.5,$1/day/$20month. LinkedIn manual unchanged; Cal.com disconnected. Five-touch draft/threading, replies, demo/recap and calling remain unproven.
 
-NARPM EXCLUDED pending commercial notice; Places funding/no-card missing; Apollo Free exhausted, no paid fallback. Budgets400units/day,$40/day credits,$387.50/month,four pages/1MB,$50/day runaway guard unchanged. Last dated callable Overture/Places/NARPM/Apollo/first-party0/0/0/0/0, not fresh; demos/global workers unverified. iPhone closed; prior GOs consumed. #700 open/#706 deferred; global issue/size totals unverified. October21 report delivered; next October22 22UTC `sched_80a1c58b`. No new spending/contact approvals pending for this local slice.
+NARPM EXCLUDED pending commercial notice; Places funding/no-card missing; Apollo Free exhausted, no paid fallback. Budgets400units/day,$40/day credits,$387.50/month,four pages/1MB,$50/day runaway guard unchanged. Last dated callable Overture/Places/NARPM/Apollo/first-party0/0/0/0/0, not fresh; demos/global workers unverified. iPhone closed; prior GOs consumed. #700 open/#706 deferred; global issue/size totals unverified. October22 report delivered; next October23 22UTC `sched_55672151`. No new spending/contact approvals pending for this local slice.
 
 Private evidence: `~/.jcode/scratch/fss-web-first-20261022/`; `~/.jcode/scratch/pr736-881e2e2-execution129/RESULT.md`; installed129 owner/capture reports; Westrom handbacks in desktop128-8c8 delivery directory.
