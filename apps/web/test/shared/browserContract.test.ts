@@ -35,6 +35,16 @@ describe('browser boundary', () => {
     expect(browserApiPathAllowed('POST', '/outreach/authorization/save')).toBe(false);
   });
 
+  it('admits only automatic supply Today V4 reads without publication or activation commands', () => {
+    expect(browserApiPathAllowed('GET', '/today/actions/v4')).toBe(true);
+    expect(browserApiPathAllowed('POST', '/today/actions/open/v4')).toBe(true);
+    expect(browserApiPathAllowed('POST', '/today/actions/v4')).toBe(false);
+    expect(browserApiPathAllowed('GET', '/today/actions/open/v4')).toBe(false);
+    for (const path of ['/today/actions/open/v4/extra', '/sourcing/automatic-research/create', '/sourcing/automatic-research/publish', '/sourcing/automatic-research/enable']) {
+      expect(browserApiPathAllowed('POST', path)).toBe(false);
+    }
+  });
+
   it('never accepts credentials as presentation metadata', () => {
     expect(browserSessionSchema.safeParse({ status: 'signed_out', csrfToken: 'x'.repeat(43) }).success).toBe(true);
     expect(browserSessionSchema.safeParse({ status: 'signed_out', csrfToken: 'x'.repeat(43), accessToken: 'secret' }).success).toBe(false);

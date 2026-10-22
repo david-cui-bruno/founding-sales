@@ -29,10 +29,10 @@ export const BROWSER_REVISION_HEADER = 'x-callie-session';
 
 /** Deliberately not a generic proxy. Existing API handlers own all product policy. */
 export const BROWSER_READ_PATHS = Object.freeze([
-  '/today', '/firms', '/meetings/outcomes', '/today/actions/v3',
+  '/today', '/firms', '/meetings/outcomes', '/today/actions/v3', '/today/actions/v4',
 ] as const);
 export const BROWSER_POST_READ_PATHS = Object.freeze([
-  '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3',
+  '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3', '/today/actions/open/v4',
   '/sourcing/research-firms/list', '/sourcing/research-firms/read',
   '/outreach/email-campaigns/control',
 ] as const);
