@@ -23,6 +23,7 @@ The default `workerDueWorkSources()` registry contains exactly the following nam
 | Source | What it materializes |
 | --- | --- |
 | `crm-mail-progress` | CRM mail progress work from retained business state. |
+| `crm-capture-read-forward` | When configured, bounded CRM-only forward work under dedicated verified capture-read clearance, rechecked against current owner consent and mailbox generation. Each job handles at most one frozen page and 50 metadata reads; owner sending OFF and incident holds remain unchanged, with no operational cursor advancement or generic incident bypass. |
 | `crm-processing-recovery` | Financial recovery of interrupted extraction, not another external dispatch. |
 | `crm-mail-backfill` | Explicitly enabled, authorized CRM backfill work. |
 | `social-drafts` | Manual requests/explicit weekly draft opt-ins and expiry, when configured; no posting authority. |

@@ -4,6 +4,8 @@ import {createCrmAcquisitionDiagnosticCapture} from '@fss/domain/mail/crmAcquisi
 import {createServerCrmGmailAccessResolver} from './crmGmail.ts';
 import {readCrmCapabilityStartup,createCrmCapabilityRuntime} from '@fss/domain/crm/capabilityStartup.ts';
 import {composeCrmCapabilities} from './crmCapabilities.ts';
+import {registerCaptureReadHandlers,type CaptureReadComposition} from './crmCaptureReadRecovery.ts';
+import {crmCaptureReadForwardSource} from '../scheduler/crmCaptureReadForwardSource.ts';
 import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
 import {crmCommitmentIntentJobHandler} from '../handlers/crmCommitmentIntent.ts';
 import {crmCommitmentJobHandler} from '../handlers/crmCommitments.ts';
@@ -130,10 +132,9 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * a statement against this database. It is the one job kind in this image that reaches
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
-export interface HandlerComposition {
+export interface HandlerComposition extends CaptureReadComposition {
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
-  /** Controlled composition only; no live proof verifier is configured by startup. */
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
   readonly apolloDiscovery?: ApolloDiscoveryDependencies;
@@ -215,7 +216,7 @@ export function registerHandlers(
   composition: HandlerComposition,
 ): HandlerRegistry {
   const { classifier } = composition;
-  registry.register(canaryHandler());
+  registry.register(canaryHandler()); registerCaptureReadHandlers(registry,composition);
   registry.register(crmMailProgressJobHandler());
   registry.register(crmCommitmentJobHandler());
   registry.register(crmCommitmentIntentJobHandler(composition.crmExtraction?.mailEvidence));
@@ -468,8 +469,8 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'classifier'|'crmExtraction'>>): {
-  readonly crmMailProcessing?:CrmMailEvidencePort;
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'classifier'|'crmExtraction'|'crmCaptureRead'>>): {
+  readonly crmMailProcessing?:CrmMailEvidencePort; readonly crmCaptureRead?:boolean;
   readonly socialDraft: boolean;
   readonly qualification: boolean;
   readonly discovery: boolean;
@@ -486,7 +487,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
 } {
   return {
     ...composition.crmExtraction?.mailEvidence===undefined?{}:{crmMailProcessing:composition.crmExtraction.mailEvidence},
-    socialDraft: composition.classifier?.processEnabled===true,
+    socialDraft: composition.classifier?.processEnabled===true, crmCaptureRead:composition.crmCaptureRead!==undefined,
     qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
     discovery: composition.discovery !== undefined,
     ...composition.apolloDiscovery?{apolloDiscovery:{accountRef:composition.apolloDiscovery.accountRef,keyRef:composition.apolloDiscovery.keyRef}}:{},
@@ -517,7 +518,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
-    readonly crmMailProcessing?:CrmMailEvidencePort;
+    readonly crmMailProcessing?:CrmMailEvidencePort; readonly crmCaptureRead?:boolean;
     readonly crmMailBackfill?:boolean;
     readonly socialDraft?: boolean;
     readonly qualification?: boolean;
@@ -530,14 +531,13 @@ export function workerDueWorkSources(
     readonly calcomReconcile?: boolean;
     readonly transcription?: boolean;
     readonly summary?: boolean;
-    /** Slice 3a: whether `call.analyze` is registered. */
     readonly analysis?: boolean;
     /** Slice C3a: whether recorded Transcribe jobs are collected (the call-audio bucket is configured). */
     readonly transcriptionCollector?: boolean;
   } = {},
 ): readonly DueWorkSource[] {
   return [
-    crmMailProgressSource(),
+    crmMailProgressSource(), crmCaptureReadForwardSource(options.crmCaptureRead===true),
     crmExtractionRecoverySource(),
     crmMailBackfillSource(options.crmMailBackfill===true),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],

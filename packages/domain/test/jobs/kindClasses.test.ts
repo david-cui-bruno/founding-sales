@@ -65,6 +65,8 @@ describe('job kind classes', () => {
       'sequence.action',
       'sequence.terminal_stop',
       'crm.mail_capture',
+      'crm.capture_read_recovery',
+      'crm.capture_read_forward',
       'crm.mail_backfill',
       'crm.business_selection',
       'retention.batch',

@@ -1,8 +1,7 @@
 import { LINKEDIN_MANUAL_OPERATIONS } from './linkedinManualOperations.ts';
 import { SOCIAL_CONTENT_OPERATIONS } from './socialContentOperations.ts';
-import {businessSelectionReadSchema,businessSelectionStatusSchema} from '@fss/contracts';
-import {businessSelectionPayloadSchema} from '@fss/contracts';
-import {businessRuleReadSchema,businessRulePayloadSchema,businessRulesSchema} from '@fss/contracts';
+import {CRM_CAPTURE_READ_RECOVERY_OPERATIONS} from './crmCaptureReadRecoveryOperations.ts';
+import {BUSINESS_SELECTION_OPERATIONS} from './businessSelectionOperations.ts';
 import {
   crmMailCaptureControlsSaveSchema,
   crmCapabilityReadSchema,
@@ -1261,10 +1260,8 @@ export const OPERATIONS = {
   },
   'crm.businessPolicyRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/policy/read'}],input:businessPolicyReadSchema,output:businessPolicySchema,transform:'actual actor mailbox configuration; capture remains disabled'},
   'crm.businessPolicySave': {kind:'command',calls:[{method:'POST',path:'/crm/business/policy/save'}],input:businessPolicySavePayloadSchema,output:z.strictObject({revision:z.number().int().positive()}),transform:'explicit disabled metadata-review consent'},
-  'crm.businessSelectionRead':{kind:'read',calls:[{method:'POST',path:'/crm/business/selection/read'}],input:businessSelectionReadSchema,output:businessSelectionStatusSchema,transform:'current account selection status without provider reads'},
-  'crm.businessSelectionRequest':{kind:'command',calls:[{method:'POST',path:'/crm/business/selection/request'}],input:businessSelectionPayloadSchema,output:z.strictObject({status:z.literal('queued'),previewJobId:z.uuid(),captureAllowed:z.literal(false)}),transform:'one selected Gmail message metadata preview; no body acquisition'},
-  'crm.businessRulesRead':{kind:'read',calls:[{method:'POST',path:'/crm/business/rules/read'}],input:businessRuleReadSchema,output:businessRulesSchema,transform:'account-scoped correspondent rules'},
-  'crm.businessRuleSave':{kind:'command',calls:[{method:'POST',path:'/crm/business/rules/save'}],input:businessRulePayloadSchema,output:z.strictObject({revision:z.number().int().positive(),captureAllowed:z.literal(false)}),transform:'versioned rule edit or removal; no capture authority'},
+  ...BUSINESS_SELECTION_OPERATIONS,
+  ...CRM_CAPTURE_READ_RECOVERY_OPERATIONS,
   'crm.businessReviewRead': {kind:'read',calls:[{method:'POST',path:'/crm/business/review/read'}],input:businessReviewReadSchema,output:businessReviewSchema,transform:'bounded proven account metadata; no bodies'},
   'crm.businessReviewDecide': {kind:'command',calls:[{method:'POST',path:'/crm/business/review/decide'}],input:businessReviewDecidePayloadSchema,output:z.strictObject({decisionRevision:z.number().int().positive(),captureAllowed:z.literal(false)}),transform:'versioned human inclusion/exclusion; no capture authority'},
   'crm.evidenceWorkBind':{kind:'command',calls:[{method:'POST',path:'/crm/evidence/work/bind'}],input:crmEvidenceWorkBindPayloadSchema,output:crmEvidenceWorkBoundSchema,transform:'exact current claim and actual task version dependency'},

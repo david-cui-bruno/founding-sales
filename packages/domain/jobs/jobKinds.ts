@@ -35,6 +35,8 @@ export const JOB_KINDS = [
   'sequence.terminal_stop',
   'mail.sync',
   'crm.mail_capture',
+  'crm.capture_read_recovery',
+  'crm.capture_read_forward',
   'crm.mail_backfill',
   'crm.business_selection',
   'mail.reconcile',
@@ -104,6 +106,8 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // Message uniqueness and a compare-and-set cursor.
   'mail.sync': 'business_uniqueness',
   'crm.mail_capture': 'outbound_fence',
+  'crm.capture_read_recovery': 'outbound_fence',
+  'crm.capture_read_forward': 'outbound_fence',
   'crm.mail_backfill': 'outbound_fence',
   'crm.business_selection': 'outbound_fence',
   // The fence state machine decides; a second reconcile observes, it does not send.
@@ -359,6 +363,8 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // A person or the clock is waiting.
   'mail.sync': 'urgent',
   'crm.mail_capture': 'bulk',
+  'crm.capture_read_recovery': 'bulk',
+  'crm.capture_read_forward': 'bulk',
   'crm.mail_backfill': 'bulk',
   'crm.business_selection': 'bulk',
   'mail.reconcile': 'urgent',
