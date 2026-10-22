@@ -1,10 +1,14 @@
 # Current operating state
 
-## October 22, 2026, 15:40 UTC local-host checkpoint
+## October 22, 2026, 17:00 UTC local-workflow checkpoint
 
 Retained dated evidence, not fresh runtime authority. See [roadmap](../sourcing/roadmap-20261007.md). Root owns the product, shared interfaces and integration. David approved the LOCAL web-first first slice05:39. No hosting, new service/spend, production data routing/deploy, provider registration change or live business reads/sends were authorized. Accepted desktop fallback and all parked selling outcomes remain intact.
 
 Product interview COMPLETE: qualified leads→Firm/Today→approved outreach→actual replies/drafts/briefs, social review-first NEXT, coaching parked. Promise: maintenance-coordination time saved. Auto email admission/verified openings and confirmed-note tasks remain desired, not live authorized. Replies/social final-review-first; LinkedIn permission settled, Facebook research-only. [Canonical plan](../../apps/web/PLAN.md) retains decisions. Bird15:23 corrected the local-code gate for issue739, not a new David deployment approval. LOCAL host2394c3ac0 reuses React/API/auth with raw streamed limits before parse, exact static routing, pinned Host/origin, strict CSP/security headers and explicit server-only settings. Actual reusable HTTPS factory NEW5/5 PASS7.9seconds: login/Today/Firm/reload/logout, durable note response-loss replay, identity/upload/static refusals. Initial CSP failure was fixed by early browser-only jitless bootstrap, never policy relaxation. Owned HTTPS/DB/template/cluster/TLS/browser resources released.64 focused checks/types/lint/workflow/scoped scanner PASS; size counts86/7/46 unchanged. Parser-policy fix768d9944a adds10 factory/lifecycle checks plus32 host regressions PASS; same spec/standards finding CLOSED and privacy delta CLEAN. All three reviews CLEAN; local host complete, not hosted/business acceptance. No push/main merge/real config/keys/provider/hosting/routing/send actions. External capacity/cost/key/callback/private-data staging and guarded rollout remain separate.
+
+## Qualified research preparation, issue740 closed locally
+
+Source18b15efd4 completes qualified research Firm plus current-proof Today research-preparation action. Original NEW5/5 actual-host/OIDC/PG/Chrome PASS16.4seconds; R740-1 fixed70ce8ca1b, NEW missing-order1PASS5.2seconds plus affected case separately PASS, not full6. Exact pending custody survives source loss; real auth refusal clears it. Three finished reviews CLEAN after same-finding closure, owned resources absent. Types/workflow/scoped scan PASS. No automatic supply/campaign, hosted, model-quality or real selling acceptance.
 
 ## Accepted local browser workflow, closed
 
