@@ -6,7 +6,7 @@ import { BrowserClient, PENDING_KEY } from '../../src/client/BrowserClient.ts';
 import { REPLY_PENDING_KEY } from '../../src/client/ReplyAttempt.ts';
 
 const id = '00000000-0000-4000-8000-000000000001';
-const session = { status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'revision-one', csrfToken: 'c'.repeat(40), expiresAt: '2026-10-23T00:00:00.000Z' };
+const session = { status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'revision-one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() };
 const firm = { id, name: 'Synthetic Alpha Firm', website: null, locality: null, regionCode: null, status: 'active', assignedUserId: id, stageKey: null, opportunityStatus: null, controlMode: null, openedAt: null, timeZone: null, timeZoneUnresolvedReason: null, addressLine: null, postalCode: null, countryCode: 'US', timeZoneConfidence: null, timeZoneSource: null, contacts: [{ id, fullName: 'Fixture Person', title: 'Owner', status: 'active', isPrimary: true }], phoneRoutes: [], emailRoutes: [], aliases: [] };
 const notes = { meetingId: id, revision: 0, debrief: '', speakerMappings: [], itemOverrides: [], sufficient: false, savedAt: null };
 const outcomes = { meetingId: id, firmId: id, notes, analysisId: null, sourceHash: 'a'.repeat(64), state: 'empty', attendance: 'unconfirmed', overview: '', items: [], tasks: [], holds: [] };
@@ -44,6 +44,21 @@ async function openNotes(): Promise<void> {
 }
 
 describe('BrowserApp real shared presentation', () => {
+  it('mounts ordinary inventory only in signed-in Today without automatically reading or qualifying', async () => {
+    const { client, commands, send } = setup();
+    render(<BrowserApp client={client} />);
+    await screen.findByRole('heading', { name: 'Ordinary sourcing inventory' });
+    expect(send.mock.calls.some(([url]) => String(url).includes('/sourcing/candidates/'))).toBe(false);
+    expect(send.mock.calls.some(([url]) => String(url).includes('/sourcing/qualification/'))).toBe(false);
+    expect(commands).toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+    await screen.findByText('Fixture Person · Owner');
+    expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
+    await act(async () => { client.invalidate(false); });
+    await screen.findByRole('heading', { name: 'Sign in' });
+    expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
+  });
+
   it('clears valid prior reply custody when cold-start authentication is refused', async () => {
     const { client, send } = setup();
     sessionStorage.setItem(REPLY_PENDING_KEY, JSON.stringify({ identity: JSON.stringify([id, id, id, 'admin', session.revision]),
