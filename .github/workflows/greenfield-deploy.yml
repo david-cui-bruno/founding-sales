@@ -414,6 +414,8 @@ jobs:
           gh run download "$GATE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "upgrade-evidence-$COMMIT" --dir "$RUNNER_TEMP/upgrade-evidence" || \
             echo 'No upgrade artifact downloaded; schema-changing preparation will refuse.'
       - name: Save the exact plan and encrypt it for the protected application job
+        env:
+          FSS_PRODUCTION_FOUNDER_BROWSER_JSON: ${{ vars.FSS_PRODUCTION_FOUNDER_BROWSER_JSON }}
         run: |
           set -euo pipefail
           node infra/scripts/reviewed-release.mjs prepare "$RUNNER_TEMP/image-digests.json" "$RUNNER_TEMP/plan-recipient.pem" \

@@ -1,0 +1,17 @@
+:root { font-family: system-ui, sans-serif; color: #18232b; background: #f7f8fa; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 64rem; margin: auto; padding: 2rem; }
+header, nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+section, article, aside { background: white; border: 1px solid #d4dbe0; border-radius: .5rem; padding: 1rem; margin: 1rem 0; }
+h1, h2, h3 { line-height: 1.25; }
+label { display: block; margin: .8rem 0; }
+input:not([type=checkbox]), textarea { display: block; width: 100%; border: 1px solid #71808d; border-radius: .3rem; padding: .65rem; font: inherit; margin-top: .4rem; }
+textarea { min-height: 10rem; }
+button { font: inherit; border: 1px solid #71808d; background: #edf2f6; border-radius: .3rem; padding: .5rem .8rem; margin: .3rem .4rem .3rem 0; cursor: pointer; }
+button:hover { background: #e0e8ee; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid #2672ab; outline-offset: 2px; }
+blockquote { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid #71808d; padding-left: 1rem; }
+[role=status] { padding: .6rem 0; }
+@media (max-width: 600px) { main { padding: 1rem; } header, nav { flex-wrap: wrap; } }

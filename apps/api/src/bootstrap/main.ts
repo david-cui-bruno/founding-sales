@@ -31,7 +31,10 @@ import { createRequestPool, poolConnections, verifyPoolConnectivity } from './co
 import { startApiHeartbeat } from './heartbeat.ts';
 import { createLogger, errorFields } from './log.ts';
 import { drainApi } from './shutdown.ts';
-import { createApiServer } from '../server.ts';
+import { createApiServer, type ApiServerOptions } from '../server.ts';
+import { readFounderBrowserSettings, browserMountWithAssets } from './browser.ts';
+import { loadBrowserAssets } from '../../../web/src/server/publicAssets.ts';
+import type { BrowserAssets } from '../../../web/src/server/hostContract.ts';
 import {loadHumanReplyDraftPort} from '../integrations/replyComposer.ts';
 
 /**
@@ -130,10 +133,14 @@ async function listen(server: Server, port: number, host: string): Promise<void>
 
 export async function main(argv: readonly string[], environment: NodeJS.ProcessEnv): Promise<number> {
   let config: ApiConfig;
+  let browserSettings: ReturnType<typeof readFounderBrowserSettings>;
+  let browserAssets: BrowserAssets | undefined;
   let crmConfiguration:ReturnType<typeof readCrmCapabilityStartup>;
   const bootLog = createLogger({ component: 'api', instanceKey: 'boot' });
   try {
     config = readApiConfig(environment);
+    browserSettings = readFounderBrowserSettings(environment);
+    if (browserSettings !== undefined) browserAssets = await loadBrowserAssets('/app/browser-public');
     crmConfiguration=readCrmCapabilityStartup(environment);
   } catch (error) {
     bootLog.log('error', 'api_configuration_refused', {
@@ -173,6 +180,10 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     return API_EXIT_CODES.configurationInvalid;
   }
 
+  if (browserSettings !== undefined && deployment.auth === undefined) {
+    log.log('error', 'api_browser_configuration_refused', {});
+    return API_EXIT_CODES.configurationInvalid;
+  }
   if (argv.includes('--selftest')) {
     log.log('info', 'api_selftest', { ...describeApiConfig(config), ...describeDeployment(deployment) });
     return API_EXIT_CODES.ok;
@@ -263,7 +274,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const diagnosticRuntime=createCrmAcquisitionDiagnosticStartup(environment,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'api',schemaVersion:REQUIRED_SCHEMA,connectionString:config.database.connectionString});
   const crmRuntime=diagnosticRuntime===undefined?createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'api',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.mail!==undefined}):undefined;
   const crmVerifiers=crmRuntime===undefined?undefined:createCrmCapabilityVerifiers({runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-api-crm-authority'});await client.connect();return {session:client,close:()=>client.end()};}});
-  const server = createApiServer({
+  const serverOptions: ApiServerOptions = {
     ...(diagnosticRuntime===undefined?{}:{crmAcquisitionDiagnosticRuntime:diagnosticRuntime}),
     ...(crmRuntime===undefined||crmVerifiers===undefined?{}:{crmCapabilityRuntime:crmRuntime,crmMailEvidence:createNativeCrmMailEvidence(crmVerifiers.captureVerifier),crmMailCaptureReadiness:{adapterAvailable:()=>crmConfiguration.capture&&deployment.mail!==undefined,proofVerifier:crmVerifiers.captureVerifier}}),
     bookingCapacity,
@@ -291,7 +302,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // Call-to-booking (slice W): Twilio and Cal.com, each null until its secret is set.
     integrations: deployment.integrations,
     log,
-  });
+  };
+  const server = createApiServer({ ...serverOptions, ...(browserSettings === undefined || browserAssets === undefined ? {} : { browser: browserMountWithAssets(browserSettings, serverOptions, browserAssets) }) });
   const heartbeat = startApiHeartbeat({
     session: asSession(heartbeatClient),
     instanceKey: config.instanceKey,

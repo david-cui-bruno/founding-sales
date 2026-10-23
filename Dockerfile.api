@@ -7,7 +7,7 @@
 # to start with an exec format error, so the platform is pinned here rather than
 # left to the builder's host.
 #
-# There is no build step. The greenfield tree is TypeScript that Node runs
+# Browser presentation builds once. Server TypeScript is code that Node runs
 # directly; `--experimental-transform-types` is required rather than plain
 # type stripping because `packages/domain` uses constructor parameter
 # properties, which strip-only mode refuses. See
@@ -21,10 +21,10 @@
 ARG NODE_IMAGE=node:24.20.0-bookworm-slim
 
 # ---------------------------------------------------------------------------
-# Dependencies. Only the three workspaces the API needs, production only,
+# Dependencies. API and browser server workspaces, production only,
 # and `--ignore-scripts` so nothing in the lock file gets to run code during
-# the build. The old trees' dependencies (Electron, React, native modules) are
-# never installed: `npm ci --workspace` resolves from the same lock file
+# the build. Desktop/native development dependencies are never installed here.
+# `npm ci --workspace` resolves from the same lock file
 # without pulling the root project's own dependencies in.
 # ---------------------------------------------------------------------------
 FROM --platform=linux/arm64 ${NODE_IMAGE} AS dependencies
@@ -32,14 +32,35 @@ FROM --platform=linux/arm64 ${NODE_IMAGE} AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
 COPY packages/domain/package.json packages/domain/
 COPY packages/contracts/package.json packages/contracts/
 
 RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
       --workspace @fss/api \
+      --workspace @fss/web \
       --workspace @fss/domain \
       --workspace @fss/contracts \
  && npm cache clean --force
+
+# Locked build-only toolchain and desktop presentation imports, never runtime tools.
+FROM --platform=linux/arm64 ${NODE_IMAGE} AS browser-build
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/
+COPY apps/desktop/package.json apps/desktop/
+COPY packages/contracts/package.json packages/contracts/
+RUN npm ci --ignore-scripts --include=dev --no-audit --no-fund \
+      --include-workspace-root --workspace @fss/web --workspace @fss/desktop --workspace @fss/contracts
+COPY tsconfig.base.json ./
+COPY apps/web/tsconfig.json apps/web/
+COPY apps/web/src/client apps/web/src/client
+COPY apps/web/src/shared apps/web/src/shared
+COPY apps/web/src/server/assets.ts apps/web/src/server/publicAssets.ts apps/web/src/server/
+COPY apps/desktop/src/renderer apps/desktop/src/renderer
+COPY packages/contracts/src packages/contracts/src
+COPY scripts/buildBrowserAssets.mjs scripts/
+RUN node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/buildBrowserAssets.mjs /app/browser-public
 
 # ---------------------------------------------------------------------------
 # Runtime.
@@ -72,6 +93,12 @@ COPY apps/api/package.json apps/api/
 COPY packages/domain/package.json packages/domain/
 COPY packages/contracts/package.json packages/contracts/
 COPY apps/api/src apps/api/src
+COPY apps/web/package.json apps/web/
+COPY apps/web/src/server apps/web/src/server
+COPY apps/web/src/shared apps/web/src/shared
+COPY --from=browser-build /app/browser-public ./browser-public
+# Build/local HTTPS entrypoints must not be available to production imports.
+RUN rm apps/web/src/server/assets.ts apps/web/src/server/server.ts
 COPY packages/domain/crm packages/domain/crm
 COPY packages/domain/db packages/domain/db
 COPY packages/domain/jobs packages/domain/jobs

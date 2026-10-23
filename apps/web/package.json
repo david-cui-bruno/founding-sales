@@ -1,0 +1,19 @@
+{
+  "name": "@fss/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first browser adapter over the existing Callie API and shared React presentation.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
+    "test:e2e": "playwright test --config playwright.config.ts"
+  },
+  "dependencies": {
+    "@fss/contracts": "*",
+    "@fss/domain": "*",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "^4.6.5"
+  }
+}

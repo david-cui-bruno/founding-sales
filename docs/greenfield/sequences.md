@@ -1,6 +1,10 @@
 # Regular follow-up sequences
 
-Regular sequences remain part of daily selling. Automatic email admission was removed; it is not the same thing as a human choosing an existing regular sequence for an authorized contact. Begin with the [selling guide](../operations/how-to-sell.md) and retain every [sending safeguard](sending.md).
+Regular sequences remain part of daily selling. Retained production129 uses manual admission. Isolated LOCAL issue741 adds explicit approved-campaign admission under [ADR0013](../adr/0013-approved-email-campaign-admission.md); it is not deployed or permission to send. Begin with the [selling guide](../operations/how-to-sell.md) and retain every [sending safeguard](sending.md).
+
+## Desired direction versus retained implementation
+
+October22 product decisions change desired scope: newly qualified leads auto-enroll only into an already-approved EMAIL campaign with approved targeting/messages/limits. Local source130 implements immutable campaign approval/revocation and automatic admission of current canonical qualified research Firms, not automatic raw-source supply. Actual new acceptance and correction evidence are recorded in the [canonical plan](../../apps/web/PLAN.md); local acceptance at17ac4804d and all three finished reviews are CLEAN after four finding closures. Existing manual enrollment below remains supported and retained production129 is unchanged. Short verified-research AI openings remain future work, with fixed approved offers/pricing/promises and no invented familiarity. Replies and one-off external/social messages remain final-review drafts. No live enrollment/send/provider activation follows from local implementation. Effective OFF, eligibility, suppression, reply stops, caps, uncertainty and current consent remain authoritative.
 
 ## Definition, enrollment and permission
 

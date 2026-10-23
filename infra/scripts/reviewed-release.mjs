@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { validateConfiguration, backendPolicy, validatePolicy, proposeExistingPolicy, stageMapping } from './release-backend-contract.mjs';
+import { founderBrowserConfiguration } from './release-founder-browser.mjs';
 import { createReleaseSafety, validateOff } from './release-safety.mjs';
 const [mode, ...args] = process.argv.slice(2);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -162,7 +163,10 @@ try {
       const evidenceBinding = read(bindingFile);
       if (evidenceBinding.from !== baseline.from || evidenceBinding.to !== process.env.COMMIT || !readFileSync(evidenceFile, 'utf8').includes(`PASS  schema ${baseline.fromSchema} → ${toSchema}`)) throw new Error('reviewed_upgrade_evidence_changed');
     }
-    const variables = { assume_deployment_role: false, api_image: `${account}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@${images.images.api.digest}`, worker_image: `${account}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${images.images.worker.digest}`, api_schema_range: { min: toSchema, max: toSchema }, worker_schema_range: { min: toSchema, max: toSchema } };
+    const baselineApi = aws(['ecs', 'describe-task-definition', '--task-definition', baseline.bindings.apiTaskDefinition]).taskDefinition;
+    if (baselineApi?.taskDefinitionArn !== baseline.bindings.apiTaskDefinition) throw new Error('baseline_api_binding_changed');
+    const founderBrowser = founderBrowserConfiguration(process.env.FSS_PRODUCTION_FOUNDER_BROWSER_JSON, baselineApi);
+    const variables = { founder_browser: founderBrowser, assume_deployment_role: false, api_image: `${account}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@${images.images.api.digest}`, worker_image: `${account}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${images.images.worker.digest}`, api_schema_range: { min: toSchema, max: toSchema }, worker_schema_range: { min: toSchema, max: toSchema } };
     const variableFile = resolve(directory, 'private', 'variables.json'); writeFileSync(variableFile, JSON.stringify(variables), { mode: 0o600 });
     const planFile = resolve(directory, 'private', 'release.tfplan');
     terraform(['init', '-input=false', '-reconfigure', '-backend-config=backend.hcl'], 'reviewed_init_failed');

@@ -1,4 +1,4 @@
-import { PHONE_HANDOFF_CONSTRAINT_CASES } from './support/phoneHandoffCases.ts'; import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
+import { campaignCompositionCases } from './support/campaignCompositionCases.ts'; import { AUTOMATIC_SUPPLY_CONSTRAINT_CASES } from './support/automaticSupplyCases.ts'; import { PHONE_HANDOFF_CONSTRAINT_CASES } from './support/phoneHandoffCases.ts'; import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {BOOKING_CHANGE_CONSTRAINT_CASES} from './support/bookingChangeConstraints.ts';
 import {BOOKING_MESSAGE_CONSTRAINT_CASES,BOOKING_MESSAGE_GUARD_CASES} from './support/bookingMessageCases.ts';
 import {BOOKING_CONVERSATION_CONSTRAINT_CASES} from './support/bookingConversationCases.ts';
@@ -9,7 +9,7 @@ import {
 import { ASK_TASK_DEPENDENCY_CONSTRAINT_CASES } from "./support/askTaskDependencyCases.ts";
 import { ASK_EXECUTION_EVIDENCE_CONSTRAINT_CASES } from "./support/askExecutionEvidenceCases.ts";
 import { ASK_SESSION_CONSTRAINT_CASES } from "./support/askSessionCases.ts";
-import { CRM_CAPTURE_READ_CONSTRAINT_CASES } from './support/crmCaptureReadCases.ts';
+import { CRM_CAPTURE_READ_CONSTRAINT_CASES } from './support/crmCaptureReadCases.ts'; import {EMAIL_CAMPAIGN_CONSTRAINT_CASES} from './support/emailCampaignCases.ts';
 import { CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES } from "./support/crmAcquisitionDiagnosticCases.ts";
 import { CRM_CAPABILITY_CONSTRAINT_CASES } from "./support/crmCapabilityCases.ts";
 import { ROADMAP_ACTIVATION_CONSTRAINT_CASES } from "./support/roadmapActivationCases.ts";
@@ -2244,7 +2244,7 @@ const cases: readonly Case[] = [
   ...peopleConstraintCases,
   ...relationshipConstraintCases,
   ...linkedinRefusalConstraintCases,
-  ...SOURCING_CONSTRAINT_CASES,
+  ...SOURCING_CONSTRAINT_CASES, ...AUTOMATIC_SUPPLY_CONSTRAINT_CASES, ...campaignCompositionCases,
   ...OUTREACH_CONSTRAINT_CASES,
   ...ROADMAP_ACTIVATION_CONSTRAINT_CASES,
   ...CRM_CAPABILITY_CONSTRAINT_CASES,
@@ -2289,7 +2289,7 @@ const cases: readonly Case[] = [
   ...MEETING_TRANSCRIPTION_CONSTRAINT_CASES, ...PHONE_HANDOFF_CONSTRAINT_CASES,
   ...MEETING_OUTCOMES_CONSTRAINT_CASES,
   ...MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES, { constraint: "meeting_unpublished_plan_shape", run: async f => await f.session.query("INSERT INTO meeting_follow_through (workspace_id, meeting_id, firm_id, source_hash, notes_revision, unpublished_plan) SELECT workspace_id, id, firm_id, $2, 0, '{}'::jsonb FROM meetings WHERE id = $1", [await meeting(f), "a".repeat(64)]) },
-  ...MEETING_AUTO_RECORDING_CONSTRAINT_CASES,
+  ...MEETING_AUTO_RECORDING_CONSTRAINT_CASES, ...EMAIL_CAMPAIGN_CONSTRAINT_CASES,
 ];
 describe("foundation constraints", () => {
   let database: TestDatabase;
