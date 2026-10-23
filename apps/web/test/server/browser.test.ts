@@ -49,6 +49,44 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it.each(['request', 'admit'])('preserves typed qualification %s product refusals without changing command identity', async action => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const body = { status: 'refused', replayed: true, reason: 'research_held' };
+    mocks.route.mockResolvedValueOnce({ status: 409, body });
+    const result = await handler(post(`/browser/api/sourcing/qualification/${action}`, { commandId: id, candidateId: id, expectedRevision: 1 }, { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision }));
+    expect(result?.status).toBe(200);
+    expect(result?.body).toEqual(body);
+    expect(result?.headers['cache-control']).toBe('private, no-store');
+    expect(mocks.route.mock.calls[0]?.[3].body).toMatchObject({ commandId: id, clientVersion: '1.4.0' });
+  });
+  it.each(['admin_only', 'session_changed', 'command_payload_mismatch', 'command_device_mismatch', 'command_kind_mismatch', 'firm_assigned_elsewhere', 'sourcing_owner_inactive', 'unknown_reason'])('keeps qualification authority/custody refusal %s generic', async reason => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    mocks.route.mockResolvedValueOnce({ status: 409, body: { status: 'refused', replayed: false, reason } });
+    const result = await handler(post('/browser/api/sourcing/qualification/request', { commandId: id }, { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision }));
+    expect(result?.status).toBe(409);
+    expect(result?.body).toEqual({ error: 'browser_request_refused' });
+  });
+  it('returns only null for exact qualification evidence absence, not arbitrary errors or private refusal fields', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    mocks.route.mockResolvedValueOnce({ status: 404, body: { error: 'not_found' } });
+    expect(await handler(post('/browser/api/sourcing/qualification/read', { candidateId: id }, headers))).toMatchObject({ status: 200, body: null });
+    mocks.route.mockResolvedValueOnce({ status: 404, body: { error: 'not_found', private: 'hidden' } });
+    expect(await handler(post('/browser/api/sourcing/qualification/read', { candidateId: id }, headers))).toMatchObject({ status: 404, body: { error: 'browser_request_refused' } });
+    mocks.route.mockResolvedValueOnce({ status: 409, body: { status: 'refused', replayed: true, reason: 'research_held', private: 'hidden' } });
+    expect(await handler(post('/browser/api/sourcing/qualification/request', { commandId: id }, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+  });
+  it.each(['read', 'request', 'admit'])('refuses qualification %s before dispatch for current non-admin, stale revision and missing CSRF', async action => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const path = `/browser/api/sourcing/qualification/${action}`;
+    expect((await handler(post(path, {}, { ...headers, 'x-callie-session': 'stale' })))?.status).toBe(409);
+    expect((await handler(post(path, {}, { ...headers, 'x-callie-csrf': '' })))?.status).toBe(403);
+    mocks.authenticate.mockResolvedValue({ authenticated: true, principal: { ...principal, role: 'salesperson' } });
+    const memberSession = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    expect((await handler(post(path, {}, { ...headers, 'x-callie-session': (memberSession?.body as { revision: string }).revision })))?.status).toBe(403);
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
   it.each(['generation_already_attempted', 'generation_outcome_unknown', 'source_changed', 'context_incomplete', 'generation_held'])('preserves authenticated generation refusal %s without invalidating custody', async reason => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const body = { status: 'refused', replayed: true, reason };
