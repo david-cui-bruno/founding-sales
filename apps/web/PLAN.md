@@ -1,10 +1,22 @@
 # Browser delivery plan
 
-Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof remains closed. October23 production rollout serves exactfef/schema132; founder login/current Today read and normal reload are observed, useful business acceptance remains open. ADR0012/0017 preserve the security boundary and desktop fallback.
+Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof remains closed. October23 production rollout serves exact84a80ada9/schema132 after protected application39936863297 SUCCESS10:26; founder login/current Today read and normal reload remain dated observations, useful business acceptance remains open. ADR0012/0017 preserve the security boundary and desktop fallback.
 
 **Local slice CLOSED:** code966c9819f, milestone docs5ff947097. Final10/10 actual local-browser workflows,43 unit/component checks, finished spec/standards/privacy reviews and owned PG/TLS/process cleanup accepted. The ownership table below records completed work, not active builders. Product interview completed October22 at07:10UTC; the following desired scope supersedes earlier preference uncertainty, not runtime controls or implementation status. Issue #738 remains the local-slice tracker and decision handoff, not permission to implement the full roadmap.
 
 ## Sequence and exclusive ownership
+
+### Issue749 ordinary inventory read, local review accepted
+
+The existing authenticated admin `/sourcing/candidates/list` read is absent from the deployed browser allowlist/UI. The ready-qualified discovery selection is not ordinary inventory. Normal founder login resolved12:02; its one ready-selection read was empty, not a global supply absence. Root committed closed read boundary2711b3b45/ADR0012 before delegation. No bypass of the deployed allowlist or direct credential path.
+
+| Outcome | Exclusive owner/files | Waits and acceptance |
+| --- | --- | --- |
+| Shared boundary and integration | Hatchling: browserContract.ts/shared test, ADR0012, BrowserApp.tsx/App test, governing docs/tracker | Existing POST read only, bounded status/offset;2711b3b45 boundary7PASS and f4b4c4e25 focused App1PASS. Initial expired test fixture corrected, production expiry unchanged. Three finished reviews CLEAN |
+| Whole read-only inventory UI | Octopus: NEW BrowserCandidateInventory.tsx and candidateInventory.test.tsx | 40b6f8519:27 actual BrowserClient/RTL PASS, explicit replacement paging/memory/request fences, no mutations/storage. Owned checks/scoped scan0 PASS |
+| Whole composed acceptance | Scorpion: NEW candidateInventory.spec.ts and support/candidateInventory*.ts | 3dfcb843a/3bc3d92bc: actual NEW5 split1PASS then remaining4PASS10.3s after owned locator failure, no passed-case replay. Exact owned cleanup; first run template/port ID recording limit retained |
+
+Finished source frozen3bc3d92bc. Hare/spec, Vole/standards and Poodle/privacy finished reviews CLEAN, FULL reports consumed14:25. Root owns final docs/tracker delivery. Private full handbacks retain original failures, Node25.9 environment limit and independent cleanup evidence. Production/main84a/schema132/OFF/global hold unchanged. No acquisition, qualification, Westrom retry, new provider/private route/spend/contact or sending change. Local read readiness is not actual qualified Firm/Today supply. Normal publication/CI/main and any guarded release remain separate. Private plan `~/.jcode/scratch/fss-ordinary-inventory-20261023/PLAN.md` records exact acceptance and ownership.
 
 ### Issue747 local F2/F3 reply correction, accepted
 
@@ -12,7 +24,7 @@ Baseline fbb3ec5ea; Owl custody193602683, Ox readinessad5d8cde/context correctio
 
 - IDs-only per-message custody preserves legacy v1 and exact settled/unknown A while B proceeds. Bounded collection/storage failures fail closed without evicting uncertainty; actual auth invalidation clears all records/private projections. F2 NEW13 plus affected23 client checks PASS36.
 - `mailbox_not_ready` is operational only after exact current mailbox authorization succeeds, preserving custody without stale prose. Existing authorization callers still require connection by default. `mailbox_unavailable` is not content-allowlisted: generation retains generic409 and exact context authority refusal becomes generic401. Restoration requires explicit fresh-context same-attempt reconciliation, no replacement UUID or extra paid dispatch. F3 final affected27 plus browser35 PASS62; earlier focused API41 separately retained, not unique additive totals.
-- Actual HTTPS/signed-OIDC/real-PG/headless-Chrome NEW3 first2PASS/1PRODUCTFAIL21.4s. Canonical mailbox revocation on context refresh exposed retained custody; Ox corrected the exact seam. ONLY affected third case separately1PASS3.1s, not one clean3 run. Both exact owned resource cleanups and scoped secret scans PASS; Homebrew1412/historical profiles untouched. Final composed domain/API/web types/workflow PASS07:27; combined docs addendum CLEAN and final workflow/budgets/diff/scoped scan PASS. Root owns commit/tracker delivery. Production/mainfef/schema132/OFF unchanged; local proof is not deployed correction, real-original usefulness or provider authority.
+- Actual HTTPS/signed-OIDC/real-PG/headless-Chrome NEW3 first2PASS/1PRODUCTFAIL21.4s. Canonical mailbox revocation on context refresh exposed retained custody; Ox corrected the exact seam. ONLY affected third case separately1PASS3.1s, not one clean3 run. Both exact owned resource cleanups and scoped secret scans PASS; Homebrew1412/historical profiles untouched. Final composed domain/API/web types/workflow PASS07:27; combined docs addendum CLEAN and final workflow/budgets/diff/scoped scan PASS. Root delivered local issue747 closure08:00, PR748 merge09:39 and protected application39936863297 SUCCESS10:26. Production/main84a80ada9/schema132, API140/worker141; no migration. Runner verified OFF/unchanged owner versions/PITR/digests/smokes/release-record readback, terminal owned task/temporary reader null. Direct health10:26:43 exact commit/schema accepted; restore UNTESTED, individual OFF payloads not independently retrieved. Global hold unchanged. Deployed correction is not real-original usefulness or provider authority.
 
 ### Issue745 founder browser on existing AWS, active
 
