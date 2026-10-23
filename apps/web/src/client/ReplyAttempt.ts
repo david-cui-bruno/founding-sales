@@ -12,6 +12,8 @@ export const replyAttemptSchema = z.strictObject({
   sourceRevision: z.string().regex(/^[a-f0-9]{64}$/u), factRefs: z.array(replyFactRefSchema).max(20),
   envelopeSHA256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
+export const REPLY_ATTEMPT_LIMIT = 64;
+const replyCustodySchema = z.strictObject({ version: z.literal(2), records: z.array(replyAttemptSchema).min(1).max(REPLY_ATTEMPT_LIMIT) });
 export type PendingReplyAttempt = z.infer<typeof replyAttemptSchema>;
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 export const replyFactRefs = (context: ReplyDraftContext): ReplyFactRef[] => context.facts.map(({ id, version }) => ({ id, version }));
@@ -43,37 +45,55 @@ export class ReplyAttempt {
   }
   dispose(): void { this.unsubscribe(); }
   private clear(): void {
-    try { this.storage.removeItem(REPLY_PENDING_KEY); } catch { /* Unusable without live matching authority. */ }
+    try { this.storage.removeItem(REPLY_PENDING_KEY); this.storageUnavailable = false; }
+    catch { this.storageUnavailable = true; }
   }
-  pending(): PendingReplyAttempt | null {
-    let raw: string | null;
-    try { raw = this.storage.getItem(REPLY_PENDING_KEY); this.storageUnavailable = false; }
-    catch { this.storageUnavailable = true; return null; }
+  private records(): PendingReplyAttempt[] {
+    if (this.storageUnavailable) return [];
     try {
-      if (raw === null) return null;
-      const value = replyAttemptSchema.parse(JSON.parse(raw));
-      if (Date.parse(value.expiresAt) <= Date.now()) { this.clear(); return null; }
-      // Cold-start discovery is not logout. A failed initial refresh emits an epoch change and clears custody.
-      if (this.client.current === null) return null;
+      const raw = this.storage.getItem(REPLY_PENDING_KEY);
+      if (raw === null) return [];
+      if (raw.length > 131072) throw new Error('Custody bounds');
+      const parsed: unknown = JSON.parse(raw);
+      const legacy = replyAttemptSchema.safeParse(parsed);
+      const records = legacy.success ? [legacy.data] : replyCustodySchema.parse(parsed).records;
+      if (new Set(records.map(value => value.messageId)).size !== records.length
+        || new Set(records.map(value => value.commandId)).size !== records.length) throw new Error('Duplicate custody');
+      // Discovery is not logout. Preserve even legacy bytes until authority is known.
+      if (this.client.current === null) return [];
       const session = this.client.current;
       if (!this.client.isCurrent(this.client.epoch) || session.status !== 'signed_in'
-        || value.identity !== identityOf(this.client) || Date.parse(value.expiresAt) > Date.parse(session.expiresAt)) {
-        this.clear(); return null;
+        || records.some(value => value.identity !== identityOf(this.client)
+          || Date.parse(value.expiresAt) <= Date.now()
+          || Date.parse(value.expiresAt) > Date.parse(session.expiresAt))) {
+        this.clear(); return [];
       }
-      return value;
+      return records;
     } catch {
+      // Never discard malformed or unreadable uncertainty to admit new paid work.
       this.storageUnavailable = true;
-      this.clear();
-      return null;
+      return [];
     }
+  }
+  pending(messageId?: string): PendingReplyAttempt | null {
+    const records = this.records();
+    return records.find(value => messageId === undefined || value.messageId === messageId) ?? null;
   }
   private retain(value: PendingReplyAttempt): void {
     if (!this.client.isCurrent(this.epoch) || identityOf(this.client) !== value.identity || Date.parse(value.expiresAt) <= Date.now()) throw new BrowserBoundaryError('session_changed');
+    const records = this.records();
+    if (this.storageUnavailable) throw new BrowserBoundaryError('storage_unavailable');
+    const prior = records.find(record => record.messageId === value.messageId);
+    if (prior && JSON.stringify(prior) !== JSON.stringify(value)) throw new BrowserBoundaryError('refused');
+    if (!prior) records.push(replyAttemptSchema.parse(value));
+    if (records.length > REPLY_ATTEMPT_LIMIT) throw new BrowserBoundaryError('storage_unavailable');
     try {
-      const serialized = JSON.stringify(replyAttemptSchema.parse(value));
+      // Keep legacy single-record encoding until another message needs custody.
+      const serialized = JSON.stringify(records.length === 1 ? records[0] : replyCustodySchema.parse({ version: 2, records }));
+      if (serialized.length > 131072) throw new Error('Custody bounds');
       this.storage.setItem(REPLY_PENDING_KEY, serialized);
       if (this.storage.getItem(REPLY_PENDING_KEY) !== serialized) throw new Error('Custody unavailable');
-    } catch { throw new BrowserBoundaryError('storage_unavailable'); }
+    } catch { this.storageUnavailable = true; throw new BrowserBoundaryError('storage_unavailable'); }
   }
   async context(messageId: string): Promise<ReplyDraftContext> {
     const result = await this.client.request('/replies/composer/context', replyDraftContextResultSchema, { messageId });
@@ -96,7 +116,7 @@ export class ReplyAttempt {
     checkOwner();
     if (fresh.sourceRevision !== context.sourceRevision || JSON.stringify(fresh.envelope) !== JSON.stringify(context.envelope)
       || JSON.stringify(replyFactRefs(fresh)) !== JSON.stringify(replyFactRefs(context))) throw new BrowserBoundaryError('refused');
-    let held = this.pending();
+    let held = this.pending(fresh.messageId);
     if (this.storageUnavailable) throw new BrowserBoundaryError('storage_unavailable');
     if (sameAttempt) {
       if (held === null || !await this.matches(held, fresh)) throw new BrowserBoundaryError('refused');
@@ -115,7 +135,7 @@ export class ReplyAttempt {
       factRefs: held.factRefs, envelope: fresh.envelope,
     }, () => {
       checkOwner();
-      if (this.pending()?.commandId !== retained.commandId) throw new BrowserBoundaryError('session_changed');
+      if (this.pending(retained.messageId)?.commandId !== retained.commandId) throw new BrowserBoundaryError('session_changed');
       this.retain(retained);
     });
   }
