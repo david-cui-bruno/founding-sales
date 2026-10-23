@@ -107,7 +107,7 @@ describe('browser reply composition over actual BrowserClient', () => {
   });
   it('lost response survives reload, never replays automatically, and explicit same-attempt check uses identical UUID and payload', async () => {
     const scope = setup(); await scope.browser.refresh(); scope.lose(true);
-    await expect(scope.attempts.generate(context(), false)).rejects.toThrow('unavailable');
+    await expect(scope.attempts.requestSuggestion(context(), false)).rejects.toThrow('unavailable');
     const held = sessionStorage.getItem(REPLY_PENDING_KEY);
     scope.attempts.dispose();
     const reloaded = new ReplyAttempt(scope.browser, sessionStorage, scope.uuid); resources.push(reloaded);
@@ -124,16 +124,16 @@ describe('browser reply composition over actual BrowserClient', () => {
   });
   it('authenticated source loss or changed revision, facts or default envelope retain uncertain IDs and refuse reconstruction', async () => {
     const scope = setup(); await scope.browser.refresh(); scope.lose(true);
-    await expect(scope.attempts.generate(context(), false)).rejects.toThrow(); const held = sessionStorage.getItem(REPLY_PENDING_KEY);
-    scope.source(null); await expect(scope.attempts.generate(context(), true)).rejects.toThrow('refused');
+    await expect(scope.attempts.requestSuggestion(context(), false)).rejects.toThrow(); const held = sessionStorage.getItem(REPLY_PENDING_KEY);
+    scope.source(null); await expect(scope.attempts.requestSuggestion(context(), true)).rejects.toThrow('refused');
     for (const changed of [{ ...context(), sourceRevision: 'c'.repeat(64) }, { ...context(), facts: [] }, { ...context(), envelope: { to: ['changed@example.test'], cc: [] } }]) {
-      scope.source(changed); await expect(scope.attempts.generate(changed, true)).rejects.toThrow('refused');
+      scope.source(changed); await expect(scope.attempts.requestSuggestion(changed, true)).rejects.toThrow('refused');
       expect(sessionStorage.getItem(REPLY_PENDING_KEY)).toBe(held);
     }
     expect(scope.commands).toHaveLength(1); expect(scope.uuid).toHaveBeenCalledTimes(1);
   });
   it.each(['signed_out', 'refusal', 'cross_tab', 'logout', 'expiry', 'identity'] as const)('clears custody and projections on actual %s', async kind => {
-    const scope = setup(); await composer(scope); await scope.attempts.generate(context(), false);
+    const scope = setup(); await composer(scope); await scope.attempts.requestSuggestion(context(), false);
     fireEvent.change(screen.getByRole('textbox', { name: 'Reply draft' }), { target: { value: 'Private draft' } });
     await act(async () => {
       if (kind === 'signed_out') { scope.session({ status: 'signed_out', csrfToken: 'c'.repeat(40) }); await scope.browser.refresh().catch(() => {}); }
@@ -146,7 +146,7 @@ describe('browser reply composition over actual BrowserClient', () => {
     expect(sessionStorage.getItem(REPLY_PENDING_KEY)).toBeNull(); expect(screen.queryByText('Private current original')).toBeNull(); expect(screen.queryByDisplayValue('Private draft')).toBeNull();
   });
   it.each(['anonymous', '401', '409'] as const)('cold-start actual auth %s clears prior custody without generation dispatch', async outcome => {
-    const original = setup(); await original.browser.refresh(); original.lose(true); await original.attempts.generate(context(), false).catch(() => {});
+    const original = setup(); await original.browser.refresh(); original.lose(true); await original.attempts.requestSuggestion(context(), false).catch(() => {});
     original.attempts.dispose();
     const cold = setup();
     expect(sessionStorage.getItem(REPLY_PENDING_KEY)).not.toBeNull();
@@ -198,13 +198,13 @@ describe('browser reply composition over actual BrowserClient', () => {
     const scope = setup(); await scope.browser.refresh();
     const storage = { getItem: () => null, setItem: () => { throw new Error('Storage blocked'); }, removeItem: () => {} };
     const blocked = new ReplyAttempt(scope.browser, storage, scope.uuid); resources.push(blocked);
-    await expect(blocked.generate(context(), false)).rejects.toThrow('storage_unavailable');
+    await expect(blocked.requestSuggestion(context(), false)).rejects.toThrow('storage_unavailable');
     expect(scope.commands).toHaveLength(0);
   });
   it('cancelled operation ownership before generation reconstruction prevents paid dispatch', async () => {
     const scope = setup(); await scope.browser.refresh();
     let owns = true;
-    const result = scope.attempts.generate(context(), false, () => owns);
+    const result = scope.attempts.requestSuggestion(context(), false, () => owns);
     owns = false;
     await expect(result).rejects.toThrow('session_changed');
     expect(scope.commands).toHaveLength(0); expect(scope.uuid).not.toHaveBeenCalled();

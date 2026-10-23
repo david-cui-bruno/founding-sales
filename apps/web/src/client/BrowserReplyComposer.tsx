@@ -42,11 +42,11 @@ export function BrowserReplyComposer({ client, attempts, messageId }: { client: 
     const value = await attempts.context(messageId);
     if (current()) setContext(value);
   }); };
-  const generate = (sameAttempt: boolean): void => {
+  const requestSuggestion = (sameAttempt: boolean): void => {
     if (context === null) return;
     const base = context;
     void run(async current => {
-      const receipt = await attempts.generate(base, sameAttempt, current);
+      const receipt = await attempts.requestSuggestion(base, sameAttempt, current);
       if (!current()) return;
       if (receipt.status === 'refused' && !['generation_already_attempted', 'generation_outcome_unknown', 'generation_unavailable', 'generation_held', 'generation_over_budget', 'input_over_budget', 'token_count_unavailable', 'generation_invalid', 'generation_invalid_facts', 'generation_unsupported_claim'].includes(receipt.reason)) {
         setContext(null); setText(''); setSuggestion(null); setNotice('Current source or selected facts are unavailable. Attempt identity remains retained. Refresh current context.'); return;
@@ -95,8 +95,8 @@ export function BrowserReplyComposer({ client, attempts, messageId }: { client: 
       <h4>Prior conversation context</h4>{context.priorContext.length === 0 ? <p>No prior context available.</p> : context.priorContext.map((item, index) => <div key={index}><p>{item.direction}</p><pre>{item.text}</pre></div>)}
       <h4>Current default recipients</h4><p>To: {context.envelope.to.join(', ')}</p><p>Cc: {context.envelope.cc.join(', ') || 'None'}</p>
       <h4>Selected approved facts</h4>{context.facts.length === 0 ? <p>No approved facts selected. Do not invent facts or booking links.</p> : context.facts.map(fact => <p key={fact.id}>{fact.text} (version {fact.version})</p>)}
-      <button disabled={busy || pending !== null} onClick={() => { generate(false); }}>Generate suggestion</button>
-      {pending?.messageId === messageId ? <button disabled={busy} onClick={() => { generate(true); }}>Check same reply attempt</button> : null}
+      <button disabled={busy || pending !== null} onClick={() => { requestSuggestion(false); }}>Generate suggestion</button>
+      {pending?.messageId === messageId ? <button disabled={busy} onClick={() => { requestSuggestion(true); }}>Check same reply attempt</button> : null}
       {suggestion ? <aside aria-label="Reply suggestion"><pre>{suggestion}</pre><button disabled={busy} onClick={() => { setText(suggestion); draftRevision.current += 1; setPreview(null); setSuggestion(null); }}>Use suggestion in draft</button></aside> : null}
       <label>Reply draft<textarea aria-label="Reply draft" maxLength={12000} value={text} onChange={event => { draftRevision.current += 1; setText(event.target.value); setPreview(null); }} /></label>
       <button disabled={busy || !text.trim()} onClick={review}>Preview exact reply</button>

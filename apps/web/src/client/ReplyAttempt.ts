@@ -85,7 +85,7 @@ export class ReplyAttempt {
       && JSON.stringify(value.factRefs) === JSON.stringify(replyFactRefs(context))
       && value.envelopeSHA256 === await envelopeHash(context);
   }
-  async generate(context: ReplyDraftContext, sameAttempt: boolean, ownsOperation: () => boolean = () => true) {
+  async requestSuggestion(context: ReplyDraftContext, sameAttempt: boolean, ownsOperation: () => boolean = () => true) {
     const epoch = this.client.epoch;
     const checkOwner = (): void => {
       if (!ownsOperation() || !this.client.isCurrent(epoch)) throw new BrowserBoundaryError('session_changed');
