@@ -28,22 +28,25 @@ export async function setProspectingAuthorization(ctx:RepositoryContext,input:{m
  if(input.enabled)await revalidateProviderIncidentConfiguration(ctx,input.mailboxId,'permission_revalidated',new Date());
  return {ok:true,value:{revision}};
 }
-/** Rechecks the live OAuth identity; refreshing tokens for that same identity is harmless. */
-export async function readProspectingAuthorization(ctx:RepositoryContext,input:ProspectingIdentity):Promise<ProspectingAuthorization>{
+/** Rechecks the live OAuth identity; refreshing tokens for that same identity is harmless.
+ * requireConnected remains true for dispatch callers. Reply context checks exact
+ * authorization independently, then classifies operational readiness itself.
+ */
+export async function readProspectingAuthorization(ctx:RepositoryContext,input:ProspectingIdentity,requireConnected=true):Promise<ProspectingAuthorization>{
  const row=(await ctx.db.query<{revision:number;enabled:boolean;matches:boolean}>(`SELECT a.revision,a.enabled,
-  m.status='connected' AND a.owner_user_id=m.owner_user_id AND a.provider_account_id=m.provider_account_id
+  (NOT $5::boolean OR m.status='connected') AND a.owner_user_id=m.owner_user_id AND a.provider_account_id=m.provider_account_id
   AND a.email_address=m.email_address AND m.owner_user_id=$3 AND m.provider_account_id=$4 AS matches
   FROM gmail_prospecting_authorizations a JOIN mailboxes m ON m.workspace_id=a.workspace_id AND m.id=a.mailbox_id
-  WHERE a.workspace_id=$1 AND a.mailbox_id=$2`,[ctx.scope.workspaceId,input.mailboxId,input.ownerUserId,input.providerAccountId])).rows[0];
+  WHERE a.workspace_id=$1 AND a.mailbox_id=$2`,[ctx.scope.workspaceId,input.mailboxId,input.ownerUserId,input.providerAccountId,requireConnected])).rows[0];
  if(!row)return {allowed:false,revision:null,reason:'authorization_absent'};
  if(!row.enabled)return {allowed:false,revision:row.revision,reason:'authorization_revoked'};
  if(!row.matches)return {allowed:false,revision:row.revision,reason:'mailbox_identity_changed'};
  return {allowed:true,revision:row.revision,reason:null};
 }
-export async function authorizationForMailbox(ctx:RepositoryContext,mailboxId:string):Promise<ProspectingAuthorization>{
+export async function authorizationForMailbox(ctx:RepositoryContext,mailboxId:string,requireConnected=true):Promise<ProspectingAuthorization>{
  const m=(await ctx.db.query<{owner_user_id:string;provider_account_id:string|null}>('SELECT owner_user_id,provider_account_id FROM mailboxes WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,mailboxId])).rows[0];
  if(!m?.provider_account_id)return {allowed:false,revision:null,reason:'mailbox_identity_unknown'};
- return readProspectingAuthorization(ctx,{mailboxId,ownerUserId:m.owner_user_id,providerAccountId:m.provider_account_id});
+ return readProspectingAuthorization(ctx,{mailboxId,ownerUserId:m.owner_user_id,providerAccountId:m.provider_account_id},requireConnected);
 }
 /** Freeze an existing authorization on newly prepared cold bytes; never retrofit old fences. */
 export async function bindProspectingFence(ctx:RepositoryContext,input:{fenceId:string;mailboxId:string;stepExecutionId:string}):Promise<void>{

@@ -29,7 +29,7 @@ const CONTENT_GENERATION_REFUSALS = new Set([
   'generation_already_attempted', 'generation_unavailable', 'token_count_unavailable',
   'input_over_budget', 'generation_held', 'generation_over_budget', 'generation_outcome_unknown',
   'generation_invalid', 'generation_invalid_facts', 'generation_unsupported_claim',
-  'source_changed', 'thread_changed', 'context_incomplete', 'message_unavailable', 'ambiguous_sender',
+  'source_changed', 'thread_changed', 'context_incomplete', 'mailbox_not_ready', 'message_unavailable', 'ambiguous_sender',
   'sender_unverified', 'recipient_unverified', 'conversation_stopped', 'answered_manually',
   'context_too_large', 'facts_catalogue_too_large', 'block_changed', 'block_retired', 'block_unapproved', 'not_found',
 ]);
