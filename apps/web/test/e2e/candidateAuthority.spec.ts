@@ -2,7 +2,7 @@ import { candidateAuthorityViewSchema, qualifiedResearchListSchema, type Candida
 import type { Page } from 'playwright/test';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import { saveCandidate } from '@fss/domain/sourcing/candidates.ts';
+import { saveCandidate, reviewCandidate } from '@fss/domain/sourcing/candidates.ts';
 import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
 import { browserRequest, browserSession } from '../support/browser.ts';
 import { test, expect, routeQualifiedResearchProvider, loginQualifiedResearch } from '../support/qualifiedResearchApp.ts';
@@ -34,6 +34,7 @@ async function read(page: Page, candidateId = source.candidateId, expectedRevisi
   });
 }
 async function load(page: Page) {
+  await page.getByRole('combobox', { name: 'Inventory status', exact: true }).selectOption('kept');
   const pending = page.waitForResponse(response => response.url().endsWith('/browser/api/sourcing/candidates/list'));
   await page.getByRole('button', { name: 'Load ordinary inventory', exact: true }).click();
   expect((await pending).status()).toBe(200);
@@ -46,6 +47,12 @@ test.beforeAll(async () => {
   const f = owned.app.fixture;
   const payload = (await f.db.query<{ payload: CandidateInput }>('SELECT payload FROM sourcing_candidates WHERE id=$1', [source.candidateId])).rows[0]!.payload;
   const context = repositoryContext(workspaceScope(f.alpha.workspaceId, { kind: 'user', userId: f.alpha.admin.userId, role: 'admin' }), f.db);
+  // Current automatic owners intentionally see only identity-review cases in
+  // needs_review. A normal retained kept observation exposes this read without
+  // inventing qualification evidence or disabling current owner authority.
+  const reviewed = await withTransaction(f.db, () => reviewCandidate(context, { id: source.candidateId, expectedRevision: source.candidateRevision, status: 'kept' }));
+  expect(reviewed.ok).toBe(true);
+  source.candidateRevision += 1;
   const saved = await withTransaction(f.db, () => saveCandidate(context, { ...payload, firmName: 'Label Only Authority Fixture', website: 'https://label-only-authority.example.test/', sourceUrl: 'https://label-only-authority.example.test/' }));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error('Synthetic retained candidate seed refused');
@@ -54,6 +61,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await owned?.stop(); });
 test.beforeEach(async ({ researchPage: page }) => {
+  page.setDefaultTimeout(10_000);
   await routeQualifiedResearchProvider(page, owned.app);
   page.on('request', request => {
     const url = new URL(request.url());
