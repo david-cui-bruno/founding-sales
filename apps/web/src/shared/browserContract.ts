@@ -35,7 +35,7 @@ export const BROWSER_READ_PATHS = Object.freeze([
 export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3', '/today/actions/open/v4',
   '/sourcing/research-firms/list', '/sourcing/research-firms/read',
-  '/sourcing/candidates/list',
+  '/sourcing/candidates/list', '/sourcing/candidates/authority/read',
   '/outreach/email-campaigns/control',
   '/replies', '/replies/card', '/replies/composer/context', '/replies/composer/preview',
 ] as const);
