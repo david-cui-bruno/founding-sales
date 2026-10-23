@@ -6,6 +6,14 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
+### Active F2/F3 reply correctness correction
+
+Baseline fbb3ec5ea, October23 06:56UTC. Root owns integration, this plan, tracker and finished spec/standards/privacy review. Two independent implementers own browser custody and domain/adapter refusal respectively. No cloud/provider/login/hosting/cost replay. PG/browser runtime remains a single root-scheduled lane if needed.
+
+- Browser owner exclusively edits ReplyAttempt.ts, BrowserReplyComposer.tsx and dedicated client tests. Custody is IDs-only per message under the existing identity/expiry boundary. Preserve legacy v1 custody and exact UUID for settled/unknown A while B proceeds independently; A cannot silently receive a replacement. Actual auth invalidation clears every record. Storage failure/capacity must fail closed, never evict uncertain custody to admit new paid work.
+- Domain/adapter owner exclusively edits reply context/readiness classification, API propagation if necessary, server/browser.ts and dedicated domain/adapter tests. Closed status contract: `mailbox_not_ready` is operational only after current mailbox authorization succeeds. `mailbox_unavailable` continues to mean absent/revoked authorization and must NOT be broadly allowlisted. Operational refusal preserves IDs but exposes no stale private context; restoration requires explicit fresh-context same-attempt reconciliation. No port call or UUID replacement on recovery.
+- Acceptance: focused current A→B→A settled/unknown/reload controls and real adapter/client readiness-loss/restoration versus true-revocation negative. Existing source/Firm/session guards and no-send constraints remain. These local corrections do not prove real-original usefulness or authorize a provider route.
+
 ### Issue745 founder browser on existing AWS, active
 
 David October23 00:52:55 approved separate browser callback on existing Google OAuth, preserving desktop, and founder-only existing CRM/email via existing AWS API/database, no extra processor/AI route. These approval waits are resolved. Conditional sending permission still requires actual readiness, no immediate enable. Root committed ADR0017/mount interface8cf4330e9.
