@@ -1,4 +1,4 @@
-# Local browser slice, issue #738
+# Browser delivery plan
 
 Approved October22 2026 at05:39UTC. This is local synthetic-data implementation, not a hosted launch or production data migration. ADR0012 is the shared security boundary. Existing desktop and production129 remain unchanged.
 
@@ -13,11 +13,13 @@ David October23 00:52:55 approved separate browser callback on existing Google O
 | Outcome | Exclusive owner/files | Dependency and acceptance |
 | --- | --- | --- |
 | Shared boundary/integration/configuration | Hatchling: ADR0017, browserContract.ts, PLAN/current docs/tracker and actual capacity/cost reads | One listener/pool, exact founder+host, target staging and normal reviewed rollout; no new spend beyond authority |
-| Production runtime | Macaque: API bootstrap/server and narrow tests, web runtime/browser founder checks | Frozen interface; separate auth config, existing readiness/request pool/shutdown, founder refusal before disclosure |
-| Public artifacts/image | Tigress: assets/publicAssets loader, build script, Dockerfile.api and packaging tests | Exact three prebuilt assets, no runtime bundler or secrets, API runtime unchanged when disabled |
-| Existing infrastructure source | Puppy: additive optional edge/stack/cluster/root config and narrow checks | Same API tasks/ALB, secret reference only, no new paid resource/scaling/provisioning by worker |
+| Production runtime | Macaque, finished: API bootstrap/server and narrow tests, web runtime/browser founder checks | 02bffd15f,12 focused PASS; S1 correction2306e780a adds14 new raw-parser checks plus affected12 PASS, one listener/488-line ratchet, disabled defaults preserved |
+| Public artifacts/image | Tigress, finished: assets/publicAssets loader, build script, Dockerfile.api and packaging tests | 6c6c644a5; final clean2306 image0526e6c2 rebuilt, offline read-only/network-none selftest/imports/config/assets PASS; original15checks retained, not replayed |
+| Existing infrastructure source | Puppy, finished: optional edge/stack/cluster/root config and narrow checks | 7e3fb76de/default4e7b12651,30 source checks PASS; same tasks/ALB, API-only secret reference, no provisioning |
+| New composed acceptance | Duckling, finished: six NEW founderHost support/spec files | 83961e0a8, original NEW5 PASS7.2s; actual API HTTP/production mount/prebuilt assets/Host-preserving TLS/signed OIDC/PG/Chrome, exact owned resources absent |
+| Finished feature review/fix | Iwazaru/spec, Mizaru/standards and Kikazaru/privacy CLEAN, SAME reviewers checked exact correction | S1 CLOSED2306e780a, shared-parser refusal/receipt bounds; NEW14 parser plus affected12PASS, original composed NEW5 not replayed, target rollout separate |
 
-Read-only runtime seam consumed FULL. Infrastructure seam reader Calf failed provider request before output, terminal/idle and no source/resource actions, ownership released. Actual01:34 API1382/2/worker1391/1 COMPLETED,pending0. API CPUpeak80.72%, memorymax18.55%; RDS available CPUmax8.36%, connectionsmax15. These do not prove browser capacity. CostExplorer namespace-attributed groups empty, cost UNKNOWN not zero. Three implementation owners work disjoint files; root schedules one new composed acceptance lane after interfaces freeze, then finished spec/standards/privacy review. Closed738–744 are not replayed. Actual callback registration, target configuration, staging and useful business acceptance remain unperformed.
+Root consumed all FULL handbacks. Actual01:34 API1382/2/worker1391/1 COMPLETED,pending0; CPUpeak80.72%, memorymax18.55%; RDS CPUmax8.36%, connectionsmax15, not browser capacity acceptance. Namespace cost UNKNOWN. Preserve occupied app.usecallie.com. Root's reviewed02:26–02:28 bootstrap created one non-exportable sales certificate, actual ISSUED/validationSUCCESS/DNS INSYNC and InUseBy[]; only its absent validation CNAME was created. One dedicated browser-cookie secret/version confirmed with private600 restore copy, modeled ~$0.40/month plus calls in existing service. No traffic DNS/ALB/IAM/runtime/provider/hold/send change. Google callback registration alone waits owner passkey verification in dedicated Firefox175, not approval. Exact founder IDs, configuration, target staging/release and useful business acceptance remain open. Closed738–744 stay closed; desktop fallback/OFF preserved. Calf's failed seam ownership was released, not completed implementation. Private BOOTSTRAP-PLAN/REVIEW and exact intent/metadata are retained under fss-founder-host-20261023.
 
 
 ### Issue744 LOCAL automatic-source campaign composition, closed
