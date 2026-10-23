@@ -1,3 +1,5 @@
+import { dispatchBrowser } from './bootstrap/browser.ts';
+import type { ApiBrowserMount } from './bootstrap/browserContract.ts';
 import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
 import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.ts';
@@ -156,13 +158,14 @@ export interface ApiOptions {
  * way to hand the server one shared session.
  */
 export interface ApiServerOptions extends Omit<ApiOptions, 'session' | 'auth'> {
+  readonly browser?: ApiBrowserMount;
   readonly connections: RequestConnections;
   readonly auth?: Omit<AuthDeps, 'db'> | undefined;
 }
 
 /** The options one request runs under: the server's, on that request's own connection. */
 export function optionsForRequest(options: ApiServerOptions, session: SessionQueryable): ApiOptions {
-  const { connections: _connections, auth, ...shared } = options;
+  const { connections: _connections, browser: _browser, auth, ...shared } = options;
   return { ...shared, session, ...(auth === undefined ? {} : { auth: { ...auth, db: session } }) };
 }
 
@@ -289,20 +292,17 @@ export async function route(
     options,
   );
 }
-
 export function createApiServer(options: ApiServerOptions): Server {
-  // For the refusal and the log line only. It is never dispatched, so its session has
-  // no connection behind it.
+  // Build the registry without borrowing a request connection.
   const registry = registryFor(optionsForRequest(options, unconnectedSession()));
   options.log?.log('info', 'routes_mounted', {
     paths: registry.paths().join(' '),
     prefixes: registry.prefixes().join(' '),
   });
-  // One per process: the verdict it caches is about this task's database, not about a
-  // request.
+  // Desktop readiness retains its existing per-process cache.
   const gate = createReadinessGate({ log: options.log });
   return createServer((request: IncomingMessage, response: ServerResponse) => {
-    void handle(request, response, options, gate);
+    if (!dispatchBrowser(options.browser, request, response)) void handle(request, response, options, gate);
   });
 }
 

@@ -9,6 +9,7 @@ export interface BrowserRequestContext {
 
 /** Each invocation obtains its own request connection, never a shared transaction. */
 export interface BrowserRuntime {
+  readonly founder?: Readonly<{ workspaceId: string; userId: string }>;
   readonly origin: string;
   readonly clientVersion: string;
   /** AES-256-GCM key, server-only. Rotation invalidates browser cookies. */

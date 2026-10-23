@@ -71,6 +71,7 @@ function envelope(request: ApiRequest, origin: string): void {
 export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
   const originUrl = new URL(runtime.origin);
   if (originUrl.origin !== runtime.origin || originUrl.protocol !== 'https:' || runtime.cookieKey.length !== 32) throw new Error('Invalid browser runtime configuration');
+  const founder = runtime.founder === undefined ? undefined : Object.freeze({ ...runtime.founder });
   const key = Buffer.from(runtime.cookieKey);
   return async request => {
     if (request.path !== '/browser' && !request.path.startsWith('/browser/')) return null;
@@ -114,6 +115,10 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
           if (!callback.authenticated) throw new Refusal(401);
           const claim = await claimSignIn(context.auth, { handoffSecret: pending.handoff, clientVersion: runtime.clientVersion });
           if (!claim.claimed) throw new Refusal(401);
+          if (founder !== undefined && (claim.grant.workspaceId !== founder.workspaceId || claim.grant.userId !== founder.userId)) {
+            outgoing.push(...Object.values(COOKIE_NAMES).map(clearCookie));
+            throw new Refusal(401);
+          }
           put(COOKIE_NAMES.access, { kind: 'access', token: claim.grant.accessToken, csrf: freshCsrf(), expiresAt: claim.grant.accessTokenExpiresAt });
           outgoing.push(clearCookie(COOKIE_NAMES.anonymous));
           return response(303, null, outgoing, { location: '/' });
@@ -121,6 +126,10 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
         const access = live(COOKIE_NAMES.access);
         const authentication = access?.kind === 'access' ? await authenticate(context.auth, `Bearer ${access.token}`) : null;
         const principal = authentication?.authenticated === true ? authentication.principal : null;
+        if (principal !== null && founder !== undefined && (principal.workspaceId !== founder.workspaceId || principal.userId !== founder.userId)) {
+          outgoing.push(...Object.values(COOKIE_NAMES).map(clearCookie));
+          throw new Refusal(401);
+        }
         if (request.path === BROWSER_PATHS.session) {
           if (principal !== null && access?.kind === 'access') return response(200, browserSessionSchema.parse({ status: 'signed_in', csrfToken: access.csrf, revision: revision(principal), workspaceId: principal.workspaceId, userId: principal.userId, deviceId: principal.deviceId, role: principal.role, expiresAt: access.expiresAt }), outgoing);
           outgoing.push(clearCookie(COOKIE_NAMES.access));
