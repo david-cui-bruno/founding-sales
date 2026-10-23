@@ -1,4 +1,5 @@
 import { dispatchBrowser } from './bootstrap/browser.ts';
+import { createApiHttpServer } from './bootstrap/browserTransport.ts';
 import type { ApiBrowserMount } from './bootstrap/browserContract.ts';
 import type { CrmAcquisitionDiagnosticRuntime } from '@fss/domain/mail/crmAcquisitionDiagnostic.ts';
 import type { CrmCapabilityRuntime } from '@fss/domain/crm/capabilityAuthority.ts';
@@ -8,7 +9,7 @@ import type {BookingCapacityDeps} from './routes/bookingCapacity.ts';
 import type {SocialMediaStore} from './social/mediaStore.ts';
 import type { CallAudioRemover } from './integrations/callAudio.ts';
 import type { MeetingAudioStore } from './integrations/meetingAudio.ts';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
@@ -299,9 +300,8 @@ export function createApiServer(options: ApiServerOptions): Server {
     paths: registry.paths().join(' '),
     prefixes: registry.prefixes().join(' '),
   });
-  // Desktop readiness retains its existing per-process cache.
   const gate = createReadinessGate({ log: options.log });
-  return createServer((request: IncomingMessage, response: ServerResponse) => {
+  return createApiHttpServer(options.browser !== undefined, (request: IncomingMessage, response: ServerResponse) => {
     if (!dispatchBrowser(options.browser, request, response)) void handle(request, response, options, gate);
   });
 }
