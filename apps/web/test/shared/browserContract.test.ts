@@ -2,12 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { browserApiPathAllowed, browserSessionSchema } from '../../src/shared/browserContract.ts';
 
 describe('browser boundary', () => {
-  it('admits only the existing ordinary inventory read, never sourcing mutations', () => {
+  it('admits ordinary inventory without unrelated sourcing mutations', () => {
     expect(browserApiPathAllowed('POST', '/sourcing/candidates/list')).toBe(true);
     for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, '/sourcing/candidates/list')).toBe(false);
-    for (const path of ['/sourcing/candidates/list/extra', '/sourcing/candidates/save', '/sourcing/candidates/review', '/sourcing/candidates/delete', '/sourcing/candidates/check', '/sourcing/qualification/request', '/sourcing/qualification/admit', '/sourcing/experiments/activate', '/sourcing/candidates/discovery/list-v1']) {
+    for (const path of ['/sourcing/candidates/list/extra', '/sourcing/candidates/save', '/sourcing/candidates/review', '/sourcing/candidates/delete', '/sourcing/candidates/check', '/sourcing/experiments/activate', '/sourcing/candidates/discovery/list-v1']) {
       expect(browserApiPathAllowed('POST', path)).toBe(false);
     }
+  });
+
+  it('admits only explicit existing qualification read, request and reviewed admission paths', () => {
+    for (const action of ['read', 'request', 'admit']) {
+      const path = `/sourcing/qualification/${action}`;
+      expect(browserApiPathAllowed('POST', path)).toBe(true);
+      for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, path)).toBe(false);
+      expect(browserApiPathAllowed('POST', `${path}/extra`)).toBe(false);
+    }
+    for (const action of ['feedback', 'firm', 'enable', 'run', 'publish']) {
+      expect(browserApiPathAllowed('POST', `/sourcing/qualification/${action}`)).toBe(false);
+    }
+    expect(browserApiPathAllowed('POST', '/sourcing/calling/admit')).toBe(false);
   });
 
   it('only admits the existing method/path combinations for the first slice', () => {

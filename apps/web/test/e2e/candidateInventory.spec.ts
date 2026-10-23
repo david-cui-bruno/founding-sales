@@ -80,8 +80,11 @@ test('ordinary retained inventory exists with empty qualified selection and exac
   await expect(inventory(page)).toContainText('no current qualification, eligibility, consent, contact or sending authority');
   await expect(inventory(page).getByRole('img')).toHaveCount(0);
   await expect(inventory(page).getByRole('button', { name: 'Read source authority', exact: true })).toHaveCount(answer.candidates.length);
-  // Only explicit read controls are present, never candidate mutation controls.
-  await expect(inventory(page).getByRole('button').filter({ hasNotText: /^Read source authority$/u })).toHaveCount(3);
+  // Inventory still never dispatches qualification automatically. Its bounded
+  // extension offers explicit existing qualification controls per candidate.
+  await expect(inventory(page).getByRole('button', { name: 'Read qualification', exact: true })).toHaveCount(answer.candidates.length);
+  await expect(inventory(page).getByRole('button', { name: 'Request qualification', exact: true })).toHaveCount(answer.candidates.length);
+  await expect(inventory(page).getByRole('button').filter({ hasNotText: /^(?:Read source authority|Read qualification|Request qualification)$/u })).toHaveCount(3);
 });
 
 test('bounded replacement next/previous and explicit status reset use exact offsets and scope empty results', async ({ researchPage: page }) => {

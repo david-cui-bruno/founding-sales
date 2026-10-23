@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type JSX } from 'react';
 import { candidateListInputSchema, candidateListSchema, candidateStatusSchema, type SourcingCandidate } from '@fss/contracts';
 import type { z } from 'zod';
 import { BrowserCandidateAuthority } from './BrowserCandidateAuthority.tsx';
+import { BrowserQualification } from './BrowserQualification.tsx';
+import { BrowserQualificationRecovery } from './BrowserQualificationRecovery.tsx';
 import type { BrowserClient } from './BrowserClient.ts';
 
 type Page = z.infer<typeof candidateListSchema>;
@@ -36,6 +38,7 @@ function Observation({ candidate, client }: { candidate: SourcingCandidate; clie
     </section>}
     {candidate.nextSourceCheckAt === null ? null : <p>Recorded next source-check time {candidate.nextSourceCheckAt}, not a check performed here.</p>}
     <BrowserCandidateAuthority client={client} candidateId={candidate.id} expectedRevision={candidate.revision} />
+    <BrowserQualification client={client} candidateId={candidate.id} expectedRevision={candidate.revision} />
   </article>;
 }
 
@@ -96,6 +99,7 @@ export function BrowserCandidateInventory({ client }: { client: BrowserClient })
   };
   return <section aria-label="Ordinary sourcing inventory" className="space-y-4">
     <h3>Ordinary sourcing inventory</h3>
+    <BrowserQualificationRecovery client={client} />
     <p>Retained ordinary observations, not the ready-qualified research selection. An empty qualified selection does not mean ordinary inventory is absent.</p>
     <p>For an automatic owner, needs_review may contain only identity-review cases, not all unqualified inventory. These observations establish no current qualification, eligibility, consent, contact or sending authority.</p>
     <label>Inventory status <select value={status} onChange={event => { changeStatus(event.target.value); }}>

@@ -36,11 +36,13 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3', '/today/actions/open/v4',
   '/sourcing/research-firms/list', '/sourcing/research-firms/read',
   '/sourcing/candidates/list', '/sourcing/candidates/authority/read',
+  '/sourcing/qualification/read',
   '/outreach/email-campaigns/control',
   '/replies', '/replies/card', '/replies/composer/context', '/replies/composer/preview',
 ] as const);
 export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/meetings/notes', '/sourcing/research-firms/create',
+  '/sourcing/qualification/request', '/sourcing/qualification/admit',
   '/outreach/email-campaigns/approve', '/outreach/email-campaigns/revoke',
   '/replies/composer/generate',
 ] as const);

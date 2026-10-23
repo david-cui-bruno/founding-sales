@@ -8,6 +8,7 @@ import type { ApiRequest } from '../../../api/src/routes/types.ts';
 import { BROWSER_PATHS, BROWSER_COMMAND_PATHS, BROWSER_CSRF_HEADER, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema } from '../shared/browserContract.ts';
 import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestContext } from './runtime.ts';
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
+import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
 
 const SECURITY_HEADERS = Object.freeze({
   'cache-control': 'private, no-store',
@@ -157,6 +158,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
           throw new Refusal(401);
         }
         if (!equal(request.headers[BROWSER_REVISION_HEADER], revision(principal))) throw new Refusal(409);
+        if (apiPath !== null && QUALIFICATION_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if (request.path === BROWSER_PATHS.signOut) {
           // Clear local custody on uncertainty, but never claim remote revocation succeeded.
           outgoing.push(...Object.values(COOKIE_NAMES).map(clearCookie));
@@ -190,6 +192,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
   });
+  const qualification = qualificationBrowserResult(path, result.status, result.body);
+  if (qualification !== null) return response(qualification.status, qualification.body, cookies);
   // Context refresh is also an authority boundary. Only this exact domain
   // refusal means absent/revoked mailbox authorization, not operational readiness.
   if (path === '/replies/composer/context' && result.status === 200

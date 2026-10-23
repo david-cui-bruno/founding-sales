@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { BrowserClient, PENDING_KEY, type BrowserClientOptions, type InvalidationChannel } from '../../src/client/BrowserClient.ts';
 
 const id = '00000000-0000-4000-8000-000000000001';
-const session = { status: 'signed_in' as const, workspaceId: id, userId: id, deviceId: id, role: 'admin' as const, revision: 'revision-one', csrfToken: 'c'.repeat(40), expiresAt: '2026-10-23T00:00:00.000Z' };
+const session = { status: 'signed_in' as const, workspaceId: id, userId: id, deviceId: id, role: 'admin' as const, revision: 'revision-one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() };
 const draft = { meetingId: id, expectedRevision: 0, debrief: 'Synthetic fixture notes', speakerMappings: [], itemOverrides: [], sufficient: false };
 const response = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {

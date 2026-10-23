@@ -29,7 +29,7 @@ function setup() {
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json(session);
     if (refuse) return json({}, 401);
-    if (url === '/browser/api/today/actions/v3') return json({ version: 3, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-22T12:00:00.000Z', actions: [...(created ? [action] : []), { actionId: 'legacy', kind: 'reply', subject: 'Legacy action', reason: 'reply', dueAt: '2026-10-22T12:00:00.000Z', state: 'open', target: { kind: 'reply', firmId: id, messageId: id } }], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
+    if (url === '/browser/api/today/actions/v4') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-22T12:00:00.000Z', actions: [...(created ? [action] : []), { actionId: 'legacy', kind: 'reply', subject: 'Legacy action', reason: 'reply', dueAt: '2026-10-22T12:00:00.000Z', state: 'open', target: { kind: 'reply', firmId: id, messageId: id } }], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     if (String(url).startsWith('/browser/api/today?')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [] });
     if (url === '/browser/api/sourcing/research-firms/list') {
       const { firmId: _firmId, ownerUserId: _owner, nextStep: _step, question: _question, ...candidate } = proof;
@@ -43,7 +43,7 @@ function setup() {
       return json({ status: 'accepted', replayed: commands.length > 1, result: proof });
     }
     if (url === '/browser/api/sourcing/research-firms/read') { if (failRead) throw new Error('Read unavailable'); return json(proof); }
-    if (url === '/browser/api/today/actions/open/v3') { opens.push(JSON.parse(String(init?.body))); return json({ version: 3, target, research: proof }); }
+    if (url === '/browser/api/today/actions/open/v4') { opens.push(JSON.parse(String(init?.body))); return json({ version: 4, target, research: proof, automaticResearch: null }); }
     throw new Error('Unexpected route');
   });
   const randomUUID = vi.fn(() => id);

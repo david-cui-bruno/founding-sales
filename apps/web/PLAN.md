@@ -1,14 +1,26 @@
 # Browser delivery plan
 
-Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof remains closed. October23 production rollout serves exacta2b8e12b6/schema132 after protected application39975971941 SUCCESS15:31; founder login/current Today read and normal reload remain dated observations, useful business acceptance remains open. ADR0012/0017 preserve the security boundary and desktop fallback.
+Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof remains closed. October23 production rollout serves exact48e6c8f97/schema132 after protected application40004641679 SUCCESS18:54; founder login/current Today read and normal reload remain dated observations, useful business acceptance remains open. ADR0012/0017 preserve the security boundary and desktop fallback.
 
 **Local slice CLOSED:** code966c9819f, milestone docs5ff947097. Final10/10 actual local-browser workflows,43 unit/component checks, finished spec/standards/privacy reviews and owned PG/TLS/process cleanup accepted. The ownership table below records completed work, not active builders. Product interview completed October22 at07:10UTC; the following desired scope supersedes earlier preference uncertainty, not runtime controls or implementation status. Issue #738 remains the local-slice tracker and decision handoff, not permission to implement the full roadmap.
 
 ## Sequence and exclusive ownership
 
-### Issue752 candidate authority observation, local acceptance complete
+### Issue754 existing qualification browser completion, locally accepted
 
-The deployed inventory and qualification reads lack registered source/current-owner/holds before a run. Local752 fixes only this read-path gap, not qualification or permission to qualify DWM. Root locked contracts/browser boundary8a7f75104 before three disjoint authors. The exact closed admin/revision read exposes bounded metadata and always authority:not_granted, never private source prose/URLs/owner identity or ledger capacity. No production/source/qualification/provider/Westrom/send changes.
+Child745/existing qualified Firm→Today. Source23bd580ea/final acceptancecf81330ad adds only explicit existing read/request/reviewed admission and IDs-only session-bound command custody. Fixbbed7a66b enforces latest-run admission under the existing candidate lock, preserving committed receipt/association idempotency, clears evidence before freshness waits and resets busy on replacement. No new qualifier/provider/source/spend/holds/sending/deployment. Same finished reviewers closed their findings; all three final verdicts CLEAN.
+
+| Outcome | Exclusive owner/files | Waits and acceptance |
+| --- | --- | --- |
+| Contract/gateway/integration | Hatchling: shared/browserContract, ADR0012, server/browser+qualificationBoundary/tests, docs/tracker | b1cc065eb/151f03547;67boundary-packaging PASS, composed types/final production asset build/scoped lint/workflow/integrated secrets PASS |
+| Complete workflow/fixes | Hamster: src/client, focused client/e2e tests, domain/sourcing/admission.ts and its focused tests |106client/23real-PG PASS; actual browser3PASS9.1s, sole owned PG/Chrome/TLS/profile cleanup verified |
+| Finished reviews | Lobster/spec, Mosquito/standards, Owl/risk | P1 latest-run/P2 stale evidence CLOSED; defensive busy reset verified; spec/standards/risk final CLEAN |
+
+Actual signed-OIDC/HTTPS/browser/API/domain proves request→controlled finish→reviewed admit→exact Firm/route→Today→canonical Firm open, request/admit lost-response reload same-UUID recovery and two newer-run admission races. Zero contacts/enrollments/outbound. Controlled evidence is not model quality/live business supply. DWM ONE real run Needs review; C Property refused before dispatch. No replay. Real originals/October24 cost remain separate. Root retains full private handoffs and earlier failures under `fss-candidate-authority-20261023/`.
+
+### Issue752 candidate authority observation, deployed
+
+Deployed752 adds only explicit metadata-only source/current-owner/holds observation, always authority:not_granted. Existing automatic authority remains separate from ordinary manual qualification. No source/provider/send mutation.
 
 | Outcome | Exclusive owner/files | Waits and acceptance |
 | --- | --- | --- |
@@ -17,9 +29,9 @@ The deployed inventory and qualification reads lack registered source/current-ow
 | Whole explicit UI | Clover: NEW BrowserCandidateAuthority/RTL, inventory mount and affected old acceptance assertion | b436435df,NEW21RTL and existing27PASS. Explicit memory-only read, exact candidate/session/page/epoch predispatch/late fences |
 | Whole new acceptance | Sunflower: NEW candidateAuthority.spec.ts and support/candidateAuthorityApp.ts | 9fb42605c/9076b179f: initial first90s fixtureFAIL/3unrun, then affected first+unrun3 PASS8.8s. No passed-case/old-suite replay |
 
-Actual bundled BrowserApp/HTTPS/signed localOIDC/PG/Chrome/BrowserClient/API/domain/SQL showed controlled completed-search association/current attested admin, label-only source unavailable, independent enabled/hold/owner observations, strict auth/foreign/stale refusals and late cross-tab logout clearing. Product read snapshots unchanged; qualification runs0. Fixture correction used normal retained reviewCandidate→kept/revision2 because automatic-owner needs_review intentionally selects identity-review cases. No product fix. Both runs' exact DB/template/PG/TLS/browser resources and IPv4/IPv6 listeners independently absent, Homebrew1412 preserved. Initial residual own profile required removal after exact PID absence, not automatic cleanup success. Concurrent SQL lock scheduling was not separately exercised; snapshot checks are not serializable durable authority. Full private PLAN/SERVER/UI/ACCEPTANCE handbacks retain failures, terminals and limits.
+Actual controlled NEW4PASS8.8s after fixture failure; exact cleanup/profile repair and full handbacks remain in private `fss-candidate-authority-20261023/`. Read snapshots unchanged, no qualification runs. Concurrent SQL locks not separately exercised; snapshots are not durable authority.
 
-Reviewed local scope accepted; all three final proof verdicts CLEAN, full reports consumed17:00. NEXT normal publication/release before the supported live read, then source→canonical Firm→Today only with actual source/owner/route/budget evidence. Real-original usefulness WAITING remains distinct, synthetic751 DONE. No generic David/cost wait, live read bypass, provider action or actual business-supply claim.
+Three finished reviews CLEAN; PR753/main48e deployed protected40004641679, health18:55:40 exact48e/schema132/API142worker143. No migration; OFF/globalhold preserved, restore UNTESTED and individual payload limits retained in current-state. This read grants no automatic qualification authority. Next754 completes existing manual web surface, not a live source/provider permission change.
 
 ### Issue751 synthetic business demonstration, reviewed local outcome
 
@@ -27,7 +39,7 @@ David15:04:51 approved invented business info, not real mailbox injection or pro
 
 Actual isolated PG recordMessage/matches/body storage and readback preserved all16 bodies. Human-authored A/B/C no-send previews passed with exact composed bytes, including final two LF. Human-selected fictional A meeting/notes produced a sourced preparation brief with SYN-A-03/04; commitments empty. B had no meeting and no agreed time. C's human correction selects96 doors/October29 deadline, not a durable claim reconciliation or meeting. D's actual classifier was uncertain even for explicit STOP; human fixture review recorded local suppression, after which context and preview refused conversation_stopped. Every followthrough was permission_missing from deliberately absent permission scope, not a durable recap/commitment/Today task. No automatic extraction, automatic opt-out recognition, model usefulness or full workflow acceptance claimed.
 
-Final one-test/four-case local run PASS after retained match-authority and exact-LF fixture failures. Types/owned lint/workflow/diff/scoped two-file scan0 passed. Exact owned DB/template/PG storage/PID/environment cleanup assertions passed; unrelated Homebrew1412 preserved. Fetch0, outbound/send intents/events/provider reservations/internal tasks0, no browser/calendar/provider/send port. Fetch stub is not OS-wide egress isolation; cleanup Boolean alone is not absence proof. Private THREADS.md contains all16 exact readable messages and run-152030 contains observed A–D outputs. Full DEMO-RESULTS.md retains failures and proof limits. Reviewed local scope accepted; publication/deployment not claimed. Real permitted originals, useful extraction and durable follow-through remain separate open outcomes; production staysa2b/schema132/OFF.
+Final one-test/four-case local run PASS after retained match-authority and exact-LF fixture failures. Types/owned lint/workflow/diff/scoped two-file scan0 passed. Exact owned DB/template/PG storage/PID/environment cleanup assertions passed; unrelated Homebrew1412 preserved. Fetch0, outbound/send intents/events/provider reservations/internal tasks0, no browser/calendar/provider/send port. Fetch stub is not OS-wide egress isolation; cleanup Boolean alone is not absence proof. Private THREADS.md contains all16 exact readable messages and run-152030 contains observed A–D outputs. Full DEMO-RESULTS.md retains failures and proof limits. Reviewed scope accepted; published through PR753/main48e, not real permitted-original acceptance. Real permitted originals, useful extraction and durable follow-through remain separate open outcomes; production48e/schema132/OFF.
 
 ### Issue749 ordinary inventory read, local review accepted
 

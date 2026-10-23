@@ -69,6 +69,11 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  if(candidate.revision!==input.expectedRevision||candidate.revision!==run.candidate_revision||candidate.status==='dismissed')return refused('candidate_changed');
  const already=(await ctx.db.query<{firm_id:string;route_id:string}>('SELECT firm_id,route_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2',[w,input.candidateId])).rows[0];
  if(already)return {ok:true,value:{firmId:already.firm_id,routeId:already.route_id,alreadyAdmitted:true}};
+ // Request/finish owners take this same candidate lock. Match readQualification's
+ // ordering so a new run cannot be inserted between this check and admission.
+ // Existing committed associations and command-receipt replay remain idempotent.
+ const latest=(await ctx.db.query<{id:string}>('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1',[w,input.candidateId])).rows[0];
+ if(latest?.id!==run.id)return refused('candidate_changed');
  if(input.mode==='automatic'){
   const settings=(await ctx.db.query<{auto_admission_enabled:boolean;qualification_evaluation:{policyVersion?:string;promptVersion?:string;reportSha256?:string;reviewedEligible?:number;falseEligible?:number}|null}>('SELECT auto_admission_enabled,qualification_evaluation FROM sourcing_discovery_settings WHERE workspace_id=$1 FOR SHARE',[w])).rows[0];
   if(!settings?.auto_admission_enabled)return refused('automatic_admission_disabled');

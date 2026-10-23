@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { QualificationCustody } from './QualificationPending.ts';
 import { saveMeetingNotesSchema, qualifiedResearchSelectionSchema, uuid, type QualifiedResearchSelection, type SaveMeetingNotes } from '@fss/contracts';
 import { RESEARCH_PENDING_KEY, researchPendingSchema, type PendingResearch } from './ResearchPending.ts';
 import { BROWSER_CSRF_HEADER, BROWSER_PATHS, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema, type BrowserSession } from '../shared/browserContract.ts';
@@ -29,12 +30,17 @@ export class BrowserBoundaryError extends Error {
 
 /** Per mounted browser app only. No credentials, private projection cache or global bridge. */
 export class BrowserClient {
+  readonly qualification: QualificationCustody;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private session: BrowserSession | null = null;
   private generation = 0;
   private listeners = new Set<() => void>();
   private readonly onBroadcast = (): void => { this.invalidate(false); };
   constructor(private readonly options: BrowserClientOptions) {
+    this.qualification = new QualificationCustody(options.storage, () => {
+      if (!this.isCurrent(this.generation) || this.session?.status !== 'signed_in' || this.session.role !== 'admin') return null;
+      return { identity: identityOf(this.session)!, expiresAt: this.session.expiresAt };
+    }, options.randomUUID, () => { this.emit(); });
     options.channel?.addEventListener('message', this.onBroadcast);
   }
   get current(): BrowserSession | null { return this.session; }
@@ -52,6 +58,7 @@ export class BrowserClient {
     clearTimeout(this.expiryTimer);
     this.generation += 1;
     this.session = null;
+    this.qualification.clear();
     try { this.options.storage.removeItem(RESEARCH_PENDING_KEY); } catch { /* Invalid identity cannot use retained custody. */ }
     this.removePending();
     this.emit();
@@ -104,7 +111,10 @@ export class BrowserClient {
       if (remaining <= 0) { this.invalidate(); throw new BrowserBoundaryError('session_changed'); }
       this.expiryTimer = setTimeout(() => { this.invalidate(); }, Math.min(remaining, 2_147_483_647));
       this.pendingResearch();
+      if (next.role !== 'admin') this.qualification.clear();
+      else { try { this.qualification.read(); } catch { /* Corrupt/unavailable custody stays fail-closed, never silently reminted. */ } }
     } else {
+      this.qualification.clear();
       try { this.options.storage.removeItem(RESEARCH_PENDING_KEY); } catch { /* No signed-in custody. */ }
     }
     this.emit();
