@@ -87,7 +87,7 @@ test.skipIf(!enabled)('four frozen synthetic business cases through actual local
       } else {
         expect(context.ok, JSON.stringify(context)).toBe(true);
         expect(preview.ok, JSON.stringify(preview)).toBe(true);
-        if (preview.ok) expect(preview.value.body).toBe(drafts[business.id]);
+        if (preview.ok) expect(preview.value.body).toBe(`${drafts[business.id]}\n\n`);
         if (context.ok) expect(context.value.priorContext).toHaveLength(3);
       }
       expect(meetings).toHaveLength(business.id === 'A' ? 1 : 0);

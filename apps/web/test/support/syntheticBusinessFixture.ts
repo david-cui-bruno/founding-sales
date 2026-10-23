@@ -47,11 +47,13 @@ export async function startSyntheticBusiness() {
         const contact = await withTransaction(db, () => createContact(ctx, { firmId: firm.value.id, fullName: person.name }));
         assert(contact.ok, JSON.stringify(contact));
         await db.query("INSERT INTO email_addresses(workspace_id,firm_id,contact_id,address,source,retrieved_at,association_confidence,technical_validation,eligibility,eligibility_policy_version) VALUES($1,$2,$3,$4,'reply',now(),0.9,'passed','usable','synthetic-demo-only')", [workspaceId, firm.value.id, contact.value.id, person.email]);
+        const stageId = (await db.query<{ id: string }>('SELECT id FROM pipeline_stages WHERE workspace_id=$1 ORDER BY position LIMIT 1', [workspaceId])).rows[0]!.id;
+        const opportunityId = (await db.query<{ id: string }>('INSERT INTO opportunities(workspace_id,firm_id,stage_id,control_mode_changed_at) VALUES($1,$2,$3,now()) RETURNING id', [workspaceId, firm.value.id, stageId])).rows[0]!.id;
         const sourceIds: Record<string, string> = {};
         for (const source of input.messages) {
           const recorded = await withTransaction(db, () => recordMessage(ctx, { mailboxId, metadata: { providerMessageId: source.id, providerThreadId: `synthetic-${input.id}`, rfcMessageId: `${source.id}@example.com`, direction: source.direction === 'inbound' ? 'incoming' : 'outgoing', internalDate: source.sentAt, headerFrom: source.from, headerTo: source.to, headerCc: [], subject: source.subject, referenceMessageIds: [], inReplyTo: null, autoSubmitted: null, listId: null, labelIds: [], attachments: [] } }));
           sourceIds[source.id] = recorded.message.id;
-          await withTransaction(db, () => recordMatches(ctx, { messageId: recorded.message.id, candidates: [{ firmId: firm.value.id, contactId: contact.value.id, opportunityId: null, rule: 'participant', viaClosedOpportunity: false }] }));
+          await withTransaction(db, () => recordMatches(ctx, { messageId: recorded.message.id, candidates: [{ firmId: firm.value.id, contactId: contact.value.id, opportunityId, rule: 'participant', viaClosedOpportunity: false }] }));
           await withTransaction(db, () => storeMessageBody(ctx, { messageId: recorded.message.id, text: source.body, truncated: false }));
         }
         const latestInbound = input.messages.filter(value => value.direction === 'inbound').at(-1)!;
