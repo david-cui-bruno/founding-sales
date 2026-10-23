@@ -50,6 +50,14 @@ The ordinary inventory offers an explicit per-candidate read only. Keep results 
 
 ## Ownership and validation
 
+### Existing manual qualification browser completion, October23
+
+The approved local web-first continuation adds only existing POST `/sourcing/qualification/read`, `/sourcing/qualification/request` and `/sourcing/qualification/admit`. Reuse the existing admin-only domain owners, strict command schemas, candidate revision/latest run, command receipts and reviewed admission policy. Request may enqueue existing approved research only when actually operated under its current server-owned source, budget and hold checks. Local implementation and synthetic validation do not authorize a live request, new acquisition/provider scope, higher budget, changed holds, contact, sending or deployment.
+
+Browser session, exact Origin, CSRF, current role/revision and founder restrictions remain unchanged. Read absence is unavailable evidence, not proof a candidate is valid or unchecked. Preserve minimal IDs-only pending request/admission payload and command UUID before dispatch, bound to public identity/revision and session expiry. Unknown responses survive reload without automatic replay or replacement UUID. Explicit recovery uses the same command and normal current readback. Clear custody and private evidence on logout, expiry, auth refusal, identity/role/revision transition and cross-tab invalidation. Current evidence and reviewable unknowns gate presentation; domain revalidation remains final authority. Admission is not permission to call or send.
+
+Root owns the shared allowlist, gateway adaptation and this contract. One implementer owns the complete client workflow and its focused tests. Read-only boundary inventory is independent. Finished spec, standards and privacy reviews plus focused composed acceptance precede any delivery claim. Native visibility is optional interim execution, not a prerequisite to this local source work.
+
 ### Ordinary sourcing inventory read, October23 follow-through
 
 The closed allowlist additionally admits only POST `/sourcing/candidates/list`, reusing existing `candidateListInputSchema`, `candidateListSchema`, API authentication/admin policy and workspace-scoped `listCandidates`. This is an ordinary retained inventory read, distinct from the ready-qualified discovery-promotion selection at `/sourcing/research-firms/list`. Neither an empty status/page nor a ready-selection result establishes global inventory absence. Existing automatic-owner `needs_review` semantics remain server-owned, not a browser definition of all unqualified inventory.
