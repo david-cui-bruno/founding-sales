@@ -6,9 +6,21 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
+### Issue754 existing qualification browser completion, active
+
+Child of745 and qualified Firm→Today. Hosted inventory lacks existing qualification request/status/reviewed-admission controls. Root froze closed allowlistb1cc065eb and gateway151f03547 before dependent client work;57boundary checks and workflow PASS. Current admin/founder/Origin/CSRF/revision and existing domain/source/budget/hold/receipt policy remain authoritative. IDs-only custody must survive uncertain responses/reload, explicit same-ID recovery only. No new qualifier/provider/source/spend/holds/sending/deployment.
+
+| Outcome | Exclusive owner/files | Waits and acceptance |
+| --- | --- | --- |
+| Contract/gateway/integration | Hatchling: shared/browserContract, ADR0012, server/browser+qualificationBoundary and tests, current docs/tracker | Boundary committed; final integration/build/reviews pending |
+| Complete client workflow | Hamster: src/client, client tests, focused e2e/support | Frozen boundary supplied; sole disposable-PG lane, actual local request→controlled finish→reviewed admission→Firm/Today and refusal/recovery required |
+| Boundary inventory | Ladybug: private read-only report | Complete, no implementation writes |
+
+DWM ONE real qualification21:50 returned Needs review, geography/firm-associated-phone blockers, no admission/Firm/Today. C Property21:54 action refused before dispatch. No replay. Native window off-Space is optional fallback, not local engineering blocker. Real originals and October24 cost remain separate.
+
 ### Issue752 candidate authority observation, deployed
 
-The previous inventory and qualification reads lacked registered source/current-owner/holds before a run. Deployed752 fixes only this read-path gap, not qualification or permission to qualify DWM. Root locked contracts/browser boundary8a7f75104 before three disjoint authors. The exact closed admin/revision read exposes bounded metadata and always authority:not_granted, never private source prose/URLs/owner identity or ledger capacity. No source/qualification/provider/Westrom/send changes.
+Deployed752 adds only explicit metadata-only source/current-owner/holds observation, always authority:not_granted. Existing automatic authority remains separate from ordinary manual qualification. No source/provider/send mutation.
 
 | Outcome | Exclusive owner/files | Waits and acceptance |
 | --- | --- | --- |
@@ -17,9 +29,9 @@ The previous inventory and qualification reads lacked registered source/current-
 | Whole explicit UI | Clover: NEW BrowserCandidateAuthority/RTL, inventory mount and affected old acceptance assertion | b436435df,NEW21RTL and existing27PASS. Explicit memory-only read, exact candidate/session/page/epoch predispatch/late fences |
 | Whole new acceptance | Sunflower: NEW candidateAuthority.spec.ts and support/candidateAuthorityApp.ts | 9fb42605c/9076b179f: initial first90s fixtureFAIL/3unrun, then affected first+unrun3 PASS8.8s. No passed-case/old-suite replay |
 
-Actual bundled BrowserApp/HTTPS/signed localOIDC/PG/Chrome/BrowserClient/API/domain/SQL showed controlled completed-search association/current attested admin, label-only source unavailable, independent enabled/hold/owner observations, strict auth/foreign/stale refusals and late cross-tab logout clearing. Product read snapshots unchanged; qualification runs0. Fixture correction used normal retained reviewCandidate→kept/revision2 because automatic-owner needs_review intentionally selects identity-review cases. No product fix. Both runs' exact DB/template/PG/TLS/browser resources and IPv4/IPv6 listeners independently absent, Homebrew1412 preserved. Initial residual own profile required removal after exact PID absence, not automatic cleanup success. Concurrent SQL lock scheduling was not separately exercised; snapshot checks are not serializable durable authority. Full private PLAN/SERVER/UI/ACCEPTANCE handbacks retain failures, terminals and limits.
+Actual controlled NEW4PASS8.8s after fixture failure; exact cleanup/profile repair and full handbacks remain in private `fss-candidate-authority-20261023/`. Read snapshots unchanged, no qualification runs. Concurrent SQL locks not separately exercised; snapshots are not durable authority.
 
-Reviewed scope accepted; all three final proof verdicts CLEAN, full reports consumed17:00. PR753 merged48e6c8f97; exact main gate39999061681/images39999062078 SUCCESS. Automatic40000015479 production jobs SKIPPED. ONE protected40004641679 completed18:54:39; direct health18:55:40 exact48e/schema132 accepted. API142/worker143, no migration. Runner OFF/owner versions/quiescence/PITR/digests/stability/smokes/readback passed; task/reader null, last task STOPPED0. PITR18:39:33.314, restore UNTESTED, individual OFF payloads not independently retrieved. Global hold unchanged. NEXT supported live evidence read, then source→canonical Firm→Today only with actual source/owner/route/budget evidence. Real-original usefulness WAITING remains distinct, synthetic751 DONE. No generic David/cost wait, live read bypass, provider action or actual business-supply claim.
+Three finished reviews CLEAN; PR753/main48e deployed protected40004641679, health18:55:40 exact48e/schema132/API142worker143. No migration; OFF/globalhold preserved, restore UNTESTED and individual payload limits retained in current-state. This read grants no automatic qualification authority. Next754 completes existing manual web surface, not a live source/provider permission change.
 
 ### Issue751 synthetic business demonstration, reviewed local outcome
 

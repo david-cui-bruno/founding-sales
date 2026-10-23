@@ -6,9 +6,13 @@ PR753 merged main `48e6c8f9777797b8fa4ad562fd78b3d0a35eee9f`; exact-main gate399
 
 David00:52:55 approved separate browser callback preserving desktop and founder-only existing CRM/email through the same AWS API/database, no extra processor/AI. Reviewed cookie/certificate and CREATE-only sales alias applied; public TLS200/bundled React/strict headers accepted, occupied app/API records untouched. Existing callback persisted05:52:52. Exact founder identity reconciled without grants/rebinding; admin login/reload06:26–06:27 accepted. Owned diagnostic tasks/definitions cleaned, earlier failures retained in canonical plan. Not useful-lead/original/capacity acceptance. Namespace cost UNKNOWN: NamePrefix reporting activated ONCE06:42:02, independent Active readback; all key values affected, no resource/backfill/spend change. ONE delayed October24 06:45UTC `sched_98d2f879`, no polling. Observed API CPUmean1.94%/max5.42%,DBmax7.88%/connectionsmax10 is not load/concurrency acceptance. Modeled secret ~$0.40/month plus calls, no added service/count. Issue745 OPEN.
 
-## Issue749 ordinary inventory, local acceptance complete
+## Issue754 browser qualification, local engineering active22:33UTC
 
-Normal founder login12:02 resolved access; ready-qualified selection empty12:03 did not establish ordinary inventory absence. Existing admin API/desktop list was missing from browser allowlist/UI. Local3bc3d92bc adds only that bounded read, explicit paging/status and memory-only observations. UI27RTL/boundary7/App1 PASS; actual HTTPS/OIDC/PG/Chrome NEW5 split1PASS then remaining4PASS10.3s after test-locator correction. Owned cleanup verified, first-run template/port recording limit retained. Three finished reviews CLEAN. Issue749 CLOSED locally; PR750 merged14:46:56 as maina2b8e12b6. Exact-main gate39972572350/images39972572338 SUCCESS; automatic39973459412 production jobs SKIPPED; subsequent protected execution above deployed inventory. Actual founder read15:35:40 returned50needs_review observations/offset0, Next enabled; fit_only/notverified, not qualified supply. No acquisition/qualification/provider/send changes.
+Hosted inventory lacks qualification request/status/reviewed admission. Child754 of745 reuses existing qualifier. Boundaryb1cc065eb/gateway151f03547 committed;57focused tests/workflow PASS. Hatchling owns shared contract/gateway/docs/integration; Hamster owns client and focused composed acceptance, sole disposable-PG lane. Finished reviews/build/acceptance pending. Native visibility is optional. ONE real DWM run21:50 returned Needs review: service-area/firm-associated-phone evidence unresolved, no Firm/Today. C Property request21:54 refused before dispatch, no replay. Preserve budgets/holds/OFF.
+
+## Issue749 ordinary inventory, deployed
+
+PR750/maina2b deployed bounded admin inventory read. Local NEW5 split1PASS+4PASS after locator correction, three reviews CLEAN; cleanup/identifier limits retained in canonical plan. Actual15:35 read returned50needs_review observations, Next enabled, not qualified supply. No acquisition/provider/send changes.
 
 ## Issue747 reply correction, deployed
 
@@ -20,11 +24,11 @@ Per-message IDs-only custody lets B proceed while settled/unknown A retains exac
 
 ## Installed fallback
 
-Desktop881/schema129 client verified October22 04:57:08 before launch04:57:17; Administrator online/Today paused04:57:43. Backup `/Applications/.Callie-before-881-20261022T045650Z.previous` retained. Post-production132 desktop workflow not rechecked. Failures contain/fix-forward, never old-schema restore or OFF bypass.
+Desktop881 backup `/Applications/.Callie-before-881-20261022T045650Z.previous` retained. October23 ordinary qualification worked against132; later same window65553 persisted off-Space, no compatibility refusal established. Do not loop activation/replay. Failures contain/fix-forward, never old-schema restore or OFF bypass.
 
 ## Capture and useful selling remain open
 
-Capture recovery October22 05:02:32 copied empty bodies; metadata established no permitted original. No replay. Real-original usefulness WAITING, synthetic751 DONE. Deployed75255ac/9076 adds the strict source/current-owner/holds read, always not_granted. NEW4PASS8.8s follows retained fixtureFAIL/3unrun; exact cleanup includes initial residual-profile repair. Source44/UI21/boundary2 and composed types/workflow PASS. Three reviews CLEAN. Fictional SQL/browser acceptance is not live DWM evidence, qualification or serializable authority. NEXT supported live evidence read, then eligible source→Firm→Today. No generic David/cost wait, provider/Westrom/send action.
+Capture recovery October22 copied empty bodies, no permitted original. No replay. Real-original usefulness WAITING, synthetic751 DONE. Deployed752 adds strict source/current-owner/holds observation, always not_granted. Controlled NEW4PASS8.8s,44source/21UI/2boundary checks and three CLEAN reviews retain fixture/cleanup limits in canonical plan. Automatic-owner authority is separate from ordinary manual qualification. NEXT754 web completion, then eligible source→Firm→Today. No generic David/cost wait or Westrom/send replay.
 
 October21 TX1,600+CA/FL1,200 raw observations are not distinct/net-new/qualified/callable Firms. Westrom guarded homepage observation supports literal residential-management/service-area claims; Jcode seed is not David attestation. ONE Firm created October22 04:00:41, ONE link04:04 generically refused, no retry. Today visibility is not qualification. Scoped receipt task217 returned0 visible rows/cleaned up, not global absence/commit/auth diagnosis. Raw UI page16 checkpoint retained, no mutation replay.
 
