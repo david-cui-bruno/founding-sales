@@ -103,3 +103,4 @@ export * from './crmCaptureReadRecovery.ts';
 export * from './qualifiedResearch.ts';
 export * from './emailCampaign.ts';
 export * from './automaticResearch.ts';
+export * from './sourcingCandidateAuthority.ts';

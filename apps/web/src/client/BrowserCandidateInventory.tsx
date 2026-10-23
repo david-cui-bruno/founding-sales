@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { candidateListInputSchema, candidateListSchema, candidateStatusSchema, type SourcingCandidate } from '@fss/contracts';
 import type { z } from 'zod';
+import { BrowserCandidateAuthority } from './BrowserCandidateAuthority.tsx';
 import type { BrowserClient } from './BrowserClient.ts';
 
 type Page = z.infer<typeof candidateListSchema>;
@@ -16,7 +17,7 @@ function Reference({ url }: { url: string }): JSX.Element {
   return href === undefined ? <span>{url}</span> : <a href={href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{url}</a>;
 }
 
-function Observation({ candidate }: { candidate: SourcingCandidate }): JSX.Element {
+function Observation({ candidate, client }: { candidate: SourcingCandidate; client: BrowserClient }): JSX.Element {
   const check = candidate.sourceCheck;
   return <article className="rounded-md border p-3" aria-label={`Candidate ${candidate.id}`}>
     <h4>{candidate.firmName}</h4>
@@ -34,6 +35,7 @@ function Observation({ candidate }: { candidate: SourcingCandidate }): JSX.Eleme
         <blockquote>{check.lastSuccess.excerpt}</blockquote></>}
     </section>}
     {candidate.nextSourceCheckAt === null ? null : <p>Recorded next source-check time {candidate.nextSourceCheckAt}, not a check performed here.</p>}
+    <BrowserCandidateAuthority client={client} candidateId={candidate.id} expectedRevision={candidate.revision} />
   </article>;
 }
 
@@ -108,7 +110,7 @@ export function BrowserCandidateInventory({ client }: { client: BrowserClient })
     {page === null ? null : <div>
       <p>Inventory page read at {readAt}. Retained observations are dated evidence, not current authority.</p>
       {page.candidates.length === 0 ? <p>No observations returned for this status and page. Other statuses or pages may contain inventory.</p> : null}
-      {page.candidates.map(candidate => <Observation key={candidate.id} candidate={candidate} />)}
+      {page.candidates.map(candidate => <Observation key={`${candidate.id}:${candidate.revision}`} candidate={candidate} client={client} />)}
       {page.qualificationWaitReason == null ? null : <p>Qualification wait observation at page read {readAt}: {page.qualificationWaitReason}</p>}
       {page.discovery == null ? null : <section aria-label="Retained discovery metadata">
         <p>Discovery metadata observed at page read {readAt}: enabled {String(page.discovery.enabled)} · Halted {String(page.discovery.halted)} · Recorded next run {page.discovery.nextRunAt}</p>
