@@ -40,6 +40,14 @@ The new command retains IDs/revisions and its exact command UUID before dispatch
 
 Today V3 derives qualified-research actions from current canonical source links and revalidates the complete target on open. Opening shows current citations and a neutral discovery preparation question, not a fabricated promise, completed task, verified maintenance need or contact approval. Actual-browser acceptance must compose creation/link, queue open, exact IDs/citations, reload/response loss, ambiguity, expiry and revocation with the actual host/auth/domain and synthetic disposable records. Real private-data rollout remains separate.
 
+## Candidate source authority observation, issue #752
+
+The additional closed POST `/sourcing/candidates/authority/read` accepts only an exact candidate ID and expected revision. Existing API authentication and current workspace-admin policy remain authoritative. Unlike the qualification view, this read can observe registered source linkage before a qualification run exists. Reuse the existing completed source-attempt/current-policy association, valid attested owner and active-admin membership, research settings and applicable workspace/channel/owner research holds. Labels, enabled budget and same-name matches are not provenance. Missing or ambiguous source association is unavailable, not proof of global absence.
+
+The strict response exposes only candidate ID/revision/time, matched source kind/attempt ID or unavailable, current-admin owner availability, research-enabled flag and held/clear/unknown. If owner is unavailable, holds remain unknown. No private source text, owner identity, report hashes, policy binding or credentials leave the server. Every response states authority not granted. Even positive observations do not authorize qualification, paid work, publication, contact or sending, and are not ledger capacity or a durable permission receipt. Refuse stale/foreign/dismissed/blocked candidates and changed candidate/source/owner/settings/holds after waits. Revalidate the exact principal before return, without retries or mutating work.
+
+The ordinary inventory offers an explicit per-candidate read only. Keep results in memory, clear on page/filter/reload/candidate revision/session/role/epoch/unmount, and fence predispatch/late responses against exact candidate and identity. No automatic reads, polling, acquisition, qualification or mutation control is added. Focused acceptance uses existing local signed OIDC, bundled browser, disposable PG and controlled registered source fixtures, with unchanged product snapshots and exact owned teardown. Local acceptance is not live DWM evidence, actual qualified supply, new provider scope or deployment authority.
+
 ## Ownership and validation
 
 ### Ordinary sourcing inventory read, October23 follow-through

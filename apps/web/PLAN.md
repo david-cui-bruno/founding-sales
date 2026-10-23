@@ -6,6 +6,19 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
+### Issue752 candidate authority observation, NOW local implementation
+
+The ordinary inventory and qualification reads do not expose registered source/current-owner/holds before a run. This is a read-path gap, not an external approval wait or permission to qualify DWM. Root locked strict contracts/browser boundary8a7f75104, NEW boundary/schema2PASS and contracts types PASS, before three disjoint authors. Exact private plan `fss-candidate-authority-20261023/PLAN.md` records the contract and acceptance. No production/source/qualification/provider/Westrom/send changes.
+
+| Outcome | Exclusive owner/files | Waits and acceptance |
+| --- | --- | --- |
+| Shared contract/integration | Hatchling: sourcingCandidateAuthority.ts/index export, browserContract.ts/NEW shared test, ADR0012, governing docs/tracker | Exact closed POST, current admin/revision, metadata only and authority not_granted. Root owns finished integration/reviews |
+| Whole server reader | Cactus: NEW domain candidateAuthority.ts/tests, NEW API candidateAuthority.ts/tests, sourcing.ts narrow mount | Reuse source/owner/settings/holds owners, stale/change/private-output refusals, focused noPG checks. No side effects |
+| Whole explicit UI | Clover: NEW BrowserCandidateAuthority.tsx/RTL test, BrowserCandidateInventory.tsx mount | Memory-only explicit read, candidate/session/page/epoch predispatch and late fences, no qualification control |
+| Whole new acceptance | Sunflower: NEW candidateAuthority.spec.ts and support/candidateAuthority*.ts | Wait server/UI freeze and root sole PG/browser grant. Real local HTTPS/OIDC/PG/Chrome, controlled lineage, stable snapshots, exact teardown |
+
+NOW implement/accept this read only. NEXT existing source→canonical Firm→Today after actual authority evidence. WAITING real-original usefulness remains distinct. Issue751 is done, not an active broad owner-useful row. Three authors active; finished spec/standards/privacy reviews follow source freeze, same reviewers check findings. No accepted-suite/release/cost replay or actual business-supply claim.
+
 ### Issue751 synthetic business demonstration, reviewed local outcome
 
 David15:04:51 approved invented business info, not real mailbox injection or production leads. Macaque authored four explicitly synthetic example.com threads/16 exact messages. Tigress mapped existing seams. Root locked private MAPPING.md before Puppy exclusively implemented two NEW opt-in support files, commits8989d2c96/e69a800bb, +200/-0. Existing production code/fixtures remained unchanged. Pawprint/spec and Piglet/standards+safety finished reviews CLEAN with explicit limits, full reports consumed15:48.
