@@ -2,7 +2,7 @@ import { access } from 'node:fs/promises';
 import { test, expect } from 'playwright/test';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { setProspectingAuthorization } from '@fss/domain/outreach/authorization.ts';
-import { TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE } from '@fss/domain/db/testing/testDatabase.ts';
+import { CLUSTER_URL_ENVIRONMENT_VARIABLE, TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE } from '@fss/domain/db/testing/testDatabase.ts';
 import { startReplyBriefApp, type ReplyBriefApp } from '../support/replyBriefApp.ts';
 import { reserveLocalBrowserDatabase } from '../support/database.ts';
 import { browserSession } from '../support/browser.ts';
@@ -13,6 +13,8 @@ let app: ReplyBriefApp;
 let release: (() => Promise<void>) | undefined;
 test.beforeAll(async () => {
   release = await reserveLocalBrowserDatabase();
+  const cluster = new URL(process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE] ?? '');
+  console.log('REPLY_CUSTODY_CLUSTER_TEMPLATE_RESERVED', JSON.stringify({ host: cluster.hostname, port: cluster.port, template: process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE] }));
   try { app = await startReplyBriefApp(); }
   catch (error) { await release(); release = undefined; throw error; }
 });
