@@ -6,6 +6,14 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
+### Issue751 synthetic business demonstration, reviewed local outcome
+
+David15:04:51 approved invented business info, not real mailbox injection or production leads. Macaque authored four explicitly synthetic example.com threads/16 exact messages. Tigress mapped existing seams. Root locked private MAPPING.md before Puppy exclusively implemented two NEW opt-in support files, commits8989d2c96/e69a800bb, +200/-0. Existing production code/fixtures remained unchanged. Pawprint/spec and Piglet/standards+safety finished reviews CLEAN with explicit limits, full reports consumed15:48.
+
+Actual isolated PG recordMessage/matches/body storage and readback preserved all16 bodies. Human-authored A/B/C no-send previews passed with exact composed bytes, including final two LF. Human-selected fictional A meeting/notes produced a sourced preparation brief with SYN-A-03/04; commitments empty. B had no meeting and no agreed time. C's human correction selects96 doors/October29 deadline, not a durable claim reconciliation or meeting. D's actual classifier was uncertain even for explicit STOP; human fixture review recorded local suppression, after which context and preview refused conversation_stopped. Every followthrough was permission_missing from deliberately absent permission scope, not a durable recap/commitment/Today task. No automatic extraction, automatic opt-out recognition, model usefulness or full workflow acceptance claimed.
+
+Final one-test/four-case local run PASS after retained match-authority and exact-LF fixture failures. Types/owned lint/workflow/diff/scoped two-file scan0 passed. Exact owned DB/template/PG storage/PID/environment cleanup assertions passed; unrelated Homebrew1412 preserved. Fetch0, outbound/send intents/events/provider reservations/internal tasks0, no browser/calendar/provider/send port. Fetch stub is not OS-wide egress isolation; cleanup Boolean alone is not absence proof. Private THREADS.md contains all16 exact readable messages and run-152030 contains observed A–D outputs. Full DEMO-RESULTS.md retains failures and proof limits. Reviewed local scope accepted; publication/deployment not claimed. Real permitted originals, useful extraction and durable follow-through remain separate open outcomes; production staysa2b/schema132/OFF.
+
 ### Issue749 ordinary inventory read, local review accepted
 
 The existing authenticated admin `/sourcing/candidates/list` read is absent from the deployed browser allowlist/UI. The ready-qualified discovery selection is not ordinary inventory. Normal founder login resolved12:02; its one ready-selection read was empty, not a global supply absence. Root committed closed read boundary2711b3b45/ADR0012 before delegation. No bypass of the deployed allowlist or direct credential path.
