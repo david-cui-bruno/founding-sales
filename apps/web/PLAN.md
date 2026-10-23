@@ -6,17 +6,17 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
-### Issue754 existing qualification browser completion, active
+### Issue754 existing qualification browser completion, locally accepted
 
-Child of745 and qualified Firm→Today. Hosted inventory lacks existing qualification request/status/reviewed-admission controls. Root froze closed allowlistb1cc065eb and gateway151f03547 before dependent client work;57boundary checks and workflow PASS. Current admin/founder/Origin/CSRF/revision and existing domain/source/budget/hold/receipt policy remain authoritative. IDs-only custody must survive uncertain responses/reload, explicit same-ID recovery only. No new qualifier/provider/source/spend/holds/sending/deployment.
+Child745/existing qualified Firm→Today. Source23bd580ea/final acceptancecf81330ad adds only explicit existing read/request/reviewed admission and IDs-only session-bound command custody. Fixbbed7a66b enforces latest-run admission under the existing candidate lock, preserving committed receipt/association idempotency, clears evidence before freshness waits and resets busy on replacement. No new qualifier/provider/source/spend/holds/sending/deployment. Same finished reviewers closed their findings; all three final verdicts CLEAN.
 
 | Outcome | Exclusive owner/files | Waits and acceptance |
 | --- | --- | --- |
-| Contract/gateway/integration | Hatchling: shared/browserContract, ADR0012, server/browser+qualificationBoundary and tests, current docs/tracker | Boundary committed; final integration/build/reviews pending |
-| Complete client workflow | Hamster: src/client, client tests, focused e2e/support | Frozen boundary supplied; sole disposable-PG lane, actual local request→controlled finish→reviewed admission→Firm/Today and refusal/recovery required |
-| Boundary inventory | Ladybug: private read-only report | Complete, no implementation writes |
+| Contract/gateway/integration | Hatchling: shared/browserContract, ADR0012, server/browser+qualificationBoundary/tests, docs/tracker | b1cc065eb/151f03547;67boundary-packaging PASS, composed types/final production asset build/scoped lint/workflow/integrated secrets PASS |
+| Complete workflow/fixes | Hamster: src/client, focused client/e2e tests, domain/sourcing/admission.ts and its focused tests |106client/23real-PG PASS; actual browser3PASS9.1s, sole owned PG/Chrome/TLS/profile cleanup verified |
+| Finished reviews | Lobster/spec, Mosquito/standards, Owl/risk | P1 latest-run/P2 stale evidence CLOSED; defensive busy reset verified; spec/standards/risk final CLEAN |
 
-DWM ONE real qualification21:50 returned Needs review, geography/firm-associated-phone blockers, no admission/Firm/Today. C Property21:54 action refused before dispatch. No replay. Native window off-Space is optional fallback, not local engineering blocker. Real originals and October24 cost remain separate.
+Actual signed-OIDC/HTTPS/browser/API/domain proves request→controlled finish→reviewed admit→exact Firm/route→Today→canonical Firm open, request/admit lost-response reload same-UUID recovery and two newer-run admission races. Zero contacts/enrollments/outbound. Controlled evidence is not model quality/live business supply. DWM ONE real run Needs review; C Property refused before dispatch. No replay. Real originals/October24 cost remain separate. Root retains full private handoffs and earlier failures under `fss-candidate-authority-20261023/`.
 
 ### Issue752 candidate authority observation, deployed
 
