@@ -1,7 +1,7 @@
 variable "founder_browser" {
   description = "Optional founder host on the existing API. Null disables it. Supply existing secret/certificate references only. The proposed default origin is not evidence of DNS/certificate availability."
   type = object({
-    origin             = optional(string, "https://app.usecallie.com")
+    origin             = optional(string, "https://sales.usecallie.com")
     clientVersion      = string
     founderWorkspaceId = string
     founderUserId      = string

@@ -1,7 +1,7 @@
 variable "founder_browser" {
   description = "Optional reviewed founder browser configuration. Null keeps production unchanged. Existing references only, never key material."
   type = object({
-    origin             = optional(string, "https://app.usecallie.com")
+    origin             = optional(string, "https://sales.usecallie.com")
     clientVersion      = string
     founderWorkspaceId = string
     founderUserId      = string

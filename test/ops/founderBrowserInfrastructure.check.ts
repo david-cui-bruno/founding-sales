@@ -18,7 +18,8 @@ describe('optional founder browser infrastructure source contract', () => {
     for (const path of ['roots/production', 'roots/rehearsal', 'modules/stack', 'modules/cluster']) {
       const config = source(`${path}/founder-browser.tf`);
       expect(config).toMatch(/default\s*= null/);
-      expect(config).toContain('origin             = optional(string, "https://app.usecallie.com")');
+      expect(config).toContain('origin             = optional(string, "https://sales.usecallie.com")');
+      expect(config).not.toContain('https://app.usecallie.com');
       for (const field of ['clientVersion', 'founderWorkspaceId', 'founderUserId', 'cookieKeySecretArn']) {
         expect(config).toMatch(new RegExp(`${field}\\s*= string`));
       }

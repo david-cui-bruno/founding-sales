@@ -1,7 +1,7 @@
 variable "founder_browser" {
   description = "Optional synthetic founder browser configuration. Null keeps rehearsal unchanged. Use rehearsal-only existing secret/certificate references."
   type = object({
-    origin             = optional(string, "https://app.usecallie.com")
+    origin             = optional(string, "https://sales.usecallie.com")
     clientVersion      = string
     founderWorkspaceId = string
     founderUserId      = string

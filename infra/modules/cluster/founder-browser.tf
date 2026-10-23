@@ -5,7 +5,7 @@
 variable "founder_browser" {
   description = "Null disables browser hosting. References only, never cookie key material."
   type = object({
-    origin             = optional(string, "https://app.usecallie.com")
+    origin             = optional(string, "https://sales.usecallie.com")
     clientVersion      = string
     founderWorkspaceId = string
     founderUserId      = string
