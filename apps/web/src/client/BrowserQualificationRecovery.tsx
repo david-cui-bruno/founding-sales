@@ -11,6 +11,7 @@ export function BrowserQualificationRecovery({ client }: { client: BrowserClient
   const mounted = useRef(false), operation = useRef<symbol | null>(null);
   useEffect(() => {
     mounted.current = true;
+    operation.current = null; setBusy(false); setHeld(null); setNotice('');
     let epoch = client.epoch;
     const update = (): void => {
       if (epoch !== client.epoch || client.current?.status !== 'signed_in') {

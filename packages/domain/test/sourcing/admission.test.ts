@@ -41,6 +41,35 @@ it('admits one firm-level route idempotently without creating deals, contacts or
  expect((await db.session.query('SELECT contact_id,e164 FROM phone_routes WHERE id=$1',[result.value.routeId])).rows[0]).toEqual({contact_id:null,e164:'+12145550100'});
  expect((await db.session.query("SELECT id FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2",[seeded.alpha.workspaceId,firmId])).rows).toHaveLength(1);
 });
+async function supersedingRun(input:{qualificationRunId:string},sameTimestamp=false){
+ const id='ffffffff-ffff-4fff-bfff-ffffffffffff';
+ // Controlled next-fingerprint fixture at the same candidate revision. Neither
+ // source fetching nor a paid worker is needed to expose the admission race.
+ await db.session.query(`INSERT INTO sourcing_qualification_runs
+  (workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,requested_at,deadline_at)
+  SELECT workspace_id,$2,candidate_id,candidate_revision,$3,prompt_version,policy_version,model_name,
+   CASE WHEN $4 THEN requested_at ELSE clock_timestamp() END,clock_timestamp()+interval '30 minutes'
+  FROM sourcing_qualification_runs WHERE id=$1`,[input.qualificationRunId,id,'f'.repeat(64),sameTimestamp]);
+ return id;
+}
+it.each(['pending','nonreviewable','timestamp_tie'])('refuses an older reviewed run after a newer %s run without creating a Firm or route',async(state)=>{
+ const input=await qualified(`Superseded ${state} PM`);
+ const newer=await supersedingRun(input,state==='timestamp_tie');
+ if(state==='nonreviewable'){
+  const row=(await db.session.query<{observations:SourceObservation[];facts:QualificationFact[]}>('SELECT observations,facts FROM sourcing_qualification_runs WHERE id=$1',[input.qualificationRunId])).rows[0]!;
+  expect(await tx(()=>finishQualification(ctx(),{runId:newer,observations:row.observations,facts:row.facts.filter(f=>f.kind!=='business_phone'),reason:null}))).toMatchObject({ok:true});
+  expect(await tx(()=>evaluateQualification(ctx(),{runId:newer}))).toMatchObject({ok:true});
+ }
+ expect(await tx(()=>admitCandidate(ctx(),input))).toEqual({ok:false,reason:'candidate_changed'});
+ expect((await db.session.query('SELECT firm_id FROM sourcing_admissions WHERE candidate_id=$1',[input.candidateId])).rows).toEqual([]);
+ expect((await db.session.query('SELECT id FROM firms WHERE name=$1',[`Superseded ${state} PM`])).rows).toEqual([]);
+});
+it('preserves an already committed exact admission association after a newer run becomes current',async()=>{
+ const input=await qualified('Committed Superseded PM');
+ const admitted=await tx(()=>admitCandidate(ctx(),input));expect(admitted.ok).toBe(true);if(!admitted.ok)throw new Error(admitted.reason);
+ await supersedingRun(input);
+ expect(await tx(()=>admitCandidate(ctx(),input))).toEqual({ok:true,value:{...admitted.value,alreadyAdmitted:true}});
+});
 it('hands an existing manually admitted firm with no research to the normal research queue exactly once',async()=>{
  const {createFirm}=await import('../../crm/firms.ts');
  const input=await qualified('Existing Research PM');

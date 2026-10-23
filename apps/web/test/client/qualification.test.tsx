@@ -15,7 +15,7 @@ const view = qualificationViewSchema.parse({ candidateId: id, runId, candidateRe
   facts: [{ kind: 'firm_identity', value: 'Synthetic residential management Firm', observationId: runId, blockId: 'identity' }],
   verdict: { decision: 'review', rank: 'fit_only', reasons: [], evidenceIds: [runId], unknowns: ['maintenance_need_unconfirmed'], policyVersion: 'fixture' }, openingQuestion: null, admission: null, history: [] });
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
-function deferred() { let resolve!: (response: Response) => void; const promise = new Promise<Response>(yes => { resolve = yes; }); return { promise, resolve }; }
+function deferred() { let resolve!: (response: Response) => void, reject!: (error: Error) => void; const promise = new Promise<Response>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function setup() {
   const data = new Map<string, string>();
   const storage = { getItem: vi.fn((key: string) => data.get(key) ?? null), setItem: vi.fn((key: string, value: string) => { data.set(key, value); }), removeItem: vi.fn((key: string) => { data.delete(key); }) };
@@ -71,7 +71,19 @@ describe('bounded browser qualification', () => {
   it.each(['run', 'revision', 'candidate', 'unknown', 'evidence'])('rejects changed %s after reviewed-admission wait without minting', async change => {
     const s = setup(); await s.client.refresh(); render(panel(s.client)); await read(); await idle();
     s.answer(change === 'run' ? { ...view, runId: other } : change === 'revision' ? { ...view, candidateRevision: 8 } : change === 'candidate' ? { ...view, candidateId: other } : change === 'unknown' ? { ...view, verdict: { ...view.verdict, unknowns: ['business_phone_unresolved'] } } : { ...view, openingQuestion: 'Changed evidence interpretation' });
-    fireEvent.click(screen.getByRole('button', { name: 'Admit reviewed qualification' })); await screen.findByText(/Qualification unavailable or refused/u); expect(s.commands).toHaveLength(0); expect(s.randomUUID).not.toHaveBeenCalled(); await act(async () => { s.client.dispose(); });
+    fireEvent.click(screen.getByRole('button', { name: 'Admit reviewed qualification' })); await screen.findByText(/Qualification unavailable or refused/u);
+    expect(screen.queryByText(/Synthetic residential management Firm/u)).toBeNull(); expect(screen.queryByRole('link')).toBeNull(); expect(screen.queryByRole('button', { name: 'Admit reviewed qualification' })).toBeNull();
+    expect(s.commands).toHaveLength(0); expect(s.randomUUID).not.toHaveBeenCalled(); await act(async () => { s.client.dispose(); });
+  });
+  it.each(['network', '503', 'malformed'])('clears reviewed private evidence before %s freshness wait and leaves it cleared on failure', async failure => {
+    const s = setup(); await s.client.refresh(); render(panel(s.client)); await read(); await idle();
+    const delayed = s.delayRead(); fireEvent.click(screen.getByRole('button', { name: 'Admit reviewed qualification' }));
+    expect(screen.queryByText(/Synthetic residential management Firm/u)).toBeNull(); expect(screen.queryByRole('link')).toBeNull(); expect(screen.queryByRole('button', { name: 'Admit reviewed qualification' })).toBeNull();
+    await waitFor(() => { expect(s.reads).toHaveLength(2); });
+    await act(async () => { if (failure === 'network') delayed.reject(new Error('Unavailable')); else delayed.resolve(json({}, failure === '503' ? 503 : 200)); });
+    await screen.findByText(/Qualification unavailable or refused/u);
+    expect(screen.queryByText(/Synthetic residential management Firm/u)).toBeNull(); expect(screen.queryByRole('link')).toBeNull(); expect(screen.queryByRole('button', { name: 'Admit reviewed qualification' })).toBeNull();
+    expect(s.commands).toHaveLength(0); expect(s.randomUUID).not.toHaveBeenCalled(); await act(async () => { s.client.dispose(); });
   });
   it.each(['request', 'admit'] as const)('retains lost %s response across actual client reload and explicitly reconciles same UUID/payload only', async kind => {
     const s = setup(); s.lose(); await s.client.refresh(); const first = render(panel(s.client));
@@ -104,8 +116,23 @@ describe('bounded browser qualification', () => {
     const s = setup(); await s.client.refresh(); const component = render(<BrowserQualification client={s.client} candidateId={id} expectedRevision={7} />);
     const delayed = s.delayRead(); fireEvent.click(screen.getByRole('button', { name: 'Read qualification' })); await waitFor(() => { expect(s.reads).toHaveLength(1); });
     component.rerender(<BrowserQualification client={s.client} candidateId={other} expectedRevision={8} />);
+    await idle();
     await act(async () => { delayed.resolve(json(view)); }); expect(screen.queryByText(/Synthetic residential/u)).toBeNull();
     await act(async () => { s.client.invalidate(); }); expect(screen.queryByText(/Latest run/u)).toBeNull(); expect(s.storage.getItem(QUALIFICATION_PENDING_KEY)).toBeNull();
+  });
+  it('resets recovery busy on client replacement and fences the old pending response', async () => {
+    const first = setup(), second = setup(); await first.client.refresh(); await second.client.refresh();
+    first.client.qualification.prepare({ kind: 'request', candidateId: id, expectedRevision: 7 });
+    second.client.qualification.prepare({ kind: 'request', candidateId: other, expectedRevision: 8 });
+    const delayed = first.delaySession(); const component = render(<BrowserQualificationRecovery client={first.client} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile exact qualification command' }));
+    expect(screen.getByRole('button', { name: 'Reconcile exact qualification command' }).hasAttribute('disabled')).toBe(true);
+    component.rerender(<BrowserQualificationRecovery client={second.client} />);
+    expect(screen.getByRole('button', { name: 'Reconcile exact qualification command' }).hasAttribute('disabled')).toBe(false);
+    await act(async () => { delayed.resolve(json(delayed.session)); });
+    expect(first.commands).toHaveLength(0); expect(second.commands).toHaveLength(0);
+    expect(second.client.qualification.read()?.receipt).toBeUndefined();
+    await act(async () => { first.client.dispose(); second.client.dispose(); });
   });
   it('fences predispatch session change and clears retained unknown custody', async () => {
     const s = setup(); await s.client.refresh(); render(panel(s.client)); const delayed = s.delaySession();

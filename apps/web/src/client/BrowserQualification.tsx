@@ -33,7 +33,7 @@ export function BrowserQualification({ client, candidateId, expectedRevision }: 
       try { const held = client.qualification.read(); setBlocked(held !== null && held.receipt === undefined); }
       catch { setBlocked(true); }
     };
-    setView(null); setNotice(''); update();
+    operation.current = null; setBusy(false); setView(null); setNotice(''); update();
     const unsubscribe = client.subscribe(update);
     return () => { mounted.current = false; operation.current = null; unsubscribe(); };
   }, [client, candidateId, expectedRevision]);
@@ -57,10 +57,12 @@ export function BrowserQualification({ client, candidateId, expectedRevision }: 
       if (kind === 'read') { setView(null); const answer = await read(); if (current()) { setView(answer); if (answer === null) setNotice('No retained qualification returned. Not evidence of global absence.'); } return; }
       let runId: string | undefined;
       if (kind === 'admit') {
+        const reviewed = view;
+        setView(null);
         // Never act on the displayed historical run after an await. Recheck the latest exact run.
         const fresh = await read();
-        if (fresh === null || !canReviewQualification(fresh, candidateId, expectedRevision) || fresh.runId !== view?.runId || JSON.stringify(fresh) !== JSON.stringify(view)) {
-          setView(fresh); throw new Error('Latest evidence requires another review');
+        if (fresh === null || !canReviewQualification(fresh, candidateId, expectedRevision) || fresh.runId !== reviewed?.runId || JSON.stringify(fresh) !== JSON.stringify(reviewed)) {
+          throw new Error('Latest evidence requires another explicit read and review');
         }
         runId = fresh.runId;
       }

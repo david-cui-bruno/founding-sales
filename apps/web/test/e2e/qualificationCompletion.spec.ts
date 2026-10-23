@@ -19,10 +19,10 @@ const context = () => repositoryContext(workspaceScope(owned.app.fixture.alpha.w
   { kind: 'user', userId: owned.app.fixture.alpha.admin.userId, role: 'admin' }), owned.app.fixture.db);
 let candidateId: string, blockedId: string;
 const input: CandidateInput = { firmName: 'Controlled Qualification Completion PM', website: 'https://qualification-completion.example.test/', locality: 'Dallas', region: 'TX', signal: 'fit_only', evidence: 'Synthetic retained residential management observation.', sourceUrl: 'https://qualification-completion.example.test/', observedOn: '2026-10-23', preparedBy: 'Controlled local qualification acceptance' };
-async function finish(runId: string, candidate: CandidateInput, phone: boolean) {
+async function finish(runId: string, candidate: CandidateInput, phone: boolean | string) {
   const id = randomUUID();
   const blocks = [{ id: 'firm', text: `${candidate.firmName} is a residential property management company in ${candidate.locality}, ${candidate.region}.` },
-    ...(phone ? [{ id: 'phone', text: `Contact ${candidate.firmName} at (214) 555-0196.` }] : [])];
+    ...(phone ? [{ id: 'phone', text: `Contact ${candidate.firmName} at ${typeof phone === 'string' ? phone : '(214) 555-0196'}.` }] : [])];
   const facts: QualificationFact[] = (['firm_identity', 'residential_management', 'service_area'] as const).map(kind => ({ kind, blockId: 'firm', observationId: id, value: blocks[0]!.text }));
   if (phone) facts.push({ kind: 'business_phone', blockId: 'phone', observationId: id, value: blocks[1]!.text });
   const result = await withTransaction(owned.app.fixture.db, () => finishQualification(context(), { runId, reason: null,
@@ -56,6 +56,57 @@ test.beforeAll(async () => {
   const saved = await withTransaction(f.db, () => saveCandidate(context(), input)); assert(saved.ok); candidateId = saved.value.id;
   const blocked = await withTransaction(f.db, () => saveCandidate(context(), { ...input, firmName: 'Controlled Nonreviewable PM', website: 'https://nonreviewable.example.test/', sourceUrl: 'https://nonreviewable.example.test/', locality: 'Worcester', region: 'MA' })); assert(blocked.ok); blockedId = blocked.value.id;
 });
+
+for (const scenario of ['delayed-post', 'unknown-before-commit'] as const) {
+  test(`authoritative admission refuses superseded reviewed run during ${scenario} without replacing command identity`, async ({ researchPage: page }) => {
+    await routeQualifiedResearchProvider(page, owned.app);
+    const candidate: CandidateInput = { ...input, firmName: `Controlled Latest Run ${scenario}`, website: `https://latest-${scenario}.example.test/`, sourceUrl: `https://latest-${scenario}.example.test/` };
+    const saved = await withTransaction(owned.app.fixture.db, () => saveCandidate(context(), candidate)); assert(saved.ok);
+    await loginQualifiedResearch(page, owned.app); await load(page);
+    const card = inventory(page).getByRole('article', { name: `Candidate ${saved.value.id}`, exact: true });
+    const queuedResponse = page.waitForResponse(response => response.url().endsWith('/browser/api/sourcing/qualification/request'));
+    await card.getByRole('button', { name: 'Request qualification', exact: true }).click();
+    const queued = await (await queuedResponse).json() as { result: { runId: string } };
+    await finish(queued.result.runId, candidate, scenario === 'delayed-post' ? '(214) 555-0197' : '(214) 555-0198');
+    await card.getByRole('button', { name: 'Read qualification', exact: true }).click();
+    await expect(card.getByRole('button', { name: 'Admit reviewed qualification', exact: true })).toBeVisible();
+    let originalCommand: unknown;
+    const newerRunId = randomUUID();
+    await page.route('**/browser/api/sourcing/qualification/admit', async route => {
+      originalCommand = route.request().postDataJSON();
+      // The panel's final evidence read and auth refresh have finished, but the
+      // actual domain command has not executed. A same-revision run becomes latest.
+      await owned.app.fixture.db.query(`INSERT INTO sourcing_qualification_runs
+        (workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name)
+        SELECT workspace_id,$2,candidate_id,candidate_revision,$3,prompt_version,policy_version,model_name
+        FROM sourcing_qualification_runs WHERE id=$1`, [queued.result.runId, newerRunId, 'e'.repeat(64)]);
+      if (scenario === 'unknown-before-commit') await route.abort('failed');
+      else await route.continue();
+    }, { times: 1 });
+    const admissionResponse = scenario === 'delayed-post' ? page.waitForResponse(response => response.url().endsWith('/browser/api/sourcing/qualification/admit')) : null;
+    await card.getByRole('button', { name: 'Admit reviewed qualification', exact: true }).click();
+    if (scenario === 'unknown-before-commit') {
+      await expect(card).toContainText('Qualification unavailable or refused.');
+      const retained = await held(page); expect(retained).not.toBeNull();
+      await page.reload(); await expect(page.getByRole('button', { name: 'Reconcile exact qualification command', exact: true })).toBeVisible();
+      expect(await held(page)).toBe(retained);
+      const recovered = page.waitForResponse(response => response.url().endsWith('/browser/api/sourcing/qualification/admit'));
+      await page.getByRole('button', { name: 'Reconcile exact qualification command', exact: true }).click();
+      const answer = await recovered;
+      expect(answer.request().postDataJSON()).toEqual(originalCommand);
+      expect(await answer.json()).toEqual({ status: 'refused', replayed: false, reason: 'candidate_changed' });
+    } else {
+      assert(admissionResponse !== null);
+      expect(await (await admissionResponse).json()).toEqual({ status: 'refused', replayed: false, reason: 'candidate_changed' });
+    }
+    await expect(inventory(page)).toContainText('Command definitively refused.');
+    expect((await owned.app.fixture.db.query('SELECT firm_id FROM sourcing_admissions WHERE candidate_id=$1', [saved.value.id])).rows).toEqual([]);
+    expect((await owned.app.fixture.db.query('SELECT id FROM firms WHERE name=$1', [candidate.firmName])).rows).toEqual([]);
+    const current = qualificationViewSchema.parse((await browserRequest(page, '/sourcing/qualification/read', { body: { candidateId: saved.value.id } })).body);
+    expect(current.runId).toBe(newerRunId); expect(current.status).toBe('pending');
+    await zeroOutbound();
+  });
+}
 test.afterAll(async () => { try { if (owned) await zeroOutbound(); } finally { await owned?.stop(); } });
 
 test('real browser request and reviewed admission retain exact custody through response loss/reload, while phone/geography unknowns remain blocked', async ({ researchPage: page }) => {
