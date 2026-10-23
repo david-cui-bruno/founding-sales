@@ -41,6 +41,8 @@ locals {
 module "stack" {
   source = "../../modules/stack"
 
+  founder_browser = var.founder_browser
+
   crm_acquisition_diagnostic = var.crm_acquisition_diagnostic
 
   environment = "rehearsal"

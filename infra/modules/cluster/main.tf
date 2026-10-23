@@ -68,19 +68,6 @@ locals {
     AWS_REGION           = var.aws_region
   })
 
-  api_environment = merge(local.common_environment, var.api_environment, {
-    # Preview must price the same transport the worker will reserve, without API IAM.
-    FSS_MODEL_TRANSPORT = var.worker_model_transport
-    FSS_ROLE            = "api"
-    FSS_SCHEMA_MIN      = tostring(var.api_schema_range.min)
-    FSS_SCHEMA_MAX      = tostring(var.api_schema_range.max)
-    PORT                = tostring(var.container_port)
-    FSS_HTTP_PORT       = tostring(var.container_port)
-    FSS_JOURNAL_ARN     = var.journal_bucket_arn
-    # Slice C3a: the deletion workflow's best-effort delete of a deleted call's objects.
-    FSS_CALL_AUDIO_BUCKET = local.call_audio_bucket_name
-  })
-
   worker_environment = merge(local.common_environment, var.worker_environment, {
     FSS_AWS_ACCOUNT_ID = var.aws_account_id
     FSS_ROLE           = "worker"
@@ -204,7 +191,7 @@ locals {
 
   runtime_database_secret = { DATABASE_SECRET_ARN = var.app_runtime_database_secret_arn }
 
-  api_task_secrets        = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.api_secret_names, name) }, local.runtime_database_secret)
+  api_task_secrets        = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.api_secret_names, name) }, local.runtime_database_secret, local.browser_task_secrets)
   worker_task_secrets     = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.worker_injected_secret_names, name) }, local.runtime_database_secret)
   operations_task_secrets = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.operations_secret_names, name) }, local.runtime_database_secret)
 
@@ -332,7 +319,7 @@ resource "aws_iam_role_policy" "api_execution_secrets" {
         Sid      = "ReadOnlyTheNamedSecrets"
         Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
-        Resource = local.runtime_secret_arns
+        Resource = distinct(concat(local.runtime_secret_arns, values(local.browser_task_secrets)))
       },
       {
         Sid      = "DecryptTheSecretKeys"

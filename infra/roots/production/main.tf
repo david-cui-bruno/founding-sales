@@ -88,6 +88,8 @@ locals {
 module "stack" {
   source = "../../modules/stack"
 
+  founder_browser = var.founder_browser
+
   environment = "production"
   destroyable = false
 

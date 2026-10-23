@@ -75,6 +75,10 @@ resource "terraform_data" "environment_guard" {
 
   lifecycle {
     precondition {
+      condition     = var.founder_browser == null ? true : split(":", trimprefix(var.founder_browser.origin, "https://"))[0] != var.api_hostname
+      error_message = "The browser must use a separate hostname and preserve the existing API/desktop origin."
+    }
+    precondition {
       condition     = !local.diagnostic_enabled || (!local.is_production && var.destroyable && !var.sending_enabled && var.active_database_host == null && var.crm_capability_adapters == null)
       error_message = "Acquisition diagnostic mode requires a destroyable rehearsal, its own managed database, sending off and no ordinary CRM adapters; production refuses it."
     }
@@ -244,6 +248,8 @@ module "database" {
 module "edge" {
   source = "../edge"
 
+  browser_certificate_arn = var.founder_browser == null ? null : var.founder_browser.certificateArn
+
   name_prefix        = var.name_prefix
   aws_account_id     = var.aws_account_id
   vpc_id             = module.network.vpc_id
@@ -260,6 +266,8 @@ module "edge" {
 
 module "cluster" {
   source = "../cluster"
+
+  founder_browser = var.founder_browser
 
   name_prefix                       = var.name_prefix
   aws_region                        = local.aws_region
