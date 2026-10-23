@@ -190,6 +190,12 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
   });
+  // Context refresh is also an authority boundary. Only this exact domain
+  // refusal means absent/revoked mailbox authorization, not operational readiness.
+  if (path === '/replies/composer/context' && result.status === 200
+    && z.strictObject({ ok: z.literal(false), reason: z.literal('mailbox_unavailable') }).safeParse(result.body).success) {
+    return response(401, { error: 'browser_request_refused' }, cookies);
+  }
   // Desktop retains its 409 command contract. Authenticated content/paid-attempt
   // refusal must not erase the browser's uncertain attempt identity as auth loss.
   if (path === '/replies/composer/generate' && result.status === 409) {

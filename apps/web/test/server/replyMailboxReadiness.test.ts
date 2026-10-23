@@ -211,3 +211,40 @@ it('genuine authorization revocation after paid settlement remains global409 and
     expect(prepare).toHaveBeenCalledOnce();
   } finally { b.attempt.dispose(); b.client.dispose(); }
 });
+
+it.each(['revoked', 'absent', 'not_ready', 'message_unavailable'] as const)('actual context refresh handles %s without broad refusal invalidation', async change => {
+  const b = browser();
+  try {
+    await b.client.refresh();
+    const source = await b.attempt.context(id);
+    await b.attempt.requestSuggestion(source, false);
+    const first = b.attempt.pending(id);
+    if (!first) throw new Error('Expected retained paid attempt');
+    // A second schema-valid IDs-only record represents another message's custody.
+    // The real ReplyAttempt reader must clear the entire collection on auth loss.
+    const secondId = '30000000-0000-4000-8000-000000000003';
+    b.storage.setItem(REPLY_PENDING_KEY, JSON.stringify({ version: 2, records: [first,
+      { ...first, messageId: secondId, commandId: '40000000-0000-4000-8000-000000000004' }] }));
+    expect(b.attempt.pending(secondId)).not.toBeNull();
+    const retained = b.storage.getItem(REPLY_PENDING_KEY);
+    if (change === 'revoked') authorization!.enabled = false;
+    if (change === 'absent') authorization = null;
+    if (change === 'not_ready') mailbox.sync_state = 'syncing';
+    if (change === 'message_unavailable') seams.message.mockResolvedValue(null);
+    await expect(b.attempt.context(id)).rejects.toMatchObject({ reason: 'refused' });
+    if (change === 'revoked' || change === 'absent') {
+      expect(b.responses.at(-1)).toEqual({ status: 401, body: { error: 'browser_request_refused' } });
+      expect(b.client.current).toBeNull();
+      expect(b.attempt.pending(id)).toBeNull();
+      expect(b.attempt.pending(secondId)).toBeNull();
+      expect(b.storage.getItem(REPLY_PENDING_KEY)).toBeNull();
+    } else {
+      expect(b.responses.at(-1)).toEqual({ status: 200, body: { ok: false,
+        reason: change === 'not_ready' ? 'mailbox_not_ready' : 'message_unavailable' } });
+      expect(b.client.current?.status).toBe('signed_in');
+      expect(b.storage.getItem(REPLY_PENDING_KEY)).toBe(retained);
+    }
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(count).toHaveBeenCalledOnce();
+  } finally { b.attempt.dispose(); b.client.dispose(); }
+});
