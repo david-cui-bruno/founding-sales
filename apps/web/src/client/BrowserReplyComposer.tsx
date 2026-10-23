@@ -10,21 +10,24 @@ export function BrowserReplyComposer({ client, attempts, messageId }: { client: 
   const [preview, setPreview] = useState<HumanReplyPreview | null>(null);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
-  const [pending, setPending] = useState(attempts.pending());
+  const [pending, setPending] = useState(attempts.pending(messageId));
   const draftRevision = useRef(0);
   const owner = useRef(0), locked = useRef(false), mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
+    owner.current += 1; locked.current = false;
+    setContext(null); setText(''); setSuggestion(null); setPreview(null); setNotice(''); setBusy(false);
+    setPending(attempts.pending(messageId));
     let epoch = client.epoch;
     const unsubscribe = client.subscribe(() => {
       if (epoch !== client.epoch || client.current?.status !== 'signed_in') {
         epoch = client.epoch; owner.current += 1; locked.current = false;
         setContext(null); setText(''); setSuggestion(null); setPreview(null); setNotice(''); setBusy(false);
       }
-      setPending(attempts.pending());
+      setPending(attempts.pending(messageId));
     });
     return () => { mounted.current = false; owner.current += 1; locked.current = false; unsubscribe(); };
-  }, [client, attempts]);
+  }, [client, attempts, messageId]);
   const run = async (work: (current: () => boolean) => Promise<void>): Promise<void> => {
     if (locked.current) return;
     const mine = ++owner.current, epoch = client.epoch;
@@ -34,7 +37,7 @@ export function BrowserReplyComposer({ client, attempts, messageId }: { client: 
     catch {
       if (current()) { setContext(null); setText(''); setSuggestion(null); setNotice('Current source or operation unavailable. Retained attempt identity is unchanged. No automatic retry. Refresh current context to compose manually.'); }
     } finally {
-      if (current()) { locked.current = false; setBusy(false); setPending(attempts.pending()); }
+      if (current()) { locked.current = false; setBusy(false); setPending(attempts.pending(messageId)); }
     }
   };
   const load = (): void => { void run(async current => {

@@ -20,9 +20,11 @@ export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDra
  const message=await readMessage(ctx,input.messageId);if(!message)return {ok:false,reason:'message_unavailable'};
  const target=await directSendTargetOf(ctx,message.id);if(!target?.contactId)return {ok:false,reason:'ambiguous_sender'};
  const firm=await readFirm(ctx,target.firmId);if(!firm||firm.status!=='active'||decideFirmRead(ctx,firm)!=='assigned_or_admin')return {ok:false,reason:'not_assigned'};
- const mailbox=(await ctx.db.query<{owner_user_id:string;email_address:string;provider_account_id:string|null;status:string;sync_state:string;generation:number}>('SELECT owner_user_id,email_address,provider_account_id,status,sync_state,generation FROM mailboxes WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,message.mailboxId])).rows[0];
+ const readMailbox=async()=>(await ctx.db.query<{owner_user_id:string;email_address:string;provider_account_id:string|null;status:string;sync_state:string;generation:number}>('SELECT owner_user_id,email_address,provider_account_id,status,sync_state,generation FROM mailboxes WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,message.mailboxId])).rows[0];
+ const mailbox=await readMailbox();
  if(!mailbox||mailbox.owner_user_id!==firm.assigned_user_id||actor.role!=='admin'&&actor.userId!==mailbox.owner_user_id)return {ok:false,reason:'owner_changed'};
- const auth=await authorizationForMailbox(ctx,message.mailboxId);if(!auth.allowed||auth.revision===null||mailbox.status!=='connected'||mailbox.sync_state!=='ready')return {ok:false,reason:'mailbox_unavailable'};
+ const auth=await authorizationForMailbox(ctx,message.mailboxId,false);if(!auth.allowed||auth.revision===null)return {ok:false,reason:'mailbox_unavailable'};
+ if(mailbox.status!=='connected'||mailbox.sync_state!=='ready')return {ok:false,reason:'mailbox_not_ready'};
  const body=await readMessageBody(ctx,message.id);
  if(message.direction!=='incoming'||!message.matched||message.metadataOnly||!message.headerFrom||!message.rfcMessageId||!body||body.truncated||message.listId!==null||message.autoSubmitted!==null&&message.autoSubmitted!=='no')return {ok:false,reason:'message_unavailable'};
  const routes=(await ctx.db.query<{id:string;version:number;address:string;contact_id:string}>(`SELECT e.id,e.version,e.address,e.contact_id FROM email_addresses e JOIN contacts c ON c.workspace_id=e.workspace_id AND c.id=e.contact_id AND c.firm_id=e.firm_id WHERE e.workspace_id=$1 AND e.firm_id=$2 AND e.retired_at IS NULL AND e.eligibility='usable' AND e.technical_validation='passed' AND e.address=ANY($3::text[]) ORDER BY e.address LIMIT 21`,[ctx.scope.workspaceId,firm.id,[message.headerFrom,...message.headerTo,...message.headerCc]])).rows;
@@ -60,11 +62,15 @@ export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDra
  // or prior message from a source/assignment snapshot that disappeared meanwhile.
  const currentMessage=await readMessage(ctx,message.id);
  const currentTarget=await directSendTargetOf(ctx,message.id);
- const currentAuth=await authorizationForMailbox(ctx,message.mailboxId);
+ const currentMailbox=await readMailbox();
+ const currentAuth=await authorizationForMailbox(ctx,message.mailboxId,false);
  const currentThread=(await ctx.db.query<{id:string;direction:'incoming'|'outgoing';internal_date:Date;body_text:string|null;truncated:boolean|null}>(`SELECT m.id,m.direction,m.internal_date,b.body_text,b.truncated FROM mail_messages m LEFT JOIN mail_message_bodies b ON b.workspace_id=m.workspace_id AND b.mail_message_id=m.id WHERE m.workspace_id=$1 AND m.mailbox_id=$2 AND m.provider_thread_id=$3 ORDER BY m.internal_date,m.id LIMIT 21`,[ctx.scope.workspaceId,message.mailboxId,message.providerThreadId])).rows;
  const currentFirm=await readFirm(ctx,firm.id);
  if(!currentFirm||currentFirm.status!=='active'||decideFirmRead(ctx,currentFirm)!=='assigned_or_admin')return {ok:false,reason:'not_assigned'};
- if(currentFirm.assigned_user_id!==firm.assigned_user_id||!currentAuth.allowed||currentAuth.revision!==auth.revision)return {ok:false,reason:'owner_changed'};
+ if(currentFirm.assigned_user_id!==firm.assigned_user_id||!currentMailbox||currentMailbox.owner_user_id!==mailbox.owner_user_id)return {ok:false,reason:'owner_changed'};
+ if(!currentAuth.allowed||currentAuth.revision!==auth.revision)return {ok:false,reason:'owner_changed'};
+ if(currentMailbox.email_address!==mailbox.email_address||currentMailbox.provider_account_id!==mailbox.provider_account_id||currentMailbox.generation!==mailbox.generation)return {ok:false,reason:'source_changed'};
+ if(currentMailbox.status!=='connected'||currentMailbox.sync_state!=='ready')return {ok:false,reason:'mailbox_not_ready'};
  if(thread.find(m=>m.id===message.id)?.body_text!==body.text||JSON.stringify(currentMessage)!==JSON.stringify(message)||JSON.stringify(currentTarget)!==JSON.stringify(target)||JSON.stringify(currentThread)!==JSON.stringify(thread))return {ok:false,reason:'source_changed'};
  return {ok:true,value:{...source,bookings,sourceRevision,availableFacts}};
 }

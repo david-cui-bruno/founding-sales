@@ -29,7 +29,7 @@ const CONTENT_GENERATION_REFUSALS = new Set([
   'generation_already_attempted', 'generation_unavailable', 'token_count_unavailable',
   'input_over_budget', 'generation_held', 'generation_over_budget', 'generation_outcome_unknown',
   'generation_invalid', 'generation_invalid_facts', 'generation_unsupported_claim',
-  'source_changed', 'thread_changed', 'context_incomplete', 'message_unavailable', 'ambiguous_sender',
+  'source_changed', 'thread_changed', 'context_incomplete', 'mailbox_not_ready', 'message_unavailable', 'ambiguous_sender',
   'sender_unverified', 'recipient_unverified', 'conversation_stopped', 'answered_manually',
   'context_too_large', 'facts_catalogue_too_large', 'block_changed', 'block_retired', 'block_unapproved', 'not_found',
 ]);
@@ -190,6 +190,12 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
   });
+  // Context refresh is also an authority boundary. Only this exact domain
+  // refusal means absent/revoked mailbox authorization, not operational readiness.
+  if (path === '/replies/composer/context' && result.status === 200
+    && z.strictObject({ ok: z.literal(false), reason: z.literal('mailbox_unavailable') }).safeParse(result.body).success) {
+    return response(401, { error: 'browser_request_refused' }, cookies);
+  }
   // Desktop retains its 409 command contract. Authenticated content/paid-attempt
   // refusal must not erase the browser's uncertain attempt identity as auth loss.
   if (path === '/replies/composer/generate' && result.status === 409) {
