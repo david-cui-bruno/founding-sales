@@ -6,18 +6,20 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
-### Issue752 candidate authority observation, NOW local implementation
+### Issue752 candidate authority observation, local acceptance complete
 
-The ordinary inventory and qualification reads do not expose registered source/current-owner/holds before a run. This is a read-path gap, not an external approval wait or permission to qualify DWM. Root locked strict contracts/browser boundary8a7f75104, NEW boundary/schema2PASS and contracts types PASS, before three disjoint authors. Exact private plan `fss-candidate-authority-20261023/PLAN.md` records the contract and acceptance. No production/source/qualification/provider/Westrom/send changes.
+The deployed inventory and qualification reads lack registered source/current-owner/holds before a run. Local752 fixes only this read-path gap, not qualification or permission to qualify DWM. Root locked contracts/browser boundary8a7f75104 before three disjoint authors. The exact closed admin/revision read exposes bounded metadata and always authority:not_granted, never private source prose/URLs/owner identity or ledger capacity. No production/source/qualification/provider/Westrom/send changes.
 
 | Outcome | Exclusive owner/files | Waits and acceptance |
 | --- | --- | --- |
-| Shared contract/integration | Hatchling: sourcingCandidateAuthority.ts/index export, browserContract.ts/NEW shared test, ADR0012, governing docs/tracker | Exact closed POST, current admin/revision, metadata only and authority not_granted. Root owns finished integration/reviews |
-| Whole server reader | Cactus: NEW domain candidateAuthority.ts/tests, NEW API candidateAuthority.ts/tests, sourcing.ts narrow mount | Reuse source/owner/settings/holds owners, stale/change/private-output refusals, focused noPG checks. No side effects |
-| Whole explicit UI | Clover: NEW BrowserCandidateAuthority.tsx/RTL test, BrowserCandidateInventory.tsx mount | Memory-only explicit read, candidate/session/page/epoch predispatch and late fences, no qualification control |
-| Whole new acceptance | Sunflower: NEW candidateAuthority.spec.ts and support/candidateAuthority*.ts | Wait server/UI freeze and root sole PG/browser grant. Real local HTTPS/OIDC/PG/Chrome, controlled lineage, stable snapshots, exact teardown |
+| Shared contract/integration | Hatchling: shared schema/export, browserContract/NEW test, ADR0012, governing docs/tracker | Boundary2PASS; composed contracts/domain/API/web types/workflow PASS. Blossom/spec, Hibiscus/standards and Daisy/privacy final reviews CLEAN |
+| Whole server reader | Cactus: NEW domain/API candidateAuthority readers/tests, sourcing mount | 55ac0ed15,44noPG PASS. Existing source/owner/settings/holds owners; fixed dependency snapshots/current principal after waits, no retry or side effects |
+| Whole explicit UI | Clover: NEW BrowserCandidateAuthority/RTL, inventory mount and affected old acceptance assertion | b436435df,NEW21RTL and existing27PASS. Explicit memory-only read, exact candidate/session/page/epoch predispatch/late fences |
+| Whole new acceptance | Sunflower: NEW candidateAuthority.spec.ts and support/candidateAuthorityApp.ts | 9fb42605c/9076b179f: initial first90s fixtureFAIL/3unrun, then affected first+unrun3 PASS8.8s. No passed-case/old-suite replay |
 
-NOW implement/accept this read only. NEXT existing source→canonical Firm→Today after actual authority evidence. WAITING real-original usefulness remains distinct. Issue751 is done, not an active broad owner-useful row. Three authors active; finished spec/standards/privacy reviews follow source freeze, same reviewers check findings. No accepted-suite/release/cost replay or actual business-supply claim.
+Actual bundled BrowserApp/HTTPS/signed localOIDC/PG/Chrome/BrowserClient/API/domain/SQL showed controlled completed-search association/current attested admin, label-only source unavailable, independent enabled/hold/owner observations, strict auth/foreign/stale refusals and late cross-tab logout clearing. Product read snapshots unchanged; qualification runs0. Fixture correction used normal retained reviewCandidate→kept/revision2 because automatic-owner needs_review intentionally selects identity-review cases. No product fix. Both runs' exact DB/template/PG/TLS/browser resources and IPv4/IPv6 listeners independently absent, Homebrew1412 preserved. Initial residual own profile required removal after exact PID absence, not automatic cleanup success. Concurrent SQL lock scheduling was not separately exercised; snapshot checks are not serializable durable authority. Full private PLAN/SERVER/UI/ACCEPTANCE handbacks retain failures, terminals and limits.
+
+Reviewed local scope accepted; all three final proof verdicts CLEAN, full reports consumed17:00. NEXT normal publication/release before the supported live read, then source→canonical Firm→Today only with actual source/owner/route/budget evidence. Real-original usefulness WAITING remains distinct, synthetic751 DONE. No generic David/cost wait, live read bypass, provider action or actual business-supply claim.
 
 ### Issue751 synthetic business demonstration, reviewed local outcome
 
