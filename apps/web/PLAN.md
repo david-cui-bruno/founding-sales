@@ -6,6 +6,18 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
+### Issue749 ordinary inventory read, local review accepted
+
+The existing authenticated admin `/sourcing/candidates/list` read is absent from the deployed browser allowlist/UI. The ready-qualified discovery selection is not ordinary inventory. Normal founder login resolved12:02; its one ready-selection read was empty, not a global supply absence. Root committed closed read boundary2711b3b45/ADR0012 before delegation. No bypass of the deployed allowlist or direct credential path.
+
+| Outcome | Exclusive owner/files | Waits and acceptance |
+| --- | --- | --- |
+| Shared boundary and integration | Hatchling: browserContract.ts/shared test, ADR0012, BrowserApp.tsx/App test, governing docs/tracker | Existing POST read only, bounded status/offset;2711b3b45 boundary7PASS and f4b4c4e25 focused App1PASS. Initial expired test fixture corrected, production expiry unchanged. Three finished reviews CLEAN |
+| Whole read-only inventory UI | Octopus: NEW BrowserCandidateInventory.tsx and candidateInventory.test.tsx | 40b6f8519:27 actual BrowserClient/RTL PASS, explicit replacement paging/memory/request fences, no mutations/storage. Owned checks/scoped scan0 PASS |
+| Whole composed acceptance | Scorpion: NEW candidateInventory.spec.ts and support/candidateInventory*.ts | 3dfcb843a/3bc3d92bc: actual NEW5 split1PASS then remaining4PASS10.3s after owned locator failure, no passed-case replay. Exact owned cleanup; first run template/port ID recording limit retained |
+
+Finished source frozen3bc3d92bc. Hare/spec, Vole/standards and Poodle/privacy finished reviews CLEAN, FULL reports consumed14:25. Root owns final docs/tracker delivery. Private full handbacks retain original failures, Node25.9 environment limit and independent cleanup evidence. Production/main84a/schema132/OFF/global hold unchanged. No acquisition, qualification, Westrom retry, new provider/private route/spend/contact or sending change. Local read readiness is not actual qualified Firm/Today supply. Normal publication/CI/main and any guarded release remain separate. Private plan `~/.jcode/scratch/fss-ordinary-inventory-20261023/PLAN.md` records exact acceptance and ownership.
+
 ### Issue747 local F2/F3 reply correction, accepted
 
 Baseline fbb3ec5ea; Owl custody193602683, Ox readinessad5d8cde/context correctiond631058d7, Pig new acceptance4294de1b0/f7a89f31f. Root consumed FULL handbacks and exact source deltas. Source d631058d7 plus test-only proof a9bf2fbf2, three finished spec/standards/privacy reviews CLEAN. S747-1/R1 were withdrawn by the same reviewers: existing API guard already converts post-wait owner_changed/not_assigned to401. NEW2 composed during-assembly controls PASS before any production change; final affected file29PASS. Original findings/corrections retained. Root owns integration/docs/tracker, reviewers own separate private reports, same reviewers check any findings. No cloud/provider/login/hosting/cost replay or sending changes.
