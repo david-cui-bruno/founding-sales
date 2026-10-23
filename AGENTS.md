@@ -2,15 +2,15 @@
 
 ## Start and ownership
 
-Read after compaction. Use GitHub Issues in `david-cui-bruno/founding-sales`: [tracker](docs/agents/issue-tracker.md), [labels](docs/agents/triage-labels.md). Before exploration read [domain rules](docs/agents/domain.md), `GLOSSARY.md` and relevant ADRs. Before roadmap, release or sending read [current state](docs/operations/current-state.md) and its roadmap. History is not live authority. Exclude `docs/archive` unless answering historical questions.
+Read after compaction: [tracker](docs/agents/issue-tracker.md), [labels](docs/agents/triage-labels.md); use `david-cui-bruno/founding-sales` Issues. Before exploration read [domain](docs/agents/domain.md), `GLOSSARY.md`, relevant ADRs. Before roadmap/release/sending read [current-state](docs/operations/current-state.md) and its roadmap. History is not authority; exclude `docs/archive` except historical questions.
 
-Prioritize core daily selling, Gmail capture, manual-first LinkedIn outreach, then release simplification. One implementer owns each whole outcome. Parallelize only independent outcomes or read-only investigations. Use David's workspace for workers.
+Prioritize daily selling, Gmail capture, manual-first LinkedIn, then release simplification. One implementer owns each outcome. Parallelize independent outcomes/read-only investigations in David's workspace.
 
 ## Decisions and approvals
 
-Decide implementation, tests, docs and reversible cleanup autonomously. David's October 18 standing authority covers release-path infrastructure/IAM/GitHub/Terraform plans/applies, keygen/secret storage with old restore copies; read-only production/credential inspection, temporary read-only ops tasks, restarts and main merges. Migration 0105 cached Ask redaction is accepted.
+Autonomously implement/test/document/reversibly clean. David's October 18 standing authority covers release-path infrastructure/IAM/GitHub/Terraform plans/applies, keygen/secret storage with old restore copies; read-only production/credential inspection, temporary read-only ops tasks, restarts and main merges. Migration 0105 cached Ask redaction is accepted.
 
-Production releases require clean CI/reviews, pinned PITR before migration, sending paused and passing smoke checks. David alone resumes sending after healthy schema 116; never enable it for him. Stop and fix forward on failures. Contain failures first by pausing sending/holding releases, then report.
+Production releases require clean CI/reviews, pinned PITR before migration, paused sending and passing smokes. David's October23 00:19:49 permission allows the normal sending path only after actual readiness, consent/eligibility, current campaign/source/cap/hold and unknown-write checks pass. Permission alone never enables sending or overrides owner-disabled controls/newer stops. Healthy releases remove only their temporary block for already-authorized sending, preserving newer stops/fresh checks (ADR0011). Failures: pause sending/hold releases, report, fix forward.
 
 Ask before new/higher spending, new paid services, AWS changes above ~$20/month, Gmail capture or LinkedIn actions, new channels/raised limits/contact groups, contacting people, irrecoverable CRM/Gmail/conversation deletion, restores losing writes, or unapproved prospect-visible changes. Use approved Bedrock/Vertex credits with ~$50/day runaway protection; confirm actual ledger costs before raising research budgets. Report decisions next update.
 
