@@ -1,8 +1,8 @@
 # Current operating state
 
-## October23 2026, 03:14UTC host preparation
+## October23 2026, 03:42UTC host preparation
 
-Production/main881/schema129 and desktop retained; LOCAL132 undeployed. David00:52:55 approved separate callback/founder-only same-AWS CRM/email, no extra processor/AI. Issue745 local NEW5browser, parser14+affected12 and artifact15 retained. PR746 original CI: Terraform/upgrade/workflows/secrets PASS, image/domain FAIL. Context240bb actual normal-context build/offline PASS, reviews CLEAN. Domain2a08 correction13noPG PASS; configuration645/ADR9da focused5PASS. Same three reviewers CLEAN for both; corrected push/CI pending. Metadata not published/applied. Sending OFF. [Roadmap](../sourcing/roadmap-20261007.md).
+Production/main881/schema129 and desktop retained; LOCAL132 undeployed. David00:52:55 approved separate callback/founder-only same-AWS CRM/email, no extra processor/AI. Issue745 local NEW5browser, parser14+12 and artifact15 retained. PR746 head442: image/infrastructure/upgrade/workflows/secrets PASS; gate FAIL only two ops checks. Browser97c5 rename preserves provider guard, reply23/guard17PASS; fixturec505 exact baseline/encrypted metadata4PASS. Same three delta reviews CLEAN; corrected push/CI pending. Metadata create-only201/exact readback03:21 confirmed, not applied. Sending OFF. [Roadmap](../sourcing/roadmap-20261007.md).
 
 Product decisions COMPLETE, [canonical plan](../../apps/web/PLAN.md): qualified leads→Firm/Today→approved outreach→actual replies/drafts/briefs, review-first social NEXT/coaching parked; Facebook research-only. Actual01:34 API1382/2/worker1391/1 COMPLETED, CPUpeak80.72%/DBconnectionsmax15, not capacity acceptance. Namespace cost UNKNOWN. Reviewed02:26–02:28 bootstrap: sales certificate ISSUED/validation DNS INSYNC, unused; dedicated cookie secret/version confirmed/private600 restore. Modeled incremental ~$0.40/month plus calls. Occupied app host untouched; no traffic/ALB/IAM/runtime change. Google registration waits owner passkey, not approval. Expected founder IDs selected from public enrollment, not current membership proof; configuration/target acceptance remain open.
 
