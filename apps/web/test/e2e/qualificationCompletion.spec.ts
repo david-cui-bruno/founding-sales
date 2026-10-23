@@ -1,7 +1,7 @@
 import type { Page } from 'playwright/test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { candidateListSchema, qualificationViewSchema, type CandidateInput, type QualificationFact } from '@fss/contracts';
+import { candidateListSchema, qualificationViewSchema, todayListResponseSchema, pluralFirmPageResponseSchema, type CandidateInput, type QualificationFact } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { saveCandidate } from '@fss/domain/sourcing/candidates.ts';
@@ -76,6 +76,7 @@ test('real browser request and reviewed admission retain exact custody through r
     const response = await route.fetch(); expect(response.status()).toBe(200); await route.abort('failed');
   }, { times: 1 });
   await card.getByRole('button', { name: 'Request qualification', exact: true }).click();
+  await expect(card).toContainText('Qualification unavailable or refused.');
   await expect(page.getByRole('button', { name: 'Reconcile exact qualification command', exact: true })).toBeVisible();
   const beforeRequestReload = await held(page); expect(beforeRequestReload).not.toBeNull();
   expect(beforeRequestReload).not.toMatch(/Controlled|residential|https|csrf|evidence/u);
@@ -98,6 +99,7 @@ test('real browser request and reviewed admission retain exact custody through r
     const response = await route.fetch(); expect(response.status()).toBe(200); await route.abort('failed');
   }, { times: 1 });
   await card.getByRole('button', { name: 'Admit reviewed qualification', exact: true }).click();
+  await expect(card).toContainText('Qualification unavailable or refused.');
   await expect(page.getByRole('button', { name: 'Reconcile exact qualification command', exact: true })).toBeVisible();
   const beforeAdmitReload = await held(page); expect(beforeAdmitReload).not.toMatch(/Controlled|residential|https|csrf|evidence/u);
   await page.reload(); await expect(page.getByRole('button', { name: 'Reconcile exact qualification command', exact: true })).toBeVisible();
@@ -109,6 +111,16 @@ test('real browser request and reviewed admission retain exact custody through r
   const association = (await owned.app.fixture.db.query('SELECT firm_id,route_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2', [owned.app.fixture.alpha.workspaceId, candidateId])).rows;
   expect(association).toEqual([{ firm_id: admitted.result.firmId, route_id: admitted.result.routeId }]);
   await expect(inventory(page)).toContainText(`Admitted exact Firm ${admitted.result.firmId}`);
+  const todayRead = page.waitForResponse(response => new URL(response.url()).pathname === '/browser/api/today');
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
+  const today = todayListResponseSchema.parse(await (await todayRead).json());
+  expect(today.cards.find(card => card.firmId === admitted.result.firmId)?.firmName).toBe(input.firmName);
+  const todayCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: 'Open firm', exact: true }) }).filter({ hasText: input.firmName });
+  const firmRead = page.waitForResponse(response => response.url().endsWith('/browser/api/crm/firm-page-v3'));
+  await todayCard.getByRole('button', { name: 'Open firm', exact: true }).click();
+  expect(pluralFirmPageResponseSchema.parse(await (await firmRead).json()).read.firm.id).toBe(admitted.result.firmId);
+  await expect(page.getByRole('region', { name: 'Firm', exact: true })).toContainText(input.firmName);
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
   await load(page); card = inventory(page).getByRole('article', { name: `Candidate ${candidateId}`, exact: true });
   await card.getByRole('button', { name: 'Read qualification', exact: true }).click();
   await expect(card).toContainText(`Admitted exact Firm ${admitted.result.firmId}`);
