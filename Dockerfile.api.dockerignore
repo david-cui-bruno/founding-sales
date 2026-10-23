@@ -20,6 +20,15 @@
 !package-lock.json
 !apps/api/package.json
 !apps/api/src
+!tsconfig.base.json
+!apps/web/package.json
+!apps/web/tsconfig.json
+!apps/web/src/client
+!apps/web/src/shared
+!apps/web/src/server
+!apps/desktop/package.json
+!apps/desktop/src/renderer
+!scripts/buildBrowserAssets.mjs
 !packages/domain/package.json
 !packages/domain/crm
 !packages/domain/db
@@ -55,6 +64,14 @@
 # to an image, and no test or fixture is part of a production container.
 packages/domain/db/testing
 **/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
 **/test/**
+**/tests/**
+**/__tests__/**
+**/fixtures/**
+**/.env
+**/.env.*
 **/node_modules
 **/.DS_Store
