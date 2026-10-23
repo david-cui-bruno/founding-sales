@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { browserApiPathAllowed, browserSessionSchema } from '../../src/shared/browserContract.ts';
 
 describe('browser boundary', () => {
+  it('admits only the existing ordinary inventory read, never sourcing mutations', () => {
+    expect(browserApiPathAllowed('POST', '/sourcing/candidates/list')).toBe(true);
+    for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, '/sourcing/candidates/list')).toBe(false);
+    for (const path of ['/sourcing/candidates/list/extra', '/sourcing/candidates/save', '/sourcing/candidates/review', '/sourcing/candidates/delete', '/sourcing/candidates/check', '/sourcing/qualification/request', '/sourcing/qualification/admit', '/sourcing/experiments/activate', '/sourcing/candidates/discovery/list-v1']) {
+      expect(browserApiPathAllowed('POST', path)).toBe(false);
+    }
+  });
+
   it('only admits the existing method/path combinations for the first slice', () => {
     expect(browserApiPathAllowed('GET', '/today')).toBe(true);
     expect(browserApiPathAllowed('POST', '/today/firm')).toBe(true);
