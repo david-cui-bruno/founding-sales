@@ -1,9 +1,9 @@
 import {beforeEach,expect,it,vi} from 'vitest';
 import {repositoryContext,workspaceScope,type RepositoryContext} from '../../db/workspaceScope.ts';
 import {advanceAutomaticResearchFirm,readAutomaticResearchFirm} from '../../sourcing/automaticResearch.ts';
-const mocks=vi.hoisted(()=>({proof:vi.fn(),identity:vi.fn(),create:vi.fn(),load:vi.fn(),audit:vi.fn(),now:vi.fn()}));
+const mocks=vi.hoisted(()=>({proof:vi.fn(),identity:vi.fn(),create:vi.fn(),load:vi.fn(),audit:vi.fn(),now:vi.fn(),owner:vi.fn()}));
 vi.mock('../../sourcing/automaticResearchProof.ts',()=>({automaticResearchProof:mocks.proof,automaticResearchIdentity:mocks.identity}));
-vi.mock('../../sourcing/automaticResearchAuthority.ts',()=>({automaticResearchNow:mocks.now}));
+vi.mock('../../sourcing/automaticResearchAuthority.ts',()=>({automaticResearchNow:mocks.now,automaticResearchOwner:mocks.owner}));
 vi.mock('../../crm/firms.ts',()=>({createFirm:mocks.create,loadFirmForUpdate:mocks.load}));
 vi.mock('../../crm/audit.ts',()=>({recordCrmAuditEvent:mocks.audit}));
 vi.mock('../../policy/sendGate.ts',()=>({lockSendGateForStopFact:vi.fn()}));
@@ -14,7 +14,8 @@ const proof={candidateId:id,candidateRevision:1,runId:id,owner:id,candidate:{fir
 let holds:{scope:string;key:string;action:string}[],holdAfterAudit:boolean;
 let ctx:RepositoryContext,queries:{sql:string;values:readonly unknown[]|undefined}[],prior:Record<string,unknown>|null,deleted:boolean;
 beforeEach(()=>{
- vi.clearAllMocks();queries=[];prior=null;deleted=false;holds=[];holdAfterAudit=false;
+ vi.clearAllMocks();for(const mock of Object.values(mocks))mock.mockReset();queries=[];prior=null;deleted=false;holds=[];holdAfterAudit=false;
+ mocks.owner.mockResolvedValue(id);
  mocks.audit.mockImplementation(async()=>{if(holdAfterAudit)holds=[{scope:'firm',key:firmId,action:'research'}];});
  mocks.proof.mockResolvedValue(proof);mocks.identity.mockResolvedValue({firmId});mocks.load.mockResolvedValue({id:firmId});mocks.create.mockResolvedValue({ok:true,value:{id:firmId}});mocks.now.mockResolvedValue('2026-10-22T12:00:00.000Z');
  ctx=repositoryContext(workspaceScope(id,{kind:'system',component:'worker'}),{query:async<Row,>(sql:string,values?:readonly unknown[])=>{
@@ -27,10 +28,13 @@ beforeEach(()=>{
   return {rows:rows as Row[],rowCount:rows.length};
  }});
 });
-it('publishes through the system owner without impersonation or campaign admission',async()=>{
+it('publishes through the system owner without impersonation or admission when no campaign exists',async()=>{
  await advanceAutomaticResearchFirm(ctx,{runId:id});
  expect(queries.some(q=>q.sql.startsWith('INSERT INTO sourcing_automatic_research_firms'))).toBe(true);
  expect(mocks.audit).toHaveBeenCalledWith(ctx,expect.objectContaining({action:'sourcing.automatic_research_published'}));
+ expect(mocks.owner).toHaveBeenCalledWith(ctx);
+ expect(queries.some(q=>q.sql.startsWith('SELECT * FROM outreach_email_campaigns'))).toBe(true);
+ expect(queries.some(q=>q.sql.startsWith('INSERT INTO outreach_email_campaign_admissions'))).toBe(false);
  expect(queries.some(q=>q.sql.includes('ROLLBACK TO'))).toBe(false);
 });
 it('rolls back Firm creation and publication on final independent proof loss after waits',async()=>{
