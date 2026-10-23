@@ -12,7 +12,7 @@ let baseline: Awaited<ReturnType<typeof inventoryProductSnapshot>>;
 const inventory = (page: Page) => page.getByRole('region', { name: 'Ordinary sourcing inventory', exact: true });
 const cards = (page: Page) => inventory(page).getByRole('article');
 const load = (page: Page) => inventory(page).getByRole('button', { name: 'Load ordinary inventory', exact: true });
-const status = (page: Page) => page.getByLabel('Inventory status', { exact: true });
+const status = (page: Page) => inventory(page).getByRole('combobox', { name: 'Inventory status', exact: true });
 async function read(page: Page) {
   const response = page.waitForResponse(response => response.url().endsWith(`/browser/api${path}`));
   await load(page).click();
@@ -45,7 +45,7 @@ test.beforeEach(async ({ researchPage: page }) => {
   page.on('request', (request: Request) => {
     const url = new URL(request.url());
     if (url.pathname.startsWith('/browser/api/')) {
-      expect(['/browser/api/today', '/browser/api/sourcing/research-firms/list', `/browser/api${path}`]).toContain(url.pathname);
+      expect(['/browser/api/today', '/browser/api/today/actions/v4', '/browser/api/sourcing/research-firms/list', `/browser/api${path}`]).toContain(url.pathname);
     }
   });
 });
