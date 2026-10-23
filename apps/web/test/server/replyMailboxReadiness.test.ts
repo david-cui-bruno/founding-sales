@@ -212,7 +212,7 @@ it('genuine authorization revocation after paid settlement remains global409 and
   } finally { b.attempt.dispose(); b.client.dispose(); }
 });
 
-it.each(['revoked', 'absent', 'not_ready', 'message_unavailable'] as const)('actual context refresh handles %s without broad refusal invalidation', async change => {
+it.each(['revoked', 'absent', 'not_ready', 'message_unavailable', 'revoked_during_assembly', 'revision_during_assembly'] as const)('actual context refresh handles %s without broad refusal invalidation', async change => {
   const b = browser();
   try {
     await b.client.refresh();
@@ -231,9 +231,16 @@ it.each(['revoked', 'absent', 'not_ready', 'message_unavailable'] as const)('act
     if (change === 'absent') authorization = null;
     if (change === 'not_ready') mailbox.sync_state = 'syncing';
     if (change === 'message_unavailable') seams.message.mockResolvedValue(null);
+    // These waits exercise composer owner_changed through the real API's
+    // privateAuthorityRefusal, not the browser's mailbox_unavailable translation.
+    let assemblyWaits = 0;
+    if (change === 'revoked_during_assembly') afterAssembly = () => { assemblyWaits++; authorization!.enabled = false; };
+    if (change === 'revision_during_assembly') afterAssembly = () => { assemblyWaits++; authorization!.revision++; };
+    const epoch = b.client.epoch;
     await expect(b.attempt.context(id)).rejects.toMatchObject({ reason: 'refused' });
-    if (change === 'revoked' || change === 'absent') {
+    if (change === 'revoked' || change === 'absent' || change.endsWith('_during_assembly')) {
       expect(b.responses.at(-1)).toEqual({ status: 401, body: { error: 'browser_request_refused' } });
+      expect(b.client.epoch).toBeGreaterThan(epoch);
       expect(b.client.current).toBeNull();
       expect(b.attempt.pending(id)).toBeNull();
       expect(b.attempt.pending(secondId)).toBeNull();
@@ -244,6 +251,8 @@ it.each(['revoked', 'absent', 'not_ready', 'message_unavailable'] as const)('act
       expect(b.client.current?.status).toBe('signed_in');
       expect(b.storage.getItem(REPLY_PENDING_KEY)).toBe(retained);
     }
+    if (change.endsWith('_during_assembly')) expect(assemblyWaits).toBe(1);
+    expect(seams.reserve).toHaveBeenCalledOnce();
     expect(prepare).toHaveBeenCalledOnce();
     expect(count).toHaveBeenCalledOnce();
   } finally { b.attempt.dispose(); b.client.dispose(); }
