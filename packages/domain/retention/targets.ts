@@ -1,3 +1,4 @@
+import {rememberExpiredManualSources} from '../sourcing/manualProspectSourceLoss.ts';
 import {sweepOfficeSources} from './officeAssessments.ts';
 import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources,sweepDiscoveryReviews} from '../sourcing/discoveryReviewVisibility.ts';
 import {expireHistoryRecoveries} from '../mail/crmHistoryRecovery.ts';
@@ -221,6 +222,7 @@ const researchEvidence: RetentionTarget = {
       [context.scope.workspaceId, input.now, input.limit],
     );
     const ids = expiring.rows.map(row => row.id);
+    await rememberExpiredManualSources(context,expiring.rows.map(row=>row.source_reference));
     const sourceDeleted=await eraseDiscoveryReviewsForSources(context,expiring.rows.map(row=>row.source_reference));
     const discoveryTotal=discoveryDeleted+sourceDeleted;
     if (ids.length === 0) return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:0,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal}};

@@ -8,6 +8,7 @@ import type { ApiRequest } from '../../../api/src/routes/types.ts';
 import { BROWSER_PATHS, BROWSER_COMMAND_PATHS, BROWSER_CSRF_HEADER, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema } from '../shared/browserContract.ts';
 import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestContext } from './runtime.ts';
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
+import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
 
 const SECURITY_HEADERS = Object.freeze({
@@ -192,6 +193,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
   });
+  const manual = manualProspectBrowserResult(path, result.status, result.body);
+  if (manual !== null) return response(manual.status, manual.body, cookies);
   const qualification = qualificationBrowserResult(path, result.status, result.body);
   if (qualification !== null) return response(qualification.status, qualification.body, cookies);
   // Context refresh is also an authority boundary. Only this exact domain

@@ -8,7 +8,7 @@ let db:TestDatabase,seeded:TwoWorkspaces,crm:SeededCrm;
 beforeAll(async()=>{
  db=await createTestDatabase({throughVersion:132});seeded=await seedTwoWorkspaces(db.session);crm=await seedCrm(db.session,seeded);
  expect(await readAppliedSchemaVersion(db.session)).toBe(132);
- await applyMigrations(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(133);
+ await applyMigrations(db.session,{throughVersion:133});expect(await readAppliedSchemaVersion(db.session)).toBe(133);
 });
 afterAll(async()=>{await db.drop();});
 it.each(RETAINED_RECOVERY_CONSTRAINT_CASES)('132 to 133 upgrade enforces $constraint with a real failing insert',async testCase=>{

@@ -105,3 +105,4 @@ export * from './emailCampaign.ts';
 export * from './automaticResearch.ts';
 export * from './sourcingCandidateAuthority.ts';
 export * from './sourcingRetainedRecovery.ts';
+export * from './manualProspects.ts';

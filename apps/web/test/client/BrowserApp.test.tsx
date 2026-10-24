@@ -20,6 +20,7 @@ function setup() {
     if (url === '/browser/session') return json(session);
     if (url === '/browser/sign-out') return json({ status: 'signed_out', csrfToken: 'a'.repeat(40) });
     if (String(url).startsWith('/browser/api/today')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [{ firmId: id, firmName: firm.name, lane: 'new_firm', dueAt: '2026-10-22T00:00:00.000Z', counts: { replies: 0, emailsDue: 0, callsDue: 0 } }] });
+    if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: [], hasMore: false });
     if (url === '/browser/api/crm/firm-page-v3') return json({ version: 3, visibility: 'assigned_or_admin', read: { visibility: 'assigned_or_admin', firm }, opportunities: [], holds: [], followUpPermissions: [] });
     if (String(url).startsWith('/browser/api/meetings/outcomes')) return json(outcomes);
     if (url === '/browser/api/meetings/notes') {
@@ -44,11 +45,12 @@ async function openNotes(): Promise<void> {
 }
 
 describe('BrowserApp real shared presentation', () => {
-  it('mounts ordinary inventory only in signed-in Today without automatically reading or qualifying', async () => {
+  it('mounts ordinary inventory explicitly and safely loads separate manual prospects only in signed-in Today', async () => {
     const { client, commands, send } = setup();
     render(<BrowserApp client={client} />);
     await screen.findByRole('heading', { name: 'Ordinary sourcing inventory' });
-    expect(send.mock.calls.some(([url]) => String(url).includes('/sourcing/candidates/'))).toBe(false);
+    expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/list')).toBe(false);
+    await waitFor(() => { expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(true); });
     expect(send.mock.calls.some(([url]) => String(url).includes('/sourcing/qualification/'))).toBe(false);
     expect(commands).toHaveLength(0);
     fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
