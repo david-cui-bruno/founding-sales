@@ -40,6 +40,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/sourcing/qualification/read',
   '/outreach/email-campaigns/control',
   '/replies', '/replies/card', '/replies/composer/context', '/replies/composer/preview',
+  '/social/drafts', '/social/drafts/read',
 ] as const);
 export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/meetings/notes', '/sourcing/research-firms/create',
