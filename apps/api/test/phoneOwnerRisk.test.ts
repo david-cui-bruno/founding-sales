@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NATIONAL_DNC_OWNER_APPROVED_AT, NATIONAL_DNC_OWNER_DECISION, NATIONAL_DNC_UNCHECKED_WARNING } from '@fss/contracts';
+import { installWeekdayClock } from '@fss/domain/test/support/weekdayClock.ts';
 import { dispatch } from '../src/server.ts';
 import { createAuthFixture, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -16,11 +17,12 @@ beforeAll(async () => {
   const base = await createAuthFixture();
   f = { ...base, deps: { ...base.deps, config: { ...base.deps.config,
     supportedClientVersions: { minimum: '1.0.0', ceiling: '1.x', incompatible: [] } } } };
+  await installWeekdayClock(f.database);
+  f.setNow(new Date());
   token = (await issueSessionFor(f, f.alpha, f.alpha.admin)).accessToken;
   firmId = await seedFirm(f, { name: 'Synthetic internal phone test', regionCode: 'RI', postalCode: '02903', assignedUserId: f.alpha.admin.userId });
   expect((await request('POST', '/firms/resolve-zone', { commandId: randomUUID(), clientVersion: '1.0.56', firmId })).status).toBe(200);
-  const offset = new Date().getUTCHours() - 12;
-  await f.db.query('UPDATE firms SET time_zone=$2 WHERE id=$1', [firmId, `Etc/GMT${offset >= 0 ? '+' : ''}${offset}`]);
+  await f.db.query("UPDATE firms SET time_zone='Etc/UTC' WHERE id=$1", [firmId]);
   routeId = (await f.db.query<{ id: string }>(`INSERT INTO phone_routes(workspace_id,firm_id,e164,source,retrieved_at,technical_validation,association_confidence)
     VALUES($1,$2,$3,'salesperson',now(),'passed',0.95) RETURNING id`, [f.alpha.workspaceId, firmId, endpoint])).rows[0]!.id;
   await f.db.query(`INSERT INTO state_postures(workspace_id,state,revision,effective_from,review_at,rules_revision,confirmed_statements,sources,confirmed_by_user_id)
@@ -28,7 +30,7 @@ beforeAll(async () => {
   receiptId = (await f.db.query<{ id: string }>(`INSERT INTO phone_owner_risk_receipts(workspace_id,owner_user_id,decision_at,approval_reference,self_test_firm_id,self_test_e164)
     VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, [f.alpha.workspaceId, f.alpha.admin.userId, NATIONAL_DNC_OWNER_APPROVED_AT, NATIONAL_DNC_OWNER_DECISION, firmId, endpoint])).rows[0]!.id;
 });
-afterAll(async () => { await f.stop(); });
+afterAll(async () => { await f?.stop(); });
 describe('owner-risk disclosure across genuine authenticated command boundary', () => {
   it('supplies pre-click advice from the server, not a client bypass flag', async () => {
     expect((await request('POST', '/dial/check', { firmId, routeId })).body).toMatchObject({ advice: { nationalDnc: {
