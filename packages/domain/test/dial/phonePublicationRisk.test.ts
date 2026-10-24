@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createTestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext } from '../../db/workspaceScope.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { readPhoneHandoffResult, reservePhoneHandoff } from '../../dial/phoneHandoff.ts';
@@ -38,6 +39,32 @@ async function alternate(value: OwnerRiskFixture, kind: 'contact' | 'firm' | 'fo
 }
 
 describe('owner-risk final current policy and exact frozen office proof', () => {
+  it('uses one fixed weekday clock across connections without permitting Saturday calls', async () => {
+    const NativeDate = Date;
+    const value = await fixture(true);
+    const at = new Date();
+    expect(at.getUTCDay()).toBe(1);
+    expect(at.getUTCHours()).toBe(12);
+    const other = await connection(value);
+    for (const session of [value.database.session, value.runtime, other.session]) {
+      const clock = (await session.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]!.at;
+      expect(Math.abs(clock.getTime() - Date.now())).toBeLessThan(1000);
+    }
+    const saturday = new Date(at); saturday.setUTCDate(at.getUTCDate() + 5);
+    expect(await withTransaction(value.runtime, () => reservePhoneHandoff(value.context,
+      { ...value.request(), at: saturday.toISOString() }))).toEqual({ ok: false, reason: 'outside_calling_window' });
+    expect((await value.database.session.query('SELECT id FROM phone_handoff_attempts')).rows).toHaveLength(0);
+    const id = await reserved(value);
+    expect(await readPhoneHandoffResult(value.context, id, false)).toMatchObject({ actionable: true });
+    await value.database.drop(); f = undefined;
+    expect(Date).toBe(NativeDate);
+    const otherDatabase = await createTestDatabase();
+    try {
+      expect((await otherDatabase.session.query<{ prosrc: string }>("SELECT prosrc FROM pg_proc WHERE oid='pg_catalog.clock_timestamp()'::regprocedure")).rows[0]?.prosrc).toBe('clock_timestamp');
+      const clock = (await otherDatabase.session.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]!.at;
+      expect(Math.abs(clock.getTime() - Date.now())).toBeLessThan(1000);
+    } finally { await otherDatabase.drop(); }
+  });
   it.each(['contact', 'firm'] as const)('exact endpoint personal flag on another %s blocks before reservation', async kind => {
     const value = await fixture(); await admitOffice(value); await alternate(value, kind);
     expect((await adviseDial(value.context, value.request()))?.nationalDnc?.status).toBe('unknown');
