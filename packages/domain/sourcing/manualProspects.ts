@@ -1,5 +1,5 @@
 import {isDeepStrictEqual} from 'node:util';
-import {manualProspectListInputSchema,manualProspectListSchema,manualProspectFeedbackInputSchema,manualProspectFeedbackSavedSchema} from '@fss/contracts';
+import {manualProspectListInputSchema,manualProspectListSchema,manualProspectFeedbackInputSchema,type manualProspectFeedbackSavedSchema} from '@fss/contracts';
 import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from '../crm/identityAccess.ts';

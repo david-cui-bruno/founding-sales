@@ -10,6 +10,7 @@ import { BrowserEmailCampaigns } from './BrowserEmailCampaigns.tsx';
 import { BrowserMeetingNotes } from './BrowserMeetingNotes.tsx';
 import { BrowserReplies } from './BrowserReplies.tsx';
 import { BrowserMeetingPreparation } from './BrowserMeetingPreparation.tsx';
+import { BrowserManualProspects } from './BrowserManualProspects.tsx';
 import { BrowserCandidateInventory } from './BrowserCandidateInventory.tsx';
 
 type Today = z.infer<typeof todayListResponseSchema>;
@@ -93,7 +94,7 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
       <Button disabled={busy} variant="outline" onClick={() => { void run(async () => { await client.refresh(); }); }}>Refresh access</Button>
     </section> : <div key={generation} className="space-y-5">
       <nav className="flex gap-3"><Button disabled={busy} onClick={() => { void run(loadToday); }}>Today</Button><span>{session.role} · Workspace {session.workspaceId}</span></nav>
-      {firm === null ? <section aria-label="Today" className="space-y-3"><h2>Today</h2><BrowserCandidateInventory client={client} /><BrowserResearchQueue client={client} />{today !== null ? <p>{today.snapshotDate} · {today.businessTimeZone}</p> : null}
+      {firm === null ? <section aria-label="Today" className="space-y-3"><h2>Today</h2><BrowserManualProspects client={client} /><BrowserCandidateInventory client={client} /><BrowserResearchQueue client={client} />{today !== null ? <p>{today.snapshotDate} · {today.businessTimeZone}</p> : null}
         {today?.cards.length === 0 ? <p>No firms need attention today.</p> : null}
         {today?.cards.map(card => <article key={card.firmId} className="rounded-md border p-4"><h3>{card.firmName}</h3><p>{card.lane.replaceAll('_', ' ')} · {countsLabel(card.counts)}</p><Button disabled={busy} onClick={() => { void run(async () => { await openFirm(card.firmId); }); }}>Open firm</Button></article>)}
       </section> : <section aria-label="Firm" className="space-y-4"><h2>{firm.read.firm.name}</h2><p>{firm.read.firm.timeZone ?? 'Time zone unknown'}</p>

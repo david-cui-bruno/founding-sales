@@ -13,7 +13,7 @@ export const MANUAL_PROSPECT_ROWS_SQL=`WITH raw AS (
   FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=c.workspace_id AND o.candidate_id=c.id) AS origins
  FROM sourcing_candidates c LEFT JOIN sourcing_manual_prospect_states s ON s.workspace_id=c.workspace_id AND s.candidate_id=c.id AND s.candidate_revision=c.revision
  WHERE c.workspace_id=$1 AND c.status<>'dismissed'
- AND NOT (c.source_check->>'state'='unavailable' AND c.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text')) IS TRUE
+ AND NOT COALESCE(c.source_check->>'state'='unavailable' AND c.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text'),false)
 ), permitted AS (
  SELECT raw.* FROM raw WHERE length(trim(observed->>'firmName')) BETWEEN 1 AND 300
  AND (observed->>'firmName') ~ '[[:alnum:]]'
@@ -26,7 +26,7 @@ export const MANUAL_PROSPECT_ROWS_SQL=`WITH raw AS (
   AND EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(origins,'[]')) o WHERE rtrim(o->'source'->>'sourceUrl','/') IN (rtrim(lost.payload->>'sourceUrl','/'),rtrim(lost.source_check->'lastSuccess'->>'url','/'))))
 ), keyed AS (
  SELECT permitted.*,CASE WHEN NULLIF(trim(observed->>'website'),'') IS NULL THEN id::text
- ELSE jsonb_build_array(lower(trim(observed->>'firmName')),lower(rtrim(observed->>'website','/')),lower(trim(observed->>'locality')),observed->>'region')::text END AS duplicate_key FROM permitted
+ ELSE jsonb_build_array(lower(trim(observed->>'firmName')),observed->>'website',lower(trim(observed->>'locality')),observed->>'region')::text END AS duplicate_key FROM permitted
 ), ranked AS (
  SELECT keyed.*,row_number() OVER(PARTITION BY duplicate_key ORDER BY created_at DESC,id DESC) AS duplicate_rank,
  (count(*) OVER(PARTITION BY duplicate_key)-1)::integer AS duplicate_count FROM keyed
