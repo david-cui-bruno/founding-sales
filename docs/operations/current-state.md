@@ -1,6 +1,6 @@
 # Current operating state
 
-## October24 2026, 08:21UTC production133, business acceptance open
+## October24 2026, 16:20UTC production133, business acceptance open
 
 PR763 merged main `17c24a6d524a1be2120ffc70890cce6e5b2d6890`; exact-main gate40074661141/images40074661053 SUCCESS. Automatic40075185694 respected hold/skipped writers. ONE protected40076134146 completed08:15:37 SUCCESS, no migration, schema133. Direct health08:15:55 confirms exact17c24a6/schema133. API146/worker147 replaced145/146. Runner passed stored/effectiveOFF/current binding, schema/digest/stability/smokes/readback. PITR08:00:10.622 within retained window, restore UNTESTED. Terminal task/temporary reader null, last exit0. Individual OFF payloads/service counts checked by runner, not independently retrieved. Global hold unchanged, no sending activation. [Roadmap](../sourcing/roadmap-20261007.md).
 
@@ -8,7 +8,7 @@ David00:52:55 approved separate browser callback preserving desktop and founder-
 
 ## Issue754 browser qualification, deployed
 
-Child754 CLOSED/PR755 merged: request/status/reviewed-admission deployed, controlled browser3PASS/106client/23PG/67boundary checks, three reviews CLEAN. CProperty00:10 unavailable/invalid_evidence, no verdict/Firm/Today. Diagnostic citation_roles/identity_not_literal; taskSTOPPED0/definition243INACTIVE. Child757 disclosure39client/NEW1browserPASS/CLEAN deployed. Issue760/ADR0018 deployed133: controlled Firm/Today PASS;536ba2ea0 session/alternate-admission reviews CLOSED/CLEANwithlimits. Candidate/Firm fences mandatory, DWM unresolved, budgets/holds/OFF unchanged. Supported input solved06:56. Identity cf7c5d92 accepted C Property Management/revision2. Interpretation572622de unknown after one same-ID reconciliation. 762/PR763 deployed17c24a6;27checks/three reviews/fullPR/mainCI CLEAN. Session transition cleared custody; normal login08:20/fresh read still original run/no interpretation. Exact receipt recovery read-only investigation, no replay/remint. Phone/maintenance unresolved, no Firm/Today/provider action.
+Child754/PR755 deployed: controlled browser3PASS/106client/23PG/67boundary checks, reviews CLEAN. CProperty original unavailable/invalid_evidence, no verdict/Firm/Today. Diagnostic citation_roles/identity_not_literal; taskSTOPPED0/definition243INACTIVE. Child757 disclosure39client/NEW1browserPASS/CLEAN deployed. Issue760/ADR0018 deployed133: controlled Firm/Today PASS;536ba2ea0 session/alternate-admission reviews CLOSED/CLEANwithlimits. Candidate/Firm fences mandatory, DWM unresolved, budgets/holds/OFF unchanged. Identity cf7c5d92 accepted C Property Management/revision2. 762/PR763 deployed17c24a6;27checks/three reviews/fullCI CLEAN. Session cleared custody. ONE reviewed read16:17 found exact572622de receipt absent/linked interpretations0/revision2/lineage true, snapshot-only not historical absence. TaskSTOPPED0/owned258INACTIVE16:18. Carrier fix/review closed, internal delay resolved. Founder login16:20 restored; ready selection rendered no cards. Phone/maintenance unsupported by originals, no qualification/admission/replay/remint/provider action or Firm/Today acceptance.
 
 ## Issue749 ordinary inventory, deployed
 
@@ -28,7 +28,7 @@ Desktop881 backup `/Applications/.Callie-before-881-20261022T045650Z.previous` r
 
 ## Capture and useful selling remain open
 
-Capture recovery October22 copied empty bodies, no permitted original. No replay. Real-original usefulness WAITING, synthetic751 DONE. Deployed752 source/current-owner/holds observation always not_granted. Controlled NEW4PASS8.8s,44source/21UI/2boundary checks/CLEAN reviews retain fixture/cleanup limits in canonical plan. Automatic-owner authority is separate from manual qualification. NEXT bounded rejected-run identity/retained-evidence contract, then eligible source→Firm→Today. No generic David/cost wait or Westrom/send replay.
+Capture recovery October22 copied empty bodies, no permitted original. No replay. Real-original usefulness WAITING, synthetic751 DONE. Deployed752 source/current-owner/holds observation always not_granted. Controlled NEW4PASS8.8s,44source/21UI/2boundary checks/CLEAN reviews retain fixture/cleanup limits in canonical plan. Automatic-owner authority is separate from manual qualification. Next: supported eligible-source→Firm→Today, not another recovery contract. No generic David/cost wait or Westrom/send replay.
 
 October21 TX1,600+CA/FL1,200 raw observations are not distinct/net-new/qualified/callable Firms. Westrom guarded homepage observation supports literal residential-management/service-area claims; Jcode seed is not David attestation. ONE Firm created October22 04:00:41, ONE link04:04 generically refused, no retry. Today visibility is not qualification. Scoped receipt task217 returned0 visible rows/cleaned up, not global absence/commit/auth diagnosis. Raw UI page16 checkpoint retained, no mutation replay.
 
