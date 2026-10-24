@@ -36,7 +36,9 @@ export async function interpretRetainedQualification(ctx:RepositoryContext,input
  return recoverySavepoint(ctx,async()=>{
   const locked=await lockRecovery(ctx,v,true);if(!locked.ok)return locked;
   const {candidate,run}=locked.value;
-  const decision=(await ctx.db.query<RetainedDecision>('SELECT * FROM sourcing_retained_identity_decisions WHERE workspace_id=$1 AND candidate_id=$2 AND id=$3 FOR UPDATE',[ctx.scope.workspaceId,v.candidateId,v.decisionId])).rows[0];
+  // lockRecovery already holds candidate/original-run locks, serializing interpretation and lifecycle deletion.
+  // Decisions are immutable. The lineage FK and unique interpretation index protect insertion without UPDATE authority.
+  const decision=(await ctx.db.query<RetainedDecision>('SELECT * FROM sourcing_retained_identity_decisions WHERE workspace_id=$1 AND candidate_id=$2 AND id=$3',[ctx.scope.workspaceId,v.candidateId,v.decisionId])).rows[0];
   if(authority&&!await authority())return fail('session_changed');
   const now=await retainedWallNow(ctx);
   if(!decision||decision.original_run_id!==run.id||decision.result_revision!==candidate.revision||decision.original_revision!==run.candidate_revision)return fail('candidate_changed');
