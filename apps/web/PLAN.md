@@ -6,9 +6,17 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
-### Current business continuation, October24 16:56UTC
+### Current business continuation, October24 17:44UTC
 
-Root owns the supported ADR0014 approved-source research path. It requires native identity/residential/service-area citations and independent email fit, not phone or invented unmet maintenance need. Earlier ordinary-qualification rejections do not establish global research ineligibility. All36 kept saved statuses read:22review/14unavailable. ONE new ordinary Neblett request2d2a2668 ended invalid_evidence;159 captured blocks reviewed, no rerun/admission or identity-only detour. Private NEBLETT-QUALIFICATION-ACTUAL.md records provider acquisition and unmeasured monetary usage. Current matched search-hit authority returns owner unavailable. verifiedFirmOwner requires enabled automatic admission, active owner and valid current reviewed evaluation, but the projection does not identify which prerequisite fails. Native normal Settings now responds and shows research enabled, but exposes no independent discovery-owner setup. Next is supported current owner/evaluation resolution, not weaker qualification, fabricated attestation, a second pipeline, another reader deployment or generic David permission. Production/main17c24a6/schema133 and owner sendingOFF unchanged. No live Firm/Today acceptance.
+David17:14 direction and17:39 explicit resume prioritize permitted retained UNVERIFIED prospects FIRST, loose/vibes fit and manual pruning. Wrong-number risk is acceptable for manual prospecting. No canonical Firm qualification, phone, unmet-maintenance-need or automatic-owner/evaluation prerequisite merely to see/work a raw prospect. ADR0014 automatic publication gates stay unchanged. Retained observations are not verified unique/callable Firms. Issue764/ADR0019 and shared boundary67e6e4b8a own the finite populated web worklist plus keep/skip/wrong-number feedback. No new acquisition/provider/spend/contact/sending authority. Production/main17c24a6/schema133/OFF unchanged; manual worklist not delivered.
+
+| Whole outcome | Exclusive owner/files | Waits |
+| --- | --- | --- |
+| Boundary/integration/release | Hatchling: contracts/manualProspects, contracts/index, shared/browserContract, ADR0019, PLAN/current-state/roadmap/tracker, schemaRange | Boundary67e6e4b8a committed; final reviews/CI/protected release before target delivery |
+| Complete manual worklist764 | Lobster: new domain projection/feedback, migration0134+coverage/lifecycle fixtures, API route+sourcing wiring, browser client/mount and focused/new e2e tests | Locked contract; sole disposable PG/Chrome lane granted, root schema134 integration after migration ready |
+| Source-boundary facts | Giraffe: ONLY private MANUAL-PROSPECT-BOUNDARY.md | Independent read-only, no runtime/resources |
+
+Reuse existing discovery-v1/ordinary candidate/source owners, bounded private pages and observed phone only when present. Separate manual feedback cannot keep/admit canonical candidates, enqueue research or mutate CRM/routes/qualification. Preserve license/notices/privacy/retention/do-not-contact controls. Root coordinates, one implementer owns outcome end-to-end. Acceptance must render actual populated local HTTPS/OIDC/PG/browser worklist, source/unknown labels, pagination/dedup and persistent feedback with unknown-command/auth/stale/workspace refusals and zero provider/CRM/outbound changes. Final spec/standards/privacy review once, findings returned to same owner/reviewers. Real hosted populated acceptance remains open.
 
 ### Issue762 runtime-role repair, deployed child of745
 

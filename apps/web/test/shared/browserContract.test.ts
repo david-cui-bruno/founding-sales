@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { browserApiPathAllowed, browserSessionSchema } from '../../src/shared/browserContract.ts';
 
 describe('browser boundary', () => {
+  it('admits only raw manual prospect reads and feedback, not canonical or outreach actions', () => {
+    for (const action of ['list', 'feedback']) {
+      const path = `/sourcing/candidates/prospects/${action}`;
+      expect(browserApiPathAllowed('POST', path)).toBe(true);
+      for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, path)).toBe(false);
+      expect(browserApiPathAllowed('POST', `${path}/extra`)).toBe(false);
+    }
+    for (const action of ['admit', 'qualify', 'fetch', 'call', 'send', 'enable']) {
+      expect(browserApiPathAllowed('POST', `/sourcing/candidates/prospects/${action}`)).toBe(false);
+    }
+  });
   it('admits ordinary inventory without unrelated sourcing mutations', () => {
     expect(browserApiPathAllowed('POST', '/sourcing/candidates/list')).toBe(true);
     for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, '/sourcing/candidates/list')).toBe(false);
