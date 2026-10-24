@@ -15,14 +15,14 @@ function setup(){
  let lose=false,malformed=false,sessionUnavailable=false,delayed:ReturnType<typeof deferred>|null=null,sessionDelay:ReturnType<typeof deferred>|null=null;
  const commands:unknown[]=[],reads:unknown[]=[];let state='new';
  const fetch=vi.fn<typeof globalThis.fetch>(async(url,init)=>{
-  if(url==='/browser/session'){if(sessionUnavailable){sessionUnavailable=false;return json({},503);}return sessionDelay?await sessionDelay.promise:json(session);}
+  if(url==='/browser/session'){if(sessionUnavailable){sessionUnavailable=false;return json({},503);}return sessionDelay?(await sessionDelay.promise).clone():json(session);}
   const body=JSON.parse(String(init?.body)) as Record<string,unknown>;
   if(String(url).endsWith('/prospects/list')){reads.push(body);return delayed?await delayed.promise:json({prospects:[{...prospect,state}],hasMore:reads.length===1});}
   expect(url).toBe('/browser/api/sourcing/candidates/prospects/feedback');expect(storage.getItem(MANUAL_PROSPECT_PENDING_KEY)).not.toBeNull();commands.push(body);state=String(body['state']);
   if(lose)throw Error('Lost response');return json(malformed?{}:{status:'accepted',replayed:commands.length>1,result:{candidateId:id,revision:1,state}});
  });
  const uuid=vi.fn(()=>crypto.randomUUID()),makeClient=()=>new BrowserClient({storage,fetch,randomUUID:uuid,navigate:vi.fn()}),client=makeClient();
- return {client,makeClient,storage,commands,reads,uuid,sessionUnavailable:()=>{sessionUnavailable=true;},lose:(value=true)=>{lose=value;},malformed:()=>{malformed=true;},change:(patch:Partial<typeof session>)=>{session={...session,...patch};},delay:()=>{delayed=deferred();return delayed;},delaySession:()=>{sessionDelay=deferred();return {...sessionDelay,session};}};
+ return {client,makeClient,storage,commands,reads,uuid,fetch,sessionUnavailable:()=>{sessionUnavailable=true;},lose:(value=true)=>{lose=value;},malformed:()=>{malformed=true;},change:(patch:Partial<typeof session>)=>{session={...session,...patch};},delay:()=>{delayed=deferred();return delayed;},delaySession:()=>{sessionDelay=deferred();return {...sessionDelay,session};}};
 }
 async function ready(){await screen.findByRole('heading',{name:prospect.observedName});await waitFor(()=>{expect(screen.getByRole('button',{name:'Keep'}).hasAttribute('disabled')).toBe(false);});}
 afterEach(cleanup);
@@ -44,6 +44,35 @@ it.each([['Keep','kept'],['Skip','skipped']] as const)('a pre-dispatch session-r
  fireEvent.click(screen.getByRole('button',{name:'Reconcile same manual feedback'}));
  await waitFor(()=>{expect(s.client.manualProspects.read()?.receipt?.status).toBe('accepted');});
  expect(s.commands).toEqual([held?.payload]);expect(s.uuid).toHaveBeenCalledTimes(1);
+ expect(screen.queryByRole('button',{name:'Reconcile same manual feedback'})).toBeNull();
+ await act(async()=>{s.client.dispose();});
+});
+it.each([['Keep','kept'],['Skip','skipped']] as const)('coalesces two %s clicks before React renders without stranding prepared custody',async(buttonName,state)=>{
+ const s=setup();await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();
+ const before=s.fetch.mock.calls.length,button=screen.getByRole('button',{name:buttonName}),delay=s.delaySession();
+ act(()=>{fireEvent.click(button);fireEvent.click(button);});
+ expect(s.commands).toEqual([]);expect(s.uuid).toHaveBeenCalledTimes(1);
+ expect(s.fetch.mock.calls.slice(before).filter(([url])=>url==='/browser/session')).toHaveLength(1);
+ await act(async()=>{delay.resolve(json(delay.session));});
+ await waitFor(()=>{expect(s.client.manualProspects.read()?.receipt).toEqual({status:'accepted',result:{candidateId:id,revision:1,state}});});
+ expect(s.commands).toHaveLength(1);expect(s.uuid).toHaveBeenCalledTimes(1);
+ // Feedback refresh and the normal post-save list refresh only, not a duplicate feedback refresh.
+ expect(s.fetch.mock.calls.slice(before).filter(([url])=>url==='/browser/session')).toHaveLength(2);
+ expect(screen.queryByRole('button',{name:'Reconcile same manual feedback'})).toBeNull();
+ await act(async()=>{s.client.dispose();});
+});
+it('coalesces two explicit recovery clicks while preserving the original payload and UUID',async()=>{
+ const s=setup();await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();s.lose();
+ fireEvent.click(screen.getByRole('button',{name:'Keep'}));await screen.findByRole('button',{name:'Reconcile same manual feedback'});
+ const held=s.client.manualProspects.read(),before=s.fetch.mock.calls.length;expect(s.commands).toHaveLength(1);s.lose(false);
+ const button=screen.getByRole('button',{name:'Reconcile same manual feedback'}),delay=s.delaySession();
+ act(()=>{fireEvent.click(button);fireEvent.click(button);});
+ expect(s.commands).toHaveLength(1);
+ expect(s.fetch.mock.calls.slice(before).filter(([url])=>url==='/browser/session')).toHaveLength(1);
+ await act(async()=>{delay.resolve(json(delay.session));});
+ await waitFor(()=>{expect(s.client.manualProspects.read()?.receipt?.status).toBe('accepted');});
+ expect(s.commands).toEqual([held?.payload,held?.payload]);expect(s.uuid).toHaveBeenCalledTimes(1);
+ expect(s.fetch.mock.calls.slice(before).filter(([url])=>url==='/browser/session')).toHaveLength(2);
  expect(screen.queryByRole('button',{name:'Reconcile same manual feedback'})).toBeNull();
  await act(async()=>{s.client.dispose();});
 });

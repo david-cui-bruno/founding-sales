@@ -31,7 +31,8 @@ export function BrowserManualProspects({client}:{client:BrowserClient}):JSX.Elem
   return ()=>{if(operation.current===token)operation.current=null;};
  },[client,state,offset,reload]);
  const feedback=async(prospect:ManualProspect|null,nextState?:'kept'|'skipped'|'wrong_number'):Promise<void>=>{
-  if(busy||custodyError)return;
+  // React may batch duplicate clicks before the busy state reaches the buttons.
+  if(operation.current!==null||busy||custodyError)return;
   const token=Symbol('manual-feedback'),epoch=client.epoch;operation.current=token;setBusy(true);setNotice('');
   const current=():boolean=>mounted.current&&operation.current===token&&client.isCurrent(epoch);
   try{
