@@ -4,6 +4,8 @@ import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from '../crm/identityAccess.ts';
 import {manualProspectRows,MANUAL_PROSPECT_ROWS_SQL} from './manualProspectRows.ts';
+import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
+import {manualPhoneSnapshots,projectManualPhone} from './manualProspectPhone.ts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
@@ -15,9 +17,21 @@ async function admin(ctx:RepositoryContext):Promise<boolean>{
 export async function listManualProspects(ctx:RepositoryContext,input:z.infer<typeof manualProspectListInputSchema>,authority:()=>Promise<boolean>=async()=>true):Promise<Result<z.infer<typeof manualProspectListSchema>>>{
  if(!await admin(ctx))return refuse('admin_only');
  if(!manualProspectListInputSchema.safeParse(input).success)return refuse('invalid_input');
- const rows=await manualProspectRows(ctx,input.state,input.offset);
- if(!await authority()||!await admin(ctx)||!isDeepStrictEqual(rows,await manualProspectRows(ctx,input.state,input.offset)))return refuse('authority_changed');
- return {ok:true,value:manualProspectListSchema.parse({prospects:rows.slice(0,50).flatMap(row=>{const p=projectManualProspect(row);return p?[p]:[];}),hasMore:rows.length>50})};
+ await lockDiscoveryReviewSources(ctx);
+ const rows=await manualProspectRows(ctx,input.state,input.offset),page=rows.slice(0,50);
+ if(page.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,page.map(row=>row.id)]);
+ const phones=await manualPhoneSnapshots(ctx,page);
+ if(!await authority()||!await admin(ctx))return refuse('authority_changed');
+ const currentRows=await manualProspectRows(ctx,input.state,input.offset),currentPhones=await manualPhoneSnapshots(ctx,page);
+ if(!await authority()||!await admin(ctx)||!isDeepStrictEqual(rows,currentRows))return refuse('authority_changed');
+ // Optional evidence changing during waits drops enrichment, never the raw queue.
+ const prospects=page.flatMap(row=>{
+  const before=phones.find(phone=>phone.candidate_id===row.id&&phone.candidate_revision===row.revision);
+  const after=currentPhones.find(phone=>phone.candidate_id===row.id&&phone.candidate_revision===row.revision);
+  const evidence=projectManualPhone(before&&isDeepStrictEqual(before,after)?after:undefined);
+  const p=projectManualProspect(row,evidence);return p?[p]:[];
+ });
+ return {ok:true,value:manualProspectListSchema.parse({prospects,hasMore:rows.length>50})};
 }
 /** Manual state is not canonical candidate review, qualification or channel suppression.
  * Candidate lock precedes live membership and session revalidation after waits.

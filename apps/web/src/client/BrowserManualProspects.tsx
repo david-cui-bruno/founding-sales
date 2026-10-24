@@ -45,7 +45,7 @@ export function BrowserManualProspects({client}:{client:BrowserClient}):JSX.Elem
  };
  if(client.current?.status!=='signed_in'||client.current.role!=='admin')return null;
  return <section aria-label="Manual prospect worklist" className="space-y-3 rounded-md border p-4">
-  <h3>Unverified prospects</h3><p>Retained manual worklist. Loose fit and unknown phone are expected. Keep, skip or flag a wrong number without qualification.</p>
+  <h3>Unverified prospects</h3><p>Compact retained queue. Suggested labels and apparent company / non company / unresolved classifications are not identity decisions or fit filters. Unknown phone is expected. Keep, skip or flag a wrong number without qualification.</p>
   <p>UNVERIFIED · Contact authority not granted. These are observations, not unique or callable Firms. No source refresh or outreach runs here.</p>
   <label>Manual state <select value={state} disabled={busy} onChange={event=>{setPage(null);setOffset(0);setState(event.target.value);}}>{['all','new','kept','skipped','wrong_number'].map(value=><option key={value} value={value}>{value.replaceAll('_',' ')}</option>)}</select></label>
   <button disabled={busy} onClick={()=>{setReload(value=>value+1);}}>Refresh retained worklist</button>
