@@ -21,6 +21,7 @@ import { readResearchSettings } from '@fss/domain/research/settings.ts';
 import { finaliseAbandonedRuns } from '@fss/domain/research/runs.ts';
 import { selectFirmsForSweep } from '@fss/domain/research/sweep.ts';
 import { RESEARCH_TRIGGERS, type ResearchTrigger } from '@fss/domain/research/types.ts';
+import {retainedFirmOnly} from '@fss/domain/sourcing/retainedAcquisition.ts';
 import type {ResearchPurpose} from '@fss/domain/research/officeAssessmentContract.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
@@ -202,6 +203,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
       const autoCreated=(await input.session.query(`SELECT 1 FROM audit_events WHERE workspace_id=$1 AND subject_id=$2 AND action='sourcing.candidate_admitted' AND detail->>'policyVersion'=$3 AND detail->>'createdFirm'='true' LIMIT 1`,[input.scope.workspaceId,payload.firmId,VERIFIED_FIRM_POLICY_VERSION])).rows.length>0;
       if(autoCreated&&payload.purpose==='brief'){await lockSendGateForStopFact(context);await lockTodayForFirmChange(context);}
       else await lockSendGateForDispatch(context);
+      if(await retainedFirmOnly(context,payload.firmId))return;
       const at = await databaseNow(context);
       const carried = parseResearchProgress(input.job.payload['progress']);
 

@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { enqueueFirmResearchBestEffort } from '../research/enqueue.ts';
+import {fenceRetainedFirm} from '../sourcing/retainedAcquisition.ts';
 import { resolveFirmZone } from '../src/rules/statePosture.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
@@ -75,6 +76,8 @@ export interface CreateFirmInput {
   readonly commandId?: string | undefined;
   /** Retained automatic qualification already owns the evidence. Do not dispatch another job. */
   readonly researchAlreadyQualified?: boolean | undefined;
+  /** Internal retained admission lineage, never accepted by generic CRM wire input. */
+  readonly retainedRecoveryDecisionId?: string | undefined;
 }
 
 /**
@@ -174,7 +177,8 @@ export async function createFirm(
   // The sweep reaches a firm whose enqueue did not happen.
   const retainedSystemResearch = input.researchAlreadyQualified === true && actor.kind === 'system'
     && (actor.component === 'worker' || actor.component === 'scheduler');
-  if (!retainedSystemResearch) await enqueueFirmResearchBestEffort(context, { firmId: created.id, trigger: 'firm_created' });
+  if(input.retainedRecoveryDecisionId!==undefined&&!await fenceRetainedFirm(context,created.id,input.retainedRecoveryDecisionId))throw Error('Retained admission lineage refused');
+  if (!retainedSystemResearch&&input.retainedRecoveryDecisionId===undefined) await enqueueFirmResearchBestEffort(context, { firmId: created.id, trigger: 'firm_created' });
 
   // Slice S2: the firm is on today's list now, not at tomorrow's 05:00 build. The build's
   // own sources, asked about this one firm, in this transaction — so an import that rolls

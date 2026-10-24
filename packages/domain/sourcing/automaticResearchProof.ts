@@ -6,6 +6,7 @@ import {qualifyEmailCandidate} from '../outreach/selection.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {researchFingerprint} from './qualifiedResearchProof.ts';
 import {automaticResearchNow,automaticResearchOwner,automaticResearchSource} from './automaticResearchAuthority.ts';
+import {retainedCandidateOnly} from './retainedAcquisition.ts';
 
 /** Reuse the CRM alias index, but explicitly bind the sourcing owner, not a forged user scope. */
 export async function automaticResearchIdentity(ctx:RepositoryContext,candidate:CandidateInput,owner:string):Promise<{firmId:string|null}|null>{
@@ -17,6 +18,7 @@ export async function automaticResearchIdentity(ctx:RepositoryContext,candidate:
 }
 /** This snapshot never writes or calls a provider. Every caller rechecks after its waits. */
 export async function automaticResearchProof(ctx:RepositoryContext,candidateId:string){
+ if(await retainedCandidateOnly(ctx,candidateId))return null;
  const owner=await automaticResearchOwner(ctx);if(!owner)return null;
  const row=(await ctx.db.query<{id:string;revision:number;status:string;qualification_blocked:boolean;payload:unknown}>('SELECT id,revision,status,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,candidateId])).rows[0];
  if(!row||row.qualification_blocked||row.status==='dismissed')return null;

@@ -8,6 +8,7 @@ import {databaseNow} from '../policy/clock.ts';
 import {officeContactContext} from '../outreach/contactContext.ts';
 import {supportedBusinessEmail,qualifyEmailCandidate} from '../outreach/selection.ts';
 import {correctCandidateName} from './candidateCorrection.ts';
+import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {requestQualification,QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 interface OfficeName {name:string;fact:QualificationFact}
 /** A legal company label in one supported office card, not an SEO title or model-written name. */
@@ -77,6 +78,7 @@ export async function recoverDiscoveredIdentity(ctx:RepositoryContext,runId:stri
   const candidate=(await ctx.db.query<{id:string;payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>(`SELECT c.* FROM sourcing_candidates c JOIN sourcing_qualification_runs r ON r.workspace_id=c.workspace_id AND r.candidate_id=c.id
    WHERE c.workspace_id=$1 AND r.id=$2 FOR UPDATE OF c`,[w,runId])).rows[0];
   if(!candidate||candidate.revision!==1||candidate.status!=='needs_review'||candidate.qualification_blocked)return;
+  if(await retainedCandidateOnly(ctx,candidate.id))return;
   if(candidate.payload.preparedBy!=='Tavily Basic search · not verified')return;
   // A hit can later be associated with an existing manual candidate. Require the
   // candidate and original hit to have been created in the same discovery transaction.

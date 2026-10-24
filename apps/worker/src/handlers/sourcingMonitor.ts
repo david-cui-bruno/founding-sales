@@ -15,7 +15,7 @@ export function sourcingMonitorSource(enabled:boolean):DueWorkSource {
   return {name:'sourcing-monitor',find:async(session,now)=>{
     if(!enabled)return [];
     const {rows}=await session.query<{id:string}>(`SELECT w.id FROM workspaces w WHERE EXISTS
-      (SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w.id AND c.payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND c.status='kept' AND c.next_source_check_at<=$1::timestamptz)
+      (SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w.id AND c.payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND c.status='kept' AND c.next_source_check_at<=$1::timestamptz AND NOT EXISTS(SELECT 1 FROM sourcing_retained_identity_decisions d WHERE d.workspace_id=c.workspace_id AND d.candidate_id=c.id))
       ORDER BY w.id`,[now]);
     const jobs:JobSpecification[]=[];
     const hour=new Date(now).toISOString().slice(0,13);

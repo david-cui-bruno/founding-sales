@@ -1,0 +1,34 @@
+import {afterAll,beforeAll,it,expect,vi} from 'vitest';
+import {randomUUID} from 'node:crypto';
+import {createTestDatabase,type TestDatabase} from '@fss/domain/db/testing/testDatabase.ts';
+import {seedTwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {seedRetainedRecovery} from '@fss/domain/test/sourcing/retainedRecoveryFixture.ts';
+import {decideRetainedIdentity} from '@fss/domain/sourcing/retainedRecovery.ts';
+import {sourcingQualificationSource,sourcingQualificationHandler} from '../src/handlers/sourcingQualification.ts';
+import {sourcingMonitorSource} from '../src/handlers/sourcingMonitor.ts';
+import {sourcingCheckHandler} from '../src/handlers/sourcingCheck.ts';
+import {runSchedulerPass} from '../src/scheduler/schedulerPass.ts';
+import {enqueueJob} from '@fss/domain/jobs/jobStore.ts';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {runOnce} from '../src/runner/jobRunner.ts';
+let db:TestDatabase;
+beforeAll(async()=>{db=await createTestDatabase();});afterAll(async()=>{await db.drop();});
+it('durably excludes retained-only drafts across versions/revisions/days and refuses old queued worker claims without fetching',async()=>{
+ const {alpha}=await seedTwoWorkspaces(db.session),ctx=repositoryContext(workspaceScope(alpha.workspaceId,{kind:'user',userId:alpha.admin.userId,role:'admin'}),db.session);
+ const fixture=await withTransaction(db.session,()=>seedRetainedRecovery(ctx));const decided=await withTransaction(db.session,()=>decideRetainedIdentity(ctx,fixture.identity));expect(decided.ok).toBe(true);
+ await db.session.query('INSERT INTO research_settings(workspace_id,enabled,daily_firm_ceiling) VALUES($1,true,100)',[alpha.workspaceId]);
+ await db.session.query('INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,owner_user_id) VALUES($1,true,$2)',[alpha.workspaceId,alpha.admin.userId]);
+ await db.session.query("UPDATE sourcing_candidates SET status='kept',revision=revision+1,next_source_check_at=now()-interval '1 day' WHERE id=$1",[fixture.candidateId]);
+ await db.session.query("UPDATE sourcing_qualification_runs SET requested_at=now()-interval '9 days',prompt_version='qualification-context-v6',policy_version='qualification-v3' WHERE id=$1",[fixture.runId]);
+ for(const now of [new Date().toISOString(),new Date(Date.now()+86400000).toISOString()])expect(await runSchedulerPass(db.session,{sources:[sourcingQualificationSource(true),sourcingMonitorSource(true)],now})).toMatchObject({inserted:0,externalActions:0});
+ expect((await db.session.query('SELECT id FROM jobs')).rows).toHaveLength(0);expect((await db.session.query('SELECT id FROM sourcing_qualification_runs')).rows).toHaveLength(1);
+ const fetchPages=vi.fn(()=>{throw Error('Retained lineage must never acquire');}),pageFetch={providerKey:'controlled',fetchPages};
+ await withTransaction(db.session,async()=>{
+  await enqueueJob(db.session,{workspaceId:alpha.workspaceId,kind:'sourcing.qualify',idempotencyKey:randomUUID(),payload:{runId:fixture.runId,candidateId:fixture.candidateId,candidateRevision:1,promptVersion:'qualification-context-v6',policyVersion:'qualification-v3'},maxAttempts:1});
+  await enqueueJob(db.session,{workspaceId:alpha.workspaceId,kind:'sourcing.check',idempotencyKey:randomUUID(),payload:{candidateId:fixture.candidateId,checkId:randomUUID()},maxAttempts:1});
+ });
+ const registry=new HandlerRegistry().register(sourcingQualificationHandler({pageFetch,extraction:null})).register(sourcingCheckHandler(pageFetch));expect(await runOnce(db.session,{registry,owner:'retained-recovery-proof',limit:5})).toMatchObject({failed:0});expect(fetchPages).not.toHaveBeenCalled();
+ for(const table of ['provider_reservations','daily_counters','firms'])expect((await db.session.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0]?.['n']).toBe(0);
+});

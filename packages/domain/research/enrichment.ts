@@ -1,4 +1,5 @@
 import {collectResearchPages} from './pageEvidence.ts';
+import {retainedFirmOnly} from '../sourcing/retainedAcquisition.ts';
 import {captureOfficeAssessment} from './officeAssessmentTarget.ts';
 import {finishOfficeResearch} from './officeAssessmentRun.ts';
 import type {ResearchPurposeInput,ResearchPurpose} from './officeAssessmentContract.ts';
@@ -253,6 +254,7 @@ export async function beginFirmResearch(
   context: RepositoryContext,
   input: BeginResearchInput,
 ): Promise<ResearchResult<ResearchStart>> {
+  await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.firmId]);
   if (!Number.isInteger(input.revision) || input.revision < 1) return refuse('invalid_input');
   if(input.purpose!==undefined&&input.purpose!=='brief'&&input.purpose!=='office_evidence')return refuse('invalid_input');
   if(input.purpose==='office_evidence'&&(input.trigger!=='user_request'||!input.requestedByUserId))return refuse('invalid_input');
@@ -386,6 +388,7 @@ export async function ensureResearchCalling(
   // otherwise reserve a fresh attempt against a finished run and call the model for it.
   const run = await lockRun(context, input.runId);
   if (run === null || run.outcome !== 'running') return { kind: 'closed' };
+  if(await retainedFirmOnly(context,run.firmId))return {kind:'closed'};
   // The budget lock before any settlement below (slice P1, fix round 2): settling takes
   // the monthly spend lock, and a retry's clearance takes this one, so it must come first.
   await lockResearchBudget(context);
