@@ -22,7 +22,7 @@ Per-message IDs-only custody lets B proceed while settled/unknown A retains exac
 
 ## Closed local outcomes, not real business acceptance
 
-[Canonical plan](../../apps/web/PLAN.md) retains CLOSED738–744 implementation, controlled acceptance, failures, cleanup and reviews. Production133 includes these changes, not live acquisition, enrollment or model-quality acceptance. Issue745 CI evidence remains separate. No accepted-suite replay.
+[Canonical plan](../../apps/web/PLAN.md) retains CLOSED738–744 implementation, controlled acceptance, failures, cleanup and reviews. Current production includes these changes, not live acquisition, enrollment or model-quality acceptance. Issue745 CI evidence remains separate. No accepted-suite replay.
 
 ## Installed fallback
 
