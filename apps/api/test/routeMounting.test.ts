@@ -363,6 +363,8 @@ describe('what the API mounts', () => {
       '/sourcing/candidates/discovery/save-v1',
       '/sourcing/candidates/discovery/useful-list-v1',
       '/sourcing/candidates/list',
+      '/sourcing/candidates/prospects/feedback',
+      '/sourcing/candidates/prospects/list',
       '/sourcing/candidates/review',
       '/sourcing/candidates/save',
       '/sourcing/experiments',
