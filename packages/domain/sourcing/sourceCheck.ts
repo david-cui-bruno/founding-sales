@@ -57,6 +57,10 @@ export async function requestSourceCheck(context:RepositoryContext,input:{id:str
   return {ok:true,value:{id:input.id}};
 }
 export async function runSourceCheck(context:RepositoryContext,input:{candidateId:string;checkId:string;scheduled?:boolean|undefined},fetcher:PageFetchProvider):Promise<void>{
+  // The caller owns the transaction. Match list/manual-feedback/retention order:
+  // workspace source lifecycle first, then candidate. Never hold a candidate while
+  // waiting for the lifecycle lock, including across source processing awaits.
+  await lockDiscoveryReviewSources(context);
   const row=(await context.db.query<Row>(`${select} FOR UPDATE`,[context.scope.workspaceId,input.candidateId])).rows[0];if(!row)return;
   if(await retainedCandidateOnly(context,row.id))return;
   if(!isLegacyCandidatePayload(row.payload))return;
@@ -97,7 +101,7 @@ export async function runSourceCheck(context:RepositoryContext,input:{candidateI
   if(Buffer.byteLength(JSON.stringify(check),'utf8')>16000)check={...check,state:'unavailable',reason:'source_unavailable',lastSuccess:prior.lastSuccess};
   // Review edits do not invalidate a snapshot. A newer check or deletion does.
   // The business_uniqueness worker and direct callers own this transaction.
-  await lockDiscoveryReviewSources(context);
+  // The lifecycle lock has been held since before the candidate lock.
   const changed=await context.db.query(`UPDATE sourcing_candidates SET source_check=$4::jsonb,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND source_check->>'checkId'=$3 AND source_check->>'state'='pending' RETURNING id`,[context.scope.workspaceId,input.candidateId,input.checkId,JSON.stringify(check)]);
   if(changed.rows.length){
     if(check.state==='unavailable'&&['source_unavailable','source_not_permitted','no_readable_text'].includes(check.reason??''))await eraseDiscoveryReviewsForSources(context,[source,...(prior.lastSuccess?[prior.lastSuccess.url]:[])]);
