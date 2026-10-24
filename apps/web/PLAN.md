@@ -8,6 +8,8 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ### Issue760 retained qualification recovery, active child of745
 
+**Current05:16UTC:** PR761 head595a4cfa2 gate40064179378 failed solely at ops providerCallBoundaries.check.ts410, 1FAIL/1001PASS/3skip. Upgrade/images/secrets/workflows passed. Six retained human-command `.interpret` references collide with the routine-reply provider boundary scan. Same Blowfish exclusively owns the four affected client files and tightly related tests for minimal semantic disambiguation, preserving the scanner and all policy. Root owns docs, same Buffalo delta review and fresh CI. No active CI observer, no merge/release or live/provider replay.
+
 Read-only design completed by Blowfish. Root locks strict IDs-only literal-span identity decision and new human-retained interpretation schemas, optional read provenance and two exact browser paths under ADR0018. Migration0133 is allocated for immutable decisions/run lineage and durable Firm acquisition fences. Existing rejected run/policy remain unchanged. Candidate revision alone cannot suppress scheduler work, and human admission otherwise enqueues Firm research, so both candidate and surviving-Firm fences are mandatory before recovery admission is deliverable.
 
 | Whole outcome | Exclusive owner/files | Waits |
