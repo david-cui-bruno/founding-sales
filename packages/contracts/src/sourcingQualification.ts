@@ -51,12 +51,20 @@ export type SourceObservation = z.infer<typeof sourceObservationSchema>;
 export type QualificationFact = z.infer<typeof qualificationFactSchema>;
 export type QualificationVerdict = z.infer<typeof qualificationVerdictSchema>;
 export type QualificationStatus = z.infer<typeof qualificationStatusSchema>;
+export const retainedQualificationRecoverySchema = z.strictObject({
+  decisionId:uuid,originalRunId:uuid,identityRevision:z.number().int().positive(),
+  interpretationRunId:uuid.nullable(),acquisitionMode:z.literal('retained_only'),
+  methodVersion:z.literal('human-retained-v1'),
+});
 export interface QualificationView {
   candidateId:string;runId:string;candidateRevision:number;status:QualificationStatus;reason:string|null;admissionReason:string|null;
   requestedAt:string;deadlineAt:string;observations:SourceObservation[];facts:QualificationFact[];
   verdict:QualificationVerdict|null;openingQuestion:string|null;
   admission:{firmId:string;routeId:string}|null;
   nativeEligibility?:NativeFirmEligibility;
+  currentCandidateRevision?:number;
+  interpretationOrigin?:'provider'|'human_retained';
+  recovery?:z.infer<typeof retainedQualificationRecoverySchema>;
   history:{runId:string;observations:SourceObservation[];facts:QualificationFact[]}[];
 }
 
@@ -69,6 +77,9 @@ export const qualificationViewSchema=z.object({
  observations:z.array(sourceObservationSchema),facts:z.array(qualificationFactSchema),verdict:qualificationVerdictSchema.nullable(),openingQuestion:z.string().nullable(),
  admission:z.object({firmId:uuid,routeId:uuid}).nullable(),history:z.array(z.object({runId:uuid,observations:z.array(sourceObservationSchema),facts:z.array(qualificationFactSchema)})),
  nativeEligibility:nativeFirmEligibilitySchema.optional(),
+ currentCandidateRevision:z.number().int().positive().optional(),
+ interpretationOrigin:z.enum(['provider','human_retained']).optional(),
+ recovery:retainedQualificationRecoverySchema.optional(),
 });
 
 const envelope={commandId:commandIdSchema,clientVersion:semanticVersionSchema};

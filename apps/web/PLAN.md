@@ -6,6 +6,17 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
+### Issue760 retained qualification recovery, active child of745
+
+Read-only design completed by Blowfish. Root locks strict IDs-only literal-span identity decision and new human-retained interpretation schemas, optional read provenance and two exact browser paths under ADR0018. Migration0133 is allocated for immutable decisions/run lineage and durable Firm acquisition fences. Existing rejected run/policy remain unchanged. Candidate revision alone cannot suppress scheduler work, and human admission otherwise enqueues Firm research, so both candidate and surviving-Firm fences are mandatory before recovery admission is deliverable.
+
+| Whole outcome | Exclusive owner/files | Waits |
+| --- | --- | --- |
+| Shared boundary/decision/integration | Hatchling: contracts, shared/browserContract, ADR0018, PLAN/current docs/tracker | Commit interface lock before implementation, finished reviews and resource/release gates |
+| Complete retained recovery | Blowfish: migration0133, necessary domain/API/worker/research owners, browser client/server adapters and focused tests | Locked interfaces, sole PG/Chrome grant before database/browser acceptance; no other implementation writer |
+
+Design is not implementation or live eligibility. Full acceptance composes existing policy and separate reviewed admission with exact canonical Firm/Today, immutable rejection, uncertain-command recovery and zero acquisition for recovery lineage. Current separate phone/name blocks may remain ineligible. No CProperty/DWM replay, provider/spend/hold/OFF change or deployment inferred. PR759 docs handoff merged0685d1b5 at03:17:11; production remains0c755/schema132.
+
 ### Issue757 retained original review, deployed child of745
 
 The actual CProperty diagnostic completed00:55: citation_roles/identity_not_literal, selection0/count6, four complete observations. Exact owned task STOPPED0 and definition243 INACTIVE. Existing name correction/evaluation require accepted facts and cannot repair this rejected run. Read DTO carried captured blocks but old UI showed only metadata/accepted facts. Earlier scripted reading yielded no originals and page-world evaluation hit CSP, never bypassed.
