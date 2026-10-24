@@ -27,6 +27,12 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
   const timer=setTimeout(()=>{owner.current++;lock.current=false;setBusy(false);setText('');setOrigin(null);setWorkspace(null);setNotice('Selected suggestion expired. Private adopted scratch cleared. Re-read current evidence.');},Math.max(0,Date.parse(origin.deadlineAt)-Date.now()));
   return ()=>{clearTimeout(timer);};
  },[origin]);
+ useEffect(()=>{
+  const deadlines=workspace?.requests.filter(request=>request.state==='ready').map(request=>Date.parse(request.deadlineAt))??[];
+  if(deadlines.length===0)return;
+  const timer=setTimeout(()=>{setWorkspace(current=>current===null?null:expireWorkspace(current));},Math.max(0,Math.min(...deadlines)-Date.now()));
+  return ()=>{clearTimeout(timer);};
+ },[workspace]);
  const read=async(selected?:SocialDraftView,conceptIndex?:number,variantIndex?:number):Promise<void>=>{
   if(lock.current||client.current?.status!=='signed_in')return;
   lock.current=true;setBusy(true);const generation=client.epoch,token=++owner.current;
@@ -37,7 +43,7 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
   try{
    if(selected===undefined){
     const result=await client.request('/social/drafts',socialDraftWorkspaceSchema,{},()=>{if(!current())throw Error('Scope changed');});
-    if(!current())return;setWorkspace(result);setNotice(result.requests.length?'Retained suggestions require a current re-read before use.':'No retained suggestions. Manual private composition is available without an account or provider.');
+    if(!current())return;setWorkspace(expireWorkspace(result));setNotice(result.requests.length?'Retained suggestions require a current re-read before use.':'No retained suggestions. Manual private composition is available without an account or provider.');
    }else{
     const result=await client.request('/social/drafts/read',z.strictObject({request:socialDraftViewSchema}),{requestId:selected.id},()=>{if(!current())throw Error('Scope changed');});
     if(!current())return;
@@ -80,6 +86,9 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
    <button type="button" onClick={()=>{owner.current++;lock.current=false;setBusy(false);setText('');setOrigin(null);setNotice('Private scratch discarded.');}}>Discard private scratch</button>
   </section>
  </section>;
+}
+function expireWorkspace(workspace:SocialDraftWorkspace):SocialDraftWorkspace{
+ return {...workspace,requests:workspace.requests.map(request=>request.state==='ready'&&Date.parse(request.deadlineAt)<=Date.now()?{...request,state:'expired',concepts:null}:request)};
 }
 function Provenance({request}:{request:SocialDraftView}):JSX.Element{
  return <div><p>Source provenance, not semantic support: {request.sourceRefs.map(ref=>`${ref.kind} ${ref.id} revision ${ref.revision}`).join(', ')||'No source references'}</p><p>Request fact references: {request.factBlocks.map(ref=>`${ref.id} version ${ref.version}`).join(', ')||'None'}</p></div>;
