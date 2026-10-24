@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {uuid} from '@fss/contracts';
+import {uuid,type SocialDraftView} from '@fss/contracts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {readSocialDraftWorkspace,socialDraftView} from '@fss/domain/social/draftWorkspace.ts';
 import {readSocialDraftRequest} from '@fss/domain/social/drafts.ts';
@@ -7,6 +7,7 @@ import {requirePrincipal,contextForPrincipal} from './routeSupport.ts';
 import type {RouteDeps} from './routeSupport.ts';
 import type {RouteResult} from './types.ts';
 class ChangedPrincipal extends Error{}
+const atReturn=(view:SocialDraftView):SocialDraftView=>view.state==='ready'&&Date.parse(view.deadlineAt)<=Date.now()?{...view,state:'expired',concepts:null,reason:'deadline_expired'}:view;
 /** Read owners may wait on source rows. Reauthenticate the exact principal after
  * those waits, before releasing private results or committing source invalidation. */
 export async function readSocialDraftRoute(deps:RouteDeps):Promise<RouteResult>{
@@ -24,5 +25,10 @@ export async function readSocialDraftRoute(deps:RouteDeps):Promise<RouteResult>{
   const body=detail?(row?{request:socialDraftView(row)}:null):await readSocialDraftWorkspace(scoped.context);
   await check();
   return body===null?{status:404,body:{error:'not_found'}}:{status:200,body};
- });await check();return answer;}catch(error){if(error instanceof ChangedPrincipal)return {status:401,body:{error:'unauthenticated'}};throw error;}
+ });await check();
+ if(answer.status===200){
+  if('request' in answer.body)return {...answer,body:{request:atReturn(answer.body.request)}};
+  if('requests' in answer.body)return {...answer,body:{...answer.body,requests:answer.body.requests.map(atReturn)}};
+ }
+ return answer;}catch(error){if(error instanceof ChangedPrincipal)return {status:401,body:{error:'unauthenticated'}};throw error;}
 }

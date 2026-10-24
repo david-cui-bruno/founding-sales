@@ -39,8 +39,6 @@ export async function refreshGroundedDraftRead(ctx:RepositoryContext,row:SocialD
  if(!locked)return {...row,state:'review',concepts:null,reason:'source_changed_or_unavailable'};
  row=locked;
  if(row.state!=='ready')return {...row,concepts:null};
- const now=(await ctx.db.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0]!.now;
- if(row.deadline_at.getTime()<=now.getTime())return {...row,state:'expired',concepts:null,reason:'deadline_expired'};
  {
   const current=ctx.scope.actor.kind==='user'?await readSocialDraftSources(ctx,row.source_selection):await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
   if(!current.ok||current.value.hash!==row.source_hash){
@@ -50,6 +48,9 @@ export async function refreshGroundedDraftRead(ctx:RepositoryContext,row:SocialD
    return {...row,state:'review',concepts:null,reason:'source_changed_or_unavailable'};
   }
  }
+ // The deadline is checked after source locks/reads, not before their waits.
+ const now=(await ctx.db.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0]!.now;
+ if(row.deadline_at.getTime()<=now.getTime())return {...row,state:'expired',concepts:null,reason:'deadline_expired'};
  return row;
 }
 /** Run within the scheduler transaction even when processing is disabled.

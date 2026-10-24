@@ -64,6 +64,20 @@ test('current source change committed during fact lock wait is revalidated befor
  try{await expect.poll(async()=>Number((await app.fixture.db.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT b.id FROM outreach_answer_blocks%'")).rows[0]?.['n'])).toBe(1);}finally{await blocker.query('COMMIT');}
  expect((await answer).status()).toBe(200);await expect(panel(page)).toContainText('Suggestion changed, expired or unavailable');await expect(panel(page).getByLabel('Private social text')).toHaveValue('');
 });
+test('workspace read revalidates device after a database wait and cannot restore private manual prose',async({researchPage:page})=>{
+ await ready(page);await panel(page).getByLabel('Private social text').fill('Private edited prose');const session=await browserSession(page);if(session.status!=='signed_in')throw Error('Signed session required');
+ const blocker=await app.fixture.database.appRuntimeSession();await blocker.query('BEGIN');await blocker.query('SELECT id FROM social_draft_requests WHERE id=$1 FOR UPDATE',[seed.requestId]);
+ const answer=page.waitForResponse(response=>response.url().endsWith('/browser/api/social/drafts'));await panel(page).getByRole('button',{name:'Read retained social suggestions'}).click();
+ try{await expect.poll(async()=>Number((await app.fixture.db.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT * FROM social_draft_requests%FOR UPDATE'")).rows[0]?.['n'])).toBe(1);await app.fixture.db.query("UPDATE devices SET status='revoked',revoked_at=now() WHERE id=$1",[session.deviceId]);}finally{await blocker.query('ROLLBACK');}
+ expect((await answer).status()).toBe(401);await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();await expect(panel(page)).toHaveCount(0);
+});
+test('deadline crossing a source lock wait returns expired without retained generated prose',async({researchPage:page})=>{
+ await ready(page);await app.fixture.db.query("UPDATE social_draft_requests SET deadline_at=clock_timestamp()+interval '1 second' WHERE id=$1",[seed.requestId]);
+ const blocker=await app.fixture.database.appRuntimeSession();await blocker.query('BEGIN');await blocker.query('SELECT block_id FROM outreach_answer_block_versions WHERE block_id=$1 FOR UPDATE',[seed.ref.id]);
+ const answer=page.waitForResponse(response=>response.url().endsWith('/browser/api/social/drafts/read'));await panel(page).getByRole('button',{name:'Re-read and use linkedin suggestion 1.1'}).click();
+ try{await expect.poll(async()=>Number((await app.fixture.db.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT b.id FROM outreach_answer_blocks%'")).rows[0]?.['n'])).toBe(1);await blocker.query('SELECT pg_sleep(1.1)');}finally{await blocker.query('COMMIT');}
+ const response=await answer;expect(response.status()).toBe(200);expect(await response.json()).toMatchObject({request:{state:'expired',concepts:null}});await expect(panel(page)).toContainText('Suggestion changed, expired or unavailable');await expect(panel(page).getByLabel('Private social text')).toHaveValue('');
+});
 test('late successful adoption cannot restore composer after cross-tab logout',async({researchPage:page})=>{
  await ready(page);const second=await page.context().newPage();await second.goto(app.origin);await expect(second.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();let release=()=>{},reached=()=>{};const held=new Promise<void>(resolve=>{release=resolve;}),seen=new Promise<void>(resolve=>{reached=resolve;});
  await page.route('**/browser/api/social/drafts/read',async route=>{const response=await route.fetch();reached();await held;await route.fulfill({response});},{times:1});await panel(page).getByRole('button',{name:'Re-read and use linkedin suggestion 1.1'}).click();await seen;
