@@ -40,6 +40,7 @@ export function BrowserRetainedRecovery({client,view,revision,blocked,onSaved}:{
  return <section aria-label="Retained qualification recovery">
   <h5>{identityOnly?'Review literal retained trade-name':'New retained-only human interpretation'}</h5>
   <p>Original rejection remains unchanged. No source fetch, model, automatic qualification, admission or contact authority. Review all original context for competing identity or contradictory evidence. If unresolved, do not confirm.</p>
+  <fieldset disabled={busy||blocked}>
   <label>Retained observation<select aria-label="Recovery observation" value={observationId} onChange={event=>{setObservationId(event.target.value);setBlockId('');setName('');setConfirmed(false);}}><option value="">Choose observation</option>{view.observations.map(s=><option key={s.id} value={s.id}>{s.id}</option>)}</select></label>
   <label>Original block<select aria-label="Recovery block" value={blockId} onChange={event=>{setBlockId(event.target.value);setName('');setConfirmed(false);}}><option value="">Choose original block</option>{source?.blocks.map(b=><option key={b.id} value={b.id}>{b.id}</option>)}</select></label>
   {block?<pre aria-label="Selected recovery original">{block.text}</pre>:null}
@@ -51,6 +52,7 @@ export function BrowserRetainedRecovery({client,view,revision,blocked,onSaved}:{
   <label><input type="checkbox" checked={confirmed} onChange={event=>setConfirmed(event.target.checked)} />{identityOnly?'I reviewed original context and confirm only this literal trade-name, not legal identity or qualification. No unresolved or conflicting identity.':'I reviewed all original context and these full-block citation roles as a new human interpretation, not the rejected model result.'}</label>
   <button type="button" disabled={busy||blocked||!confirmed||(identityOnly?!citation||!name:selections.length===0)} onClick={()=>{void submit();}}>{identityOnly?'Record identity-only decision':'Interpret retained citations'}</button>
   <button type="button" disabled={busy} onClick={()=>{setConfirmed(false);setSelections([]);setName('');setNotice('Unresolved or conflicting evidence remains unconfirmed. No decision or interpretation dispatched.');}}>Keep unresolved</button>
+  </fieldset>
   {notice?<p role="status">{notice}</p>:null}
  </section>;
 }

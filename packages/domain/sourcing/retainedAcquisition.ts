@@ -24,12 +24,12 @@ export async function candidateAcquisitionOutstanding(ctx:RepositoryContext,cand
  return (await ctx.db.query(`SELECT 1 WHERE EXISTS(SELECT 1 FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 AND state IN ('pending','running'))
  OR EXISTS(SELECT 1 FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 AND source_check->>'state'='pending')
  OR EXISTS(SELECT 1 FROM jobs WHERE workspace_id=$1 AND state IN ('queued','retryable','running') AND kind IN ('sourcing.qualify','sourcing.check') AND payload->>'candidateId'=$2::text)
- OR EXISTS(SELECT 1 FROM provider_reservations p JOIN sourcing_qualification_runs r ON r.workspace_id=p.workspace_id AND r.id=p.subject_id WHERE r.workspace_id=$1 AND r.candidate_id=$2 AND p.subject_kind='sourcing_qualification' AND p.state IN ('reserved','calling'))`,[ctx.scope.workspaceId,candidateId])).rows.length>0;
+ OR EXISTS(SELECT 1 FROM provider_reservations p JOIN sourcing_qualification_runs r ON r.workspace_id=p.workspace_id AND r.id=p.subject_id WHERE r.workspace_id=$1 AND r.candidate_id=$2 AND p.subject_kind='sourcing_qualification' AND p.state IN ('reserved','calling','estimated'))`,[ctx.scope.workspaceId,candidateId])).rows.length>0;
 }
 export async function firmAcquisitionOutstanding(ctx:RepositoryContext,firmId:string):Promise<boolean>{
  return (await ctx.db.query(`SELECT 1 WHERE EXISTS(SELECT 1 FROM research_runs WHERE workspace_id=$1 AND firm_id=$2 AND outcome='running')
  OR EXISTS(SELECT 1 FROM jobs WHERE workspace_id=$1 AND kind='research.firm' AND payload->>'firmId'=$2::text AND state IN ('queued','running','retryable'))
- OR EXISTS(SELECT 1 FROM provider_reservations p JOIN research_runs r ON r.workspace_id=p.workspace_id AND r.id=p.subject_id WHERE r.workspace_id=$1 AND r.firm_id=$2 AND p.subject_kind='research_run' AND p.state IN ('reserved','calling'))`,[ctx.scope.workspaceId,firmId])).rows.length>0;
+ OR EXISTS(SELECT 1 FROM provider_reservations p JOIN research_runs r ON r.workspace_id=p.workspace_id AND r.id=p.subject_id WHERE r.workspace_id=$1 AND r.firm_id=$2 AND p.subject_kind='research_run' AND p.state IN ('reserved','calling','estimated'))`,[ctx.scope.workspaceId,firmId])).rows.length>0;
 }
 /** Internal CRM seam. The caller owns the Firm lock and surrounding admission savepoint. */
 export async function fenceRetainedFirm(ctx:RepositoryContext,firmId:string,decisionId:string):Promise<boolean>{

@@ -107,13 +107,13 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   const invalid=candidate.status==='dismissed'?'candidate_dismissed':candidate.revision!==run.candidate_revision?'candidate_changed':
     run.deadline_at.getTime()<=Date.parse(now)?'qualification_expired':null;
   if(invalid){
-    await context.db.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason=$3,finished_at=now() WHERE workspace_id=$1 AND id=$2",[workspaceId,run.id,invalid]);
+    await context.db.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason=$3,finished_at=$4::timestamptz WHERE workspace_id=$1 AND id=$2",[workspaceId,run.id,invalid,now]);
     return refused(invalid);
   }
   if(evidence.data.observations.some(source=>Date.parse(source.retrievedAt)>Date.parse(now)+1000))return refused('invalid_evidence');
   await context.db.query(`UPDATE sourcing_qualification_runs SET state=$3,reason=$4,observations=$5::jsonb,facts=$6::jsonb,
-    opening_question=$7,finished_at=now() WHERE workspace_id=$1 AND id=$2`,
-    [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null]);
+    opening_question=$7,finished_at=$8::timestamptz WHERE workspace_id=$1 AND id=$2`,
+    [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null,now]);
   const diagnostic=input.reason===null?undefined:normalizeQualificationDiagnostic(input.diagnostic,evidence.data.observations.filter(s=>s.firstParty&&!s.truncated));
   await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review',policyVersion:run.policy_version,...(input.supplementedEvidence?.length?{evidenceRecovery:{rule:'supported-office-card-v1',citations:input.supplementedEvidence}}:{}),...(diagnostic?{diagnostic}:{})}});
   return {ok:true,value:{runId:run.id}};
