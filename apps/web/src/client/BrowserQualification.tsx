@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import type { BrowserClient } from './BrowserClient.ts';
 import { canReviewQualification } from './QualificationPending.ts';
 import { dispatchQualification } from './QualificationDispatch.ts';
+import { CapturedQualificationOriginals } from './CapturedQualificationOriginals.tsx';
 type QualificationView = z.infer<typeof qualificationViewSchema>;
 
 export function QualificationEvidenceLink({ url }: { url: string }): JSX.Element {
@@ -97,6 +98,7 @@ export function BrowserQualification({ client, candidateId, expectedRevision }: 
       {view.observations.map(source => <div key={source.id}>
         <QualificationEvidenceLink url={source.url} /><p>Retrieved {source.retrievedAt} · Published {source.publishedAt ?? 'unknown'} · First party {String(source.firstParty)} · Truncated {String(source.truncated)}</p>
         {view.facts.filter(fact => fact.observationId === source.id).map((fact, index) => <blockquote key={index}>{fact.kind}: {fact.value}</blockquote>)}
+        <CapturedQualificationOriginals key={`${candidateId}:${expectedRevision}:${view.runId}:${source.id}`} source={source} />
       </div>)}
       {view.openingQuestion ? <p>Preparation question {view.openingQuestion}</p> : null}
       {view.admission ? <p>Admitted exact Firm {view.admission.firmId}. Route {view.admission.routeId}. No contact or sending authority.</p> : null}
