@@ -15,7 +15,7 @@ Read-only design completed by Blowfish. Root locks strict IDs-only literal-span 
 | Shared boundary/decision/integration | Hatchling: contracts, shared/browserContract, ADR0018, PLAN/current docs/tracker | Commit interface lock before implementation, finished reviews and resource/release gates |
 | Complete retained recovery | Blowfish: migration0133, necessary domain/API/worker/research owners, browser client/server adapters and focused tests | Locked interfaces, sole PG/Chrome grant before database/browser acceptance; no other implementation writer |
 
-Design is not implementation or live eligibility. Full acceptance composes existing policy and separate reviewed admission with exact canonical Firm/Today, immutable rejection, uncertain-command recovery and zero acquisition for recovery lineage. Current separate phone/name blocks may remain ineligible. No CProperty/DWM replay, provider/spend/hold/OFF change or deployment inferred. PR759 docs handoff merged0685d1b5 at03:17:11; production remains0c755/schema132.
+Implementationbd997d768 committed39files665+/23-; domain60/API/client31 and composed types reportedPASS, final validation/reviews pending. Root REQUIRED_SCHEMA133 integrationc068c558c unblocks normal scheduler regression. Not live eligibility. Full acceptance composes existing policy and separate reviewed admission with exact canonical Firm/Today, immutable rejection, uncertain-command recovery and zero acquisition for recovery lineage. Current separate phone/name blocks may remain ineligible. No CProperty/DWM replay, provider/spend/hold/OFF change or deployment inferred. PR759 docs handoff merged0685d1b5 at03:17:11; production remains0c755/schema132.
 
 ### Issue757 retained original review, deployed child of745
 
