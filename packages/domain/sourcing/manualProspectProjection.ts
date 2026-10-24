@@ -24,7 +24,7 @@ export function projectManualProspect(row:ManualProspectRow):ManualProspect|null
  const notices=parsed.flatMap(origin=>[...origin.licenses.map(label=>({label,url:null})),...origin.notices.map(notice=>({label:notice.label,url:safeManualReference(notice.url)}))]);
  const unique=[...new Map(notices.map(notice=>[JSON.stringify(notice),notice])).values()];
  // Never silently truncate a source's mandatory licensing notices.
- if(unique.length>256)return null;
- return manualProspectSchema.parse({...common,observedName:p.firmName,website:safeManualReference(p.website),locality:p.locality,region:p.region,
+ const projected=manualProspectSchema.safeParse({...common,observedName:p.firmName,website:safeManualReference(p.website),locality:p.locality,region:p.region,
   sources:parsed.map(origin=>({label:`${origin.source.provider} · ${origin.source.release}`,url:safeManualReference(origin.source.sourceUrl),observedAt:origin.source.retrievedAt})),sourceNotices:unique});
+ return projected.success?projected.data:null;
 }
