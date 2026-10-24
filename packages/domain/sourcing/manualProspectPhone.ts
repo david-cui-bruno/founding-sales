@@ -15,13 +15,29 @@ export interface ManualPhoneSnapshot extends Record<string,unknown>{
  */
 export async function manualPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualProspectRow[]):Promise<ManualPhoneSnapshot[]>{
  if(rows.length===0)return [];
+ const initial=await readPhoneSnapshots(ctx,rows,null);
+ // The run lock is not retention authority. CRM deletion independently deletes
+ // evidence_items, so lock exact supporting rows in global ID order and retain
+ // only those IDs as authority. Re-read AFTER waits: a deletion/update that won
+ // first must not leave its old permission snapshot usable. A later insertion
+ // cannot silently become an unlocked source of authority in this read.
+ const observations=initial.flatMap(snapshot=>Array.isArray(snapshot.observations)?snapshot.observations:[]);
+ const locked=await ctx.db.query<{id:string}>(`SELECT e.id FROM evidence_items e WHERE e.workspace_id=$1
+  AND EXISTS(SELECT 1 FROM jsonb_array_elements($2::jsonb) page
+   WHERE e.source_reference=page->>'url' AND e.content_hash=page->>'contentHash'
+   AND to_char(e.retrieved_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')=page->>'retrievedAt')
+  AND (e.terms_allow_retention OR e.retention_expires_at>clock_timestamp())
+  ORDER BY e.id FOR SHARE OF e`,[ctx.scope.workspaceId,JSON.stringify(observations)]);
+ return readPhoneSnapshots(ctx,rows,locked.rows.map(row=>row.id));
+}
+async function readPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualProspectRow[],evidenceIds:readonly string[]|null):Promise<ManualPhoneSnapshot[]>{
  return (await ctx.db.query<ManualPhoneSnapshot>(`SELECT r.id,r.candidate_id,r.candidate_revision,r.observations,r.facts,
  ARRAY(SELECT DISTINCT page->>'url' FROM jsonb_array_elements(r.observations) page WHERE
   (EXISTS(SELECT 1 FROM sourcing_candidates retained WHERE retained.workspace_id=r.workspace_id AND retained.id=r.candidate_id
     AND rtrim(retained.payload->>'sourceUrl','/')=rtrim(page->>'url','/'))
    OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=r.workspace_id AND o.candidate_id=r.candidate_id
     AND rtrim(o.source->>'sourceUrl','/')=rtrim(page->>'url','/'))
-   OR EXISTS(SELECT 1 FROM evidence_items e WHERE e.workspace_id=r.workspace_id AND e.source_reference=page->>'url'
+   OR EXISTS(SELECT 1 FROM evidence_items e WHERE e.workspace_id=r.workspace_id AND ($3::uuid[] IS NULL OR e.id=ANY($3::uuid[])) AND e.source_reference=page->>'url'
     AND e.content_hash=page->>'contentHash'
     AND to_char(e.retrieved_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')=page->>'retrievedAt'
     AND (e.terms_allow_retention OR e.retention_expires_at>clock_timestamp())))
@@ -36,7 +52,7 @@ export async function manualPhoneSnapshots(ctx:RepositoryContext,rows:readonly M
  ORDER BY 1) AS permitted_urls
  FROM sourcing_candidates c JOIN LATERAL(SELECT * FROM sourcing_qualification_runs q WHERE q.workspace_id=c.workspace_id AND q.candidate_id=c.id ORDER BY q.requested_at DESC,q.id DESC LIMIT 1 FOR SHARE) r ON r.candidate_revision=c.revision
  WHERE c.workspace_id=$1 AND c.id=ANY($2::uuid[]) AND c.status<>'dismissed'
- AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text') ORDER BY c.id`,[ctx.scope.workspaceId,rows.map(row=>row.id)])).rows;
+ AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text') ORDER BY c.id`,[ctx.scope.workspaceId,rows.map(row=>row.id),evidenceIds])).rows;
 }
 
 /** Only whole structured business_phone fact values are normalized. No mining
