@@ -1,11 +1,14 @@
 import { z } from 'zod';
 import { instant, qualificationRequestCommandSchema, qualificationAdmissionCommandSchema,
   qualificationQueuedSchema, qualificationAdmittedSchema, type QualificationView } from '@fss/contracts';
+import {commandIdSchema,retainedIdentityDecisionInputSchema,retainedInterpretationInputSchema,retainedIdentityDecisionResultSchema,retainedInterpretationResultSchema,type RetainedIdentityDecisionInput,type RetainedInterpretationInput} from '@fss/contracts';
 
 export const QUALIFICATION_PENDING_KEY = 'callie.browser.pending-qualification.v1';
 export const qualificationCommandSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('request'), payload: qualificationRequestCommandSchema.omit({ clientVersion: true }) }),
   z.strictObject({ kind: z.literal('admit'), payload: qualificationAdmissionCommandSchema.omit({ clientVersion: true }) }),
+  z.strictObject({kind:z.literal('identity'),payload:retainedIdentityDecisionInputSchema.safeExtend({commandId:commandIdSchema})}),
+  z.strictObject({kind:z.literal('retained_interpretation'),payload:retainedInterpretationInputSchema.safeExtend({commandId:commandIdSchema})}),
 ]);
 export const qualificationPendingSchema = z.strictObject({
   identity: z.string(), expiresAt: instant, command: qualificationCommandSchema,
@@ -13,6 +16,8 @@ export const qualificationPendingSchema = z.strictObject({
     z.strictObject({ kind: z.literal('refused') }),
     z.strictObject({ kind: z.literal('request'), result: qualificationQueuedSchema }),
     z.strictObject({ kind: z.literal('admit'), result: qualificationAdmittedSchema }),
+    z.strictObject({kind:z.literal('identity'),result:retainedIdentityDecisionResultSchema}),
+    z.strictObject({kind:z.literal('retained_interpretation'),result:retainedInterpretationResultSchema}),
   ]).optional(),
 });
 export type PendingQualification = z.infer<typeof qualificationPendingSchema>;
@@ -20,10 +25,18 @@ export type QualificationCommand = z.infer<typeof qualificationCommandSchema>;
 const reviewable = new Set(['maintenance_need_unconfirmed', 'help_date_unknown', 'help_needs_revalidation',
   'need_evidence_conflicts', 'job_date_unknown', 'growth_date_unknown', 'event_needs_revalidation']);
 /** Same reviewed-admission policy as the native panel. Unknown geography/phone never becomes reviewable. */
-export function canReviewQualification(view: Pick<QualificationView, 'candidateId' | 'candidateRevision' | 'status' | 'admission' | 'verdict'> | null, candidateId: string, revision: number): boolean {
+export function canReviewQualification(view: (Pick<QualificationView, 'candidateId' | 'candidateRevision' | 'status' | 'admission' | 'verdict'> & {recovery?:QualificationView['recovery']|undefined}) | null, candidateId: string, revision: number): boolean {
   return view !== null && view.candidateId === candidateId && view.candidateRevision === revision
     && ['review', 'eligible'].includes(view.status) && view.admission === null && view.verdict !== null
+    && (view.recovery===undefined||view.verdict.decision==='eligible')
     && view.verdict.unknowns.every(code => reviewable.has(code));
+}
+
+/** Read-only v1 tag compatibility. Never changes payload, UUID, binding or stored bytes. */
+function canonicalRetainedTag(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || !('kind' in value)
+    || typeof value.kind !== 'string' || /^interpret$/u.exec(value.kind)?.[0] !== value.kind) return value;
+  return { ...value, kind: 'retained_interpretation' };
 }
 
 /** IDs-only custody. Storage failure is an error, never permission to mint a replacement UUID. */
@@ -37,7 +50,10 @@ export class QualificationCustody {
     if (binding === null) return null;
     const raw = this.storage.getItem(QUALIFICATION_PENDING_KEY);
     if (raw === null) return null;
-    const held = qualificationPendingSchema.parse(JSON.parse(raw));
+    const stored: unknown = JSON.parse(raw);
+    const held = qualificationPendingSchema.parse(typeof stored === 'object' && stored !== null && 'command' in stored
+      ? { ...stored, command: canonicalRetainedTag(stored.command), ...('receipt' in stored ? { receipt: canonicalRetainedTag(stored.receipt) } : {}) }
+      : stored);
     if (held.identity !== binding.identity || Date.parse(held.expiresAt) <= Date.now()
       || Date.parse(held.expiresAt) > Date.parse(binding.expiresAt)) { this.clear(); return null; }
     return held;
@@ -54,7 +70,8 @@ export class QualificationCustody {
     this.changed();
   }
   prepare(input: { kind: 'request'; candidateId: string; expectedRevision: number }
-    | { kind: 'admit'; candidateId: string; expectedRevision: number; qualificationRunId: string }): PendingQualification {
+    | { kind: 'admit'; candidateId: string; expectedRevision: number; qualificationRunId: string }
+    | ({kind:'identity'}&RetainedIdentityDecisionInput) | ({kind:'retained_interpretation'}&RetainedInterpretationInput)): PendingQualification {
     const binding = this.binding();
     if (binding === null) throw new Error('Qualification authority unavailable');
     const previous = this.read();

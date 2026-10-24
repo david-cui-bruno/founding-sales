@@ -5,6 +5,7 @@ import type { BrowserClient } from './BrowserClient.ts';
 import { canReviewQualification } from './QualificationPending.ts';
 import { dispatchQualification } from './QualificationDispatch.ts';
 import { CapturedQualificationOriginals } from './CapturedQualificationOriginals.tsx';
+import {BrowserRetainedRecovery} from './BrowserRetainedRecovery.tsx';
 type QualificationView = z.infer<typeof qualificationViewSchema>;
 
 export function QualificationEvidenceLink({ url }: { url: string }): JSX.Element {
@@ -51,7 +52,7 @@ export function BrowserQualification({ client, candidateId, expectedRevision }: 
         if (!current()) throw new Error('Qualification binding changed');
       });
       if (!current()) throw new Error('Qualification superseded');
-      if (answer !== null && (answer.candidateId !== candidateId || answer.candidateRevision !== expectedRevision)) throw new Error('Qualification candidate changed');
+      if (answer !== null && (answer.candidateId !== candidateId || (answer.currentCandidateRevision??answer.candidateRevision) !== expectedRevision)) throw new Error('Qualification candidate changed');
       return answer;
     };
     try {
@@ -84,13 +85,15 @@ export function BrowserQualification({ client, candidateId, expectedRevision }: 
     <h5>Qualification evidence</h5>
     <p>Existing qualification policy only. Admission records a Firm and route, not consent, contact or sending authority.</p>
     <button type="button" disabled={busy || !admin} onClick={() => { void run('read'); }}>Read qualification</button>
-    <button type="button" disabled={busy || blocked || waiting || !admin} onClick={() => { void run('request'); }}>Request qualification</button>
+    <button type="button" disabled={busy || blocked || waiting || !admin || view?.recovery!==undefined} onClick={() => { void run('request'); }}>Request qualification</button>
     {canReviewQualification(view, candidateId, expectedRevision) ? <button type="button" disabled={busy || blocked || !admin} onClick={() => { void run('admit'); }}>Admit reviewed qualification</button> : null}
     {busy ? <p role="status">Qualification operation in progress.</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
     {view === null ? null : <div>
       <p>Candidate {view.candidateId} revision {view.candidateRevision} · Latest run {view.runId} · Status {view.status}</p>
       <p>Requested {view.requestedAt} · Deadline {view.deadlineAt}</p>
+      {view.recovery?<p>Retained-only acquisition fence. Human decision {view.recovery.decisionId}. Original run {view.recovery.originalRunId}. Current candidate revision {view.currentCandidateRevision}. Interpretation {view.interpretationOrigin}. No automatic acquisition or publication.</p>:null}
+      <BrowserRetainedRecovery key={`${candidateId}:${expectedRevision}:${view.runId}:${view.recovery?.decisionId??'none'}`} client={client} view={view} revision={expectedRevision} blocked={blocked||busy||!admin} onSaved={message=>{setView(null);setNotice(message);}} />
       {view.reason ? <p>Reason {view.reason}</p> : null}{view.admissionReason ? <p>Admission reason {view.admissionReason}</p> : null}
       {view.verdict === null ? <p>No current verdict.</p> : <><p>Verdict {view.verdict.decision} · Rank {view.verdict.rank} · Policy {view.verdict.policyVersion}</p>
         {view.verdict.reasons.map(reason => <p key={reason}>Evidence reason {reason}</p>)}

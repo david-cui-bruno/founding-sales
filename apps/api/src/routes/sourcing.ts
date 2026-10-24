@@ -1,4 +1,6 @@
+import {retainedPrincipalAuthority} from './retainedPrincipalAuthority.ts';
 import {CANDIDATE_AUTHORITY_PATH,routeCandidateAuthority} from './candidateAuthority.ts';
+import {RETAINED_RECOVERY_PATHS,routeRetainedRecovery} from './sourcingRetainedRecovery.ts';
 import {QUALIFIED_RESEARCH_PATHS,routeQualifiedResearch} from './qualifiedResearch.ts';
 import {DISCOVERY_PROMOTION_PATHS,routeDiscoveryPromotion} from './sourcingDiscoveryPromotion.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -25,12 +27,13 @@ import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSuppo
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
 export const SOURCING_PATHS=[CANDIDATE_AUTHORITY_PATH,...QUALIFIED_RESEARCH_PATHS,...DISCOVERY_REVIEW_PATHS,...DISCOVERY_PROMOTION_PATHS,'/sourcing/candidates/discovery/save-v1','/sourcing/candidates/discovery/list-v1','/sourcing/calling/admit','/sourcing/calling/assess','/sourcing/experiments','/sourcing/experiments/save','/sourcing/experiments/activate','/sourcing/experiments/stop','/sourcing/experiments/erase','/sourcing/candidates/correct-name','/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
 export async function routeSourcing(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
-  if(!(SOURCING_PATHS as readonly string[]).includes(request.path))return null;
+  if(!([...SOURCING_PATHS,...RETAINED_RECOVERY_PATHS] as readonly string[]).includes(request.path))return null;
   if(!options.auth)return {status:404,body:{error:'not_found'}};
   if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
   const auth=options.auth,authenticated=await requirePrincipal(auth,request);
   if(!authenticated.ok)return authenticated.result;
   const deps={auth,request,principal:authenticated.principal};
+  if((RETAINED_RECOVERY_PATHS as readonly string[]).includes(request.path))return routeRetainedRecovery(deps);
   if(request.path===CANDIDATE_AUTHORITY_PATH)return routeCandidateAuthority(deps);
   if((QUALIFIED_RESEARCH_PATHS as readonly string[]).includes(request.path))return routeQualifiedResearch(deps);
   if((DISCOVERY_REVIEW_PATHS as readonly string[]).includes(request.path))return routeDiscoveryReview(deps);
@@ -78,7 +81,7 @@ export async function routeSourcing(request:ApiRequest,options:RoutingOptions):P
     const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return requestQualification(context,input);
   });
   if(request.path==='/sourcing/qualification/admit')return await runRouteCommand(deps,qualificationAdmissionCommandSchema,'sourcing.admit',async(context,body)=>{
-    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return admitCandidate(context,input);
+    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return admitCandidate(context,input,retainedPrincipalAuthority(deps,context));
   });
   if(request.path==='/sourcing/candidates/check')return await runRouteCommand(deps,candidateCheckCommandSchema,'sourcing.check',async(context,body)=>{
     const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;

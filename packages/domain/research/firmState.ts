@@ -2,6 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { listApplicableHolds } from '../policy/holds.ts';
 import { isSuppressed } from '../suppression/effective.ts';
 import { refuse, type ResearchResult } from './types.ts';
+import {retainedFirmOnly} from '../sourcing/retainedAcquisition.ts';
 
 /**
  * Whether research may look at this firm at all.
@@ -47,6 +48,7 @@ export async function firmIsResearchable(
   const firm = rows[0];
   if (firm === undefined) return refuse('firm_unknown');
   if (firm.status === 'merged') return refuse('firm_merged');
+  if (await retainedFirmOnly(context,firmId)) return refuse('research_disabled');
   const suppression = await isSuppressed(context, { scope: 'firm', canonicalKey: firmId });
   if (suppression !== null) return refuse('firm_suppressed');
   const holds = await listApplicableHolds(context, {

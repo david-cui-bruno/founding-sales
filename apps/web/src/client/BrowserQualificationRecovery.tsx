@@ -41,6 +41,8 @@ export function BrowserQualificationRecovery({ client }: { client: BrowserClient
       {held.command.kind === 'admit' ? <p>Reviewed run {held.command.payload.qualificationRunId}.</p> : null}
       {held.receipt?.kind === 'request' ? <p>Recorded qualification run {held.receipt.result.runId}. Read current evidence explicitly.</p> : null}
       {held.receipt?.kind === 'admit' ? <p>Admitted exact Firm {held.receipt.result.firmId}. Route {held.receipt.result.routeId}. No contact or sending authority.</p> : null}
+      {held.receipt?.kind==='identity'?<p>Recorded identity decision {held.receipt.result.decisionId}, candidate revision {held.receipt.result.revision}. No qualification or admission.</p>:null}
+      {held.receipt?.kind==='retained_interpretation'?<p>Recorded human-retained interpretation {held.receipt.result.runId}. Explicitly read current evidence before separate admission.</p>:null}
       {held.receipt?.kind === 'refused' ? <p>Command definitively refused. No admission or qualification success is implied.</p> : null}
       {held.receipt === undefined ? <button type="button" disabled={busy} onClick={() => { void reconcile(); }}>Reconcile exact qualification command</button> : null}
     </>}

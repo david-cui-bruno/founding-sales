@@ -9,6 +9,7 @@ import { readResearchSettings } from './settings.ts';
 import { accept, refuse, type ResearchResult, type ResearchTrigger } from './types.ts';
 import type { ResearchPurpose, ResearchPurposeInput } from './officeAssessmentContract.ts';
 import { VALID_RESEARCH_JOB_INTENT_SQL } from './jobIntent.ts';
+import {retainedFirmOnly} from '../sourcing/retainedAcquisition.ts';
 
 /**
  * Materialize one `research.firm` job.
@@ -49,6 +50,7 @@ export async function enqueueFirmResearch(
   if (purpose === 'office_evidence' && (input.trigger !== 'user_request' || !input.requestedByUserId)) return refuse('invalid_input');
   const lockedFirm = await loadFirmForUpdate(context, input.firmId);
   if (lockedFirm === null) return refuse('firm_unknown');
+  if(await retainedFirmOnly(context,input.firmId))return refuse('research_disabled');
   // Assignment can change while enqueue waits. Authorize the current locked row,
   // before either reusing pending work or creating a new paid research intent.
   const decision = decideFirmMutation(context, lockedFirm);

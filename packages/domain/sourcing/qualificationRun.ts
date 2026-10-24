@@ -18,11 +18,13 @@ import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VE
 import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome} from './qualificationPrompt.ts';
 import {normalizeQualificationDiagnostic,type QualificationDiagnostic,type QualificationDiagnosticPhase} from './qualificationDiagnostics.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {retainedCandidateOnly} from './retainedAcquisition.ts';
 interface Run extends QualificationRunRow {payload:CandidateInput;current_revision:number;candidate_status:string}
 const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS candidate_status FROM sourcing_qualification_runs r
  JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND r.id=$2`;
 async function allowed(ctx:RepositoryContext,runId:string):Promise<Run|null>{
  const row=(await ctx.db.query<Run>(readSql,[ctx.scope.workspaceId,runId])).rows[0];
+ if(row&&(row['retained_identity_decision_id']||await retainedCandidateOnly(ctx,row.candidate_id)))return null;
  if(row&&!isLegacyCandidatePayload(row.payload))return null;
  if(!row||!['pending','running'].includes(row.state)||row.candidate_status==='dismissed'||row.current_revision!==row.candidate_revision||row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx)))return null;
  if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return null;
@@ -33,6 +35,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  if(!decideAdminOnly(ctx).permitted)return;
  const db=ctx.db as SessionQueryable;
  const run=await withTransaction(db,async()=>{
+  await db.query('SELECT c.id FROM sourcing_candidates c JOIN sourcing_qualification_runs r ON r.workspace_id=c.workspace_id AND r.candidate_id=c.id WHERE r.workspace_id=$1 AND r.id=$2 FOR UPDATE OF c',[ctx.scope.workspaceId,input.runId]);
   const row=await allowed(ctx,input.runId);if(!row)return null;
   const changed=await db.query("UPDATE sourcing_qualification_runs SET state='running' WHERE workspace_id=$1 AND id=$2 AND state='pending' RETURNING id",[ctx.scope.workspaceId,row.id]);
   return changed.rows.length?row:null;

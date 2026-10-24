@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const QUALIFICATION_BROWSER_PATHS = new Set([
   '/sourcing/qualification/read', '/sourcing/qualification/request', '/sourcing/qualification/admit',
+  '/sourcing/qualification/recovery/identity', '/sourcing/qualification/recovery/interpret',
 ]);
 const refusalSchema = z.strictObject({
   status: z.literal('refused'), replayed: z.boolean(), reason: z.string(),
@@ -17,6 +18,8 @@ const productReasons = new Set([
   'calling_state_not_enabled', 'firm_identity_ambiguous', 'firm_merged',
   'phone_or_firm_stopped', 'phone_association_ambiguous', 'firm_already_enrolled',
   'calling_held', 'route_unavailable',
+  'retained_only','acquisition_in_progress','rejection_provenance_required','identity_evidence_required',
+  'recovery_already_recorded','interpretation_already_recorded','qualification_clock_conflict','invalid_evidence',
 ]);
 
 /** Transport presentation only. Existing domain policy and receipts are unchanged. */
@@ -26,7 +29,7 @@ export function qualificationBrowserResult(path: string, status: number, body: u
     // Absence is unavailable evidence, not an assertion that a candidate exists.
     return { status: 200, body: null };
   }
-  if (!['/sourcing/qualification/request', '/sourcing/qualification/admit'].includes(path) || status !== 409) return null;
+  if (!QUALIFICATION_BROWSER_PATHS.has(path) || path==='/sourcing/qualification/read' || status !== 409) return null;
   const refusal = refusalSchema.safeParse(body);
   return refusal.success && productReasons.has(refusal.data.reason) ? { status: 200, body: refusal.data } : null;
 }

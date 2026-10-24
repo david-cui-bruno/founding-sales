@@ -16,6 +16,7 @@ import {parsePageText} from '../research/pageText.ts';
 import type {PageFetchProvider} from '../research/providers.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
+import {retainedCandidateOnly} from './retainedAcquisition.ts';
 
 interface Row {id:string;revision:number;status:string;payload:CandidateInput;source_check:unknown;check_job_state:string|null;[key:string]:unknown}
 const select=`SELECT id,revision,status,payload,source_check,(SELECT state FROM jobs j WHERE j.workspace_id=sourcing_candidates.workspace_id AND j.id::text=source_check->>'jobId') AS check_job_state FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2`;
@@ -40,6 +41,7 @@ export async function requestSourceCheck(context:RepositoryContext,input:{id:str
   if(row.revision!==input.expectedRevision)return {ok:false,reason:'candidate_changed'};
   if(options.scheduled && row.status!=='kept')return {ok:false,reason:'candidate_not_monitored'};
   if(row.status==='dismissed')return {ok:false,reason:'candidate_dismissed'};
+  if(await retainedCandidateOnly(context,row.id))return {ok:false,reason:'retained_only'};
   const now=await databaseNow(context),previous=visibleSourceCheck(row.source_check,row.check_job_state);
   if(previous?.state==='pending' && Date.parse(now)-Date.parse(previous.requestedAt)<30*60_000)return {ok:false,reason:'check_in_progress'};
   const refusal=await blocked(context);if(refusal)return {ok:false,reason:refusal};
@@ -55,7 +57,8 @@ export async function requestSourceCheck(context:RepositoryContext,input:{id:str
   return {ok:true,value:{id:input.id}};
 }
 export async function runSourceCheck(context:RepositoryContext,input:{candidateId:string;checkId:string;scheduled?:boolean|undefined},fetcher:PageFetchProvider):Promise<void>{
-  const row=(await context.db.query<Row>(select,[context.scope.workspaceId,input.candidateId])).rows[0];if(!row)return;
+  const row=(await context.db.query<Row>(`${select} FOR UPDATE`,[context.scope.workspaceId,input.candidateId])).rows[0];if(!row)return;
+  if(await retainedCandidateOnly(context,row.id))return;
   if(!isLegacyCandidatePayload(row.payload))return;
   const parsed=candidateSourceCheckSchema.safeParse(row.source_check);
   if(!parsed.success || parsed.data.checkId!==input.checkId || parsed.data.state!=='pending')return;
@@ -68,6 +71,7 @@ export async function runSourceCheck(context:RepositoryContext,input:{candidateI
     const settings=await readResearchSettings(context);
     try {
       const result=await fetcher.fetchPages({urls:[source],firmWebsite:row.payload.website,links:[source],maxPagesPerFirm:1,maxBytes:settings.maxPageBytes,shouldContinue:async()=>{
+        if(await retainedCandidateOnly(context,row.id))return false;
         if(await blocked(context))return false;
         const current=(await context.db.query<Row>(select,[context.scope.workspaceId,input.candidateId])).rows[0];
         return current!==undefined && current.status!=='dismissed' && (!input.scheduled||current.status==='kept') && candidateSourceCheckSchema.safeParse(current.source_check).success && (current.source_check as CandidateSourceCheck).checkId===input.checkId;

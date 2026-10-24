@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {seedRetainedRecovery} from '../../../../packages/domain/test/sourcing/retainedRecoveryFixture.ts';
+import {test,expect,startQualifiedResearchApp,routeQualifiedResearchProvider,loginQualifiedResearch} from '../support/qualifiedResearchApp.ts';
+import {QUALIFICATION_PENDING_KEY} from '../../src/client/QualificationPending.ts';
+let owned:Awaited<ReturnType<typeof startQualifiedResearchApp>>,fixture:Awaited<ReturnType<typeof seedRetainedRecovery>>;
+test.beforeAll(async()=>{
+ assert.equal(process.env['FSS_RETAINED_RECOVERY_EXCLUSIVE_LANE'],'issue760-retained-recovery');
+ owned=await startQualifiedResearchApp();const f=owned.app.fixture;
+ fixture=await withTransaction(f.db,()=>seedRetainedRecovery(repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db)));
+});
+test.afterAll(async()=>{await owned?.stop();});
+test('expired exact session after recovery lock wait refuses without mutation and retains same-UUID unknown custody',async({researchPage:page})=>{
+ const f=owned.app.fixture,clock=f.deps.now();
+ await routeQualifiedResearchProvider(page,owned.app);await loginQualifiedResearch(page,owned.app);
+ const inventory=page.getByRole('region',{name:'Ordinary sourcing inventory',exact:true});
+ await inventory.getByRole('button',{name:'Load ordinary inventory',exact:true}).click();
+ const card=inventory.getByRole('article',{name:`Candidate ${fixture.candidateId}`,exact:true});
+ await card.getByRole('button',{name:'Read qualification',exact:true}).click();
+ const recovery=card.getByRole('region',{name:'Retained qualification recovery',exact:true});
+ await recovery.getByLabel('Recovery observation',{exact:true}).selectOption(fixture.source.id);
+ await recovery.getByLabel('Recovery block',{exact:true}).selectOption('identity');
+ await recovery.getByLabel('Literal retained trade-name',{exact:true}).fill(fixture.firmName);await recovery.getByRole('checkbox').check();
+ const tables=['sourcing_candidates','sourcing_qualification_runs','sourcing_retained_identity_decisions','sourcing_retained_firm_acquisition_fences','firms','contacts','phone_routes','outreach_email_sources','jobs','provider_reservations','daily_counters'];
+ const snapshot=async()=>{const rows:Record<string,unknown[]>={};for(const table of tables)rows[table]=(await f.db.query(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows;return rows;};
+ const before=await snapshot(),blocker=await f.database.appRuntimeSession();
+ await blocker.query('BEGIN');await blocker.query('SELECT id FROM sourcing_candidates WHERE id=$1 FOR UPDATE',[fixture.candidateId]);
+ const blockerPid=(await blocker.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+ await page.route('**/browser/api/sourcing/qualification/recovery/identity',async route=>{const answer=await route.fetch();expect(answer.status()).toBe(409);expect(await answer.json()).toMatchObject({error:'browser_request_refused'});await route.abort('failed');},{times:1});
+ try{
+  await recovery.getByRole('button',{name:'Record identity-only decision',exact:true}).click();
+  await expect.poll(async()=>(await f.db.query<{waiting:boolean}>('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))) AS waiting',[blockerPid])).rows[0]?.waiting).toBe(true);
+  f.advance(3600001);
+ }finally{await blocker.query('ROLLBACK');}
+ await expect(recovery).toContainText('Recovery unavailable');
+ const pending=await page.evaluate(key=>sessionStorage.getItem(key),QUALIFICATION_PENDING_KEY);expect(pending).not.toBeNull();
+ expect(await snapshot()).toEqual(before);
+ f.setNow(clock);
+ await page.reload();expect(await page.evaluate(key=>sessionStorage.getItem(key),QUALIFICATION_PENDING_KEY)).toBe(pending);
+ const replay=page.waitForResponse(r=>r.url().endsWith('/browser/api/sourcing/qualification/recovery/identity'));
+ await page.getByRole('button',{name:'Reconcile exact qualification command',exact:true}).click();
+ expect((await f.db.query("SELECT result_status,result FROM command_receipts WHERE command_kind='sourcing.retained_identity'")).rows).toEqual([{result_status:'refused',result:'session_changed'}]);
+ expect((await replay).status()).toBe(409);
+ expect((await replay).request().postDataJSON().commandId).toBe(JSON.parse(pending!).command.payload.commandId);
+ await expect.poll(()=>page.evaluate(key=>sessionStorage.getItem(key),QUALIFICATION_PENDING_KEY)).toBeNull();
+ expect(await snapshot()).toEqual(before);
+ expect((await f.db.query('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2',[f.alpha.workspaceId,f.alpha.admin.userId])).rows[0]).toEqual({role:'admin',status:'active'});
+ console.log('ISSUE760_R1_LOCK_WAIT_REFUSED: exact expiry, unchanged recovery/CRM/acquisition, same-UUID reconciliation then existing authority invalidation');
+});

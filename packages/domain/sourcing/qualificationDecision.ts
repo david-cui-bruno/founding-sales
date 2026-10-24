@@ -6,6 +6,7 @@ import {databaseNow} from '../policy/clock.ts';
 import {qualifyCandidate,NEUTRAL_MAINTENANCE_QUESTION,type SourcingIdentity} from './qualificationPolicy.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {retainedWallNow,lockRetainedAdmin} from './retainedAcquisition.ts';
 export function candidateIdentity(candidate:CandidateInput,facts:readonly QualificationFact[],sources:readonly SourceObservation[]):SourcingIdentity {
  const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
  const matched=facts.some(f=>f.kind==='firm_identity'&&fold(f.value).includes(fold(candidate.firmName))&&sources.some(s=>s.id===f.observationId&&s.firstParty&&!s.truncated));
@@ -23,7 +24,8 @@ export async function evaluateQualification(ctx:RepositoryContext,input:{runId:s
  if(!isLegacyCandidatePayload(candidate.payload))return {ok:false,reason:'candidate_format_not_supported'};
  if(candidate.status==='dismissed'||candidate.revision!==run.candidate_revision)return {ok:false,reason:'candidate_changed'};
  if(!['review','eligible'].includes(run.state)||run.reason!==null)return {ok:false,reason:'evidence_unavailable'};
- const verdict=qualifyCandidate({identity:candidateIdentity(candidate.payload,run.facts,run.observations),facts:run.facts,observations:run.observations,now:await databaseNow(ctx)});
+ if(run['retained_identity_decision_id']&&!await lockRetainedAdmin(ctx))return {ok:false,reason:'admin_only'};
+ const verdict=qualifyCandidate({identity:candidateIdentity(candidate.payload,run.facts,run.observations),facts:run.facts,observations:run.observations,now:run['retained_identity_decision_id']?await retainedWallNow(ctx):await databaseNow(ctx)});
  // Free-form model questions cannot be proven claim-free; a neutral question always remains useful.
  await ctx.db.query('UPDATE sourcing_qualification_runs SET state=$3,verdict=$4::jsonb,opening_question=$5 WHERE workspace_id=$1 AND id=$2',
   [w,run.id,verdict.decision==='eligible'?'eligible':'review',JSON.stringify(verdict),NEUTRAL_MAINTENANCE_QUESTION]);

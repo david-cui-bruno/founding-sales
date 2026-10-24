@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
+import {retainedIdentityDecisionResultSchema,retainedInterpretationResultSchema} from '@fss/contracts';
 import type { BrowserClient } from './BrowserClient.ts';
 import type { PendingQualification } from './QualificationPending.ts';
 
@@ -17,6 +18,18 @@ export async function dispatchQualification(client: BrowserClient, held: Pending
     client.qualification.retain(held);
   };
   const command = held.command;
+  if(command.kind==='identity'){
+    const answer=await client.request('/sourcing/qualification/recovery/identity',z.union([refused,z.strictObject({status:z.literal('accepted'),replayed:z.boolean(),result:retainedIdentityDecisionResultSchema})]),command.payload,beforeDispatch);
+    if(!current())return '';
+    client.qualification.retain({...held,receipt:answer.status==='accepted'?{kind:'identity',result:answer.result}:{kind:'refused'}});
+    return answer.status==='accepted'?'Literal trade-name decision recorded. Not qualification. Explicitly reread current candidate and retained evidence.':`Identity decision refused: ${answer.reason}`;
+  }
+  if(command.kind==='retained_interpretation'){
+    const answer=await client.request('/sourcing/qualification/recovery/interpret',z.union([refused,z.strictObject({status:z.literal('accepted'),replayed:z.boolean(),result:retainedInterpretationResultSchema})]),command.payload,beforeDispatch);
+    if(!current())return '';
+    client.qualification.retain({...held,receipt:answer.status==='accepted'?{kind:'retained_interpretation',result:answer.result}:{kind:'refused'}});
+    return answer.status==='accepted'?`New retained interpretation recorded. Run ${answer.result.runId}. Read and review separately before admission.`:`Retained interpretation refused: ${answer.reason}`;
+  }
   if (command.kind === 'request') {
     const answer = await client.request('/sourcing/qualification/request', queued, command.payload, beforeDispatch);
     if (!current()) return '';

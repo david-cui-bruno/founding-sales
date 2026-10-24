@@ -1,4 +1,5 @@
 import {mergeSourcingAttribution} from '../sourcing/attribution.ts';
+import {retainedFirmOnly} from '../sourcing/retainedAcquisition.ts';
 import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
@@ -134,6 +135,8 @@ export async function mergeFirms(
   if (first === null) return refuse('firm_unknown');
   const second = await loadFirmForUpdate(context, secondId);
   if (second === null) return refuse('firm_unknown');
+  // Retained-only authority cannot be lost by canonicalization. No merge lift exists.
+  if(await retainedFirmOnly(context,first.id)||await retainedFirmOnly(context,second.id))return refuse('invalid_input');
 
   const source = first.id === input.sourceFirmId ? first : second;
   const target = first.id === input.targetFirmId ? first : second;

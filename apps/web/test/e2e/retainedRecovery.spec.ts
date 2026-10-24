@@ -1,0 +1,55 @@
+import assert from 'node:assert/strict';
+import type {Page} from 'playwright/test';
+import {candidateListSchema,qualificationViewSchema,todayListResponseSchema,pluralFirmPageResponseSchema} from '@fss/contracts';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {seedRetainedRecovery} from '../../../../packages/domain/test/sourcing/retainedRecoveryFixture.ts';
+import {recordStatePosture} from '@fss/domain/policy/postures.ts';
+import {POSTURE_STATEMENTS} from '@fss/domain/src/rules/statePosture.ts';
+import {test,expect,startQualifiedResearchApp,routeQualifiedResearchProvider,loginQualifiedResearch} from '../support/qualifiedResearchApp.ts';
+import {browserRequest} from '../support/browser.ts';
+import {QUALIFICATION_PENDING_KEY} from '../../src/client/QualificationPending.ts';
+const noWriteTables=['jobs','provider_reservations','daily_counters','contacts','sequence_enrollments','outbound_messages'];
+const baseline=new Map<string,unknown[]>();
+let owned:Awaited<ReturnType<typeof startQualifiedResearchApp>>,fixture:Awaited<ReturnType<typeof seedRetainedRecovery>>,original:unknown;
+const inventory=(page:Page)=>page.getByRole('region',{name:'Ordinary sourcing inventory',exact:true});
+const context=()=>repositoryContext(workspaceScope(owned.app.fixture.alpha.workspaceId,{kind:'user',userId:owned.app.fixture.alpha.admin.userId,role:'admin'}),owned.app.fixture.db);
+async function load(page:Page){const response=page.waitForResponse(r=>r.url().endsWith('/browser/api/sourcing/candidates/list'));await inventory(page).getByRole('button',{name:'Load ordinary inventory',exact:true}).click();expect((await response).status()).toBe(200);return candidateListSchema.parse(await(await response).json());}
+const held=(page:Page)=>page.evaluate(key=>sessionStorage.getItem(key),QUALIFICATION_PENDING_KEY);
+test.beforeAll(async()=>{
+ assert.equal(process.env['FSS_RETAINED_RECOVERY_EXCLUSIVE_LANE'],'issue760-retained-recovery','Root sole disposable PG/Chrome lane grant required');owned=await startQualifiedResearchApp();
+ fixture=await withTransaction(owned.app.fixture.db,()=>seedRetainedRecovery(context()));
+ for(const table of noWriteTables)baseline.set(table,(await owned.app.fixture.db.query(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows);
+ original=(await owned.app.fixture.db.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[fixture.runId])).rows[0];
+ const posture=await withTransaction(owned.app.fixture.db,()=>recordStatePosture(context(),{state:'TX',effectiveFrom:new Date(Date.now()-60000).toISOString(),confirmedStatements:Object.keys(POSTURE_STATEMENTS)}));assert(posture.ok);
+});
+test.afterAll(async()=>{await owned?.stop();});
+test('composes retained identity and human interpretation through real HTTPS signed OIDC custody to exact Firm and Today without acquisition',async({researchPage:page})=>{
+ await routeQualifiedResearchProvider(page,owned.app);await loginQualifiedResearch(page,owned.app);expect(owned.app.fixture.google.jwksFetches()).toBeGreaterThan(0);await load(page);
+ let card=inventory(page).getByRole('article',{name:`Candidate ${fixture.candidateId}`,exact:true});await card.getByRole('button',{name:'Read qualification',exact:true}).click();
+ await expect(card).toContainText('invalid_evidence');await expect(card.getByRole('button',{name:'Admit reviewed qualification',exact:true})).toHaveCount(0);
+ let recovery=card.getByRole('region',{name:'Retained qualification recovery',exact:true});
+ await recovery.getByLabel('Recovery observation',{exact:true}).selectOption(fixture.source.id);await recovery.getByLabel('Recovery block',{exact:true}).selectOption('unrelated');await expect(recovery.getByLabel('Selected recovery original')).toContainText('<img');await expect(recovery.locator('img')).toHaveCount(0);
+ await recovery.getByRole('button',{name:'Keep unresolved',exact:true}).click();expect(await held(page)).toBeNull();
+ await recovery.getByLabel('Recovery block',{exact:true}).selectOption('identity');await recovery.getByLabel('Literal retained trade-name',{exact:true}).fill(fixture.firmName);await recovery.getByRole('checkbox').check();
+ await page.route('**/browser/api/sourcing/qualification/recovery/identity',async route=>{const response=await route.fetch();expect(response.status()).toBe(200);expect(await response.json()).toMatchObject({status:'accepted'});await route.abort('failed');},{times:1});
+ await recovery.getByRole('button',{name:'Record identity-only decision',exact:true}).click();await expect(recovery).toContainText('Recovery unavailable');const identityHeld=await held(page);expect(identityHeld).not.toBeNull();expect(identityHeld).not.toMatch(/Retained Harbor|Copyright|https|csrf/u);
+ await page.reload();await expect(page.getByRole('button',{name:'Reconcile exact qualification command',exact:true})).toBeVisible();expect(await held(page)).toBe(identityHeld);
+ const replay=page.waitForResponse(r=>r.url().endsWith('/browser/api/sourcing/qualification/recovery/identity'));await page.getByRole('button',{name:'Reconcile exact qualification command',exact:true}).click();expect(await(await replay).json()).toMatchObject({status:'accepted',replayed:true});
+ expect((await owned.app.fixture.db.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[fixture.runId])).rows[0]).toEqual(original);expect((await owned.app.fixture.db.query('SELECT id FROM firms WHERE id<>$1 AND id<>$2',[owned.app.alphaFirmId,owned.app.betaFirmId])).rows).toHaveLength(0);
+ await load(page);card=inventory(page).getByRole('article',{name:`Candidate ${fixture.candidateId}`,exact:true});await expect(card).toContainText(fixture.firmName);await card.getByRole('button',{name:'Read qualification',exact:true}).click();recovery=card.getByRole('region',{name:'Retained qualification recovery',exact:true});await expect(recovery).toContainText('New retained-only human interpretation');
+ await expect(card.getByRole('button',{name:'Request qualification',exact:true})).toBeDisabled();
+ await recovery.getByLabel('Recovery observation',{exact:true}).selectOption(fixture.source.id);
+ for(const selection of fixture.interpretation('10000000-0000-4000-8000-000000000001').selections){await recovery.getByLabel('Recovery block',{exact:true}).selectOption(selection.blockId);await recovery.getByLabel('Recovery citation role',{exact:true}).selectOption(selection.kind);await recovery.getByRole('button',{name:'Add retained citation',exact:true}).click();}
+ await recovery.getByRole('checkbox').check();const interpreted=page.waitForResponse(r=>r.url().endsWith('/browser/api/sourcing/qualification/recovery/interpret'));await recovery.getByRole('button',{name:'Interpret retained citations',exact:true}).click();expect(await(await interpreted).json()).toMatchObject({status:'accepted',replayed:false});
+ await card.getByRole('button',{name:'Read qualification',exact:true}).click();await expect(card).toContainText('human_retained');await expect(card.getByRole('button',{name:'Admit reviewed qualification',exact:true})).toBeVisible();
+ const admitted=page.waitForResponse(r=>r.url().endsWith('/browser/api/sourcing/qualification/admit'));await card.getByRole('button',{name:'Admit reviewed qualification',exact:true}).click();const admission=await(await admitted).json() as {status:string;result:{firmId:string;routeId:string}};expect(admission.status).toBe('accepted');await expect(inventory(page)).toContainText(`Admitted exact Firm ${admission.result.firmId}`);
+ const todayResponse=page.waitForResponse(r=>new URL(r.url()).pathname==='/browser/api/today');await page.getByRole('button',{name:'Today',exact:true}).click();const today=todayListResponseSchema.parse(await(await todayResponse).json());expect(today.cards.find(c=>c.firmId===admission.result.firmId)?.firmName).toBe(fixture.firmName);
+ const todayCard=page.getByRole('article').filter({has:page.getByRole('button',{name:'Open firm',exact:true})}).filter({hasText:fixture.firmName}),firmResponse=page.waitForResponse(r=>r.url().endsWith('/browser/api/crm/firm-page-v3'));await todayCard.getByRole('button',{name:'Open firm',exact:true}).click();expect(pluralFirmPageResponseSchema.parse(await(await firmResponse).json()).read.firm.id).toBe(admission.result.firmId);
+ expect((await owned.app.fixture.db.query('SELECT firm_id FROM sourcing_retained_firm_acquisition_fences')).rows).toEqual([{firm_id:admission.result.firmId}]);
+ const read=await browserRequest(page,'/sourcing/qualification/read',{body:{candidateId:fixture.candidateId}});expect(qualificationViewSchema.parse(read.body)).toMatchObject({status:'admitted',interpretationOrigin:'human_retained',recovery:{originalRunId:fixture.runId}});
+ expect((await owned.app.fixture.db.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[fixture.runId])).rows[0]).toEqual(original);
+ for(const table of noWriteTables)expect((await owned.app.fixture.db.query(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows,`${table}: no new or changed acquisition/contact records`).toEqual(baseline.get(table));
+ await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeVisible();expect(await held(page)).toBeNull();
+ console.log('ISSUE760_RETAINED_RECOVERY_ACCEPTED',JSON.stringify({candidateId:fixture.candidateId,originalRunId:fixture.runId,firmId:admission.result.firmId,originalUnchanged:true,acquisition:0,contact:0}));
+});

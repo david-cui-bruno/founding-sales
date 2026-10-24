@@ -7,6 +7,7 @@ import {databaseNow} from '../policy/clock.ts';
 import {qualifyEmailCandidate} from '../outreach/selection.ts';
 import {readDiscoveryPreparation} from './discoveryPromotion.ts';
 import {nativeFirmCitations} from './nativeFirmEligibility.ts';
+import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 export const canonicalResearchValue=(value:unknown):string=>JSON.stringify(value,(_key,item:unknown)=>item!==null&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
 export const researchFingerprint=(value:unknown):string=>createHash('sha256').update(canonicalResearchValue(value)).digest('hex');
@@ -25,6 +26,7 @@ export async function readQualifiedResearchCandidate(ctx:RepositoryContext,disco
  if(!await researchActor(ctx))return null;
  const row=(await ctx.db.query<{id:string;provider:string;release:string;record_id:string;legacy_candidate_id:string;revision:number;qualification_blocked:boolean;payload:unknown}>(`SELECT p.id,p.provider,p.release,p.record_id,p.legacy_candidate_id,c.revision,c.qualification_blocked,c.payload FROM sourcing_discovery_promotions p JOIN sourcing_candidates c ON c.workspace_id=p.workspace_id AND c.id=p.legacy_candidate_id WHERE p.workspace_id=$1 AND p.raw_candidate_id=$2`,[ctx.scope.workspaceId,discoveryCandidateId])).rows[0];
  if(!row||row.qualification_blocked)return null;
+ if(await retainedCandidateOnly(ctx,row.legacy_candidate_id))return null;
  const preparation=await readDiscoveryPreparation(ctx,row.id),candidate=candidateInputSchema.safeParse(row.payload);
  if(!preparation||!candidate.success)return null;
  const originSql='SELECT o.source,o.source_metadata,o.licenses,o.notices,r.qualification_blocked FROM sourcing_candidate_discovery_origins o JOIN sourcing_candidates r ON r.workspace_id=o.workspace_id AND r.id=o.candidate_id WHERE o.workspace_id=$1 AND o.candidate_id=$2 AND o.provider=$3 AND o.release=$4 AND o.record_id=$5';

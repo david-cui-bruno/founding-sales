@@ -23,6 +23,7 @@ import {OUTREACH_PATHS,routeOutreach} from './outreach.ts';
 import {EMAIL_CAMPAIGN_PATHS,routeEmailCampaigns} from './emailCampaigns.ts';
 import {MEETING_QUALIFICATION_PATHS,routeMeetingQualification} from './meetingQualification.ts';
 import { SOURCING_PATHS, routeSourcing } from './sourcing.ts';
+import {RETAINED_RECOVERY_PATHS} from './sourcingRetainedRecovery.ts';
 import { MEETING_AUTO_RECORDING_PATHS,routeMeetingAutoRecording } from './meetingAutoRecording.ts';
 import { MEETING_FOLLOW_THROUGH_PATHS,routeMeetingFollowThrough } from './meetingFollowThrough.ts';
 import { MEETING_OUTCOMES_PATHS, routeMeetingOutcomes } from './meetingOutcomes.ts';
@@ -174,7 +175,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
   return [
     healthModule(routing),
     moduleOf('sourcing-learning',{paths:SOURCING_LEARNING_PATHS},routeSourcingLearning,routing),
-    moduleOf('sourcing', { paths: SOURCING_PATHS }, routeSourcing, routing),
+    moduleOf('sourcing', { paths: [...SOURCING_PATHS,...RETAINED_RECOVERY_PATHS] }, routeSourcing, routing),
     moduleOf('auth', { prefixes: ['/auth'] }, routeAuth, routing),
     // This workspace's Macs and the revocation (wave 3b). Exact paths, and beside
     // `auth` rather than under it: `/auth` is what a Mac calls with no session, and

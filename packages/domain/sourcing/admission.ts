@@ -21,6 +21,8 @@ import {qualifyCandidate,supportedBusinessPhone} from './qualificationPolicy.ts'
 import {candidateIdentity} from './qualificationDecision.ts';
 import {verifiedFirmOwner,verifiedFirmEvidence,verifiedWebsiteKey,VERIFIED_FIRM_POLICY_VERSION} from './verifiedFirmPolicy.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {retainedCandidateOnly,retainedWallNow,lockRetainedAdmin,fenceRetainedFirm} from './retainedAcquisition.ts';
+import type {RetainedAuthority} from './retainedRecoveryEvidence.ts';
 interface AdmissionInput {candidateId:string;expectedRevision:number;qualificationRunId:string;mode:'automatic'|'reviewed'}
 interface AdmissionResult {firmId:string;routeId:string;alreadyAdmitted:boolean}
 const refused=(reason:string):SourcingResult<AdmissionResult>=>({ok:false,reason});
@@ -40,17 +42,18 @@ export function sourcingTimeZone(region:string,locality:string):string|null {
  return null;
 }
 /** A transaction/savepoint makes every refused admission leave the CRM unchanged. */
-export async function admitCandidate(ctx:RepositoryContext,input:AdmissionInput):Promise<SourcingResult<AdmissionResult>> {
+export async function admitCandidate(ctx:RepositoryContext,input:AdmissionInput,authority?:RetainedAuthority):Promise<SourcingResult<AdmissionResult>> {
  if(!decideAdminOnly(ctx).permitted)return refused('admin_only');
  if(input.mode==='reviewed'&&ctx.scope.actor.kind!=='user')return refused('admin_only');
  await ctx.db.query('SAVEPOINT sourcing_admission');
  try{
-  const result=await admit(ctx,input);
+  let result=await admit(ctx,input,authority);
+  if(result.ok&&authority&&!await authority())result=refused('session_changed');
   if(!result.ok)await ctx.db.query('ROLLBACK TO SAVEPOINT sourcing_admission');
   await ctx.db.query('RELEASE SAVEPOINT sourcing_admission');return result;
  }catch(error){await ctx.db.query('ROLLBACK TO SAVEPOINT sourcing_admission');await ctx.db.query('RELEASE SAVEPOINT sourcing_admission');throw error;}
 }
-async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<SourcingResult<AdmissionResult>> {
+async function admit(ctx:RepositoryContext,input:AdmissionInput,authority?:RetainedAuthority):Promise<SourcingResult<AdmissionResult>> {
  const w=ctx.scope.workspaceId;
  // Merge/stop paths use gate -> Today -> firms. Admission takes that same order.
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
@@ -64,6 +67,10 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  const candidate=(await ctx.db.query<{revision:number;status:string;qualification_blocked:boolean;payload:CandidateInput}>('SELECT revision,status,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 AND candidate_id=$3 FOR UPDATE',[w,input.qualificationRunId,input.candidateId])).rows[0];
  if(!candidate||!run)return refused('not_found');
+ const retained=await retainedCandidateOnly(ctx,input.candidateId),decisionId=typeof run['retained_identity_decision_id']==='string'?run['retained_identity_decision_id']:undefined;
+ if(retained&&(input.mode!=='reviewed'||!decisionId||!await lockRetainedAdmin(ctx)))return refused('identity_review_required');
+ if(retained&&authority&&!await authority())return refused('session_changed');
+ if(retained&&(run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION))return refused('evidence_unavailable');
  if(!isLegacyCandidatePayload(candidate.payload))return refused('candidate_format_not_supported');
  if(candidate.qualification_blocked)return refused('identity_review_required');
  if(candidate.revision!==input.expectedRevision||candidate.revision!==run.candidate_revision||candidate.status==='dismissed')return refused('candidate_changed');
@@ -84,10 +91,11 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
   if((await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return refused('research_held');
  }
  if(!['review','eligible'].includes(run.state)||run.reason)return refused('evidence_unavailable');
- const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=await databaseNow(ctx);
+ const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=retained?await retainedWallNow(ctx):await databaseNow(ctx);
  const verified=input.mode==='automatic'?verifiedFirmEvidence({candidate:candidate.payload,facts:run.facts,observations:run.observations,now}):null;
  if(verified&&verified.kind!=='verified')return refused(verified.reason);
  const ranked=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now});
+ if(retained&&ranked.decision!=='eligible')return refused(ranked.unknowns[0]??'evidence_unavailable');
  const verdict=input.mode==='automatic'?{...ranked,decision:'eligible' as const,unknowns:[],reasons:['verified_first_party_firm'],policyVersion:VERIFIED_FIRM_POLICY_VERSION}:ranked;
  const reviewable=new Set(['maintenance_need_unconfirmed','help_date_unknown','help_needs_revalidation','need_evidence_conflicts','job_date_unknown','growth_date_unknown','event_needs_revalidation']);
  const invalid=verdict.unknowns.find(reason=>!reviewable.has(reason));if(invalid)return refused(invalid);
@@ -114,13 +122,15 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  if(otherRoute)return refused('phone_association_ambiguous');
  if(firm&&(await ctx.db.query('SELECT id FROM sequence_enrollments WHERE workspace_id=$1 AND firm_id=$2 AND ended_at IS NULL LIMIT 1',[w,firm.id])).rows.length)return refused('firm_already_enrolled');
  if((await listApplicableHolds(ctx,{actionKind:'dial_authorization',...(firm?{firmId:firm.id}:{}),ownerUserId:owner,channel:'call'})).length)return refused('calling_held');
- if(!firm){const made=await createFirm(ctx,{name:candidate.payload.firmName,website:candidate.payload.website,locality:candidate.payload.locality,regionCode:candidate.payload.region,assignedUserId:owner});if(!made.ok)return refused(made.reason);firm=made.value;}
+ if(!firm){const made=await createFirm(ctx,{name:candidate.payload.firmName,website:candidate.payload.website,locality:candidate.payload.locality,regionCode:candidate.payload.region,assignedUserId:owner,...(decisionId?{retainedRecoveryDecisionId:decisionId}:{})});if(!made.ok)return refused(made.reason);firm=made.value;}
+ else if(decisionId&&!await fenceRetainedFirm(ctx,firm.id,decisionId))return refused('acquisition_in_progress');
  const existing=(await ctx.db.query<{id:string;contact_id:string|null;e164:string;eligibility:string}>('SELECT id,contact_id,e164,eligibility FROM phone_routes WHERE workspace_id=$1 AND firm_id=$2 AND e164=$3 ORDER BY id LIMIT 1 FOR UPDATE',[w,firm.id,phone])).rows[0];
  if(existing&&['invalid','retired'].includes(existing.eligibility))return refused('route_unavailable');
  if(existing&&await firstSuppressed(ctx,await suppressionKeys(ctx,firm,existing,undefined),'phone'))return refused('phone_or_firm_stopped');
  const route=existing?{ok:true as const,value:existing}:await addPhoneRoute(ctx,{firmId:firm.id,e164:phone,source:'website',retrievedAt:new Date(run.observations[0]!.retrievedAt)});
  if(!route.ok)return refused(route.reason);
  if(firm.time_zone===null){const resolved=await resolveZoneForFirm(ctx,{firmId:firm.id,recordedZone:zone});if(!resolved.ok)return refused(resolved.reason);}
+ if(retained){const finalNow=await retainedWallNow(ctx),fresh=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now:finalNow});if(fresh.decision!=='eligible')return refused(fresh.unknowns[0]??'evidence_unavailable');if((await applicablePosture(ctx,candidate.payload.region,finalNow)).decision.kind==='refused')return refused('calling_state_not_enabled');}
  await ctx.db.query('INSERT INTO sourcing_admissions(workspace_id,candidate_id,run_id,firm_id,route_id) VALUES($1,$2,$3,$4,$5)',[w,input.candidateId,run.id,firm.id,route.value.id]);
  await ctx.db.query("UPDATE sourcing_qualification_runs SET state='admitted',verdict=$3::jsonb WHERE workspace_id=$1 AND id=$2",[w,run.id,JSON.stringify(verdict)]);
  const query=(await ctx.db.query<{query_id:string}>(`SELECT a.query_id FROM sourcing_discovery_hits h JOIN sourcing_discovery_attempts a ON a.workspace_id=h.workspace_id AND a.id=h.attempt_id WHERE h.workspace_id=$1 AND h.candidate_id=$2 ORDER BY a.created_at,a.id LIMIT 1`,[w,input.candidateId])).rows[0];
@@ -130,7 +140,7 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  await refreshTodayForFirm(ctx,{firmId:firm.id});
  // New firms already enqueue inside createFirm. Reused firms need the same handoff,
  // but do not replace an existing brief or retry a previous/uncertain research run.
- if(exact[0]&&(await ctx.db.query("SELECT id FROM research_runs WHERE workspace_id=$1 AND firm_id=$2 AND purpose='brief' LIMIT 1",[w,firm.id])).rows.length===0){
+ if(!retained&&exact[0]&&(await ctx.db.query("SELECT id FROM research_runs WHERE workspace_id=$1 AND firm_id=$2 AND purpose='brief' LIMIT 1",[w,firm.id])).rows.length===0){
   await enqueueFirmResearchBestEffort(ctx,{firmId:firm.id,trigger:input.mode==='reviewed'?'user_request':'sweep',...(input.mode==='reviewed'?{requestedByUserId:owner}:{})});
  }
  return {ok:true,value:{firmId:firm.id,routeId:route.value.id,alreadyAdmitted:false}};

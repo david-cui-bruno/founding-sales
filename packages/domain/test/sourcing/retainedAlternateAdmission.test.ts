@@ -1,0 +1,46 @@
+import {createHash} from 'node:crypto';
+import {beforeAll,afterAll,it,expect} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import {withTransaction} from '../../db/queryable.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
+import {seedRetainedRecovery} from './retainedRecoveryFixture.ts';
+import {decideRetainedIdentity,interpretRetainedQualification} from '../../sourcing/retainedRecovery.ts';
+import {admitCallingCandidate} from '../../sourcing/callingAdmission.ts';
+import {assessCallingEvidence} from '../../sourcing/callingEvidence.ts';
+import {admitEmailCandidate} from '../../outreach/emailAdmission.ts';
+import {assessEmailCandidate,supportedBusinessEmail} from '../../outreach/selection.ts';
+import {candidateIdentity} from '../../sourcing/qualificationDecision.ts';
+import {createFirm} from '../../crm/firms.ts';
+import type {CandidateInput} from '@fss/contracts';
+import type {QualificationRunRow} from '../../sourcing/qualificationStore.ts';
+let db:TestDatabase,seed:TwoWorkspaces;
+const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),db.session);
+const tx=<T>(work:()=>Promise<T>)=>withTransaction(db.session,work);
+const tables=['firms','contacts','phone_routes','email_addresses','outreach_email_sources','sourcing_admissions','sourcing_qualification_runs','sourcing_retained_identity_decisions','sourcing_retained_firm_acquisition_fences','audit_events','jobs','provider_reservations','daily_counters'];
+async function snapshot(){const state:Record<string,unknown[]>={};for(const t of tables)state[t]=(await db.session.query(`SELECT to_jsonb(t) AS row FROM ${t} t ORDER BY to_jsonb(t)::text`)).rows;return state;}
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);});
+afterAll(async()=>{await db.drop();});
+it.each([false,true])('refuses alternate calling/email paths for fully supported retained evidence (existing Firm %s)',async existing=>{
+ const f=await tx(()=>seedRetainedRecovery(ctx(),existing?' Existing':' New'));
+ f.source.blocks.find(b=>b.id==='need')!.text='Our team is overwhelmed by maintenance repair backlog.';
+ f.source.blocks.push({id:'email',text:`${f.firmName} Dallas, TX office info@${new URL(f.website).hostname}`});
+ f.source.relevantTextHash=createHash('sha256').update(JSON.stringify(f.source.blocks)).digest('hex');
+ // Fixture assembly precedes the immutable decision. No production recovery edits originals.
+ await db.session.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb WHERE id=$1',[f.runId,JSON.stringify([f.source])]);
+ const identity=await tx(()=>decideRetainedIdentity(ctx(),{...f.identity,relevantTextHash:f.source.relevantTextHash}));if(!identity.ok)throw Error(identity.reason);
+ const draft=f.interpretation(identity.value.decisionId);
+ const interpretation=await tx(()=>interpretRetainedQualification(ctx(),{...draft,selections:[...draft.selections.map(s=>({...s,blockId:s.kind==='firm_identity'?'fit':s.blockId,relevantTextHash:f.source.relevantTextHash})),{kind:'business_email',observationId:f.source.id,blockId:'email',contentHash:f.source.contentHash,relevantTextHash:f.source.relevantTextHash}]}));
+ expect(interpretation).toMatchObject({ok:true});if(!interpretation.ok)throw Error(interpretation.reason);
+ const candidate=(await db.session.query<{payload:CandidateInput}>('SELECT payload FROM sourcing_candidates WHERE id=$1',[f.candidateId])).rows[0]!.payload;
+ const run=(await db.session.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[interpretation.value.runId])).rows[0]!;
+ expect(assessCallingEvidence({candidate,observations:run.observations,facts:run.facts,phone:'+12145550186',knownPersonalCell:false,now:new Date().toISOString()})).toMatchObject({kind:'source_evidence_eligible'});
+ expect(supportedBusinessEmail({facts:run.facts,observations:run.observations,identity:candidateIdentity(candidate,run.facts,run.observations),now:new Date().toISOString()})).toMatchObject({address:`info@${new URL(f.website).hostname}`});
+ if(existing)expect(await tx(()=>createFirm(ctx(),{name:f.firmName,website:f.website,locality:'Dallas',regionCode:'TX',assignedUserId:seed.alpha.admin.userId}))).toMatchObject({ok:true});
+ const before=await snapshot(),input={candidateId:f.candidateId,qualificationRunId:run.id,expectedRevision:2};
+ expect(await tx(()=>admitCallingCandidate(ctx(),{...input,phone:'+12145550186'}))).toEqual({ok:false,reason:'identity_review_required'});
+ expect(await snapshot()).toEqual(before);
+ expect(await assessEmailCandidate(ctx(),input)).toEqual({ok:false,reason:'identity_review_required'});
+ expect(await tx(()=>admitEmailCandidate(ctx(),{...input,expectedOwnerUserId:seed.alpha.admin.userId,reviewed:true}))).toEqual({ok:false,reason:'identity_review_required'});
+ expect(await snapshot()).toEqual(before);
+});

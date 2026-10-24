@@ -18,6 +18,7 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {retainedCandidateOnly,retainedWallNow} from './retainedAcquisition.ts';
 
 import {QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from './qualificationVersions.ts';
 export {QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from './qualificationVersions.ts';
@@ -43,6 +44,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   if(candidate.revision!==input.expectedRevision)return refused('candidate_changed');
   if(candidate.status==='dismissed')return refused('candidate_dismissed');
   if(candidate.qualification_blocked)return refused('identity_review_required');
+  if(await retainedCandidateOnly(context,candidate.id))return refused('retained_only');
   const now=await databaseNow(context),settings=await readResearchSettings(context);
   const fingerprint=createHash('sha256').update(JSON.stringify([candidate.revision,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,now.slice(0,10)])).digest('hex');
   const previous=(await context.db.query<{id:string}>(
@@ -77,7 +79,8 @@ export async function readQualification(context:RepositoryContext,input:{candida
     (['pending','running'].includes(current.state) && current.deadline_at.getTime()<=Date.parse(now))?'qualification_expired':current.reason;
   const admission=(await context.db.query<{firm_id:string;route_id:string}>(
     'SELECT firm_id,route_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2',[context.scope.workspaceId,candidate.id])).rows[0];
-  return {candidateId:candidate.id,runId:current.id,candidateRevision:current.candidate_revision,status:reason?'unavailable':current.state,reason,admissionReason:current.admission_reason,
+  const recovery=(await context.db.query<{id:string;original_run_id:string;result_revision:number;interpretation_run_id:string|null}>(`SELECT d.id,d.original_run_id,d.result_revision,r.id AS interpretation_run_id FROM sourcing_retained_identity_decisions d LEFT JOIN sourcing_qualification_runs r ON r.workspace_id=d.workspace_id AND r.retained_identity_decision_id=d.id WHERE d.workspace_id=$1 AND d.candidate_id=$2 ORDER BY d.created_at DESC,d.id DESC LIMIT 1`,[context.scope.workspaceId,candidate.id])).rows[0];
+  return {candidateId:candidate.id,runId:current.id,candidateRevision:current.candidate_revision,currentCandidateRevision:candidate.revision,interpretationOrigin:current['retained_identity_decision_id']?'human_retained':'provider',...(recovery?{recovery:{decisionId:recovery.id,originalRunId:recovery.original_run_id,identityRevision:recovery.result_revision,interpretationRunId:recovery.interpretation_run_id,acquisitionMode:'retained_only' as const,methodVersion:'human-retained-v1' as const}}:{}),status:reason?'unavailable':current.state,reason,admissionReason:current.admission_reason,
     requestedAt:current.requested_at.toISOString(),deadlineAt:current.deadline_at.toISOString(),observations:current.observations,facts:current.facts,
     verdict:reason?null:current.verdict,openingQuestion:reason?null:current.opening_question,
     admission:admission?{firmId:admission.firm_id,routeId:admission.route_id}:null,
@@ -100,17 +103,17 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   const run=(await context.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[workspaceId,input.runId])).rows[0];
   if(!run)return refused('not_found');
   if(!['pending','running'].includes(run.state))return refused('run_finished');
-  const now=await databaseNow(context);
+  const now=run['retained_identity_decision_id']?await retainedWallNow(context):await databaseNow(context);
   const invalid=candidate.status==='dismissed'?'candidate_dismissed':candidate.revision!==run.candidate_revision?'candidate_changed':
     run.deadline_at.getTime()<=Date.parse(now)?'qualification_expired':null;
   if(invalid){
-    await context.db.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason=$3,finished_at=now() WHERE workspace_id=$1 AND id=$2",[workspaceId,run.id,invalid]);
+    await context.db.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason=$3,finished_at=$4::timestamptz WHERE workspace_id=$1 AND id=$2",[workspaceId,run.id,invalid,now]);
     return refused(invalid);
   }
   if(evidence.data.observations.some(source=>Date.parse(source.retrievedAt)>Date.parse(now)+1000))return refused('invalid_evidence');
   await context.db.query(`UPDATE sourcing_qualification_runs SET state=$3,reason=$4,observations=$5::jsonb,facts=$6::jsonb,
-    opening_question=$7,finished_at=now() WHERE workspace_id=$1 AND id=$2`,
-    [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null]);
+    opening_question=$7,finished_at=$8::timestamptz WHERE workspace_id=$1 AND id=$2`,
+    [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null,now]);
   const diagnostic=input.reason===null?undefined:normalizeQualificationDiagnostic(input.diagnostic,evidence.data.observations.filter(s=>s.firstParty&&!s.truncated));
   await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review',policyVersion:run.policy_version,...(input.supplementedEvidence?.length?{evidenceRecovery:{rule:'supported-office-card-v1',citations:input.supplementedEvidence}}:{}),...(diagnostic?{diagnostic}:{})}});
   return {ok:true,value:{runId:run.id}};

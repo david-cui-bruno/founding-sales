@@ -14,6 +14,7 @@ export async function monitorCandidateSources(context:RepositoryContext):Promise
   if((await listApplicableHolds(context,{actionKind:'research',channel:'research'})).length>0)return {queued:0};
   const {rows}=await context.db.query<{id:string;revision:number}>(
     `SELECT id,revision FROM sourcing_candidates WHERE workspace_id=$1 AND payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND status='kept'
+      AND NOT EXISTS(SELECT 1 FROM sourcing_retained_identity_decisions d WHERE d.workspace_id=sourcing_candidates.workspace_id AND d.candidate_id=sourcing_candidates.id)
       AND next_source_check_at<=now() ORDER BY next_source_check_at,id
       LIMIT $2 FOR UPDATE SKIP LOCKED`,[context.scope.workspaceId,SOURCE_MONITOR_LIMIT]);
   let queued=0;

@@ -103,6 +103,7 @@ export async function selectFirmsForSweep(
        FROM firms f
       WHERE f.workspace_id = $1
         AND f.status = 'active'
+        AND NOT EXISTS(SELECT 1 FROM sourcing_retained_firm_acquisition_fences retained WHERE retained.workspace_id=f.workspace_id AND retained.firm_id=f.id)
         AND NOT EXISTS (
           SELECT 1 FROM effective_suppressions e
            WHERE e.workspace_id = f.workspace_id AND e.scope = 'firm' AND e.canonical_key = f.id::text
