@@ -9,6 +9,11 @@ const prospect = {
   possibleDuplicateCount: 0, qualification: 'unverified', contactAuthority: 'not_granted',
 };
 describe('manual retained prospect boundary', () => {
+  it('preserves all sixteen origins with sixteen licenses and notices each', () => {
+    const sourceNotices = Array.from({ length: 512 }, (_, index) => ({ label: `Notice ${index}`, url: null }));
+    expect(manualProspectSchema.safeParse({ ...prospect, sourceNotices }).success).toBe(true);
+    expect(manualProspectSchema.safeParse({ ...prospect, sourceNotices: [...sourceNotices, { label: 'Overflow', url: null }] }).success).toBe(false);
+  });
   it('accepts a raw observation without phone, qualification or automatic owner', () => {
     expect(manualProspectSchema.safeParse(prospect).success).toBe(true);
   });

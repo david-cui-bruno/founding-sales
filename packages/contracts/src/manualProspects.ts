@@ -26,7 +26,7 @@ export const manualProspectSchema = z.strictObject({
   sourceNotices: z.array(z.strictObject({
     label: z.string().min(1).max(300),
     url: z.string().max(2000).nullable(),
-  })).max(256),
+  })).max(512),
   retainedAt: instant,
   state: manualProspectStateSchema,
   unknowns: z.array(z.string().min(1).max(200)).max(20),
