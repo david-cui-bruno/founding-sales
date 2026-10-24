@@ -22,6 +22,7 @@ import {candidateIdentity} from './qualificationDecision.ts';
 import {verifiedFirmOwner,verifiedFirmEvidence,verifiedWebsiteKey,VERIFIED_FIRM_POLICY_VERSION} from './verifiedFirmPolicy.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 import {retainedCandidateOnly,retainedWallNow,lockRetainedAdmin,fenceRetainedFirm} from './retainedAcquisition.ts';
+import type {RetainedAuthority} from './retainedRecoveryEvidence.ts';
 interface AdmissionInput {candidateId:string;expectedRevision:number;qualificationRunId:string;mode:'automatic'|'reviewed'}
 interface AdmissionResult {firmId:string;routeId:string;alreadyAdmitted:boolean}
 const refused=(reason:string):SourcingResult<AdmissionResult>=>({ok:false,reason});
@@ -41,17 +42,18 @@ export function sourcingTimeZone(region:string,locality:string):string|null {
  return null;
 }
 /** A transaction/savepoint makes every refused admission leave the CRM unchanged. */
-export async function admitCandidate(ctx:RepositoryContext,input:AdmissionInput):Promise<SourcingResult<AdmissionResult>> {
+export async function admitCandidate(ctx:RepositoryContext,input:AdmissionInput,authority?:RetainedAuthority):Promise<SourcingResult<AdmissionResult>> {
  if(!decideAdminOnly(ctx).permitted)return refused('admin_only');
  if(input.mode==='reviewed'&&ctx.scope.actor.kind!=='user')return refused('admin_only');
  await ctx.db.query('SAVEPOINT sourcing_admission');
  try{
-  const result=await admit(ctx,input);
+  let result=await admit(ctx,input,authority);
+  if(result.ok&&authority&&!await authority())result=refused('session_changed');
   if(!result.ok)await ctx.db.query('ROLLBACK TO SAVEPOINT sourcing_admission');
   await ctx.db.query('RELEASE SAVEPOINT sourcing_admission');return result;
  }catch(error){await ctx.db.query('ROLLBACK TO SAVEPOINT sourcing_admission');await ctx.db.query('RELEASE SAVEPOINT sourcing_admission');throw error;}
 }
-async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<SourcingResult<AdmissionResult>> {
+async function admit(ctx:RepositoryContext,input:AdmissionInput,authority?:RetainedAuthority):Promise<SourcingResult<AdmissionResult>> {
  const w=ctx.scope.workspaceId;
  // Merge/stop paths use gate -> Today -> firms. Admission takes that same order.
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
@@ -67,6 +69,7 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  if(!candidate||!run)return refused('not_found');
  const retained=await retainedCandidateOnly(ctx,input.candidateId),decisionId=typeof run['retained_identity_decision_id']==='string'?run['retained_identity_decision_id']:undefined;
  if(retained&&(input.mode!=='reviewed'||!decisionId||!await lockRetainedAdmin(ctx)))return refused('identity_review_required');
+ if(retained&&authority&&!await authority())return refused('session_changed');
  if(retained&&(run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION))return refused('evidence_unavailable');
  if(!isLegacyCandidatePayload(candidate.payload))return refused('candidate_format_not_supported');
  if(candidate.qualification_blocked)return refused('identity_review_required');

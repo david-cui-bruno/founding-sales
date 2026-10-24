@@ -1,3 +1,4 @@
+import {retainedCandidateOnly} from '../sourcing/retainedAcquisition.ts';
 import {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
 import {campaignCandidateProvenance,campaignDatabaseNow} from './emailCampaignAuthority.ts';
 export {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
@@ -76,6 +77,7 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  const candidate=(await ctx.db.query<{payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>('SELECT payload,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,input.candidateId])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 AND candidate_id=$3',[w,input.qualificationRunId,input.candidateId])).rows[0];
  if(!candidate||!run)return {ok:false,reason:'not_found'};
+ if(await retainedCandidateOnly(ctx,input.candidateId))return {ok:false,reason:'identity_review_required'};
  if(candidate.qualification_blocked||candidate.status==='dismissed'||candidate.revision!==run.candidate_revision)return {ok:false,reason:'candidate_changed'};
  if(!['eligible','review','admitted'].includes(run.state)||run.reason)return {ok:false,reason:'evidence_unavailable'};
  const identity=candidateIdentity(candidate.payload,run.facts,run.observations);

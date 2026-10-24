@@ -1,3 +1,4 @@
+import {retainedCandidateOnly} from '../sourcing/retainedAcquisition.ts';
 import {existingEmailRoute} from './existingEmail.ts';
 import type {AutomaticResearchTarget,CandidateInput} from '@fss/contracts';
 import {campaignCandidateProvenance} from './emailCampaignAuthority.ts';
@@ -39,6 +40,7 @@ async function admit(ctx:RepositoryContext,input:Input,automaticSource?:Automati
  const candidate=(await ctx.db.query<{payload:CandidateInput;revision:number}>('SELECT payload,revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
  await ctx.db.query('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.qualificationRunId]);
  if(!candidate||candidate.revision!==input.expectedRevision)return {ok:false,reason:'candidate_changed'};
+ if(await retainedCandidateOnly(ctx,input.candidateId))return {ok:false,reason:'identity_review_required'};
  const assessment=await assessEmailCandidate(ctx,input,automaticSource);if(!assessment.ok)return assessment;
  if(assessment.value.firmId!==(firm?.id??null))return {ok:false,reason:'firm_changed'};
  if(assessment.value.reviewRequired&&!input.reviewed)return {ok:false,reason:'qualification_requires_review'};

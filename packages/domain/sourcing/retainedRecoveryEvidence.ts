@@ -8,10 +8,11 @@ import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './quali
 import {candidateAcquisitionOutstanding,lockRetainedAdmin,retainedWallNow} from './retainedAcquisition.ts';
 export interface RecoveryCandidate {payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean;[key:string]:unknown}
 export interface RetainedDecision {id:string;candidate_id:string;original_run_id:string;original_revision:number;result_revision:number;observation_id:string;block_id:string;content_hash:string;relevant_text_hash:string;name_start:number;name_end:number;[key:string]:unknown}
+export type RetainedAuthority=()=>Promise<boolean>;
 export const fail=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
-export async function recoverySavepoint<T>(ctx:RepositoryContext,work:()=>Promise<SourcingResult<T>>):Promise<SourcingResult<T>>{
+export async function recoverySavepoint<T>(ctx:RepositoryContext,work:()=>Promise<SourcingResult<T>>,authority?:RetainedAuthority):Promise<SourcingResult<T>>{
  await ctx.db.query('SAVEPOINT retained_recovery');
- try{const result=await work();if(!result.ok)await ctx.db.query('ROLLBACK TO SAVEPOINT retained_recovery');await ctx.db.query('RELEASE SAVEPOINT retained_recovery');return result;}
+ try{let result=await work();if(result.ok&&authority&&!await authority())result=fail('session_changed');if(!result.ok)await ctx.db.query('ROLLBACK TO SAVEPOINT retained_recovery');await ctx.db.query('RELEASE SAVEPOINT retained_recovery');return result;}
  catch(error){await ctx.db.query('ROLLBACK TO SAVEPOINT retained_recovery');await ctx.db.query('RELEASE SAVEPOINT retained_recovery');throw error;}
 }
 export async function lockRecovery(ctx:RepositoryContext,input:{candidateId:string;expectedRevision:number;qualificationRunId:string},revisionChanged=false):Promise<SourcingResult<{candidate:RecoveryCandidate;run:QualificationRunRow;now:string}>>{

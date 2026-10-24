@@ -1,3 +1,4 @@
+import {retainedPrincipalAuthority} from './retainedPrincipalAuthority.ts';
 import {CANDIDATE_AUTHORITY_PATH,routeCandidateAuthority} from './candidateAuthority.ts';
 import {RETAINED_RECOVERY_PATHS,routeRetainedRecovery} from './sourcingRetainedRecovery.ts';
 import {QUALIFIED_RESEARCH_PATHS,routeQualifiedResearch} from './qualifiedResearch.ts';
@@ -80,7 +81,7 @@ export async function routeSourcing(request:ApiRequest,options:RoutingOptions):P
     const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return requestQualification(context,input);
   });
   if(request.path==='/sourcing/qualification/admit')return await runRouteCommand(deps,qualificationAdmissionCommandSchema,'sourcing.admit',async(context,body)=>{
-    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return admitCandidate(context,input);
+    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return admitCandidate(context,input,retainedPrincipalAuthority(deps,context));
   });
   if(request.path==='/sourcing/candidates/check')return await runRouteCommand(deps,candidateCheckCommandSchema,'sourcing.check',async(context,body)=>{
     const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;
