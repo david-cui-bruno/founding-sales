@@ -376,6 +376,8 @@ describe('what the API mounts', () => {
       '/sourcing/qualification/feedback',
       '/sourcing/qualification/firm',
       '/sourcing/qualification/read',
+      '/sourcing/qualification/recovery/identity',
+      '/sourcing/qualification/recovery/interpret',
       '/sourcing/qualification/request',
       '/sourcing/research-firms/create',
       '/sourcing/research-firms/list',
