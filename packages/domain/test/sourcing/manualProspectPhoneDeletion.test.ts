@@ -1,6 +1,3 @@
-import {execFileSync} from 'node:child_process';
-import {readFile} from 'node:fs/promises';
-import {join} from 'node:path';
 import {afterAll,beforeAll,beforeEach,expect,it} from 'vitest';
 import {createTestDatabase,TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
@@ -15,11 +12,9 @@ let db:TestDatabase,seeded:TwoWorkspaces,crm:SeededCrm,reader:SessionQueryable,d
 const context=()=>repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),reader);
 function signal(){let resolve!:()=>void;const promise=new Promise<void>(yes=>{resolve=yes;});return {promise,resolve};}
 beforeAll(async()=>{
- const postgres=execFileSync('ps',['-axo','pid,command'],{encoding:'utf8'}).split('\n').filter(line=>/(?:^|\s)(?:\S*\/)?postgres(?:\s|$)/u.test(line)&&!/postgres: /u.test(line));
- expect(postgres.filter(line=>!line.includes('/opt/homebrew/opt/postgresql@17/bin/postgres -D /opt/homebrew/var/postgresql@17'))).toHaveLength(1);
  db=await createTestDatabase();seeded=await seedTwoWorkspaces(db.session);crm=await seedCrm(db.session,seeded);reader=await db.appRuntimeSession();deleter=await db.appRuntimeSession();
- const storagePath=String((await db.session.query('SHOW data_directory')).rows[0]?.['data_directory']);
- console.log('PHONE_DELETE_RESOURCES',JSON.stringify({storagePath,pid:Number((await readFile(join(storagePath,'postmaster.pid'),'utf8')).split('\n')[0]),database:db.name,template:process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE],port:Number((await db.session.query('SHOW port')).rows[0]?.['port'])}));
+ // The harness owns cluster cleanup. Server files/processes may be in a container.
+ console.log('PHONE_DELETE_RESOURCES',JSON.stringify({database:db.name,template:process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE],backendPid:Number((await db.session.query('SELECT pg_backend_pid() pid')).rows[0]?.['pid'])}));
 });
 beforeEach(async()=>{await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM evidence_items');});
 afterAll(async()=>{await db?.drop();console.log('PHONE_DELETE_DATABASE_DROPPED: owned sessions disconnected and disposable test database dropped');});
