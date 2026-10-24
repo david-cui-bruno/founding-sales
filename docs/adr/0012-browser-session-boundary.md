@@ -58,6 +58,12 @@ Browser session, exact Origin, CSRF, current role/revision and founder restricti
 
 Root owns the shared allowlist, gateway adaptation and this contract. One implementer owns the complete client workflow and its focused tests. Read-only boundary inventory is independent. Finished spec, standards and privacy reviews plus focused composed acceptance precede any delivery claim. Native visibility is optional interim execution, not a prerequisite to this local source work.
 
+### Retained qualification originals, issue #757
+
+The existing qualification-read response already includes original captured observation blocks, including runs with unavailable interpretation and no accepted facts. Offer explicit per-source disclosure in the same memory-only view. Render escaped plain captured text, exact observation/block references and dated first-party/truncation metadata. Captured originals are not verified identity, accepted qualification facts, current website content or contact authority. Disclosure performs no request or external navigation. Do not fetch images, evaluate markup, persist private text or widen the allowlist. Keep original disclosure bound to the exact view's candidate/revision/run and clear it with existing evidence/session invalidation, replacement and late-response fences. A subsequent explicit read starts closed disclosure, not a retained expanded snapshot.
+
+This does not add name correction, rejected-run repair or retained-only qualification. Preserve failed runs and literal identity policy. Those absent mutation contracts require separate design, especially downstream scheduling after revision changes. Acceptance covers unavailable/no-facts originals, safe hostile text, explicit disclosure with zero fetches, replaced run/candidate/session and late reads through the existing browser authentication and domain read boundary.
+
 ### Ordinary sourcing inventory read, October23 follow-through
 
 The closed allowlist additionally admits only POST `/sourcing/candidates/list`, reusing existing `candidateListInputSchema`, `candidateListSchema`, API authentication/admin policy and workspace-scoped `listCandidates`. This is an ordinary retained inventory read, distinct from the ready-qualified discovery-promotion selection at `/sourcing/research-firms/list`. Neither an empty status/page nor a ready-selection result establishes global inventory absence. Existing automatic-owner `needs_review` semantics remain server-owned, not a browser definition of all unqualified inventory.

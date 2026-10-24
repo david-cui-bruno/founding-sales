@@ -8,7 +8,7 @@ David00:52:55 approved separate browser callback preserving desktop and founder-
 
 ## Issue754 browser qualification, deployed
 
-Child754 CLOSED/PR755 merged: existing request/status/reviewed-admission web surface deployed above. Source23bd580ea/cf81330ad/fixbbed7a66b. Controlled browser3PASS,106client/23PG/67boundary-packaging, types/build/lint/workflow/secrets PASS; same three reviews CLEAN. Hatchling sole release owner, not Bird. Real CProperty explicit requestOctober24 00:10:16 accepted; read00:10:45 unavailable/invalid_evidence, four complete first-party pages, no verdict/Firm/Today. Diagnose retained extraction metadata, no rerun. DWM remains Needs review with service-area/firm-phone unresolved. Preserve budgets/holds/OFF.
+Child754 CLOSED/PR755 merged: existing request/status/reviewed-admission web surface deployed above. Source23bd580ea/cf81330ad/fixbbed7a66b. Controlled browser3PASS,106client/23PG/67boundary-packaging, types/build/lint/workflow/secrets PASS; same three reviews CLEAN. Hatchling sole release owner, not Bird. Real CProperty requestOctober24 00:10:16 accepted; read00:10:45 unavailable/invalid_evidence, four complete pages, no verdict/Firm/Today. Bounded diagnostic00:55 confirmed citation_roles/identity_not_literal; owned taskSTOPPED0/definition243INACTIVE. Existing correction requires accepted facts. Child757 disclosure39client/NEW1browserPASS/CLEAN; PR758 CI failed33 weekend-fixture cases, domain6953PASS; API-weekendfix22835f0a7/3PASS/24PASS/CLEAN awaits CI. No identity repair/rerun. DWM remains Needs review, service-area/firm-phone unresolved. Preserve budgets/holds/OFF.
 
 ## Issue749 ordinary inventory, deployed
 
@@ -28,7 +28,7 @@ Desktop881 backup `/Applications/.Callie-before-881-20261022T045650Z.previous` r
 
 ## Capture and useful selling remain open
 
-Capture recovery October22 copied empty bodies, no permitted original. No replay. Real-original usefulness WAITING, synthetic751 DONE. Deployed752 adds strict source/current-owner/holds observation, always not_granted. Controlled NEW4PASS8.8s,44source/21UI/2boundary checks and three CLEAN reviews retain fixture/cleanup limits in canonical plan. Automatic-owner authority is separate from ordinary manual qualification. NEXT diagnose CProperty extraction refusal, then eligible source→Firm→Today. No generic David/cost wait or Westrom/send replay.
+Capture recovery October22 copied empty bodies, no permitted original. No replay. Real-original usefulness WAITING, synthetic751 DONE. Deployed752 adds strict source/current-owner/holds observation, always not_granted. Controlled NEW4PASS8.8s,44source/21UI/2boundary checks and three CLEAN reviews retain fixture/cleanup limits in canonical plan. Automatic-owner authority is separate from ordinary manual qualification. NEXT757 retained-original review, then eligible source→Firm→Today. No generic David/cost wait or Westrom/send replay.
 
 October21 TX1,600+CA/FL1,200 raw observations are not distinct/net-new/qualified/callable Firms. Westrom guarded homepage observation supports literal residential-management/service-area claims; Jcode seed is not David attestation. ONE Firm created October22 04:00:41, ONE link04:04 generically refused, no retry. Today visibility is not qualification. Scoped receipt task217 returned0 visible rows/cleaned up, not global absence/commit/auth diagnosis. Raw UI page16 checkpoint retained, no mutation replay.
 
