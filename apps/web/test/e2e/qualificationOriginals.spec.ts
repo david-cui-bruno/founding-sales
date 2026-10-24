@@ -73,6 +73,8 @@ test('new retained-only browser journey discloses empty-fact originals without f
   await loginQualifiedResearch(page, owned.app);
   expect(owned.app.fixture.google.jwksFetches()).toBeGreaterThan(0);
   const before = await unchangedState();
+  // Existing host fixture creates two firms, each enqueueing research.firm. No worker runs.
+  expect((await owned.app.fixture.db.query('SELECT kind FROM jobs ORDER BY kind')).rows).toEqual([{ kind: 'research.firm' }, { kind: 'research.firm' }]);
   await load(page); await read(page);
   await expect(card(page).getByRole('button', { name: 'Admit reviewed qualification', exact: true })).toHaveCount(0);
   await expect(card(page).getByText(original, { exact: true })).toHaveCount(0);
@@ -109,7 +111,7 @@ test('new retained-only browser journey discloses empty-fact originals without f
   await expect(page.getByText(original, { exact: true })).toHaveCount(0);
   await expect(page.getByRole('region', { name: /Captured original blocks/u })).toHaveCount(0);
   expect(await unchangedState()).toEqual(before);
-  for (const table of ['provider_reservations', 'jobs', 'sourcing_admissions', 'contacts', 'sequence_enrollments', 'outbound_messages']) {
+  for (const table of ['provider_reservations', 'sourcing_admissions', 'contacts', 'sequence_enrollments', 'outbound_messages']) {
     expect((await owned.app.fixture.db.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0]?.['count']).toBe(0);
   }
   expect(mutations).toEqual([]); expect(external).toEqual([]); expect(dialogs).toEqual([]);
