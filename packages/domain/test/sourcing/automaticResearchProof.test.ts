@@ -20,14 +20,15 @@ function fixture(){
  const native:SourceObservation={id,url:candidate.website,contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:now,publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'native',text}]};
  const emailSource:SourceObservation={...native,id:other,blocks:[{id:'email',text:email}]};
  const facts:QualificationFact[]=[...(['firm_identity','service_area','residential_management'] as const).map(kind=>({kind,value:text,observationId:id,blockId:'native'})),{kind:'business_email',value:email,observationId:other,blockId:'email'}];
- return {row:{id,revision:1,status:'needs_review',qualification_blocked:false,payload:{...candidate}},run:{id,candidate_revision:1,prompt_version:QUALIFICATION_PROMPT_VERSION,policy_version:QUALIFICATION_POLICY_VERSION,reason:null,state:'review',facts,observations:[native,emailSource]},hits:[{attempt_id:id,source_url:candidate.website,native_result:{url:candidate.website},query_id:query.id,query:query.query,policy_version:'targeting-v1'}],origins:[] as Record<string,unknown>[],role:'admin',time:now};
+ return {retained:false,row:{id,revision:1,status:'needs_review',qualification_blocked:false,payload:{...candidate}},run:{id,candidate_revision:1,prompt_version:QUALIFICATION_PROMPT_VERSION,policy_version:QUALIFICATION_POLICY_VERSION,reason:null,state:'review',facts,observations:[native,emailSource]},hits:[{attempt_id:id,source_url:candidate.website,native_result:{url:candidate.website},query_id:query.id,query:query.query,policy_version:'targeting-v1'}],origins:[] as Record<string,unknown>[],role:'admin',time:now};
 }
 let f:ReturnType<typeof fixture>,ctx:RepositoryContext;
 beforeEach(()=>{
  f=fixture();mocks.owner.mockResolvedValue(id);mocks.settings.mockResolvedValue({enabled:true});mocks.holds.mockResolvedValue([]);mocks.policy.mockResolvedValue({version:'targeting-v1',queries:[query],rankOrder:[]});
  ctx=repositoryContext(workspaceScope(id,{kind:'system',component:'worker'}),{query:async<Row,>(sql:string)=>{
   let rows:unknown[]=[];
-  if(sql.includes('workspace_memberships'))rows=[{role:f.role,status:'active'}];
+  if(sql==='SELECT id FROM sourcing_retained_identity_decisions WHERE workspace_id=$1 AND candidate_id=$2 LIMIT 1')rows=f.retained?[{id}]:[];
+  else if(sql.includes('workspace_memberships'))rows=[{role:f.role,status:'active'}];
   else if(sql.includes('clock_timestamp()'))rows=[{now:new Date(f.time)}];
   else if(sql.includes('FROM sourcing_candidates'))rows=[f.row];
   else if(sql.includes('FROM sourcing_qualification_runs'))rows=[f.run];
@@ -36,6 +37,9 @@ beforeEach(()=>{
   else throw new Error(`Unexpected query: ${sql}`);
   return {rows:rows as Row[],rowCount:rows.length};
  }});
+});
+it('refuses retained-only candidates before consulting owner, evidence or acquisition authority',async()=>{
+ f.retained=true;expect(await automaticResearchProof(ctx,id)).toBeNull();expect(mocks.owner).not.toHaveBeenCalled();expect(mocks.policy).not.toHaveBeenCalled();
 });
 it('accepts completed exact source native + independent email without phone or promotion',async()=>{
  const proof=await automaticResearchProof(ctx,id);expect(proof).toMatchObject({owner:id,runId:id,candidateRevision:1,source:{source:{kind:'search_hit',attemptId:id}}});expect(proof?.citations).toHaveLength(3);expect(proof?.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
