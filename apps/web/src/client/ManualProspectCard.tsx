@@ -15,9 +15,11 @@ function phoneLabel(p:ManualProspect):string{
 export function ManualProspectCard({prospect:p,disabled,feedback}:{prospect:ManualProspect;disabled:boolean;feedback:(state:'kept'|'skipped'|'wrong_number')=>void}):JSX.Element{
  const label=p.presentation?.label??p.observedName,kind=p.presentation?.kind.replaceAll('_',' ')??'unresolved';
  const phone=p.phoneEvidence;
+ let site:string|null=null;
+ try{if(p.website){const url=new URL(p.website);if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)site=url.hostname;}}catch{/* Unsafe references remain text-only in details. */}
  return <article aria-label={`Manual prospect ${p.candidateId}`} className="manual-prospect-row">
   <div className="manual-prospect-overview">
-   <div className="manual-prospect-identity"><h4>{label}</h4><p>{kind} · UNVERIFIED</p></div>
+   <div className="manual-prospect-identity"><h4>{label}</h4><p>{kind} · UNVERIFIED</p><p>Site {site?<Reference url={p.website} label={site}/>:'unknown'}</p></div>
    <p>Apparent area {p.locality??'unknown'}, {p.region??'unknown'}</p>
    <p className="manual-prospect-phone">{phoneLabel(p)}</p>
    <p>Manual state {p.state.replaceAll('_',' ')} · Revision {p.revision}</p>

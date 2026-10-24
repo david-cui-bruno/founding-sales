@@ -75,3 +75,19 @@ it('malformed optional phone evidence and bare assertions leave raw list usable'
  await db.session.query(`UPDATE sourcing_qualification_runs SET observations='[{"url":"https://source.example.test/", "retrievedAt":"invalid"}]'`);
  expect((await prospect()).observedPhone).toBeNull();
 });
+it('rechecks the live principal after a real source-lifecycle lock wait before exposing retained phones',async()=>{
+ const c=await candidate();await seedManualPhoneRun(db.session,seeded.alpha.workspaceId,c.id,manualPhoneFixture(c.input.sourceUrl));
+ const blocker=await db.appRuntimeSession();await blocker.query('BEGIN');
+ await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-discovery-review:${seeded.alpha.workspaceId}`]);
+ const pending=list();
+ try{
+  await expect.poll(async()=>Number((await db.session.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT pg_advisory_xact_lock%'")).rows[0]?.['n'])).toBe(1);
+  await db.session.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[seeded.alpha.workspaceId,seeded.alpha.salesperson.userId]);
+  await db.session.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
+ }finally{await blocker.query('ROLLBACK');}
+ try{expect(await pending).toMatchObject({ok:false,reason:'authority_changed'});}
+ finally{
+  await db.session.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
+  await db.session.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seeded.alpha.workspaceId,seeded.alpha.salesperson.userId]);
+ }
+});

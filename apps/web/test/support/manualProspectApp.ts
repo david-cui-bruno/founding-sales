@@ -22,8 +22,8 @@ async function port():Promise<number>{const server=reserveServer();await new Pro
 /** Ticket764 exclusive local harness. All actual API/auth requests SET ROLE app_runtime.
  * Signed provider navigation alone is synthetic. No bypass, workers or paid ports.
  */
-export async function startManualProspectApp(){
- assert.equal(process.env['FSS_MANUAL_PROSPECT_EXCLUSIVE_LANE'],'764');
+export async function startManualProspectApp(ticket:'764'|'767'='764'){
+ assert.equal(process.env['FSS_MANUAL_PROSPECT_EXCLUSIVE_LANE'],ticket);
  const executable=process.env['FSS_LOCAL_BROWSER_EXECUTABLE'];assert(executable);await access(executable);
  const postgres=execFileSync('ps',['-axo','pid,ppid,command'],{encoding:'utf8'}).split('\n').filter(line=>/(?:^|\s)(?:\S*\/)?postgres(?:\s|$)/u.test(line)&&!/postgres: /u.test(line));
  assert(postgres.every(line=>line.includes('/opt/homebrew/opt/postgresql@17/bin/postgres -D /opt/homebrew/var/postgresql@17')),'Another disposable PostgreSQL lane is active');
@@ -57,12 +57,12 @@ export async function startManualProspectApp(){
    const callback=new URL('/browser/callback',origin);callback.searchParams.set('code',code);callback.searchParams.set('state',url.searchParams.get('state')??'');response.writeHead(302,{location:callback.href,'cache-control':'no-store'});response.end();
   });
   await new Promise<void>((resolve,reject)=>{server!.once('error',reject);server!.listen(Number(new URL(origin).port),'localhost',resolve);});
-  console.log('MANUAL_PROSPECT_764_RESOURCES',JSON.stringify({storagePath,postgresPid,tlsPath,database:fixture.database.name,template:process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE],httpsPort:Number(new URL(origin).port)}));
+  console.log(`MANUAL_PROSPECT_${ticket}_RESOURCES`,JSON.stringify({storagePath,postgresPid,tlsPath,database:fixture.database.name,template:process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE],httpsPort:Number(new URL(origin).port)}));
   return {fixture,origin,chooseIdentity:(member:SeededMember)=>{identity=member;},runtimeRequests:()=>runtimeRequests,stop:async()=>{
    try{server!.closeAllConnections();await new Promise<void>((resolve,reject)=>server!.close(error=>error?reject(error):resolve()));assert(!server!.listening);}
    finally{try{
     await fixture.stop();const admin=new pg.Client({connectionString:process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE]});await admin.connect();try{assert.equal((await admin.query('SELECT 1 FROM pg_database WHERE datname=$1',[fixture.database.name])).rowCount,0);}finally{await admin.end();}
-   }finally{try{await certificate.remove();await absent(tlsPath);}finally{await release();await absent(storagePath);assert.throws(()=>process.kill(postgresPid,0),{code:'ESRCH'});assert.equal(process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE],undefined);console.log('MANUAL_PROSPECT_764_RELEASED: exact DB/template/PG process/storage/HTTPS/TLS absence verified, Homebrew untouched');}}}
+   }finally{try{await certificate.remove();await absent(tlsPath);}finally{await release();await absent(storagePath);assert.throws(()=>process.kill(postgresPid,0),{code:'ESRCH'});assert.equal(process.env[TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE],undefined);console.log(`MANUAL_PROSPECT_${ticket}_RELEASED: exact DB/template/PG process/storage/HTTPS/TLS absence verified, Homebrew untouched`);}}}
   }};
  }catch(error){server?.closeAllConnections();if(server?.listening)await new Promise<void>(resolve=>server!.close(()=>resolve()));try{await fixture.stop();}finally{try{await certificate.remove();}finally{await release();}}throw error;}
 }

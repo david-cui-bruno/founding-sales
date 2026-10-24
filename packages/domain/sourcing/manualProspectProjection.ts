@@ -14,7 +14,7 @@ export function projectManualProspect(row:ManualProspectRow,phone:NonNullable<Ma
  const ordinary=candidateInputSchema.safeParse(row.payload),discovery=discoveryCandidatePayloadSchema.safeParse(row.payload);
  const declared=discovery.success?discovery.data.row.officePhoneEvidence:'unknown';
  const phoneEvidence:NonNullable<ManualProspect['phoneEvidence']>=declared==='ambiguous'||(declared==='absent'&&phone.state==='observed')?
-  {state:'conflicting',reason:'retained_source_ambiguous',sources:phone.state==='observed'?phone.sources:[]}:
+  {state:'conflicting',reason:'retained_source_ambiguous',sources:phone.state==='observed'||phone.state==='conflicting'?phone.sources:[]}:
   declared==='absent'&&phone.state!=='conflicting'?{state:'absent',basis:'retained_source_declares_absent'}:phone;
  const observed=phoneEvidence.state==='observed';
  const common={candidateId:row.id,revision:row.revision,retainedAt:row.created_at.toISOString(),state:row.manual_state,

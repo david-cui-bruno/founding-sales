@@ -51,4 +51,6 @@ it('never mines prose, URLs, notices, unrelated blocks or ungrounded assertions 
 it('retains contradictions between an explicit absence and an observed phone rather than picking a winner',()=>{
  const input=manualDiscoveryFixture();input.row.officePhoneEvidence='absent';
  expect(projectManualProspect(row({kind:'discovery-v1',row:input.row},input.origins),projectManualPhone(snapshot()))).toMatchObject({observedPhone:null,phoneEvidence:{state:'conflicting',reason:'retained_source_ambiguous',sources:[{}]}});
+ input.row.officePhoneEvidence='ambiguous';
+ expect(projectManualProspect(row({kind:'discovery-v1',row:input.row},input.origins),projectManualPhone(snapshot(['2145550123','2145550124'])))).toMatchObject({observedPhone:null,phoneEvidence:{state:'conflicting',reason:'retained_source_ambiguous',sources:[{},{}]}});
 });
