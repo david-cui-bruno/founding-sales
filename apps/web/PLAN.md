@@ -1,14 +1,14 @@
 # Browser delivery plan
 
-Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof remains closed. October23 production rollout serves exact48e6c8f97/schema132 after protected application40004641679 SUCCESS18:54; founder login/current Today read and normal reload remain dated observations, useful business acceptance remains open. ADR0012/0017 preserve the security boundary and desktop fallback.
+Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof remains closed. October24 production serves exact3a375361/schema132 after protected application40041529063 SUCCESS00:05; direct health00:06:17 accepted, founder login00:09:37/current ordinary inventory00:09:53 observed. Useful business acceptance remains open. ADR0012/0017 preserve security and desktop fallback.
 
 **Local slice CLOSED:** code966c9819f, milestone docs5ff947097. Final10/10 actual local-browser workflows,43 unit/component checks, finished spec/standards/privacy reviews and owned PG/TLS/process cleanup accepted. The ownership table below records completed work, not active builders. Product interview completed October22 at07:10UTC; the following desired scope supersedes earlier preference uncertainty, not runtime controls or implementation status. Issue #738 remains the local-slice tracker and decision handoff, not permission to implement the full roadmap.
 
 ## Sequence and exclusive ownership
 
-### Issue754 existing qualification browser completion, locally accepted
+### Issue754 existing qualification browser completion, deployed
 
-Child745/existing qualified Firm→Today. Source23bd580ea/final acceptancecf81330ad adds only explicit existing read/request/reviewed admission and IDs-only session-bound command custody. Fixbbed7a66b enforces latest-run admission under the existing candidate lock, preserving committed receipt/association idempotency, clears evidence before freshness waits and resets busy on replacement. No new qualifier/provider/source/spend/holds/sending/deployment. Same finished reviewers closed their findings; all three final verdicts CLEAN.
+Child745/existing qualified Firm→Today. Source23bd580ea/final acceptancecf81330ad adds only explicit existing read/request/reviewed admission and IDs-only session-bound command custody. Fixbbed7a66b enforces latest-run admission under the existing candidate lock, preserving committed receipt/association idempotency, clears evidence before freshness waits and resets busy on replacement. No new qualifier. Existing provider/source/spend/holds/sending policy unchanged; protected release accepted above. Same finished reviewers closed their findings; all three final verdicts CLEAN.
 
 | Outcome | Exclusive owner/files | Waits and acceptance |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Child745/existing qualified Firm→Today. Source23bd580ea/final acceptancecf8133
 | Complete workflow/fixes | Hamster: src/client, focused client/e2e tests, domain/sourcing/admission.ts and its focused tests |106client/23real-PG PASS; actual browser3PASS9.1s, sole owned PG/Chrome/TLS/profile cleanup verified |
 | Finished reviews | Lobster/spec, Mosquito/standards, Owl/risk | P1 latest-run/P2 stale evidence CLOSED; defensive busy reset verified; spec/standards/risk final CLEAN |
 
-Actual signed-OIDC/HTTPS/browser/API/domain proves request→controlled finish→reviewed admit→exact Firm/route→Today→canonical Firm open, request/admit lost-response reload same-UUID recovery and two newer-run admission races. Zero contacts/enrollments/outbound. Controlled evidence is not model quality/live business supply. DWM ONE real run Needs review; C Property refused before dispatch. No replay. Real originals/October24 cost remain separate. Root retains full private handoffs and earlier failures under `fss-candidate-authority-20261023/`.
+Actual signed-OIDC/HTTPS/browser/API/domain proves request→controlled finish→reviewed admit→exact Firm/route→Today→canonical Firm open, lost-response reload same-UUID recovery and two newer-run races. Zero contacts/enrollments/outbound in controlled acceptance, not model quality/live supply. PR755 merged/#754 CLOSED. Hatchling retains sole release/resources ownership, Bird oversight only. ONE real CProperty requestOctober24 00:10:16 accepted run6dce93fa-877b-43bf-a769-d0bfd83614c2; read00:10:45 unavailable/invalid_evidence after four complete first-party pages, no verdict/Firm/Today. Ox owns read-only local diagnostic-path investigation/private CPROPERTY-DIAGNOSTIC-PATH.md, no cloud/provider/test/source edits; root owns actual bounded diagnostic read and docs. Do not rerun CProperty or DWM Needs review. Real originals/cost remain separate. Private handoffs/failures: `fss-candidate-authority-20261023/`.
 
 ### Issue752 candidate authority observation, deployed
 
@@ -31,7 +31,7 @@ Deployed752 adds only explicit metadata-only source/current-owner/holds observat
 
 Actual controlled NEW4PASS8.8s after fixture failure; exact cleanup/profile repair and full handbacks remain in private `fss-candidate-authority-20261023/`. Read snapshots unchanged, no qualification runs. Concurrent SQL locks not separately exercised; snapshots are not durable authority.
 
-Three finished reviews CLEAN; PR753/main48e deployed protected40004641679, health18:55:40 exact48e/schema132/API142worker143. No migration; OFF/globalhold preserved, restore UNTESTED and individual payload limits retained in current-state. This read grants no automatic qualification authority. Next754 completes existing manual web surface, not a live source/provider permission change.
+Three finished reviews CLEAN; PR753/main48e deployed protected40004641679, health18:55:40 exact48e/schema132/API142worker143. No migration; OFF/globalhold preserved, restore UNTESTED and individual payload limits retained in current-state. Issue754 manual web surface subsequently deployed above; source-authority read still grants no automatic qualification authority.
 
 ### Issue751 synthetic business demonstration, reviewed local outcome
 
