@@ -30,7 +30,7 @@ export function BrowserRetainedRecovery({client,view,revision,blocked,onSaved}:{
     const start=block.text.indexOf(name);if(start<0||block.text.indexOf(name,start+1)>=0)throw Error('Choose an unambiguous literal span');
     held=client.qualification.prepare({kind:'identity',candidateId:view.candidateId,expectedRevision:revision,qualificationRunId:view.runId,...citation,nameStart:start,nameEnd:start+name.length,decision:'confirm_literal_trade_name',acknowledged:'identity_only_not_qualification'});
    }else{
-    held=client.qualification.prepare({kind:'interpret',candidateId:view.candidateId,expectedRevision:revision,decisionId:view.recovery!.decisionId,qualificationRunId:view.recovery!.originalRunId,selections,acknowledged:'new_retained_interpretation_not_original_model_result'});
+    held=client.qualification.prepare({kind:'retained_interpretation',candidateId:view.candidateId,expectedRevision:revision,decisionId:view.recovery!.decisionId,qualificationRunId:view.recovery!.originalRunId,selections,acknowledged:'new_retained_interpretation_not_original_model_result'});
    }
    const message=await dispatchQualification(client,held,current);
    if(current())onSaved(`${message} Refresh inventory if candidate revision changed, then explicitly read qualification again.`);
