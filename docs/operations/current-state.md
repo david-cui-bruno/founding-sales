@@ -1,6 +1,6 @@
 # Current operating state
 
-## October24 2026, 23:16UTC actionable queue accepted
+## October24 2026, 23:26UTC social review active
 
 Production/mainef419ac8a89f24276d6a4c704686b8b549c61f98/schema134/API149/worker150 accepted. PR768/exact-main gate40138142742/images40138142703 SUCCESS. Failed prestart40139717960 reconciled, only reader269 cleaned. Reviewed bounded recovery40140357139 SUCCESS23:11:26, no migration, fresh PITR22:55:10.887Z, native OFF/bindings/digests/stability/smokes/readback passed. Restore UNTESTED. Direct health23:12 and services23:15 accepted, readers270/272 INACTIVE. Shared hold/owner OFF unchanged. Hosted23:14 compact50 rows/readable labels/details, ALL50 phones not extracted. Kept-filter23:15 independently preserved exact Somerville/Denton cards, no feedback replay/alerts/recovery. Existing first-save766 proof retained. No qualification/contact authority or new acquisition. [Roadmap](../sourcing/roadmap-20261007.md).
 
@@ -40,7 +40,7 @@ David approved invented business threads, not real mailbox injection. Four label
 
 ## Controls, direction and retained outcomes
 
-Product interview complete: qualified leads→useful Firm/Today→approved outreach→actual replies/drafts/one-screen briefs; review-first social NEXT/coaching parked, Facebook research-only. Sending remains OFF despite conditional readiness permission and public configuration sendingEnabled=true. Preserve newer stops, consent/privacy, cap5/lower ramps/local weekday mornings/suppression/reply/refusal. Gmail incoming+Sent/new originals/no history,Haiku4.5,$1/day/$20month; no new AI route. LinkedIn untouched; Cal.com disconnected, existing booking link separate.
+Issue769/ADR0020 active: Nautilus sole implementer/PGChrome owner, root integration/reviews. Boundary8bec618b7/two social reads/10tests PASS; private memory-only review/composer, no generation/save/publication/provider. Voice learning/durable drafts later. Coaching parked, Facebook research-only. Sending OFF despite conditional permission/public sendingEnabled=true. Preserve newer stops/consent/privacy/cap5/lower ramps/weekday mornings/suppression/reply/refusal. Gmail incoming+Sent/new originals/no history,Haiku4.5,$1/day/$20month; no new AI route. LinkedIn untouched; Cal.com disconnected, booking link separate.
 
 NARPM EXCLUDED pending commercial notice; Places funding missing; Apollo Free exhausted/no paid fallback. Budgets400units/day,$40/day,$387.50/month,four pages/1MB,$50/day runaway unchanged. Last dated callable Overture/Places/NARPM/Apollo/first-party0/0/0/0/0, advisory6/runtime0 overlapping, demos unverified. Ledger October20 $0.79/day/$3.89/month is stale; modeled10/30 comparison unrun. Targets100/300 unsupported. Real supply/original usefulness open. Issue749 deployed; global issue/size totals unverified, #700open/#706deferred. Daily October23 delivered; David06:20 cancelled daily/cost schedules, only Bird hourly remains. No new spending/contact approval requested.
 
