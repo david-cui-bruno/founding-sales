@@ -79,7 +79,7 @@ it('coalesces two explicit recovery clicks while preserving the original payload
 it('initially reads bounded raw worklist, escapes text and unsafe links with no persistent projections or qualification requests',async()=>{
  const s=setup();await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();
  expect(s.reads).toEqual([{state:'all',offset:0}]);expect(s.commands).toEqual([]);expect(s.storage.setItem).not.toHaveBeenCalled();expect(s.uuid).not.toHaveBeenCalled();
- expect(screen.queryByRole('img')).toBeNull();expect(screen.getAllByRole('link')).toHaveLength(1);expect(screen.getByRole('link').getAttribute('rel')).toBe('noopener noreferrer');expect(screen.getAllByText(/Phone unknown/u).length).toBeGreaterThan(0);
+ expect(screen.queryByRole('img')).toBeNull();fireEvent.click(screen.getByText('Observed name, sources and details'));expect(screen.getAllByRole('link')).toHaveLength(1);expect(screen.getByRole('link').getAttribute('rel')).toBe('noopener noreferrer');expect(screen.getAllByText(/Phone unknown/u).length).toBeGreaterThan(0);
  fireEvent.click(screen.getByRole('button',{name:'Next prospect page'}));await waitFor(()=>{expect(s.reads).toHaveLength(2);});expect(s.reads[1]).toEqual({state:'all',offset:50});
  await act(async()=>{s.client.dispose();});
 });

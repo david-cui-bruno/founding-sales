@@ -15,3 +15,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 blockquote { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid #71808d; padding-left: 1rem; }
 [role=status] { padding: .6rem 0; }
 @media (max-width: 600px) { main { padding: 1rem; } header, nav { flex-wrap: wrap; } }
+.manual-prospect-row { padding: .65rem .8rem; margin: .4rem 0; overflow-wrap: anywhere; }
+.manual-prospect-overview { display: grid; grid-template-columns: minmax(12rem, 2fr) minmax(8rem, 1fr) minmax(10rem, 1.3fr); gap: .25rem 1rem; align-items: center; }
+.manual-prospect-overview p, .manual-prospect-identity h4 { margin: 0; }
+.manual-prospect-identity p, .manual-prospect-overview > p { font-size: .85rem; }
+.manual-prospect-actions { grid-column: 2 / -1; }
+.manual-prospect-actions button { padding: .3rem .55rem; font-size: .9rem; }
+.manual-prospect-row summary { cursor: pointer; font-size: .85rem; margin-top: .3rem; }
+.manual-prospect-row summary:focus-visible { outline: 3px solid #2672ab; outline-offset: 2px; }
+.manual-prospect-row details[open] { border-top: 1px solid #d4dbe0; margin-top: .5rem; }
+@media (max-width: 700px) { .manual-prospect-overview { grid-template-columns: 1fr; } .manual-prospect-actions { grid-column: auto; } }

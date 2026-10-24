@@ -9,6 +9,29 @@ export const manualProspectListInputSchema = z.strictObject({
   state: z.enum(['all', 'new', 'kept', 'skipped', 'wrong_number']),
   offset: z.number().int().min(0).max(1000000),
 });
+/** A queue label is never a canonical identity decision. Original observedName survives. */
+export const manualProspectPresentationSchema = z.strictObject({
+  label: z.string().trim().min(1).max(300),
+  basis: z.enum(['retained_name', 'source_title', 'site_label']),
+  kind: z.enum(['apparent_company', 'non_company', 'unresolved']),
+  reason: z.string().trim().min(1).max(200),
+});
+const manualPhoneSourceSchema = z.strictObject({
+  runId: uuid, observationId: uuid, blockId: z.string().min(1).max(80),
+  url: z.string().min(1).max(2000), retrievedAt: instant,
+});
+/** Existing permitted retained facts only. This is an observed Endpoint, not a Route. */
+export const manualProspectPhoneEvidenceSchema = z.discriminatedUnion('state', [
+  z.strictObject({state: z.literal('not_extracted'), reason: z.enum([
+    'no_retained_phone_field', 'no_current_permitted_phone_evidence', 'retained_text_not_extracted',
+  ])}),
+  z.strictObject({state: z.literal('absent'), basis: z.literal('retained_source_declares_absent')}),
+  z.strictObject({state: z.literal('conflicting'), reason: z.enum([
+    'multiple_retained_numbers', 'retained_source_ambiguous',
+  ]), sources: z.array(manualPhoneSourceSchema).max(16)}),
+  z.strictObject({state: z.literal('observed'), value: z.string().regex(/^\+[1-9]\d{7,14}$/u),
+    sources: z.array(manualPhoneSourceSchema).min(1).max(16)}),
+]);
 export const manualProspectSchema = z.strictObject({
   candidateId: uuid,
   revision: z.number().int().positive(),
@@ -18,6 +41,8 @@ export const manualProspectSchema = z.strictObject({
   region: z.string().max(150).nullable(),
   observedPhone: z.string().max(200).nullable(),
   phoneBasis: z.enum(['retained_observation', 'unknown']),
+  presentation: manualProspectPresentationSchema.optional(),
+  phoneEvidence: manualProspectPhoneEvidenceSchema.optional(),
   sources: z.array(z.strictObject({
     label: z.string().min(1).max(300),
     url: z.string().max(2000).nullable(),
@@ -33,6 +58,13 @@ export const manualProspectSchema = z.strictObject({
   possibleDuplicateCount: z.number().int().nonnegative(),
   qualification: z.literal('unverified'),
   contactAuthority: z.literal('not_granted'),
+}).superRefine((value, ctx) => {
+  if (value.phoneEvidence?.state === 'observed') {
+    if (value.observedPhone !== value.phoneEvidence.value || value.phoneBasis !== 'retained_observation')
+      ctx.addIssue({code: 'custom', message: 'Observed phone must match its retained evidence.'});
+  } else if (value.observedPhone !== null || value.phoneBasis !== 'unknown') {
+    ctx.addIssue({code: 'custom', message: 'A phone value requires explicit retained provenance.'});
+  }
 });
 export const manualProspectListSchema = z.strictObject({
   prospects: z.array(manualProspectSchema).max(50),
