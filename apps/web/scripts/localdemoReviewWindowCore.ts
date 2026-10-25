@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { localDemoManualPreparation } from './localdemoMode.ts';
 
 export type ReviewReceipt = {
   version: 1;
@@ -27,6 +28,7 @@ export const shellQuote = (value: string): string => `'${value.replaceAll("'", "
 export function checkReviewStart(env: NodeJS.ProcessEnv, platform = process.platform): number {
   if (platform !== 'darwin') throw Error('Independent review windows require macOS launchd. Use plain foreground localdemo elsewhere.');
   if (env['FSS_SYNTHETIC_LOCAL_DEMO'] !== '1') throw Error('Explicit FSS_SYNTHETIC_LOCAL_DEMO=1 required');
+  localDemoManualPreparation(env);
   if (Object.keys(env).some(key => /^(?:FSS_TEST_(?:POSTGRES_URL|CLUSTER_URL|TEMPLATE_DATABASE)|DATABASE_URL|PGHOST|PGPORT|PGDATABASE|PGUSER|PGPASSWORD|AWS_|GOOGLE_|VERTEX_|FSS_BROWSER_|FSS_PRODUCTION_)/u.test(key) && (key.startsWith('FSS_TEST_') || env[key]))) throw Error('Inherited database/provider/browser configuration refused. Use a clean environment.');
   const minutes = Number(env['FSS_LOCAL_DEMO_MINUTES'] ?? '20');
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 30) throw Error('Demo lifetime must be 1..30 minutes');
@@ -92,7 +94,7 @@ export async function inspectReviewService(receipt: ReviewReceipt, inspect = lau
 
 export function reviewPlist(receipt: ReviewReceipt, env: NodeJS.ProcessEnv): string {
   const args = [receipt.node, '--experimental-transform-types', '--disable-warning=ExperimentalWarning', receipt.script, 'supervise', receipt.directory];
-  const environment = { HOME: env['HOME'] ?? '', PATH: env['PATH'] ?? '', TMPDIR: tmpdir(), LC_ALL: 'en_US.UTF-8', FSS_SYNTHETIC_LOCAL_DEMO: '1', FSS_LOCAL_DEMO_MINUTES: String(receipt.minutes) };
+  const environment = { HOME: env['HOME'] ?? '', PATH: env['PATH'] ?? '', TMPDIR: tmpdir(), LC_ALL: 'en_US.UTF-8', FSS_SYNTHETIC_LOCAL_DEMO: '1', FSS_LOCAL_DEMO_MINUTES: String(receipt.minutes), ...(localDemoManualPreparation(env) ? { FSS_LOCAL_DEMO_MANUAL_PREPARATION: '1' } : {}) };
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>
 <key>Label</key><string>${xml(receipt.label)}</string>
 <key>ProgramArguments</key><array>${args.map(value => `<string>${xml(value)}</string>`).join('')}</array>

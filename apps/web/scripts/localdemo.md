@@ -1,5 +1,13 @@
 # Issue781 local synthetic browser demo
 
+## Fictional sales-workspace loop (goal783, child785)
+
+Add `FSS_LOCAL_DEMO_MANUAL_PREPARATION=1` to the clean independent start command below to open the actual current prospect worklist with two explicitly fictional retained observations. Omitting it preserves the original781 reply journey. Other supplied values are rejected. The selected prospect starts with unknown phone and no completed activity, inferred Firm association, recipient or contact permission.
+
+Inspect its company/source details, choose **Prepare manual draft · NO SEND**, type fictional outreach and **Review exact draft · NO SEND**. Editing invalidates review. Draft and review exist only in this open view and are discarded by reload, selection, refresh or access changes. Nothing is sent or saved by review. Original-backed Replies remains separate and its fixture suggestions are scripted, not live inference.
+
+For the outcome step, open this prospect's private manual activity and expand the persistent **Fictional outcome walkthrough and limits** instructions. Only in this disposable fictional workspace, deliberately simulate the unchecked manual-phone report attestation and save an explicitly SYNTHETIC report. No real call occurred. Record a callback intention if useful, reload, select the exact same prospect, reopen private activity, refresh its metadata and deliberately open the exact report. This retrieves a stored intention, not an earliest-due queue, reminder, Today task, booking or action. Report content persists only until this demo shuts down. Do not enter real or private business data.
+
 ## Reliable macOS review window (issue784)
 
 For a review that must survive its originating terminal/tool command, explicitly start the finite OS-owned window from the repository root:

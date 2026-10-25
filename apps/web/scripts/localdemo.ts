@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { chromium, type BrowserContext } from 'playwright';
 import { assertSyntheticNoSend, containSyntheticBrowser, signInSyntheticBrowser, startSyntheticBrowser, requireLocalDemo, prepareSyntheticCliDependency } from '../test/support/syntheticBrowserApp.ts';
 import { syntheticBrowserCase, syntheticReplySource } from '../test/support/syntheticBrowserCase.ts';
+import { localDemoManualPreparation } from './localdemoMode.ts';
 
 // See localdemo.md for the clean-environment command and exact-owned stop policy.
 export async function runLocalDemo(options: { reviewWindow?: boolean; stopCommand?: string; onReady?: (receipt: Record<string, unknown>) => Promise<void>; onStopping?: () => Promise<void> } = {}): Promise<void> {
   requireLocalDemo(process.env);
+  const manualPreparation = localDemoManualPreparation(process.env);
   // initdb inherits locale. A clean shell otherwise creates SQL_ASCII on macOS.
   process.env['LC_ALL'] = 'en_US.UTF-8';
   const lifetime = Number(process.env['FSS_LOCAL_DEMO_MINUTES'] ?? '20');
@@ -48,7 +50,7 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
     profile = await mkdtemp(join(tmpdir(), 'fss-synthetic-781-chrome-'));
     console.error('SYNTHETIC_BROWSER_STARTING', JSON.stringify({ pid: process.pid, profile, expiresAt }));
     if (cancelled()) return;
-    runtime = await startSyntheticBrowser();
+    runtime = await startSyntheticBrowser({ manualPreparation });
     // A signal during startup lets existing owners finish safely, then unwinds.
     // It never launches Chrome or announces a ready demo after cancellation.
     if (cancelled()) return;
@@ -59,11 +61,18 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
     const page = context.pages()[0] ?? await context.newPage();
     await signInSyntheticBrowser(page, runtime.app);
     if (cancelled()) return;
-    await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
-    await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticReplySource.subject}`, exact: true }).click();
-    await page.getByRole('button', { name: 'Refresh current reply context', exact: true }).click();
-    await page.getByText(syntheticReplySource.body, { exact: true }).waitFor();
-    await page.locator('#replies').scrollIntoViewIfNeeded();
+    if (runtime.manualPreparation) {
+      const worklist = page.getByRole('region', { name: 'Manual prospect worklist', exact: true });
+      await worklist.getByRole('table').locator(`tr[data-candidate-id="${runtime.manualPreparation.candidateId}"]`).getByRole('button').click();
+      await worklist.getByRole('article', { name: `Manual prospect ${runtime.manualPreparation.candidateId}`, exact: true }).waitFor();
+      await worklist.scrollIntoViewIfNeeded();
+    } else {
+      await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
+      await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticReplySource.subject}`, exact: true }).click();
+      await page.getByRole('button', { name: 'Refresh current reply context', exact: true }).click();
+      await page.getByText(syntheticReplySource.body, { exact: true }).waitFor();
+      await page.locator('#replies').scrollIntoViewIfNeeded();
+    }
     await assertSyntheticNoSend(runtime.app);
     if (cancelled()) return;
     if (options.reviewWindow) {
@@ -71,13 +80,13 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
       expiresAt = new Date(Date.now() + lifetime * 60_000).toISOString();
       timer = setTimeout(requestShutdown, lifetime * 60_000);
     }
-    const receipt = { issue: 781, pid: process.pid, origin: runtime.app.origin, oidcIssuer: runtime.app.fixture.google.issuer, profile, storagePath: runtime.app.storagePath, postgresPid: runtime.app.postgresPid, tlsPath: runtime.app.tlsPath, database: runtime.app.fixture.database.name, meetingId: runtime.app.meetingId, expiresAt, stop: options.stopCommand ?? `kill -TERM ${process.pid}`, sendingEnabled: false, model: 'fixed fixture script, no live inference', runtimeRoleChecks: runtime.app.runtimeRoleChecks() };
+    const receipt = { issue: manualPreparation ? 783 : 781, workflow: manualPreparation ? 'fictional prospect preparation and manual activity' : 'fictional original-backed reply and meeting notes', ...(runtime.manualPreparation ? { candidateId: runtime.manualPreparation.candidateId } : {}), pid: process.pid, origin: runtime.app.origin, oidcIssuer: runtime.app.fixture.google.issuer, profile, storagePath: runtime.app.storagePath, postgresPid: runtime.app.postgresPid, tlsPath: runtime.app.tlsPath, database: runtime.app.fixture.database.name, meetingId: runtime.app.meetingId, expiresAt, stop: options.stopCommand ?? `kill -TERM ${process.pid}`, sendingEnabled: false, model: 'fixed fixture script, no live inference', runtimeRoleChecks: runtime.app.runtimeRoleChecks() };
     await writeFile(join(profile, 'resource-receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
     if (cancelled()) return;
     await options.onReady?.(receipt);
     if (cancelled()) return;
     console.error('SYNTHETIC_BROWSER_DEMO_READY', JSON.stringify(receipt));
-    console.error('Use the labeled Chrome window. Fictional input is open in Replies. Generate is an explicit scripted action. Ctrl-C stops and erases this entire disposable demo.');
+    console.error(manualPreparation ? 'Use the labeled Chrome window. The selected prospect is fictional. Prepare and review a manual NO SEND draft, then deliberately record a fictional report only under the simulation instructions. Callback intentions are display-only, not reminders. All data is erased at shutdown.' : 'Use the labeled Chrome window. Fictional input is open in Replies. Generate is an explicit scripted action. Ctrl-C stops and erases this entire disposable demo.');
     await closed;
     await publishStopping();
     await assertSyntheticNoSend(runtime.app);
