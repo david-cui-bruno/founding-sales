@@ -4,6 +4,7 @@ import {manualProspectPhoneEvidenceSchema} from '@fss/contracts';
 import {scanManualLiteralPhones,type LiteralInput} from '../../sourcing/manualProspectLiteralPhone.ts';
 import {projectManualPhone,type ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
 import {originalAuthorities,originalLineage} from '../../sourcing/manualProspectOriginalAuthority.ts';
+import {projectManualProspect} from '../../sourcing/manualProspectProjection.ts';
 import {manualPhoneFixture} from './support/manualPhoneFixture.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 function input(texts=['Phone: (214) 555-0123']):LiteralInput {
@@ -53,6 +54,23 @@ it.each(['Phone: unavailable\nCompany registration: 2145550123','Phone: N/A\nOrd
 it.each(['Phone:\n(214) 555-0123','Call us at (214) 555-0123','Phone: 2145550123 / +1 214 555 0123','Phone: 2145550123; (214) 555-0123'])('SPEC finite attachment grammar preserves supported forms: %s',text=>{
  const result=scanManualLiteralPhones(input([text]));expect(result.unresolved).toBe(false);expect(projectManualPhone(snapshot([text]))).toMatchObject({state:'observed',value:'+12145550123'});
  for(const source of result.sources)expect(text.slice(source.start,source.end)).toBe(source.literal);
+});
+it.each([
+ ['Phone: 2145550123 ext ４５','2145550123 ext ４５'],
+ ['Phone: 2145550123 ext. SALES','2145550123 ext. SALES'],
+ ['Phone: 2145550123 or ８００５５５０１９９','８００５５５０１９９'],
+ ['Phone: 2145550123 or ２１４５５５０１２４','２１４５５５０１２４'],
+ ['Phone: 2145550123 or 8005550199 ext ４５','8005550199 ext ４５'],
+])('RISK R1 STANDARDS S1 retains whole unsupported forms even under explicit raw absence: %s',(text,literal)=>{
+ const scan=scanManualLiteralPhones(input([text]));expect(scan.unresolved).toBe(true);
+ expect(scan.sources).toContainEqual(expect.objectContaining({literal,normalizedValue:null}));
+ for(const source of scan.sources)expect(text.slice(source.start,source.end)).toBe(source.literal);
+ const phone=projectManualPhone(snapshot([text]));expect(phone.state).toBe('conflicting');
+ const fixture=manualDiscoveryFixture(),projected=projectManualProspect({id:randomUUID(),revision:1,created_at:new Date(),manual_state:'new',duplicate_count:0,payload:{kind:'discovery-v1',row:{...fixture.row,officePhoneEvidence:'absent'}},origins:fixture.origins},phone);
+ expect(projected).toMatchObject({observedPhone:null,phoneEvidence:{state:'conflicting',sources:scan.sources.map(source=>expect.objectContaining({literal:source.literal,normalizedValue:source.normalizedValue}))}});
+});
+it('STANDARDS S1 refuses malformed doubled-plus prefix without a normalized suffix winner',()=>{
+ const text='Phone: ++12145550123';expect(scanManualLiteralPhones(input([text]))).toMatchObject({unresolved:true,sources:[]});expect(projectManualPhone(snapshot([text])).state).toBe('conflicting');
 });
 it('combines repeated equal numbers but preserves distinct numbers across whole input',()=>{
  expect(projectManualPhone(snapshot(['Phone 2145550123','Tel +1 214 555 0123']))).toMatchObject({state:'observed',value:'+12145550123',sources:[{},{}]});

@@ -19,8 +19,11 @@ export interface ManualPhoneSnapshot extends Record<string,unknown>,ManualOrigin
 export async function manualPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualProspectRow[]):Promise<ManualPhoneSnapshot[]>{
  if(rows.length===0)return [];
  const initial=await readPhoneSnapshots(ctx,rows,null);
- const runIds=initial.flatMap(snapshot=>[snapshot.id,...(snapshot.original_run_id?[snapshot.original_run_id]:[])]);
- if(runIds.length)await ctx.db.query('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,runIds]);
+ // FK deletion cascades original -> decision -> interpretation. Lock ancestors
+ // before descendants even when a derived UUID sorts first, then sort per level.
+ const ancestors=[...new Set(initial.flatMap(snapshot=>snapshot.original_run_id?[snapshot.original_run_id]:[]))];
+ const descendants=initial.map(snapshot=>snapshot.id).filter(id=>!ancestors.includes(id));
+ for(const runIds of [ancestors,descendants])if(runIds.length)await ctx.db.query('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,runIds]);
  // The run lock is not retention authority. CRM deletion independently deletes
  // evidence_items, so lock exact supporting rows in global ID order and retain
  // only those IDs as authority. Re-read AFTER waits: a deletion/update that won

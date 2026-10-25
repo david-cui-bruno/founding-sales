@@ -11,8 +11,7 @@ export function manualPhoneFixture(url='https://source.example.test/phone',value
 export function manualLiteralPhoneFixture(url='https://source.example.test/phone',texts=['Main phone: (214) 555-0123']){
  const evidence=manualPhoneFixture(url,texts);evidence.observations[0]!.firstParty=true;evidence.facts=[];return evidence;
 }
-export async function seedManualPhoneRun(db:SessionQueryable,workspaceId:string,candidateId:string,evidence=manualPhoneFixture(),revision=1){
- const id=randomUUID();
+export async function seedManualPhoneRun(db:SessionQueryable,workspaceId:string,candidateId:string,evidence=manualPhoneFixture(),revision=1,id=randomUUID()){
  await db.query(`INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,state,reason,observations,facts)
  VALUES($1,$2,$3,$4,$5,'retained-test','retained-test','none','unavailable','identity_unresolved',$6,$7)`,[workspaceId,id,candidateId,revision,createHash('sha256').update(id).digest('hex'),JSON.stringify(evidence.observations),JSON.stringify(evidence.facts)]);
  return id;

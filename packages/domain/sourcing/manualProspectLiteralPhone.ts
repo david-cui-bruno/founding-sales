@@ -14,7 +14,7 @@ const host=(value:string|null)=>{try{const url=new URL(value??'');return ['http:
 const labels=/\b(?:office\s+phone|main\s+phone|mobile(?:\s+phone)?|personal(?:\s+phone)?|emergency(?:\s+phone)?|fax|telephone|phone|tel|call\s+us)\b/giu;
 // Vanity and extension forms are retained as unsupported WHOLE literals. Never
 // accept their numeric prefix as a business endpoint. No cross-block stitching.
-const tokens=/\+?[\p{N}(][\p{N}(). \t-]*\p{N}(?:[ \t]*(?:ext(?:ension)?\.?|x|#)[ \t]*\p{N}+|-?[\p{L}\p{N}-]+)?/giu;
+const tokens=/\+?[\p{N}(][\p{N}(). \t-]*\p{N}(?:[ \t]*(?:ext(?:ension)?\.?|x|#)[ \t]*[\p{L}\p{N}]+|-?[\p{L}\p{N}-]+)?/giu;
 /** Consume only explicitly attached literals. Unmatched prose/fields/residue
  * makes the segment unresolved, never a license to search later identifiers.
  * Unicode/vanity tokens are retained but do NOT extend the supported grammar. */
