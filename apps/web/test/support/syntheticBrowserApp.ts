@@ -17,14 +17,16 @@ export function syntheticAssets(assets: BrowserAssets): BrowserAssets {
   const decorated = new Map(assets);
   const html = assets.get('/'), css = assets.get('/styles.css');
   if (!html || !css) throw Error('Current product assets required');
+  const document = new TextDecoder().decode(html.body);
+  if (document.split('<div id="root">').length !== 2) throw Error('Current product root required for synthetic labeling');
   const banner = `<aside id="synthetic-demo-label" aria-label="Synthetic demo notice"><strong>${demoLabel}</strong><details><summary>Local demo instructions and limits</summary><p>All people, messages, source facts and the meeting are invented. No actual booking, model call, mailbox capture or contact. Reply suggestions are a fixed human-authored script. Edit and preview in Replies, nothing is sent.</p><p>Next: Refresh replies, select Marshlight, refresh context, generate once, adopt, edit and preview. Then Open firm → Load existing meetings → Open preparation. Notes: copy the displayed fictional meeting ID into Meeting ID, Read meeting notes, write private rehearsal notes and Save. Reload and Read again to reopen. Notes persist only for this disposable demo lifetime.</p><p>Two actual times, scheduling, task assignment and sending are not supplied by this demo. Reply drafts themselves are memory-only and lost on reload. Do not treat the fictional booked meeting as Dana's commitment.</p></details></aside>`;
-  decorated.set('/', { ...html, body: new TextEncoder().encode(new TextDecoder().decode(html.body).replace('<div id="root">', `${banner}<div id="root">`)) });
+  decorated.set('/', { ...html, body: new TextEncoder().encode(document.replace('<div id="root">', `${banner}<div id="root">`)) });
   decorated.set('/styles.css', { ...css, body: new TextEncoder().encode(`${new TextDecoder().decode(css.body)}\n#synthetic-demo-label{position:sticky;top:0;z-index:999;background:#fff4c2;color:#241800;border:3px solid #805600;padding:10px;font:15px/1.4 system-ui}#synthetic-demo-label p{margin:4px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}`) });
   return decorated;
 }
 
-export async function startSyntheticBrowser(env: NodeJS.ProcessEnv = process.env) {
-  requireLocalDemo(env);
+export async function startSyntheticBrowser() {
+  requireLocalDemo(process.env);
   const release = await reserveLocalBrowserDatabase();
   let app: ReplyBriefApp | undefined;
   try {

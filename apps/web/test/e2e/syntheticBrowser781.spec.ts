@@ -5,9 +5,10 @@ import { assertSyntheticNoSend, containSyntheticBrowser, demoLabel, signInSynthe
 import { scriptedReply, syntheticBrowserCase } from '../support/syntheticBrowserCase.ts';
 import { browserRequest } from '../support/browser.ts';
 
+test.skip(process.env['FSS_SYNTHETIC_LOCAL_DEMO'] !== '1', 'Explicit isolated local demo opt-in required');
 // New composed user journey, not a replay of issue751 domain scenarios.
 test('fictional originals to editable reply, sourced preparation and durable private rehearsal notes in current Chrome', async ({ page, context, browser }) => {
-  const runtime = await startSyntheticBrowser({ FSS_SYNTHETIC_LOCAL_DEMO: '1' });
+  const runtime = await startSyntheticBrowser();
   const app = runtime.app;
   const proof = process.env['FSS_SYNTHETIC_PROOF_DIR'];
   let profile: string | undefined;
@@ -28,6 +29,7 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticBrowserCase.messages[3]!.subject}`, exact: true }).click();
     await page.getByRole('button', { name: 'Refresh current reply context', exact: true }).click();
     for (const source of syntheticBrowserCase.messages) await expect(page.getByText(source.body, { exact: true })).toBeVisible();
+    if (proof) { await page.getByText(syntheticBrowserCase.messages[3]!.body, { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: `${proof}/781-input-viewport.png` }); await chmod(`${proof}/781-input-viewport.png`, 0o600); }
     expect(app.calls()).toBe(0);
     await page.getByRole('button', { name: 'Generate suggestion', exact: true }).click();
     await expect(page.getByRole('complementary', { name: 'Reply suggestion' })).toContainText(scriptedReply);
@@ -39,7 +41,7 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     await expect(page.getByRole('article', { name: 'Final reply preview' })).toContainText(edited);
     await expect(page.getByRole('button', { name: /^(Send|Confirm reply|Book)$/u })).toHaveCount(0);
     for (const path of ['/replies/composer/send', '/replies/composer/send-status', '/replies/confirm']) expect((await browserRequest(page, path, { body: {} })).status).toBe(404);
-    if (proof) { await page.screenshot({ path: `${proof}/781-reply.png`, fullPage: true }); await chmod(`${proof}/781-reply.png`, 0o600); }
+    if (proof) { await page.getByRole('article', { name: 'Final reply preview' }).scrollIntoViewIfNeeded(); await page.screenshot({ path: `${proof}/781-reply.png`, fullPage: true }); await chmod(`${proof}/781-reply.png`, 0o600); await page.screenshot({ path: `${proof}/781-reply-viewport.png` }); await chmod(`${proof}/781-reply-viewport.png`, 0o600); }
     const open = async () => {
       await page.getByRole('article').filter({ has: page.getByRole('heading', { name: syntheticBrowserCase.firm, level: 3, exact: true }) }).getByRole('button', { name: 'Open firm', exact: true }).click();
     };

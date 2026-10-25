@@ -19,7 +19,7 @@ Default lifetime: 20 minutes, hard maximum30. Set `FSS_LOCAL_DEMO_MINUTES=1` thr
 Acceptance (exclusive disposable-PG/Chrome lane, never concurrent with the demo):
 
 ```sh
-PATH="/opt/homebrew/opt/node@24/bin:$PATH" FSS_LOCAL_BROWSER_EXECUTABLE='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' npm run test:e2e --workspace apps/web -- test/e2e/syntheticBrowser781.spec.ts
+env -i HOME="$HOME" PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:/usr/bin:/bin" TMPDIR="$TMPDIR" LC_ALL=en_US.UTF-8 FSS_SYNTHETIC_LOCAL_DEMO=1 FSS_LOCAL_BROWSER_EXECUTABLE='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' npm run test:e2e --workspace apps/web -- test/e2e/syntheticBrowser781.spec.ts
 ```
 
 Local synthetic usability is not production, real-business, autonomous follow-through or live-model acceptance. No release, sending, Gmail capture or LinkedIn activation is authorized by this command.

@@ -23,6 +23,9 @@ describe('local synthetic launcher boundary', () => {
     expect(new TextDecoder().decode(labeled.get('/styles.css')!.body)).toContain('position:sticky');
     expect(new TextDecoder().decode(original.get('/')!.body)).not.toContain(demoLabel);
     expect(() => syntheticAssets(new Map())).toThrow('assets required');
+    const missingRoot = new Map(original);
+    missingRoot.set('/', { body: encoder.encode('<body>No current product root</body>'), contentType: 'text/html; charset=utf-8' });
+    expect(() => syntheticAssets(missingRoot)).toThrow('root required');
   });
   it('retains only fictional original input, never oracle expectations', () => {
     expect(syntheticBrowserCase.messages).toHaveLength(4);
@@ -38,6 +41,8 @@ describe('local synthetic launcher boundary', () => {
     expect(code).toContain("process.on('SIGTERM'");
     expect(code).toContain('await runtime?.stop()');
     expect(code).toContain('await context?.close()');
+    expect(code).toContain("process.env['LC_ALL'] = 'en_US.UTF-8'");
+    expect(code).toContain('signalListeners.get(signal)!.has(listener)');
     expect(code).not.toContain('process.kill(');
   });
 });
