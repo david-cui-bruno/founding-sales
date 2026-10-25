@@ -7,7 +7,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --config vitest.config.ts",
-    "test:e2e": "playwright test --config playwright.config.ts"
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "localdemo": "node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/localdemo.ts"
   },
   "dependencies": {
     "@fss/contracts": "*",

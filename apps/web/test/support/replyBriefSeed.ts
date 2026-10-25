@@ -7,14 +7,15 @@ import { recordMatches } from '@fss/domain/mail/matching.ts';
 import { saveAnswerBlock, approveAnswerBlock } from '@fss/domain/outreach/facts.ts';
 import { promoteReply } from '@fss/domain/today/promotions.ts';
 import { setProspectingAuthorization } from '@fss/domain/outreach/authorization.ts';
+import type { SyntheticCase } from './syntheticBusinessFixture.ts';
 
 /** Canonical API replyComposer conversation seed, using the actual fixture member.
  * No fabricated principal, capture, provider or outbound operation is involved. */
-export async function seedReplyBrief(f: AuthFixture, firmId: string) {
+export async function seedReplyBrief(f: AuthFixture, firmId: string, conversation?: SyntheticCase) {
   const owner = f.alpha.salesperson.userId;
   const workspaceId = f.alpha.workspaceId;
   const address = `owner-${randomUUID()}@example.test`;
-  const recipient = `prospect-${randomUUID()}@example.test`;
+  const recipient = conversation?.participants[0]?.email ?? `prospect-${randomUUID()}@example.test`;
   const ctx = repositoryContext(workspaceScope(workspaceId, { kind: 'user', userId: owner, role: 'salesperson' }), f.db);
   const admin = repositoryContext(workspaceScope(workspaceId, { kind: 'user', userId: f.alpha.admin.userId, role: 'admin' }), f.db);
   const existing = (await f.db.query<{ id: string; email_address: string }>('SELECT id,email_address FROM mailboxes WHERE workspace_id=$1 AND owner_user_id=$2', [workspaceId, owner])).rows[0];
@@ -29,6 +30,19 @@ export async function seedReplyBrief(f: AuthFixture, firmId: string) {
   const message = await withTransaction(f.db, () => recordMessage(ctx, { mailboxId: mailbox.id, metadata: { providerMessageId: id, providerThreadId: id, rfcMessageId: `${id}@example.test`, direction: 'incoming', internalDate: new Date().toISOString(), headerFrom: recipient, headerTo: [mailbox.email_address], headerCc: [], subject: 'Synthetic preparation question', referenceMessageIds: [], inReplyTo: null, autoSubmitted: null, listId: null, labelIds: [], attachments: [] } }));
   await withTransaction(f.db, () => recordMatches(ctx, { messageId: message.message.id, candidates: [{ firmId, contactId: contact.id, opportunityId: opportunity.id, rule: 'participant', viaClosedOpportunity: false }] }));
   await withTransaction(f.db, () => storeMessageBody(ctx, { messageId: message.message.id, text: 'Could we discuss the synthetic maintenance plan?', truncated: false }));
+  // Optional fictional browser journey, retaining the canonical reply fixture owner.
+  // The latest inbound owns the card. Earlier originals share its thread.
+  if (conversation) {
+    const latest = conversation.messages.filter(source => source.direction === 'inbound').at(-1)!;
+    await f.db.query('UPDATE mail_messages SET subject=$2,internal_date=$3 WHERE id=$1', [message.message.id, latest.subject, latest.sentAt]);
+    await f.db.query('UPDATE mail_message_bodies SET body_text=$2 WHERE mail_message_id=$1', [message.message.id, latest.body]);
+    await f.db.query('UPDATE contacts SET full_name=$2 WHERE id=$1', [contact.id, conversation.participants[0]!.name]);
+    for (const source of conversation.messages.filter(source => source.id !== latest.id)) {
+      const prior = await withTransaction(f.db, () => recordMessage(ctx, { mailboxId: mailbox.id, metadata: { providerMessageId: source.id, providerThreadId: id, rfcMessageId: `${source.id}@example.com`, direction: source.direction === 'inbound' ? 'incoming' : 'outgoing', internalDate: source.sentAt, headerFrom: source.from, headerTo: source.to, headerCc: [], subject: source.subject, referenceMessageIds: [], inReplyTo: null, autoSubmitted: null, listId: null, labelIds: [], attachments: [] } }));
+      await withTransaction(f.db, () => recordMatches(ctx, { messageId: prior.message.id, candidates: [{ firmId, contactId: contact.id, opportunityId: opportunity.id, rule: 'participant', viaClosedOpportunity: false }] }));
+      await withTransaction(f.db, () => storeMessageBody(ctx, { messageId: prior.message.id, text: source.body, truncated: false }));
+    }
+  }
   await withTransaction(f.db, () => promoteReply(ctx, { firmId, contactId: contact.id, messageId: message.message.id, receivedAt: new Date().toISOString() }));
   const saved = await withTransaction(f.db, () => saveAnswerBlock(admin, { kind: 'product', text: 'Callie helps existing property teams coordinate maintenance requests.' }));
   if (!saved.ok) throw new Error(saved.reason);
