@@ -46,8 +46,9 @@ it('same-site visible observations remain individual and batched feedback target
   const body=JSON.parse(String(init?.body)) as Record<string,unknown>;commands.push(body);return json({status:'accepted',replayed:false,result:{candidateId:other,revision:7,state:'kept'}});
  }),randomUUID:()=>crypto.randomUUID(),navigate:vi.fn()});
  await client.refresh();render(<BrowserManualProspects client={client}/>);
+ await screen.findByRole('table');fireEvent.click(within(screen.getByRole('table')).getAllByRole('button')[1]!);
  const member=await screen.findByRole('article',{name:`Manual prospect ${other}`});await waitFor(()=>{expect(within(member).getByRole('button',{name:'Keep'}).hasAttribute('disabled')).toBe(false);});
- expect(screen.getAllByRole('article')).toHaveLength(2);const button=within(member).getByRole('button',{name:'Keep'});act(()=>{fireEvent.click(button);fireEvent.click(button);});
+ expect(screen.getAllByRole('article')).toHaveLength(1);expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(3);const button=within(member).getByRole('button',{name:'Keep'});act(()=>{fireEvent.click(button);fireEvent.click(button);});
  await waitFor(()=>{expect(commands).toHaveLength(1);});expect(commands[0]).toMatchObject({candidateId:other,expectedRevision:7,state:'kept'});
  await act(async()=>{client.dispose();});
 });

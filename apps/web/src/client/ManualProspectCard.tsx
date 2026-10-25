@@ -1,27 +1,21 @@
 import type {JSX} from 'react';
 import type {ManualProspect} from '@fss/contracts';
+import {manualPhoneLabel,manualProspectLabel,manualProspectSite} from './manualProspectPresentation.ts';
 function Reference({url,label}:{url:string|null;label:string}):JSX.Element{
  let href:string|undefined;
  try{if(url){const parsed=new URL(url);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)href=parsed.href;}}catch{/* Retained text is not executable. */}
  return href?<a href={href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{label}</a>:<span>{label}</span>;
 }
-function phoneLabel(p:ManualProspect):string{
- const evidence=p.phoneEvidence;
- if(evidence?.state==='observed')return `Phone ${evidence.value} · observed, not call-ready`;
- if(evidence?.state==='absent')return 'Phone absent · retained source explicitly declares absent';
- if(evidence?.state==='conflicting')return 'Phone conflicting · no number selected';
- return 'Phone unknown · not extracted';
-}
 export function ManualProspectCard({prospect:p,disabled,feedback,activity}:{prospect:ManualProspect;disabled:boolean;feedback:(state:'kept'|'skipped'|'wrong_number')=>void;activity?:()=>void}):JSX.Element{
- const label=p.presentation?.label??p.observedName,kind=p.presentation?.kind.replaceAll('_',' ')??'unresolved';
+ const label=manualProspectLabel(p),kind=p.presentation?.kind.replaceAll('_',' ')??'unresolved';
  const phone=p.phoneEvidence;
- let site:string|null=null;
- try{if(p.website){const url=new URL(p.website);if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)site=url.hostname;}}catch{/* Unsafe references remain text-only in details. */}
+ const site=manualProspectSite(p);
  return <article aria-label={`Manual prospect ${p.candidateId}`} className="manual-prospect-row">
   <div className="manual-prospect-overview">
-   <div className="manual-prospect-identity"><h4>{label}</h4><p>{kind} · UNVERIFIED</p><p>Site {site?<Reference url={p.website} label={site}/>:'unknown'}</p></div>
+   <div className="manual-inspector-top"><span className="manual-eyebrow">Selected prospect</span><span className={`manual-state manual-state-${p.state}`}>{p.state.replaceAll('_',' ')}</span></div>
+   <div className="manual-prospect-identity"><h3 tabIndex={-1}>{label}</h3><p>{kind} · UNVERIFIED</p><p>Site {site?<Reference url={p.website} label={site}/>:'unknown'}</p></div>
    <p>Apparent area {p.locality??'unknown'}, {p.region??'unknown'}</p>
-   <p className="manual-prospect-phone">{phoneLabel(p)}</p>
+   <div className="manual-prospect-phone"><span className="manual-eyebrow">Retained phone evidence</span><p>{manualPhoneLabel(p)}</p><p>Ownership and reachability are not verified. Unknown phones remain reviewable.</p>{p.state==='wrong_number'?<p className="manual-wrong-note">Manual flag: wrong number. Original phone evidence is unchanged.</p>:null}</div>
    <p>Manual state {p.state.replaceAll('_',' ')} · Revision {p.revision}</p>
    <div className="manual-prospect-actions" role="group" aria-label="Feedback for this exact observation">
     <button disabled={disabled} onClick={()=>{feedback('kept');}}>Keep</button>
@@ -29,6 +23,7 @@ export function ManualProspectCard({prospect:p,disabled,feedback,activity}:{pros
     <button disabled={disabled} onClick={()=>{feedback('wrong_number');}}>Wrong number</button>
     {activity?<button disabled={disabled} onClick={activity}>Open private manual activity</button>:null}
    </div>
+   <p className="manual-decision-note">Reversible review of this exact observation only. No phone verification, source correction or contact permission.</p>
   </div>
   <details><summary>Observed name, sources and details</summary>
    <p>Original observed name: {p.observedName}</p>
