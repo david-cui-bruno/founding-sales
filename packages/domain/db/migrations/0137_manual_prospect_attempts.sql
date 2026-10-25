@@ -13,8 +13,9 @@ BEGIN
  IF occurrence->>'kind'='unknown' THEN
   IF (SELECT count(*) FROM jsonb_object_keys(occurrence))<>1 THEN RETURN false; END IF;
  ELSIF occurrence->>'kind'='known' THEN
-  IF (SELECT count(*) FROM jsonb_object_keys(occurrence))<>2 OR jsonb_typeof(occurrence->'occurredAt')<>'string'
-   OR occurrence->>'occurredAt' !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$' THEN RETURN false; END IF;
+  IF (SELECT count(*) FROM jsonb_object_keys(occurrence))<>2 OR NOT occurrence ?& ARRAY['kind','occurredAt']
+   OR jsonb_typeof(occurrence->'occurredAt') IS DISTINCT FROM 'string'
+   OR (occurrence->>'occurredAt' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$') IS NOT TRUE THEN RETURN false; END IF;
   PERFORM (occurrence->>'occurredAt')::timestamptz;
  ELSE RETURN false; END IF;
  IF c->'note'<>'null'::jsonb THEN
