@@ -17,6 +17,8 @@ import { readBrowserHostSettings } from '../../src/server/settings.ts';
 import type { BrowserRuntime } from '../../src/server/runtime.ts';
 import { localCertificate } from './tls.ts';
 import { seedReplyBrief } from './replyBriefSeed.ts';
+import type { SyntheticCase } from './syntheticBusinessFixture.ts';
+import type { BrowserAssets } from '../../src/server/hostContract.ts';
 
 async function reservePort(): Promise<number> {
   const reservation = reserveServer();
@@ -28,7 +30,7 @@ async function reservePort(): Promise<number> {
 
 /** Actual exported HTTPS host, bundled UI, signed OIDC/PKCE/JWKS and request-owned API.
  * Only the local identity-provider navigation and paid draft port are controlled. */
-export async function startReplyBriefApp() {
+export async function startReplyBriefApp(options: { conversation?: SyntheticCase; decorateAssets?: (assets: BrowserAssets) => BrowserAssets } = {}) {
   const fixture = await createAuthFixture();
   const certificate = await localCertificate().catch(async error => { await fixture.stop(); throw error; });
   let server: Server | undefined;
@@ -45,11 +47,12 @@ export async function startReplyBriefApp() {
     const tlsPath = certificatePaths.find(path => path !== undefined);
     if (!tlsPath) throw new Error('Owned certificate directory not found');
     console.log('REPLY_BRIEF_OWNED_RESOURCES', JSON.stringify({ storagePath, postgresPid, tlsPath, database: fixture.database.name }));
-    const firmId = await seedFirm(fixture, { name: 'Reply Brief Synthetic Firm', regionCode: 'TX', assignedUserId: fixture.alpha.salesperson.userId });
-    const seed = await seedReplyBrief(fixture, firmId);
+    const firmId = await seedFirm(fixture, { name: options.conversation?.firm ?? 'Reply Brief Synthetic Firm', regionCode: 'TX', assignedUserId: fixture.alpha.salesperson.userId });
+    const seed = await seedReplyBrief(fixture, firmId, options.conversation);
     const meetingId = randomUUID();
     await fixture.db.query("INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at,attendee_name,event_title,booking_notes,details_observed_at) VALUES($1,$2,$3,$4,$4,'booked',now()+interval '2 days',now()+interval '2 days 30 minutes',now(),'Robin Fixture','Synthetic maintenance discussion','Discuss current maintenance workflow.',now())", [fixture.alpha.workspaceId, meetingId, firmId, `reply-brief-${meetingId}`]);
-    const assets = await buildBrowserAssets();
+    const built = await buildBrowserAssets();
+    const assets = options.decorateAssets?.(built) ?? built;
     let identity: SeededMember = fixture.alpha.salesperson;
     let calls = 0;
     let answer = 'Thank you for your question.';
