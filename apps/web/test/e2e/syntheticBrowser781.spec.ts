@@ -22,6 +22,8 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     console.log('SYNTHETIC_781_CHROME_OWNED', JSON.stringify({ chromePid, profile, version: browser.version() }));
     await containSyntheticBrowser(context, app);
     await signInSyntheticBrowser(page, app);
+    expect(app.runtimeRoleChecks()).toBeGreaterThan(0);
+    expect((await app.fixture.db.query<{ current_user: string }>('SELECT current_user')).rows[0]?.current_user).not.toBe('app_runtime');
     await expect(page.getByLabel('Synthetic demo notice')).toContainText(demoLabel);
     expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);
     expect(app.fixture.google.tokenExchanges().at(-1)?.clientSecretPresented).toBe(true);
@@ -72,6 +74,7 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     expect(stored).not.toContain(scriptedReply);
     if (proof) { await page.screenshot({ path: `${proof}/781-reopened-notes.png`, fullPage: true }); await chmod(`${proof}/781-reopened-notes.png`, 0o600); }
     await assertSyntheticNoSend(app);
+    console.log('SYNTHETIC_781_APP_RUNTIME_REQUESTS_VERIFIED', app.runtimeRoleChecks());
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page.getByLabel('Workspace ID', { exact: true })).toBeVisible();
     expect((await browserRequest(page, '/replies', { body: {} })).status).toBe(401);

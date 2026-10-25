@@ -5,12 +5,29 @@ import type { BrowserAssets } from '../../src/server/hostContract.ts';
 import { reserveLocalBrowserDatabase } from './database.ts';
 import { startReplyBriefApp, type ReplyBriefApp } from './replyBriefApp.ts';
 import { scriptedReply, syntheticBrowserCase } from './syntheticBrowserCase.ts';
+import { snapshotExitListeners, removeExitListenersAddedSince } from '@fss/domain/db/testing/embeddedPostgres.ts';
 
 export const demoLabel = 'SYNTHETIC · fictional case A · NO SEND · scripted, not live model inference';
 export function requireLocalDemo(env: NodeJS.ProcessEnv): void {
   if (env['FSS_SYNTHETIC_LOCAL_DEMO'] !== '1') throw Error('Explicit FSS_SYNTHETIC_LOCAL_DEMO=1 required');
   if (['FSS_TEST_POSTGRES_URL', 'FSS_TEST_CLUSTER_URL', 'FSS_TEST_TEMPLATE_DATABASE'].some(key => env[key] !== undefined)) throw Error('Inherited PostgreSQL configuration refused');
   if (Object.keys(env).some(key => /^(?:DATABASE_URL|PGHOST|PGPORT|PGDATABASE|PGUSER|PGPASSWORD|AWS_|GOOGLE_|VERTEX_|FSS_BROWSER_|FSS_PRODUCTION_)/u.test(key) && env[key])) throw Error('Production/provider configuration refused. Use a clean local environment.');
+}
+
+/** CLI-only import boundary. Reclaim only listeners introduced by this dependency
+ * before any initialization/resource awaits. Ordinary fixture callers do not use it. */
+export async function prepareSyntheticCliDependency(): Promise<void> {
+  requireLocalDemo(process.env);
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const known = new Map(signals.map(signal => [signal, new Set(process.listeners(signal))]));
+  const exits = snapshotExitListeners();
+  try { await import('embedded-postgres'); }
+  finally {
+    removeExitListenersAddedSince(exits);
+    for (const signal of signals) for (const listener of process.listeners(signal)) {
+      if (!known.get(signal)!.has(listener)) process.removeListener(signal, listener);
+    }
+  }
 }
 
 export function syntheticAssets(assets: BrowserAssets): BrowserAssets {
@@ -30,7 +47,7 @@ export async function startSyntheticBrowser() {
   const release = await reserveLocalBrowserDatabase();
   let app: ReplyBriefApp | undefined;
   try {
-    app = await startReplyBriefApp({ conversation: syntheticBrowserCase, decorateAssets: syntheticAssets });
+    app = await startReplyBriefApp({ conversation: syntheticBrowserCase, decorateAssets: syntheticAssets, requestDatabaseRole: 'app_runtime' });
     app.setAnswer(scriptedReply);
     // Replace the generic fixture's brief material with literal case A observations.
     const firstInbound = syntheticBrowserCase.messages[0]!;

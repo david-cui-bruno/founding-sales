@@ -30,7 +30,7 @@ async function reservePort(): Promise<number> {
 
 /** Actual exported HTTPS host, bundled UI, signed OIDC/PKCE/JWKS and request-owned API.
  * Only the local identity-provider navigation and paid draft port are controlled. */
-export async function startReplyBriefApp(options: { conversation?: SyntheticCase; decorateAssets?: (assets: BrowserAssets) => BrowserAssets } = {}) {
+export async function startReplyBriefApp(options: { conversation?: SyntheticCase; decorateAssets?: (assets: BrowserAssets) => BrowserAssets; requestDatabaseRole?: 'app_runtime' } = {}) {
   const fixture = await createAuthFixture();
   const certificate = await localCertificate().catch(async error => { await fixture.stop(); throw error; });
   let server: Server | undefined;
@@ -55,6 +55,7 @@ export async function startReplyBriefApp(options: { conversation?: SyntheticCase
     const assets = options.decorateAssets?.(built) ?? built;
     let identity: SeededMember = fixture.alpha.salesperson;
     let calls = 0;
+    let runtimeRoleChecks = 0;
     let answer = 'Thank you for your question.';
     let duringGeneration: (() => Promise<void>) | undefined;
     const port: HumanReplyDraftPort = {
@@ -77,6 +78,12 @@ export async function startReplyBriefApp(options: { conversation?: SyntheticCase
         const client = new pg.Client({ connectionString: url.toString() });
         await client.connect();
         try {
+          if (options.requestDatabaseRole === 'app_runtime') {
+            await client.query('SET ROLE app_runtime');
+            const role = await client.query<{ current_user: string }>('SELECT current_user');
+            assert.equal(role.rows[0]?.current_user, 'app_runtime');
+            runtimeRoleChecks += 1;
+          }
           const session = asSession({ query: async (text, values) => await client.query(text, values), connect: async () => { await client.connect(); }, end: async () => { await client.end(); } });
           const auth = { ...fixture.deps, config, db: session };
           return await work({ auth, api: { session, auth, supportedClientVersions: config.supportedClientVersions, sendingEnabled: false, production: false, replyComposer: port } });
@@ -106,6 +113,7 @@ export async function startReplyBriefApp(options: { conversation?: SyntheticCase
     return {
       origin, fixture, firmId, meetingId, seed, storagePath, postgresPid, tlsPath,
       calls: () => calls,
+      runtimeRoleChecks: () => runtimeRoleChecks,
       setAnswer: (text: string) => { answer = text; },
       duringGeneration: (action?: () => Promise<void>) => { duringGeneration = action; },
       chooseIdentity: (member: SeededMember) => { identity = member; },
