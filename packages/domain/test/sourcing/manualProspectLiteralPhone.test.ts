@@ -35,6 +35,25 @@ it('does not lose unsupported alternate beside a supported number or coerce no-m
  expect(projectManualPhone(snapshot(['No endpoint retained']))).toMatchObject({state:'not_extracted',reason:'retained_text_not_extracted',coverage:{state:'complete'}});
  expect(scanManualLiteralPhones(input(['Unlabelled 2145550123'])).sources).toEqual([]);
 });
+it.each([
+ ['Phone: 2145550123 / ２１４５５５０１２４','２１４５５５０１２４'],
+ ['Phone: 2145550123 / ٢١٤٥٥٥٠١٢٤','٢١٤٥٥٥٠١٢٤'],
+ ['Phone: (214) 555-0123-FLOWERS','(214) 555-0123-FLOWERS'],
+ ['Phone: 2145550123 / (214) 555-0124-FLOWERS','(214) 555-0124-FLOWERS'],
+])('SPEC F1 refuses unsupported whole literal instead of selecting a prefix: %s',(text,literal)=>{
+ const result=scanManualLiteralPhones(input([text]));expect(result.unresolved).toBe(true);
+ expect(result.sources).toContainEqual(expect.objectContaining({literal,normalizedValue:null,normalizationBasis:'unsupported'}));
+ for(const source of result.sources)expect(text.slice(source.start,source.end)).toBe(source.literal);
+ expect(projectManualPhone(snapshot([text]))).toMatchObject({state:'conflicting',reason:'unresolved_retained_literal'});
+});
+it.each(['Phone: unavailable\nCompany registration: 2145550123','Phone: N/A\nOrder ID: 2145550123','Phone:\nRegistration: 2145550123'])('SPEC F2 never borrows unrelated field numbers: %s',text=>{
+ const result=scanManualLiteralPhones(input([text]));expect(result.unresolved).toBe(true);expect(result.sources).toEqual([]);
+ const evidence=projectManualPhone(snapshot([text]));expect(['not_extracted','conflicting']).toContain(evidence.state);
+});
+it.each(['Phone:\n(214) 555-0123','Call us at (214) 555-0123','Phone: 2145550123 / +1 214 555 0123','Phone: 2145550123; (214) 555-0123'])('SPEC finite attachment grammar preserves supported forms: %s',text=>{
+ const result=scanManualLiteralPhones(input([text]));expect(result.unresolved).toBe(false);expect(projectManualPhone(snapshot([text]))).toMatchObject({state:'observed',value:'+12145550123'});
+ for(const source of result.sources)expect(text.slice(source.start,source.end)).toBe(source.literal);
+});
 it('combines repeated equal numbers but preserves distinct numbers across whole input',()=>{
  expect(projectManualPhone(snapshot(['Phone 2145550123','Tel +1 214 555 0123']))).toMatchObject({state:'observed',value:'+12145550123',sources:[{},{}]});
  expect(projectManualPhone(snapshot(['Phone 2145550123 and (214) 555-0124']))).toMatchObject({state:'conflicting',reason:'multiple_retained_numbers'});

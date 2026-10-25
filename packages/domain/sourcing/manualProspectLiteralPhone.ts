@@ -14,7 +14,20 @@ const host=(value:string|null)=>{try{const url=new URL(value??'');return ['http:
 const labels=/\b(?:office\s+phone|main\s+phone|mobile(?:\s+phone)?|personal(?:\s+phone)?|emergency(?:\s+phone)?|fax|telephone|phone|tel|call\s+us)\b/giu;
 // Vanity and extension forms are retained as unsupported WHOLE literals. Never
 // accept their numeric prefix as a business endpoint. No cross-block stitching.
-const tokens=/(?:\+?\d[\d-]*[A-Za-z][A-Za-z\d-]*|\+?[\d(][\d(). \t-]*\d(?:[ \t]*(?:ext(?:ension)?\.?|x|#)[ \t]*\d+)?)/giu;
+const tokens=/\+?[\p{N}(][\p{N}(). \t-]*\p{N}(?:[ \t]*(?:ext(?:ension)?\.?|x|#)[ \t]*\p{N}+|-?[\p{L}\p{N}-]+)?/giu;
+/** Consume only explicitly attached literals. Unmatched prose/fields/residue
+ * makes the segment unresolved, never a license to search later identifiers.
+ * Unicode/vanity tokens are retained but do NOT extend the supported grammar. */
+function attachedLiterals(segment:string):{matches:RegExpExecArray[];complete:boolean}{
+ const matches:RegExpExecArray[]=[];let cursor=0;
+ for(const token of segment.matchAll(tokens)){
+  const gap=segment.slice(cursor,token.index);
+  const connector=matches.length===0?/^\s*(?::|[.-])?\s*(?:at\s+)?$/iu:/^\s*(?:[/,;&]|and|or)?\s*$/iu;
+  if(!connector.test(gap))return {matches,complete:false};
+  matches.push(token);cursor=token.index+token[0].length;
+ }
+ return {matches,complete:/^[\s.,;]*$/u.test(segment.slice(cursor))};
+}
 const splitSurrogate=(text:string,at:number)=>at>0&&at<text.length&&/[\uD800-\uDBFF]/u.test(text[at-1]!)&&/[\uDC00-\uDFFF]/u.test(text[at]!);
 export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
  const coverage:LiteralScan['coverage']={parser,state:'complete',observations:0,blocks:0};
@@ -38,13 +51,14 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
    for(const [index,label] of found.entries()){
     const start=label.index+label[0].length,end=found[index+1]?.index??block.text.length;
     const segment=block.text.slice(start,end);
-    const candidates=[...segment.matchAll(tokens)];
+    const attached=attachedLiterals(segment),candidates=attached.matches;
+    if(!attached.complete)result.unresolved=true;
     for(const token of candidates){
      const literal=token[0].trimEnd(),at=start+token.index,to=at+literal.length;
      if(literal.length>200||label[0].length>200||result.sources.length>=16)return bounded();
      const adjacent=(block.text[at-1]??'')+(block.text[to]??'');
      const ambiguous=/\b(?:fax|mobile|personal|emergency|vendor|powered\s+by|website\s+by|testimonial|customer\s+review)\b/iu.test(block.text)||/[\p{L}\p{N}]/u.test(adjacent)||splitSurrogate(block.text,at)||splitSurrogate(block.text,to);
-     const normalized=canonicalizePhone(literal),supported=normalized.ok&&!ambiguous;
+     const normalized=canonicalizePhone(literal),supported=normalized.ok&&!ambiguous&&attached.complete&&/^[0-9+(). \t-]+$/u.test(literal);
      if(!supported)result.unresolved=true;
      result.sources.push(literalSource(input,source,block.id,label[0],label.index,literal,at,supported&&normalized.ok?normalized.handle.value:null));
     }
