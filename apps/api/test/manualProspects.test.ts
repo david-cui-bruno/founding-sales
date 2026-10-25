@@ -46,7 +46,7 @@ it('normal runCommand receipts reconcile exact UUID without reapplying historica
 it('775 authenticates literal original extraction independently of malformed model facts and keeps source rows unchanged',async()=>{
  const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db),input=manualOrdinaryFixture(775);input.website='https://source.example.test/';
  const saved=await withTransaction(f.db,()=>saveCandidate(ctx,input));if(!saved.ok)throw Error(saved.reason);
- const run=await seedManualPhoneRun(f.db,f.alpha.workspaceId,saved.value.id,manualLiteralPhoneFixture(input.sourceUrl));await f.db.query('UPDATE sourcing_qualification_runs SET facts=$2 WHERE id=$1',[run,JSON.stringify({invalid:'model'})]);
+ const run=await seedManualPhoneRun(f.db,f.alpha.workspaceId,saved.value.id,manualLiteralPhoneFixture(input.sourceUrl));await f.db.query('UPDATE sourcing_qualification_runs SET facts=$2 WHERE id=$1',[run,JSON.stringify([{invalid:'model'}])]);
  const before=(await f.db.query('SELECT to_jsonb(r) row FROM sourcing_qualification_runs r ORDER BY id')).rows;
  try{
   const answer=await request(read,admin,{state:'all',offset:0});expect(answer.status).toBe(200);

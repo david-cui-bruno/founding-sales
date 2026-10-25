@@ -93,7 +93,7 @@ it('rechecks the live principal after a real source-lifecycle lock wait before e
 });
 it('775 parses a current retained first-party original with failed facts without changing product ledgers',async()=>{
  const c=await candidate('alpha',775,true),e=manualLiteralPhoneFixture(c.input.sourceUrl),run=await seedManualPhoneRun(db.session,seeded.alpha.workspaceId,c.id,e);
- await db.session.query('UPDATE sourcing_qualification_runs SET facts=$2 WHERE id=$1',[run,JSON.stringify({malformed:'model'})]);
+ await db.session.query('UPDATE sourcing_qualification_runs SET facts=$2 WHERE id=$1',[run,JSON.stringify([{malformed:'model'}])]);
  const before=(await db.session.query('SELECT to_jsonb(r) row FROM sourcing_qualification_runs r ORDER BY id')).rows;
  expect(await prospect()).toMatchObject({candidateId:c.id,qualification:'unverified',contactAuthority:'not_granted',phoneEvidence:{state:'observed',value:'+12145550123',coverage:{state:'complete'},sources:[{method:'retained_original_literal',literal:'(214) 555-0123',authority:{kind:'candidate_source'},lineage:{kind:'provider_original'}}]}});
  expect((await db.session.query('SELECT to_jsonb(r) row FROM sourcing_qualification_runs r ORDER BY id')).rows).toEqual(before);

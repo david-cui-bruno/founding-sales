@@ -66,5 +66,7 @@ test('775 current session revoked during real source lifecycle lock wait refuses
   await expect.poll(async()=>Number((await app.fixture.db.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT pg_advisory_xact_lock%'")).rows[0]?.['n'])).toBe(1);
   await app.fixture.db.query("UPDATE devices SET status='revoked',revoked_at=now() WHERE id=$1",[session.deviceId]);
  }finally{await blocker.query('ROLLBACK');}
- expect((await response).status()).toBe(401);await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();await expect(panel(page)).toHaveCount(0);expect(await page.locator('body').innerText()).not.toContain('214');
+ // Existing list authority_changed is a generic409, which BrowserClient treats
+ // as authority invalidation just like401/403. Do not change the shared route.
+ expect((await response).status()).toBe(409);await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();await expect(panel(page)).toHaveCount(0);expect(await page.locator('body').innerText()).not.toContain('+12145550123');
 });
