@@ -51,7 +51,9 @@ describe('local synthetic launcher boundary', () => {
     expect(code).toContain('await context?.close()');
     expect(code).toContain("process.env['LC_ALL'] = 'en_US.UTF-8'");
     expect(code).toContain('await prepareSyntheticCliDependency()');
-    expect(code.indexOf('await prepareSyntheticCliDependency()')).toBeLessThan(code.indexOf('await startSyntheticBrowser()'));
+    const startup = code.indexOf('await startSyntheticBrowser({ manualPreparation })');
+    expect(startup).toBeGreaterThan(0);
+    expect(code.indexOf('await prepareSyntheticCliDependency()')).toBeLessThan(startup);
     expect(code).not.toContain('process.kill(');
   });
   it.skipIf(process.env['FSS_SYNTHETIC_STARTUP_PROOF'] !== '1')('SIGTERM after PG import and TLS acquisition cancels startup before Chrome/READY and cleans owned resources', async () => {

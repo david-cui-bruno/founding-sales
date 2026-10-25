@@ -6,7 +6,7 @@ function Reference({url,label}:{url:string|null;label:string}):JSX.Element{
  try{if(url){const parsed=new URL(url);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)href=parsed.href;}}catch{/* Retained text is not executable. */}
  return href?<a href={href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{label}</a>:<span>{label}</span>;
 }
-export function ManualProspectCard({prospect:p,disabled,feedback,activity}:{prospect:ManualProspect;disabled:boolean;feedback:(state:'kept'|'skipped'|'wrong_number')=>void;activity?:()=>void}):JSX.Element{
+export function ManualProspectCard({prospect:p,disabled,feedback,activity,prepare}:{prospect:ManualProspect;disabled:boolean;feedback:(state:'kept'|'skipped'|'wrong_number')=>void;activity?:()=>void;prepare?:()=>void}):JSX.Element{
  const label=manualProspectLabel(p),kind=p.presentation?.kind.replaceAll('_',' ')??'unresolved';
  const phone=p.phoneEvidence;
  const site=manualProspectSite(p);
@@ -21,6 +21,7 @@ export function ManualProspectCard({prospect:p,disabled,feedback,activity}:{pros
     <button disabled={disabled} onClick={()=>{feedback('kept');}}>Keep</button>
     <button disabled={disabled} onClick={()=>{feedback('skipped');}}>Skip</button>
     <button disabled={disabled} onClick={()=>{feedback('wrong_number');}}>Wrong number</button>
+    {prepare?<button disabled={disabled} onClick={prepare}>Prepare manual draft · NO SEND</button>:null}
     {activity?<button disabled={disabled} onClick={activity}>Open private manual activity</button>:null}
    </div>
    <p className="manual-decision-note">Reversible review of this exact observation only. No phone verification, source correction or contact permission.</p>

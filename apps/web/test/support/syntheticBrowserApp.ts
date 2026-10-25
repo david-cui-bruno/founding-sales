@@ -5,6 +5,7 @@ import type { BrowserAssets } from '../../src/server/hostContract.ts';
 import { reserveLocalBrowserDatabase } from './database.ts';
 import { startReplyBriefApp, type ReplyBriefApp } from './replyBriefApp.ts';
 import { scriptedReply, syntheticBrowserCase } from './syntheticBrowserCase.ts';
+import {manualProspectPreparationDemoAssets,seedManualProspectPreparationDemo} from './manualProspectPreparationDemo.ts';
 import { snapshotExitListeners, removeExitListenersAddedSince } from '@fss/domain/db/testing/embeddedPostgres.ts';
 import { createOwnedTeardown } from '@fss/domain/db/testing/globalSetup.ts';
 
@@ -43,12 +44,12 @@ export function syntheticAssets(assets: BrowserAssets): BrowserAssets {
   return decorated;
 }
 
-export async function startSyntheticBrowser() {
+export async function startSyntheticBrowser({manualPreparation=false}:{manualPreparation?:boolean}={}) {
   requireLocalDemo(process.env);
   const release = await reserveLocalBrowserDatabase();
   let app: ReplyBriefApp | undefined;
   try {
-    app = await startReplyBriefApp({ conversation: syntheticBrowserCase, decorateAssets: syntheticAssets, requestDatabaseRole: 'app_runtime' });
+    app = await startReplyBriefApp({ conversation: syntheticBrowserCase, decorateAssets: manualPreparation?assets=>manualProspectPreparationDemoAssets(syntheticAssets(assets)):syntheticAssets, requestDatabaseRole: 'app_runtime' });
     app.setAnswer(scriptedReply);
     // Replace the generic fixture's brief material with literal case A observations.
     const firstInbound = syntheticBrowserCase.messages[0]!;
@@ -56,8 +57,9 @@ export async function startSyntheticBrowser() {
     await app.fixture.db.query('UPDATE firm_facts SET quote=$2,retrieved_at=$3 WHERE firm_id=$1', [app.firmId, firstInbound.body, firstInbound.sentAt]);
     await app.fixture.db.query('UPDATE evidence_items SET source_reference=$2 WHERE firm_id=$1', [app.firmId, 'https://fictional.example.test/SYN-A-01']);
     await app.fixture.db.query('UPDATE meetings SET attendee_name=$2,event_title=$3,booking_notes=$4,starts_at=$5,ends_at=$6 WHERE id=$1', [app.meetingId, 'Mara Fenwick (invented)', 'SYNTHETIC screen walkthrough, not a real booking', 'Fictional source agreement only. No calendar invitation or actual booking operation.', '2026-10-26T14:00:00-04:00', '2026-10-26T14:20:00-04:00']);
+    const manualProspects=manualPreparation?await seedManualProspectPreparationDemo(app):undefined;
     const owned = app;
-    return { app: owned, stop: createOwnedTeardown([
+    return { app: owned, manualPreparation:manualProspects, stop: createOwnedTeardown([
       () => owned.stop(),
       release,
       async () => {
