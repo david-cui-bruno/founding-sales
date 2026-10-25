@@ -6,7 +6,9 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
-### Active social integration769, October24 23:55UTC
+### Active social release769, October25 00:21UTC
+
+PR770 all required checks SUCCESS, merged October25 00:20:58 as 0d949c680a8cd382c0121f67be69d3635bc93cb0. Exact-main gate40146343737/images40146343765 running; sole observer685020cbkz. Not deployed, protected release and hosted acceptance depend on these runs. Shared hold and owner OFF unchanged.
 
 23:55 SAME Calf SPEC/Tigress STANDARDS expiry P2 and Macaque PRIVACY latest-meeting R1 CLOSED at b301dd2be. Full updated reports consumed. Targeted UI16/realPG12PASS, including normal transcription-writer lock wait and fresh v2 projection; full types/lint/workflow/build/scoped secrets PASS, resources absent. Reviews are source-only, supplied runtime evidence not independently rerun. Root owns fresh PR CI, exact-main release and hosted acceptance. No production change or new approval wait.
 
