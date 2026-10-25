@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useRef,useState,type JSX} from 'react';
 import {manualProspectActivityListSchema,type ManualProspect,type ManualProspectActivityList,type ManualProspectActivityView,type ManualProspectActivityContent,type ManualProspectActivitySaveInput} from '@fss/contracts';
-import {BrowserBoundaryError,type BrowserClient} from './BrowserClient.ts';
+import type {BrowserClient} from './BrowserClient.ts';
 import {ManualProspectActivityForm} from './ManualProspectActivityForm.tsx';
 import {MANUAL_ACTIVITY_PREFIX,dispatchManualActivity,reconcileManualActivity,readManualActivity} from './ManualProspectActivityDispatch.ts';
 import {MANUAL_ACTIVITY_PENDING_KEY,type ManualActivityPending} from './ManualProspectActivityCustody.ts';
@@ -22,7 +22,9 @@ export function BrowserManualProspectActivity({client,prospect:p,isScopeCurrent=
   if(operation.current!==null||busy||!isScopeCurrent())return;
   const token=Symbol('manual-activity'),epoch=client.epoch;operation.current=token;setBusy(true);setNotice('');
   const current=():boolean=>mounted.current&&operation.current===token&&isScopeCurrent()&&client.isCurrent(epoch)&&client.current?.status==='signed_in'&&client.current.role==='admin';
-  void work(current).catch(error=>{if(current()){setView(null);setEditing(false);setCreating(false);setNotice('Activity unavailable or outcome UNKNOWN. No automatic replay. Reconcile the exact pending command.');if(error instanceof BrowserBoundaryError&&error.reason==='refused')onUnavailable?.();}}).finally(()=>{if(current()){refreshPending();operation.current=null;setBusy(false);}});
+  // HTTP refusal also includes transient503. Confirmed401/403/409 revoke scope via
+  // BrowserClient's invalidation subscription, while exact unavailable reads notify below.
+  void work(current).catch(()=>{if(current()){setView(null);setEditing(false);setCreating(false);setNotice('Activity unavailable or outcome UNKNOWN. No automatic replay. Reconcile the exact pending command.');}}).finally(()=>{if(current()){refreshPending();operation.current=null;setBusy(false);}});
  };
  const load=async(current:()=>boolean,afterId?:string):Promise<void>=>{
   setList(null);setView(null);setEditing(false);setCreating(false);

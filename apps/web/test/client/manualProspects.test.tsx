@@ -224,10 +224,33 @@ it('an actual lost save response keeps UNKNOWN identity and its recovery availab
  fireEvent.click(screen.getByRole('button',{name:'Reconcile exact manual activity receipt'}));await screen.findByText(/Receipt UNKNOWN/u);
  expect(s.storage.getItem(MANUAL_ACTIVITY_PENDING_KEY)).toBe(bytes);expect(s.uuid).toHaveBeenCalledTimes(1);expect(saves).toBe(1);expect(bytes).not.toContain('SYNTHETIC lost report');await act(async()=>{s.client.dispose();});
 });
-it.each(['logout','expiry','source'] as const)('%s refusal clears current preparation and private activity',async kind=>{
+it.each(['session503','save503'] as const)('%s preserves reviewed preparation and exact UNKNOWN custody without replay',async kind=>{
+ vi.stubGlobal('crypto',webcrypto);vi.stubGlobal('navigator',{locks:{request:async(_name:string,_options:unknown,work:()=>Promise<unknown>)=>work()}});
+ const s=setup();let saves=0;
+ s.route(url=>{if(url.endsWith('/activity/save')){saves++;return json({},503);}if(url.endsWith('/activity/receipt'))return json({state:'unknown'});return undefined;});
+ await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();composePreparation();fireEvent.click(screen.getByRole('button',{name:"Open this prospect's private manual activity"}));
+ fireEvent.click(screen.getByRole('button',{name:'Record a user-performed attempt'}));fireEvent.click(screen.getByLabelText('I performed this manual attempt (user report, not verified)',{exact:true}));
+ if(kind==='session503')s.sessionUnavailable();
+ fireEvent.click(screen.getByRole('button',{name:'Save manual report'}));await screen.findByText(/Activity unavailable or outcome UNKNOWN/u);
+ const bytes=s.storage.getItem(MANUAL_ACTIVITY_PENDING_KEY),held=s.client.manualActivity.read();expect(bytes).not.toBeNull();expect(held).not.toBeNull();expect(saves).toBe(kind==='session503'?0:1);
+ expect(screen.getByRole('article',{name:'Reviewed manual draft'}).textContent).toContain(privateDraft);expect(screen.getByLabelText('Manual outreach draft')).toHaveProperty('value',privateDraft);
+ expect(screen.getByRole('button',{name:'Record a user-performed attempt'}).hasAttribute('disabled')).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'Reconcile exact manual activity receipt'}));await screen.findByText(/Receipt UNKNOWN/u);
+ expect(s.storage.getItem(MANUAL_ACTIVITY_PENDING_KEY)).toBe(bytes);expect(s.client.manualActivity.read()).toEqual(held);expect(s.uuid).toHaveBeenCalledTimes(1);expect(saves).toBe(kind==='session503'?0:1);
+ expect(screen.getByRole('article',{name:'Reviewed manual draft'}).textContent).toContain(privateDraft);await act(async()=>{s.client.dispose();});
+});
+it.each(['logout','expiry',401,403,409] as const)('%s refusal clears current preparation and private activity',async kind=>{
  const s=setup();await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();composePreparation();fireEvent.click(screen.getByRole('button',{name:"Open this prospect's private manual activity"}));
- if(kind==='source'){s.route(url=>url.endsWith('/activity/list')?json({error:'unavailable'},404):undefined);fireEvent.click(screen.getByRole('button',{name:'Refresh manual activity'}));await waitFor(()=>{expect(screen.queryByLabelText('Manual outreach draft')).toBeNull();});}
+ if(typeof kind==='number'){s.route(url=>url.endsWith('/activity/list')?json({error:'unavailable'},kind):undefined);fireEvent.click(screen.getByRole('button',{name:'Refresh manual activity'}));await waitFor(()=>{expect(screen.queryByLabelText('Manual outreach draft')).toBeNull();});expect(s.client.current).toBeNull();}
  else if(kind==='expiry'){const now=vi.spyOn(Date,'now').mockReturnValue(Date.now()+120001);act(()=>{s.client.isCurrent(s.client.epoch);});now.mockRestore();}
  else await act(async()=>{await s.client.signOut().catch(()=>{});});
  expect(screen.queryByRole('article',{name:'Reviewed manual draft'})).toBeNull();expect(screen.queryByRole('region',{name:'Private manual prospect activity'})).toBeNull();await act(async()=>{s.client.dispose();});
+});
+it('an exact unavailable report read clears preparation without treating a service error as source loss',async()=>{
+ const s=setup(),attemptId='30000000-0000-4000-8000-000000000003',at='2026-10-25T12:00:00.000Z';
+ const metadata={candidateId:id,candidateRevision:1,attemptId,activityRevision:1,recordedAt:at,updatedAt:at,availability:'unavailable'};
+ s.route(url=>url.endsWith('/activity/list')?json({activities:[metadata],nextAfterId:null}):url.endsWith('/activity/read')?json({activity:{...metadata,reason:'source_changed_or_unavailable'}}):undefined);
+ await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();composePreparation();fireEvent.click(screen.getByRole('button',{name:"Open this prospect's private manual activity"}));
+ fireEvent.click(screen.getByRole('button',{name:'Refresh manual activity'}));fireEvent.click(await screen.findByRole('button',{name:`Open manual report ${attemptId}`}));
+ await waitFor(()=>{expect(screen.queryByLabelText('Manual outreach draft')).toBeNull();});expect(screen.queryByRole('article',{name:'Reviewed manual draft'})).toBeNull();expect(screen.queryByRole('region',{name:'Private manual prospect activity'})).toBeNull();expect(s.client.current?.status).toBe('signed_in');await act(async()=>{s.client.dispose();});
 });
