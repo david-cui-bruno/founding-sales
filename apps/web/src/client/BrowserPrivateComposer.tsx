@@ -20,9 +20,10 @@ export function BrowserPrivateComposer({client,adoption,reviewBusy,reviewRevisio
   const changed=(event:StorageEvent):void=>{if(event.key===PRIVATE_DRAFT_PENDING_KEY){try{if(event.newValue!==localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY))return;}catch{setBlocked(true);}token.current++;guard.current=false;setBusy(false);if(originRef.current.kind==='suggestion')reset();setList(null);payload.current=null;held();setNotice('Another tab changed private save custody. Manual edits remain unsaved in this page only. Reopen current content explicitly.');}};
   const operationToken=token;window.addEventListener('storage',changed);return ()=>{operationToken.current++;unsubscribe();window.removeEventListener('storage',changed);};
  },[client,custody,held]);
- useEffect(()=>{if(originRef.current.kind==='suggestion'){token.current++;reset();}},[reviewRevision]);
+ // Evidence cancellation releases UI ownership, never the held command identity.
+ useEffect(()=>{if(originRef.current.kind==='suggestion'){token.current++;guard.current=false;setBusy(false);payload.current=null;reset();held();}},[reviewRevision,held]);
  useEffect(()=>{
-  if(adoption===null){if(originRef.current.kind==='suggestion'){token.current++;reset();}return;}
+  if(adoption===null){if(originRef.current.kind==='suggestion'){token.current++;guard.current=false;setBusy(false);payload.current=null;reset();held();}return;}
   if(guard.current||adoptionBlocked.current)return;
   token.current++;const variant=adoption.request.concepts?.[adoption.conceptIndex]?.variants[adoption.variantIndex];
   if(!variant||Date.parse(adoption.request.deadlineAt)<=Date.now())return;
@@ -30,7 +31,7 @@ export function BrowserPrivateComposer({client,adoption,reviewBusy,reviewRevisio
   const generation=client.epoch,id=token.current;
   void privateDraftSHA256(JSON.stringify({request:socialDraftViewSchema.parse(adoption.request),conceptIndex:adoption.conceptIndex,variantIndex:adoption.variantIndex})).then(hash=>{if(token.current===id&&client.isCurrent(generation))setOrigin({kind:'suggestion',requestId:adoption.request.id,conceptIndex:adoption.conceptIndex,variantIndex:adoption.variantIndex,selectionSHA256:hash});}).catch(()=>{if(token.current===id)setNotice('Selection fingerprint unavailable. Re-read before saving.');});
   setNotice('Current ready suggestion adopted privately. Provenance is not proof of semantic support. Human review required.');
- },[adoption,client]);
+ },[adoption,client,held]);
  useEffect(()=>{
   if(!deadline)return;let timer:ReturnType<typeof setTimeout>;
   const expire=():void=>{const remaining=Date.parse(deadline)-Date.now();if(remaining>0){timer=setTimeout(expire,Math.min(2147483647,remaining));return;}token.current++;guard.current=false;setBusy(false);reset();setList(null);payload.current=null;setNotice('Selected suggestion or private draft expired. Private adopted scratch cleared. Re-read current evidence.');};
