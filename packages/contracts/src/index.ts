@@ -109,3 +109,4 @@ export * from './sourcingCandidateAuthority.ts';
 export * from './sourcingRetainedRecovery.ts';
 export * from './manualProspects.ts';
 export * from './manualLiteralPhone.ts';
+export * from './manualProspectActivity.ts';
