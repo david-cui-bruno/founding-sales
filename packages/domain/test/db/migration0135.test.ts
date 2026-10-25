@@ -4,7 +4,7 @@ import {applyMigrations,readAppliedSchemaVersion} from '../../db/migrationRunner
 import {seedTwoWorkspaces,type TwoWorkspaces} from './support/fixtures.ts';
 import {SOCIAL_PRIVATE_CONSTRAINT_CASES,privateDraftRow,insertPrivateDraft} from './support/socialPrivateCases.ts';
 let db:TestDatabase,seeded:TwoWorkspaces;
-beforeAll(async()=>{db=await createTestDatabase({throughVersion:134});seeded=await seedTwoWorkspaces(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(134);await applyMigrations(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(135);});
+beforeAll(async()=>{db=await createTestDatabase({throughVersion:134});seeded=await seedTwoWorkspaces(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(134);await applyMigrations(db.session,{throughVersion:135});expect(await readAppliedSchemaVersion(db.session)).toBe(135);});
 afterAll(async()=>{await db?.drop();});
 it.each(SOCIAL_PRIVATE_CONSTRAINT_CASES)('134 to 135 rejects $constraint',async testCase=>{await db.session.query('BEGIN');try{await expect(testCase.run({session:db.session,seeded})).rejects.toMatchObject({constraint:testCase.constraint});}finally{await db.session.query('ROLLBACK');}});
 it('app_runtime owns only current private composition and all constraints are classified',async()=>{

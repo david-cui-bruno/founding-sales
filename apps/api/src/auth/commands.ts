@@ -99,6 +99,7 @@ export async function runCommand<T>(
   principal: AuthenticatedPrincipal,
   request: CommandRequest,
   work: (context: RepositoryContext) => Promise<CommandWorkResult<T>>,
+  beforeCommit?: (context: RepositoryContext) => Promise<void>,
 ): Promise<CommandOutcome<T>> {
   if (clientCompatibility(deps.config.supportedClientVersions, request.clientVersion).kind !== 'supported') {
     return { status: 'refused', reason: 'client_upgrade_required', replayed: false };
@@ -150,6 +151,9 @@ export async function runCommand<T>(
           storedResult,
         ],
       );
+      // Optional current-authority fence after receipt uniqueness/audit waits.
+      // Throwing rolls back both the mutation and ordinary receipt.
+      await beforeCommit?.(context);
       return outcome.status === 'accepted'
         ? { status: 'accepted', result: outcome.result, replayed: false }
         : {

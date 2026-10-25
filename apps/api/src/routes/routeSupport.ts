@@ -119,6 +119,7 @@ export async function runRouteCommand<Schema extends z.ZodType<{ commandId: stri
   schema: Schema,
   kind: string,
   work: (context: RepositoryContext, body: z.infer<Schema>) => Promise<CommandResult<T>>,
+  beforeCommit?: (context: RepositoryContext) => Promise<void>,
 ): Promise<RouteResult> {
   const parsed = schema.safeParse(deps.request.body);
   if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
@@ -135,6 +136,6 @@ export async function runRouteCommand<Schema extends z.ZodType<{ commandId: stri
     return Object.keys(details).length === 0
       ? { status: 'refused', reason: result.reason }
       : { status: 'refused', reason: result.reason, details };
-  });
+  }, beforeCommit);
   return commandReply(outcome);
 }
