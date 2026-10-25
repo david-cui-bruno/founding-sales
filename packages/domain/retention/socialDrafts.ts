@@ -1,6 +1,7 @@
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {TableCoverage} from './coverage.ts';
 export const SOCIAL_DRAFT_RETENTION_COVERAGE:Readonly<Record<string,TableCoverage>>={
+ social_voice_preferences:{dispositions:['retained','deletion_removes','departure_revokes'],note:'Durable owner-curated private style until explicit remove or normal owner/workspace lifecycle erasure. No expiry or source dependency. Migration0136 synchronously NULLs entries on membership departure and cascades on membership/workspace deletion. Tombstone fences stale writes. No prose history, receipt or audit content.'},
  social_draft_requests:{dispositions:['retained'],note:'Source references/hashes and anonymized draft suggestions, never copied transcripts; deleted or changed sources block generation and result acceptance.'},
  social_private_drafts:{dispositions:['swept','deletion_redacts','departure_revokes'],note:'Current PRIVATE prose only, no history. Fixed first-save maximum90day expiry and earlier source freshness. Normal source/association/fact DELETE/UPDATE and owner departure synchronously erase current bytes, origin and source snapshots through migration0135 triggers. Terminal opaque identity/revision prevents resurrection. Existing canceled_drafts retention sweeps expired text; no publication/job authority.'},
 };

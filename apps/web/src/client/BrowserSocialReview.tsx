@@ -2,6 +2,7 @@ import {useEffect,useRef,useState,type JSX} from 'react';
 import {socialDraftWorkspaceSchema,socialDraftViewSchema,type SocialDraftWorkspace,type SocialDraftView} from '@fss/contracts';
 import {z} from 'zod';
 import {BrowserPrivateComposer,type PrivateAdoption} from './BrowserPrivateComposer.tsx';
+import {BrowserVoicePreferences} from './BrowserVoicePreferences.tsx';
 import type {BrowserClient} from './BrowserClient.ts';
 
 /** Retained suggestion review plus explicitly saved private composition. */
@@ -59,7 +60,7 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
  return <section aria-label="Private social review" className="space-y-3 rounded-md border p-4">
   <h2>Private social review</h2>
   <p>Review retained suggestions or compose a private post or comment. Unsaved edits stay in authenticated memory. Only explicit Save persists a private draft. Not approved, scheduled or published.</p>
-  <p>No generation, voice learning, source acquisition or platform action is available. Retained source metadata is dated provenance, not current coverage or semantic support.</p>
+  <p>No generation, automatic voice learning, source acquisition or platform action is available. Retained source metadata is dated provenance, not current coverage or semantic support.</p>
   <button type="button" disabled={busy} onClick={()=>{void read();}}>Read retained social suggestions</button>
   <p role="status">{notice}</p>
   {workspace!==null?<div className="space-y-3">
@@ -74,6 +75,7 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
     {request.state==='ready'?request.concepts?.map((concept,ci)=><div key={ci}><h5>{concept.theme}</h5><p>Variant fact references: {concept.factRefs.map(ref=>`${ref.id} v${ref.version}`).join(', ')||'None'}</p>{concept.variants.map((variant,vi)=><div key={vi}><p className="whitespace-pre-wrap">{variant.text}</p><button type="button" disabled={busy||new Date(request.deadlineAt).getTime()<=Date.now()} onClick={()=>{void read(request,ci,vi);}}>Re-read and use {variant.platform} suggestion {ci+1}.{vi+1}</button></div>)}</div>):<p>Not available for adoption. No supported text is presented.</p>}
    </article>)}
   </div>:null}
+  <BrowserVoicePreferences client={client}/>
   <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
  </section>;
 }

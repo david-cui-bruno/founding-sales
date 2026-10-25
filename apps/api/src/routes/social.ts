@@ -17,18 +17,20 @@ import {saveSocialConnection,disconnectSocialAccount} from '@fss/domain/social/a
 import {socialPostSaveCommandSchema,socialPostActionCommandSchema,socialBeginCommandSchema,socialObservationCommandSchema} from '@fss/contracts';
 import {saveSocialPost,approveSocialPost,requestSocialCancellation,readSocialWorkspace} from '@fss/domain/social/posts.ts';
 import {claimSocialDelivery,beginSocialSubmission,recordSocialObservation} from '@fss/domain/social/delivery.ts';
+import {SOCIAL_VOICE_PATHS,routeSocialVoicePreferences} from './socialVoicePreferences.ts';
 import {SOCIAL_PRIVATE_PATHS,routeSocialPrivateDrafts} from './socialPrivateDrafts.ts';
 import {z} from 'zod';
 import {uuid,socialAssetRegisterCommandSchema,socialAssetCompleteCommandSchema,socialAssetDeleteCommandSchema} from '@fss/contracts';
 import {readSocialAsset,registerSocialAsset,completeSocialAsset,deleteSocialAsset,listSocialAssets,socialAssetObject} from '@fss/domain/social/assets.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOCIAL_PATHS=[...SOCIAL_PRIVATE_PATHS,'/social/linkedin-policy/read','/social/linkedin-policy/save','/social/linkedin-policy/disable','/social/linkedin-policy/revoke','/social/linkedin-policy/check-current','/social/accounts/manual','/social/manual-handoff/read','/social/manual-handoff/confirm','/social/delivery/hold','/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
+export const SOCIAL_PATHS=[...SOCIAL_VOICE_PATHS,...SOCIAL_PRIVATE_PATHS,'/social/linkedin-policy/read','/social/linkedin-policy/save','/social/linkedin-policy/disable','/social/linkedin-policy/revoke','/social/linkedin-policy/check-current','/social/accounts/manual','/social/manual-handoff/read','/social/manual-handoff/confirm','/social/delivery/hold','/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
 export async function routeSocial(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOCIAL_PATHS.includes(request.path))return null;if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
  const principal=await requirePrincipal(auth,request);if(!principal.ok)return principal.result;const scoped=contextForPrincipal(auth,principal.principal);if(!scoped.ok)return scoped.result;
  const ctx=scoped.context,deps={auth,request,principal:principal.principal};
+ if((SOCIAL_VOICE_PATHS as readonly string[]).includes(request.path))return routeSocialVoicePreferences(deps);
  if((SOCIAL_PRIVATE_PATHS as readonly string[]).includes(request.path))return routeSocialPrivateDrafts(deps);
  if(request.path==='/social/linkedin-policy/read'){
   if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};

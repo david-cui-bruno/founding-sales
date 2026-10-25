@@ -4,7 +4,7 @@
 
 Read after compaction: [tracker](docs/agents/issue-tracker.md), [labels](docs/agents/triage-labels.md); use `david-cui-bruno/founding-sales` Issues. Before exploration read [domain](docs/agents/domain.md), `GLOSSARY.md`, relevant ADRs. Before roadmap/release/sending read [current-state](docs/operations/current-state.md) and its roadmap. History is not authority; exclude `docs/archive` except historical questions.
 
-Prioritize daily selling, Gmail capture, manual-first LinkedIn, then release simplification. One implementer owns each outcome. Parallelize independent outcomes/read-only investigations in David's workspace.
+Prioritize selling/Gmail/manual-first LinkedIn, then release simplification. Root owns integration/interfaces/production. Assign exclusive outcomes with acceptance/dependencies/resources. Refill on completion/blocking. Tracker/PLAN: backlog; todos: active.
 
 ## Decisions and approvals
 

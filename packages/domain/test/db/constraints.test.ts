@@ -28,7 +28,7 @@ import { LINKEDIN_POLICY_CONSTRAINT_CASES } from "./support/linkedinPolicyCases.
 import { LINKEDIN_RECURRING_CONSTRAINT_CASES } from "./support/linkedinRecurringCases.ts";
 import { LINKEDIN_MANUAL_CONSTRAINT_CASES } from "./support/linkedinManualCases.ts";
 import { LINKEDIN_POSTING_POLICY_CONSTRAINT_CASES } from "./support/linkedinPostingPolicyCases.ts";
-import { SOCIAL_CONSTRAINT_CASES } from "./support/socialCases.ts"; import {SOCIAL_PRIVATE_CONSTRAINT_CASES} from './support/socialPrivateCases.ts';
+import { SOCIAL_CONSTRAINT_CASES } from "./support/socialCases.ts"; import {SOCIAL_PRIVATE_CONSTRAINT_CASES} from './support/socialPrivateCases.ts'; import { SOCIAL_VOICE_CONSTRAINT_CASES } from './support/socialVoiceCases.ts';
 import { OUTREACH_CONSTRAINT_CASES } from "./support/outreachCases.ts";
 import { SOURCING_CONSTRAINT_CASES } from "./support/sourcingCases.ts";
 import { MEETING_AUTO_RECORDING_CONSTRAINT_CASES } from "./support/meetingAutoRecordingCases.ts";
@@ -2250,7 +2250,7 @@ const cases: readonly Case[] = [
   ...CRM_CAPABILITY_CONSTRAINT_CASES,
   ...CRM_CAPTURE_READ_CONSTRAINT_CASES,
   ...CRM_ACQUISITION_DIAGNOSTIC_CONSTRAINT_CASES,
-  ...SOCIAL_CONSTRAINT_CASES, ...SOCIAL_PRIVATE_CONSTRAINT_CASES,
+  ...SOCIAL_CONSTRAINT_CASES, ...SOCIAL_PRIVATE_CONSTRAINT_CASES, ...SOCIAL_VOICE_CONSTRAINT_CASES,
   ...LINKEDIN_POLICY_CONSTRAINT_CASES,
   ...LINKEDIN_POSTING_POLICY_CONSTRAINT_CASES,
   ...LINKEDIN_RECURRING_CONSTRAINT_CASES,
