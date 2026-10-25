@@ -5,15 +5,17 @@ import type {BrowserClient} from './BrowserClient.ts';
 import {dispatchManualProspect} from './ManualProspectDispatch.ts';
 import type {PendingManualProspect} from './ManualProspectPending.ts';
 import {ManualProspectCard} from './ManualProspectCard.tsx';
+import {BrowserManualProspectActivity} from './BrowserManualProspectActivity.tsx';
 
 export function BrowserManualProspects({client}:{client:BrowserClient}):JSX.Element|null{
  const [state,setState]=useState('all'),[offset,setOffset]=useState(0),[reload,setReload]=useState(0);
  const [page,setPage]=useState<z.infer<typeof manualProspectListSchema>|null>(null),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
  const [pending,setPending]=useState<PendingManualProspect|null>(null),[custodyError,setCustodyError]=useState(false);
+ const [activity,setActivity]=useState<ManualProspect|null>(null);
  const operation=useRef<symbol|null>(null),mounted=useRef(false);
  useEffect(()=>{
   mounted.current=true;let epoch=client.epoch;
-  const clear=():void=>{operation.current=null;setPage(null);setPending(null);setBusy(false);setNotice('');};
+  const clear=():void=>{operation.current=null;setPage(null);setActivity(null);setPending(null);setBusy(false);setNotice('');};
   clear();setCustodyError(false);
   const unsubscribe=client.subscribe(()=>{if(epoch!==client.epoch||client.current?.status!=='signed_in'){epoch=client.epoch;clear();}});
   try{setPending(client.manualProspects.read());}catch{setCustodyError(true);}
@@ -56,6 +58,7 @@ export function BrowserManualProspects({client}:{client:BrowserClient}):JSX.Elem
   {notice?<p role="status">{notice}</p>:null}{custodyError?<p role="alert">Pending feedback storage unavailable. Dispatch blocked. No replacement command created.</p>:null}
   {pending&&!pending.receipt?<div><p>Uncertain manual feedback for candidate {pending.payload.candidateId}, revision {pending.payload.expectedRevision}. Exact command {pending.payload.commandId}.</p><button disabled={busy||custodyError} onClick={()=>{void feedback(null);}}>Reconcile same manual feedback</button></div>:null}
   {page?.prospects.length===0?<p>No retained prospects returned for this state and page.</p>:null}
-  {page?.prospects.map(prospect=><ManualProspectCard key={`${prospect.candidateId}:${prospect.revision}`} prospect={prospect} disabled={busy||custodyError||(pending!==null&&!pending.receipt)} feedback={(value)=>{void feedback(prospect,value);}}/>)}
+  {page?.prospects.map(prospect=><ManualProspectCard key={`${prospect.candidateId}:${prospect.revision}`} prospect={prospect} disabled={busy||custodyError||(pending!==null&&!pending.receipt)} feedback={(value)=>{void feedback(prospect,value);}} activity={()=>setActivity(prospect)}/>)}
+  {activity?<div><button onClick={()=>setActivity(null)}>Close private manual activity</button><BrowserManualProspectActivity key={`${activity.candidateId}:${activity.revision}`} client={client} prospect={activity}/></div>:null}
  </section>;
 }

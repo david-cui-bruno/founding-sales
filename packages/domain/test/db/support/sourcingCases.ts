@@ -1,4 +1,5 @@
 import {MANUAL_PROSPECT_CONSTRAINT_CASES} from './manualProspectCases.ts';
+import {MANUAL_ACTIVITY_CONSTRAINT_CASES} from './manualProspectActivityCases.ts';
 import {RETAINED_RECOVERY_CONSTRAINT_CASES} from './retainedRecoveryCases.ts';
 import {APOLLO_DISCOVERY_CONSTRAINT_CASES} from './apolloDiscoveryCases.ts';
 import {DISCOVERY_INTAKE_CONSTRAINT_CASES} from './discoveryIntakeCases.ts';
@@ -13,6 +14,7 @@ const insert=(f:Fixture,overrides:Record<string,unknown>={})=>{
  return f.session.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload,status,revision) VALUES($1,$2,$3,$4::jsonb,$5,$6)',Object.values(row));
 };
 export const SOURCING_CONSTRAINT_CASES=[
+ ...MANUAL_ACTIVITY_CONSTRAINT_CASES,
  ...MANUAL_PROSPECT_CONSTRAINT_CASES,
  ...RETAINED_RECOVERY_CONSTRAINT_CASES,
  ...DISCOVERY_PROMOTION_CONSTRAINT_CASES,

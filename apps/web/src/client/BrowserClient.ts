@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ManualProspectCustody } from './ManualProspectPending.ts';
+import { ManualProspectActivityCustody } from './ManualProspectActivityCustody.ts';
 import { QualificationCustody } from './QualificationPending.ts';
 import { saveMeetingNotesSchema, qualifiedResearchSelectionSchema, uuid, type QualifiedResearchSelection, type SaveMeetingNotes } from '@fss/contracts';
 import { RESEARCH_PENDING_KEY, researchPendingSchema, type PendingResearch } from './ResearchPending.ts';
@@ -17,6 +18,7 @@ export interface InvalidationChannel {
 export interface BrowserClientOptions {
   fetch: typeof fetch;
   storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+  manualActivityStorage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
   channel?: InvalidationChannel;
   navigate(url: string): void;
   randomUUID(): string;
@@ -32,6 +34,7 @@ export class BrowserBoundaryError extends Error {
 /** Per mounted browser app only. No credentials, private projection cache or global bridge. */
 export class BrowserClient {
   readonly manualProspects: ManualProspectCustody;
+  readonly manualActivity: ManualProspectActivityCustody;
   readonly qualification: QualificationCustody;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private session: BrowserSession | null = null;
@@ -40,6 +43,14 @@ export class BrowserClient {
   private readonly onBroadcast = (): void => { this.invalidate(false); };
   constructor(private readonly options: BrowserClientOptions) {
     this.manualProspects = new ManualProspectCustody(options.storage, () => {
+      if (!this.isCurrent(this.generation) || this.session?.status !== 'signed_in' || this.session.role !== 'admin') return null;
+      return { identity: identityOf(this.session)!, expiresAt: this.session.expiresAt };
+    }, options.randomUUID);
+    this.manualActivity = new ManualProspectActivityCustody(options.manualActivityStorage ?? {
+      getItem: key => globalThis.localStorage.getItem(key),
+      setItem: (key, value) => { globalThis.localStorage.setItem(key, value); },
+      removeItem: key => { globalThis.localStorage.removeItem(key); },
+    }, () => {
       if (!this.isCurrent(this.generation) || this.session?.status !== 'signed_in' || this.session.role !== 'admin') return null;
       return { identity: identityOf(this.session)!, expiresAt: this.session.expiresAt };
     }, options.randomUUID);
@@ -64,7 +75,7 @@ export class BrowserClient {
     clearTimeout(this.expiryTimer);
     this.generation += 1;
     this.session = null;
-    this.manualProspects.clear(); this.qualification.clear();
+    this.manualProspects.clear(); this.manualActivity.clear(); this.qualification.clear();
     try { this.options.storage.removeItem(RESEARCH_PENDING_KEY); } catch { /* Invalid identity cannot use retained custody. */ }
     this.removePending();
     this.emit();
@@ -117,10 +128,10 @@ export class BrowserClient {
       if (remaining <= 0) { this.invalidate(); throw new BrowserBoundaryError('session_changed'); }
       this.expiryTimer = setTimeout(() => { this.invalidate(); }, Math.min(remaining, 2_147_483_647));
       this.pendingResearch();
-      if (next.role !== 'admin') { this.manualProspects.clear(); this.qualification.clear(); }
+      if (next.role !== 'admin') { this.manualProspects.clear(); this.manualActivity.clear(); this.qualification.clear(); }
       else { try { this.qualification.read(); } catch { /* Corrupt/unavailable custody stays fail-closed, never silently reminted. */ } }
     } else {
-      this.manualProspects.clear(); this.qualification.clear();
+      this.manualProspects.clear(); this.manualActivity.clear(); this.qualification.clear();
       try { this.options.storage.removeItem(RESEARCH_PENDING_KEY); } catch { /* No signed-in custody. */ }
     }
     this.emit();

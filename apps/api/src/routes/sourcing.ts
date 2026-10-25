@@ -1,4 +1,5 @@
 import {MANUAL_PROSPECT_PATHS,routeManualProspects} from './manualProspects.ts';
+import {MANUAL_ACTIVITY_PATHS,routeManualProspectActivity} from './manualProspectActivity.ts';
 import {retainedPrincipalAuthority} from './retainedPrincipalAuthority.ts';
 import {CANDIDATE_AUTHORITY_PATH,routeCandidateAuthority} from './candidateAuthority.ts';
 import {RETAINED_RECOVERY_PATHS,routeRetainedRecovery} from './sourcingRetainedRecovery.ts';
@@ -26,7 +27,7 @@ import {discoveryIntakeSaveCommandSchema,discoveryIntakeListInputSchema} from '@
 import {saveDiscoveryCandidate,listDiscoveryCandidates} from '@fss/domain/sourcing/discoveryIntake.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOURCING_PATHS=[...MANUAL_PROSPECT_PATHS,CANDIDATE_AUTHORITY_PATH,...QUALIFIED_RESEARCH_PATHS,...DISCOVERY_REVIEW_PATHS,...DISCOVERY_PROMOTION_PATHS,'/sourcing/candidates/discovery/save-v1','/sourcing/candidates/discovery/list-v1','/sourcing/calling/admit','/sourcing/calling/assess','/sourcing/experiments','/sourcing/experiments/save','/sourcing/experiments/activate','/sourcing/experiments/stop','/sourcing/experiments/erase','/sourcing/candidates/correct-name','/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
+export const SOURCING_PATHS=[...MANUAL_ACTIVITY_PATHS,...MANUAL_PROSPECT_PATHS,CANDIDATE_AUTHORITY_PATH,...QUALIFIED_RESEARCH_PATHS,...DISCOVERY_REVIEW_PATHS,...DISCOVERY_PROMOTION_PATHS,'/sourcing/candidates/discovery/save-v1','/sourcing/candidates/discovery/list-v1','/sourcing/calling/admit','/sourcing/calling/assess','/sourcing/experiments','/sourcing/experiments/save','/sourcing/experiments/activate','/sourcing/experiments/stop','/sourcing/experiments/erase','/sourcing/candidates/correct-name','/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
 export async function routeSourcing(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
   if(!([...SOURCING_PATHS,...RETAINED_RECOVERY_PATHS] as readonly string[]).includes(request.path))return null;
   if(!options.auth)return {status:404,body:{error:'not_found'}};
@@ -34,6 +35,7 @@ export async function routeSourcing(request:ApiRequest,options:RoutingOptions):P
   const auth=options.auth,authenticated=await requirePrincipal(auth,request);
   if(!authenticated.ok)return authenticated.result;
   const deps={auth,request,principal:authenticated.principal};
+  if((MANUAL_ACTIVITY_PATHS as readonly string[]).includes(request.path))return routeManualProspectActivity(deps);
   if((MANUAL_PROSPECT_PATHS as readonly string[]).includes(request.path))return routeManualProspects(deps);
   if((RETAINED_RECOVERY_PATHS as readonly string[]).includes(request.path))return routeRetainedRecovery(deps);
   if(request.path===CANDIDATE_AUTHORITY_PATH)return routeCandidateAuthority(deps);
