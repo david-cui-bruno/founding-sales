@@ -6,11 +6,12 @@ import {browserRequest,browserSession} from '../support/browser.ts';
 import {startManualProspectApp} from '../support/manualProspectApp.ts';
 import {seedManualProspects,manualProductSnapshot,routeManualProvider,loginManual} from '../support/manualProspectSeed.ts';
 import {MANUAL_PROSPECT_PENDING_KEY} from '../../src/client/ManualProspectPending.ts';
+import {inspectManualProspect} from '../support/manualProspectInspector.ts';
 const read='/sourcing/candidates/prospects/list',feedback='/sourcing/candidates/prospects/feedback';
 let app:Awaited<ReturnType<typeof startManualProspectApp>>,rows:Awaited<ReturnType<typeof seedManualProspects>>,baseline:Awaited<ReturnType<typeof manualProductSnapshot>>;
 const panel=(page:Page)=>page.getByRole('region',{name:'Manual prospect worklist',exact:true});
 const card=(page:Page,id:string)=>panel(page).getByRole('article',{name:`Manual prospect ${id}`,exact:true});
-async function ready(page:Page){await expect(panel(page).getByRole('article')).toHaveCount(50);await expect(panel(page).getByRole('button',{name:'Refresh retained worklist',exact:true})).toBeEnabled();}
+async function ready(page:Page){await expect(panel(page).getByRole('table').getByRole('row')).toHaveCount(51);await expect(panel(page).getByRole('button',{name:'Refresh retained worklist',exact:true})).toBeEnabled();}
 async function refresh(page:Page){const answer=page.waitForResponse(response=>response.url().endsWith(`/browser/api${read}`));await panel(page).getByRole('button',{name:'Refresh retained worklist',exact:true}).click();const response=await answer;expect(response.status()).toBe(200);return manualProspectListSchema.parse(await response.json());}
 test.beforeAll(async()=>{app=await startManualProspectApp();rows=await seedManualProspects(app);baseline=await manualProductSnapshot(app);});
 test.afterAll(async()=>{try{if(app&&baseline)expect(await manualProductSnapshot(app)).toEqual(baseline);}finally{await app?.stop();}});
@@ -23,17 +24,17 @@ test.afterEach(async({researchPage:page})=>{
 });
 test('actual signed OIDC runtime-role browser initially shows raw discovery and ordinary, safe HTML/notices/unknown phone and bounded dedup pages',async({researchPage:page})=>{
  await loginManual(page,app);await ready(page);expect(app.runtimeRequests()).toBeGreaterThan(0);expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);expect(app.fixture.google.tokenExchanges().at(-1)?.clientSecretPresented).toBe(true);
- await expect(card(page,rows.rawId)).toContainText('<img src=x onerror=alert(1)> Unverified raw');await expect(card(page,rows.ordinaryId)).toContainText('Ordinary unverified 764');
+ await inspectManualProspect(page,rows.ordinaryId);await expect(card(page,rows.ordinaryId)).toContainText('Ordinary unverified 764');await inspectManualProspect(page,rows.rawId);await expect(card(page,rows.rawId)).toContainText('<img src=x onerror=alert(1)> Unverified raw');
  await expect(card(page,rows.rawId)).toContainText('Phone unknown');await expect(card(page,rows.rawId)).toContainText('CDLA-Permissive-2.0');await expect(panel(page).getByRole('img')).toHaveCount(0);await expect(panel(page).locator('a[href^="javascript:"]')).toHaveCount(0);
  const first=await refresh(page);expect(first.prospects.every(p=>p.qualification==='unverified'&&p.contactAuthority==='not_granted'&&p.observedPhone===null)).toBe(true);expect(first.prospects.find(p=>p.observedName==='Possible duplicate observation')?.possibleDuplicateCount).toBe(1);
- const next=page.waitForResponse(response=>response.url().endsWith(`/browser/api${read}`));await panel(page).getByRole('button',{name:'Next prospect page',exact:true}).click();const response=await next;expect(response.request().postDataJSON()).toEqual({state:'all',offset:50});const last=manualProspectListSchema.parse(await response.json());expect(last.prospects).toHaveLength(4);await expect(panel(page).getByRole('article')).toHaveCount(4);await expect(card(page,rows.rawId)).toHaveCount(0);
+ const next=page.waitForResponse(response=>response.url().endsWith(`/browser/api${read}`));await panel(page).getByRole('button',{name:'Next prospect page',exact:true}).click();const response=await next;expect(response.request().postDataJSON()).toEqual({state:'all',offset:50});const last=manualProspectListSchema.parse(await response.json());expect(last.prospects).toHaveLength(4);await expect(panel(page).getByRole('table').getByRole('row')).toHaveCount(5);await expect(card(page,rows.rawId)).toHaveCount(0);
 });
 test('manual keep/skip/wrong-number persists independently through reload; lost response reconciles same UUID only',async({researchPage:page})=>{
- await loginManual(page,app);await ready(page);
+ await loginManual(page,app);await ready(page);await inspectManualProspect(page,rows.rawId);
  for(const [button,state] of [['Keep','kept'],['Skip','skipped']] as const){const response=page.waitForResponse(response=>response.url().endsWith(`/browser/api${feedback}`));await card(page,rows.rawId).getByRole('button',{name:button,exact:true}).click();expect(await (await response).json()).toMatchObject({status:'accepted',result:{candidateId:rows.rawId,state}});await expect(card(page,rows.rawId)).toContainText(`Manual state ${state}`);}
  let firstBody:unknown;await page.route(`**/browser/api${feedback}`,async route=>{firstBody=route.request().postDataJSON();expect(await page.evaluate(key=>sessionStorage.getItem(key),MANUAL_PROSPECT_PENDING_KEY)).not.toBeNull();const response=await route.fetch();expect(response.status()).toBe(200);await route.abort('failed');},{times:1});
  await card(page,rows.rawId).getByRole('button',{name:'Wrong number',exact:true}).click();await expect(panel(page).getByRole('button',{name:'Reconcile same manual feedback'})).toBeEnabled();
- const held=await page.evaluate(key=>sessionStorage.getItem(key),MANUAL_PROSPECT_PENDING_KEY);await page.reload();await ready(page);expect(await page.evaluate(key=>sessionStorage.getItem(key),MANUAL_PROSPECT_PENDING_KEY)).toBe(held);await expect(card(page,rows.rawId)).toContainText('Manual state wrong number');
+ const held=await page.evaluate(key=>sessionStorage.getItem(key),MANUAL_PROSPECT_PENDING_KEY);await page.reload();await ready(page);await inspectManualProspect(page,rows.rawId);expect(await page.evaluate(key=>sessionStorage.getItem(key),MANUAL_PROSPECT_PENDING_KEY)).toBe(held);await expect(card(page,rows.rawId)).toContainText('Manual state wrong number');
  const reconcile=page.waitForResponse(response=>response.url().endsWith(`/browser/api${feedback}`));await panel(page).getByRole('button',{name:'Reconcile same manual feedback'}).click();const answer=await reconcile;expect(answer.request().postDataJSON()).toEqual(firstBody);expect(await answer.json()).toMatchObject({status:'accepted',replayed:true});await expect(panel(page).getByRole('button',{name:'Reconcile same manual feedback'})).toHaveCount(0);
 });
 test('exact stale revision and restricted/deleted source refuse feedback without CRM or policy effects',async({researchPage:page})=>{
@@ -50,7 +51,7 @@ test('workspace/admin isolation and exact CSRF/session revision refusal preserve
  await page.getByRole('button',{name:'Sign out',exact:true}).click();await loginManual(page,app,'sales');await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();await expect(panel(page)).toHaveCount(0);expect((await browserRequest(page,read,{body:{state:'all',offset:0}})).status).toBe(403);
 });
 test('session revocation while feedback waits on exact candidate lock refuses the write and clears custody',async({researchPage:page})=>{
- await loginManual(page,app);await ready(page);const session=await browserSession(page);if(session.status!=='signed_in')throw Error('Signed session required');
+ await loginManual(page,app);await ready(page);await inspectManualProspect(page,rows.rawId);const session=await browserSession(page);if(session.status!=='signed_in')throw Error('Signed session required');
  const blocker=await app.fixture.database.appRuntimeSession();await blocker.query('BEGIN');await blocker.query('SELECT id FROM sourcing_candidates WHERE id=$1 FOR UPDATE',[rows.rawId]);
  const answer=page.waitForResponse(response=>response.url().endsWith(`/browser/api${feedback}`));await card(page,rows.rawId).getByRole('button',{name:'Keep',exact:true}).click();
  try{

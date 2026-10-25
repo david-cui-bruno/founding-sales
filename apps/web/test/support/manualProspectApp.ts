@@ -22,7 +22,7 @@ async function port():Promise<number>{const server=reserveServer();await new Pro
 /** Exclusive local manual/review harness. All actual API/auth requests SET ROLE app_runtime.
  * Signed provider navigation alone is synthetic. No bypass, workers or paid ports.
  */
-export async function startManualProspectApp(ticket:'764'|'767'|'769'|'771'|'773'|'775'|'777'='764'){
+export async function startManualProspectApp(ticket:'764'|'767'|'769'|'771'|'773'|'775'|'777'|'779'='764'){
  assert.equal(process.env['FSS_MANUAL_PROSPECT_EXCLUSIVE_LANE'],ticket);
  const executable=process.env['FSS_LOCAL_BROWSER_EXECUTABLE'];assert(executable);await access(executable);
  const postgres=execFileSync('ps',['-axo','pid,ppid,command'],{encoding:'utf8'}).split('\n').filter(line=>/(?:^|\s)(?:\S*\/)?postgres(?:\s|$)/u.test(line)&&!/postgres: /u.test(line));
