@@ -6,6 +6,10 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
+### Active durable private drafts771, October25 01:15UTC
+
+Issue771 is assigned to root. Duckling is the sole whole-outcome owner, currently doing the bounded source-only design milestone before root commits shared contract/ADR/browser/schema interfaces. Goal: explicitly save/list/reopen/revise private post/comment drafts without connected social accounts. Existing publishing-linked social_posts is not silently widened or given fake accounts. Persisted source-derived text must preserve normal source deletion/retention authority, and unknown-save recovery cannot put prose in browser durable storage or silently duplicate writes. Root owns shared interfaces and status, Duckling owns implementation after explicit file grant, then finished spec/standards/privacy review and actual signed browser acceptance. No new generation/provider/publication/schedule/approval/acquisition/contact authority. Voice learning remains separate. Production stays delivered769 below, not771.
+
 ### Delivered private social review769, October25 01:06UTC
 
 PR770 all required checks SUCCESS, merged October25 00:20:58 as 0d949c680a8cd382c0121f67be69d3635bc93cb0. Exact-main gate40146343737/images40146343765 SUCCESS. ONE protected application40147758866 SUCCESS01:01:26, schema134 unchanged, API150/worker151/migration147/operations275; PITR00:46:29.347Z/restoreUNTESTED. Independent health/stable services accepted, readers273/274/276 INACTIVE. Shared hold and owner OFF unchanged.
