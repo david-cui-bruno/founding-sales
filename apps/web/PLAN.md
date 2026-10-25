@@ -6,7 +6,13 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
-### Active goal783: usable sales workspace, October25 19:05UTC
+### Active goal783: simplify the sales workspace, October25 21:07UTC
+
+David's actual walkthrough feedback: the workspace is ugly/borderline unusable because there is too much stuff. Next approved outcome is ONE goal-first, reviewable local clickable design, not another panel or broad product rewrite. Root locks a calm sales desk: choose prospect, essential company/context, prepare and review manual message, explicitly simulate an outcome and find its entered follow-up intention. One clear primary action per screen, compact visible fictional/no-send status, source and operational detail on demand. Follow-up display is not reminder execution. Keep capabilities/data intact until user-visible design and reversible implementation review.
+
+Octopus owns only private WORKSPACE.html in fss-workspace-simplification-20261025, with frontend-design skill and root BRIEF. Root owns bounded keep/move/remove/rework rationale, actual visible prototype review, tracker and integration. Fictional memory-only preview, no external fonts/network/storage/backend/model/send/deployment or CRM/Desktop/evidence deletion. This is design, not implemented product persistence or real-business acceptance. Current requested fictional product window and root exact-generation cleanup remain untouched, expiry21:25:24UTC. Acceptance: one coherent clickable desktop/narrow/keyboard direction and short rationale for David, not exhaustive audit paperwork.
+
+### Delivered goal783 local foundation, October25 19:05UTC
 
 David approved actually using FSS through a reliable fictional current-product loop: select prospect → understand company/source → review no-send outreach/reply → explicitly record fictional outcome → find next follow-up. Closed781 capabilities are inputs, not proof this broader loop is complete. Missing real originals or David's next annotation cannot block already-identifiable local usability fixes. Six existing waits remain separate evidence/operational/decision gates, not global development blockers.
 
