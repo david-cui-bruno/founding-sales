@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { browserApiPathAllowed, browserSessionSchema } from '../../src/shared/browserContract.ts';
 
 describe('browser boundary', () => {
+  it('admits only existing social suggestion reads, never generation or publication', () => {
+    for (const path of ['/social/drafts', '/social/drafts/read']) {
+      expect(browserApiPathAllowed('POST', path)).toBe(true);
+      for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, path)).toBe(false);
+      expect(browserApiPathAllowed('POST', `${path}/extra`)).toBe(false);
+    }
+    for (const path of ['/social', '/social/drafts/request', '/social/posts/save', '/social/posts/approve', '/social/posts/cancel', '/social/weekly', '/social/weekly/save', '/social/accounts/connect', '/social/accounts/manual', '/social/manual-handoff/read', '/social/manual-handoff/confirm', '/social/delivery/queue', '/social/delivery/claim', '/social/delivery/begin', '/social/delivery/observe', '/social/assets']) {
+      expect(browserApiPathAllowed('POST', path)).toBe(false);
+    }
+  });
   it('admits only raw manual prospect reads and feedback, not canonical or outreach actions', () => {
     for (const action of ['list', 'feedback']) {
       const path = `/sourcing/candidates/prospects/${action}`;

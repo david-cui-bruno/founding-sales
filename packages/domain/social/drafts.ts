@@ -34,15 +34,23 @@ export async function readSocialDraftRequest(ctx:RepositoryContext,id:string):Pr
  return row?refreshGroundedDraftRead(ctx,row):null;
 }
 export async function refreshGroundedDraftRead(ctx:RepositoryContext,row:SocialDraftRow):Promise<SocialDraftRow>{
- // Historical mode-less requests can contain tagged facts. Revalidate fact-bearing
- // ready reads too, including deleted versions, instead of displaying their stale text.
- if((row.source_selection.mode||row.source_selection.factBlocks.length)&&row.state==='ready'){
+ // Always acquire the current request after waits, not a workspace scan snapshot.
+ const locked=(await ctx.db.query<SocialDraftRow>('SELECT * FROM social_draft_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR UPDATE',[ctx.scope.workspaceId,row.id,row.owner_user_id])).rows[0];
+ if(!locked)return {...row,state:'review',concepts:null,reason:'source_changed_or_unavailable'};
+ row=locked;
+ if(row.state!=='ready')return {...row,concepts:null};
+ {
   const current=ctx.scope.actor.kind==='user'?await readSocialDraftSources(ctx,row.source_selection):await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
   if(!current.ok||current.value.hash!==row.source_hash){
-   await ctx.db.query("UPDATE social_draft_requests SET state='review',concepts=NULL,reason='source_changed_or_unavailable',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state='ready'",[ctx.scope.workspaceId,row.id]);
+   // Preserve existing grounded invalidation. Legacy source-only failures are
+   // withheld in the read projection, not a new durable invalidation path.
+   if(row.source_selection.mode||row.source_selection.factBlocks.length)await ctx.db.query("UPDATE social_draft_requests SET state='review',concepts=NULL,reason='source_changed_or_unavailable',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state='ready'",[ctx.scope.workspaceId,row.id]);
    return {...row,state:'review',concepts:null,reason:'source_changed_or_unavailable'};
   }
  }
+ // The deadline is checked after source locks/reads, not before their waits.
+ const now=(await ctx.db.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0]!.now;
+ if(row.deadline_at.getTime()<=now.getTime())return {...row,state:'expired',concepts:null,reason:'deadline_expired'};
  return row;
 }
 /** Run within the scheduler transaction even when processing is disabled.

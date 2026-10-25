@@ -19,10 +19,10 @@ import {reserveLocalBrowserDatabase} from './database.ts';
 
 async function absent(path:string):Promise<void>{await access(path).then(()=>{throw Error('Owned resource remains');},error=>{assert.equal((error as NodeJS.ErrnoException).code,'ENOENT');});}
 async function port():Promise<number>{const server=reserveServer();await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'localhost',resolve);});const value=(server.address() as AddressInfo).port;await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));return value;}
-/** Ticket764 exclusive local harness. All actual API/auth requests SET ROLE app_runtime.
+/** Exclusive local manual/review harness. All actual API/auth requests SET ROLE app_runtime.
  * Signed provider navigation alone is synthetic. No bypass, workers or paid ports.
  */
-export async function startManualProspectApp(ticket:'764'|'767'='764'){
+export async function startManualProspectApp(ticket:'764'|'767'|'769'='764'){
  assert.equal(process.env['FSS_MANUAL_PROSPECT_EXCLUSIVE_LANE'],ticket);
  const executable=process.env['FSS_LOCAL_BROWSER_EXECUTABLE'];assert(executable);await access(executable);
  const postgres=execFileSync('ps',['-axo','pid,ppid,command'],{encoding:'utf8'}).split('\n').filter(line=>/(?:^|\s)(?:\S*\/)?postgres(?:\s|$)/u.test(line)&&!/postgres: /u.test(line));

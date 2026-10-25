@@ -4,6 +4,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readApprovedAnswerBlocks} from '../outreach/facts.ts';
 import {prepareSocialDraftInput,prepareGroundedSocialDraftInput,type SocialDraftSource,type SocialDraftInput,type SocialDraftProvenance} from './draftPolicy.ts';
 import type {SocialResult} from './posts.ts';
+import {lockSocialMeetingSource} from './draftMeetingLocks.ts';
 interface Prepared{input:SocialDraftInput;provenance:SocialDraftProvenance[];hash:string}
 function textOf(utterances:unknown):string|null{
  if(!Array.isArray(utterances))return null;let text='';
@@ -55,18 +56,20 @@ async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftReq
  for(const ref of input.sourceRefs){
   let text:string|null=null;
   if(ref.kind==='call'&&ref.revision===1){
-   const row=(await ctx.db.query<{utterances:unknown}>(`SELECT t.utterances FROM call_transcripts t JOIN call_sessions c ON c.workspace_id=t.workspace_id AND c.id=t.call_session_id JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=c.firm_id WHERE t.workspace_id=$1 AND t.call_session_id=$2 AND c.actor_user_id=$3 AND f.status='active' AND octet_length(t.utterances::text)<=131072`,[workspace,ref.id,user])).rows[0];
+   const row=(await ctx.db.query<{utterances:unknown}>(`SELECT t.utterances FROM call_transcripts t JOIN call_sessions c ON c.workspace_id=t.workspace_id AND c.id=t.call_session_id JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=c.firm_id WHERE t.workspace_id=$1 AND t.call_session_id=$2 AND c.actor_user_id=$3 AND f.status='active' AND octet_length(t.utterances::text)<=131072 FOR SHARE OF t,c,f`,[workspace,ref.id,user])).rows[0];
    if(row)text=textOf(row.utterances);
   }else if(ref.kind==='meeting'){
-   const row=(await ctx.db.query<{utterances:unknown}>(`SELECT t.utterances FROM meeting_transcripts t JOIN meeting_recordings r ON r.workspace_id=t.workspace_id AND r.id=t.recording_id JOIN meetings m ON m.workspace_id=r.workspace_id AND m.id=r.meeting_id JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id WHERE t.workspace_id=$1 AND t.id=$2 AND t.version=$3 AND f.assigned_user_id=$4 AND f.status='active' AND octet_length(t.utterances::text)<=131072 AND NOT EXISTS(SELECT 1 FROM meeting_transcripts n WHERE n.workspace_id=t.workspace_id AND n.original_recording_id=t.original_recording_id AND n.version>t.version)`,[workspace,ref.id,ref.revision,user])).rows[0];
+   if(await lockSocialMeetingSource(ctx,ref.id)===null)return {ok:false,reason:'source_changed_or_unavailable'};
+   const row=(await ctx.db.query<{utterances:unknown}>(`SELECT t.utterances FROM meeting_transcripts t JOIN meeting_recordings r ON r.workspace_id=t.workspace_id AND r.id=t.recording_id JOIN meetings m ON m.workspace_id=r.workspace_id AND m.id=r.meeting_id JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id WHERE t.workspace_id=$1 AND t.id=$2 AND t.version=$3 AND f.assigned_user_id=$4 AND f.status='active' AND octet_length(t.utterances::text)<=131072 AND NOT EXISTS(SELECT 1 FROM meeting_transcripts n WHERE n.workspace_id=t.workspace_id AND n.original_recording_id=t.original_recording_id AND n.version>t.version) FOR SHARE OF t,r,m,f`,[workspace,ref.id,ref.revision,user])).rows[0];
    if(row)text=textOf(row.utterances);
   }else if(ref.kind==='public'){
-   const row=(await ctx.db.query<{payload:unknown}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 AND revision=$3 AND status<>\'dismissed\'',[workspace,ref.id,ref.revision])).rows[0];
+   const row=(await ctx.db.query<{payload:unknown}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 AND revision=$3 AND status<>\'dismissed\' FOR SHARE',[workspace,ref.id,ref.revision])).rows[0];
    if(row)text=JSON.stringify(row.payload);
   }
   if(text===null)return {ok:false,reason:'source_changed_or_unavailable'};
   hashes.push(createHash('sha256').update(JSON.stringify([ref,text])).digest('hex'));sources.push({...ref,text});
  }
+ if(input.factBlocks.length)await ctx.db.query('SELECT b.id FROM outreach_answer_blocks b JOIN outreach_answer_block_versions v ON v.workspace_id=b.workspace_id AND v.block_id=b.id AND v.version=b.current_version WHERE b.workspace_id=$1 AND b.id=ANY($2::uuid[]) ORDER BY b.id FOR SHARE OF b,v',[workspace,input.factBlocks.map(b=>b.id)]);
  const blocks=input.factBlocks.length?await readApprovedAnswerBlocks(ctx,input.factBlocks):{ok:true as const,value:[]};
  if(!blocks.ok)return {ok:false,reason:blocks.reason};
  // Tagged facts carry status/original-source authority that the legacy prompt cannot retain.

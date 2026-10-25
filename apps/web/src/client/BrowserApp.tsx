@@ -11,6 +11,7 @@ import { BrowserMeetingNotes } from './BrowserMeetingNotes.tsx';
 import { BrowserReplies } from './BrowserReplies.tsx';
 import { BrowserMeetingPreparation } from './BrowserMeetingPreparation.tsx';
 import { BrowserManualProspects } from './BrowserManualProspects.tsx';
+import { BrowserSocialReview } from './BrowserSocialReview.tsx';
 import { BrowserCandidateInventory } from './BrowserCandidateInventory.tsx';
 
 type Today = z.infer<typeof todayListResponseSchema>;
@@ -87,6 +88,7 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     {notice ? <p role="status">{notice}</p> : null}
     <BrowserEmailCampaigns client={client} />
     <BrowserReplies client={client} />
+    <BrowserSocialReview client={client} />
     {session?.status !== 'signed_in' ? <section aria-label="Sign in" className="space-y-3"><h2>Sign in</h2>
       <label>Workspace ID<Input aria-label="Workspace ID" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); }} /></label>
       <label>Browser label<Input aria-label="Browser label" value={deviceLabel} onChange={event => { setDeviceLabel(event.target.value); }} /></label>
