@@ -8,6 +8,7 @@ import type { ApiRequest } from '../../../api/src/routes/types.ts';
 import { BROWSER_PATHS, BROWSER_COMMAND_PATHS, BROWSER_CSRF_HEADER, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema } from '../shared/browserContract.ts';
 import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestContext } from './runtime.ts';
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
+import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
 
@@ -178,7 +179,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   let body = request.body;
   if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
     for (const name of Object.keys(body)) {
-      if (['authorization', 'cookie', 'headers', 'origin'].includes(name.toLowerCase())) throw new Refusal(400);
+      if (['authorization', 'cookie', 'headers', 'origin'].includes(name.toLowerCase())
+        && !(name === 'origin' && path === '/social/private-drafts/save')) throw new Refusal(400);
     }
   }
   if ((BROWSER_COMMAND_PATHS as readonly string[]).includes(path)) {
@@ -193,6 +195,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
   });
+  const privateDraft = privateDraftBrowserResult(path, result.status, result.body);
+  if (privateDraft !== null) return response(privateDraft.status, privateDraft.body, cookies);
   const manual = manualProspectBrowserResult(path, result.status, result.body);
   if (manual !== null) return response(manual.status, manual.body, cookies);
   const qualification = qualificationBrowserResult(path, result.status, result.body);

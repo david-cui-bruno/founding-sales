@@ -1,3 +1,4 @@
+import {sweepPrivateDrafts} from './socialDrafts.ts';
 import {rememberExpiredManualSources} from '../sourcing/manualProspectSourceLoss.ts';
 import {sweepOfficeSources} from './officeAssessments.ts';
 import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources,sweepDiscoveryReviews} from '../sourcing/discoveryReviewVisibility.ts';
@@ -291,8 +292,8 @@ const jobPayloads: RetentionTarget = {
 const canceledDrafts: RetentionTarget = {
   dataKind: 'canceled_drafts',
   state: 'implemented',
-  tables: ['outbound_messages'],
-  note: 'A held, unsent draft fence has its rendered subject and body cleared thirty days after it was held; the row stays, because the fence is what stops a second send.',
+  tables: ['outbound_messages','social_private_drafts'],
+  note: 'Held unsent outbound prose clears after thirty days, retaining its send fence. Independently, current private social prose clears at its fixed first-save expiry, at most ninety days or earlier source rights, retaining only terminal identity and revision.',
   sweep: async (context, input) => {
     const boundaryAt = requireBoundary(input, 'canceled_drafts');
     const { rowCount } = await context.db.query(
@@ -311,7 +312,8 @@ const canceledDrafts: RetentionTarget = {
       [context.scope.workspaceId, boundaryAt, input.limit, REDACTED_DRAFT],
     );
     const redacted = rowCount ?? 0;
-    return { boundaryAt, rowsDeleted: 0, rowsRedacted: redacted, detail: { outbound_messages: redacted } };
+    const privateRedacted=await sweepPrivateDrafts(context,input.limit);
+    return { boundaryAt, rowsDeleted: 0, rowsRedacted: redacted+privateRedacted, detail: { outbound_messages: redacted,social_private_drafts:privateRedacted } };
   },
 };
 

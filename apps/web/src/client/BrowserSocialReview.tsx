@@ -1,9 +1,10 @@
 import {useEffect,useRef,useState,type JSX} from 'react';
 import {socialDraftWorkspaceSchema,socialDraftViewSchema,type SocialDraftWorkspace,type SocialDraftView} from '@fss/contracts';
 import {z} from 'zod';
+import {BrowserPrivateComposer,type PrivateAdoption} from './BrowserPrivateComposer.tsx';
 import type {BrowserClient} from './BrowserClient.ts';
 
-/** Private scratch only. No custody record, persistence, mutation or generation. */
+/** Retained suggestion review plus explicitly saved private composition. */
 export function BrowserSocialReview({client}:{client:BrowserClient}):JSX.Element{
  const binding=useRef({client,key:0});
  if(binding.current.client!==client)binding.current={client,key:binding.current.key+1};
@@ -12,33 +13,28 @@ export function BrowserSocialReview({client}:{client:BrowserClient}):JSX.Element
 function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
  const [signedIn,setSignedIn]=useState(client.current?.status==='signed_in');
  const [epoch,setEpoch]=useState(client.epoch),[workspace,setWorkspace]=useState<SocialDraftWorkspace|null>(null);
- const [text,setText]=useState(''),[kind,setKind]=useState('post'),[origin,setOrigin]=useState<SocialDraftView|null>(null);
+ const [adoption,setAdoption]=useState<PrivateAdoption|null>(null);
  const [busy,setBusy]=useState(false),[notice,setNotice]=useState('Read retained suggestions or write privately below.');
  const scope=useRef(client),owner=useRef(0),lock=useRef(false);scope.current=client;
  useEffect(()=>{
-  const clear=():void=>{owner.current++;lock.current=false;setBusy(false);setWorkspace(null);setText('');setKind('post');setOrigin(null);setEpoch(client.epoch);setNotice('Private social content cleared. Read retained suggestions or write privately below.');};
+  const clear=():void=>{owner.current++;lock.current=false;setBusy(false);setWorkspace(null);setAdoption(null);setEpoch(client.epoch);setNotice('Private social content cleared. Read retained suggestions or write privately below.');};
   clear();let observed=client.epoch;
   const requestOwner=owner;
   const unsubscribe=client.subscribe(()=>{setSignedIn(client.current?.status==='signed_in');if(observed!==client.epoch||client.current?.status!=='signed_in'){observed=client.epoch;clear();}});
   return ()=>{requestOwner.current++;lock.current=false;unsubscribe();};
  },[client]);
  useEffect(()=>{
-  if(origin===null)return;
-  const timer=setTimeout(()=>{owner.current++;lock.current=false;setBusy(false);setText('');setOrigin(null);setWorkspace(null);setNotice('Selected suggestion expired. Private adopted scratch cleared. Re-read current evidence.');},Math.max(0,Date.parse(origin.deadlineAt)-Date.now()));
-  return ()=>{clearTimeout(timer);};
- },[origin]);
- useEffect(()=>{
   const deadlines=workspace?.requests.filter(request=>request.state==='ready').map(request=>Date.parse(request.deadlineAt))??[];
-  if(deadlines.length===0)return;
-  const timer=setTimeout(()=>{setWorkspace(current=>current===null?null:expireWorkspace(current));},Math.max(0,Math.min(...deadlines)-Date.now()));
-  return ()=>{clearTimeout(timer);};
+  if(!deadlines.length)return;
+  const timer=setTimeout(()=>setWorkspace(value=>value?expireWorkspace(value):null),Math.max(0,Math.min(...deadlines)-Date.now()));
+  return ()=>clearTimeout(timer);
  },[workspace]);
  const read=async(selected?:SocialDraftView,conceptIndex?:number,variantIndex?:number):Promise<void>=>{
   if(lock.current||client.current?.status!=='signed_in')return;
   lock.current=true;setBusy(true);const generation=client.epoch,token=++owner.current;
   const current=():boolean=>scope.current===client&&owner.current===token&&client.isCurrent(generation);
   // Any explicit evidence refresh discards previously adopted prose and provenance.
-  if(origin!==null){setText('');setOrigin(null);}setWorkspace(null);
+  setAdoption(null);setWorkspace(null);
   setNotice('Reading current retained evidence…');
   try{
    if(selected===undefined){
@@ -50,19 +46,19 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
     const fresh=result.request;
     // Compare the exact retained selection, not merely the request ID or array position.
     if(fresh.id!==selected.id||fresh.state!=='ready'||new Date(fresh.deadlineAt).getTime()<=Date.now()||JSON.stringify(fresh)!==JSON.stringify(selected)){
-     setText('');setOrigin(null);setNotice('Suggestion changed, expired or unavailable. Nothing adopted. Read retained suggestions again.');return;
+     setAdoption(null);setNotice('Suggestion changed, expired or unavailable. Nothing adopted. Read retained suggestions again.');return;
     }
     const variant=fresh.concepts?.[conceptIndex??-1]?.variants[variantIndex??-1];
     if(!variant)throw Error('Variant unavailable');
-    setText(variant.text);setOrigin(fresh);setNotice('Current ready suggestion adopted privately. Provenance is not proof of semantic support. Human review required.');
+    setAdoption({request:fresh,conceptIndex:conceptIndex!,variantIndex:variantIndex!});setNotice('Current ready suggestion adopted privately. Provenance is not proof of semantic support. Human review required.');
    }
-  }catch{if(current()){if(selected!==undefined||origin!==null)setText('');setOrigin(null);setNotice('Social evidence unavailable or access refused. No action was retried.');}}
+  }catch{if(current()){setAdoption(null);setNotice('Social evidence unavailable or access refused. No action was retried.');}}
   finally{if(current()){lock.current=false;setBusy(false);}}
  };
  if(!signedIn||client.current?.status!=='signed_in'||epoch!==client.epoch||scope.current!==client)return null;
  return <section aria-label="Private social review" className="space-y-3 rounded-md border p-4">
   <h2>Private social review</h2>
-  <p>Post or comment scratch, in this signed-in page's memory only. Refresh, sign-out or session change loses edits. Not saved, approved, scheduled or published.</p>
+  <p>Review retained suggestions or compose a private post or comment. Unsaved edits stay in authenticated memory. Only explicit Save persists a private draft. Not approved, scheduled or published.</p>
   <p>No generation, voice learning, source acquisition or platform action is available. Retained source metadata is dated provenance, not current coverage or semantic support.</p>
   <button type="button" disabled={busy} onClick={()=>{void read();}}>Read retained social suggestions</button>
   <p role="status">{notice}</p>
@@ -78,13 +74,7 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
     {request.state==='ready'?request.concepts?.map((concept,ci)=><div key={ci}><h5>{concept.theme}</h5><p>Variant fact references: {concept.factRefs.map(ref=>`${ref.id} v${ref.version}`).join(', ')||'None'}</p>{concept.variants.map((variant,vi)=><div key={vi}><p className="whitespace-pre-wrap">{variant.text}</p><button type="button" disabled={busy||new Date(request.deadlineAt).getTime()<=Date.now()} onClick={()=>{void read(request,ci,vi);}}>Re-read and use {variant.platform} suggestion {ci+1}.{vi+1}</button></div>)}</div>):<p>Not available for adoption. No supported text is presented.</p>}
    </article>)}
   </div>:null}
-  <section aria-label="Memory-only social composer" className="space-y-2"><h3>Private scratch composer</h3>
-   <label>Scratch format <select aria-label="Scratch format" value={kind} onChange={event=>{setKind(event.target.value);}}><option value="post">Post</option><option value="comment">Comment</option></select></label>
-   <p>{origin===null?'Manually written scratch.':'Based on a retained generated suggestion.'} All composer prose and edits are unverified and human-review-required. Format is presentation only, not sourced comment generation.</p>
-   {origin!==null?<div><p>Selected origin request {origin.id} · State at last explicit read: {origin.state}</p><Provenance request={origin}/></div>:null}
-   <label>Private {kind} text<textarea disabled={busy} aria-label="Private social text" className="block min-h-40 w-full rounded-md border p-3" maxLength={10000} value={text} onChange={event=>{setText(event.target.value);}}/></label><p>{text.length}/10000 characters · Never stored or sent</p>
-   <button type="button" onClick={()=>{owner.current++;lock.current=false;setBusy(false);setText('');setOrigin(null);setNotice('Private scratch discarded.');}}>Discard private scratch</button>
-  </section>
+  <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
  </section>;
 }
 function expireWorkspace(workspace:SocialDraftWorkspace):SocialDraftWorkspace{

@@ -12,9 +12,9 @@ CREATE TABLE social_private_drafts (
  source_hash text,
  dependencies jsonb NOT NULL DEFAULT '{}',
  reason text CONSTRAINT social_private_reason CHECK(reason IN ('expired','source_changed_or_unavailable','removed')),
- created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
- updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
- expires_at timestamptz NOT NULL DEFAULT clock_timestamp()+interval '90 days',
+ created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+ updated_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+ expires_at timestamptz NOT NULL DEFAULT statement_timestamp()+interval '90 days',
  PRIMARY KEY(workspace_id,id),
  CONSTRAINT social_private_owner_fk FOREIGN KEY(workspace_id,owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
  CONSTRAINT social_private_text CHECK(text IS NULL OR (length(text) BETWEEN 1 AND 10000 AND length(btrim(text))>0 AND octet_length(text)<=40000)),
@@ -49,7 +49,8 @@ BEGIN
   UPDATE social_private_drafts SET text=NULL,origin=NULL,source_selection=NULL,source_hash=NULL,dependencies='{}',reason='source_changed_or_unavailable',revision=revision+1,updated_at=clock_timestamp()
   WHERE workspace_id=(source_row->>'workspace_id')::uuid AND reason IS NULL
    AND (dependencies @> jsonb_build_object('meeting_transcripts',jsonb_build_array(source_id))
-    OR dependencies @> jsonb_build_object('meeting_recordings',jsonb_build_array(source_row->>'recording_id')));
+    OR dependencies @> jsonb_build_object('meeting_recordings',jsonb_build_array(source_row->>'recording_id'))
+    OR dependencies @> jsonb_build_object('meeting_recordings',jsonb_build_array(source_row->>'original_recording_id')));
  ELSE
   UPDATE social_private_drafts SET text=NULL,origin=NULL,source_selection=NULL,source_hash=NULL,dependencies='{}',reason='source_changed_or_unavailable',revision=revision+1,updated_at=clock_timestamp()
   WHERE workspace_id=(source_row->>'workspace_id')::uuid AND reason IS NULL
@@ -71,7 +72,10 @@ BEGIN
  IF TG_OP='DELETE' OR NEW.status<>'active' THEN
   UPDATE social_private_drafts SET text=NULL,origin=NULL,source_selection=NULL,source_hash=NULL,dependencies='{}',reason='removed',revision=revision+1,updated_at=clock_timestamp()
   WHERE workspace_id=OLD.workspace_id AND owner_user_id=OLD.user_id AND reason IS NULL;
+ ELSIF NEW.role IS DISTINCT FROM OLD.role THEN
+  UPDATE social_private_drafts SET text=NULL,origin=NULL,source_selection=NULL,source_hash=NULL,dependencies='{}',reason='source_changed_or_unavailable',revision=revision+1,updated_at=clock_timestamp()
+  WHERE workspace_id=OLD.workspace_id AND owner_user_id=OLD.user_id AND origin_kind='suggestion' AND reason IS NULL;
  END IF;
  RETURN NULL;
 END $$;
-CREATE TRIGGER social_private_owner_departure AFTER UPDATE OF status OR DELETE ON workspace_memberships FOR EACH ROW EXECUTE FUNCTION erase_departed_social_private_owner();
+CREATE TRIGGER social_private_owner_departure AFTER UPDATE OF status,role OR DELETE ON workspace_memberships FOR EACH ROW EXECUTE FUNCTION erase_departed_social_private_owner();
