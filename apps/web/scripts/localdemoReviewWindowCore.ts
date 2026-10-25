@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,13 +12,15 @@ export type ReviewReceipt = {
   script: string;
   createdAt: string;
   minutes: number;
-  state: 'starting' | 'ready' | 'stopping' | 'failed';
+  state: 'starting' | 'ready' | 'stopping' | 'finalizing' | 'finalization-failed' | 'failed';
   controls: { status: string; stop: string; log: string };
   supervisorPid?: number;
   resources?: Record<string, unknown>;
+  resourcesStopped?: boolean;
+  finalization?: { token: string; pid?: number; expiresAt: string; outcome: 'pending' | 'failed-or-unknown' | 'native-removed' };
 };
 export const reviewDirectory = (): string => join(tmpdir(), `fss-local-review-${process.getuid!()}`);
-export const launchctl = (args: string[]): string => execFileSync('/bin/launchctl', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+export const launchctl = (args: string[]): string => execFileSync('/bin/launchctl', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 });
 export const xml = (value: string): string => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 export const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -49,6 +51,43 @@ export async function assertOwnedService(receipt: ReviewReceipt, inspect = launc
   const plist = await realpath(join(receipt.directory, 'review.plist'));
   if (!listing.includes(`path = ${plist}`) || !listing.includes(`program = ${receipt.node}`) || !listing.includes(receipt.script) || !listing.includes(receipt.directory)) throw Error('Review service ownership mismatch. Refusing control.');
   return listing;
+}
+
+export async function assertSameReviewLease(receipt: ReviewReceipt): Promise<ReviewReceipt> {
+  const current = await readReviewReceipt(receipt.directory);
+  if (current.label !== receipt.label || current.target !== receipt.target) throw Error('Review lease changed. Refusing stale control.');
+  return current;
+}
+
+export const reviewStopPath = (receipt: ReviewReceipt): string => join(receipt.directory, `stop-${receipt.label}.json`);
+
+export async function requestReviewStop(receipt: ReviewReceipt): Promise<void> {
+  await assertSameReviewLease(receipt);
+  const body = `${JSON.stringify({ label: receipt.label, target: receipt.target })}\n`;
+  try { await writeFile(reviewStopPath(receipt), body, { mode: 0o600, flag: 'wx' }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || await readFile(reviewStopPath(receipt), 'utf8') !== body) throw error;
+  }
+}
+
+export async function reviewStopRequested(receipt: ReviewReceipt): Promise<boolean> {
+  await assertSameReviewLease(receipt);
+  let body: string;
+  try { body = await readFile(reviewStopPath(receipt), 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+  const marker = JSON.parse(body) as { label?: string; target?: string };
+  return marker.label === receipt.label && marker.target === receipt.target;
+}
+
+/** Only an exact launchctl not-found response establishes absence. Native errors
+ * and timeouts are unknown outcomes, never permission to discard the lease. */
+export async function inspectReviewService(receipt: ReviewReceipt, inspect = launchctl): Promise<string | null> {
+  try { return await assertOwnedService(receipt, inspect); }
+  catch (error) {
+    const native = error as { status?: number; stderr?: Buffer | string };
+    if (native.status === 113 && String(native.stderr).includes(`Could not find service "${receipt.label}"`)) return null;
+    throw error;
+  }
 }
 
 export function reviewPlist(receipt: ReviewReceipt, env: NodeJS.ProcessEnv): string {

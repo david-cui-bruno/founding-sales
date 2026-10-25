@@ -7,7 +7,7 @@ import { assertSyntheticNoSend, containSyntheticBrowser, signInSyntheticBrowser,
 import { syntheticBrowserCase, syntheticReplySource } from '../test/support/syntheticBrowserCase.ts';
 
 // See localdemo.md for the clean-environment command and exact-owned stop policy.
-export async function runLocalDemo(options: { reviewWindow?: boolean; stopCommand?: string; onReady?: (receipt: Record<string, unknown>) => Promise<void> } = {}): Promise<void> {
+export async function runLocalDemo(options: { reviewWindow?: boolean; stopCommand?: string; onReady?: (receipt: Record<string, unknown>) => Promise<void>; onStopping?: () => Promise<void> } = {}): Promise<void> {
   requireLocalDemo(process.env);
   // initdb inherits locale. A clean shell otherwise creates SQL_ASCII on macOS.
   process.env['LC_ALL'] = 'en_US.UTF-8';
@@ -17,6 +17,8 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
   let profile: string | undefined;
   let runtime: Awaited<ReturnType<typeof startSyntheticBrowser>> | undefined;
   let context: BrowserContext | undefined;
+  let stopping: Promise<void> | undefined;
+  const publishStopping = (): Promise<void> => stopping ??= Promise.resolve().then(() => options.onStopping?.());
   let shutdownRequested = false;
   let finish = (): void => {};
   const closed = new Promise<void>(resolve => { finish = resolve; });
@@ -77,17 +79,21 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
     console.error('SYNTHETIC_BROWSER_DEMO_READY', JSON.stringify(receipt));
     console.error('Use the labeled Chrome window. Fictional input is open in Replies. Generate is an explicit scripted action. Ctrl-C stops and erases this entire disposable demo.');
     await closed;
+    await publishStopping();
     await assertSyntheticNoSend(runtime.app);
   } finally {
     clearTimeout(timer);
-    try { await context?.close(); }
+    try { await publishStopping(); }
     finally {
-      try { await runtime?.stop(); }
+      try { await context?.close(); }
       finally {
-        if (profile) await rm(profile, { recursive: true, force: true });
-        process.off('SIGINT', onSignal);
-        process.off('SIGTERM', onSignal);
-        process.off('SIGHUP', onSignal);
+        try { await runtime?.stop(); }
+        finally {
+          if (profile) await rm(profile, { recursive: true, force: true });
+          process.off('SIGINT', onSignal);
+          process.off('SIGTERM', onSignal);
+          process.off('SIGHUP', onSignal);
+        }
       }
     }
     console.error('SYNTHETIC_BROWSER_DEMO_STOPPED: owned HTTPS, OIDC, database, cluster, TLS and Chrome profile removed');
