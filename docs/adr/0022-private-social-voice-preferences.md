@@ -1,0 +1,29 @@
+# ADR 0022: Explicit private social voice preferences
+
+Accepted October25, 2026 for issue773, following delivered private composition ADR0021. This adds inert owner-curated style guidance, not inference, training, generation or publication.
+
+## Owner and scope
+
+Use one distinct `social_voice_preferences` row per workspace and owner user, migration0136. Reuse existing signed browser/API/current-principal and ordinary runCommand owners. Never overload social_private_drafts, settings with broad workspace reads, social_posts, facts, approvals, accounts, jobs or model requests. No automatic preference capture from draft edits. No stored examples, before/after prose, draft/source IDs or external style-reference acquisition. Arbitrary pasted guidance cannot be proven free of facts or private text. Explain that this is unverified style instruction, not factual evidence, product truth, consent or activation.
+
+The owner explicitly curates up to20 entries, each a stable UUID, dimension(tone/formality/concision/structure/vocabulary/formatting/avoid) and nonblank exact guidance at most500 characters/2000 UTF8bytes. The serialized entry array is at most10000UTF8bytes, IDs unique. Render as text. No revision history. Current content stays private until explicit removal or ordinary owner/workspace lifecycle erasure, without the unrelated composition90-day expiry. A guide is not source-derived, so unrelated Firm/source/draft deletion does not erase it.
+
+## Identity and removal fence
+
+One server-created guideId remains stable for the owner/workspace row. Initial create succeeds only if no row exists and starts revision1. Whole-guide update requires exact guideId/current positive expectedRevision and available state. Remove requires the same CAS and available state, physically NULLs all entries, increments revision, and records removedAt. Do not delete the tombstone or reset revision. A stale update/create cannot resurrect it.
+
+An explicit restart is the only post-removal creation path: exact same guideId/current removed revision, empty editor first, newly authored full entries, incrementing the existing revision. Restart fails against available state. Removal/restart are visible explicit controls, never inferred by ordinary save or automatic retry. Owner departure/removal or normal owner/workspace deletion clears private content through ordinary lifecycle authority. Transient session/device/role invalidation clears UI but never erases a legitimate guide. No new scheduler.
+
+## Strict routes and custody
+
+Exact browser POST reads `/social/voice-preferences/read` and `/social/voice-preferences/receipt`; exact ordinary command `/social/voice-preferences/save`. Strict contracts reject source/draft/fact/account/provider/publishing fields. Read returns absent, available(current entries), or removed(metadata only). Save and receipt results contain guideId/revision only. Receipt is current owner/workspace/device/exact-command-kind/canonical parsed-payload-hash bound, using the existing command ledger, not a parallel ledger.
+
+Persist only opaque command identity, binding, operation, guideId/revision where known, payload hash and bounded expiry before dispatch, under a distinct voice custody namespace. Never persist guidance in browser storage, URLs, logs, audit, receipts or command metadata. Web Locks serialize across tabs and a synchronous guard refuses duplicate activation before token replacement. Mounted exact payload supports explicit sameUUID retry only. After reload, explicit receipt reconciliation uses IDs/hash, accepted requires fresh authorized read, absent is UNKNOWN and blocks replacement mutation, never auto-remints or reconstructs content. Conflicts do not merge or overwrite other edits. Logout/scope/unmount/authority loss fences late responses and clears all guidance memory, without stranding reconcile busy controls.
+
+Lock owner/lifecycle before guide rows; serialize first-create absence via existing parent lock or equivalent transaction-safe owner key. Retain exact device/session authority through commit and revalidate current principal after waits, on normal results and receipt replay, before projections. Preference content must never leak via another workspace/owner or stale read after membership/device/session expiry.
+
+## Acceptance and exclusions
+
+Finished spec/standards/privacy review and focused contracts/constraints/upgrade/lifecycle/custody checks. Actual signed HTTPS/OIDC/app_runtime/Postgres/installed browser acceptance covers empty→create→reload/read→CAS revise→remove→explicit restart, stale pre-removal writes refused, cross-tab conflict, lost response and IDs-only UNKNOWN, principal revocation across real row waits and late logout response clearing. Verify physical content erasure, no stored guidance history and no side effects on drafts/facts/jobs/providers/accounts/approvals/outbound. Normal CI/protected release and hosted acceptance use newly authored neutral preferences only, never overwrite an existing owner guide.
+
+No generation consumer, provider call, automatic training, source acquisition, account/channel action, schedule or publishing is included. Later governed generation must independently establish approved data/model/budget scope and treat preferences as untrusted instructions, never factual support.
