@@ -6,9 +6,21 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
-### Active private voice guide773, October25 03:37UTC
+### Active private voice guide773, October25 04:10UTC
 
-Issue773 is claimed by root following delivered769/771. Blossom source-only SOCIAL-VOICE-CONTRACT.md COMPLETE/full consumed. Root ADR0022/contracts lock separate owner/workspace guide,20 bounded human-curated entries, stable ID/monotonic CAS, physical clear and explicit same-ID removed-revision restart, durable until owner removal/lifecycle deletion. No examples/source/draft linkage or implicit learning, no inference/training/generation. Exact read/receipt/save paths and schema136 integration committed6340d102e; migration0136/whole implementation and sole disposable PG/HTTPS/Chrome acceptance lane granted to Maple03:42. No competing implementation/resource owner. Root owns shared contracts/ADR/schemaRange/browserContract/PLAN/current-state/roadmap, implementer owns complete remaining outcome including migration/normal lifecycle/fixtures/API/UI/actual local acceptance. Shared contract7PASS/types/lint/workflow/diffPASS, not full-product acceptance. No production/provider/acquisition/platform/publication/contact action, production remains135. Full private SOCIAL-VOICE-TICKET.md retains acceptance/exclusions.
+Issue773 local implementation704b1a313+098869fa6 COMPLETE. Root shared6340d102e/ADR0022 locks separate owner/workspace guide,20 bounded human-curated entries, stable ID/monotonic CAS, physical clear and explicit same-ID removed-revision restart, durable until owner removal/lifecycle deletion. No examples/source/draft linkage, implicit learning, inference/training/generation. Maple supplied151 focused tests and NEW signed HTTPS/OIDC/app_runtime/PG/installedChrome11/11PASS; exact owned resources absent, unrelated Homebrew preserved. Root production assets/gateway69PASS. Finished Seedling SPEC/Evergreen STANDARDS/Palmtree PRIVACY CLEAN with source-only limits; FULL reports consumed, supplied runtime evidence not independently rerun. Shared optional command beforeCommit callback included in reviews. No competing writer or PG/Chrome owner. Root now owns integrated scan/docs/PR/required CI/exact-main/protected migration135→136 and hosted acceptance. Production remains135 until accepted release. Full private SOCIAL-VOICE-TICKET.md/SOCIAL-VOICE-IMPLEMENTATION.md retain proof and exclusions.
+
+### Rolling ready queue, adopted October25 04:10UTC
+
+Root is stable integration/tracker/shared-contract/schema/route/docs/production owner. Assignments below are temporary whole outcomes, not permanent teams. Consume completion/blocker/resource events and immediately dispatch independent approved ready work. Tracker/this PLAN retain history; active todos exclude completed worker cards. No new authority follows from a READY label.
+
+| Finite outcome | Owner and exclusive files | Genuine dependency, acceptance and constraints |
+| --- | --- | --- |
+| Voice773 delivery | Root integration/release; Maple remains sole source-fix owner if findings return | Reviews CLEAN. Required CI/exact-main gates, fresh protected135→136 release, unchanged holds and neutral hosted save/reopen/removal without overwriting owner work. Only root production writer; no generation activation. |
+| Retained phone-only extraction contract | Ant (`session_ant_1792901579852_65849f0f65cebc8e`), ONLY private MANUAL-PHONE-READY.md, proposed tracker body for root | READY source-only design from approved manual-list priority and retained evidence owners. Define a finite no-fetch literal-phone path with provenance/current source rights, explicit absent/not-extracted/conflicting states and observable manual queue acceptance. No shared edits/resources, acquisition/model/contact/provider actions or inferred callable supply. Implementation waits on root committed contract and exclusive resource grant, not773 hosted acceptance. |
+| Manual attempts/outcomes/callbacks | Unassigned existing-owner follow-on | waiting on: finite scope and existing owner/schema inventory after phone contract. Do not activate calls, send, qualification or CRM promotion to manufacture acceptance. |
+
+Completed readable-name/compact-queue767 behavior remains delivered, not another implementation ticket. External real-original/demo/cost dependencies remain explicit in the roadmap rather than occupying worker assignments.
 
 ### Delivered durable private drafts771, October25 03:31UTC
 
