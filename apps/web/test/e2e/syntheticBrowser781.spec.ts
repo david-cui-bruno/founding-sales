@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { access, chmod } from 'node:fs/promises';
 import { test, expect } from 'playwright/test';
 import { assertSyntheticNoSend, containSyntheticBrowser, demoLabel, signInSyntheticBrowser, startSyntheticBrowser } from '../support/syntheticBrowserApp.ts';
-import { scriptedReply, syntheticBrowserCase } from '../support/syntheticBrowserCase.ts';
+import { scriptedReply, syntheticBrowserCase, syntheticReplySource } from '../support/syntheticBrowserCase.ts';
 import { browserRequest } from '../support/browser.ts';
 
 test.skip(process.env['FSS_SYNTHETIC_LOCAL_DEMO'] !== '1', 'Explicit isolated local demo opt-in required');
@@ -26,16 +26,16 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);
     expect(app.fixture.google.tokenExchanges().at(-1)?.clientSecretPresented).toBe(true);
     await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
-    await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticBrowserCase.messages[3]!.subject}`, exact: true }).click();
+    await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticReplySource.subject}`, exact: true }).click();
     await page.getByRole('button', { name: 'Refresh current reply context', exact: true }).click();
     for (const source of syntheticBrowserCase.messages) await expect(page.getByText(source.body, { exact: true })).toBeVisible();
-    if (proof) { await page.getByText(syntheticBrowserCase.messages[3]!.body, { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: `${proof}/781-input-viewport.png` }); await chmod(`${proof}/781-input-viewport.png`, 0o600); }
+    if (proof) { await page.getByText(syntheticReplySource.body, { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: `${proof}/781-input-viewport.png` }); await chmod(`${proof}/781-input-viewport.png`, 0o600); }
     expect(app.calls()).toBe(0);
     await page.getByRole('button', { name: 'Generate suggestion', exact: true }).click();
     await expect(page.getByRole('complementary', { name: 'Reply suggestion' })).toContainText(scriptedReply);
     expect(app.calls()).toBe(1);
     await page.getByRole('button', { name: 'Use suggestion in draft', exact: true }).click();
-    const edited = `${scriptedReply} [SYNTHETIC human edit: two possible times still need to be chosen. NO SEND.]`;
+    const edited = `${scriptedReply} [SYNTHETIC manual edit: retain the recap promise as unfulfilled. NO SEND.]`;
     await page.getByLabel('Reply draft', { exact: true }).fill(edited);
     await page.getByRole('button', { name: 'Preview exact reply', exact: true }).click();
     await expect(page.getByRole('article', { name: 'Final reply preview' })).toContainText(edited);
@@ -49,11 +49,11 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     await page.getByRole('button', { name: 'Load existing meetings', exact: true }).click();
     await page.getByRole('button', { name: 'Open preparation', exact: true }).click();
     const brief = page.getByRole('article', { name: 'Current meeting brief' });
-    await expect(brief).toContainText('Dana Vale (invented)');
-    await expect(brief).toContainText('roughly 184 residential units');
-    await expect(brief).toContainText('not a commitment');
+    await expect(brief).toContainText('Mara Fenwick (invented)');
+    await expect(brief).toContainText('84 rental doors');
+    await expect(brief).toContainText('Fulfillment unobserved');
     await expect(brief).toContainText(app.meetingId);
-    const note = 'SYNTHETIC rehearsal only, not a completed meeting: Dana reports completion follow-through problems. Interest is tentative. Check inspection availability and choose two possible times. No commitment or task assignment, no send.';
+    const note = 'SYNTHETIC rehearsal only, not a completed meeting: Mara wants request ownership clarified when vendors have not replied. SYN-A-04 recap promise due 2026-10-27 12:00 America/New_York, fulfillment unobserved. Private preparation notes only, no task assignment, calendar event or send.';
     await page.getByLabel('Meeting ID', { exact: true }).fill(app.meetingId);
     await page.getByRole('button', { name: 'Read meeting notes', exact: true }).click();
     await page.getByLabel('Your notes', { exact: true }).fill(note);

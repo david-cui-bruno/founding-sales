@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, type BrowserContext } from 'playwright';
 import { assertSyntheticNoSend, containSyntheticBrowser, signInSyntheticBrowser, startSyntheticBrowser, requireLocalDemo } from '../test/support/syntheticBrowserApp.ts';
-import { syntheticBrowserCase } from '../test/support/syntheticBrowserCase.ts';
+import { syntheticBrowserCase, syntheticReplySource } from '../test/support/syntheticBrowserCase.ts';
 
 // Run from repository root: FSS_SYNTHETIC_LOCAL_DEMO=1 npm run localdemo --workspace apps/web
 // Ctrl-C or SIGTERM this exact Node PID. All state is deleted, never shared Chrome/Homebrew PG.
@@ -42,9 +42,9 @@ try {
   const page = context.pages()[0] ?? await context.newPage();
   await signInSyntheticBrowser(page, runtime.app);
   await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
-  await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticBrowserCase.messages[3]!.subject}`, exact: true }).click();
+  await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticReplySource.subject}`, exact: true }).click();
   await page.getByRole('button', { name: 'Refresh current reply context', exact: true }).click();
-  await page.getByText(syntheticBrowserCase.messages[3]!.body, { exact: true }).waitFor();
+  await page.getByText(syntheticReplySource.body, { exact: true }).waitFor();
   await page.locator('#replies').scrollIntoViewIfNeeded();
   await assertSyntheticNoSend(runtime.app);
   const receipt = { issue: 781, pid: process.pid, origin: runtime.app.origin, oidcIssuer: runtime.app.fixture.google.issuer, profile, storagePath: runtime.app.storagePath, postgresPid: runtime.app.postgresPid, tlsPath: runtime.app.tlsPath, database: runtime.app.fixture.database.name, meetingId: runtime.app.meetingId, expiresAt, stop: `kill -TERM ${process.pid}`, sendingEnabled: false, model: 'fixed fixture script, no live inference' };

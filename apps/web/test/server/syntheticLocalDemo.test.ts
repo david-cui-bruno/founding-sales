@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { requireLocalDemo, syntheticAssets, demoLabel } from '../support/syntheticBrowserApp.ts';
-import { syntheticBrowserCase } from '../support/syntheticBrowserCase.ts';
+import { syntheticBrowserCase, syntheticReplySource } from '../support/syntheticBrowserCase.ts';
 
 describe('local synthetic launcher boundary', () => {
   it('requires opt-in and refuses every inherited database/provider/browser selection', () => {
@@ -29,6 +29,10 @@ describe('local synthetic launcher boundary', () => {
   });
   it('retains only fictional original input, never oracle expectations', () => {
     expect(syntheticBrowserCase.messages).toHaveLength(4);
+    expect(syntheticBrowserCase.firm).toBe('Fablewick Property Stewardship (invented)');
+    expect(syntheticBrowserCase.participants[0]?.email).toBe('mara.fenwick@example.com');
+    expect(syntheticReplySource.id).toBe('SYN-A-03');
+    expect(syntheticBrowserCase.messages[3]?.direction).toBe('outbound');
     expect(syntheticBrowserCase.messages.map(value => value.id)).toEqual(['SYN-A-01', 'SYN-A-02', 'SYN-A-03', 'SYN-A-04']);
     expect(syntheticBrowserCase).not.toHaveProperty('expected');
     expect(JSON.stringify(syntheticBrowserCase)).not.toMatch(/@(?![a-z.]*example\.com)/u);
