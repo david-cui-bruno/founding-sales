@@ -181,16 +181,24 @@ describe('campaign exact command custody over actual BrowserClient', () => {
     expect(() => unreadable.prepare({ kind: 'approve', policy: policy() })).toThrow('storage_unavailable');
   });
   it('RTL presents approved choices and explicit subset, approves once with no recipient/send controls', async () => {
+    // Pin Date only: real async timers still run, while the bounded expiry fixture cannot age out.
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-22T12:00:00.000Z'));
     const scope = setup(); await scope.browser.refresh(); render(<BrowserEmailCampaigns client={scope.browser} />);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh campaigns' }));
     await screen.findByRole('option', { name: /Published five-email/u });
     fireEvent.change(screen.getByLabelText('Approved sender'), { target: { value: id } });
     fireEvent.change(screen.getByLabelText('Approved email sequence'), { target: { value: other } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'MA' }));
+    for (const expiresAt of ['2026-10-21T12:00', '2026-11-23T12:00']) {
+      fireEvent.change(screen.getByLabelText('Campaign expiry'), { target: { value: expiresAt } });
+      fireEvent.click(screen.getByRole('button', { name: 'Approve campaign once' }));
+      expect(screen.getByRole('status').textContent).toContain('an expiry within 30 days');
+      expect(scope.commands).toHaveLength(0); expect(scope.storage.getItem(CAMPAIGN_PENDING_KEY)).toBeNull();
+    }
     fireEvent.change(screen.getByLabelText('Campaign expiry'), { target: { value: '2026-10-23T12:00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Approve campaign once' }));
     await vi.waitFor(() => { expect(scope.commands).toHaveLength(1); });
-    expect(scope.commands[0]).toMatchObject({ mailboxId: id, sequenceVersionId: other, regions: ['MA'], authorizationRevision: 2, dailyAdmissionLimit: 1, maxEnrollments: 25 });
+    expect(scope.commands[0]).toMatchObject({ mailboxId: id, sequenceVersionId: other, regions: ['MA'], authorizationRevision: 2, dailyAdmissionLimit: 1, maxEnrollments: 25, expiresAt: new Date('2026-10-23T12:00').toISOString() });
     expect(screen.queryByRole('button', { name: /^send|recipient/iu })).toBeNull();
   });
 });
