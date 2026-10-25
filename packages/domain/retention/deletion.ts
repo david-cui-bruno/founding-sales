@@ -1,6 +1,8 @@
 import {privateDraftDeletionRows} from './socialDraftDeletion.ts'; import {measureResearchErasure,eraseOfficeAssessments} from './officeAssessments.ts';
 import { measurePhoneHandoffDeletion, erasePhoneHandoffs } from './phoneHandoffs.ts';
 import {lockAskLifecycle} from '../crm/askAnswerLifecycle.ts';
+import {lockDiscoveryReviewSources} from '../sourcing/discoveryReviewVisibility.ts';
+import {deleteManualActivityEvidence} from './manualActivityEvidenceDeletion.ts';
 import {redactBackfillMetadataRows} from '../mail/crmBackfillMetadata.ts';
 import {
   mailContextPredicate,
@@ -1146,8 +1148,8 @@ export async function commitDeletion(
   const actor = context.scope.actor;
   if (actor.kind !== "user") return refuse("admin_only");
 
-  // Ask recovery has no surviving source authority after erasure. Serialize its
-  // bounded database stage before the existing deletion lock hierarchy.
+  // Raw activity source lifecycle precedes Ask, gates and all deletion rows.
+  await lockDiscoveryReviewSources(context);
   await lockAskLifecycle(context);
   // Gate before rows and measurement: concurrent bookings/admissions either commit
   // into this erasure closure first or wait until its tombstones have committed.
@@ -1828,11 +1830,7 @@ export async function commitDeletion(
     `DELETE FROM firm_links WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
-  await remove(
-    "evidence_items",
-    `DELETE FROM evidence_items WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
-    byContact,
-  );
+  removed["evidence_items"] = await deleteManualActivityEvidence(context,scope);
   await remove(
     "record_aliases",
     `DELETE FROM record_aliases WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}`,
