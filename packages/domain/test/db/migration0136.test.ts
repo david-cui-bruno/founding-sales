@@ -6,7 +6,7 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from './support/fixtures.ts';
 import {socialVoiceEntriesSchema} from '@fss/contracts';
 let db:TestDatabase,seed:TwoWorkspaces;
 const entry=()=>({entryId:randomUUID(),dimension:'tone',guidance:'Use direct neutral language.'});
-beforeAll(async()=>{db=await createTestDatabase({throughVersion:135});seed=await seedTwoWorkspaces(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(135);await applyMigrations(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(136);});
+beforeAll(async()=>{db=await createTestDatabase({throughVersion:135});seed=await seedTwoWorkspaces(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(135);await applyMigrations(db.session,{throughVersion:136});expect(await readAppliedSchemaVersion(db.session)).toBe(136);});
 afterAll(async()=>db?.drop());
 const invalid=[null,{},[],Array.from({length:21},entry),[{...entry(),extra:'forbidden'}],[{...entry(),guidance:' \t\n'}],[{...entry(),guidance:'\u00a0\ufeff'}],[{...entry(),guidance:'x'.repeat(501)}],[{...entry(),guidance:'😀'.repeat(251)}],[{...entry(),dimension:'fact'}],[{...entry(),entryId:'invalid'}],[{...entry(),guidance:null}],[{...entry(),guidance:123}],[null],Array.from({length:20},()=>({...entry(),guidance:'x'.repeat(500)}))];
 it.each(invalid.map((entries,index)=>({entries,index})))('upgrade rejects malformed or over-limit entries case $index',async({entries})=>{

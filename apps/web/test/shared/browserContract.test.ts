@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { browserApiPathAllowed, browserSessionSchema } from '../../src/shared/browserContract.ts';
 
 describe('browser boundary', () => {
+  it('admits only the four recording-only manual activity POST routes', () => {
+    for (const action of ['list', 'read', 'save', 'receipt']) {
+      const path = `/sourcing/candidates/prospects/activity/${action}`;
+      expect(browserApiPathAllowed('POST', path)).toBe(true);
+      for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, path)).toBe(false);
+      expect(browserApiPathAllowed('POST', `${path}/extra`)).toBe(false);
+    }
+    for (const action of ['call', 'callback', 'today', 'consent', 'suppress', 'send', 'fetch', 'enable']) expect(browserApiPathAllowed('POST', `/sourcing/candidates/prospects/activity/${action}`)).toBe(false);
+  });
   it('admits only existing social suggestion reads, never generation or publication', () => {
     for (const path of ['/social/drafts', '/social/drafts/read']) {
       expect(browserApiPathAllowed('POST', path)).toBe(true);

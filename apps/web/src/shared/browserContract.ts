@@ -37,6 +37,8 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/sourcing/research-firms/list', '/sourcing/research-firms/read',
   '/sourcing/candidates/list', '/sourcing/candidates/authority/read',
   '/sourcing/candidates/prospects/list',
+  '/sourcing/candidates/prospects/activity/list', '/sourcing/candidates/prospects/activity/read',
+  '/sourcing/candidates/prospects/activity/receipt',
   '/sourcing/qualification/read',
   '/outreach/email-campaigns/control',
   '/replies', '/replies/card', '/replies/composer/context', '/replies/composer/preview',
@@ -47,6 +49,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
 export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/meetings/notes', '/sourcing/research-firms/create',
   '/sourcing/candidates/prospects/feedback',
+  '/sourcing/candidates/prospects/activity/save',
   '/sourcing/qualification/request', '/sourcing/qualification/admit',
   '/sourcing/qualification/recovery/identity', '/sourcing/qualification/recovery/interpret',
   '/outreach/email-campaigns/approve', '/outreach/email-campaigns/revoke',

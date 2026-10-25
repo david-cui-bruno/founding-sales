@@ -12,7 +12,7 @@ function phoneLabel(p:ManualProspect):string{
  if(evidence?.state==='conflicting')return 'Phone conflicting · no number selected';
  return 'Phone unknown · not extracted';
 }
-export function ManualProspectCard({prospect:p,disabled,feedback}:{prospect:ManualProspect;disabled:boolean;feedback:(state:'kept'|'skipped'|'wrong_number')=>void}):JSX.Element{
+export function ManualProspectCard({prospect:p,disabled,feedback,activity}:{prospect:ManualProspect;disabled:boolean;feedback:(state:'kept'|'skipped'|'wrong_number')=>void;activity?:()=>void}):JSX.Element{
  const label=p.presentation?.label??p.observedName,kind=p.presentation?.kind.replaceAll('_',' ')??'unresolved';
  const phone=p.phoneEvidence;
  let site:string|null=null;
@@ -27,6 +27,7 @@ export function ManualProspectCard({prospect:p,disabled,feedback}:{prospect:Manu
     <button disabled={disabled} onClick={()=>{feedback('kept');}}>Keep</button>
     <button disabled={disabled} onClick={()=>{feedback('skipped');}}>Skip</button>
     <button disabled={disabled} onClick={()=>{feedback('wrong_number');}}>Wrong number</button>
+    {activity?<button disabled={disabled} onClick={activity}>Open private manual activity</button>:null}
    </div>
   </div>
   <details><summary>Observed name, sources and details</summary>
