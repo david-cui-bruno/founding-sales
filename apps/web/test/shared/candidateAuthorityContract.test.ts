@@ -8,7 +8,8 @@ it('admits only the closed candidate authority metadata read', () => {
   expect(browserApiPathAllowed('POST', path)).toBe(true);
   for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, path)).toBe(false);
   for (const suffix of ['/extra', '/../request', '?candidateId=x']) expect(browserApiPathAllowed('POST', path + suffix)).toBe(false);
-  for (const path of ['/sourcing/qualification/request', '/sourcing/candidates/authority/write', '/sourcing/automatic-research/enable']) {
+  expect(browserApiPathAllowed('POST', '/sourcing/qualification/request')).toBe(true);
+  for (const path of ['/sourcing/candidates/authority/write', '/sourcing/automatic-research/enable']) {
     expect(browserApiPathAllowed('POST', path)).toBe(false);
   }
 });

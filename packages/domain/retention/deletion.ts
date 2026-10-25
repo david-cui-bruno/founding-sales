@@ -1,4 +1,4 @@
-import {measureResearchErasure,eraseOfficeAssessments} from './officeAssessments.ts';
+import {privateDraftDeletionRows} from './socialDraftDeletion.ts'; import {measureResearchErasure,eraseOfficeAssessments} from './officeAssessments.ts';
 import { measurePhoneHandoffDeletion, erasePhoneHandoffs } from './phoneHandoffs.ts';
 import {lockAskLifecycle} from '../crm/askAnswerLifecycle.ts';
 import {redactBackfillMetadataRows} from '../mail/crmBackfillMetadata.ts';
@@ -527,7 +527,7 @@ async function measure(
   const firm = scope.firmId;
   const contact = scope.contactId;
   const byContact = [workspace, contact, firm] as const;
-  const handoffs = await measurePhoneHandoffDeletion(context, scope);
+  const handoffs = await measurePhoneHandoffDeletion(context, scope); const privateDrafts=await privateDraftDeletionRows(context,scope,MEETING_IN_SCOPE);
 
   const removes: Record<string, number> = {
     national_registry_endpoint_scrubs: handoffs.scrubs,
@@ -707,7 +707,7 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
-    phone_handoff_attempts: handoffs.attempts, phone_owner_risk_receipts: handoffs.receipts,
+    phone_handoff_attempts: handoffs.attempts, phone_owner_risk_receipts: handoffs.receipts, social_private_drafts:privateDrafts.count,
     crm_ask_index_work:await countOf(context,`SELECT count(*) AS count FROM crm_ask_index_work a WHERE a.workspace_id=$1 AND ${CRM_ASK_INDEX_IN_SCOPE}`,byContact),
     crm_ask_canonical_windows:await countOf(context,`SELECT count(*) AS count FROM crm_ask_canonical_windows WHERE workspace_id=$1 AND work_id IN(${CRM_ASK_INDEX_IDS}) AND state IN ('pending','current')`,byContact),
     crm_commitment_reviews: await countOf(context,`SELECT count(*) AS count FROM crm_commitment_reviews r WHERE r.workspace_id=$1 AND ${CRM_COMMITMENT_REVIEW_IN_SCOPE}`,byContact),
@@ -1008,7 +1008,7 @@ async function measure(
     redacts,
     stops,
     retains,
-    identityVersions, phoneReceiptBindings: handoffs.receiptBindings,
+    identityVersions:[...identityVersions,...privateDrafts.versions], phoneReceiptBindings: handoffs.receiptBindings,
     handles: [...handles].sort(),
     attendeeKeys: [...attendeeKeys].filter((key) => !handles.has(key)).sort(),
   };
@@ -1339,7 +1339,7 @@ export async function commitDeletion(
   const workspace = context.scope.workspaceId;
   const byContact = [workspace, scope.contactId, scope.firmId] as const;
   const removed: Record<string, number> = await eraseOfficeAssessments(context,scope,closure.firms);
-  const redacted: Record<string, number> = {};
+  const redacted: Record<string, number> = {social_private_drafts:measured.redacts['social_private_drafts']??0};
   const erasedHandoffs = await erasePhoneHandoffs(context, scope);
   redacted['phone_handoff_attempts'] = erasedHandoffs.attempts; redacted['phone_owner_risk_receipts'] = erasedHandoffs.receipts;
   removed['national_registry_endpoint_scrubs'] = erasedHandoffs.scrubs;

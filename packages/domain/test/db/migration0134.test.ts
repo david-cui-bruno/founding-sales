@@ -4,7 +4,7 @@ import {applyMigrations,readAppliedSchemaVersion} from '../../db/migrationRunner
 import {seedTwoWorkspaces,type TwoWorkspaces} from './support/fixtures.ts';
 import {MANUAL_PROSPECT_CONSTRAINT_CASES} from './support/manualProspectCases.ts';
 let db:TestDatabase,seeded:TwoWorkspaces;
-beforeAll(async()=>{db=await createTestDatabase({throughVersion:133});seeded=await seedTwoWorkspaces(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(133);await applyMigrations(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(134);});
+beforeAll(async()=>{db=await createTestDatabase({throughVersion:133});seeded=await seedTwoWorkspaces(db.session);expect(await readAppliedSchemaVersion(db.session)).toBe(133);await applyMigrations(db.session, {throughVersion:134});expect(await readAppliedSchemaVersion(db.session)).toBe(134);});
 afterAll(async()=>{await db.drop();});
 it.each(MANUAL_PROSPECT_CONSTRAINT_CASES)('133 to 134 rejects $constraint',async testCase=>{
  await db.session.query('BEGIN');try{await expect(testCase.run({session:db.session,seeded})).rejects.toMatchObject({constraint:testCase.constraint});}finally{await db.session.query('ROLLBACK');}
