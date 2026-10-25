@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
+import {manualLiteralPhoneCoverageSchema, manualLiteralPhoneSourceSchema} from './manualLiteralPhone.ts';
 
 /** Private manual worklist only. Raw observations are never canonical Firms or contact authority. */
 export const manualProspectStateSchema = z.enum(['new', 'kept', 'skipped', 'wrong_number']);
@@ -16,22 +17,35 @@ export const manualProspectPresentationSchema = z.strictObject({
   kind: z.enum(['apparent_company', 'non_company', 'unresolved']),
   reason: z.string().trim().min(1).max(200),
 });
-const manualPhoneSourceSchema = z.strictObject({
+const retainedFactPhoneSourceSchema = z.strictObject({
   runId: uuid, observationId: uuid, blockId: z.string().min(1).max(80),
   url: z.string().min(1).max(2000), retrievedAt: instant,
 });
-/** Existing permitted retained facts only. This is an observed Endpoint, not a Route. */
+const manualPhoneSourceSchema = z.union([retainedFactPhoneSourceSchema, manualLiteralPhoneSourceSchema]);
+const coverage = manualLiteralPhoneCoverageSchema.optional();
+/** Permitted retained facts or exact literal original spans. An Endpoint is not a Route. */
 export const manualProspectPhoneEvidenceSchema = z.discriminatedUnion('state', [
   z.strictObject({state: z.literal('not_extracted'), reason: z.enum([
     'no_retained_phone_field', 'no_current_permitted_phone_evidence', 'retained_text_not_extracted',
-  ])}),
-  z.strictObject({state: z.literal('absent'), basis: z.literal('retained_source_declares_absent')}),
+    'bounded_scan_incomplete', 'optional_source_changed', 'retained_ancestry_unavailable',
+    'original_not_usable',
+  ]), coverage}),
+  z.strictObject({state: z.literal('absent'), basis: z.literal('retained_source_declares_absent'), coverage}),
   z.strictObject({state: z.literal('conflicting'), reason: z.enum([
-    'multiple_retained_numbers', 'retained_source_ambiguous',
-  ]), sources: z.array(manualPhoneSourceSchema).max(16)}),
+    'multiple_retained_numbers', 'retained_source_ambiguous', 'unresolved_retained_literal',
+  ]), sources: z.array(manualPhoneSourceSchema).max(16), coverage}),
   z.strictObject({state: z.literal('observed'), value: z.string().regex(/^\+[1-9]\d{7,14}$/u),
-    sources: z.array(manualPhoneSourceSchema).min(1).max(16)}),
-]);
+    sources: z.array(manualPhoneSourceSchema).min(1).max(16), coverage}),
+]).superRefine((value, ctx) => {
+  if(value.state !== 'observed') return;
+  for(const source of value.sources) {
+    if('method' in source && (source.normalizedValue !== value.value || value.coverage?.state !== 'complete'
+      || value.coverage.observations < 1 || value.coverage.blocks < 1))
+      ctx.addIssue({code:'custom', message:'A selected literal needs matching endpoint and complete authorized coverage.'});
+  }
+  if(value.coverage && value.coverage.state !== 'complete')
+    ctx.addIssue({code:'custom', message:'Incomplete or changed evidence cannot select a phone.'});
+});
 export const manualProspectSchema = z.strictObject({
   candidateId: uuid,
   revision: z.number().int().positive(),
