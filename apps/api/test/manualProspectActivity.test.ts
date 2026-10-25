@@ -45,3 +45,21 @@ it('opaque exact receipts replay IDs only, mismatched hash stays unknown and fre
  expect((await request('receipt',admin,receipt)).body).toMatchObject({state:'accepted'});
  for(const table of ['jobs','provider_reservations','firms','contacts','call_logs','callbacks','today_items','phone_routes','sequence_enrollments','outbound_messages','suppression_events'])expect((await f.db.query(`SELECT count(*)::int n FROM ${table}`)).rows[0]?.['n']).toBe(0);
 });
+it('real receipt uniqueness wait rechecks source wall clock at final commit and rolls back prose, audit and receipt',async()=>{
+ const grant=await issueSessionFor(f,f.alpha,f.alpha.admin),runtime=await f.database.appRuntimeSession(),blocker=await f.database.appRuntimeSession();
+ const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),runtime),input=manualOrdinaryFixture(778);
+ const candidate=await withTransaction(runtime,()=>saveCandidate(ctx,input));if(!candidate.ok)throw Error(candidate.reason);
+ const firm=(await f.db.query<{id:string}>('INSERT INTO firms(workspace_id,name,assigned_user_id) VALUES($1,$2,$3) RETURNING id',[f.alpha.workspaceId,'Synthetic receipt expiry parent',f.alpha.admin.userId])).rows[0]!.id;
+ await f.db.query(`INSERT INTO evidence_items(workspace_id,firm_id,provider,source_reference,content_hash,terms_allow_retention,retention_expires_at) VALUES($1,$2,'website',$3,$4,true,clock_timestamp()+interval '2 seconds')`,[f.alpha.workspaceId,firm,input.sourceUrl,'e'.repeat(64)]);
+ const body={...command(),candidateId:candidate.value.id};
+ await blocker.query('BEGIN');await blocker.query(`INSERT INTO command_receipts(workspace_id,device_id,command_id,command_kind,payload_hash,result_status,result) VALUES($1,$2,$3,'sourcing.manual_activity_save',$4,'refused','"fixture"'::jsonb)`,[f.alpha.workspaceId,grant.deviceId,body.commandId,'e'.repeat(64)]);
+ const pending=dispatch({method:'POST',path:prefix+'/save',query:new URLSearchParams(),headers:{authorization:`Bearer ${grant.accessToken}`},body},{session:runtime,auth:{...f.deps,db:runtime},supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update'});
+ try{
+  await expect.poll(async()=>Number((await f.db.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'INSERT INTO command_receipts%'")).rows[0]?.['n'])).toBe(1);
+  await blocker.query('SELECT pg_sleep(2.1)');
+ }finally{await blocker.query('ROLLBACK');}
+ expect(await pending).toMatchObject({status:409,body:{error:'candidate_unavailable'}});
+ expect((await runtime.query('SELECT id FROM sourcing_manual_prospect_attempts WHERE id=$1',[body.attemptId])).rows).toEqual([]);
+ expect((await runtime.query('SELECT command_id FROM command_receipts WHERE command_id=$1',[body.commandId])).rows).toEqual([]);
+ expect((await runtime.query('SELECT id FROM audit_events WHERE subject_id=$1',[body.attemptId])).rows).toEqual([]);
+});

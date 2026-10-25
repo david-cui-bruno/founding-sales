@@ -1,7 +1,7 @@
 import {manualProspectActivitySaveCommandSchema,manualProspectActivityListInputSchema,manualProspectActivityReadInputSchema,manualProspectActivityReceiptInputSchema,manualProspectActivityReceiptSchema} from '@fss/contracts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {saveManualProspectActivity,listManualProspectActivity,readManualProspectActivity} from '@fss/domain/sourcing/manualProspectActivity.ts';
-import {ManualActivityAuthorityChanged,ManualActivityUnavailable,requireManualActivityAuthority} from '@fss/domain/sourcing/manualProspectActivityAccess.ts';
+import {ManualActivityAuthorityChanged,ManualActivityUnavailable,requireManualActivityAuthority,currentManualActivityAuthority} from '@fss/domain/sourcing/manualProspectActivityAccess.ts';
 import {contextForPrincipal,runRouteCommand,requirePrincipal,type RouteDeps} from './routeSupport.ts';
 import {retainedPrincipalAuthority} from './retainedPrincipalAuthority.ts';
 import {samePrivatePrincipal} from './privateReadAuthority.ts';
@@ -15,10 +15,13 @@ export async function routeManualProspectActivity(deps:RouteDeps):Promise<RouteR
  try{
   let answer:RouteResult;
   if(deps.request.path===MANUAL_ACTIVITY_PATHS[2]){
-   answer=await runRouteCommand(deps,manualProspectActivitySaveCommandSchema,MANUAL_ACTIVITY_COMMAND_KIND,(ctx,body)=>{
+   let beforeCommit:(()=>Promise<void>)|undefined;
+   answer=await runRouteCommand(deps,manualProspectActivitySaveCommandSchema,MANUAL_ACTIVITY_COMMAND_KIND,async(ctx,body)=>{
     const {commandId:_id,clientVersion:_version,...input}=body;
-    return saveManualProspectActivity(ctx,input,retainedPrincipalAuthority(deps,ctx));
-   });
+    const authority=retainedPrincipalAuthority(deps,ctx),result=await saveManualProspectActivity(ctx,input,authority);
+    if(result.ok)beforeCommit=()=>currentManualActivityAuthority(ctx,input.candidateId,input.expectedCandidateRevision,authority);
+    return result;
+   },async()=>{await beforeCommit?.();});
   }else{
    const schema=deps.request.path===MANUAL_ACTIVITY_PATHS[0]?manualProspectActivityListInputSchema:deps.request.path===MANUAL_ACTIVITY_PATHS[1]?manualProspectActivityReadInputSchema:manualProspectActivityReceiptInputSchema;
    const parsed=schema.safeParse(deps.request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
