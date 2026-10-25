@@ -5,7 +5,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from '../crm/identityAccess.ts';
 import {manualProspectRows,MANUAL_PROSPECT_ROWS_SQL} from './manualProspectRows.ts';
 import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
-import {manualPhoneSnapshots,projectManualPhone} from './manualProspectPhone.ts';
+import {manualPhoneSnapshots,recheckManualPhoneSnapshots,projectManualPhone,changedManualPhone} from './manualProspectPhone.ts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
@@ -22,13 +22,19 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
  if(page.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,page.map(row=>row.id)]);
  const phones=await manualPhoneSnapshots(ctx,page);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
- const currentRows=await manualProspectRows(ctx,input.state,input.offset),currentPhones=await manualPhoneSnapshots(ctx,page);
- if(!await authority()||!await admin(ctx)||!isDeepStrictEqual(rows,currentRows))return refuse('authority_changed');
+ const checked=await recheckManualPhoneSnapshots(ctx,page,phones);
+ if(!await authority()||!await admin(ctx))return refuse('authority_changed');
+ const currentRows=await manualProspectRows(ctx,input.state,input.offset),currentPhones=await recheckManualPhoneSnapshots(ctx,page,phones);
+ if(!isDeepStrictEqual(rows,currentRows))return refuse('authority_changed');
+ // Authority owns session/device/membership SHARE locks through this transaction.
+ // Read clock-based rights after that final authority wait, not before it.
+ const wall=(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
  // Optional evidence changing during waits drops enrichment, never the raw queue.
  const prospects=page.flatMap(row=>{
   const before=phones.find(phone=>phone.candidate_id===row.id&&phone.candidate_revision===row.revision);
   const after=currentPhones.find(phone=>phone.candidate_id===row.id&&phone.candidate_revision===row.revision);
-  const evidence=projectManualPhone(before&&isDeepStrictEqual(before,after)?after:undefined);
+  const middle=checked.find(phone=>phone.candidate_id===row.id&&phone.candidate_revision===row.revision);
+  const evidence=isDeepStrictEqual(before,middle)&&isDeepStrictEqual(before,after)?projectManualPhone(after,wall):changedManualPhone();
   const p=projectManualProspect(row,evidence);return p?[p]:[];
  });
  return {ok:true,value:manualProspectListSchema.parse({prospects,hasMore:rows.length>50})};

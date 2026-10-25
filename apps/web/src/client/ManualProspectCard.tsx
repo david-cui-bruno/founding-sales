@@ -39,7 +39,15 @@ export function ManualProspectCard({prospect:p,disabled,feedback}:{prospect:Manu
    <ul aria-label="Source licenses and notices">{p.sourceNotices.map((notice,i)=><li key={i}><Reference url={notice.url} label={notice.label}/></li>)}</ul>
    {phone?.state==='not_extracted'?<p>Phone evidence: {phone.reason.replaceAll('_',' ')}. Missing data is not explicit absence.</p>:null}
    {phone?.state==='conflicting'?<p>Phone evidence: {phone.reason.replaceAll('_',' ')}</p>:null}
-   {phone?.state==='observed'||phone?.state==='conflicting'?<ul aria-label="Retained phone provenance">{phone.sources.map((source,i)=><li key={i}><Reference url={source.url} label={source.url}/> · Retrieved {source.retrievedAt} · Run {source.runId} · Observation {source.observationId} · Block {source.blockId}</li>)}</ul>:null}
+   {phone?.coverage?<p>Retained phone scan: {phone.coverage.state} · {phone.coverage.observations} observations · {phone.coverage.blocks} blocks · {phone.coverage.parser}. Coverage is limited to permitted retained inputs, not the whole business.</p>:null}
+   {phone?.state==='observed'||phone?.state==='conflicting'?<ul aria-label="Retained phone provenance">{phone.sources.map((source,i)=><li key={i}><Reference url={source.url} label={source.url}/> · Retrieved {source.retrievedAt} · Run {source.runId} · Observation {source.observationId} · Block {source.blockId}
+    {'method' in source?<>
+     <p>Retained original literal: {source.literal} · UTF-16 span [{source.start}, {source.end}) · Label {source.label} [{source.labelStart}, {source.labelEnd})</p>
+     <p>Normalization: {source.normalizationBasis.replaceAll('_',' ')} · {source.normalizedValue??'unsupported, no endpoint selected'} · {source.normalization}. Default US is a formatting assumption, not verified location.</p>
+     <p>Captured content hash {source.contentHash} · Retained blocks hash {source.relevantTextHash}. Block hashing does not verify an unavailable whole page.</p>
+     <p>Authority: {source.authority.kind.replaceAll('_',' ')} · {JSON.stringify(source.authority)} · Origin: {source.lineage.kind.replaceAll('_',' ')} · {JSON.stringify(source.lineage)}</p>
+    </>:<p>Retained business_phone fact, not retrospective literal extraction.</p>}
+   </li>)}</ul>:null}
    <p>{p.unknowns.join(' · ')}</p>
    <p>Reversible manual feedback only. No CRM creation, qualification, source correction, DNC clearance or contact permission.</p>
   </details>

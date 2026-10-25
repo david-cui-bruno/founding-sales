@@ -8,6 +8,9 @@ export function manualPhoneFixture(url='https://source.example.test/phone',value
  const facts:QualificationFact[]=values.map((value,i)=>({kind:'business_phone',value,observationId:source.id,blockId:`phone-${i}`}));
  return {observations:[source],facts};
 }
+export function manualLiteralPhoneFixture(url='https://source.example.test/phone',texts=['Main phone: (214) 555-0123']){
+ const evidence=manualPhoneFixture(url,texts);evidence.observations[0]!.firstParty=true;evidence.facts=[];return evidence;
+}
 export async function seedManualPhoneRun(db:SessionQueryable,workspaceId:string,candidateId:string,evidence=manualPhoneFixture(),revision=1){
  const id=randomUUID();
  await db.query(`INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,state,reason,observations,facts)
