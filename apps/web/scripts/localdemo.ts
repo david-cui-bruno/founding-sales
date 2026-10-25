@@ -47,7 +47,7 @@ try {
   await page.getByText(syntheticBrowserCase.messages[3]!.body, { exact: true }).waitFor();
   await page.locator('#replies').scrollIntoViewIfNeeded();
   await assertSyntheticNoSend(runtime.app);
-  const receipt = { issue: 781, pid: process.pid, origin: runtime.app.origin, oidcIssuer: runtime.app.fixture.google.issuer, profile, storagePath: runtime.app.storagePath, postgresPid: runtime.app.postgresPid, tlsPath: runtime.app.tlsPath, database: runtime.app.fixture.database.name, meetingId: runtime.app.meetingId, expiresAt, stop: `kill -TERM ${process.pid}`, sendingEnabled: false, model: 'human-authored fixed script, no live inference' };
+  const receipt = { issue: 781, pid: process.pid, origin: runtime.app.origin, oidcIssuer: runtime.app.fixture.google.issuer, profile, storagePath: runtime.app.storagePath, postgresPid: runtime.app.postgresPid, tlsPath: runtime.app.tlsPath, database: runtime.app.fixture.database.name, meetingId: runtime.app.meetingId, expiresAt, stop: `kill -TERM ${process.pid}`, sendingEnabled: false, model: 'fixed fixture script, no live inference' };
   await writeFile(join(profile, 'resource-receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
   console.error('SYNTHETIC_BROWSER_DEMO_READY', JSON.stringify(receipt));
   console.error('Use the labeled Chrome window. Fictional input is open in Replies. Generate is an explicit scripted action. Ctrl-C stops and erases this entire disposable demo.');
