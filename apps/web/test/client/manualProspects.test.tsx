@@ -204,6 +204,26 @@ it('same-turn stale A activity submit is fenced before even acquiring a WebLock'
  act(()=>{fireEvent.click(screen.getByRole('button',{name:'Next prospect'}));fireEvent.click(save);});
  expect(lock).not.toHaveBeenCalled();expect(s.uuid).not.toHaveBeenCalled();expect(s.client.manualActivity.read()).toBeNull();await act(async()=>{s.client.dispose();});
 });
+it('closing same-prospect activity keeps the reviewed preparation and reopening does not create activity',async()=>{
+ const s=setup();await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();composePreparation();const before=s.fetch.mock.calls.length;
+ fireEvent.click(screen.getByRole('button',{name:"Open this prospect's private manual activity"}));fireEvent.click(screen.getByRole('button',{name:'Record a user-performed attempt'}));
+ fireEvent.click(screen.getByRole('button',{name:"Open this prospect's private manual activity"}));expect(screen.getByRole('form',{name:'Manual activity report'})).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Close private manual activity'}));expect(screen.queryByRole('form',{name:'Manual activity report'})).toBeNull();
+ expect(screen.getByRole('article',{name:'Reviewed manual draft'}).textContent).toContain(privateDraft);expect(s.fetch.mock.calls).toHaveLength(before);expect(s.storage.setItem).not.toHaveBeenCalled();await act(async()=>{s.client.dispose();});
+});
+it('an actual lost save response keeps UNKNOWN identity and its recovery available across selected-prospect closure',async()=>{
+ vi.stubGlobal('crypto',webcrypto);vi.stubGlobal('navigator',{locks:{request:async(_name:string,_options:unknown,work:()=>Promise<unknown>)=>work()}});
+ const s=setup();s.rows([prospect,rival]);let saves=0;
+ s.route(url=>{if(url.endsWith('/activity/save')){saves++;return Promise.reject(Error('Lost response after dispatch'));}if(url.endsWith('/activity/receipt'))return json({state:'unknown'});return undefined;});
+ await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();composePreparation();fireEvent.click(screen.getByRole('button',{name:"Open this prospect's private manual activity"}));
+ fireEvent.click(screen.getByRole('button',{name:'Record a user-performed attempt'}));fireEvent.click(screen.getByLabelText('I performed this manual attempt (user report, not verified)',{exact:true}));
+ fireEvent.change(screen.getByLabelText('Relevant business result note'),{target:{value:'SYNTHETIC lost report'}});fireEvent.click(screen.getByRole('button',{name:'Save manual report'}));
+ await screen.findByText(/Activity unavailable or outcome UNKNOWN/u);const bytes=s.storage.getItem(MANUAL_ACTIVITY_PENDING_KEY);expect(bytes).not.toBeNull();expect(saves).toBe(1);
+ expect(screen.getByRole('article',{name:'Reviewed manual draft'})).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Next prospect'}));
+ fireEvent.click(screen.getByRole('button',{name:'Open private manual activity'}));expect(screen.getByRole('button',{name:'Record a user-performed attempt'}).hasAttribute('disabled')).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'Reconcile exact manual activity receipt'}));await screen.findByText(/Receipt UNKNOWN/u);
+ expect(s.storage.getItem(MANUAL_ACTIVITY_PENDING_KEY)).toBe(bytes);expect(s.uuid).toHaveBeenCalledTimes(1);expect(saves).toBe(1);expect(bytes).not.toContain('SYNTHETIC lost report');await act(async()=>{s.client.dispose();});
+});
 it.each(['logout','expiry','source'] as const)('%s refusal clears current preparation and private activity',async kind=>{
  const s=setup();await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();composePreparation();fireEvent.click(screen.getByRole('button',{name:"Open this prospect's private manual activity"}));
  if(kind==='source'){s.route(url=>url.endsWith('/activity/list')?json({error:'unavailable'},404):undefined);fireEvent.click(screen.getByRole('button',{name:'Refresh manual activity'}));await waitFor(()=>{expect(screen.queryByLabelText('Manual outreach draft')).toBeNull();});}
