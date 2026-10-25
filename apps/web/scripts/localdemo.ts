@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +7,7 @@ import { assertSyntheticNoSend, containSyntheticBrowser, signInSyntheticBrowser,
 import { syntheticBrowserCase, syntheticReplySource } from '../test/support/syntheticBrowserCase.ts';
 
 // See localdemo.md for the clean-environment command and exact-owned stop policy.
-async function runLocalDemo(): Promise<void> {
+export async function runLocalDemo(options: { reviewWindow?: boolean; stopCommand?: string; onReady?: (receipt: Record<string, unknown>) => Promise<void> } = {}): Promise<void> {
   requireLocalDemo(process.env);
   // initdb inherits locale. A clean shell otherwise creates SQL_ASCII on macOS.
   process.env['LC_ALL'] = 'en_US.UTF-8';
@@ -27,8 +28,8 @@ async function runLocalDemo(): Promise<void> {
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   process.on('SIGHUP', onSignal);
-  const expiresAt = new Date(Date.now() + lifetime * 60_000).toISOString();
-  const timer = setTimeout(requestShutdown, lifetime * 60_000);
+  let expiresAt = new Date(Date.now() + lifetime * 60_000).toISOString();
+  let timer = setTimeout(requestShutdown, lifetime * 60_000);
   const cancelled = (): boolean => {
     if (!shutdownRequested) return false;
     console.error('SYNTHETIC_BROWSER_STARTUP_CANCELLED', JSON.stringify({ pid: process.pid, profile, origin: runtime?.app.origin, oidcIssuer: runtime?.app.fixture.google.issuer }));
@@ -63,8 +64,15 @@ async function runLocalDemo(): Promise<void> {
     await page.locator('#replies').scrollIntoViewIfNeeded();
     await assertSyntheticNoSend(runtime.app);
     if (cancelled()) return;
-    const receipt = { issue: 781, pid: process.pid, origin: runtime.app.origin, oidcIssuer: runtime.app.fixture.google.issuer, profile, storagePath: runtime.app.storagePath, postgresPid: runtime.app.postgresPid, tlsPath: runtime.app.tlsPath, database: runtime.app.fixture.database.name, meetingId: runtime.app.meetingId, expiresAt, stop: `kill -TERM ${process.pid}`, sendingEnabled: false, model: 'fixed fixture script, no live inference', runtimeRoleChecks: runtime.app.runtimeRoleChecks() };
+    if (options.reviewWindow) {
+      clearTimeout(timer);
+      expiresAt = new Date(Date.now() + lifetime * 60_000).toISOString();
+      timer = setTimeout(requestShutdown, lifetime * 60_000);
+    }
+    const receipt = { issue: 781, pid: process.pid, origin: runtime.app.origin, oidcIssuer: runtime.app.fixture.google.issuer, profile, storagePath: runtime.app.storagePath, postgresPid: runtime.app.postgresPid, tlsPath: runtime.app.tlsPath, database: runtime.app.fixture.database.name, meetingId: runtime.app.meetingId, expiresAt, stop: options.stopCommand ?? `kill -TERM ${process.pid}`, sendingEnabled: false, model: 'fixed fixture script, no live inference', runtimeRoleChecks: runtime.app.runtimeRoleChecks() };
     await writeFile(join(profile, 'resource-receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    if (cancelled()) return;
+    await options.onReady?.(receipt);
     if (cancelled()) return;
     console.error('SYNTHETIC_BROWSER_DEMO_READY', JSON.stringify(receipt));
     console.error('Use the labeled Chrome window. Fictional input is open in Replies. Generate is an explicit scripted action. Ctrl-C stops and erases this entire disposable demo.');
@@ -85,4 +93,4 @@ async function runLocalDemo(): Promise<void> {
     console.error('SYNTHETIC_BROWSER_DEMO_STOPPED: owned HTTPS, OIDC, database, cluster, TLS and Chrome profile removed');
   }
 }
-await runLocalDemo();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await runLocalDemo();
