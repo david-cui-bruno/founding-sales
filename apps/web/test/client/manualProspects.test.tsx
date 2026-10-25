@@ -5,6 +5,8 @@ import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/reac
 import {BrowserClient} from '../../src/client/BrowserClient.ts';
 import {BrowserManualProspects} from '../../src/client/BrowserManualProspects.tsx';
 import {MANUAL_PROSPECT_PENDING_KEY} from '../../src/client/ManualProspectPending.ts';
+import {manualProspectSchema} from '@fss/contracts';
+import {ManualProspectCard} from '../../src/client/ManualProspectCard.tsx';
 const id='10000000-0000-4000-8000-000000000001';
 const prospect={candidateId:id,revision:1,observedName:'<img src=x onerror=alert(1)> Loose fit',website:'javascript:alert(1)',locality:null,region:null,observedPhone:null,phoneBasis:'unknown',sources:[{label:'Retained source',url:'https://source.example.test/',observedAt:null}],sourceNotices:[{label:'CDLA-Permissive-2.0',url:null}],retainedAt:'2026-10-20T00:00:00.000Z',state:'new',unknowns:['Phone unknown'],possibleDuplicateCount:2,qualification:'unverified',contactAuthority:'not_granted'};
 const json=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status});
@@ -109,4 +111,19 @@ it.each(['role','revision','workspace','expiry','auth'] as const)('clears IDs-on
  if(kind==='expiry'){const now=vi.spyOn(Date,'now').mockReturnValue(Date.now()+120001);s.client.isCurrent(s.client.epoch);now.mockRestore();}
  else if(kind==='auth')s.client.invalidate();else{s.change(kind==='role'?{role:'sales'}:kind==='workspace'?{workspaceId:'20000000-0000-4000-8000-000000000002'}:{revision:'new'});await expect(s.client.refresh()).rejects.toThrow();}
  expect(s.storage.getItem(MANUAL_PROSPECT_PENDING_KEY)).toBeNull();s.client.dispose();
+});
+it('discloses exact authorized literal provenance and scoped coverage without dialing or HTML execution',()=>{
+ const source={method:'retained_original_literal',runId:id,observationId:id,blockId:'block-phone',url:'https://source.example.test/phone',retrievedAt:'2026-10-24T00:00:00.000Z',contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),parser:'manual-literal-phone-v1',literal:'(214) 555-0123',start:7,end:21,label:'Phone',labelStart:0,labelEnd:5,normalizedValue:'+12145550123',normalization:'existing-canonicalize-phone-v1',normalizationBasis:'default_us',authority:{kind:'candidate_source',sourceUrl:'https://source.example.test/phone'},lineage:{kind:'provider_original'}};
+ const row=manualProspectSchema.parse({...prospect,observedPhone:'+12145550123',phoneBasis:'retained_observation',phoneEvidence:{state:'observed',value:'+12145550123',sources:[source],coverage:{parser:'manual-literal-phone-v1',state:'complete',observations:1,blocks:1}}});
+ const view=render(<ManualProspectCard prospect={row} disabled={false} feedback={vi.fn()}/>);fireEvent.click(screen.getByText('Observed name, sources and details'));
+ expect(screen.getByText(/Retained original literal: \(214\) 555-0123/u).textContent).toContain('UTF-16 span [7, 21)');
+ expect(screen.getByText(/Default US is a formatting assumption/u)).toBeTruthy();expect(screen.getByText(/not the whole business/u)).toBeTruthy();
+ expect(view.container.querySelector('a[href^="tel:"]')).toBeNull();expect(view.container.querySelector('img')).toBeNull();
+ const legacy=manualProspectSchema.parse({...row,phoneEvidence:{state:'observed',value:'+12145550123',sources:[{runId:id,observationId:id,blockId:'legacy',url:'https://source.example.test/',retrievedAt:'2026-10-24T00:00:00.000Z'}]}});
+ view.rerender(<ManualProspectCard prospect={legacy} disabled={false} feedback={vi.fn()}/>);expect(screen.getByText(/not retrospective literal extraction/u)).toBeTruthy();
+});
+it('changed optional phone read stays unknown and shows no stale rival content',()=>{
+ const row=manualProspectSchema.parse({...prospect,phoneEvidence:{state:'not_extracted',reason:'optional_source_changed',coverage:{parser:'manual-literal-phone-v1',state:'changed',observations:0,blocks:0}}});
+ const view=render(<ManualProspectCard prospect={row} disabled={false} feedback={vi.fn()}/>);expect(view.container.textContent).toContain('Phone unknown · not extracted');
+ expect(view.container.textContent).toContain('optional source changed');expect(view.container.textContent).not.toContain('214555');expect(view.container.querySelectorAll('button')).toHaveLength(3);
 });

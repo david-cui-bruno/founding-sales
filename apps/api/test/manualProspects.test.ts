@@ -7,7 +7,10 @@ import {issueSessionFor} from './support/sessionFixture.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {saveDiscoveryCandidate} from '@fss/domain/sourcing/discoveryIntake.ts';
-import {manualDiscoveryFixture} from '../../../packages/domain/test/sourcing/support/manualProspectFixture.ts';
+import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
+import {manualProspectListSchema} from '@fss/contracts';
+import {manualDiscoveryFixture,manualOrdinaryFixture} from '../../../packages/domain/test/sourcing/support/manualProspectFixture.ts';
+import {manualLiteralPhoneFixture,seedManualPhoneRun} from '../../../packages/domain/test/sourcing/support/manualPhoneFixture.ts';
 let f:AuthFixture,admin:string,sales:string,beta:string,id:string;
 const read='/sourcing/candidates/prospects/list',feedback='/sourcing/candidates/prospects/feedback';
 async function request(path:string,token:string|null,body:unknown,method='POST'){
@@ -39,4 +42,18 @@ it('normal runCommand receipts reconcile exact UUID without reapplying historica
  expect((await request(feedback,admin,{...command(),expectedRevision:2})).body).toMatchObject({status:'refused',reason:'candidate_changed'});
  expect((await f.db.query('SELECT * FROM sourcing_candidates')).rows).toEqual(before);
  for(const table of ['jobs','provider_reservations','firms','contacts','phone_routes','sequence_enrollments','outbound_messages'])expect((await f.db.query(`SELECT count(*)::int n FROM ${table}`)).rows[0]?.['n']).toBe(0);
+});
+it('775 authenticates literal original extraction independently of malformed model facts and keeps source rows unchanged',async()=>{
+ const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db),input=manualOrdinaryFixture(775);input.website='https://source.example.test/';
+ const saved=await withTransaction(f.db,()=>saveCandidate(ctx,input));if(!saved.ok)throw Error(saved.reason);
+ const run=await seedManualPhoneRun(f.db,f.alpha.workspaceId,saved.value.id,manualLiteralPhoneFixture(input.sourceUrl));await f.db.query('UPDATE sourcing_qualification_runs SET facts=$2 WHERE id=$1',[run,JSON.stringify([{invalid:'model'}])]);
+ const before=(await f.db.query('SELECT to_jsonb(r) row FROM sourcing_qualification_runs r ORDER BY id')).rows;
+ try{
+  const answer=await request(read,admin,{state:'all',offset:0});expect(answer.status).toBe(200);
+  expect(manualProspectListSchema.parse(answer.body).prospects.find(row=>row.candidateId===saved.value.id)).toMatchObject({observedPhone:'+12145550123',qualification:'unverified',contactAuthority:'not_granted',phoneEvidence:{state:'observed',sources:[{method:'retained_original_literal',authority:{kind:'candidate_source'}}],coverage:{state:'complete'}}});
+  expect(manualProspectListSchema.parse((await request(read,beta,{state:'all',offset:0})).body).prospects).toEqual([]);
+  expect((await request(read,sales,{state:'all',offset:0})).status).toBe(403);
+  expect((await f.db.query('SELECT to_jsonb(r) row FROM sourcing_qualification_runs r ORDER BY id')).rows).toEqual(before);
+  for(const table of ['jobs','provider_reservations','firms','contacts','phone_routes','sequence_enrollments','outbound_messages'])expect((await f.db.query(`SELECT count(*)::int n FROM ${table}`)).rows[0]?.['n']).toBe(0);
+ }finally{await f.db.query('DELETE FROM sourcing_candidates WHERE id=$1',[saved.value.id]);}
 });

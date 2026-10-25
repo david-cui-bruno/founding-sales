@@ -14,8 +14,8 @@ export function projectManualProspect(row:ManualProspectRow,phone:NonNullable<Ma
  const ordinary=candidateInputSchema.safeParse(row.payload),discovery=discoveryCandidatePayloadSchema.safeParse(row.payload);
  const declared=discovery.success?discovery.data.row.officePhoneEvidence:'unknown';
  const phoneEvidence:NonNullable<ManualProspect['phoneEvidence']>=declared==='ambiguous'||(declared==='absent'&&phone.state==='observed')?
-  {state:'conflicting',reason:'retained_source_ambiguous',sources:phone.state==='observed'||phone.state==='conflicting'?phone.sources:[]}:
-  declared==='absent'&&phone.state!=='conflicting'?{state:'absent',basis:'retained_source_declares_absent'}:phone;
+  {state:'conflicting',reason:'retained_source_ambiguous',sources:phone.state==='observed'||phone.state==='conflicting'?phone.sources:[],...(phone.coverage?{coverage:phone.coverage}:{})}:
+  declared==='absent'&&phone.state!=='conflicting'&&(!phone.coverage||phone.coverage.state==='complete')?{state:'absent',basis:'retained_source_declares_absent',...(phone.coverage?{coverage:phone.coverage}:{})}:phone;
  const observed=phoneEvidence.state==='observed';
  const common={candidateId:row.id,revision:row.revision,retainedAt:row.created_at.toISOString(),state:row.manual_state,
   observedPhone:observed?phoneEvidence.value:null,phoneBasis:observed?'retained_observation':'unknown',phoneEvidence,possibleDuplicateCount:row.duplicate_count,
