@@ -21,6 +21,7 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
  const rows=await manualProspectRows(ctx,input.state,input.offset),page=rows.slice(0,50);
  if(page.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,page.map(row=>row.id)]);
  const phones=await manualPhoneSnapshots(ctx,page);
+ if(ctx.scope.actor.kind==='user')await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,ctx.scope.actor.userId]);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
  const checked=await recheckManualPhoneSnapshots(ctx,page,phones);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
