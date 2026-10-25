@@ -6,6 +6,7 @@ import { reserveLocalBrowserDatabase } from './database.ts';
 import { startReplyBriefApp, type ReplyBriefApp } from './replyBriefApp.ts';
 import { scriptedReply, syntheticBrowserCase } from './syntheticBrowserCase.ts';
 import { snapshotExitListeners, removeExitListenersAddedSince } from '@fss/domain/db/testing/embeddedPostgres.ts';
+import { createOwnedTeardown } from '@fss/domain/db/testing/globalSetup.ts';
 
 export const demoLabel = 'SYNTHETIC · fictional case A · NO SEND · scripted, not live model inference';
 export function requireLocalDemo(env: NodeJS.ProcessEnv): void {
@@ -56,17 +57,18 @@ export async function startSyntheticBrowser() {
     await app.fixture.db.query('UPDATE evidence_items SET source_reference=$2 WHERE firm_id=$1', [app.firmId, 'https://fictional.example.test/SYN-A-01']);
     await app.fixture.db.query('UPDATE meetings SET attendee_name=$2,event_title=$3,booking_notes=$4,starts_at=$5,ends_at=$6 WHERE id=$1', [app.meetingId, 'Mara Fenwick (invented)', 'SYNTHETIC screen walkthrough, not a real booking', 'Fictional source agreement only. No calendar invitation or actual booking operation.', '2026-10-26T14:00:00-04:00', '2026-10-26T14:20:00-04:00']);
     const owned = app;
-    let stopped = false;
-    return { app: owned, stop: async () => {
-      if (stopped) return;
-      stopped = true;
-      try { await owned.stop(); } finally { await release(); }
-      await access(owned.storagePath).then(() => { throw Error('Owned PG directory remains'); }, error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
-      assert.throws(() => process.kill(owned.postgresPid, 0), { code: 'ESRCH' });
-      console.log('SYNTHETIC_BROWSER_CLUSTER_PID_DIRECTORY_ABSENT');
-    } };
+    return { app: owned, stop: createOwnedTeardown([
+      () => owned.stop(),
+      release,
+      async () => {
+        await access(owned.storagePath).then(() => { throw Error('Owned PG directory remains'); }, error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+        assert.throws(() => process.kill(owned.postgresPid, 0), { code: 'ESRCH' });
+        console.log('SYNTHETIC_BROWSER_CLUSTER_PID_DIRECTORY_ABSENT');
+      },
+    ]) };
   } catch (error) {
-    try { await app?.stop(); } finally { await release(); }
+    try { await createOwnedTeardown([async () => { await app?.stop(); }, release])(); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Synthetic startup and teardown failed'); }
     throw error;
   }
 }
