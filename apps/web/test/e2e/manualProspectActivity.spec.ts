@@ -10,12 +10,13 @@ import {browserSession} from '../support/browser.ts';
 import {startManualProspectApp} from '../support/manualProspectApp.ts';
 import {manualProductSnapshot,routeManualProvider,loginManual} from '../support/manualProspectSeed.ts';
 import {MANUAL_ACTIVITY_PENDING_KEY} from '../../src/client/ManualProspectActivityCustody.ts';
+import {inspectManualProspect} from '../support/manualProspectInspector.ts';
 let app:Awaited<ReturnType<typeof startManualProspectApp>>,ordinary:string,discovery:string,baseline:Awaited<ReturnType<typeof manualProductSnapshot>>;
 test.use({actionTimeout:15000});
 const prose='Private synthetic manual report, no real business attempt.';
 const panel=(page:Page)=>page.getByRole('region',{name:'Private manual prospect activity',exact:true});
 const form=(page:Page)=>panel(page).getByRole('form',{name:'Manual activity report',exact:true});
-async function open(page:Page,id=ordinary){await page.getByRole('article',{name:`Manual prospect ${id}`,exact:true}).getByRole('button',{name:'Open private manual activity',exact:true}).click();await expect(panel(page)).toBeVisible();}
+async function open(page:Page,id=ordinary){await inspectManualProspect(page,id);await page.getByRole('article',{name:`Manual prospect ${id}`,exact:true}).getByRole('button',{name:'Open private manual activity',exact:true}).click();await expect(panel(page)).toBeVisible();}
 async function compose(page:Page,text=prose){await panel(page).getByRole('button',{name:'Record a user-performed attempt',exact:true}).click();await form(page).getByLabel('I performed this manual attempt (user report, not verified)',{exact:true}).check();await form(page).getByLabel('Relevant business result note',{exact:true}).fill(text);}
 async function submit(page:Page){await form(page).getByRole('button',{name:'Save manual report',exact:true}).click();await expect(panel(page)).toContainText('Manual report saved.');await expect(panel(page)).toContainText('Business note:');await expect(panel(page).getByRole('button',{name:'Record a user-performed attempt',exact:true})).toBeEnabled();}
 async function last(){return (await app.fixture.db.query<{id:string;revision:number;content:Record<string,unknown>}>('SELECT id,revision,content FROM sourcing_manual_prospect_attempts ORDER BY recorded_at DESC LIMIT 1')).rows[0]!;}
@@ -25,7 +26,7 @@ test.beforeAll(async()=>{
  const a=await withTransaction(runtime,()=>saveCandidate(ctx,manualOrdinaryFixture(777))),b=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx,manualDiscoveryFixture(randomUUID())));if(!a.ok||!b.ok)throw Error('Controlled candidate seed failed');ordinary=a.value.id;discovery=b.value.id;baseline=await manualProductSnapshot(app);
 });
 test.afterAll(async()=>{try{if(app&&baseline)expect(await manualProductSnapshot(app)).toEqual(baseline);}finally{await app?.stop();}});
-test.beforeEach(async({researchPage:page})=>{await app.fixture.db.query('DELETE FROM sourcing_manual_prospect_attempts');await routeManualProvider(page,app);await loginManual(page,app);await expect(page.getByRole('region',{name:'Manual prospect worklist',exact:true}).getByRole('article')).toHaveCount(2);});
+test.beforeEach(async({researchPage:page})=>{await app.fixture.db.query('DELETE FROM sourcing_manual_prospect_attempts');await routeManualProvider(page,app);await loginManual(page,app);await expect(page.getByRole('region',{name:'Manual prospect worklist',exact:true}).getByRole('table').getByRole('row')).toHaveCount(3);});
 test.afterEach(async({researchPage:page})=>{
  expect(await manualProductSnapshot(app)).toEqual(baseline);const storage=await page.evaluate(()=>JSON.stringify({local:{...localStorage},session:{...sessionStorage}}));expect(storage).not.toContain(prose);expect(storage).not.toContain('callback private intention');
  expect(JSON.stringify((await app.fixture.db.query("SELECT result FROM command_receipts WHERE command_kind='sourcing.manual_activity_save'")).rows)).not.toContain(prose);

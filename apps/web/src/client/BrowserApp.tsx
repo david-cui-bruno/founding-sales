@@ -82,27 +82,31 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     try { await client.signOut(); setNotice('Signed out.'); }
     catch { setNotice('Local private state cleared. Remote sign-out was not confirmed. Sign in again to check access.'); }
   };
-  return <main className="mx-auto max-w-4xl space-y-6 p-6">
-    <header className="flex items-center justify-between gap-4"><div><h1>Callie</h1><p>Local browser workspace</p></div>{session?.status === 'signed_in' ? <Button onClick={() => { void logout(); }}>Sign out</Button> : null}</header>
-    <aside className="rounded-md border p-3">Calling, Gmail capture, LinkedIn outreach, provider setup and native features: OFF / unavailable in this browser. No outreach is performed.</aside>
+  return <div className="browser-workspace">
+    <header className="browser-sidebar"><div className="browser-brand"><h1>Callie</h1><p>Founder workspace</p></div>
+      {session?.status === 'signed_in' ? <><nav aria-label="Workspace sections">{session.role==='admin'?<a href="#prospects">Prospects</a>:null}<a href="#today">Today / Firms</a><a href="#email">Email</a><a href="#replies">Replies</a><a href="#social">Social</a></nav><div className="browser-session"><p>{session.role} · Private workspace</p><Button onClick={() => { void logout(); }}>Sign out</Button></div></> : null}
+    </header>
+    <main className="browser-main">
     {notice ? <p role="status">{notice}</p> : null}
-    <BrowserEmailCampaigns client={client} />
-    <BrowserReplies client={client} />
-    <BrowserSocialReview client={client} />
     {session?.status !== 'signed_in' ? <section aria-label="Sign in" className="space-y-3"><h2>Sign in</h2>
       <label>Workspace ID<Input aria-label="Workspace ID" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); }} /></label>
       <label>Browser label<Input aria-label="Browser label" value={deviceLabel} onChange={event => { setDeviceLabel(event.target.value); }} /></label>
       <Button disabled={busy} onClick={() => { void run(async () => { await client.signIn(workspaceId, deviceLabel); }); }}>Sign in</Button>
       <Button disabled={busy} variant="outline" onClick={() => { void run(async () => { await client.refresh(); }); }}>Refresh access</Button>
     </section> : <div key={generation} className="space-y-5">
-      <nav className="flex gap-3"><Button disabled={busy} onClick={() => { void run(loadToday); }}>Today</Button><span>{session.role} · Workspace {session.workspaceId}</span></nav>
-      {firm === null ? <section aria-label="Today" className="space-y-3"><h2>Today</h2><BrowserManualProspects client={client} /><BrowserCandidateInventory client={client} /><BrowserResearchQueue client={client} />{today !== null ? <p>{today.snapshotDate} · {today.businessTimeZone}</p> : null}
+      <BrowserManualProspects client={client} />
+      <div id="today"><nav className="flex gap-3"><Button disabled={busy} onClick={() => { void run(loadToday); }}>Today</Button><span>{session.role} · Workspace {session.workspaceId}</span></nav>
+      {firm === null ? <section aria-label="Today" className="space-y-3"><h2>Today</h2><BrowserCandidateInventory client={client} /><BrowserResearchQueue client={client} />{today !== null ? <p>{today.snapshotDate} · {today.businessTimeZone}</p> : null}
         {today?.cards.length === 0 ? <p>No firms need attention today.</p> : null}
         {today?.cards.map(card => <article key={card.firmId} className="rounded-md border p-4"><h3>{card.firmName}</h3><p>{card.lane.replaceAll('_', ' ')} · {countsLabel(card.counts)}</p><Button disabled={busy} onClick={() => { void run(async () => { await openFirm(card.firmId); }); }}>Open firm</Button></article>)}
       </section> : <section aria-label="Firm" className="space-y-4"><h2>{firm.read.firm.name}</h2><p>{firm.read.firm.timeZone ?? 'Time zone unknown'}</p>
         {firm.read.visibility === 'assigned_or_admin' ? <><h3>People at this firm</h3><ul>{firm.read.firm.contacts.map(contact => <li key={contact.id}>{contact.fullName}{contact.title ? ` · ${contact.title}` : ''}</li>)}</ul></> : <p>Firm detail is restricted to the assigned person or administrator.</p>}
         {firm.visibility === 'assigned_or_admin' ? <><h3>Opportunities</h3><ul>{firm.opportunities.map(entry => <li key={entry.opportunity.id}>{entry.displayName ?? 'Opportunity'} · {entry.opportunity.status}</li>)}</ul><BrowserMeetingPreparation key={`brief:${firm.read.firm.id}`} client={client} firmId={firm.read.firm.id} /><BrowserMeetingNotes key={firm.read.firm.id} client={client} firmId={firm.read.firm.id} /></> : null}
-      </section>}
+      </section>}</div>
     </div>}
-  </main>;
+    <div id="email"><BrowserEmailCampaigns client={client} /></div>
+    <div id="replies"><BrowserReplies client={client} /></div>
+    <div id="social"><BrowserSocialReview client={client} /></div>
+    <aside className="browser-capability-note">Calling, Gmail capture, LinkedIn outreach, provider setup and native features: OFF / unavailable in this browser. No outreach is performed.</aside>
+  </main></div>;
 }

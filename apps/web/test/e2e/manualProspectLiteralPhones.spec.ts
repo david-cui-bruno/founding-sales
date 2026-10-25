@@ -10,6 +10,7 @@ import {test,expect} from '../support/qualifiedResearchApp.ts';
 import {startManualProspectApp} from '../support/manualProspectApp.ts';
 import {manualProductSnapshot,routeManualProvider,loginManual} from '../support/manualProspectSeed.ts';
 import {browserSession} from '../support/browser.ts';
+import {inspectManualProspect} from '../support/manualProspectInspector.ts';
 const read='/browser/api/sourcing/candidates/prospects/list';
 let app:Awaited<ReturnType<typeof startManualProspectApp>>,single:string,conflict:string,missing:string,absent:string,run:string,baseline:Awaited<ReturnType<typeof manualProductSnapshot>>;
 const panel=(page:Page)=>page.getByRole('region',{name:'Manual prospect worklist',exact:true});
@@ -40,17 +41,17 @@ test.afterEach(async({researchPage:page})=>{
  const stored=await page.evaluate(()=>JSON.stringify({local:{...localStorage},session:{...sessionStorage}}));expect(stored).not.toMatch(/12145550123|\(214\) 555|Main phone|literal-absent|contentHash|source\.example/u);
 });
 test('775 actual signed runtime browser shows all four honest phone states with exact original span and no acquisition',async({researchPage:page})=>{
- await loginManual(page,app);await expect(panel(page).getByRole('article')).toHaveCount(4);
+ await loginManual(page,app);await expect(panel(page).getByRole('table').getByRole('row')).toHaveCount(5);
  const list=await refresh(page),row=list.prospects.find(value=>value.candidateId===single)!;
  expect(row).toMatchObject({qualification:'unverified',contactAuthority:'not_granted',phoneEvidence:{state:'observed',coverage:{state:'complete'},sources:[{method:'retained_original_literal',literal:'(214) 555-0123',start:15,end:29,label:'Main phone',lineage:{kind:'provider_original'}}]}});
  expect(list.prospects.find(value=>value.candidateId===conflict)?.phoneEvidence?.state).toBe('conflicting');expect(list.prospects.find(value=>value.candidateId===missing)?.phoneEvidence?.state).toBe('not_extracted');expect(list.prospects.find(value=>value.candidateId===absent)?.phoneEvidence?.state).toBe('absent');
- await card(page,single).getByText('Observed name, sources and details',{exact:true}).click();await expect(card(page,single)).toContainText('Retained original literal: (214) 555-0123');await expect(card(page,single)).toContainText('UTF-16 span [15, 29)');await expect(card(page,single)).toContainText('formatting assumption');await expect(card(page,single).locator('a[href^="tel:"]')).toHaveCount(0);
- const feedback=page.waitForResponse(value=>value.url().endsWith('/prospects/feedback'));await card(page,missing).getByRole('button',{name:'Keep',exact:true}).click();expect(await (await feedback).json()).toMatchObject({status:'accepted',result:{candidateId:missing,state:'kept'}});
- await page.reload();await expect(card(page,missing)).toContainText('Manual state kept');await expect(card(page,single)).toContainText('Phone +12145550123');
+ await inspectManualProspect(page,single);await card(page,single).getByText('Observed name, sources and details',{exact:true}).click();await expect(card(page,single)).toContainText('Retained original literal: (214) 555-0123');await expect(card(page,single)).toContainText('UTF-16 span [15, 29)');await expect(card(page,single)).toContainText('formatting assumption');await expect(card(page,single).locator('a[href^="tel:"]')).toHaveCount(0);
+ await inspectManualProspect(page,missing);const feedback=page.waitForResponse(value=>value.url().endsWith('/prospects/feedback'));await card(page,missing).getByRole('button',{name:'Keep',exact:true}).click();expect(await (await feedback).json()).toMatchObject({status:'accepted',result:{candidateId:missing,state:'kept'}});
+ await page.reload();await inspectManualProspect(page,missing);await expect(card(page,missing)).toContainText('Manual state kept');await inspectManualProspect(page,single);await expect(card(page,single)).toContainText('Phone +12145550123');
  expect(app.runtimeRequests()).toBeGreaterThan(0);expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);expect(app.fixture.google.tokenExchanges().at(-1)?.clientSecretPresented).toBe(true);
 });
 test('775 optional original loss removes phone but leaves the same raw prospect and actions without stale content',async({researchPage:page})=>{
- await loginManual(page,app);await expect(card(page,single)).toContainText('Phone +12145550123');
+ await loginManual(page,app);await inspectManualProspect(page,single);await expect(card(page,single)).toContainText('Phone +12145550123');
  const retained=(await app.fixture.db.query('SELECT observations FROM sourcing_qualification_runs WHERE id=$1',[run])).rows[0]?.['observations'];
  try{
   await app.fixture.db.query("UPDATE sourcing_qualification_runs SET observations='[]' WHERE id=$1",[run]);
@@ -59,7 +60,7 @@ test('775 optional original loss removes phone but leaves the same raw prospect 
  }finally{await app.fixture.db.query('UPDATE sourcing_qualification_runs SET observations=$2 WHERE id=$1',[run,JSON.stringify(retained)]);}
 });
 test('775 current session revoked during real source lifecycle lock wait refuses phone read and clears private queue',async({researchPage:page})=>{
- await loginManual(page,app);await expect(card(page,single)).toContainText('Phone +12145550123');const session=await browserSession(page);if(session.status!=='signed_in')throw Error('Signed session required');
+ await loginManual(page,app);await inspectManualProspect(page,single);await expect(card(page,single)).toContainText('Phone +12145550123');const session=await browserSession(page);if(session.status!=='signed_in')throw Error('Signed session required');
  const blocker=await app.fixture.database.appRuntimeSession();await blocker.query('BEGIN');await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-discovery-review:${app.fixture.alpha.workspaceId}`]);
  const response=page.waitForResponse(value=>value.url().endsWith(read));await panel(page).getByRole('button',{name:'Refresh retained worklist',exact:true}).click();
  try{
