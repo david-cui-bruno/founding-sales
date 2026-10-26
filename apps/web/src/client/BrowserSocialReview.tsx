@@ -6,12 +6,12 @@ import {BrowserVoicePreferences} from './BrowserVoicePreferences.tsx';
 import type {BrowserClient} from './BrowserClient.ts';
 
 /** Retained suggestion review plus explicitly saved private composition. */
-export function BrowserSocialReview({client}:{client:BrowserClient}):JSX.Element{
+export function BrowserSocialReview({client,autoList=false}:{client:BrowserClient;autoList?:boolean}):JSX.Element{
  const binding=useRef({client,key:0});
  if(binding.current.client!==client)binding.current={client,key:binding.current.key+1};
- return <SocialReviewSession key={binding.current.key} client={client}/>;
+ return <SocialReviewSession key={binding.current.key} client={client} autoList={autoList}/>;
 }
-function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
+function SocialReviewSession({client,autoList}:{client:BrowserClient;autoList:boolean}):JSX.Element|null{
  const [signedIn,setSignedIn]=useState(client.current?.status==='signed_in');
  const [epoch,setEpoch]=useState(client.epoch),[workspace,setWorkspace]=useState<SocialDraftWorkspace|null>(null);
  const [adoption,setAdoption]=useState<PrivateAdoption|null>(null);
@@ -57,26 +57,28 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
   finally{if(current()){lock.current=false;setBusy(false);}}
  };
  if(!signedIn||client.current?.status!=='signed_in'||epoch!==client.epoch||scope.current!==client)return null;
- return <section aria-label="Private social review" className="space-y-3 rounded-md border p-4">
-  <h2>Private social review</h2>
-  <p>Review retained suggestions or compose a private post or comment. Unsaved edits stay in authenticated memory. Only explicit Save persists a private draft. Not approved, scheduled or published.</p>
-  <p>No generation, automatic voice learning, source acquisition or platform action is available. Retained source metadata is dated provenance, not current coverage or semantic support.</p>
+ return <section aria-label="Private social review" className="social-review">
+  <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} autoList={autoList} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
+  <div className="social-secondary-toolbar">
   <button type="button" disabled={busy} onClick={()=>{void read();}}>Read retained social suggestions</button>
-  <p role="status">{notice}</p>
+  </div>
+  <p role="status" className="social-notice">{notice}</p>
+  <details className="social-details" open={workspace!==null||busy}><summary>Retained suggestions & sources</summary>
+  <p>No generation, automatic voice learning, source acquisition or platform action is available. Retained source metadata is dated provenance, not current coverage or semantic support.</p>
   {workspace!==null?<div className="space-y-3">
    <details><summary>Retained source metadata ({workspace.sources.length}, at most 60)</summary><ul>{workspace.sources.map(source=><li key={`${source.kind}:${source.id}`}>{source.label} · {source.kind} {source.id} revision {source.revision} · Observed {source.observedAt}</li>)}</ul></details>
    <details><summary>Current approved factual inputs ({workspace.facts.length}, at most 20)</summary><ul>{workspace.facts.map(fact=><li key={fact.id}>{fact.text}<small className="block">Fact {fact.id} version {fact.version}{fact.socialInput?` · ${fact.socialInput.topic} · ${fact.socialInput.status}${fact.socialInput.sourceRef?` · Public original ${fact.socialInput.sourceRef.id} revision ${fact.socialInput.sourceRef.revision} · ${fact.socialInput.sourceRef.url} · Checked ${fact.socialInput.sourceRef.checkedAt}`:''}`:''}</small></li>)}</ul></details>
    <h3>Retained requests (at most 20)</h3>
    {workspace.requests.length===0?<p>No retained suggestion requests. No inference has been run by this screen.</p>:null}
-   {workspace.requests.map(request=><article key={request.id} aria-label={`Social request ${request.id}`} className="rounded-md border p-3">
+   {workspace.requests.map(request=><article key={request.id} aria-label={`Social request ${request.id}`} className="social-retained-request">
     <h4>{request.state} · {request.mode??'legacy themes'}</h4><p>Request {request.id} · Created {request.createdAt} · Deadline {request.deadlineAt}</p>
     {request.reason?<p>Reason: {request.reason}</p>:null}
     <Provenance request={request}/>
     {request.state==='ready'?request.concepts?.map((concept,ci)=><div key={ci}><h5>{concept.theme}</h5><p>Variant fact references: {concept.factRefs.map(ref=>`${ref.id} v${ref.version}`).join(', ')||'None'}</p>{concept.variants.map((variant,vi)=><div key={vi}><p className="whitespace-pre-wrap">{variant.text}</p><button type="button" disabled={busy||new Date(request.deadlineAt).getTime()<=Date.now()} onClick={()=>{void read(request,ci,vi);}}>Re-read and use {variant.platform} suggestion {ci+1}.{vi+1}</button></div>)}</div>):<p>Not available for adoption. No supported text is presented.</p>}
    </article>)}
   </div>:null}
-  <BrowserVoicePreferences client={client}/>
-  <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
+  </details>
+  <details className="social-details"><summary>Private voice guide</summary><BrowserVoicePreferences client={client}/></details>
  </section>;
 }
 function expireWorkspace(workspace:SocialDraftWorkspace):SocialDraftWorkspace{
