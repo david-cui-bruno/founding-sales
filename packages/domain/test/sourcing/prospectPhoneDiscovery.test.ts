@@ -1,5 +1,4 @@
 import {randomUUID,createHash} from 'node:crypto';
-import {readFileSync} from 'node:fs';
 import {afterAll,beforeAll,beforeEach,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
@@ -35,10 +34,7 @@ function provider(website:string,before?:((request:PageFetchRequest)=>Promise<vo
  }};
 }
 async function rawRun(id:string){return (await runtime.query('SELECT * FROM sourcing_prospect_phone_discoveries WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,id])).rows[0]!;}
-beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();
- const directory=(await db.session.query<{directory:string}>("SELECT current_setting('data_directory') directory")).rows[0]!.directory;
- console.error('PHONE_DISCOVERY_OWNED_PG',JSON.stringify({directory,pid:Number(readFileSync(`${directory}/postmaster.pid`,'utf8').split('\n')[0]),port:new URL(process.env['FSS_TEST_CLUSTER_URL']!).port,database:db.name}));
-});
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
 beforeEach(async()=>{
  await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM jobs');
  await db.session.query("UPDATE workspace_memberships SET role='admin',status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
