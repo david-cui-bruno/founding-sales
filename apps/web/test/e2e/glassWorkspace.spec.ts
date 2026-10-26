@@ -18,8 +18,9 @@ const test = base.extend({ context: async ({ browserName }, use) => {
 // New composed product acceptance only. No old child-proof suite is invoked.
 // Runtime grant: FSS_GLASS_WORKSPACE_EXCLUSIVE_LANE=783, FSS_SYNTHETIC_LOCAL_DEMO=1,
 // installed FSS_LOCAL_BROWSER_EXECUTABLE and private FSS_GLASS_PRIVATE_ARTIFACTS.
-test.use({ ignoreHTTPSErrors: true, screenshot: 'off', trace: 'off', video: 'off', viewport: { width: 1440, height: 1000 }, launchOptions: { ...(process.env['FSS_LOCAL_BROWSER_EXECUTABLE'] ? { executablePath: process.env['FSS_LOCAL_BROWSER_EXECUTABLE'] } : {}) } });
-test.describe.configure({ mode: 'serial', timeout: 180_000 });
+test.use({ ignoreHTTPSErrors: true, actionTimeout: 15_000, screenshot: 'off', trace: 'off', video: 'off', viewport: { width: 1440, height: 1000 }, launchOptions: { ...(process.env['FSS_LOCAL_BROWSER_EXECUTABLE'] ? { executablePath: process.env['FSS_LOCAL_BROWSER_EXECUTABLE'] } : {}) } });
+// One worker still runs serially, but one failed outcome must not skip unrelated flows.
+test.describe.configure({ mode: 'default', timeout: 180_000 });
 let owned: Awaited<ReturnType<typeof startGlassWorkspace>> | undefined;
 let seed: GlassWorkspaceSeed;
 let history: GlassIntroductions | undefined;
@@ -54,7 +55,7 @@ const secondConversation = (page: Page) => page.getByRole('button', { name: 'FIC
 
 test('Today -> exact prepared Prospects -> canonical Calling wrap -> saved Email edit/reload preserves sent and uncertain history', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Today', exact: true, level: 1 })).toBeVisible();
-  await page.getByRole('button', { name: 'Review prospects →', exact: true }).click();
+  await page.getByRole('region', { name: 'Manual calling review', exact: true }).getByRole('button', { name: 'Prospect supply', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Prospects', exact: true, level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Today', exact: true, level: 1 })).toHaveCount(0);
   const row = page.locator('.prospects-supply-row').filter({ has: page.getByRole('heading', { name: seed.name, exact: true }) });

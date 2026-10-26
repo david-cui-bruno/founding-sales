@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { expect, type BrowserContext, type Page } from 'playwright/test';
-import { callingFollowUpListSchema, callingFollowUpSaveInputSchema } from '@fss/contracts';
+import { callingFollowUpSaveInputSchema } from '@fss/contracts';
 import { browserRequest, browserSession } from './browser.ts';
 import { assertGlassStorage, navigateGlass, type GlassWorkspaceApp } from './glassWorkspaceApp.ts';
 import { glassSaveAcceptance, glassWrapAcceptance } from './glassWorkspaceContracts.ts';
@@ -20,19 +20,18 @@ async function openFollowUp(page: Page, draftId: string): Promise<void> {
 /** Actual HTTP commits with deliberately lost transport responses, never invented success.
  * Two same-identity tabs exercise the shared bounded registry and offscreen auth observer. */
 export async function acceptGlassTwoTabUnknown(page: Page, context: BrowserContext, app: GlassWorkspaceApp, seed: GlassWorkspaceSeed): Promise<void> {
-  const listed = await browserRequest(page, '/calling/follow-ups/list', { body: {} });
-  expect(listed.status).toBe(200);
-  const first = callingFollowUpListSchema.parse(listed.body).drafts.find(value => value.availability === 'available' && value.source.kind === 'firm');
-  if (!first) throw Error('Earlier real canonical Calling-to-Email draft required');
-  const secondId = randomUUID();
-  // Independent fictional retained observation, through the actual signed API/domain.
-  const created = await browserRequest(page, '/calling/wrap', { body: {
-    kind: 'candidate', candidateId: seed.otherCandidateId, expectedCandidateRevision: 1, attemptId: randomUUID(), commandId: randomUUID(),
-    report: { performedByUser: true, channel: 'manual_phone', occurrence: { kind: 'unknown' }, result: 'conversation', note: 'FICTIONAL two-tab fixture, no real phone action.', callback: null },
-    promisedEmail: { draftId: secondId, nextAction: 'promised_email', subject: 'FICTIONAL two-tab independent promise', body: 'FICTIONAL second private promise. No sending.' },
-  } });
-  expect(created.status).toBe(200);
-  expect(glassWrapAcceptance.parse(created.body).result.followUp).toMatchObject({ state: 'queued_for_review', draftId: secondId, revision: 1 });
+  const first = { draftId: randomUUID() }, secondId = randomUUID();
+  // Independent fictional observations through the actual signed API/domain.
+  // No earlier accepted UI path needs replaying to run this outcome by itself.
+  for (const [candidateId, draftId] of [[seed.candidateId, first.draftId], [seed.otherCandidateId, secondId]]) {
+    const created = await browserRequest(page, '/calling/wrap', { body: {
+      kind: 'candidate', candidateId, expectedCandidateRevision: 1, attemptId: randomUUID(), commandId: randomUUID(),
+      report: { performedByUser: true, channel: 'manual_phone', occurrence: { kind: 'unknown' }, result: 'conversation', note: 'FICTIONAL two-tab fixture, no real phone action.', callback: null },
+      promisedEmail: { draftId, nextAction: 'promised_email', subject: 'FICTIONAL two-tab independent promise', body: 'FICTIONAL independent private promise. No sending.' },
+    } });
+    expect(created.status).toBe(200);
+    expect(glassWrapAcceptance.parse(created.body).result.followUp).toMatchObject({ state: 'queued_for_review', draftId, revision: 1 });
+  }
   const other = await context.newPage();
   const saved = new Map<string, { commandId: string; payloadSHA256: string }>();
   let dispatches = 0;

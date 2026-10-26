@@ -17,6 +17,7 @@ export async function launchGlassContext() {
   let context: BrowserContext | undefined;
   try {
     context = await chromium.launchPersistentContext(profile, { executablePath, headless: true, ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
+    context.setDefaultTimeout(15_000);
     const owned = context;
     const processes = execFileSync('ps', ['-axo', 'pid,command'], { encoding: 'utf8' }).split('\n').filter(line => line.includes(`--user-data-dir=${profile}`));
     const pids = processes.map(line => Number(line.trim().split(/\s+/u)[0]));
