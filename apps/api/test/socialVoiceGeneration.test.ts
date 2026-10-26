@@ -92,7 +92,9 @@ it.each(['device','session','expiry'] as const)('R1 signed guided REQUEST refuse
 });
 it.each(['audit_events','command_receipts'] as const)('R1 expiry during %s insertion rolls back guided request, audit and receipt',async table=>{
  const f=await createAuthFixture(),stop=await registerVoiceFixture(f);try{
-  const runtime=await f.database.appRuntimeSession(),writer=await f.database.appRuntimeSession(),observer=await f.database.appRuntimeSession(),auth={...f.deps,db:runtime};
+  // audit_events is append-only to app_runtime. Only the fixture lock holder is
+  // privileged, while the actual signed command still uses app_runtime.
+  const runtime=await f.database.appRuntimeSession(),writer=table==='audit_events'?f.db:await f.database.appRuntimeSession(),observer=await f.database.appRuntimeSession(),auth={...f.deps,db:runtime};
   const issued=await issueSessionFor(f,f.alpha,f.alpha.admin),ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),runtime),selection=await withTransaction(runtime,()=>voiceGenerationSelection(ctx));
   const commandId=randomUUID(),pid=(await runtime.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0]!.pid;
   await writer.query('BEGIN');await writer.query(`LOCK TABLE ${table} IN SHARE MODE`);

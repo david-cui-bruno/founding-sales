@@ -13,12 +13,16 @@ async function absentPort(port:number){for(const host of ['127.0.0.1','::1'])awa
 export async function registerVoiceDatabase(db:TestDatabase){
  const backends=(await db.session.query('SELECT pid,backend_type FROM pg_stat_activity WHERE datname=current_database()')).rows;
  console.log('SOCIAL_VOICE_DATABASE_REGISTERED',JSON.stringify({workerPid:process.pid,database:db.name,backends}));
- return async()=>{await db.drop();await admin(async c=>{assert.equal((await c.query('SELECT 1 FROM pg_database WHERE datname=$1',[db.name])).rowCount,0);});console.log('SOCIAL_VOICE_DATABASE_ABSENT',JSON.stringify({database:db.name}));};
+ return async()=>{const backends=(await db.session.query('SELECT pid,backend_type FROM pg_stat_activity WHERE datname=current_database()')).rows;console.log('SOCIAL_VOICE_BACKENDS_AT_TEARDOWN',JSON.stringify({database:db.name,backends}));await db.drop();await admin(async c=>{assert.equal((await c.query('SELECT 1 FROM pg_database WHERE datname=$1',[db.name])).rowCount,0);});console.log('SOCIAL_VOICE_DATABASE_ABSENT',JSON.stringify({database:db.name}));};
 }
 export async function registerVoiceFixture(f:AuthFixture){
- const drop=await registerVoiceDatabase(f.database),port=Number(new URL(f.google.issuer).port);
+ await registerVoiceDatabase(f.database);const port=Number(new URL(f.google.issuer).port);
  console.log('SOCIAL_VOICE_OIDC_REGISTERED',JSON.stringify({workerPid:process.pid,port,database:f.database.name}));
- return async()=>{await f.google.stop();await drop();await absentPort(port);console.log('SOCIAL_VOICE_OIDC_ABSENT',JSON.stringify({port,ipv4:'ECONNREFUSED',ipv6:'ECONNREFUSED'}));};
+ return async()=>{
+  console.log('SOCIAL_VOICE_BACKENDS_AT_TEARDOWN',JSON.stringify({database:f.database.name,backends:(await f.db.query('SELECT pid,backend_type FROM pg_stat_activity WHERE datname=current_database()')).rows}));
+  await f.stop();await admin(async c=>{assert.equal((await c.query('SELECT 1 FROM pg_database WHERE datname=$1',[f.database.name])).rowCount,0);});
+  console.log('SOCIAL_VOICE_DATABASE_ABSENT',JSON.stringify({database:f.database.name}));await absentPort(port);console.log('SOCIAL_VOICE_OIDC_ABSENT',JSON.stringify({port,ipv4:'ECONNREFUSED',ipv6:'ECONNREFUSED'}));
+ };
 }
 /** Root's14:18 exclusive disposable PG/API grant. Canonical owners create/drop
  * resources. Exact observations supplement, never replace, their teardown. */
