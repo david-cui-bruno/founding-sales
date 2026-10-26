@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "baseUrl": ".", "paths": {
+    "@fss/contracts": ["../contracts/src/index.ts"],
+    "@fss/domain/*": ["./*"]
+  } },
+  "include": ["outreach/campaignOpening*.ts", "test/outreach/campaignOpening*.ts", "../../apps/worker/src/handlers/sequenceAction.ts", "../../apps/worker/test/campaignOpeningSequence.test.ts", "vitest.campaignOpening.config.ts"]
+}

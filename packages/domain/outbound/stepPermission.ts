@@ -1,5 +1,6 @@
 import {verifyRoutineReplyFence} from '../outreach/replyDelivery.ts';
 import {verifyProspectingFence} from '../outreach/authorization.ts';
+import { verifyCampaignOpeningFence } from '../outreach/campaignOpeningStore.ts';
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
@@ -142,6 +143,7 @@ export async function decideStepPermission(
   if (!meeting.ok) return refuseSend('step_ineligible', `follow_up_not_permitted:${meeting.reason}`);
   const routine = await verifyRoutineReplyFence(context, { fenceId: fence.id, at: now.toISOString() });
   if (!routine.ok) return refuseSend('step_ineligible', `follow_up_not_permitted:${routine.reason}`);
+  if (!await verifyCampaignOpeningFence(context, fence)) return refuseSend('step_ineligible', 'campaign_opening_unavailable');
   return acceptSend({ execution, enrollment });
 }
 

@@ -1,4 +1,6 @@
 import { withTransaction } from '../db/queryable.ts';
+import { readyCampaignOpening, attachCampaignOpeningFence } from '../outreach/campaignOpeningStore.ts';
+import { prefixCampaignOpening } from '../outreach/campaignOpening.ts';
 import {routineDraftForExecution,attachRoutineFence} from '../outreach/replyDelivery.ts';
 import {readOutreachCadence,outreachStepDue,lastOutreachTouch,outreachExecutionTiming} from '../outreach/timing.ts';
 import { meetingSuccessorDue } from '../meetings/followThroughSuccessor.ts';
@@ -284,6 +286,7 @@ export async function runDueStepExecution(
 
   const fenceId = fence.outboundMessageId ?? null;
   if ((fence.state === 'prepared' || fence.state === 'held') && fenceId !== null) {
+    if ((await readyCampaignOpening(context, execution.id)).kind === 'held') return await holdExecution(context, execution, 'long_hold_review');
     // Check the current instant as well as the due date before either a new preparation
     // or a retry of an existing fence. Dispatch rechecks the same rule under the gate.
     if (execution.channel === 'email' && enrollment.originKind === 'prospecting') {
@@ -301,10 +304,7 @@ export async function runDueStepExecution(
     }
     const routine = await routineDraftForExecution(context, execution.id);
     if (routine !== null && !routine.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [routine.reason] });
-    // The bytes were decided and frozen when the fence was prepared, and nothing was
-    // attempted with them. Appendix B: "Prepared, and Gmail request provably not
-    // started — retry same fence". The dispatch that follows the commit re-decides
-    // everything — eligibility, window, cap — under the send gate.
+    // Retry the same unattempted fence. Dispatch rechecks permission under the gate.
     return await handBackToSend(context, execution, fenceId);
   }
 
@@ -519,15 +519,12 @@ async function runEmailStep(
     return await holdExecution(context, execution, 'optout_link');
   }
 
-  // The footer, composed **before** the fence stores anything (lane W3-F, migration
-  // 0020). The approved body may carry the legacy block or none at all; either way the
-  // bytes handed over end with the sign-off and the workspace's `postal_address` when it
-  // has one. A body that cannot be given one — a legacy stop line the composition cannot
-  // account for, a composed body past the fence's 4,000 characters, a link in the final
-  // bytes, or the address switch on with nothing configured — holds the step here, with
-  // nothing written and no fence created.
+  // Approved prefix only. Existing footer composition still owns final-byte checks.
+  const opening = await readyCampaignOpening(context, execution.id);
+  if (opening.kind === 'held') return await holdExecution(context, execution, 'long_hold_review');
+  const withOpening = opening.kind === 'ready' ? prefixCampaignOpening(rendered, opening.opening) : rendered;
   const composed = await composeBodyForWorkspace(context, {
-    body: rendered.body,
+    body: withOpening.body,
     signOff: template.footerSignOff,
   });
   if (!composed.composed) {
@@ -568,6 +565,7 @@ async function runEmailStep(
   };
   const prepared = await input.sendHandoff.prepare(context, request);
   if (!prepared.ok) return await holdExecution(context, execution, prepared.reason);
+  if (opening.kind === 'ready') await attachCampaignOpeningFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId, subject: request.subject, body: request.body });
   if (routine?.ok === true) await attachRoutineFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
   if (meetingPlan !== null) await attachMeetingFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
 
