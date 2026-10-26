@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { registerOpeningCompatibilityDatabases, verifyOpeningDatabaseAbsent } from '../outreach/campaignOpeningPgRuntime.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { GmailClientError, type GmailMessageMetadata } from '../../mail/gmailClient.ts';
@@ -66,15 +67,14 @@ import {
  */
 describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
   let world: OutboundWorld;
-
   beforeAll(async () => {
     world = await createOutboundWorld();
+    await registerOpeningCompatibilityDatabases();
   });
-
   afterAll(async () => {
     await world.stop();
+    await verifyOpeningDatabaseAbsent(world.database.name);
   });
-
   const workspaceId = (): string => world.alpha.workspace.workspaceId;
   const context = () => world.systemContext(workspaceId());
   const mailbox = () => ({ id: world.alpha.mailboxId, ownerUserId: world.alpha.workspace.salesperson.userId });

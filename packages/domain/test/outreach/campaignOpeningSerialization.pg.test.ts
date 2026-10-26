@@ -85,7 +85,7 @@ it.each(['serialization', 'ordinary-fetch-error'] as const)('risk STD1 qualifica
   } finally { await f.stop(); }
 }, 60_000);
 
-it.each([false, true])('risk STD1 policy=%s candidate-first inversion refuses atomically while gate-first claim commits', async enabled => {
+it.each([false, true])('risk STD1 policy=%s candidate-first inversion preserves legacy work or refuses policy-enabled work atomically', async enabled => {
   const f = await campaignOpeningPgFixture(enabled);
   try {
     const input = await newQualification(f), fence = await prepared(f), baseline = await counters(f);
@@ -100,12 +100,25 @@ it.each([false, true])('risk STD1 policy=%s candidate-first inversion refuses at
       await gate.query("SELECT pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||$1::text,0))", [f.w]);
       const waiting = gate.query('SELECT 1 FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [f.w, input.candidateId]);
       await vi.waitFor(async () => expect((await observer.query<{ blocked: boolean }>('SELECT $2::integer=ANY(pg_blocking_pids($1)) AS blocked', [gatePid, ownerPid])).rows[0]?.blocked).toBe(true));
-      await expect(requestQualification(f.admin, input)).rejects.toMatchObject({ code: '40001', constraint: 'campaign_opening_stop_serialization' });
-      await f.db.query('ROLLBACK'); await waiting;
+      if (enabled) {
+        await expect(requestQualification(f.admin, input)).rejects.toMatchObject({ code: '40001', constraint: 'campaign_opening_stop_serialization' });
+        await f.db.query('ROLLBACK');
+      } else {
+        expect((await requestQualification(f.admin, input)).ok).toBe(true);
+        await f.db.query('COMMIT');
+      }
+      await waiting;
       expect((await claimForDispatch(repositoryContext(f.worker.scope, gate), { outboundMessageId: fence.id })).ok).toBe(true);
       await gate.query('COMMIT');
     } finally { await f.db.query('ROLLBACK'); await gate.query('ROLLBACK'); }
-    expect(await counters(f)).toEqual(baseline); // No failed-request counter/job/run residue.
+    if (enabled) expect(await counters(f)).toEqual(baseline); // No refused-request residue.
+    else {
+      const committed = await counters(f);
+      expect(committed.runs).toHaveLength(baseline.runs.length + 1);
+      expect(committed.jobs).toHaveLength(baseline.jobs.length + 1);
+      expect(committed.counters.reduce((sum, row) => sum + Number(row['count']), 0))
+        .toBe(baseline.counters.reduce((sum, row) => sum + Number(row['count']), 0) + 1);
+    }
     expect((await readFenceByStepExecution(f.worker, f.executionId))?.state).toBe('dispatching');
     // New explicit mutation after the other transaction committed, never an
     // automatic retry of a selector, provider call or UNKNOWN attempt.

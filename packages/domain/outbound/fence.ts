@@ -693,22 +693,8 @@ export async function insertSentTombstone(
   return acceptSend(toFence(row));
 }
 
-/**
- * Record as `sent` a fence the restored database holds as `prepared` or `held`, whose
- * Message-ID the Sent folder proves already left (lane g73).
- *
- * The restore point fell between the fence's preparation and its dispatch — a fence
- * prepared at 16:59 and held by the day's cap, released and sent the next morning after
- * the point the database was restored to. Left alone, the dispatch path would claim it
- * and send it a second time under the same Message-ID. The machine has no edge from
- * `prepared` to `sent`, so the fence walks the edges it has, each with its ledger row:
- * `held → prepared` where it was held — through `releaseFence`, the one edge back to
- * `prepared` this file has and the one Appendix G 12's check counts — then
- * `prepared → dispatching` with the dispatch instant set to Gmail's (written once, as
- * every dispatch instant is), and `dispatching → sent` under the token that claim
- * minted. The claim is the same atomic `WHERE state = 'prepared'` the dispatch path
- * uses, so a worker racing it loses exactly as a second worker would.
- */
+/** Record observed Sent-folder history, never a new send. Release held fences,
+ * then atomically walk prepared → dispatching → sent with paired ledger rows. */
 export async function markPreDispatchFenceSent(
   context: RepositoryContext,
   input: {
@@ -717,33 +703,38 @@ export async function markPreDispatchFenceSent(
     readonly providerThreadId: string;
     readonly sentAt: string;
     readonly actor?: string | undefined;
-    /**
-     * The bytes Gmail actually holds for this message, when they could be read
-     * (`readSentMessageBytes`).
-     *
-     * Since lane W3-F the footer is composed at the claim, so a fence restored from
-     * before an address change can carry a body that is *not* what left: the rewrite
-     * happened after the restore point. Supplied, these bytes and their hash are written
-     * with the same statement that claims the fence — lawful because the envelope only
-     * freezes once a token exists — and the row then records what the prospect received.
-     * Absent, nothing is overwritten and the ledger says the sent bytes are unverified,
-     * which is the honest record and the human step's cue (review of PR 296, P1).
-     */
+    /** Verified paired bytes replace the restored envelope before its token freezes
+     * it. Without both halves the unchanged bytes are explicitly unverified. */
     readonly verifiedBytes?: { readonly subject: string; readonly body: string } | undefined;
   },
 ): Promise<SendResult<OutboundFenceRow>> {
+  // SAVEPOINT probes ownership without committing an existing caller transaction
+  // (BEGIN alone would only warn). Standalone recovery needs the same atomic
+  // witness/terminal/accounting boundary as transactional restore callers.
+  let own = false;
+  try { await context.db.query('SAVEPOINT historical_fence_sent'); }
+  catch (error) {
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === '25P01')) throw error;
+    await context.db.query('BEGIN'); own = true;
+  }
+  try {
+    const result = await recordPreDispatchFenceSent(context, input);
+    await context.db.query(own ? 'COMMIT' : 'RELEASE SAVEPOINT historical_fence_sent');
+    return result;
+  } catch (error) {
+    await context.db.query(own ? 'ROLLBACK' : 'ROLLBACK TO SAVEPOINT historical_fence_sent');
+    if (!own) await context.db.query('RELEASE SAVEPOINT historical_fence_sent');
+    throw error;
+  }
+}
+async function recordPreDispatchFenceSent(context: RepositoryContext, input: Parameters<typeof markPreDispatchFenceSent>[1]): Promise<SendResult<OutboundFenceRow>> {
   const actor = input.actor ?? describeActor(context);
   const current = await readFence(context, input.outboundMessageId);
   if (current?.state === 'held') {
     // Safe for the reason the edge exists at all: `held` never entered dispatching.
     await releaseFence(context, { outboundMessageId: input.outboundMessageId, actor });
   }
-  // And bytes Gmail holds are still bytes this table has an opinion about: a message
-  // that carries a visible opt-out link would break `outbound_messages_no_optout_link`
-  // and abort the whole restore transaction. The send already happened and cannot be
-  // unsent, so the fence is marked `sent` with the bytes it already stores and the
-  // recovery reports `sent_bytes_unverified` for the human step — the operator reads
-  // the real message in the mailbox (review of PR 311, second round).
+  // Forbidden opt-out bytes remain unverified, never abort historical recording.
   const offered = input.verifiedBytes;
   const refused =
     offered !== undefined && (hasOptOutLink(offered.subject) || hasOptOutLink(offered.body));

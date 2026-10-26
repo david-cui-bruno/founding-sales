@@ -38,6 +38,12 @@ BEGIN
   IF (NEW.workspace_id,NEW.id,NEW.campaign_id,NEW.policy) IS DISTINCT FROM (OLD.workspace_id,OLD.id,OLD.campaign_id,OLD.policy)
    OR OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL THEN RAISE EXCEPTION 'opening policy immutable' USING ERRCODE='23514',CONSTRAINT='campaign_opening_policy_immutable'; END IF;
  ELSE
+  -- Absence is a supported legacy mode, not an unlocked snapshot shortcut.
+  -- Mutations hold the shared presence gate until commit. Policy activation
+  -- must refuse rather than race past their no-policy decision or wait on rows.
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('fss.opening-presence:'||NEW.workspace_id::text,0)) THEN
+   RAISE EXCEPTION 'opening activation serialization refused' USING ERRCODE='40001',CONSTRAINT='campaign_opening_stop_serialization';
+  END IF;
   IF NEW.revoked_at IS NOT NULL OR (NEW.policy->>'approvedAt')::timestamptz>clock_timestamp()
    OR (NEW.policy->>'expiresAt')::timestamptz<=clock_timestamp() OR NOT EXISTS(
     SELECT 1 FROM outreach_email_campaigns c JOIN workspace_memberships m ON m.workspace_id=c.workspace_id AND m.user_id=c.owner_user_id
@@ -258,6 +264,17 @@ REVOKE DELETE,TRUNCATE ON outreach_campaign_opening_policies,outreach_campaign_o
 -- changes an attempted envelope. Unclaimed prefix bytes are physically removed.
 CREATE FUNCTION campaign_opening_try_stop_gate(w uuid) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
+ -- Shared with other legacy mutations, exclusive against policy INSERT. Never
+ -- wait here after a source row lock. A first policy cannot commit between this
+ -- absence read and the mutation commit, including a concurrently first attempt.
+ IF current_setting('transaction_isolation') NOT IN ('read committed','read uncommitted') THEN
+  RAISE EXCEPTION 'opening mutation requires fresh authority snapshot' USING ERRCODE='40001',CONSTRAINT='campaign_opening_stop_serialization';
+ END IF;
+ IF NOT pg_try_advisory_xact_lock_shared(hashtextextended('fss.opening-presence:'||w::text,0)) THEN
+  RAISE EXCEPTION 'opening activation serialization refused' USING ERRCODE='40001',CONSTRAINT='campaign_opening_stop_serialization';
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM outreach_campaign_opening_policies WHERE workspace_id=w)
+  AND NOT EXISTS(SELECT 1 FROM outreach_campaign_opening_attempts WHERE workspace_id=w) THEN RETURN; END IF;
  IF NOT pg_try_advisory_xact_lock(hashtextextended('fss.send-gate:'||w::text,0)) THEN
   RAISE EXCEPTION 'opening source mutation serialization refused' USING ERRCODE='40001',CONSTRAINT='campaign_opening_stop_serialization';
  END IF;

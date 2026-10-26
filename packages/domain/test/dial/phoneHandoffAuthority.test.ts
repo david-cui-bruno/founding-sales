@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { registerOpeningCompatibilityDatabases, verifyOpeningDatabaseAbsent } from '../outreach/campaignOpeningPgRuntime.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { withTransaction, type SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext } from '../../db/workspaceScope.ts';
@@ -7,11 +8,12 @@ import { phoneFixture, type PhoneFixture } from './phoneHandoffFixtures.ts';
 
 let database: TestDatabase;
 let f: PhoneFixture;
-beforeEach(async () => { database = await createTestDatabase(); f = await phoneFixture(database); await f.publish(); });
-afterEach(async () => { await database.drop(); });
+beforeEach(async () => { database = await createTestDatabase(); await registerOpeningCompatibilityDatabases(); f = await phoneFixture(database); await f.publish(); });
+afterEach(async () => { await database.drop(); await verifyOpeningDatabaseAbsent(database.name); });
 
 async function connection() {
   const session = await database.appRuntimeSession();
+  await registerOpeningCompatibilityDatabases();
   await session.query("SET statement_timeout='8s'");
   const pid = (await session.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
   if (!pid) throw new Error('missing backend pid');

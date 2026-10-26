@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {registerOpeningCompatibilityDatabases,verifyOpeningDatabaseAbsent} from '../outreach/campaignOpeningPgRuntime.ts';
 import {afterEach,expect,it} from 'vitest';
 import {ownerRiskFixture,riskEndpoint,type OwnerRiskFixture} from './phoneOwnerRiskFixtures.ts';
 import {withTransaction} from '../../db/queryable.ts';
@@ -19,9 +20,10 @@ import {recordSuppression} from '../../suppression/events.ts';
 import {recordingSuppressionJournal} from '../../suppression/journal.ts';
 import {enqueueFirmResearch} from '../../research/enqueue.ts';
 let f:OwnerRiskFixture|undefined;
-afterEach(async()=>{await f?.database.drop();f=undefined;});
+afterEach(async()=>{if(f){await f.database.drop();await verifyOpeningDatabaseAbsent(f.database.name);}f=undefined;});
 async function fixture(historical=false){
  f=await ownerRiskFixture(false);const value=f;
+ await registerOpeningCompatibilityDatabases();
  await value.database.session.query("UPDATE firms SET locality='Dallas',region_code='TX' WHERE id=$1",[value.crm.alpha.firmId]);
  await withTransaction(value.runtime,()=>recordStatePosture(value.context,{state:'TX',effectiveFrom:new Date(Date.now()-60000).toISOString(),confirmedStatements:Object.keys(POSTURE_STATEMENTS)}));
  await value.assess('<main><h1>Northwind Test Holdings</h1><p>We manage residential properties.</p><p>Dallas, TX</p><p>Office: (212) 555-0187</p></main>'.replace('We manage residential','Northwind Test Holdings manages residential'));
@@ -110,6 +112,7 @@ it.each(['claim','publication'] as const)('revalidates exact calling sources aft
  const initial=stage==='publication'?await value.reserve():null;
  if(initial&&!initial.ok)throw new Error(initial.reason);
  const blocker=await connection(value),waiter=await pid(value.runtime);
+ await registerOpeningCompatibilityDatabases();
  await blocker.session.query('BEGIN');
  await blocker.session.query('SELECT id FROM evidence_items WHERE workspace_id=$1 FOR UPDATE',[value.w]);
  const pending=stage==='claim'?value.reserve():readPhoneHandoffResult(value.context,initial!.ok?initial!.value.attemptId:'',false);

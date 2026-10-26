@@ -1,4 +1,5 @@
 import recordedBrg from './support/438-brg-geography.json';
+import {registerOpeningCompatibilityDatabases,verifyOpeningDatabaseAbsent} from '../outreach/campaignOpeningPgRuntime.ts';
 import {qualificationFactSchema} from '@fss/contracts';
 import {afterAll,beforeAll,beforeEach,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
@@ -14,8 +15,8 @@ import type {PageFetchProvider} from '../../research/providers.ts';
 import type {QualificationExtractionProvider} from '../../sourcing/qualificationPrompt.ts';
 let db:TestDatabase,workspaceId:string;
 const ctx=()=>repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
-beforeAll(async()=>{db=await createTestDatabase();workspaceId=(await seedTwoWorkspaces(db.session)).alpha.workspaceId;});
-afterAll(async()=>db.drop());
+beforeAll(async()=>{db=await createTestDatabase();await registerOpeningCompatibilityDatabases();workspaceId=(await seedTwoWorkspaces(db.session)).alpha.workspaceId;});
+afterAll(async()=>{await db.drop();await verifyOpeningDatabaseAbsent(db.name);});
 beforeEach(async()=>{
  await db.session.query('DELETE FROM active_holds');await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');await db.session.query('DELETE FROM sourcing_candidates');
  await db.session.query('DELETE FROM provider_reservations');await db.session.query('DELETE FROM provider_ledger');
@@ -155,6 +156,7 @@ it.each(['info@other.test','example@gmail.com','[email protected]'])('does not r
 
 it.each(['workspace','channel'] as const)('sees a %s research hold committed while identity recovery waits for the send gate',async scopeKind=>{
  const original=await discovered(),session=await db.appRuntimeSession();
+ await registerOpeningCompatibilityDatabases();
  const other=repositoryContext(ctx().scope,session),pid=(await session.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
  const {openHold}=await import('../../policy/holds.ts');
  let opened!:()=>void;const holdOpened=new Promise<void>(resolve=>{opened=resolve;});
