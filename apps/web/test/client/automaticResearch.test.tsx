@@ -67,6 +67,7 @@ describe('automatic research actual BrowserClient and queue', () => {
     const first = render(<BrowserResearchQueue client={scope.client} />);
     await screen.findByText(proof.firmName); await ready(); openAutomatic();
     const section = await screen.findByRole('region', { name: 'Current automatic research proof' });
+    fireEvent.click(within(section).getByText('Source passages and exact research lineage'));
     expect(scope.opens).toEqual([{ actionId: action.actionId, target }]);
     for (const text of [`Publication ${id} revision 3`, `Candidate ${id} revision 2 · Run ${other}`, `Evidence fingerprint ${target.evidenceFingerprint}`]) expect(within(section).getByText(text)).toBeTruthy();
     expect(within(section).getByText(/Source search_hit · Attempt/u)).toBeTruthy();

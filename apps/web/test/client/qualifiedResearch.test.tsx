@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { z } from 'zod';
 import { qualifiedResearchFirmSchema, type QualifiedResearchSelection } from '@fss/contracts';
 import { BrowserApp } from '../../src/client/BrowserApp.tsx';
@@ -60,22 +60,26 @@ async function createFromList(): Promise<void> {
 }
 
 describe('qualified research actual BrowserClient composition', () => {
-  it('composes Today create, IDs-only durable custody and exact action current proof', async () => {
+  it('composes secondary research creation, IDs-only durable custody and exact action current proof', async () => {
     const scope = setup();
     render(<BrowserApp client={scope.client} />);
+    const navigation = await screen.findByRole('navigation', { name: 'Workspace sections' });
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Prospects' }));
+    fireEvent.click(screen.getByText('Qualified selection and existing research requests'));
     await createFromList();
     await screen.findByText(/Research Firm confirmed/u);
     expect(scope.commands).toEqual([{ ...selection, commandId: id }]);
     const held = JSON.parse(scope.storage.getItem(RESEARCH_PENDING_KEY) ?? 'null') as Record<string, unknown>;
     expect(held).toEqual({ identity: JSON.stringify([id, id, id, 'admin', 'revision-one']), commandId: id, selection, expiresAt: scope.client.current?.status === 'signed_in' ? scope.client.current.expiresAt : '', createdFirmId: id });
     expect(JSON.stringify(held)).not.toMatch(/Synthetic|quote|citation|https|csrf|email|question/u);
+    fireEvent.click(screen.getByRole('button', { name: '← Back to prepared research' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
     await screen.findByText('Current firm_identity source block');
     expect(scope.opens).toEqual([{ actionId: action.actionId, target }]);
-    expect(screen.getAllByText(/Retrieved 2026-10-22T12:00/u)).toHaveLength(3);
+    expect(within(screen.getByRole('region', { name: 'Current research proof' })).getAllByText(/Retrieved 2026-10-22T12:00/u)).toHaveLength(3);
     expect(screen.getByText(/Discovery preparation question/u)).toBeTruthy();
     expect(scope.randomUUID).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/This action is unsupported in this browser/u)).toBeTruthy();
+    expect(screen.queryByText(/This action is unsupported in this browser/u)).toBeNull();
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_001);
     await act(async () => { expect(scope.client.isCurrent(scope.client.epoch)).toBe(false); });
     expect(screen.queryByText('Current firm_identity source block')).toBeNull();

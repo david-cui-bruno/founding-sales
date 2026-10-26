@@ -46,19 +46,31 @@ function setup() {
     waitControl: (value: () => Promise<Response>) => { waitControl = value; } };
 }
 afterEach(() => { cleanup(); for (const resource of resources.splice(0)) resource.dispose(); sessionStorage.clear(); vi.useRealTimers(); });
+async function openCampaignPage(): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name: 'Email' }));
+  fireEvent.click(await screen.findByRole('button', { name: /^(Automatic outreach|Outbound activity)$/u }));
+}
+function revealPolicy(): void {
+  const summary = screen.getByText('Campaign policy and one-time approval');
+  const details = summary.closest('details');
+  if (!details?.open) fireEvent.click(summary);
+}
 
 describe('campaign exact command custody over actual BrowserClient', () => {
   it('same-mounted BrowserApp recovers enabled campaign controls after command 409 and Refresh access without replay', async () => {
     const scope = setup(); await scope.browser.refresh();
     scope.client.prepare({ kind: 'revoke', id, expectedRevision: 1 }); scope.commandStatus(409);
     render(<BrowserApp client={scope.browser} />);
+    await openCampaignPage();
     fireEvent.click(screen.getByRole('button', { name: 'Retry same campaign command' }));
     await vi.waitFor(() => { expect(scope.browser.current).toBeNull(); });
     expect(scope.commands).toHaveLength(1); expect(scope.storage.getItem(CAMPAIGN_PENDING_KEY)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh access' }));
+    await openCampaignPage();
     const refresh = await screen.findByRole('button', { name: 'Refresh campaigns' });
     expect(refresh.hasAttribute('disabled')).toBe(false);
     fireEvent.click(refresh);
+    await screen.findByText('Current campaign control loaded.'); revealPolicy();
     await screen.findByRole('option', { name: /Published five-email/u });
     expect(scope.commands).toHaveLength(1);
   });
@@ -67,10 +79,12 @@ describe('campaign exact command custody over actual BrowserClient', () => {
     const releases: ((response: Response) => void)[] = [];
     scope.waitControl(() => new Promise<Response>(resolve => { releases.push(resolve); }));
     render(<BrowserApp client={scope.browser} />);
+    await openCampaignPage();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh campaigns' }));
     await vi.waitFor(() => { expect(releases).toHaveLength(1); });
     await act(async () => { scope.broadcast(); });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh access' }));
+    await openCampaignPage();
     const refresh = await screen.findByRole('button', { name: 'Refresh campaigns' });
     expect(refresh.hasAttribute('disabled')).toBe(false);
     fireEvent.click(refresh);
@@ -81,6 +95,7 @@ describe('campaign exact command custody over actual BrowserClient', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh campaigns' }));
     expect(releases).toHaveLength(2);
     await act(async () => { releases[1]?.(json({ ...control, sequences: [{ id: other, label: 'Current replacement sequence' }] })); });
+    revealPolicy();
     expect(screen.getByRole('button', { name: 'Refresh campaigns' }).hasAttribute('disabled')).toBe(false);
     expect(screen.getByRole('option', { name: 'Current replacement sequence' })).toBeTruthy();
     expect(scope.commands).toHaveLength(0);

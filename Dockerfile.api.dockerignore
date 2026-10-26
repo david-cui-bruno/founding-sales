@@ -56,6 +56,7 @@
 !packages/domain/funnel
 !packages/domain/business
 !packages/domain/calls
+!packages/domain/calling
 !packages/domain/meetings
 !packages/contracts/package.json
 !packages/contracts/src

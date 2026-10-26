@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useRef,useState,type JSX} from 'react';
-import {manualProspectListSchema,type ManualProspect} from '@fss/contracts';
+import {manualProspectListSchema,type ManualProspect,type CallingSubject} from '@fss/contracts';
 import type {z} from 'zod';
 import type {BrowserClient} from './BrowserClient.ts';
 import {dispatchManualProspect} from './ManualProspectDispatch.ts';
@@ -9,7 +9,7 @@ import {BrowserManualProspectActivity} from './BrowserManualProspectActivity.tsx
 import {ManualProspectTable} from './ManualProspectTable.tsx';
 import {ManualProspectPreparation} from './ManualProspectPreparation.tsx';
 
-export function BrowserManualProspects({client}:{client:BrowserClient}):JSX.Element|null{
+export function BrowserManualProspects({client,onOpenCalling}:{client:BrowserClient;onOpenCalling?:(subject:CallingSubject)=>void}):JSX.Element|null{
  const [state,setState]=useState('all'),[offset,setOffset]=useState(0),[reload,setReload]=useState(0);
  const [page,setPage]=useState<z.infer<typeof manualProspectListSchema>|null>(null),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
  const [pending,setPending]=useState<PendingManualProspect|null>(null),[custodyError,setCustodyError]=useState(false);
@@ -79,7 +79,7 @@ export function BrowserManualProspects({client}:{client:BrowserClient}):JSX.Elem
  };
  if(client.current?.status!=='signed_in'||client.current.role!=='admin')return null;
  return <section id="prospects" aria-label="Manual prospect worklist" className="manual-worklist">
-  <div className="manual-page-top"><div><p className="manual-eyebrow">Workspace / retained observations</p><h2>Prospects</h2><p>Review companies. Keep the observations worth another look.</p></div>
+  <div className="manual-page-top"><div><p className="manual-eyebrow">Retained observations</p><h2>Retained review</h2><p>Keep the observations worth another look.</p></div>
    <div className="manual-view-switch" role="group" aria-label="Prospect view"><button aria-pressed={!focus} onClick={()=>setFocus(false)}>Worklist</button><button aria-pressed={focus} onClick={()=>setFocus(true)}>Focus</button></div>
   </div>
   <p className="manual-authority">UNVERIFIED · Contact authority not granted. These are observations, not unique or callable Firms. No source refresh or outreach runs here.</p>
@@ -93,8 +93,9 @@ export function BrowserManualProspects({client}:{client:BrowserClient}):JSX.Elem
   {page&&chosen?<div className={`manual-workspace${focus?' manual-focus':''}`}>
    {!focus?<ManualProspectTable prospects={prospects} selected={chosen.candidateId} select={select}/>:null}
    <div ref={inspector} className="manual-inspector" aria-label="Selected prospect inspector" role="region">
-    <div className="manual-inspector-nav"><span>{index+1} / {prospects.length} on this page</span><div><button aria-label="Previous prospect" disabled={index<=0} onClick={()=>select(prospects[index-1]!.candidateId)}>←</button><button aria-label="Next prospect" disabled={index>=prospects.length-1} onClick={()=>select(prospects[index+1]!.candidateId)}>→</button></div></div>
+   <div className="manual-inspector-nav">{focus?<button onClick={()=>{setFocus(false);requestAnimationFrame(()=>document.getElementById(`manual-row-${chosen.candidateId}`)?.focus());}}>← Back to retained review</button>:null}<span>{index+1} / {prospects.length} on this page</span><div><button aria-label="Previous prospect" disabled={index<=0} onClick={()=>select(prospects[index-1]!.candidateId)}>←</button><button aria-label="Next prospect" disabled={index>=prospects.length-1} onClick={()=>select(prospects[index+1]!.candidateId)}>→</button></div></div>
     <ManualProspectCard key={`${chosen.candidateId}:${chosen.revision}`} prospect={chosen} disabled={busy||custodyError||(pending!==null&&!pending.receipt)} feedback={(value)=>{if(currentScope())void feedback(chosen,value);}} activity={openActivity} prepare={()=>{if(currentScope()){setFocus(true);setPreparing(true);}}}/>
+    {onOpenCalling?<button disabled={busy} onClick={()=>{if(currentScope()&&operation.current===null)onOpenCalling({kind:'candidate',candidateId:chosen.candidateId,expectedCandidateRevision:chosen.revision});}}>Open calling brief</button>:null}
     {preparing?<ManualProspectPreparation key={`prepare:${viewScope}:${chosen.candidateId}:${chosen.revision}`} prospect={chosen} isScopeCurrent={currentScope} openActivity={openActivity}/>:null}
     {activity&&activity.candidateId===chosen.candidateId&&activity.revision===chosen.revision?<div><button onClick={closeActivity}>Close private manual activity</button><BrowserManualProspectActivity key={`activity:${viewScope}:${activityVersion}:${chosen.candidateId}:${chosen.revision}`} client={client} prospect={activity} isScopeCurrent={currentActivityScope} onUnavailable={activityUnavailable}/></div>:null}
    </div>

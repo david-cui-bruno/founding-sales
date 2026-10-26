@@ -458,10 +458,10 @@ describe('C04: a logged call applies the frozen step, bound through its Today ta
       );
       expect(rows.map(row => [row.state, row.end_reason])).toEqual([['stopped', 'engaged_call']]);
       expect((await readOpenOpportunity(salesperson(), firm.firmId))?.control_mode).toBe('manual');
-      // The call log is there, with what was agreed on it.
+      // Read this command's log, not the enrollment fixture's agreed-sequence evidence.
       const log = await one<{ agreed_follow_up: string | null }>(
-        'SELECT agreed_follow_up FROM call_logs WHERE workspace_id = $1 AND firm_id = $2',
-        [seeded.alpha.workspaceId, firm.firmId],
+        'SELECT agreed_follow_up FROM call_logs WHERE workspace_id = $1 AND id = $2',
+        [seeded.alpha.workspaceId, logged.value.callLogId],
       );
       expect(log.agreed_follow_up).toBe('single_email');
     } finally {

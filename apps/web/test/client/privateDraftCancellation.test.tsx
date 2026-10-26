@@ -22,6 +22,7 @@ it('mounted evidence refresh cancels sourced save UI but preserves same command 
   const body=JSON.parse(String(init?.body)) as Record<string,unknown>;
   if(url==='/browser/api/social/private-drafts/save'){commands.push(body);return heldResponse;}
   if(url==='/browser/api/social/private-drafts/receipt'){receipts.push(body);return json(known?{state:'accepted',result:{draftId,revision:1}}:{state:'unknown'});}
+  if(url==='/browser/api/social/private-drafts/list')return json({drafts:[],nextAfterId:null});
   if(url==='/browser/api/social/private-drafts/read'){currentReads.push(String(body['draftId']));return json({draft:{draftId,revision:1,kind:'post',originKind:'suggestion',availability:'available',createdAt:new Date(now).toISOString(),updatedAt:new Date(now).toISOString(),expiresAt:new Date(now+86400000).toISOString(),text:'Current explicitly reopened saved text.',origin:commands[0]?.['origin'],reviewRequired:true}});}
   throw Error('Unexpected route');
  });
