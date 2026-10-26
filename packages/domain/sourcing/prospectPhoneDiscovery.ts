@@ -60,7 +60,7 @@ export async function requestProspectPhoneDiscovery(ctx:RepositoryContext,input:
  const context=await phoneDiscoveryContext(ctx,input.candidateId,input.expectedRevision);
  if(!context)return refuse('official_site_unknown');
  const research=await phoneDiscoveryResearchRefusal(ctx,ctx.scope.actor.userId);if(research)return refuse(research);
- const limits=await phoneDiscoverySourceLimit(ctx,context.sourceUrls);
+ const limits=await phoneDiscoverySourceLimit(ctx,[context.website,...context.sourceUrls]);
  if(limits.denied)return refuse('source_not_permitted');
  const now=await phoneDiscoveryNow(ctx),settings=await readResearchSettings(ctx);
  const count=await incrementDailyCounter(ctx,{subjectKind:'workspace',subjectKey:ctx.scope.workspaceId,counterKind:RESEARCH_FIRM_RUN_COUNTER,
@@ -70,7 +70,7 @@ export async function requestProspectPhoneDiscovery(ctx:RepositoryContext,input:
  if(!await phoneDiscoveryPrincipal(ctx,authority))return refuse('authority_changed');
  if(!isDeepStrictEqual(context,await phoneDiscoveryContext(ctx,input.candidateId,input.expectedRevision)))return refuse('source_changed');
  const finalResearch=await phoneDiscoveryResearchRefusal(ctx,ctx.scope.actor.userId);if(finalResearch)return refuse(finalResearch);
- const finalLimits=await phoneDiscoverySourceLimit(ctx,context.sourceUrls),at=await phoneDiscoveryNow(ctx);
+ const finalLimits=await phoneDiscoverySourceLimit(ctx,[context.website,...context.sourceUrls]),at=await phoneDiscoveryNow(ctx);
  if(finalLimits.denied)return refuse('source_not_permitted');
  const expiresAt=new Date(Math.min(at.getTime()+7*86400000,finalLimits.expiresAt?.getTime()??Infinity));
  if(expiresAt<=at)return refuse('source_expired');
@@ -159,7 +159,11 @@ export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{run
    const {website,sourceUrls}=initial.content;
    const urls=[...new Set([website,...sourceUrls.filter(url=>isPublicResearchUrl(url)&&isSameResearchSite(website,url))])];
    const answer=await deps.pageFetch.fetchPages({urls,firmWebsite:website,links:urls,prioritizeContactPages:true,maxPagesPerFirm:maxPages,maxBytes,shouldContinue:allowed});
-   captured=answer.ok?captureProspectPhonePages(answer.value.pages,website,maxPages,maxBytes,(await phoneDiscoveryNow(ctx)).getTime()):refuse('source_unavailable');
+   // The real provider omits an aborted over-byte-cap page. Its surviving
+   // prefix cannot establish complete phone coverage. Intentional page-budget
+   // limits and policy refusals are not evidence of an over-bound original.
+   captured=!answer.ok?refuse('source_unavailable'):(answer.value.skipped['page_over_bound']??0)>0?refuse('bounded_capture_incomplete'):
+    captureProspectPhonePages(answer.value.pages,website,maxPages,maxBytes,(await phoneDiscoveryNow(ctx)).getTime());
   }
  }catch{captured=refuse('source_unavailable');}
  await withTransaction(ctx.db,async()=>{

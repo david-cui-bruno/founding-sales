@@ -45,7 +45,7 @@ export async function validatePhoneDiscoveryRun(ctx:RepositoryContext,run:PhoneD
  if(!isDeepStrictEqual(current,{website:run.content.website,sourceUrls:run.content.sourceUrls}))return 'source_changed';
  if(await retainedCandidateOnly(ctx,run.candidate_id))return 'retained_only';
  if(acquisition){const research=await phoneDiscoveryResearchRefusal(ctx,run.creator_user_id,run.requested_at);if(research)return research;}
- const limits=await phoneDiscoverySourceLimit(ctx,[...current.sourceUrls,...run.content.observations.map(source=>source.url)]);
+ const limits=await phoneDiscoverySourceLimit(ctx,[current.website,...current.sourceUrls,...run.content.observations.map(source=>source.url)]);
  if(limits.denied)return 'source_not_permitted';
  const now=await phoneDiscoveryNow(ctx);
  if(run.expires_at<=now||limits.expiresAt&&limits.expiresAt<=now)return 'source_expired';
