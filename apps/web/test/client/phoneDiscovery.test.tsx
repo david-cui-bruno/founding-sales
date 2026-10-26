@@ -149,3 +149,28 @@ it('phone discovery Calling mount keeps original unknown record intact and expos
  const result=screen.getByLabelText('Current phone discovery result');expect(within(result).getByText(/Phone \+12145550123/u)).toBeTruthy();expect(screen.getByText('Phone unknown · not extracted')).toBeTruthy();expect(JSON.stringify(p)).toBe(before);
  expect(screen.queryByRole('button',{name:/qualify|admit|dial|send/iu})).toBeNull();expect(f.calls.every(c=>c.path.startsWith(root))).toBe(true);
 });
+it('phone discovery actual Calling current conflicting read selects no winner or acquisition',async()=>{
+ const f=setup();await f.client.refresh();const original=fresh();
+ if(original.phoneEvidence.state!=='observed')throw Error('Expected discovery literal fixture');
+ const legacy={runId:other,observationId:candidateId,blockId:'business-phone',url:'https://company.example.test/about',retrievedAt:original.checkedAt};
+ const current=prospectPhoneDiscoveryViewSchema.parse({...original,phoneEvidence:{state:'conflicting',reason:'multiple_retained_numbers',sources:[legacy,...original.phoneEvidence.sources],coverage:original.phoneEvidence.coverage}});
+ f.setView(current);
+ const prospect=manualProspectSchema.parse({candidateId,revision:1,observedName:'FICTIONAL conflicting phone company',website:original.website,locality:null,region:null,observedPhone:null,phoneBasis:'unknown',phoneEvidence:current.phoneEvidence,sources:[{label:'retained source',url:legacy.url,observedAt:legacy.retrievedAt}],sourceNotices:[],retainedAt:original.requestedAt,state:'new',unknowns:[],possibleDuplicateCount:0,qualification:'unverified',contactAuthority:'not_granted'});
+ const before=JSON.stringify(prospect);
+ const mounted=render(<CallingContext client={f.client} entry={{subject:{kind:'candidate',candidateId,expectedCandidateRevision:1},label:prospect.observedName,prospect}} onReady={vi.fn()}/>);
+ expect(f.calls).toEqual([]);expect(screen.getByText('Phone conflicting · no number selected')).toBeTruthy();
+ await click('Read phone result');
+ const result=screen.getByLabelText('Current phone discovery result');
+ expect(within(result).getByText('Phone conflicting · no number selected')).toBeTruthy();
+ expect(within(result).getByText(/Phone evidence: multiple retained numbers/u)).toBeTruthy();
+ expect(within(result).getByRole('link',{name:legacy.url})).toBeTruthy();
+ expect(within(result).getByRole('link',{name:'https://company.example.test/contact'})).toBeTruthy();
+ expect(screen.getAllByText('Phone conflicting · no number selected')).toHaveLength(2);
+ expect(screen.queryByText(/observed, not call-ready/u)).toBeNull();
+ expect(mounted.container.textContent).not.toMatch(/\+1214555012[34]/u);
+ expect(mounted.container.querySelector('a[href^="tel:"]')).toBeNull();
+ expect(screen.queryByRole('button',{name:/qualify|admit|dial|send/iu})).toBeNull();
+ expect(f.calls).toEqual([{path:`${root}read`,body:{candidateId,expectedRevision:1}}]);
+ expect(f.uuid).not.toHaveBeenCalled();expect(localStorage.getItem(QUALIFICATION_PENDING_KEY)).toBeNull();
+ expect(JSON.stringify(prospect)).toBe(before);expect('value' in current.phoneEvidence).toBe(false);
+});

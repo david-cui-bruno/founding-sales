@@ -31,7 +31,7 @@ export const phoneDiscoveryPaths = {
 /** New root grant in addition to the existing harness guard. Imports, compilation
  * and linting cannot acquire PG, Chrome, listeners or a resource lease. */
 export function requirePhoneDiscoveryRuntimeGrant(): void {
-  assert.equal(process.env['FSS_PHONE_DISCOVERY_RUNTIME_GRANT'], '797', 'Separate Fox phone-discovery runtime grant required after Eagle releases PG');
+  assert.equal(process.env['FSS_PHONE_DISCOVERY_RUNTIME_GRANT'], '797', 'Separate Fox phone-discovery runtime grant required after Mosquito releases PG');
   requireGlassRuntimeGrant();
 }
 export async function startPhoneDiscoveryApp() {
@@ -103,6 +103,12 @@ export async function drivePhoneDiscoveryJob(app: GlassWorkspaceApp, runId: stri
     expect(request.maxPagesPerFirm).toBeLessThanOrEqual(4);
     expect(request.maxBytes).toBeLessThanOrEqual(1_000_000);
     expect(await request.shouldContinue?.()).toBe(true);
+    // The controlled page is still subject to the source owner's exact destination
+    // check. A refusal or thrown check must never manufacture a successful page.
+    assert(request.mayFetchUrl, 'Phone discovery must bind the exact URL authority guard');
+    if (!await request.mayFetchUrl(phoneDiscoveryCase.phoneUrl)) return {
+      ok: true, costCents: 0, value: { pages: [], skipped: { source_authority_refused: 1 } },
+    };
     return { ok: true, costCents: 0, value: { pages: [{ url: phoneDiscoveryCase.phoneUrl, contentHash,
       retrievedAt, body, contentType: 'text/plain', firstParty: true }], skipped: {} } };
   } };
