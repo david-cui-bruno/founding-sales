@@ -5,7 +5,7 @@ import { qualifiedResearchSelectionSchema, qualifiedResearchListSchema, qualifie
 import { Button } from '../../../desktop/src/renderer/ui/button.tsx';
 import { BrowserBoundaryError, type BrowserClient } from './BrowserClient.ts';
 import { AutomaticResearchProof } from './AutomaticResearchProof.tsx';
-import type { AutomaticResearchFirm } from '@fss/contracts';
+import type { AutomaticResearchFirm, CallingSubject } from '@fss/contracts';
 
 const citationHref = (url: string): string | undefined => {
   try {
@@ -36,9 +36,10 @@ export function ResearchProof({ proof }: { proof: QualifiedResearchFirm }): JSX.
 }
 
 /** A current-proof queue and one explicit noncontact command, not a second command engine. */
-export function BrowserResearchQueue({ client, workspace = false }: { client: BrowserClient; workspace?: boolean }): JSX.Element {
+export function BrowserResearchQueue({ client, workspace = false, onOpenCalling }: { client: BrowserClient; workspace?: boolean; onOpenCalling?: (subject: CallingSubject) => void }): JSX.Element {
   const inFlight = useRef<{ epoch: number; token: symbol } | null>(null);
   const mounted = useRef(false);
+  const selectionLease = useRef(0);
   const detail = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const observedEpoch = useRef(client.epoch);
@@ -55,12 +56,14 @@ export function BrowserResearchQueue({ client, workspace = false }: { client: Br
   }, [workspace, proof, automaticProof]);
   useEffect(() => {
     mounted.current = true;
+    selectionLease.current++;
     observedEpoch.current = client.epoch;
     setActions(null); setCandidates([]); setAfterId(null); setProof(null); setAutomaticProof(null);
     setPending(client.pendingResearch()); setBusy(false); setNotice('');
     const unsubscribe = client.subscribe(() => {
     setPending(client.pendingResearch());
     if (observedEpoch.current !== client.epoch || client.current?.status !== 'signed_in') {
+      selectionLease.current++;
       observedEpoch.current = client.epoch;
       inFlight.current = null;
       setActions(null); setCandidates([]); setAfterId(null); setProof(null); setAutomaticProof(null); setPending(null); setBusy(false); setNotice('');
@@ -77,6 +80,7 @@ export function BrowserResearchQueue({ client, workspace = false }: { client: Br
     if (!mounted.current || !client.isCurrent(epoch) || client.current?.status !== 'signed_in') return;
     if (inFlight.current?.epoch === epoch) return;
     const operation = { epoch, token: Symbol('research-operation') };
+    selectionLease.current++;
     inFlight.current = operation;
     const active = operationGuard(epoch);
     setBusy(true); setProof(null); setAutomaticProof(null); setNotice('');
@@ -148,6 +152,15 @@ export function BrowserResearchQueue({ client, workspace = false }: { client: Br
   };
   const prepared = actions?.filter(action => action.target.kind === 'qualified_research' || action.target.kind === 'automatic_research');
   const hasDetail = workspace && (proof !== null || automaticProof !== null);
+  const lease = selectionLease.current, selectionEpoch = client.epoch;
+  const openedProof = automaticProof ?? proof;
+  const openCalling = (): void => {
+    if (!onOpenCalling || openedProof === null || !mounted.current || selectionLease.current !== lease || inFlight.current !== null
+      || !client.isCurrent(selectionEpoch) || client.current?.status !== 'signed_in' || Date.parse(openedProof.validUntil) <= Date.now()) return;
+    // Both current proof DTOs contain an explicit canonical Firm ID. Never infer from admission, site or name.
+    onOpenCalling({ kind: 'firm', firmId: 'target' in openedProof ? openedProof.target.firmId : openedProof.firmId });
+  };
+  const callingAction = onOpenCalling && openedProof !== null ? <button disabled={busy} onClick={openCalling}>Open calling brief</button> : null;
   const candidatesView = <section aria-label="Research candidates"><h3>Research candidates</h3><p>Only current ready, unambiguous retained candidates are listed. Creating a research Firm grants no channel authority.</p>
     <Button disabled={busy} onClick={() => { void run(epoch => loadCandidates(epoch)); }}>Load research candidates</Button>
     {candidates.map(candidate => <article key={candidate.selection.discoveryCandidateId} className="prospects-candidate"><h4>{candidate.firmName}</h4><p>{candidate.locality}, {candidate.region} · <a href={citationHref(candidate.website)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{candidate.website}</a></p>
@@ -160,8 +173,9 @@ export function BrowserResearchQueue({ client, workspace = false }: { client: Br
       {pending.createdFirmId === undefined ? <Button disabled={busy} onClick={() => { void run(epoch => create(epoch)); }}>Retry exact research command</Button> : <div><p>Created Firm {pending.createdFirmId}. Review its current Today action. No new command was generated.</p><Button disabled={busy} onClick={() => { void run(readConfirmed); }}>Read current research Firm</Button></div>}</div> : null}
   </section>;
   return <div className={workspace ? 'prospects-research' : 'space-y-4'}>
-    {hasDetail ? <div ref={detail} className="prospects-detail"><button onClick={() => { setProof(null); setAutomaticProof(null); requestAnimationFrame(() => list.current?.focus()); }}>← Back to prepared research</button>
+    {hasDetail ? <div ref={detail} className="prospects-detail"><button onClick={() => { selectionLease.current++; setProof(null); setAutomaticProof(null); requestAnimationFrame(() => list.current?.focus()); }}>← Back to prepared research</button>
       {automaticProof !== null ? <AutomaticResearchProof proof={automaticProof} /> : null}{proof !== null ? <ResearchProof proof={proof} /> : null}
+      {callingAction}
     </div> : <><section aria-label={workspace ? 'Prepared source-backed supply' : 'Action queue'} className="prospects-supply" ref={list} tabIndex={-1}>
     <div className="prospects-supply-heading"><div><h3>{workspace ? 'Prepared research' : 'Action queue'}</h3>
     {workspace ? <p>{prepared === undefined ? 'Current supply has not been read.' : `${prepared.length} source-backed research items in this read`} · Not a callable count.</p> : null}</div>
@@ -175,6 +189,6 @@ export function BrowserResearchQueue({ client, workspace = false }: { client: Br
     {workspace ? <p className="prospects-authority">Prepared context, not contact permission. Maintenance need and phone ownership are not established.</p> : null}
   </section>
   {workspace ? <details className="prospects-secondary" open={pending !== null || undefined}><summary>Qualified selection and existing research requests</summary>{candidatesView}</details> : candidatesView}
-  {!workspace && automaticProof !== null ? <AutomaticResearchProof proof={automaticProof} /> : null}{!workspace && proof !== null ? <ResearchProof proof={proof} /> : null}</>}
+  {!workspace && automaticProof !== null ? <AutomaticResearchProof proof={automaticProof} /> : null}{!workspace && proof !== null ? <ResearchProof proof={proof} /> : null}{!workspace ? callingAction : null}</>}
   {busy && workspace ? <p role="status">Reading current research or resolving the exact request.</p> : null}{notice ? <p role="status">{notice}</p> : null}</div>;
 }

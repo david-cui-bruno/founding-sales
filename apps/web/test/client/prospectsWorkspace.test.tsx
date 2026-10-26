@@ -29,11 +29,13 @@ function deferred() {
   return { promise, resolve };
 }
 const queue = (actions: unknown[] = [action, legacy]) => ({ version: 4, workspaceId: id, businessTimeZone: 'America/Chicago', asOf: at, actions, promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
-function setup() {
+function setup(kind: 'automatic' | 'qualified' = 'automatic') {
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: vi.fn((key: string, value: string) => { values.set(key, value); }), removeItem: (key: string) => { values.delete(key); } };
   const session = { status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() };
-  let response: unknown = queue(), failQueue = false, lost = false;
+  const qualifiedTarget = { ...selection, kind: 'qualified_research', firmId: qualified.firmId, promotionId: qualified.promotionId, evidenceFingerprint: qualified.evidenceFingerprint };
+  let response: unknown = kind === 'automatic' ? queue() : queue([{ ...action, subject: qualified.firmName, reason: 'qualified_research_ready', target: qualifiedTarget }]), failQueue = false, lost = false;
+  let rows = [raw];
   let delayed: ReturnType<typeof deferred> | undefined;
   const requests: Array<{ url: string; body: unknown }> = [];
   const send = vi.fn<typeof fetch>(async (url, init) => {
@@ -41,8 +43,8 @@ function setup() {
     const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body));
     requests.push({ url: String(url), body });
     if (url === '/browser/api/today/actions/v4') { if (failQueue) throw Error('Read failed'); return json(response); }
-    if (url === '/browser/api/today/actions/open/v4') return delayed ? await delayed.promise : json({ version: 4, target, research: null, automaticResearch: proof });
-    if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: [raw], hasMore: body !== null && typeof body === 'object' && 'offset' in body && body.offset === 0 });
+    if (url === '/browser/api/today/actions/open/v4') return delayed ? await delayed.promise : json(kind === 'automatic' ? { version: 4, target, research: null, automaticResearch: proof } : { version: 4, target: qualifiedTarget, research: qualified, automaticResearch: null });
+    if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: rows, hasMore: body !== null && typeof body === 'object' && 'offset' in body && body.offset === 0 });
     if (url === '/browser/api/sourcing/candidates/prospects/feedback') {
       if (lost) throw Error('Lost feedback response');
       return json({ status: 'accepted', replayed: false, result: { candidateId: id, revision: raw.revision, state: 'kept' } });
@@ -56,7 +58,7 @@ function setup() {
   });
   const randomUUID = vi.fn(() => crypto.randomUUID());
   const client = new BrowserClient({ fetch: send, storage, navigate: vi.fn(), randomUUID });
-  return { client, send, requests, storage, randomUUID, session, values, fail: () => { failQueue = true; }, empty: () => { response = queue([legacy]); }, lose: () => { lost = true; }, delay: () => { delayed = deferred(); return delayed; } };
+  return { client, send, requests, storage, randomUUID, session, values, rows: (value: typeof rows) => { rows = value; }, fail: () => { failQueue = true; }, empty: () => { response = queue([legacy]); }, lose: () => { lost = true; }, delay: () => { delayed = deferred(); return delayed; } };
 }
 async function ready(): Promise<void> {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh action queue' }).hasAttribute('disabled')).toBe(false));
@@ -174,5 +176,80 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     render(<AutomaticResearchProof proof={{ ...proof, website: url, source: { ...proof.source, sourceUrl: url }, citations: proof.citations.map(citation => ({ ...citation, url })) }} />);
     fireEvent.click(screen.getByText('Source passages and exact research lineage'));
     expect(screen.queryAllByRole('link')).toHaveLength(0);
+  });
+});
+
+describe('Prospects to Calling exact navigation composition', () => {
+  it('expired prepared proof cannot open a brief even while the session remains current', async () => {
+    const s = setup(), open = vi.fn(); s.session.expiresAt = '2026-10-29T00:00:00.000Z';
+    await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
+    const button = await screen.findByRole('button', { name: 'Open calling brief' });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-27T01:00:00.000Z'));
+    try { fireEvent.click(button); expect(open).not.toHaveBeenCalled(); expect(s.client.current?.status).toBe('signed_in'); }
+    finally { clock.mockRestore(); await act(async () => { s.client.dispose(); }); }
+  });
+  it.each(['automatic', 'qualified'] as const)('%s opened proof passes only its explicit canonical Firm ID without requests or writes', async kind => {
+    const s = setup(kind), open = vi.fn(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    expect(screen.queryByRole('button', { name: 'Open calling brief' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
+    const button = await screen.findByRole('button', { name: 'Open calling brief' });
+    const requests = s.requests.length; fireEvent.click(button);
+    expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'firm', firmId: kind === 'automatic' ? proof.target.firmId : qualified.firmId });
+    expect(s.requests).toHaveLength(requests); expect(s.randomUUID).not.toHaveBeenCalled(); expect(s.storage.setItem).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /start phone|dial|call now/iu })).toBeNull();
+    await act(async () => { s.client.dispose(); });
+  });
+  it.each(['back', 'destination', 'epoch', 'unmount'] as const)('same-turn %s revokes an old prepared-brief action before callback', async transition => {
+    const s = setup(), open = vi.fn(); await s.client.refresh(); const view = render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
+    const stale = await screen.findByRole('button', { name: 'Open calling brief' });
+    act(() => {
+      if (transition === 'back') fireEvent.click(screen.getByRole('button', { name: '← Back to prepared research' }));
+      else if (transition === 'destination') fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
+      else if (transition === 'epoch') s.client.invalidate(false);
+      else view.unmount();
+      fireEvent.click(stale);
+    });
+    expect(open).not.toHaveBeenCalled(); await act(async () => { s.client.dispose(); });
+  });
+  it('a new research read synchronously invalidates an opened proof even before replacement rendering', async () => {
+    const s = setup(), open = vi.fn(); await s.client.refresh(); render(<BrowserResearchQueue client={s.client} onOpenCalling={open} />); await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
+    const stale = await screen.findByRole('button', { name: 'Open calling brief' });
+    act(() => { fireEvent.click(screen.getByRole('button', { name: 'Load research candidates' })); fireEvent.click(stale); });
+    expect(open).not.toHaveBeenCalled(); await act(async () => { s.client.dispose(); });
+  });
+  it('raw unknown-phone selection passes exact candidate and revision, never an invented Firm', async () => {
+    const s = setup(), open = vi.fn(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
+    const button = await screen.findByRole('button', { name: 'Open calling brief' });
+    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));
+    const requests = s.requests.length; fireEvent.click(button);
+    expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: raw.candidateId, expectedCandidateRevision: raw.revision });
+    expect(s.requests).toHaveLength(requests); expect(s.randomUUID).not.toHaveBeenCalled(); expect(s.storage.setItem).not.toHaveBeenCalled();
+    await act(async () => { s.client.dispose(); });
+  });
+  it.each(['selection', 'page', 'filter', 'refresh', 'destination', 'epoch'] as const)('same-turn raw %s refuses an old exact-record action', async transition => {
+    const s = setup(), open = vi.fn(); s.rows([raw, { ...raw, candidateId: other, revision: 7 }]);
+    await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
+    const stale = await screen.findByRole('button', { name: 'Open calling brief' });
+    await waitFor(() => expect(stale.hasAttribute('disabled')).toBe(false));
+    act(() => {
+      if (transition === 'selection') fireEvent.click(screen.getByRole('button', { name: 'Next prospect' }));
+      else if (transition === 'page') fireEvent.click(screen.getByRole('button', { name: 'Next prospect page' }));
+      else if (transition === 'filter') fireEvent.change(screen.getByLabelText('Manual state'), { target: { value: 'kept' } });
+      else if (transition === 'refresh') fireEvent.click(screen.getByRole('button', { name: 'Refresh retained worklist' }));
+      else if (transition === 'destination') fireEvent.click(screen.getByRole('button', { name: 'Prepared research' }));
+      else s.client.invalidate(false);
+      fireEvent.click(stale);
+    });
+    expect(open).not.toHaveBeenCalled();
+    if (transition === 'selection') {
+      fireEvent.click(screen.getByRole('button', { name: 'Open calling brief' }));
+      expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: other, expectedCandidateRevision: 7 });
+    }
+    await act(async () => { s.client.dispose(); });
   });
 });
