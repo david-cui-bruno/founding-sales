@@ -49,6 +49,21 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it('normalizes only closed Voice product refusals through the actual gateway', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const body = { status: 'refused', replayed: false, reason: 'telephony_budget_disabled' };
+    mocks.route.mockResolvedValueOnce({ status: 409, body });
+    expect(await handler(post('/browser/api/calls/session', { commandId: id }, headers))).toMatchObject({ status: 200, body });
+    for (const reason of ['command_payload_mismatch', 'command_device_mismatch', 'session_changed', 'unknown_reason']) {
+      mocks.route.mockResolvedValueOnce({ status: 409, body: { ...body, reason } });
+      expect(await handler(post('/browser/api/calls/session', { commandId: id }, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+    }
+    mocks.route.mockResolvedValueOnce({ status: 503, body: { error: 'integration_unconfigured' } });
+    expect(await handler(post('/browser/api/calls/access-token', {}, headers))).toMatchObject({ status: 200, body: { availability: 'unavailable', reason: 'integration_unconfigured' } });
+    mocks.route.mockResolvedValueOnce({ status: 503, body: { error: 'integration_unconfigured' } });
+    expect(await handler(post('/browser/api/calling/execution/receipt', { firmId: id, commandId: id, payloadSHA256: 'a'.repeat(64) }, headers))).toMatchObject({ status: 503, body: { error: 'browser_request_refused' } });
+  });
   it('pins explicit Voice start and leaves receipt identity unchanged', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
