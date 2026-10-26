@@ -50,10 +50,10 @@ export class CallingFollowUpDispatch {
         check(current);
         if ('error' in answer) return { state: 'unknown' };
         if (answer.status === 'accepted') {
-          exactAcceptance(held, answer.result); this.custody.complete(held);
+          exactAcceptance(held, answer.result); await this.custody.complete(held, current);
           return { state: 'accepted', ...answer.result };
         }
-        this.custody.complete(held);
+        await this.custody.complete(held, current);
         return { state: 'refused' };
       } catch { return { state: 'unknown' }; }
     });
@@ -68,10 +68,10 @@ export class CallingFollowUpDispatch {
       if (receipt.state === 'unknown') return { state: 'unknown' };
       if (receipt.state === 'accepted') {
         if (receipt.acceptance.operation !== 'save') throw Error('Follow-up receipt operation changed');
-        exactAcceptance(held, receipt.acceptance.result); this.custody.complete(held);
+        exactAcceptance(held, receipt.acceptance.result); await this.custody.complete(held, current);
         return { state: 'accepted', ...receipt.acceptance.result };
       }
-      this.custody.complete(held);
+      await this.custody.complete(held, current);
       return { state: 'refused' };
     });
   }

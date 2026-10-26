@@ -7,7 +7,8 @@ import '../../src/client/schemaRuntime.ts';
 import { callingFollowUpSaveCommandSchema, type CallingFollowUpMetadata, type CallingFollowUpView, type CallingFollowUpSaveInput } from '@fss/contracts';
 import { BrowserClient } from '../../src/client/BrowserClient.ts';
 import { BrowserEmailWorkspace } from '../../src/client/BrowserEmailWorkspace.tsx';
-import { CALLING_FOLLOW_UP_PENDING_KEY, installCallingFollowUpCustody } from '../../src/client/CallingFollowUpPending.ts';
+import { CALLING_FOLLOW_UP_PENDING_KEY, CallingFollowUpPending, installCallingFollowUpCustody } from '../../src/client/CallingFollowUpPending.ts';
+import { CallingFollowUpDispatch } from '../../src/client/CallingFollowUpDispatch.ts';
 import { privateDraftCanonicalJson, privateDraftSHA256 } from '../../src/client/PrivateDraftCustody.ts';
 import { payloadHashOf } from '../../../api/src/auth/tokens.ts';
 
@@ -37,7 +38,7 @@ function setup() {
     const input = JSON.parse(String(init?.body)) as BrowserSave & { afterId?: string };
     if (url === '/browser/api/calling/follow-ups/list') return list(input);
     if (url === '/browser/api/calling/follow-ups/read') return read(input);
-    if (url === '/browser/api/calling/follow-ups/save') { expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toContain(input.commandId); return save(input); }
+    if (url === '/browser/api/calling/follow-ups/save') { expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toContain(input.commandId); return save(input); }
     if (url === '/browser/api/calling/follow-ups/receipt') return receipt();
     throw Error('Unexpected endpoint. No provider, outbound, wrap or send allowed.');
   });
@@ -62,7 +63,7 @@ async function loseSave(scope: ReturnType<typeof setup>) {
   scope.save(async () => { throw Error('lost response'); });
   fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await screen.findByText(/Save outcome UNKNOWN/u);
-  return sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)!;
+  return localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)!;
 }
 
 it('lists metadata only and reads exactly selected revision, never notes or inferred recipient', async () => {
@@ -75,7 +76,7 @@ it('lists metadata only and reads exactly selected revision, never notes or infe
   expect(screen.getByText(/Recipient unresolved/u)).toBeTruthy();
   expect(screen.getByRole('heading', { name: 'Private promised email' })).toBe(document.activeElement);
   expect(screen.getByText('Exact saved source').closest('details')?.open).toBe(false);
-  expect(sessionStorage.length).toBe(0); expect(localStorage.length).toBe(0);
+  expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
 });
 
 it('saves explicit edits using CAS, durable hash-only custody and a fresh exact accepted-revision read', async () => {
@@ -90,7 +91,7 @@ it('saves explicit edits using CAS, durable hash-only custody and a fresh exact 
   expect(saved).not.toHaveProperty('clientVersion');
   expect((screen.getByRole('textbox', { name: 'Follow-up body' }) as HTMLTextAreaElement).value).toBe('Current saved content');
   expect(JSON.parse(String(calls(scope, '/read').at(-1)?.[1]?.body))).toEqual({ draftId: a, expectedRevision: 2 });
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
   expect(calls(scope, '/save')).toHaveLength(1);
 });
 
@@ -101,7 +102,7 @@ it('withdraws only after explicit permanent confirmation and never reopens withd
   fireEvent.click(screen.getByRole('button', { name: 'Confirm permanent withdrawal' }));
   await screen.findByText(/Historical save accepted. Follow-up withdrawn/u);
   expect(JSON.parse(String(calls(scope, '/save')[0]?.[1]?.body))).toMatchObject({ operation: 'withdraw', draftId: a, expectedRevision: 1 });
-  expect(screen.queryByRole('textbox')).toBeNull(); expect(sessionStorage.length).toBe(0);
+  expect(screen.queryByRole('textbox')).toBeNull(); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
 });
 
 it('retains UNKNOWN across unmount, never replays/remints, and recovers only by exact receipt then current read', async () => {
@@ -114,12 +115,12 @@ it('retains UNKNOWN across unmount, never replays/remints, and recovers only by 
   expect(calls(scope, '/save')).toHaveLength(1);
   fireEvent.click(screen.getByRole('button', { name: 'Check same follow-up receipt' }));
   await screen.findByText(/Save outcome UNKNOWN/u);
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
   expect(JSON.parse(String(calls(scope, '/receipt')[0]?.[1]?.body))).toEqual({ operation: 'save', commandId: held?.commandId, payloadSHA256: held?.payloadSHA256 });
   scope.receipt(async () => json({ state: 'accepted', acceptance: { operation: 'save', result: { draftId: a, revision: 2 } } }));
   fireEvent.click(screen.getByRole('button', { name: 'Check same follow-up receipt' }));
   await screen.findByText(/saved for review at revision 2/u);
-  expect(calls(scope, '/save')).toHaveLength(1); expect(sessionStorage.length).toBe(0);
+  expect(calls(scope, '/save')).toHaveLength(1); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   expect((screen.getByRole('textbox', { name: 'Follow-up body' }) as HTMLTextAreaElement).value).not.toBe('Private uncertain edit');
 });
 
@@ -127,7 +128,7 @@ it('does not let an UNKNOWN on A block an independent save on B or restore A pro
   const scope = setup(); await mount(scope); await open(); const bytes = await loseSave(scope);
   await open(b); scope.save(async input => json({ status: 'accepted', replayed: false, result: { draftId: b, revision: input.expectedRevision + 1 } }));
   fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' })); await screen.findByText(/saved for review at revision 2/u);
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
   expect(calls(scope, '/save')).toHaveLength(2);
 });
 
@@ -140,24 +141,24 @@ it('clears unavailable source content but preserves opaque uncertainty and recei
   await screen.findByText(/Current follow-up unavailable or outcome unknown/u);
   expect(screen.queryByRole('textbox')).toBeNull();
   expect(screen.getByRole('button', { name: 'Check same follow-up receipt' })).toBeTruthy();
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
 });
 
 it('rejects mismatched save/receipt identity without losing UNKNOWN or accepting history as current content', async () => {
   const scope = setup(); scope.save(async () => json({ status: 'accepted', replayed: false, result: { draftId: b, revision: 2 } }));
   await mount(scope); await open(); fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
-  await screen.findByText(/Save outcome UNKNOWN/u); const bytes = sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY);
+  await screen.findByText(/Save outcome UNKNOWN/u); const bytes = localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY);
   scope.receipt(async () => json({ state: 'accepted', acceptance: { operation: 'save', result: { draftId: a, revision: 8 } } }));
   fireEvent.click(screen.getByRole('button', { name: 'Check same follow-up receipt' }));
   await screen.findByText(/Current follow-up unavailable or outcome unknown/u);
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes); expect(screen.queryByRole('textbox')).toBeNull();
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes); expect(screen.queryByRole('textbox')).toBeNull();
 });
 
 it('handles a recorded CAS refusal without signing out, overwriting, retrying or retaining editor prose', async () => {
   const scope = setup(); scope.save(async () => json({ status: 'refused', replayed: false, reason: 'stale_revision' }));
   await mount(scope); await open(); fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await screen.findByText(/Save refused/u); expect(scope.client.current?.status).toBe('signed_in');
-  expect(screen.queryByRole('textbox')).toBeNull(); expect(sessionStorage.length).toBe(0); expect(calls(scope, '/save')).toHaveLength(1);
+  expect(screen.queryByRole('textbox')).toBeNull(); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0); expect(calls(scope, '/save')).toHaveLength(1);
 });
 
 it('replaces bounded metadata pages and never guesses a requested draft revision', async () => {
@@ -179,13 +180,13 @@ it('fences a late selected-message read and clears private content/custody on au
   await act(async () => { resolve(json({ draft: available(a) })); });
   expect((screen.getByRole('textbox', { name: 'Follow-up body' }) as HTMLTextAreaElement).value).toBe(`Saved body ${b}`);
   await loseSave(scope); act(() => { scope.client.invalidate(); });
-  expect(screen.queryByRole('textbox')).toBeNull(); expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+  expect(screen.queryByRole('textbox')).toBeNull(); expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
 });
 
 it('clears custody offscreen through the root lifetime observer without remounting Email', async () => {
   const scope = setup(); const view = await mount(scope); await open(); await loseSave(scope);
-  view.unmount(); expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).not.toBeNull();
-  act(() => { scope.client.invalidate(); }); expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+  view.unmount(); expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).not.toBeNull();
+  act(() => { scope.client.invalidate(); }); expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
 });
 
 it('fails closed before dispatch when locks or verified storage are unavailable', async () => {
@@ -193,7 +194,7 @@ it('fails closed before dispatch when locks or verified storage are unavailable'
   Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined });
   fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await screen.findByText(/Current follow-up unavailable or outcome unknown/u);
-  expect(calls(scope, '/save')).toHaveLength(0); expect(sessionStorage.length).toBe(0);
+  expect(calls(scope, '/save')).toHaveLength(0); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
 });
 
 it('does not dispatch after save lock wait if selection was abandoned', async () => {
@@ -202,7 +203,7 @@ it('does not dispatch after save lock wait if selection was abandoned', async ()
   Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: async (_name: string, _options: unknown, work: () => Promise<unknown>) => new Promise(resolve => { grant = async () => { try { resolve(await work()); } catch { resolve(undefined); } }; }) } });
   fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await open(b); await act(async () => { await grant?.(); });
-  expect(calls(scope, '/save')).toHaveLength(0); expect(sessionStorage.length).toBe(0);
+  expect(calls(scope, '/save')).toHaveLength(0); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
 });
 
 it('does not dispatch or remint when verified pending storage cannot be written', async () => {
@@ -210,25 +211,25 @@ it('does not dispatch or remint when verified pending storage cannot be written'
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('quota'); });
   fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await screen.findByText(/Current follow-up unavailable or outcome unknown/u);
-  expect(calls(scope, '/save')).toHaveLength(0); expect(sessionStorage.length).toBe(0);
+  expect(calls(scope, '/save')).toHaveLength(0); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
 });
 
 it('keeps malformed existing custody fail-closed instead of replacing its unknown identity', async () => {
-  const scope = setup(); sessionStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, '{malformed');
+  const scope = setup(); localStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, '{malformed');
   await mount(scope); await open();
   expect((screen.getByRole('button', { name: 'Save private follow-up' }) as HTMLButtonElement).disabled).toBe(true);
   expect(calls(scope, '/save')).toHaveLength(0);
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe('{malformed');
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe('{malformed');
 });
 
 it('keeps an unrecorded content-error response UNKNOWN, but a recorded receipt refusal releases it', async () => {
   const scope = setup(); scope.save(async () => json({ error: 'draft_unavailable' }));
   await mount(scope); await open(); fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await screen.findByText(/Save outcome UNKNOWN/u);
-  expect(scope.client.current?.status).toBe('signed_in'); expect(sessionStorage.length).toBe(1);
+  expect(scope.client.current?.status).toBe('signed_in'); expect(localStorage.length).toBe(1); expect(sessionStorage.length).toBe(0);
   scope.receipt(async () => json({ state: 'refused', reason: 'draft_unavailable' }));
   fireEvent.click(screen.getByRole('button', { name: 'Check same follow-up receipt' }));
-  await screen.findByText(/Save refused/u); expect(sessionStorage.length).toBe(0);
+  await screen.findByText(/Save refused/u); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   expect(calls(scope, '/save')).toHaveLength(1); expect(screen.queryByRole('textbox')).toBeNull();
 });
 
@@ -246,7 +247,7 @@ it('does not let accepted late save restore content or custody after session inv
   await waitFor(() => { expect(calls(scope, '/save')).toHaveLength(1); });
   act(() => { scope.client.invalidate(); });
   await act(async () => { release(json({ status: 'accepted', replayed: false, result: { draftId: a, revision: 2 } })); });
-  expect(calls(scope, '/read')).toHaveLength(1); expect(screen.queryByRole('textbox')).toBeNull(); expect(sessionStorage.length).toBe(0);
+  expect(calls(scope, '/read')).toHaveLength(1); expect(screen.queryByRole('textbox')).toBeNull(); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
 });
 
 it('retains a dispatched late save as UNKNOWN after switching selection, without restoring old text', async () => {
@@ -254,10 +255,10 @@ it('retains a dispatched late save as UNKNOWN after switching selection, without
   scope.save(async () => new Promise<Response>(done => { release = done; }));
   await mount(scope); await open(); fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await waitFor(() => { expect(calls(scope, '/save')).toHaveLength(1); });
-  await open(b); const bytes = sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY);
+  await open(b); const bytes = localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY);
   await act(async () => { release(json({ status: 'accepted', replayed: false, result: { draftId: a, revision: 2 } })); });
   expect((screen.getByRole('textbox', { name: 'Follow-up body' }) as HTMLTextAreaElement).value).toBe(`Saved body ${b}`);
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
   expect(calls(scope, '/read')).toHaveLength(2);
 });
 
@@ -265,7 +266,7 @@ it('rejects oversized metadata and provides Back focus without keeping private e
   const scope = setup(); await mount(scope); fireEvent.change(await open(), { target: { value: 'Discard on Back' } });
   fireEvent.click(screen.getByRole('button', { name: 'Back to follow-ups' }));
   expect(screen.getByRole('heading', { name: 'Calling follow-ups' })).toBe(document.activeElement);
-  expect(screen.queryByRole('textbox')).toBeNull(); expect(sessionStorage.length).toBe(0);
+  expect(screen.queryByRole('textbox')).toBeNull(); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   scope.list(async () => json({ drafts: Array.from({ length: 21 }, (_, index) => metadata(id(index + 10))), nextAfterId: null }));
   fireEvent.click(screen.getByRole('button', { name: 'Refresh follow-ups' }));
   await screen.findByText(/Current follow-up metadata unavailable/u);
@@ -278,7 +279,7 @@ it('conserves both independent UNKNOWN records without reminting on duplicate cl
   const save = screen.getByRole('button', { name: 'Save private follow-up' });
   fireEvent.click(save); fireEvent.click(save); await screen.findByText(/Save outcome UNKNOWN/u);
   await open(b); await loseSave(scope);
-  const held = JSON.parse(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)!) as { draftId: string }[];
+  const held = JSON.parse(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)!) as { draftId: string }[];
   expect(held.map(value => value.draftId)).toEqual([a, b]); expect(mint).toHaveBeenCalledTimes(2); expect(calls(scope, '/save')).toHaveLength(2);
 });
 
@@ -288,11 +289,11 @@ it('does not mint or dispatch invalid blank content and never treats a wrap rece
   fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   expect(screen.getByText(/Enter a nonblank subject/u)).toBeTruthy(); expect(mint).not.toHaveBeenCalled(); expect(calls(scope, '/save')).toHaveLength(0);
   fireEvent.change(screen.getByRole('textbox', { name: 'Follow-up body' }), { target: { value: 'Explicit promise' } }); await loseSave(scope);
-  const bytes = sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY);
+  const bytes = localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY);
   scope.receipt(async () => json({ state: 'accepted', acceptance: { operation: 'wrap', result: { kind: 'firm', firmId: a, callLogId: id(6), staleIntroductions: 'stopped', attention: [], followUp: { state: 'not_requested' } } } }));
   fireEvent.click(screen.getByRole('button', { name: 'Check same follow-up receipt' }));
   await screen.findByText(/Current follow-up unavailable or outcome unknown/u);
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes); expect(mint).toHaveBeenCalledTimes(1);
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes); expect(mint).toHaveBeenCalledTimes(1);
 });
 
 it('fences save preparation after hashing if selection changed, before UUID mint or storage', async () => {
@@ -304,7 +305,7 @@ it('fences save preparation after hashing if selection changed, before UUID mint
   await mount(scope); await open(); fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await waitFor(() => { expect(release).toBeDefined(); }); await open(b);
   await act(async () => { release?.(); await new Promise(resolve => { setTimeout(resolve, 0); }); });
-  expect(mint).not.toHaveBeenCalled(); expect(calls(scope, '/save')).toHaveLength(0); expect(sessionStorage.length).toBe(0);
+  expect(mint).not.toHaveBeenCalled(); expect(calls(scope, '/save')).toHaveLength(0); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
 });
 
 it.each(['update', 'withdraw'] as const)('omits browser clientVersion for %s while preserving envelope-free hash and exact receipt identity', async operation => {
@@ -329,7 +330,7 @@ it.each(['update', 'withdraw'] as const)('omits browser clientVersion for %s whi
     fireEvent.click(screen.getByRole('button', { name: 'Confirm permanent withdrawal' }));
   } else fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await screen.findByText(/Save outcome UNKNOWN/u);
-  const bytes = sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)!;
+  const bytes = localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)!;
   const [held] = JSON.parse(bytes) as { commandId: string; payloadSHA256: string }[];
   expect(serverPayloadHash).toBe(await privateDraftSHA256(privateDraftCanonicalJson(input)));
   expect(held?.payloadSHA256).toBe(serverPayloadHash);
@@ -337,6 +338,111 @@ it.each(['update', 'withdraw'] as const)('omits browser clientVersion for %s whi
   await waitFor(() => { expect(calls(scope, '/receipt')).toHaveLength(1); });
   await waitFor(() => { expect((screen.getByRole('button', { name: 'Check same follow-up receipt' }) as HTMLButtonElement).disabled).toBe(false); });
   expect(JSON.parse(String(calls(scope, '/receipt')[0]?.[1]?.body))).toEqual({ operation: 'save', commandId: held?.commandId, payloadSHA256: serverPayloadHash });
-  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
   expect(calls(scope, '/save')).toHaveLength(1); expect(mint).toHaveBeenCalledTimes(1);
+});
+
+function isolatedTabStorage(): Storage {
+  const values = new Map<string, string>();
+  return { get length() { return values.size; }, key: index => [...values.keys()][index] ?? null, clear: () => { values.clear(); },
+    getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); }, removeItem: key => { values.delete(key); } };
+}
+function serializedTabLocks() {
+  const queues = new Map<string, Promise<void>>(), held = new Set<string>();
+  const request = vi.fn(async (name: string, _options: unknown, work: () => Promise<unknown>) => {
+    const previous = queues.get(name) ?? Promise.resolve();
+    let release = (): void => {};
+    const next = new Promise<void>(resolve => { release = resolve; }); queues.set(name, previous.then(() => next));
+    await previous; held.add(name);
+    try { return await work(); } finally { held.delete(name); release(); }
+  });
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { request } });
+  return { request, held };
+}
+async function custodyTab(number: number, expiresAt = new Date(Date.now() + 180000).toISOString()) {
+  const tabStorage = isolatedTabStorage();
+  vi.stubGlobal('sessionStorage', tabStorage);
+  let response: (input: BrowserSave) => Promise<Response> = async () => { throw Error('lost save response'); };
+  const send = vi.fn<typeof fetch>(async (url, init) => {
+    if (url === '/browser/session') return json({ status: 'signed_in', workspaceId: a, userId: a, deviceId: a, role: 'admin', revision: 'one', csrfToken: 'c'.repeat(40), expiresAt });
+    if (url === '/browser/api/calling/follow-ups/save') return response(JSON.parse(String(init?.body)) as BrowserSave);
+    if (url === '/browser/api/calling/follow-ups/receipt') return json({ state: 'accepted', acceptance: { operation: 'save', result: { draftId: a, revision: 2 } } });
+    throw Error('Unexpected cross-tab operation');
+  });
+  const client = new BrowserClient({ fetch: send, storage: tabStorage, navigate: vi.fn(), randomUUID: () => id(90 + number) });
+  clients.push(client); await client.refresh();
+  const mint = vi.fn(() => id(70 + number));
+  const custody = new CallingFollowUpPending(client, undefined, mint);
+  observers.push(() => { custody.dispose(); }); observers.push(installCallingFollowUpCustody(client));
+  const epoch = client.epoch, current = (): boolean => client.isCurrent(epoch) && client.current?.status === 'signed_in';
+  return { client, custody, mint, send, current, tabStorage, dispatch: new CallingFollowUpDispatch(client, custody), response: (value: typeof response) => { response = value; } };
+}
+const sharedSave = (draftId = a): CallingFollowUpSaveInput => ({ operation: 'update', draftId, expectedRevision: 1, subject: 'Private promised subject', body: 'Private promised body' });
+
+it('cross-tab UNKNOWN excludes tab B after tab A releases its lock and recovers only the same UUID/hash', async () => {
+  const locks = serializedTabLocks(), tabA = await custodyTab(1), tabB = await custodyTab(2);
+  expect(await tabA.dispatch.save(sharedSave(), tabA.current)).toEqual({ state: 'unknown' });
+  const held = tabA.custody.read(a)!; expect(held).not.toBeNull(); expect(locks.held.size).toBe(0);
+  tabA.custody.dispose(); // Screen unmount cannot discard the shared unknown.
+  expect(await tabB.dispatch.save(sharedSave(), tabB.current)).toEqual({ state: 'unknown' });
+  expect(tabB.send.mock.calls.filter(([url]) => String(url).endsWith('/save'))).toHaveLength(0);
+  expect(tabB.mint).not.toHaveBeenCalled(); expect(tabB.custody.read(a)).toEqual(held);
+  const bytes = localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)!;
+  expect(bytes).not.toMatch(/Private promised subject|Private promised body|subject|body/u);
+  expect(tabA.tabStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull(); expect(tabB.tabStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+  expect(await tabB.dispatch.reconcile(held, tabB.current)).toEqual({ state: 'accepted', draftId: a, revision: 2 });
+  const receipt = tabB.send.mock.calls.find(([url]) => String(url).endsWith('/receipt'));
+  expect(JSON.parse(String(receipt?.[1]?.body))).toEqual({ operation: 'save', commandId: held.commandId, payloadSHA256: held.payloadSHA256 });
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull(); expect(tabA.mint).toHaveBeenCalledTimes(1); expect(tabB.mint).not.toHaveBeenCalled();
+});
+
+it('cross-tab different drafts conserve simultaneous UNKNOWN records and resolve one without erasing the other', async () => {
+  const locks = serializedTabLocks(), expiry = new Date(Date.now() + 180000).toISOString();
+  const tabA = await custodyTab(1, expiry), tabB = await custodyTab(2, expiry);
+  expect(await Promise.all([tabA.dispatch.save(sharedSave(a), tabA.current), tabB.dispatch.save(sharedSave(b), tabB.current)])).toEqual([{ state: 'unknown' }, { state: 'unknown' }]);
+  expect(tabA.custody.all().map(value => value.draftId).sort()).toEqual([a, b]);
+  expect(tabB.custody.all()).toEqual(tabA.custody.all());
+  const heldB = tabB.custody.read(b), heldA = tabA.custody.read(a)!;
+  await tabB.dispatch.reconcile(heldA, tabB.current);
+  expect(tabA.custody.read(a)).toBeNull(); expect(tabA.custody.read(b)).toEqual(heldB);
+  expect(locks.request.mock.calls.filter(([name]) => name === 'callie.calling-follow-up-records').length).toBeGreaterThanOrEqual(3);
+  expect(locks.held.size).toBe(0);
+});
+
+it('cross-tab shorter current lease cannot erase another valid pending save and offscreen auth clears it', async () => {
+  serializedTabLocks(); const tabA = await custodyTab(1, new Date(Date.now() + 240000).toISOString());
+  const tabB = await custodyTab(2, new Date(Date.now() + 120000).toISOString());
+  await tabA.dispatch.save(sharedSave(), tabA.current); const held = tabA.custody.read(a)!;
+  expect(tabB.custody.read(a)).toEqual(held);
+  tabA.custody.dispose(); tabB.custody.dispose();
+  act(() => { tabA.client.invalidate(); });
+  expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull(); expect(tabB.custody.read(a)).toBeNull();
+});
+
+it('cross-tab unrelated draft completes while another draft network response is still outstanding', async () => {
+  const locks = serializedTabLocks(), expiry = new Date(Date.now() + 180000).toISOString();
+  const tabA = await custodyTab(1, expiry), tabB = await custodyTab(2, expiry);
+  let release: (response: Response) => void = () => {};
+  tabA.response(async () => new Promise<Response>(resolve => { release = resolve; }));
+  tabB.response(async input => {
+    expect(locks.held.has('callie.calling-follow-up-records')).toBe(false);
+    return json({ status: 'accepted', replayed: false, result: { draftId: input.draftId, revision: input.expectedRevision + 1 } });
+  });
+  const outstanding = tabA.dispatch.save(sharedSave(a), tabA.current);
+  await waitFor(() => { expect(tabA.send.mock.calls.some(([url]) => String(url).endsWith('/save'))).toBe(true); });
+  const heldA = tabA.custody.read(a);
+  expect(await tabB.dispatch.save(sharedSave(b), tabB.current)).toEqual({ state: 'accepted', draftId: b, revision: 2 });
+  expect(tabB.custody.read(a)).toEqual(heldA); expect(tabB.custody.read(b)).toBeNull();
+  release(json({ error: 'draft_unavailable' })); expect(await outstanding).toEqual({ state: 'unknown' });
+});
+
+it('cross-tab registry wait rechecks auth before mint and cannot recreate cleared custody offscreen', async () => {
+  const locks = serializedTabLocks(), tabA = await custodyTab(1); let release = (): void => {};
+  const blocker = locks.request('callie.calling-follow-up-records', {}, async () => new Promise<void>(resolve => { release = resolve; }));
+  await waitFor(() => { expect(locks.held.has('callie.calling-follow-up-records')).toBe(true); });
+  const result = tabA.dispatch.save(sharedSave(), tabA.current).catch(() => ({ state: 'blocked' }));
+  await waitFor(() => { expect(locks.request.mock.calls.filter(([name]) => name === 'callie.calling-follow-up-records')).toHaveLength(2); });
+  tabA.custody.dispose(); act(() => { tabA.client.invalidate(); }); release(); await blocker;
+  expect(await result).toEqual({ state: 'blocked' }); expect(tabA.mint).not.toHaveBeenCalled();
+  expect(tabA.send.mock.calls.filter(([url]) => String(url).endsWith('/save'))).toHaveLength(0); expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
 });
