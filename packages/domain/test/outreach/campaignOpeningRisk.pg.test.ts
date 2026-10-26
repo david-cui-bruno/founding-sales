@@ -48,7 +48,7 @@ it.each(['denial', 'expiry', 'delete', 'reference', 'attempted'] as const)('risk
       expect((await beginReconciling(f.worker, { outboundMessageId: before.id, detail: 'fictional unknown send', windowHours: 1 })).ok).toBe(true);
     });
     const args = [f.w, evidence.id];
-    if (change === 'denial' || change === 'attempted') await f.db.query('UPDATE evidence_items SET terms_allow_retention=false,retention_expires_at=NULL WHERE workspace_id=$1 AND id=$2', args);
+    if (change === 'denial' || change === 'attempted') await f.db.query("UPDATE evidence_items SET terms_allow_retention=false,retention_expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND id=$2", args);
     if (change === 'expiry') await f.db.query("UPDATE evidence_items SET retention_expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND id=$2", args);
     if (change === 'delete') await f.db.query('DELETE FROM evidence_items WHERE workspace_id=$1 AND id=$2', args);
     if (change === 'reference') await f.db.query("UPDATE evidence_items SET source_reference='https://example.test/replaced-witness' WHERE workspace_id=$1 AND id=$2", args);

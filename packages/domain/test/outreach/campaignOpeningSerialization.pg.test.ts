@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
 import { candidateInputSchema } from '@fss/contracts';
 import { campaignOpeningPgFixture, openingPgHandoff } from './campaignOpeningPgFixture.ts';
@@ -21,10 +21,15 @@ async function prepared(f: Awaited<ReturnType<typeof campaignOpeningPgFixture>>)
   const fence = await readFenceByStepExecution(f.worker, f.executionId); if (!fence) throw new Error('fence missing'); return fence;
 }
 async function newQualification(f: Awaited<ReturnType<typeof campaignOpeningPgFixture>>) {
-  // Distinct fictional model identity avoids the legitimate same-day request
-  // dedupe. No model is installed/invoked and this fixture never runs the job.
-  await f.db.query("UPDATE research_settings SET enabled=true,model_name='fictional-serialization-only' WHERE workspace_id=$1", [f.w]);
+  // Age only the existing fictional qualification request identity before any
+  // opening snapshot. Keep the sole allowed model and every legacy constraint.
+  // The ordinary owner can then request today's run rather than deduping it.
+  await f.db.query('UPDATE research_settings SET enabled=true WHERE workspace_id=$1', [f.w]);
   const row = (await f.db.query<{ revision: number }>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2', [f.w, f.source.selection.candidateId])).rows[0]!;
+  const run = (await f.db.query<{ prompt_version: string; policy_version: string; model_name: string }>('SELECT prompt_version,policy_version,model_name FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2', [f.w, f.source.selection.runId])).rows[0]!;
+  const priorDay = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const fingerprint = createHash('sha256').update(JSON.stringify([row.revision, run.prompt_version, run.policy_version, run.model_name, priorDay])).digest('hex');
+  await f.db.query("UPDATE sourcing_qualification_runs SET fingerprint=$3,requested_at=clock_timestamp()-interval '1 day',deadline_at=clock_timestamp()-interval '23 hours 30 minutes' WHERE workspace_id=$1 AND id=$2", [f.w, f.source.selection.runId, fingerprint]);
   return { candidateId: f.source.selection.candidateId, expectedRevision: row.revision };
 }
 async function counters(f: Awaited<ReturnType<typeof campaignOpeningPgFixture>>) {
@@ -36,7 +41,7 @@ async function counters(f: Awaited<ReturnType<typeof campaignOpeningPgFixture>>)
 it.each([false, true])('risk STD1 policy=%s candidate-first inversion refuses atomically while gate-first claim commits', async enabled => {
   const f = await campaignOpeningPgFixture(enabled);
   try {
-    const fence = await prepared(f), input = await newQualification(f), baseline = await counters(f);
+    const input = await newQualification(f), fence = await prepared(f), baseline = await counters(f);
     const gate = await f.fixture.database.appRuntimeSession(), observer = await f.fixture.database.appRuntimeSession();
     await registerOpeningDatabases();
     const ownerPid = (await f.db.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
@@ -66,7 +71,7 @@ it.each([false, true])('risk STD1 policy=%s candidate-first inversion refuses at
 it.each([false, true])('risk STD1 policy=%s mutation-first commit is visible to the subsequent current-opening claim', async enabled => {
   const f = await campaignOpeningPgFixture(enabled);
   try {
-    const fence = await prepared(f), input = await newQualification(f);
+    const input = await newQualification(f), fence = await prepared(f);
     expect((await f.tx(() => requestQualification(f.admin, input))).ok).toBe(true);
     if (enabled) {
       expect(await readCampaignOpeningAttempt(f.worker, f.executionId)).toMatchObject({ state: 'invalidated', content: null });

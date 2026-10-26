@@ -43,10 +43,10 @@ export async function registerOpeningFixture(fixture: AuthFixture) {
 /** Isolated root-granted PG16 owner, reusing canonical start/template/teardown.
  * No browser, HTTPS, provider, external URL adoption or shared harness edits. */
 export default async function setup() {
-  assert.equal(process.env['FSS_EMAIL_OPENING_PG_GRANT'], '783-root-20261026T1249');
+  assert.equal(process.env['FSS_EMAIL_OPENING_PG_GRANT'], '783-root-corrections-20261026T1329');
   assert.equal(process.env['FSS_TEST_POSTGRES_URL'], undefined, 'Never adopt another PostgreSQL service');
   const before = homebrew(); assert.match(before, /postgres/u);
-  console.log('EMAIL_OPENING_PARENT_REGISTERED', JSON.stringify({ pid: process.pid, parentPid: process.ppid, homebrew1106: before, grant: '2026-10-26T12:49:00Z' }));
+  console.log('EMAIL_OPENING_PARENT_REGISTERED', JSON.stringify({ pid: process.pid, parentPid: process.ppid, homebrew1106: before, grant: '2026-10-26T13:29:00Z', scope: 'new-correction-cases-only' }));
   const cluster = await startPostgresCluster();
   try {
     assert.equal(cluster.source, 'embedded'); assert(cluster.storagePath);
