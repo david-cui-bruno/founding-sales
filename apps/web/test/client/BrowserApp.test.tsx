@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { webcrypto } from 'node:crypto';
+import { TextEncoder } from 'node:util';
+import { callingWrapInputSchema } from '@fss/contracts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BrowserApp } from '../../src/client/BrowserApp.tsx';
 import { BrowserToday } from '../../src/client/BrowserToday.tsx';
@@ -8,6 +11,8 @@ import * as ProspectsWorkspace from '../../src/client/BrowserProspectsWorkspace.
 import type { EmailWorkspaceProps, WorkspaceScreenProps } from '../../src/client/workspaceNavigation.ts';
 import { BrowserClient, PENDING_KEY } from '../../src/client/BrowserClient.ts';
 import { REPLY_PENDING_KEY } from '../../src/client/ReplyAttempt.ts';
+import { CALLING_PENDING_KEY } from '../../src/client/CallingPending.ts';
+import { CALLING_FOLLOW_UP_PENDING_KEY } from '../../src/client/CallingFollowUpPending.ts';
 
 const id = '00000000-0000-4000-8000-000000000001';
 const session = { status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'revision-one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() };
@@ -20,6 +25,9 @@ function setup() {
   const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
   const commands: unknown[] = [];
   let loseResponse = false;
+  let loseWrap = false, loseFollowUp = false;
+  let promised: { draftId: string; subject: string; body: string } | null = null;
+  const metadata = () => promised ? { draftId: promised.draftId, revision: 1, source: { kind: 'firm', firmId: id, callLogId: id }, availability: 'available', createdAt: '2026-10-26T00:00:00Z', updatedAt: '2026-10-26T00:00:00Z' } : null;
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json(session);
     if (url === '/browser/sign-out') return json({ status: 'signed_out', csrfToken: 'a'.repeat(40) });
@@ -27,6 +35,27 @@ function setup() {
     if (String(url).startsWith('/browser/api/today')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [{ firmId: id, firmName: firm.name, lane: 'new_firm', dueAt: '2026-10-22T00:00:00.000Z', counts: { replies: 0, emailsDue: 0, callsDue: 0 } }] });
     if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: [], hasMore: false });
     if (url === '/browser/api/crm/firm-page-v3') return json({ version: 3, visibility: 'assigned_or_admin', read: { visibility: 'assigned_or_admin', firm }, opportunities: [], holds: [], followUpPermissions: [] });
+    if (url === '/browser/api/calling/wrap') {
+      const { commandId, ...payload } = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(commandId).toBeTruthy(); expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toContain(commandId);
+      const input = callingWrapInputSchema.parse(payload); commands.push(input);
+      if (input.kind !== 'firm') throw Error('Only exact Firm fixture supported');
+      if (input.promisedEmail) promised = input.promisedEmail;
+      if (loseWrap) throw Error('Lost wrap response');
+      return json({ status: 'accepted', replayed: false, result: { kind: 'firm', firmId: input.firmId, callLogId: id, staleIntroductions: 'stopped', attention: [], followUp: promised ? { state: 'queued_for_review', draftId: promised.draftId, revision: 1 } : { state: 'not_requested' } } });
+    }
+    if (url === '/browser/api/calling/follow-ups/list') return json({ drafts: promised ? [metadata()] : [], nextAfterId: null });
+    if (url === '/browser/api/calling/follow-ups/read' && promised) {
+      const input = JSON.parse(String(init?.body)) as { draftId: string; expectedRevision: number };
+      expect(input).toEqual({ draftId: promised.draftId, expectedRevision: 1 });
+      return json({ draft: { ...metadata(), content: { subject: promised.subject, body: promised.body }, state: 'queued_for_review', recipient: 'unresolved', sendAuthority: 'not_granted' } });
+    }
+    if (url === '/browser/api/calling/follow-ups/save') {
+      const input = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toContain(input['commandId']); commands.push(input);
+      if (loseFollowUp) throw Error('Lost follow-up response');
+      throw Error('Unexpected successful follow-up mutation');
+    }
     if (String(url).startsWith('/browser/api/meetings/outcomes')) return json(outcomes);
     if (url === '/browser/api/meetings/notes') {
       const command = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -38,7 +67,10 @@ function setup() {
     throw new Error('Unexpected route');
   });
   const client = new BrowserClient({ fetch: send, storage, navigate: vi.fn(), randomUUID: () => id });
-  return { client, storage, commands, send, lose: () => { loseResponse = true; }, recover: () => { loseResponse = false; } };
+  return { client, storage, commands, send, lose: () => { loseResponse = true; }, recover: () => { loseResponse = false; },
+    loseWrap: () => { loseWrap = true; }, loseFollowUp: () => { loseFollowUp = true; },
+    seedDraft: () => { promised = { draftId: id, subject: 'Existing promised material', body: 'Existing private promise' }; },
+  };
 }
 afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); });
 function navigate(name: string): void {
@@ -54,6 +86,87 @@ async function openNotes(): Promise<void> {
 }
 
 describe('BrowserApp real shared presentation', () => {
+  describe('actual Calling composition', () => {
+    beforeEach(() => {
+      vi.stubGlobal('crypto', webcrypto); vi.stubGlobal('TextEncoder', TextEncoder);
+      Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: vi.fn(async (_name: string, _options: unknown, work: () => Promise<unknown>) => work()) } });
+    });
+    afterEach(() => { cleanup(); vi.unstubAllGlobals(); Reflect.deleteProperty(navigator, 'locks'); });
+    async function openActualCalling(client: BrowserClient): Promise<void> {
+      render(<BrowserApp client={client} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Open calling brief' }));
+      await waitFor(() => { expect(screen.getByLabelText('Actual outcome').matches(':disabled')).toBe(false); });
+    }
+    it('opens the accepted exact promised draft in the real Email editor with current revision, never sends', async () => {
+      const s = setup();
+      try {
+        await openActualCalling(s.client);
+        fireEvent.change(screen.getByLabelText('Actual outcome'), { target: { value: 'interested' } });
+        fireEvent.change(screen.getByLabelText('Private call notes'), { target: { value: 'PRIVATE internal context' } });
+        fireEvent.change(screen.getByLabelText('Next action'), { target: { value: 'promised_email' } });
+        fireEvent.change(screen.getByLabelText('Promised email subject'), { target: { value: 'Independent promised material' } });
+        fireEvent.change(screen.getByLabelText('Promised email body'), { target: { value: 'Independently written recipient-facing body' } });
+        fireEvent.click(screen.getByRole('checkbox', { name: /I personally performed/u }));
+        fireEvent.click(screen.getByRole('button', { name: 'Save outcome and promised email' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Review promised email in Email →' }));
+        const body = await screen.findByRole('textbox', { name: 'Follow-up body' });
+        expect((body as HTMLTextAreaElement).value).toBe('Independently written recipient-facing body');
+        expect(screen.getByRole('region', { name: 'Email workspace' })).toBeTruthy();
+        expect(screen.queryByRole('region', { name: 'Current calling brief' })).toBeNull();
+        expect(screen.getByRole('button', { name: 'Follow-ups' }).getAttribute('aria-pressed')).toBe('true');
+        const input = callingWrapInputSchema.parse(s.commands[0]);
+        expect(input.kind).toBe('firm');
+        expect(JSON.stringify(input.promisedEmail)).not.toContain('PRIVATE');
+        const draftId = input.promisedEmail!.draftId;
+        const reads = s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/follow-ups/read');
+        expect(reads).toHaveLength(2);
+        for (const [, init] of reads) expect(JSON.parse(String(init?.body))).toEqual({ draftId, expectedRevision: 1 });
+        expect(s.commands).toHaveLength(1);
+        expect(s.send.mock.calls.some(([url]) => /send|dial|reserve|provider/u.test(String(url)))).toBe(false);
+      } finally { s.client.dispose(); }
+    });
+    it('retains both real UNKNOWN commands across page unmounts and physically clears them on offscreen auth invalidation', async () => {
+      const s = setup(); s.loseWrap(); s.loseFollowUp();
+      try {
+        await openActualCalling(s.client);
+        fireEvent.change(screen.getByLabelText('Actual outcome'), { target: { value: 'no_answer' } });
+        fireEvent.click(screen.getByRole('checkbox', { name: /I personally performed/u }));
+        fireEvent.click(screen.getByRole('button', { name: 'Save outcome' }));
+        await screen.findByText('Outcome UNKNOWN for this exact subject.');
+        const wrap = sessionStorage.getItem(CALLING_PENDING_KEY); expect(wrap).not.toBeNull();
+        s.seedDraft(); navigate('Email');
+        expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBe(wrap);
+        fireEvent.click(screen.getByRole('button', { name: 'Follow-ups' }));
+        fireEvent.click(await screen.findByRole('button', { name: /Draft 00000000/u }));
+        const body = await screen.findByRole('textbox', { name: 'Follow-up body' });
+        fireEvent.change(body, { target: { value: 'PRIVATE uncertain edit' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
+        await screen.findByText(/Save outcome UNKNOWN. Exact command retained/u);
+        const followUp = sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY); expect(followUp).not.toBeNull();
+        navigate('Today'); await screen.findByRole('button', { name: 'Open firm' });
+        expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBe(wrap);
+        expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(followUp);
+        expect(`${wrap}${followUp}`).not.toContain('PRIVATE');
+        const writes = s.commands.length, requests = s.send.mock.calls.length;
+        act(() => { s.client.invalidate(); });
+        expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBeNull();
+        expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+        expect(s.commands).toHaveLength(writes); expect(s.send).toHaveBeenCalledTimes(requests);
+        expect(screen.queryByRole('textbox', { name: 'Follow-up body' })).toBeNull();
+      } finally { s.client.dispose(); }
+    });
+    it('app cleanup only unsubscribes the new custody observers without erasing uncertainty', async () => {
+      const s = setup(); const ui = render(<BrowserApp client={s.client} />); await screen.findByRole('button', { name: 'Open firm' });
+      sessionStorage.setItem(CALLING_PENDING_KEY, 'opaque-calling-unknown'); sessionStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, 'opaque-follow-up-unknown');
+      ui.unmount();
+      expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBe('opaque-calling-unknown');
+      expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe('opaque-follow-up-unknown');
+      s.client.invalidate();
+      expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBe('opaque-calling-unknown');
+      expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe('opaque-follow-up-unknown'); s.client.dispose();
+    });
+  });
   describe('exact navigation', () => {
     it('opens only the current exact Firm in memory without dispatching requests or granting readiness', async () => {
       const { client, send, storage } = setup(); render(<BrowserApp client={client} />);
@@ -61,13 +174,13 @@ describe('BrowserApp real shared presentation', () => {
       const open = await screen.findByRole('button', { name: 'Open calling brief' });
       const before = send.mock.calls.length;
       fireEvent.click(open);
-      expect(screen.getByText(`Selected Firm ${id}. Selection only, not calling readiness.`)).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Calling sessions are not available yet.' })).toBeTruthy();
-      expect(send).toHaveBeenCalledTimes(before);
+      await screen.findByRole('heading', { name: firm.name, level: 2 });
+      expect(screen.getByText('Manual report only. This screen does not place or reserve a call.')).toBeTruthy();
+      expect(send.mock.calls.slice(before).every(([url]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/crm/firm-page-v3')).toBe(true);
       expect(storage.getItem(PENDING_KEY)).toBeNull();
       expect(sessionStorage.length + localStorage.length).toBe(0);
       navigate('Email'); navigate('Calling');
-      expect(screen.getByText(`Selected Firm ${id}. Selection only, not calling readiness.`)).toBeTruthy();
+      await screen.findByRole('heading', { name: firm.name, level: 2 });
       client.dispose();
     });
     it('keeps exact candidate/revision selection across pages and clears it after a new auth epoch', async () => {
@@ -83,13 +196,13 @@ describe('BrowserApp real shared presentation', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Invalid candidate' }));
         expect(screen.queryByRole('heading', { name: 'Calling' })).toBeNull(); expect(send).toHaveBeenCalledTimes(before);
         fireEvent.click(screen.getByRole('button', { name: 'Exact candidate' }));
-        expect(screen.getByText(`Selected candidate ${id} · revision 7. Selection only, not calling readiness.`)).toBeTruthy();
-        expect(send).toHaveBeenCalledTimes(before);
+        await screen.findByRole('heading', { name: 'Selected retained observation' });
+        expect(send.mock.calls.slice(before).every(([url]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/list')).toBe(true);
         navigate('Email'); navigate('Calling');
-        expect(screen.getByText(/revision 7\. Selection only/u)).toBeTruthy();
+        await screen.findByRole('heading', { name: 'Selected retained observation' });
         await act(async () => { client.invalidate(); await client.refresh(); });
         act(() => { oldOpen?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 7 }); });
-        navigate('Calling'); expect(screen.queryByText(/Selected candidate/u)).toBeNull();
+        navigate('Calling'); expect(screen.queryByRole('region', { name: 'Current calling brief' })).toBeNull();
       } finally { probe.mockRestore(); client.dispose(); }
     });
     it('passes memory-only Email selection props and clears them on logout and reauthentication', async () => {

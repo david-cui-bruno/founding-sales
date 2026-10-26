@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
-import { callingSubjectSchema, type CallingSubject } from '@fss/contracts';
+import { callingSubjectSchema, uuid, type CallingSubject } from '@fss/contracts';
 import { BrowserClient } from './BrowserClient.ts';
 import { BrowserProspectsWorkspace } from './BrowserProspectsWorkspace.tsx';
 import { BrowserEmailWorkspace } from './BrowserEmailWorkspace.tsx';
@@ -11,6 +11,9 @@ import { ReplyAttempt } from './ReplyAttempt.ts';
 import { EmailCampaignClient } from './EmailCampaignClient.ts';
 import { PrivateDraftCustody } from './PrivateDraftCustody.ts';
 import { VoicePreferenceCustody } from './VoicePreferenceCustody.ts';
+import { CallingWorkspace } from './CallingWorkspace.tsx';
+import { installCallingCustody } from './CallingPending.ts';
+import { installCallingFollowUpCustody } from './CallingFollowUpPending.ts';
 import type { EmailWorkspaceProps, WorkspaceSection } from './workspaceNavigation.ts';
 
 export function createBrowserClient(): BrowserClient {
@@ -35,12 +38,23 @@ function AuthenticatedWorkspace({ client, section, onNavigate, settings }: {
   };
   const emailProps: EmailWorkspaceProps = {
     client, onNavigate, selectedFollowUpDraftId: selectedEmailDraftId,
-    onFollowUpDraftSelectionChange: draftId => { if (current()) setSelectedEmailDraftId(draftId); },
+    onFollowUpDraftSelectionChange: draftId => {
+      if (current() && (draftId === null || uuid.safeParse(draftId).success)) setSelectedEmailDraftId(draftId);
+    },
   };
   return <div>
     {section === 'today' ? <BrowserToday client={client} onNavigate={onNavigate} onOpenCalling={openCalling} /> : null}
     {section === 'prospects' ? <BrowserProspectsWorkspace client={client} onNavigate={onNavigate} onOpenCalling={openCalling} /> : null}
-    {section === 'calling' ? <div><div className="workspace-page-head"><div><p className="workspace-eyebrow">Calling workspace</p><h1>Calling</h1></div></div><section className="workspace-glass workspace-empty"><h2>Calling sessions are not available yet.</h2><p>No dialer, session or callable queue is connected here. You can review retained prospects and their existing context without starting a call.</p>{callingSelection ? <p role="status">Selected {callingSelection.kind === 'firm' ? `Firm ${callingSelection.firmId}` : `candidate ${callingSelection.candidateId} · revision ${callingSelection.expectedCandidateRevision}`}. Selection only, not calling readiness.</p> : null}<button type="button" className="workspace-primary" onClick={() => { onNavigate('prospects'); }}>Review prospects</button></section></div> : null}
+    {section === 'calling' ? <CallingWorkspace client={client} selection={callingSelection} onSelectionChange={selection => {
+      if (!current()) return;
+      if (selection === null) setCallingSelection(null);
+      else { const exact = callingSubjectSchema.safeParse(selection); if (exact.success && current()) setCallingSelection(exact.data); }
+    }} onOpenEmailDraft={draftId => {
+      if (!current()) return;
+      const exact = uuid.safeParse(draftId);
+      if (!exact.success || !current()) return;
+      setSelectedEmailDraftId(exact.data); onNavigate('email');
+    }} onNavigate={onNavigate} /> : null}
     {section === 'email' ? <BrowserEmailWorkspace {...emailProps} /> : null}
     {section === 'social' ? <BrowserSocialWorkspace client={client} onNavigate={onNavigate} /> : null}
     {section === 'settings' ? settings : null}
@@ -68,6 +82,7 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     // These existing owners neither read product APIs nor replay pending commands.
     const replies = new ReplyAttempt(client), campaigns = new EmailCampaignClient(client);
     const privateDrafts = new PrivateDraftCustody(client), voice = new VoicePreferenceCustody(client);
+    const removeCallingCustody = installCallingCustody(client), removeFollowUpCustody = installCallingFollowUpCustody(client);
     const unsubscribe = client.subscribe(() => {
       if (!live.current) return;
       setSession(client.current); setGeneration(client.epoch);
@@ -89,6 +104,7 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     return () => {
       live.current = false; operation.current += 1; locked.current = false;
       unsubscribe(); replies.dispose(); campaigns.dispose();
+      removeCallingCustody(); removeFollowUpCustody();
       if (suppliedClient === undefined) client.dispose();
     };
   }, [client, suppliedClient]);

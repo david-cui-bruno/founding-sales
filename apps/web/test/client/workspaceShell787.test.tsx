@@ -9,6 +9,8 @@ import { CAMPAIGN_PENDING_KEY } from '../../src/client/CampaignPending.ts';
 import { REPLY_PENDING_KEY } from '../../src/client/ReplyAttempt.ts';
 import { PRIVATE_DRAFT_PENDING_KEY } from '../../src/client/PrivateDraftCustody.ts';
 import { VOICE_PENDING_KEY } from '../../src/client/VoicePreferenceCustody.ts';
+import { CALLING_PENDING_KEY } from '../../src/client/CallingPending.ts';
+import { CALLING_FOLLOW_UP_PENDING_KEY } from '../../src/client/CallingFollowUpPending.ts';
 
 const id = '00000000-0000-4000-8000-000000000001';
 const other = '00000000-0000-4000-8000-000000000002';
@@ -35,7 +37,7 @@ function setup() {
     if (url === '/browser/session') return sessionWait ? await sessionWait.promise : json(status === 'signed_out' ? { status, csrfToken: 'c'.repeat(40) } : { status, workspaceId: id, userId: id, deviceId: id, role, revision, csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() });
     if (url === '/browser/api/today/actions/v4') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-25T12:00:00.000Z', actions: [], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     if (url === '/browser/api/social/private-drafts/list') return json({ drafts: [], nextAfterId: null });
-    if (String(url).startsWith('/browser/api/today')) {
+    if (String(url).startsWith('/browser/api/today?')) {
       const held = todayWait; todayWait = undefined;
       return held ? await held.promise : json(todayAnswer, todayStatus);
     }
@@ -86,7 +88,7 @@ describe('issue787 mounted real-client shell', () => {
     expect(screen.getByRole('region', { name: 'Public conversations' })).toBeTruthy();
     expect(screen.queryByRole('textbox', { name: 'Private social text' })).toBeNull();
     navigate('Calling');
-    expect(screen.getByRole('heading', { name: 'Calling sessions are not available yet.' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Your next conversation starts with context.' })).toBeTruthy();
     expect(screen.queryByText('Unsaved private text')).toBeNull();
     const routes = s.send.mock.calls.map(([url]) => String(url));
     expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks', '/browser/api/today/actions/v4', '/browser/api/sourcing/candidates/prospects/list', '/browser/api/social/private-drafts/list'].includes(url))).toBe(true);
@@ -106,8 +108,8 @@ describe('issue787 mounted real-client shell', () => {
       expect(rules.find(rule => rule.selectorText === '.browser-workspace[data-theme=dark]')?.style.getPropertyValue('--bg')).toBeTruthy();
       const cards = rules.filter(rule => rule.selectorText.startsWith(':where(.browser-main section') || rule.selectorText.startsWith(':where(.browser-main article'));
       expect(cards).toHaveLength(2);
-      const ui = render(<main className="browser-main">{['workspace-prospects', 'email-workspace', 'social-workspace'].map(name => <section key={name} className={name}><section /><article /><aside /></section>)}<section data-legacy="true" /></main>);
-      for (const feature of ui.container.querySelectorAll('.workspace-prospects, .workspace-prospects *, .email-workspace, .email-workspace *, .social-workspace, .social-workspace *')) {
+      const ui = render(<main className="browser-main">{['workspace-prospects', 'email-workspace', 'social-workspace', 'workspace-calling'].map(name => <section key={name} className={name}><section /><article /><aside /></section>)}<section data-legacy="true" /></main>);
+      for (const feature of ui.container.querySelectorAll('.workspace-prospects, .workspace-prospects *, .email-workspace, .email-workspace *, .social-workspace, .social-workspace *, .workspace-calling, .workspace-calling *')) {
         expect(cards.some(rule => feature.matches(rule.selectorText))).toBe(false);
       }
       expect(cards.some(rule => ui.container.querySelector('[data-legacy]')!.matches(rule.selectorText))).toBe(true);
@@ -120,17 +122,17 @@ describe('issue787 mounted real-client shell', () => {
     expect(screen.getByText(/Snapshot 2026-10-25/u)).toBeTruthy();
     expect(within(screen.getByRole('navigation')).getAllByRole('button').map(button => button.textContent)).toEqual(['Today', 'Prospects', 'Calling', 'Email', 'Social']);
     expect(within(screen.getByRole('navigation')).getByRole('button', { name: 'Today' }).getAttribute('aria-current')).toBe('page');
-    expect(s.send.mock.calls.every(([url]) => url === '/browser/session' || String(url).startsWith('/browser/api/today'))).toBe(true);
+    expect(s.send.mock.calls.every(([url]) => url === '/browser/session' || String(url).startsWith('/browser/api/today?'))).toBe(true);
     expect(screen.queryByRole('heading', { name: 'Replies' })).toBeNull();
     expect(screen.queryByRole('heading', { name: /social/iu })).toBeNull();
   });
   it('keeps calling honest and dispatches no readiness/provider/dial request', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
     const count = s.send.mock.calls.length; navigate('Calling');
-    expect(screen.getByRole('heading', { name: 'Calling sessions are not available yet.' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Your next conversation starts with context.' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /start call/iu })).toBeNull();
     expect(screen.queryByText(card.firmName)).toBeNull();
-    expect(s.send).toHaveBeenCalledTimes(count);
+    expect(s.send.mock.calls.slice(count).every(([url]) => url === '/browser/session' || url === '/browser/api/today/actions/v4')).toBe(true);
     expect(document.activeElement).toBe(screen.getByRole('main'));
   });
   it('switches day/night in the shell and settings without storing private or preference state', async () => {
@@ -175,7 +177,7 @@ describe('issue787 mounted real-client shell', () => {
     await screen.findByText(/Current view unavailable or refused/u);
     expect(screen.queryByText(card.firmName)).toBeNull();
     expect(screen.queryByText(/No firms need attention/u)).toBeNull();
-    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today'))).toHaveLength(2);
+    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today?'))).toHaveLength(2);
     s.answer(today); fireEvent.click(screen.getByRole('button', { name: 'Refresh Today' }));
     await screen.findByText(card.firmName);
   });
@@ -188,17 +190,19 @@ describe('issue787 mounted real-client shell', () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
     localStorage.setItem(PRIVATE_DRAFT_PENDING_KEY, 'inactive-ids-only'); localStorage.setItem(VOICE_PENDING_KEY, 'inactive-ids-only');
     sessionStorage.setItem(CAMPAIGN_PENDING_KEY, 'inactive-ids-only'); sessionStorage.setItem(REPLY_PENDING_KEY, 'inactive-ids-only');
+    sessionStorage.setItem(CALLING_PENDING_KEY, 'inactive-ids-only'); sessionStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, 'inactive-ids-only');
     s.answer({}, code); fireEvent.click(screen.getByRole('button', { name: 'Refresh Today' }));
     await screen.findByRole('heading', { name: 'Sign in' });
     expect(screen.queryByText(card.firmName)).toBeNull();
     expect(localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY)).toBeNull(); expect(localStorage.getItem(VOICE_PENDING_KEY)).toBeNull();
     expect(sessionStorage.getItem(CAMPAIGN_PENDING_KEY)).toBeNull(); expect(sessionStorage.getItem(REPLY_PENDING_KEY)).toBeNull();
+    expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBeNull(); expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
   });
   it('ignores late Today after page navigation, then loads a fresh Today on return', async () => {
     const s = setup(); const held = s.delayToday(); render(<BrowserApp client={s.client} />); await screen.findByText('Loading Today…');
     navigate('Calling'); await act(async () => { held.resolve(json(today)); });
     expect(screen.queryByText(card.firmName)).toBeNull(); navigate('Today'); await screen.findByText(card.firmName);
-    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today'))).toHaveLength(2);
+    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today?'))).toHaveLength(2);
   });
   it('ignores late Firm after navigation without replacing the new page', async () => {
     const s = setup(); const held = s.delayFirm(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
@@ -219,7 +223,7 @@ describe('issue787 mounted real-client shell', () => {
     if (kind === 'revision') s.changeRevision(); else s.member();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Today' })); await screen.findByRole('heading', { name: 'Sign in' });
     expect(screen.queryByText(card.firmName)).toBeNull();
-    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today'))).toHaveLength(1);
+    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today?'))).toHaveLength(1);
   });
   it('reports uncertain logout honestly and clears private content immediately', async () => {
     const s = setup(); s.uncertainLogout(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
@@ -241,6 +245,6 @@ describe('issue787 mounted real-client shell', () => {
     expect(screen.getAllByRole('button', { name: 'Open firm' })).toHaveLength(8);
     fireEvent.click(screen.getByRole('button', { name: 'Show more firms' }));
     expect(screen.getAllByRole('heading', { level: 3 }).map(value => value.textContent)).toEqual(Array.from({ length: 10 }, (_, index) => `Firm ${index}`));
-    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today'))).toHaveLength(1);
+    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today?'))).toHaveLength(1);
   });
 });
