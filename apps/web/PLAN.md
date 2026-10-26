@@ -6,6 +6,12 @@ Initial local scope approved October22 2026 at05:39UTC. Its synthetic proof rema
 
 ## Sequence and exclusive ownership
 
+### Active deletion-first retirement, October26 03:50UTC
+
+PR792 merged4f80ca849 at03:37:30UTC with all required checks green; children787–791 closed. David now explicitly requests removal of superseded source, not compatibility wrappers or archives. Under parent783, Evergreen owns #793: delete the unused non-workspace ResearchQueue presentation and migrate its meaningful tests to current Prospects. Herb owns #794: remove obsolete Email/Social compact/automatic-list presentation switches and dead-only fixtures, preserving current supported controls and safety coverage. Exact file grants and acceptance are in those tracker cards. Root owns shared imports/exports, browser.css, dependency/build manifests, this plan and final integration. Two disjoint source writers; no shared runtime allocation.
+
+Retire only code proven superseded through actual consumers and build/changed-path behavior, not grep alone. Root checks shared styles/dependencies for concrete removals after the screen boundaries are settled. Every materially retained old module needs its present consumer/requirement and specific retirement condition, never “maybe later.” Use small reversible commits, delete obsolete-only tests, retain meaningful surviving regressions, review the finished diff once and submit normal PR/CI. No arbitrary line target or open-ended cleanup. User data, prototypes/annotations, migrations, operational rollback artifacts, Git history/branches/worktrees and unrelated native fallback remain out of scope. No deployment or live effects.
+
 ### Active goal783: approved glass-workspace implementation, October26 00:04UTC
 
 David approved implementation at00:04:42UTC after Sheep's revised design review. Authoritative read-only design is Sheep's fss-sheep-design-20261025 commit d1240dc, BRIEF.md and README.md. Earlier Fox prototypes are superseded. Preserve pearlescent glass, restrained layout and actual page replacement: Today, Prospects, Calling, Email, Social; secondary settings/night mode. Prioritize Today to prepared prospect/context/website to calling outcome/promised follow-up to Email. Continuous supply and automatic eligible outbound email are targets, not fabricated live status. Incoming replies/booking automation are deferred. Social public conversations are not DMs; platform route limitations remain explicit. No live acquisition, sending, publishing, calling, deployment or new spending follows from implementation approval.
