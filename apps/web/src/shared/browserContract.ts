@@ -45,6 +45,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/social/drafts', '/social/drafts/read',
   '/social/private-drafts/list', '/social/private-drafts/read', '/social/private-drafts/receipt',
   '/social/voice-preferences/read', '/social/voice-preferences/receipt',
+  '/calling/follow-ups/list', '/calling/follow-ups/read', '/calling/follow-ups/receipt',
 ] as const);
 export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/meetings/notes', '/sourcing/research-firms/create',
@@ -55,6 +56,7 @@ export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/outreach/email-campaigns/approve', '/outreach/email-campaigns/revoke',
   '/replies/composer/generate',
   '/social/private-drafts/save', '/social/voice-preferences/save',
+  '/calling/wrap', '/calling/follow-ups/save',
 ] as const);
 
 export const browserSignInSchema = z.strictObject({
