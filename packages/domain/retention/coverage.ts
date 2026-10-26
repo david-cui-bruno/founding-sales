@@ -58,6 +58,14 @@ const coverage = (
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   Object.freeze({
+  outreach_campaign_opening_policies: coverage(
+    ['retained'],
+    'Immutable owner-approved variant text and exact campaign/template binding are retained as approval history, not copied prospect evidence. Revocation and current owner, campaign, template and expiry checks prevent reuse. No recipient, private notes, model credentials or live activation are stored.',
+  ),
+  outreach_campaign_opening_attempts: coverage(
+    ['swept', 'retained', 'deletion_redacts', 'departure_revokes'],
+    'Derived opening and citation content clears on expiry, original source loss, owner departure or changed policy/template/campaign authority. Unclaimed outbound prefixes clear before source witnesses disappear. Opaque immutable attempt/binding/hash and UNKNOWN fences remain to prevent replay. Already-attempted immutable outbound envelopes retain the existing business-correspondence lifecycle, not reusable opening authority.',
+  ),
   calling_follow_up_drafts: coverage(
     ['swept', 'retained', 'deletion_redacts', 'departure_revokes'],
     'Creator-private current promised-email subject/body follows its exact candidate report or canonical call source. Source correction, withdrawal, deletion, Firm assignment/status changes and creator membership loss physically clear content through lifecycle triggers before source witnesses disappear. Existing raw-source retention sweeps clear expired candidate content. Opaque source identity, revisions and terminal uniqueness fences remain to prevent resurrection; no copied call notes, recipient address, sent history or sending authority is stored.',

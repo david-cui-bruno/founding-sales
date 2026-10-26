@@ -3,11 +3,13 @@ import {actorKind,actorUserId} from '../crm/types.ts';
 import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
 import {eraseManualActivityForSources} from './manualProspectActivitySourceErasure.ts';
 import {eraseProspectPhoneDiscoveriesForSources} from './prospectPhoneDiscoveryLifecycle.ts';
+import {eraseCampaignOpeningsForSources} from '../outreach/campaignOpeningRetention.ts';
 export const MANUAL_SOURCE_LOSS_ACTION='sourcing.manual_source_retention_expired';
 /** Existing append-only audit custody, used only as a denial fence. No URL/body
  * is retained and no candidate/CRM data is changed. Absence grants no authority. */
 export async function rememberExpiredManualSources(ctx:RepositoryContext,urls:readonly string[]):Promise<void>{
  if(urls.length===0)return;
+ await eraseCampaignOpeningsForSources(ctx,urls);
  await lockDiscoveryReviewSources(ctx);
  await eraseManualActivityForSources(ctx,urls);
  await eraseProspectPhoneDiscoveriesForSources(ctx,urls);
