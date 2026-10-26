@@ -6,7 +6,7 @@ import {PrivateDraftCustody,PRIVATE_DRAFT_PENDING_KEY,privateDraftSHA256,type Pr
 import './workspaceSocial.css';
 export interface PrivateAdoption{request:SocialDraftView;conceptIndex:number;variantIndex:number}
 const saveAnswer=z.union([z.strictObject({status:z.literal('accepted'),replayed:z.boolean(),result:socialPrivateDraftSavedSchema}),z.strictObject({status:z.literal('refused'),replayed:z.boolean(),reason:z.string()})]);
-export function BrowserPrivateComposer({client,adoption,reviewBusy,reviewRevision,onDiscard,autoList=false}:{client:BrowserClient;adoption:PrivateAdoption|null;reviewBusy:boolean;reviewRevision:number;onDiscard:()=>void;autoList?:boolean}):JSX.Element{
+export function BrowserPrivateComposer({client,adoption,reviewBusy,reviewRevision,onDiscard}:{client:BrowserClient;adoption:PrivateAdoption|null;reviewBusy:boolean;reviewRevision:number;onDiscard:()=>void}):JSX.Element{
  const custody=useMemo(()=>new PrivateDraftCustody(client),[client]);
  const [text,setText]=useState(''),[kind,setKind]=useState<'post'|'comment'>('post'),[origin,setOrigin]=useState<SocialPrivateDraftOrigin>({kind:'manual'});
  const [selected,setSelected]=useState<Extract<SocialPrivateDraftView,{availability:'available'}>|null>(null),[deadline,setDeadline]=useState<string|null>(null);
@@ -92,8 +92,8 @@ export function BrowserPrivateComposer({client,adoption,reviewBusy,reviewRevisio
  const retry=()=>operation(async current=>custody.exclusive(async()=>{const attempt=payload.current;if(!attempt)throw Error('Lost in-memory payload');custody.assert(attempt.held);const answer=await client.request('/social/private-drafts/save',saveAnswer,{...attempt.input,commandId:attempt.held.commandId},()=>{if(!current())throw Error('Scope changed');custody.assert(attempt.held);});await outcome(answer,attempt.held,current);}));
  const showList=(result:SocialPrivateDraftList):void=>{if(result.drafts.some(draft=>draft.draftId===selectedRef.current?.draftId&&draft.availability==='unavailable')){reset();setNotice('Selected private draft is no longer available. Private text cleared.');}setList(result);};
  useEffect(()=>{
-  if(autoList)void operation(async current=>{const result=await client.request('/social/private-drafts/list',socialPrivateDraftListSchema,{},()=>{if(!current())throw Error('Scope changed');});if(current())setList(result);});
- },[client,autoList,operation]);
+  void operation(async current=>{const result=await client.request('/social/private-drafts/list',socialPrivateDraftListSchema,{},()=>{if(!current())throw Error('Scope changed');});if(current())setList(result);});
+ },[client,operation]);
  const unavailable=busy||reviewBusy||pending!==null||blocked;
  // Focus only committed, enabled targets. A newer transition replaces the intent,
  // so no deferred editor/list callback can steal focus after Back or reopen.

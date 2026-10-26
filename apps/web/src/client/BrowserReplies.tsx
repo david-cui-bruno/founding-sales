@@ -69,7 +69,7 @@ export function BrowserReplies({ client }: { client: BrowserClient }): JSX.Eleme
       <section className="email-thread" aria-label="Selected email conversation">
         {card ? <><header className="email-thread-heading"><button className="email-back" onClick={() => { returningToList.current = true; setSelected(null); }}>Back to conversations</button>
           <h3 ref={heading} tabIndex={-1}>{card.contactName ?? card.firmName}</h3><p>{card.firmName} · {card.subject ?? 'No subject'}</p></header>
-          <BrowserReplyComposer key={`${epoch}:${card.messageId}`} client={client} attempts={attempts} messageId={card.messageId} loadOnMount
+          <BrowserReplyComposer key={`${epoch}:${card.messageId}`} client={client} attempts={attempts} messageId={card.messageId}
             initialScratch={drafts.current.get(card.messageId)} onScratchChange={value => {
               if (!client.isCurrent(epoch)) return;
               if (value === null) drafts.current.delete(card.messageId); else drafts.current.set(card.messageId, value);

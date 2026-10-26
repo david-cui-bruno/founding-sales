@@ -28,7 +28,7 @@ it('mounted evidence refresh cancels sourced save UI but preserves same command 
  });
  const client=new BrowserClient({storage:localStorage,fetch,navigate:vi.fn(),randomUUID:()=>id});
  try{
-  await client.refresh();render(<BrowserSocialReview client={client}/>);fireEvent.click(screen.getByRole('button',{name:'Read retained social suggestions'}));await screen.findByRole('button',{name:'Re-read and use linkedin suggestion 1.1'});fireEvent.click(screen.getByRole('button',{name:'Re-read and use linkedin suggestion 1.1'}));
+  await client.refresh();await act(async()=>{render(<BrowserSocialReview client={client}/>);});fireEvent.click(screen.getByRole('button',{name:'Read retained social suggestions'}));await screen.findByRole('button',{name:'Re-read and use linkedin suggestion 1.1'});fireEvent.click(screen.getByRole('button',{name:'Re-read and use linkedin suggestion 1.1'}));
   await waitFor(()=>expect(screen.getByRole('button',{name:'Save private draft'}).hasAttribute('disabled')).toBe(false));fireEvent.change(screen.getByLabelText('Private social text'),{target:{value:'Edited source-dependent private bytes.'}});fireEvent.click(screen.getByRole('button',{name:'Save private draft'}));await waitFor(()=>expect(commands).toHaveLength(1));
   const pending=localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY);expect(pending).not.toContain('Edited source-dependent');const identity=JSON.parse(pending!) as {commandId:string;payloadSHA256:string};expect(commands[0]?.['commandId']).toBe(identity.commandId);
   fireEvent.click(screen.getByRole('button',{name:'Read retained social suggestions'}));await screen.findByRole('button',{name:'Re-read and use linkedin suggestion 1.1'});expect(screen.getByLabelText('Private social text')).toHaveProperty('value','');
