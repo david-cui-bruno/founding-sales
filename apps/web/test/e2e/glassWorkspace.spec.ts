@@ -207,7 +207,7 @@ test('actual missing-source refusal and held real response cannot restore unmoun
     await navigateGlass(page, 'Social');
     const session = await browserSession(page);
     if (session.status !== 'signed_in') throw Error('Current signed identity required for revocation acceptance');
-    await app().fixture.db.query('UPDATE devices SET revoked_at=now() WHERE id=$1', [session.deviceId]);
+    await app().fixture.db.query("UPDATE devices SET status='revoked',revoked_at=now() WHERE id=$1", [session.deviceId]);
     const revoked = await browserRequest(page, '/calling/follow-ups/list', { body: {} });
     expect(revoked.status).toBe(401);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();

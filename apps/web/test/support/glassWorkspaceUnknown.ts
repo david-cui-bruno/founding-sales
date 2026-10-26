@@ -50,6 +50,7 @@ export async function acceptGlassTwoTabUnknown(page: Page, context: BrowserConte
       expect(response.status()).toBe(200);
       expect(glassSaveAcceptance.parse(await response.json()).result).toEqual({ draftId: payload.draftId, revision: payload.expectedRevision + 1 });
       saved.set(payload.draftId, { commandId: String(commandId), payloadSHA256: createHash('sha256').update(privateDraftCanonicalJson(payload)).digest('hex') });
+      console.log('GLASS783_UNKNOWN_REAL_COMMIT', JSON.stringify({ draftId: payload.draftId, ...saved.get(payload.draftId), registry: await records(target) }));
       await route.abort('failed'); // Server committed, but browser has no acceptance evidence.
     });
     const privateA = 'FICTIONAL lost response A. Never store this private body in custody.';
@@ -59,6 +60,8 @@ export async function acceptGlassTwoTabUnknown(page: Page, context: BrowserConte
     await Promise.all([page, other].map(target => target.getByRole('button', { name: 'Save private follow-up', exact: true }).click()));
     for (const target of [page, other]) await expect(target.getByText('Save outcome UNKNOWN.', { exact: false })).toBeVisible();
     const both = await records(page);
+    console.log('GLASS783_UNKNOWN_CONSERVATION', JSON.stringify({ dispatches, committed: [...saved], registry: both, otherRegistry: await records(other) }));
+    expect(saved.size, 'Both distinct saves must have actual backend acceptance before transport loss').toBe(2);
     expect(both).toHaveLength(2);
     for (const held of both) expect(held).toMatchObject(saved.get(held.draftId)!);
     expect(both.map(value => value.draftId).sort()).toEqual([first.draftId, secondId].sort());
@@ -88,7 +91,7 @@ export async function acceptGlassTwoTabUnknown(page: Page, context: BrowserConte
     await navigateGlass(other, 'Social');
     const session = await browserSession(page);
     if (session.status !== 'signed_in') throw Error('Real signed identity required');
-    await app.fixture.db.query('UPDATE devices SET revoked_at=now() WHERE id=$1', [session.deviceId]);
+    await app.fixture.db.query("UPDATE devices SET status='revoked',revoked_at=now() WHERE id=$1", [session.deviceId]);
     // Actual mounted product request causes 401 and app-lifetime invalidation while Email is absent.
     await page.getByRole('button', { name: 'List saved private drafts', exact: true }).click();
     for (const target of [page, other]) {
