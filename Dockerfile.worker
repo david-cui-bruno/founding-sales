@@ -105,6 +105,7 @@ COPY packages/domain/release packages/domain/release
 # Call-to-booking (slice W): the telephony reservations' sweep.
 COPY packages/domain/business packages/domain/business
 COPY packages/domain/calls packages/domain/calls
+COPY packages/domain/calling packages/domain/calling
 # Slice M1: the Cal.com reconciliation.
 COPY packages/domain/meetings packages/domain/meetings
 COPY packages/contracts/src packages/contracts/src

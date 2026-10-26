@@ -38,6 +38,7 @@
 !packages/domain/release
 !packages/domain/business
 !packages/domain/calls
+!packages/domain/calling
 !packages/domain/meetings
 !packages/domain/funnel
 !packages/contracts/package.json
