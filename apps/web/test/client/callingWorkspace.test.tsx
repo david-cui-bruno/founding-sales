@@ -51,7 +51,7 @@ it('retained phone queue keeps unknown and conflicting rows, selects exact page-
   if(path.endsWith('/prospects/list')){const input=JSON.parse(String(init?.body)) as {offset:number};offsets.push(input.offset);return Response.json({prospects:input.offset===0?[prospect,ambiguous]:[changed?{...prospect,candidateId:observed.candidateId,revision:observed.revision,observedName:observed.observedName}:observed],hasMore:input.offset===0});}
   throw Error('Unexpected changed-path request');
  });
- const client=new BrowserClient({fetch:fetcher,storage:localStorage,navigate:vi.fn()});clients.push(client);await client.refresh();const selected=vi.fn();
+ const client=new BrowserClient({fetch:fetcher,storage:localStorage,navigate:vi.fn(),randomUUID:()=>other});clients.push(client);await client.refresh();const selected=vi.fn();
  render(<CallingQueue client={client} onSelect={selected} disabled={false}/>);
  fireEvent.click(screen.getByRole('button',{name:'Retained list'}));
  await screen.findByRole('button',{name:/Synthetic unknown-phone candidate.*Phone unknown/u});
@@ -67,7 +67,7 @@ it('retained phone late candidate read cannot resurrect details after session lo
  let resolve:(value:Response)=>void=()=>{throw Error('Read not started');};
  const pending=new Promise<Response>(done=>{resolve=done;});
  const fetcher=vi.fn<typeof fetch>(async(url)=>String(url)==='/browser/session'?Response.json({status:'signed_in',workspaceId:id,userId:id,deviceId:id,role:'admin',revision:'one',csrfToken:'c'.repeat(40),expiresAt:new Date(Date.now()+60000).toISOString()}):pending);
- const client=new BrowserClient({fetch:fetcher,storage:localStorage,navigate:vi.fn()});clients.push(client);await client.refresh();const ready=vi.fn();
+ const client=new BrowserClient({fetch:fetcher,storage:localStorage,navigate:vi.fn(),randomUUID:()=>other});clients.push(client);await client.refresh();const ready=vi.fn();
  render(<CallingContext client={client} entry={{subject:phoneEntry(observed).subject,label:observed.observedName}} onReady={ready}/>);
  expect(fetcher).toHaveBeenCalledTimes(2);await act(async()=>{client.invalidate();resolve(Response.json({prospects:[observed],hasMore:false}));});
  expect(screen.queryByLabelText('Retained phone evidence')).toBeNull();expect(screen.queryByRole('link',{name:phoneSource.url})).toBeNull();expect(ready.mock.calls.every(([data])=>data===null)).toBe(true);
