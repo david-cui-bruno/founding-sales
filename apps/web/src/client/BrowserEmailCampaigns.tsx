@@ -3,8 +3,9 @@ import { emailCampaignPolicySchema, type EmailCampaignControl } from '@fss/contr
 import { type BrowserClient } from './BrowserClient.ts';
 import { EmailCampaignClient } from './EmailCampaignClient.ts';
 import { type CampaignAction } from './CampaignPending.ts';
+import './workspaceEmail.css';
 
-export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JSX.Element {
+export function BrowserEmailCampaigns({ client, compact = false }: { client: BrowserClient; compact?: boolean }): JSX.Element {
   const [manager] = useState(() => new EmailCampaignClient(client));
   const [control, setControl] = useState<EmailCampaignControl | null>(null);
   const [pending, setPending] = useState(manager.pending());
@@ -25,6 +26,7 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
         generation = client.epoch;
         operation.current += 1;
         lock.current = false;
+        setControl(null); setMailboxId(''); setSequenceVersionId(''); setRegions([]); setExpiry('');
         setBusy(false); setNotice('');
       }
       setPending(manager.pending());
@@ -71,23 +73,25 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
     command({ kind: 'approve', policy: policy.data });
   };
   if (client.current?.status !== 'signed_in' || client.current.role !== 'admin') return <></>;
-  return <section aria-label="Email campaigns" className="space-y-3 rounded-md border p-4"><h2>Email campaigns</h2>
+  return <section aria-label="Email campaigns" className="email-campaigns"><h2>Automatic outreach</h2>
     <p>Approve once to automatically admit qualified canonical Firms, including new qualified research Firms, without per-recipient approval. Enrollment is not delivery. Sending authority remains unchanged.</p>
     <p>Only verified residential property management companies qualify. Selected regions remain subject to the current stricter locality and geography policy. Ambiguous evidence stays internal.</p>
     <button disabled={busy} onClick={() => { void run(() => manager.control()); }}>Refresh campaigns</button>
     {notice ? <p role="status">{notice}</p> : null}
     {pending ? <aside aria-label="Pending campaign command"><p>Pending {pending.action.kind} command {pending.commandId}. {pending.accepted ? `Accepted campaign ${pending.accepted.campaignId} revision ${pending.accepted.revision}. Current read required.` : 'Outcome not confirmed. Reload never dispatches this command.'}</p>
       <button disabled={busy} onClick={() => { void run(() => manager.retry()); }}>Retry same campaign command</button></aside> : null}
-    {control ? <><label>Approved sender<select aria-label="Approved sender" disabled={busy || pending !== null} value={mailboxId} onChange={event => { setMailboxId(event.target.value); }}><option value="">Select sender</option>{control.senders.map(sender => <option key={sender.id} value={sender.id}>{sender.label} · authorization revision {sender.authorizationRevision}</option>)}</select></label>
+    {control ? <><h3>Current campaigns</h3>{control.campaigns.length === 0 ? <p>No current campaigns.</p> : null}{control.campaigns.map(campaign => <article key={campaign.id}><p>Campaign {campaign.id} revision {campaign.revision} · {campaign.state} · {campaign.regions.join(', ')} · admitted {campaign.admittedCount}/{campaign.maxEnrollments} · daily limit {campaign.dailyAdmissionLimit} · expires {campaign.expiresAt}</p>
+        <button aria-label={`Revoke campaign ${campaign.id}`} disabled={busy || pending !== null || campaign.revokedAt !== null} onClick={() => { command({ kind: 'revoke', id: campaign.id, expectedRevision: campaign.revision }); }}>Revoke campaign</button></article>)}
+      <h3>Automatic admission activity</h3><p>Admissions are not sent-message history or confirmation of delivery.</p>{control.admissions.length === 0 ? <p>No current admissions.</p> : null}{control.admissions.map(admission => <details key={admission.enrollmentId}><summary>Firm {admission.firmId} · admitted {admission.admittedAt}</summary><p>Campaign {admission.campaignId} · Contact {admission.contactId} · Route {admission.routeId} · Plan {admission.planId} · Enrollment {admission.enrollmentId} · Candidate {admission.candidateId} · Qualification run {admission.qualificationRunId}</p></details>)}
+      <details className="email-campaign-policy" open={!compact}><summary>Campaign policy and one-time approval</summary><p>Approve a bounded campaign, not each recipient. Existing sending controls remain authoritative.</p>
+      <label>Approved sender<select aria-label="Approved sender" disabled={busy || pending !== null} value={mailboxId} onChange={event => { setMailboxId(event.target.value); }}><option value="">Select sender</option>{control.senders.map(sender => <option key={sender.id} value={sender.id}>{sender.label} · authorization revision {sender.authorizationRevision}</option>)}</select></label>
       <label>Approved email sequence<select aria-label="Approved email sequence" disabled={busy || pending !== null} value={sequenceVersionId} onChange={event => { setSequenceVersionId(event.target.value); }}><option value="">Select sequence</option>{control.sequences.map(sequence => <option key={sequence.id} value={sequence.id}>{sequence.label}</option>)}</select></label>
       <fieldset disabled={busy || pending !== null}><legend>Campaign regions</legend>{(['TX', 'RI', 'MA'] as const).map(region => <label key={region}><input type="checkbox" checked={regions.includes(region)} onChange={event => { setRegions(previous => event.target.checked ? [...previous, region] : previous.filter(value => value !== region)); }} />{region}</label>)}</fieldset>
       <label>Daily admission limit<input aria-label="Daily admission limit" type="number" min="1" max="5" value={daily} disabled={busy || pending !== null} onChange={event => { setDaily(event.target.value); }} /></label>
       <label>Lifetime enrollment cap<input aria-label="Lifetime enrollment cap" type="number" min="1" max="25" value={lifetime} disabled={busy || pending !== null} onChange={event => { setLifetime(event.target.value); }} /></label>
       <label>Campaign expiry<input aria-label="Campaign expiry" type="datetime-local" value={expiry} disabled={busy || pending !== null} onChange={event => { setExpiry(event.target.value); }} /></label>
       <button disabled={busy || pending !== null || control.campaigns.some(value => value.revokedAt === null)} onClick={approve}>Approve campaign once</button>
-      <h3>Current campaigns</h3>{control.campaigns.length === 0 ? <p>No current campaigns.</p> : null}{control.campaigns.map(campaign => <article key={campaign.id}><p>Campaign {campaign.id} revision {campaign.revision} · {campaign.state} · {campaign.regions.join(', ')} · admitted {campaign.admittedCount}/{campaign.maxEnrollments} · daily limit {campaign.dailyAdmissionLimit} · expires {campaign.expiresAt}</p>
-        <button aria-label={`Revoke campaign ${campaign.id}`} disabled={busy || pending !== null || campaign.revokedAt !== null} onClick={() => { command({ kind: 'revoke', id: campaign.id, expectedRevision: campaign.revision }); }}>Revoke campaign</button></article>)}
-      <h3>Automatic admissions</h3>{control.admissions.length === 0 ? <p>No current admissions.</p> : null}{control.admissions.map(admission => <p key={admission.enrollmentId}>Campaign {admission.campaignId} · Firm {admission.firmId} · Contact {admission.contactId} · Route {admission.routeId} · Plan {admission.planId} · Enrollment {admission.enrollmentId} · Candidate {admission.candidateId} · Qualification run {admission.qualificationRunId} · {admission.admittedAt}</p>)}
+      </details>
     </> : null}
   </section>;
 }
