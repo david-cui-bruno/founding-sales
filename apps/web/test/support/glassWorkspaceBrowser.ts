@@ -21,6 +21,7 @@ export async function launchGlassContext() {
     const processes = execFileSync('ps', ['-axo', 'pid,command'], { encoding: 'utf8' }).split('\n').filter(line => line.includes(`--user-data-dir=${profile}`));
     const pids = processes.map(line => Number(line.trim().split(/\s+/u)[0]));
     assert(pids.length > 0 && pids.every(Number.isSafeInteger), 'Exact owned Chrome PID required');
+    console.log('GLASS783_CHROME_REGISTERED', JSON.stringify({ executablePath, profile, pids, headless: true }));
     return { context: owned, async stop() {
       try {
         await owned.close();
@@ -28,6 +29,7 @@ export async function launchGlassContext() {
       } finally {
         await rm(profile, { recursive: true, force: true });
         await access(profile).then(() => { throw Error('Owned Chrome profile remains'); }, error => { assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT'); });
+        console.log('GLASS783_CHROME_RELEASED', JSON.stringify({ profile, pids }));
       }
     } };
   } catch (error) { try { await context?.close(); } finally { await rm(profile, { recursive: true, force: true }); } throw error; }
