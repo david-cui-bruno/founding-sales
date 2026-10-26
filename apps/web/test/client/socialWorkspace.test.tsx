@@ -56,7 +56,7 @@ beforeEach(()=>{
  let queue=Promise.resolve<unknown>(undefined);
  vi.stubGlobal('navigator',{locks:{request:(_name:string,_options:unknown,work:()=>Promise<unknown>)=>{const result=queue.then(work);queue=result.catch(()=>undefined);return result;}}});
 });
-afterEach(()=>{cleanup();localStorage.clear();vi.unstubAllGlobals();});
+afterEach(()=>{cleanup();localStorage.clear();vi.restoreAllMocks();vi.unstubAllGlobals();});
 const text=()=>screen.getByLabelText('Private social text');
 const reopen=(id=firstId)=>fireEvent.click(screen.getByRole('button',{name:new RegExp(`Reopen private draft ${id}`,'u')}));
 async function mount(){const s=fixture();await s.client.refresh();const view=render(<BrowserSocialWorkspace client={s.client}/>);await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});return {...s,view};}
@@ -101,10 +101,35 @@ it('offers honest public-discussion unavailability, no fictional DMs or connecti
  expect(screen.getByRole('button',{name:'Open public discussion'}).hasAttribute('disabled')).toBe(true);expect(s.reads).toHaveLength(before);expect(screen.queryByLabelText('Private social text')).toBeNull();
  expect(screen.queryByRole('button',{name:/publish|connect|send|schedule/iu})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Posts'}));await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});expect(text()).toHaveProperty('value','');s.client.dispose();
 });
-it('Back preserves mounted unsaved text, returns focus to list, and new composition clears identity',async()=>{
+it('Back preserves mounted unsaved text and new composition clears identity',async()=>{
  const s=await mount();reopen();await waitFor(()=>expect(text()).toHaveProperty('value','First neutral owner draft.'));fireEvent.change(text(),{target:{value:'Mounted unsaved edit.'}});
- fireEvent.click(screen.getByRole('button',{name:'Back to drafts'}));expect(document.activeElement).toBe(screen.getByRole('button',{name:'List saved private drafts'}));expect(text()).toHaveProperty('value','Mounted unsaved edit.');
+ fireEvent.click(screen.getByRole('button',{name:'Back to drafts'}));expect(text()).toHaveProperty('value','Mounted unsaved edit.');
  fireEvent.click(screen.getByRole('button',{name:'Start new manual draft'}));expect(text()).toHaveProperty('value','');expect(screen.getByText('New private draft')).toBeTruthy();expect(screen.getByRole('complementary',{name:'Saved private drafts'}).querySelector('[aria-pressed="true"]')).toBeNull();s.client.dispose();
+});
+it('Back focus runs only after the committed list-visible class with mounted enabled target',async()=>{
+ const s=await mount();fireEvent.click(screen.getByRole('button',{name:'Start new manual draft'}));
+ const editor=text(),list=screen.getByRole('button',{name:'List saved private drafts'});
+ fireEvent.change(editor,{target:{value:'Mounted focus-regression scratch.'}});
+ const committed: boolean[]=[];
+ vi.spyOn(list,'focus').mockImplementation(()=>{committed.push(list.isConnected&&!list.hasAttribute('disabled')&&!list.closest('.social-composition')!.classList.contains('social-editor-open'));});
+ expect(list.closest('.social-composition')!.classList.contains('social-editor-open')).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'Back to drafts'}));
+ expect(committed).toEqual([true]);expect(text()).toBe(editor);expect(editor).toHaveProperty('value','Mounted focus-regression scratch.');expect(s.commands).toEqual([]);s.client.dispose();
+});
+it('Back supersedes pending editor focus without a later callback stealing list focus',async()=>{
+ const frames:FrameRequestCallback[]=[];vi.stubGlobal('requestAnimationFrame',(callback:FrameRequestCallback)=>{frames.push(callback);return frames.length;});
+ const s=await mount();fireEvent.click(screen.getByRole('button',{name:'Start new manual draft'}));
+ const list=screen.getByRole('button',{name:'List saved private drafts'});
+ fireEvent.click(screen.getByRole('button',{name:'Back to drafts'}));
+ act(()=>{for(const frame of frames)frame(0);});
+ expect(document.activeElement).toBe(list);expect(list.closest('.social-editor-open')).toBeNull();s.client.dispose();
+});
+it('a same-turn Back and reopen never restores stale list focus after the newer editor transition',async()=>{
+ const s=await mount();const start=screen.getByRole('button',{name:'Start new manual draft'});fireEvent.click(start);
+ const list=screen.getByRole('button',{name:'List saved private drafts'}),focus=vi.spyOn(list,'focus');
+ const back=screen.getByRole('button',{name:'Back to drafts'});
+ act(()=>{back.click();start.click();});
+ expect(focus).not.toHaveBeenCalled();expect(list.closest('.social-editor-open')).not.toBeNull();s.client.dispose();
 });
 it.each(['unavailable','wrong identity'] as const)('never restores prose after %s selected read',async mode=>{
  const s=await mount();if(mode==='unavailable')s.withhold();else s.wrongIdentity();reopen();await screen.findByText(mode==='unavailable'?/Private draft unavailable: source_changed_or_unavailable/u:/Private operation unavailable or outcome unknown/u);expect(text()).toHaveProperty('value','');expect(s.commands).toEqual([]);s.client.dispose();

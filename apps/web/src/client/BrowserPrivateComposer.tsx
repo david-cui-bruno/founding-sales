@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useMemo,useRef,useState,type JSX} from 'react';
+import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type JSX} from 'react';
 import {z} from 'zod';
 import {socialDraftViewSchema,socialPrivateDraftListSchema,socialPrivateDraftReadSchema,socialPrivateDraftReceiptSchema,socialPrivateDraftSavedSchema,type SocialDraftView,type SocialPrivateDraftOrigin,type SocialPrivateDraftView,type SocialPrivateDraftList,type SocialPrivateDraftSaveInput} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
@@ -14,7 +14,8 @@ export function BrowserPrivateComposer({client,adoption,reviewBusy,reviewRevisio
  const [list,setList]=useState<SocialPrivateDraftList|null>(null),[pending,setPending]=useState<PrivateDraftPending|null>(null),[busy,setBusy]=useState(false),[blocked,setBlocked]=useState(false),[notice,setNotice]=useState('Write privately. Only explicit Save stores text.');
  const [editorOpen,setEditorOpen]=useState(false);
  const editor=useRef<HTMLTextAreaElement>(null),listButton=useRef<HTMLButtonElement>(null);
- const openEditor=():void=>{setEditorOpen(true);requestAnimationFrame(()=>editor.current?.focus());};
+ const focusIntent=useRef<'editor'|'list'|null>(null);
+ const openEditor=():void=>{focusIntent.current='editor';setEditorOpen(true);};
  const guard=useRef(false),token=useRef(0),payload=useRef<{held:PrivateDraftPending;input:SocialPrivateDraftSaveInput}|null>(null),binding=useRef(client.epoch);
  const originRef=useRef(origin);originRef.current=origin;const adoptionBlocked=useRef(false);adoptionBlocked.current=pending!==null||blocked;
  const reset=():void=>{setText('');setKind('post');setOrigin({kind:'manual'});selectedRef.current=null;setSelected(null);setDeadline(null);};
@@ -94,6 +95,14 @@ export function BrowserPrivateComposer({client,adoption,reviewBusy,reviewRevisio
   if(autoList)void operation(async current=>{const result=await client.request('/social/private-drafts/list',socialPrivateDraftListSchema,{},()=>{if(!current())throw Error('Scope changed');});if(current())setList(result);});
  },[client,autoList,operation]);
  const unavailable=busy||reviewBusy||pending!==null||blocked;
+ // Focus only committed, enabled targets. A newer transition replaces the intent,
+ // so no deferred editor/list callback can steal focus after Back or reopen.
+ useLayoutEffect(()=>{
+  const intent=focusIntent.current;if(intent===null||(intent==='editor')!==editorOpen)return;
+  const target=intent==='editor'?editor.current:listButton.current;
+  if(!target?.isConnected||target.disabled)return;
+  focusIntent.current=null;target.focus();
+ });
  return <section aria-label="Private social composer" aria-busy={busy||reviewBusy} className={`social-composition${editorOpen?' social-editor-open':''}`}>
   <div className="social-composition-toolbar"><div><h3>Private posts & comments</h3><p>Save privately. Nothing is approved, scheduled or published.</p></div>
    <button type="button" disabled={unavailable} onClick={()=>{token.current++;reset();openEditor();setNotice('New blank manual composition. Previous text and provenance cleared.');}}>Start new manual draft</button>
@@ -105,7 +114,7 @@ export function BrowserPrivateComposer({client,adoption,reviewBusy,reviewRevisio
    {list===null?<p className="social-empty">Load saved drafts to see current private records. Draft text is read only when you reopen one.</p>:<div>{list.drafts.length===0?<p className="social-empty">No saved private drafts. Start a new manual draft.</p>:null}{list.drafts.map(draft=><button className="social-draft-row" key={draft.draftId} type="button" aria-label={`Reopen private draft ${draft.draftId}, ${draft.kind}, revision ${draft.revision}, ${draft.availability}`} aria-pressed={selected?.draftId===draft.draftId} disabled={unavailable} onClick={()=>{void operation(current=>reopen(draft.draftId,current));}}><strong>{draft.kind==='post'?'Post':'Comment'} · Revision {draft.revision}</strong><span>{draft.originKind==='manual'?'Manual':'Retained suggestion'} · {draft.availability}</span><small>Updated <time dateTime={draft.updatedAt}>{draft.updatedAt.slice(0,10)}</time> · {draft.draftId.slice(-8)}</small></button>)}{list.nextAfterId?<button type="button" disabled={busy||blocked} onClick={()=>{void operation(async current=>{const result=await client.request('/social/private-drafts/list',socialPrivateDraftListSchema,{afterId:list.nextAfterId},()=>{if(!current())throw Error('Scope changed');});if(current())showList(result);});}}>Next private drafts</button>:null}</div>}
   </aside>
   <div className="social-selected-editor">
-  <button className="social-mobile-back" type="button" onClick={()=>{setEditorOpen(false);listButton.current?.focus();}}>Back to drafts</button>
+  <button className="social-mobile-back" type="button" onClick={()=>{focusIntent.current='list';setEditorOpen(false);}}>Back to drafts</button>
   <div className="social-editor-heading"><h4>{selected?'Selected private draft':'New private draft'}</h4><span>{selected?`Revision ${selected.revision}${text!==selected.text||kind!==selected.kind?' · Unsaved changes':''}`:'Unsaved'}</span></div>
   <label>Scratch format <select aria-label="Scratch format" value={kind} disabled={unavailable} onChange={e=>setKind(e.target.value==='comment'?'comment':'post')}><option value="post">Post</option><option value="comment">Comment</option></select></label>
   <details className="social-details"><summary>Source, privacy & expiry</summary>
