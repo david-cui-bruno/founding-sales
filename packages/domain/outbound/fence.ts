@@ -738,9 +738,6 @@ export async function markPreDispatchFenceSent(
     // Safe for the reason the edge exists at all: `held` never entered dispatching.
     await releaseFence(context, { outboundMessageId: input.outboundMessageId, actor });
   }
-  // Both columns or neither: a verified record is a subject and a body that were read
-  // together from the same message (review of PR 296, second round).
-  //
   // And bytes Gmail holds are still bytes this table has an opinion about: a message
   // that carries a visible opt-out link would break `outbound_messages_no_optout_link`
   // and abort the whole restore transaction. The send already happened and cannot be
@@ -762,7 +759,7 @@ export async function markPreDispatchFenceSent(
   const claimed = await context.db.query<{ attempt_token: string }>(
     `UPDATE outbound_messages
         SET state = 'dispatching', attempt_token = gen_random_uuid(),
-            dispatch_started_at = $3::timestamptz,
+            dispatch_started_at = $3::timestamptz, provider_message_id = $7, provider_thread_id = $8,
             subject = coalesce($4::text, subject),
             body = coalesce($5::text, body),
             rendered_hash = coalesce($6::text, rendered_hash),
@@ -776,6 +773,8 @@ export async function markPreDispatchFenceSent(
       subject,
       body,
       body === null || subject === null ? null : renderedHash(subject, body),
+      input.providerMessageId,
+      input.providerThreadId,
     ],
   );
   const token = claimed.rows[0]?.attempt_token;

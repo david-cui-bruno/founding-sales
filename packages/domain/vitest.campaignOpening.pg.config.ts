@@ -10,7 +10,7 @@ export default defineConfig({
     pool: 'forks', maxWorkers: 1, fileParallelism: false, testTimeout: 60_000, hookTimeout: 60_000,
     globalSetup: ['./test/outreach/campaignOpeningPgRuntime.ts'],
     setupFiles: ['./test/outreach/campaignOpeningPgCatalogSetup.ts'],
-    include: ['test/outreach/campaignOpening.pg.test.ts', 'test/outreach/campaignOpeningConstraints.pg.test.ts', 'test/outreach/campaignOpeningRisk.pg.test.ts', 'test/db/constraints.test.ts'],
-    testNamePattern: /risk R|risk SPEC|admitted real first execution|actual delayed|real source erasure|actual policy absence|actual app role cannot|unclaimed prefix|refuses the insert that would break (?:outreach_campaign_opening_|campaign_opening_)|has a case for every constraint/u,
+    include: ['test/outreach/campaignOpening.pg.test.ts', 'test/outreach/campaignOpeningConstraints.pg.test.ts', 'test/outreach/campaignOpeningRisk.pg.test.ts', 'test/outreach/campaignOpeningRecovery.pg.test.ts', 'test/outreach/campaignOpeningSerialization.pg.test.ts', 'test/db/constraints.test.ts'],
+    testNamePattern: /risk R|risk SPEC|risk STD|admitted real first execution|actual delayed|real source erasure|actual policy absence|actual app role cannot|unclaimed prefix|refuses the insert that would break (?:outreach_campaign_opening_|campaign_opening_)|has a case for every constraint/u,
   },
 });

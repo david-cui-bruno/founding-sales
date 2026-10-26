@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import type { TwoWorkspaces } from './support/fixtures.ts';
 import type { SeededMail } from './support/mailFixtures.ts';
+import type { SeededOutbound } from './support/outboundFixtures.ts';
 import { openingFixture } from '../outreach/campaignOpeningFixture.ts';
 
-type Fixture = { session: SessionQueryable; seeded: TwoWorkspaces; mail: SeededMail };
+type Fixture = { session: SessionQueryable; seeded: TwoWorkspaces; mail: SeededMail; outbound: SeededOutbound };
 type Row = Record<string, unknown>;
 type Case = { constraint: string; run: (fixture: Fixture) => Promise<unknown> };
 const policies = 'outreach_campaign_opening_policies';
@@ -53,6 +54,12 @@ const invalidAttempt = (constraint: typeof attemptChecks[number], patch: Row): C
 /** Exact named PK/UNIQUE/FK/CHECK catalog coverage for additive migration0140.
  * FK name reflects PostgreSQL's 63-byte generated-name truncation. */
 export const CAMPAIGN_OPENING_CONSTRAINT_CASES: readonly Case[] = [
+  { constraint: 'campaign_opening_historical_terminal', run: async f => {
+    await f.session.query(`UPDATE outbound_messages SET state='dispatching',attempt_token=gen_random_uuid(),dispatch_started_at=clock_timestamp(),
+      provider_message_id='fictional-observed',provider_thread_id='fictional-thread' WHERE workspace_id=$1 AND id=$2`,
+    [f.seeded.alpha.workspaceId, f.outbound.alpha.preparedFenceId]);
+    return f.session.query('SET CONSTRAINTS campaign_opening_historical_terminal IMMEDIATE');
+  } },
   { constraint: 'outreach_campaign_opening_policies_pkey', run: async f => {
     const row = await policyRow(f); await insert(f, policies, row);
     await f.session.query(`ALTER TABLE ${policies} DROP CONSTRAINT outreach_campaign_opening_policies_workspace_id_campaign_id_key`);

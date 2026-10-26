@@ -83,6 +83,37 @@ CREATE TABLE outreach_campaign_opening_attempts (
   OR (fence_id IS NOT NULL AND subject_hash ~ '^[a-f0-9]{64}$' AND body_hash ~ '^[a-f0-9]{64}$')),
  CONSTRAINT campaign_opening_binding_shape CHECK(campaign_opening_binding_valid(binding))
 );
+-- A new approved opening starts with the canonical present-day footer, not a
+-- legacy guessed footer. Rebinding recognises only exact recorded blocks and
+-- preserves every byte above their separator. The existing TS composer remains
+-- the composition owner, this SQL predicate independently narrows its mutation.
+CREATE FUNCTION campaign_opening_footer_body(w uuid,t uuid,b text) RETURNS text LANGUAGE plpgsql AS $$
+DECLARE signoff text; current_address text; block text; head text; current_footer text;
+BEGIN
+ PERFORM pg_advisory_xact_lock_shared(hashtextextended(w::text||':postal_address',0));
+ SELECT btrim(footer_sign_off,E' \t\n\r') INTO signoff FROM template_versions WHERE workspace_id=w AND id=t FOR SHARE;
+ IF signoff IS NULL OR signoff='' THEN RETURN NULL; END IF;
+ SELECT nullif(btrim(value->>'address',E' \t\n\r'),'') INTO current_address FROM workspace_settings
+  WHERE workspace_id=w AND setting_key='postal_address' AND superseded_at IS NULL;
+ current_footer:=signoff||CASE WHEN current_address IS NULL THEN '' ELSE E'\n'||current_address END;
+ FOR block IN WITH addresses AS (
+   SELECT '' AS address UNION SELECT coalesce(current_address,'') UNION
+   SELECT coalesce(nullif(btrim(v.value->>'address',E' \t\n\r'),''),'') FROM
+    (SELECT value FROM workspace_settings WHERE workspace_id=w AND setting_key='postal_address' ORDER BY version DESC LIMIT 100) v
+  ) SELECT signoff||CASE WHEN a.address='' THEN '' ELSE E'\n'||a.address END FROM addresses a ORDER BY length(a.address) DESC LOOP
+  IF b=block THEN RETURN current_footer; END IF;
+  IF right(b,length(block)+2)=E'\n\n'||block THEN
+   head:=left(b,length(b)-length(block)-2);
+   RETURN head||E'\n\n'||current_footer;
+  END IF;
+ END LOOP;
+ RETURN NULL;
+END $$;
+CREATE FUNCTION campaign_opening_footer_hash_matches(w uuid,f uuid,sh text,bh text,rebound text) RETURNS boolean LANGUAGE sql AS $$
+ SELECT EXISTS(SELECT 1 FROM outbound_messages o WHERE o.workspace_id=w AND o.id=f AND o.attempt_token IS NULL AND o.state IN ('prepared','held')
+  AND encode(sha256(convert_to(o.subject,'UTF8')),'hex')=sh AND encode(sha256(convert_to(o.body,'UTF8')),'hex')=bh
+  AND encode(sha256(convert_to(campaign_opening_footer_body(w,o.template_version_id,o.body),'UTF8')),'hex')=rebound)
+$$;
 CREATE FUNCTION campaign_opening_attempt_fence() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE p jsonb; payload jsonb; expected text; cid jsonb;
 BEGIN
@@ -99,7 +130,9 @@ BEGIN
    OR (OLD.state='ready' AND NEW.state NOT IN ('ready','invalidated'))
    OR (OLD.state IN ('refused','invalidated') AND NEW.state<>OLD.state)
    OR (OLD.state='ready' AND NEW.content IS NOT NULL AND NEW.content IS DISTINCT FROM OLD.content)
-   OR (OLD.fence_id IS NOT NULL AND (NEW.fence_id,NEW.subject_hash,NEW.body_hash) IS DISTINCT FROM (OLD.fence_id,OLD.subject_hash,OLD.body_hash))
+   OR (OLD.fence_id IS NOT NULL AND ((NEW.fence_id,NEW.subject_hash) IS DISTINCT FROM (OLD.fence_id,OLD.subject_hash)
+    OR (NEW.body_hash IS DISTINCT FROM OLD.body_hash AND NOT (pg_trigger_depth()>1 AND OLD.state='ready' AND OLD.invalidated_at IS NULL
+     AND campaign_opening_footer_hash_matches(OLD.workspace_id,OLD.fence_id,OLD.subject_hash,OLD.body_hash,NEW.body_hash)))))
    THEN RAISE EXCEPTION 'opening immutable attempt or transition' USING ERRCODE='23514',CONSTRAINT='campaign_opening_attempt_immutable'; END IF;
  END IF;
  IF TG_OP='INSERT' OR (NEW.state='ready' AND NEW.content IS NOT NULL) THEN
@@ -154,12 +187,31 @@ BEGIN
  RETURN NEW;
 END $$;
 CREATE TRIGGER campaign_opening_attempt_fence BEFORE INSERT OR UPDATE ON outreach_campaign_opening_attempts FOR EACH ROW EXECUTE FUNCTION campaign_opening_attempt_fence();
+CREATE FUNCTION campaign_opening_footer_rebind() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE a outreach_campaign_opening_attempts%ROWTYPE;
+BEGIN
+ IF NEW.body IS NOT DISTINCT FROM OLD.body OR NEW.attempt_token IS NOT NULL OR NEW.state NOT IN ('prepared','held') THEN RETURN NEW; END IF;
+ SELECT * INTO a FROM outreach_campaign_opening_attempts WHERE workspace_id=OLD.workspace_id AND fence_id=OLD.id FOR UPDATE;
+ IF NOT FOUND OR a.content IS NULL THEN RETURN NEW; END IF;
+ IF a.state<>'ready' OR a.invalidated_at IS NOT NULL OR NEW.subject IS DISTINCT FROM OLD.subject
+  OR NEW.template_version_id IS DISTINCT FROM OLD.template_version_id
+  OR NOT campaign_opening_footer_hash_matches(OLD.workspace_id,OLD.id,a.subject_hash,a.body_hash,encode(sha256(convert_to(NEW.body,'UTF8')),'hex'))
+ THEN RAISE EXCEPTION 'opening permits only canonical footer rewrite' USING ERRCODE='23514',CONSTRAINT='campaign_opening_footer_only'; END IF;
+ UPDATE outreach_campaign_opening_attempts SET body_hash=encode(sha256(convert_to(NEW.body,'UTF8')),'hex')
+  WHERE workspace_id=a.workspace_id AND execution_id=a.execution_id AND body_hash=a.body_hash;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER campaign_opening_footer_rebind BEFORE UPDATE OF body ON outbound_messages FOR EACH ROW EXECUTE FUNCTION campaign_opening_footer_rebind();
 -- The existing send gate/claim remains the only sending engine. This last check
 -- closes wall-time expiry and footer-rewrite waits after stepPermission returns.
 CREATE FUNCTION campaign_opening_dispatch_fence() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE a outreach_campaign_opening_attempts%ROWTYPE; p outreach_campaign_opening_policies%ROWTYPE;
 BEGIN
  IF NEW.origin_kind<>'step_execution' OR NEW.state<>'dispatching' OR OLD.state<>'prepared' THEN RETURN NEW; END IF;
+ -- Historical recovery has no provider-send authority. A deferred constraint
+ -- below prevents this witness-bearing transient state from surviving commit.
+ IF NEW.provider_message_id IS NOT NULL AND NEW.provider_thread_id IS NOT NULL
+  AND NEW.attempt_token IS NOT NULL AND NEW.dispatch_started_at<=clock_timestamp() THEN RETURN NEW; END IF;
  SELECT * INTO a FROM outreach_campaign_opening_attempts WHERE workspace_id=NEW.workspace_id AND execution_id=NEW.step_execution_id;
  SELECT op.* INTO p FROM outreach_campaign_opening_policies op
   JOIN outreach_email_campaign_admissions admission ON admission.workspace_id=op.workspace_id AND admission.campaign_id=op.campaign_id
@@ -179,6 +231,24 @@ BEGIN
  RETURN NEW;
 END $$;
 CREATE TRIGGER campaign_opening_dispatch_fence BEFORE UPDATE OF state ON outbound_messages FOR EACH ROW EXECUTE FUNCTION campaign_opening_dispatch_fence();
+CREATE FUNCTION campaign_opening_historical_terminal() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.state='prepared' AND NEW.state='dispatching' AND NEW.provider_message_id IS NOT NULL THEN
+  IF NEW.provider_thread_id IS NULL OR NEW.dispatch_started_at>clock_timestamp() OR NOT EXISTS(
+   SELECT 1 FROM outbound_messages o WHERE o.workspace_id=NEW.workspace_id AND o.id=NEW.id AND o.state='sent'
+   AND o.attempt_token=NEW.attempt_token AND o.provider_message_id=NEW.provider_message_id AND o.provider_thread_id=NEW.provider_thread_id
+   AND o.sent_at=NEW.dispatch_started_at AND o.subject=NEW.subject AND o.body=NEW.body
+   AND EXISTS(SELECT 1 FROM outbound_message_events e WHERE e.workspace_id=o.workspace_id AND e.outbound_message_id=o.id
+    AND e.attempt_token=o.attempt_token AND e.from_state='prepared' AND e.to_state='dispatching'
+    AND e.detail->>'reconciled_from'='sent_folder_pre_dispatch_fence' AND e.detail->>'providerMessageId'=o.provider_message_id)
+   AND EXISTS(SELECT 1 FROM outbound_message_events e WHERE e.workspace_id=o.workspace_id AND e.outbound_message_id=o.id
+    AND e.attempt_token=o.attempt_token AND e.from_state='dispatching' AND e.to_state='sent'
+    AND e.detail->>'reconciled_from'='sent_folder_pre_dispatch_fence' AND e.detail->>'providerMessageId'=o.provider_message_id)
+  ) THEN RAISE EXCEPTION 'historical witness requires terminal sent in same transaction' USING ERRCODE='23514',CONSTRAINT='campaign_opening_historical_terminal'; END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE CONSTRAINT TRIGGER campaign_opening_historical_terminal AFTER UPDATE ON outbound_messages DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION campaign_opening_historical_terminal();
 GRANT SELECT,INSERT ON outreach_campaign_opening_policies TO app_runtime,migration;
 GRANT UPDATE(revoked_at) ON outreach_campaign_opening_policies TO app_runtime,migration;
 GRANT SELECT,INSERT ON outreach_campaign_opening_attempts TO app_runtime,migration;
@@ -186,28 +256,44 @@ GRANT UPDATE(state,content,finished_at,invalidated_at,fence_id,subject_hash,body
 REVOKE DELETE,TRUNCATE ON outreach_campaign_opening_policies,outreach_campaign_opening_attempts FROM app_runtime,migration;
 -- Erasure never deletes/remints the attempt, resets admission/cap history or
 -- changes an attempted envelope. Unclaimed prefix bytes are physically removed.
+CREATE FUNCTION campaign_opening_try_stop_gate(w uuid) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+ IF NOT pg_try_advisory_xact_lock(hashtextextended('fss.send-gate:'||w::text,0)) THEN
+  RAISE EXCEPTION 'opening source mutation serialization refused' USING ERRCODE='40001',CONSTRAINT='campaign_opening_stop_serialization';
+ END IF;
+END $$;
 CREATE FUNCTION erase_campaign_opening(w uuid,x uuid) RETURNS integer LANGUAGE plpgsql AS $$
 DECLARE a outreach_campaign_opening_attempts%ROWTYPE; n integer;
 BEGIN
+ PERFORM campaign_opening_try_stop_gate(w);
  SELECT * INTO a FROM outreach_campaign_opening_attempts WHERE workspace_id=w AND execution_id=x FOR UPDATE;
  IF NOT FOUND OR (a.invalidated_at IS NOT NULL AND a.content IS NULL) THEN RETURN 0; END IF;
+ UPDATE outreach_campaign_opening_attempts SET content=NULL,invalidated_at=coalesce(invalidated_at,clock_timestamp()),
+  state=CASE WHEN state='ready' THEN 'invalidated' ELSE state END
+  WHERE workspace_id=w AND execution_id=x AND (invalidated_at IS NULL OR content IS NOT NULL);
+ GET DIAGNOSTICS n=ROW_COUNT;
  IF a.content IS NOT NULL AND a.fence_id IS NOT NULL THEN
   UPDATE outbound_messages o SET body=substring(o.body FROM length(a.content->>'opening')+3),
    rendered_hash=encode(sha256(convert_to(o.subject||E'\n\n'||substring(o.body FROM length(a.content->>'opening')+3),'UTF8')),'hex'),updated_at=now()
    WHERE o.workspace_id=w AND o.id=a.fence_id AND o.attempt_token IS NULL AND o.state IN ('prepared','held')
    AND left(o.body,length(a.content->>'opening')+2)=(a.content->>'opening')||E'\n\n';
  END IF;
- UPDATE outreach_campaign_opening_attempts SET content=NULL,invalidated_at=coalesce(invalidated_at,clock_timestamp()),
-  state=CASE WHEN state='ready' THEN 'invalidated' ELSE state END
-  WHERE workspace_id=w AND execution_id=x AND (invalidated_at IS NULL OR content IS NOT NULL);
- GET DIAGNOSTICS n=ROW_COUNT; RETURN n;
+ RETURN n;
 END $$;
 CREATE FUNCTION campaign_opening_source_erasure() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE a record; w uuid; target uuid;
 BEGIN
  w:=OLD.workspace_id;
  IF TG_OP='UPDATE' AND to_jsonb(NEW)=to_jsonb(OLD) THEN RETURN NEW; END IF;
- PERFORM pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||w::text,0));
+ PERFORM campaign_opening_try_stop_gate(w);
+ IF TG_TABLE_NAME='sourcing_candidates' AND (
+  (to_jsonb(OLD)->'source_check'->>'state'='unavailable' AND to_jsonb(OLD)->'source_check'->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text'))
+  OR (TG_OP='UPDATE' AND to_jsonb(NEW)->'source_check'->>'state'='unavailable' AND to_jsonb(NEW)->'source_check'->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text'))
+ ) THEN
+  PERFORM erase_campaign_opening_sources(w,ARRAY[
+   to_jsonb(OLD)->'payload'->>'sourceUrl',to_jsonb(OLD)->'source_check'->'lastSuccess'->>'url',
+   to_jsonb(NEW)->'payload'->>'sourceUrl',to_jsonb(NEW)->'source_check'->'lastSuccess'->>'url']);
+ END IF;
  IF TG_TABLE_NAME='evidence_items' THEN
   PERFORM erase_campaign_opening_sources(w,ARRAY[OLD.source_reference]);
   IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW;
@@ -232,7 +318,7 @@ END $$;
 CREATE FUNCTION erase_campaign_opening_sources(w uuid,urls text[]) RETURNS integer LANGUAGE plpgsql AS $$
 DECLARE a record; n integer:=0;
 BEGIN
- PERFORM pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||w::text,0));
+ PERFORM campaign_opening_try_stop_gate(w);
  FOR a IN SELECT r.execution_id FROM outreach_campaign_opening_attempts r WHERE r.workspace_id=w AND (r.invalidated_at IS NULL OR r.content IS NOT NULL) AND (
   EXISTS(SELECT 1 FROM sourcing_qualification_runs q,jsonb_array_elements(q.observations) o WHERE q.workspace_id=w AND q.id=(r.binding->>'qualificationRunId')::uuid AND rtrim(o->>'url','/')=ANY(ARRAY(SELECT rtrim(u,'/') FROM unnest(urls) u)))
   OR EXISTS(SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w AND c.id=(r.binding->>'candidateId')::uuid AND rtrim(c.payload->>'sourceUrl','/')=ANY(ARRAY(SELECT rtrim(u,'/') FROM unnest(urls) u)))
@@ -253,9 +339,9 @@ CREATE TRIGGER campaign_opening_run_erasure BEFORE UPDATE OF facts,observations,
 CREATE FUNCTION campaign_opening_run_insert_erasure() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE a record;
 BEGIN
- PERFORM pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||NEW.workspace_id::text,0));
+ PERFORM campaign_opening_try_stop_gate(NEW.workspace_id);
  FOR a IN SELECT execution_id FROM outreach_campaign_opening_attempts WHERE workspace_id=NEW.workspace_id
-  AND binding->>'candidateId'=NEW.candidate_id::text AND invalidated_at IS NULL ORDER BY execution_id LOOP
+  AND binding->>'candidateId'=NEW.candidate_id::text AND (invalidated_at IS NULL OR content IS NOT NULL) ORDER BY execution_id LOOP
   PERFORM erase_campaign_opening(NEW.workspace_id,a.execution_id);
  END LOOP;
  RETURN NEW;
@@ -275,7 +361,7 @@ CREATE TRIGGER campaign_opening_evidence_denial AFTER INSERT ON evidence_items F
 CREATE FUNCTION sweep_campaign_openings(w uuid,batch integer) RETURNS integer LANGUAGE plpgsql AS $$
 DECLARE a record; n integer:=0;
 BEGIN
- PERFORM pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||w::text,0));
+ PERFORM campaign_opening_try_stop_gate(w);
  FOR a IN SELECT execution_id FROM outreach_campaign_opening_attempts WHERE workspace_id=w
   AND ((invalidated_at IS NULL AND (binding->>'validUntil')::timestamptz<=clock_timestamp()) OR (invalidated_at IS NOT NULL AND content IS NOT NULL))
   ORDER BY execution_id LIMIT greatest(0,least(batch,500)) FOR UPDATE SKIP LOCKED LOOP
