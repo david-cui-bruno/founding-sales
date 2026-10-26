@@ -71,7 +71,14 @@ export async function containGlass(context: BrowserContext, app: GlassWorkspaceA
 }
 export async function signInGlass(page: Page, app: GlassWorkspaceApp, identity: 'admin' | 'salesperson' = 'admin'): Promise<void> {
   app.chooseIdentity(app.fixture.alpha[identity]);
+  page.on('response', response => {
+    const url = new URL(response.url());
+    if (url.origin === app.origin && url.pathname.startsWith('/browser/')) console.log('GLASS783_HTTP_STATUS', JSON.stringify({ path: url.pathname, status: response.status() }));
+  });
+  const initialSession = page.waitForResponse(response => new URL(response.url()).pathname === '/browser/session');
   await page.goto(app.origin);
+  expect((await initialSession).status()).toBe(200);
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeEnabled();
   await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
