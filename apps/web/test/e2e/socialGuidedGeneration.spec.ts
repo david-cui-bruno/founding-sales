@@ -3,7 +3,7 @@ import type {Page} from 'playwright/test';
 import {test,expect} from '../support/qualifiedResearchApp.ts';
 import {browserRequest} from '../support/browser.ts';
 import {startManualProspectApp} from '../support/manualProspectApp.ts';
-import {routeManualProvider,loginManual} from '../support/manualProspectSeed.ts';
+import {routeManualProvider} from '../support/manualProspectSeed.ts';
 import {socialProductSnapshot} from '../support/socialReviewSeed.ts';
 import {seedSocialGuidedGeneration} from '../support/socialGuidedGenerationSeed.ts';
 import {voiceText} from '../../../../packages/domain/test/social/voiceGenerationFixtures.ts';
@@ -11,6 +11,12 @@ const generation=(page:Page)=>page.getByRole('region',{name:'Guided social sugge
 const composer=(page:Page)=>page.getByRole('region',{name:'Private social composer',exact:true});
 let app:Awaited<ReturnType<typeof startManualProspectApp>>,seed:Awaited<ReturnType<typeof seedSocialGuidedGeneration>>,baseline:Record<string,unknown[]>;
 async function social(page:Page){await page.getByRole('navigation',{name:'Workspace sections',exact:true}).getByRole('button',{name:'Social',exact:true}).click();await expect(generation(page)).toBeVisible();}
+async function login(page:Page){
+ // Wait for the initial session/CSRF refresh before editing or submitting. A
+ // concurrent initial signed-out transition can otherwise clear the form.
+ await page.goto(app.origin);await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();await expect(page.getByText('Checking browser session…',{exact:true})).toHaveCount(0);
+ await page.getByLabel('Workspace ID',{exact:true}).fill(app.fixture.alpha.workspaceId);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
+}
 async function snapshot(){const value=await socialProductSnapshot(app);for(const key of ['provider_reservations','command_receipts','audit_events'])delete value[key];return value;}
 async function select(page:Page){await generation(page).getByRole('button',{name:'Read current generation inputs',exact:true}).click();await generation(page).getByRole('checkbox',{name:/Use saved voice guide/u}).check();await generation(page).getByRole('checkbox',{name:/A local draft workspace is planned/u}).check();}
 async function request(page:Page){await select(page);await generation(page).getByRole('button',{name:'Request guided social suggestion',exact:true}).click();await expect(generation(page)).toContainText('Current request queued');const row=(await app.fixture.db.query<{id:string}>('SELECT id FROM social_draft_requests ORDER BY created_at DESC LIMIT 1')).rows[0]!;return row.id;}
@@ -19,9 +25,9 @@ async function save(page:Page,text=voiceText){await composer(page).getByLabel('P
 async function reopen(page:Page,id:string){await composer(page).getByRole('button',{name:'List saved private drafts',exact:true}).click();await composer(page).getByRole('button',{name:new RegExp(`^Reopen private draft ${id},`,'u')}).click();}
 // This fixture reuses the existing 773 harness slot. Execution requires a fresh
 // explicit Root grant for that exact slot, not an old plan or inherited env.
-test.beforeAll(async()=>{app=await startManualProspectApp('773');baseline=await snapshot();});
+test.beforeAll(async()=>{app=await startManualProspectApp('773');expect((await app.fixture.db.query('SHOW server_encoding')).rows[0]?.['server_encoding']).toBe('UTF8');expect(Number((await app.fixture.db.query('SHOW server_version_num')).rows[0]?.['server_version_num'])).toBeGreaterThanOrEqual(160000);expect(Number((await app.fixture.db.query('SHOW server_version_num')).rows[0]?.['server_version_num'])).toBeLessThan(170000);console.log('SOCIAL_GUIDED_PG16_UTF8_VERIFIED');baseline=await snapshot();});
 test.afterAll(async()=>{try{if(app&&baseline)expect(await snapshot()).toEqual(baseline);}finally{await app?.stop();}});
-test.beforeEach(async({researchPage:page})=>{for(const table of ['social_private_drafts','social_draft_requests','social_voice_preferences','outreach_answer_blocks'])await app.fixture.db.query(`DELETE FROM ${table}`);seed=await seedSocialGuidedGeneration(app);await routeManualProvider(page,app);await loginManual(page,app);await social(page);});
+test.beforeEach(async({researchPage:page})=>{for(const table of ['social_private_drafts','social_draft_requests','social_voice_preferences','outreach_answer_blocks'])await app.fixture.db.query(`DELETE FROM ${table}`);seed=await seedSocialGuidedGeneration(app);await routeManualProvider(page,app);await login(page);await social(page);});
 test.afterEach(async({researchPage:page})=>{expect(await snapshot()).toEqual(baseline);expect(await page.evaluate(()=>JSON.stringify({local:{...localStorage},session:{...sessionStorage}}))).not.toContain(voiceText);const receipts=await app.fixture.db.query("SELECT result FROM command_receipts WHERE command_kind IN ('social_drafts_request','social.private_draft_save')");expect(JSON.stringify(receipts.rows)).not.toContain(voiceText);});
 test('signed guided request -> actual capable fake engine -> fresh exact variant -> explicit private save/reload/revise',async({researchPage:page})=>{
  const requestId=await ready(page);expect((await app.fixture.db.query('SELECT count(*)::int n FROM social_private_drafts')).rows[0]?.['n']).toBe(0);const first=await save(page);await page.reload();await social(page);await expect(composer(page).getByLabel('Private social text')).toHaveValue('');await reopen(page,first.id);await expect(composer(page).getByLabel('Private social text')).toHaveValue(voiceText);const revised=await save(page,voiceText+' Privately refined.');expect(revised).toEqual({id:first.id,revision:2});expect((await app.fixture.db.query('SELECT origin,source_selection FROM social_private_drafts WHERE id=$1',[first.id])).rows[0]).toMatchObject({origin:{kind:'suggestion',requestId},source_selection:{voiceGuideRef:seed.selection.voiceGuideRef}});expect(app.runtimeRequests()).toBeGreaterThan(0);expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);
