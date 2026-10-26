@@ -2,6 +2,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BrowserApp } from '../../src/client/BrowserApp.tsx';
+import { BrowserToday } from '../../src/client/BrowserToday.tsx';
+import * as EmailWorkspace from '../../src/client/BrowserEmailWorkspace.tsx';
+import * as ProspectsWorkspace from '../../src/client/BrowserProspectsWorkspace.tsx';
+import type { EmailWorkspaceProps, WorkspaceScreenProps } from '../../src/client/workspaceNavigation.ts';
 import { BrowserClient, PENDING_KEY } from '../../src/client/BrowserClient.ts';
 import { REPLY_PENDING_KEY } from '../../src/client/ReplyAttempt.ts';
 
@@ -50,6 +54,73 @@ async function openNotes(): Promise<void> {
 }
 
 describe('BrowserApp real shared presentation', () => {
+  describe('exact navigation', () => {
+    it('opens only the current exact Firm in memory without dispatching requests or granting readiness', async () => {
+      const { client, send, storage } = setup(); render(<BrowserApp client={client} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+      const open = await screen.findByRole('button', { name: 'Open calling brief' });
+      const before = send.mock.calls.length;
+      fireEvent.click(open);
+      expect(screen.getByText(`Selected Firm ${id}. Selection only, not calling readiness.`)).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Calling sessions are not available yet.' })).toBeTruthy();
+      expect(send).toHaveBeenCalledTimes(before);
+      expect(storage.getItem(PENDING_KEY)).toBeNull();
+      expect(sessionStorage.length + localStorage.length).toBe(0);
+      navigate('Email'); navigate('Calling');
+      expect(screen.getByText(`Selected Firm ${id}. Selection only, not calling readiness.`)).toBeTruthy();
+      client.dispose();
+    });
+    it('keeps exact candidate/revision selection across pages and clears it after a new auth epoch', async () => {
+      let oldOpen: WorkspaceScreenProps['onOpenCalling'];
+      const probe = vi.spyOn(ProspectsWorkspace, 'BrowserProspectsWorkspace').mockImplementation(({ onOpenCalling }: WorkspaceScreenProps) => {
+        oldOpen = onOpenCalling;
+        return <><button onClick={() => { onOpenCalling?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 7 }); }}>Exact candidate</button><button onClick={() => { onOpenCalling?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 0 }); }}>Invalid candidate</button></>;
+      });
+      const { client, send } = setup();
+      try {
+        render(<BrowserApp client={client} />); await screen.findByRole('button', { name: 'Open firm' });
+        navigate('Prospects'); const before = send.mock.calls.length;
+        fireEvent.click(screen.getByRole('button', { name: 'Invalid candidate' }));
+        expect(screen.queryByRole('heading', { name: 'Calling' })).toBeNull(); expect(send).toHaveBeenCalledTimes(before);
+        fireEvent.click(screen.getByRole('button', { name: 'Exact candidate' }));
+        expect(screen.getByText(`Selected candidate ${id} · revision 7. Selection only, not calling readiness.`)).toBeTruthy();
+        expect(send).toHaveBeenCalledTimes(before);
+        navigate('Email'); navigate('Calling');
+        expect(screen.getByText(/revision 7\. Selection only/u)).toBeTruthy();
+        await act(async () => { client.invalidate(); await client.refresh(); });
+        act(() => { oldOpen?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 7 }); });
+        navigate('Calling'); expect(screen.queryByText(/Selected candidate/u)).toBeNull();
+      } finally { probe.mockRestore(); client.dispose(); }
+    });
+    it('passes memory-only Email selection props and clears them on logout and reauthentication', async () => {
+      let oldSelect: EmailWorkspaceProps['onFollowUpDraftSelectionChange'];
+      const probe = vi.spyOn(EmailWorkspace, 'BrowserEmailWorkspace').mockImplementation(({ selectedFollowUpDraftId, onFollowUpDraftSelectionChange }: EmailWorkspaceProps) => {
+        oldSelect = onFollowUpDraftSelectionChange;
+        return <div><p>Draft selection: {selectedFollowUpDraftId ?? 'none'}</p><button onClick={() => { onFollowUpDraftSelectionChange?.(id); }}>Choose exact draft</button></div>;
+      });
+      const { client, send } = setup();
+      try {
+        render(<BrowserApp client={client} />); await screen.findByRole('button', { name: 'Open firm' });
+        navigate('Email'); const before = send.mock.calls.length; fireEvent.click(screen.getByRole('button', { name: 'Choose exact draft' }));
+        expect(screen.getByText(`Draft selection: ${id}`)).toBeTruthy(); expect(send).toHaveBeenCalledTimes(before);
+        navigate('Calling'); navigate('Email'); expect(screen.getByText(`Draft selection: ${id}`)).toBeTruthy();
+        fireEvent.click(screen.getByRole('button', { name: 'Sign out' })); await screen.findByRole('heading', { name: 'Sign in' });
+        await act(async () => { await client.refresh(); });
+        act(() => { oldSelect?.(id); }); navigate('Email');
+        expect(screen.getByText('Draft selection: none')).toBeTruthy();
+      } finally { probe.mockRestore(); client.dispose(); }
+    });
+    it('synchronously refuses the opened Firm callback on expiry before React removes the view', async () => {
+      const { client, send } = setup(); await client.refresh(); const onOpenCalling = vi.fn();
+      render(<BrowserToday client={client} onOpenCalling={onOpenCalling} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+      const open = await screen.findByRole('button', { name: 'Open calling brief' });
+      const before = send.mock.calls.length;
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 180_000);
+      try { fireEvent.click(open); expect(onOpenCalling).not.toHaveBeenCalled(); expect(send).toHaveBeenCalledTimes(before); }
+      finally { clock.mockRestore(); client.dispose(); }
+    });
+  });
   it('opens Today alone and retains manual prospects and ordinary inventory behind explicit destinations', async () => {
     const { client, commands, send } = setup();
     render(<BrowserApp client={client} />);
