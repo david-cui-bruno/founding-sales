@@ -67,8 +67,9 @@ function setup(storage: Storage = sessionStorage) {
 async function composer(scope: ReturnType<typeof setup>) {
   await scope.browser.refresh();
   render(<BrowserReplyComposer client={scope.browser} attempts={scope.attempts} messageId={id} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh current reply context' }));
   await screen.findByText('Private current original');
+  expect(scope.send.mock.calls.filter(([url]) => url === '/browser/api/replies/composer/context')).toHaveLength(1);
+  expect(scope.commands).toHaveLength(0);
 }
 beforeEach(() => { vi.stubGlobal('crypto', webcrypto); vi.stubGlobal('TextEncoder', TextEncoder); });
 afterEach(() => { cleanup(); for (const resource of resources.splice(0)) resource.dispose(); sessionStorage.clear(); vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -79,7 +80,6 @@ describe('browser reply composition over actual BrowserClient', () => {
     expect(scope.commands).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh replies' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Synthetic Firm: Synthetic reply' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh current reply context' }));
     await screen.findByText('Private prior passage');
     fireEvent.change(screen.getByRole('textbox', { name: 'Reply draft' }), { target: { value: 'Manually composed reply' } });
     fireEvent.click(screen.getByRole('button', { name: 'Preview exact reply' }));
@@ -113,7 +113,7 @@ describe('browser reply composition over actual BrowserClient', () => {
     const reloaded = new ReplyAttempt(scope.browser, sessionStorage, scope.uuid); resources.push(reloaded);
     render(<BrowserReplyComposer client={scope.browser} attempts={reloaded} messageId={id} />);
     expect(scope.commands).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh current reply context' })); await screen.findByText('Private current original');
+    await screen.findByText('Private current original');
     expect(scope.commands).toHaveLength(1); scope.lose(false);
     fireEvent.click(screen.getByRole('button', { name: 'Check same reply attempt' }));
     await screen.findByText(/Same attempt checked/u);

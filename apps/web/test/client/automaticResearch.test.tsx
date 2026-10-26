@@ -62,7 +62,7 @@ function openAutomatic(): void { fireEvent.click(screen.getAllByRole('button', {
 afterEach(cleanup);
 
 describe('automatic research actual BrowserClient and queue', () => {
-  it('reads and opens exact V4 proof, preserves manual/legacy controls and reloads without mutation', async () => {
+  it('reads and opens exact V4 proof, preserves qualified selection, excludes unrelated actions and reloads without mutation', async () => {
     const scope = setup(); await scope.client.refresh();
     const first = render(<BrowserResearchQueue client={scope.client} />);
     await screen.findByText(proof.firmName); await ready(); openAutomatic();
@@ -74,7 +74,9 @@ describe('automatic research actual BrowserClient and queue', () => {
     expect(within(section).getByText(/Email fit: eligible, not channel permission/u)).toBeTruthy();
     expect(within(section).getAllByText(/Retrieved/u)).toHaveLength(3);
     expect(within(section).getByRole('link', { name: proof.citations[0]!.url }).getAttribute('href')).toBe(proof.citations[0]!.url);
-    expect(screen.getByText(/This action is unsupported/u)).toBeTruthy();
+    expect(screen.queryByText(legacy.subject)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '← Back to prepared research' }));
+    fireEvent.click(screen.getByText('Qualified selection and existing research requests'));
     expect(screen.getByRole('button', { name: 'Load research candidates' })).toBeTruthy();
     fireEvent.click(screen.getAllByRole('button', { name: 'Review current research' })[1]!);
     await screen.findByRole('region', { name: 'Current research proof' });
@@ -112,26 +114,34 @@ describe('automatic research actual BrowserClient and queue', () => {
     expect(screen.queryByRole('region', { name: 'Current automatic research proof' })).toBeNull();
     expect(scope.client.current?.status).toBe('signed_in'); expect(scope.client.epoch).toBe(1);
     await act(async () => { newer.resolve(json({ version: 4, workspaceId: id, businessTimeZone: 'America/Chicago', asOf: now, actions: [], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } })); });
-    await screen.findByText('No current actions.'); await ready();
+    await screen.findByText('No prepared research returned. Retained review and source inventory are separate.'); await ready();
     await act(async () => { scope.client.dispose(); });
   });
   it('retains the existing manual create command and current read under the additive queue', async () => {
     const scope = setup(); await scope.client.refresh(); render(<BrowserResearchQueue client={scope.client} />);
     await screen.findByText(proof.firmName); await ready();
+    fireEvent.click(screen.getByText('Qualified selection and existing research requests'));
     fireEvent.click(screen.getByRole('button', { name: 'Load research candidates' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Create research Firm' }));
     await screen.findByText(/Research Firm confirmed/u);
     expect(scope.commands).toEqual([{ ...selection, commandId: id }]);
     expect(scope.client.pendingResearch()?.createdFirmId).toBe(manual.firmId);
     expect(scope.randomUUID).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Read current research Firm' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '← Back to prepared research' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Read current research Firm' }));
+    await screen.findByRole('region', { name: 'Current research proof' });
+    expect(scope.send.mock.calls.filter(([url]) => url === '/browser/api/sourcing/research-firms/read').map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ firmId: manual.firmId }, { firmId: manual.firmId }]);
+    expect(scope.commands).toHaveLength(1); expect(scope.randomUUID).toHaveBeenCalledTimes(1);
     await act(async () => { scope.client.dispose(); });
   });
   it.each(['logout', '401'] as const)('%s clears mounted automatic proof and queue', async reason => {
     const scope = setup(); await scope.client.refresh(); render(<BrowserResearchQueue client={scope.client} />);
     await screen.findByText(proof.firmName); await ready(); openAutomatic(); await screen.findByRole('region', { name: 'Current automatic research proof' });
     if (reason === 'logout') await act(async () => { await scope.client.signOut().catch(() => {}); });
-    else { scope.refuse(); fireEvent.click(screen.getByRole('button', { name: 'Refresh action queue' })); await waitFor(() => { expect(scope.client.current).toBeNull(); }); }
+    else {
+      scope.refuse();
+      await act(async () => { await expect(scope.client.request('/sourcing/research-firms/read', qualifiedResearchFirmSchema, { firmId: manual.firmId })).rejects.toMatchObject({ reason: 'refused' }); });
+    }
     expect(screen.queryByText(proof.firmName)).toBeNull();
     expect(screen.queryByRole('region', { name: 'Current automatic research proof' })).toBeNull();
     expect(scope.values.size).toBe(0);
@@ -141,8 +151,8 @@ describe('automatic research actual BrowserClient and queue', () => {
     const scope = setup(); await scope.client.refresh(); render(<BrowserResearchQueue client={scope.client} />);
     await screen.findByText(proof.firmName); await ready(); openAutomatic(); await screen.findByRole('region', { name: 'Current automatic research proof' });
     scope.change({ role: 'salesperson' });
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh action queue' }));
-    await waitFor(() => { expect(scope.client.current).toBeNull(); });
+    await act(async () => { await expect(scope.client.refresh()).rejects.toMatchObject({ reason: 'session_changed' }); });
+    expect(scope.client.current).toBeNull();
     expect(screen.queryByText(proof.firmName)).toBeNull(); expect(screen.queryByRole('region', { name: 'Current automatic research proof' })).toBeNull();
     expect(screen.queryByRole('status')).toBeNull();
     await act(async () => { scope.client.dispose(); });

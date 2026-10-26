@@ -70,7 +70,9 @@ describe('campaign exact command custody over actual BrowserClient', () => {
     const refresh = await screen.findByRole('button', { name: 'Refresh campaigns' });
     expect(refresh.hasAttribute('disabled')).toBe(false);
     fireEvent.click(refresh);
-    await screen.findByText('Current campaign control loaded.'); revealPolicy();
+    await screen.findByText('Current campaign control loaded.');
+    expect(screen.getByText('Campaign policy and one-time approval').closest('details')?.open).toBe(false);
+    revealPolicy();
     await screen.findByRole('option', { name: /Published five-email/u });
     expect(scope.commands).toHaveLength(1);
   });
@@ -200,6 +202,9 @@ describe('campaign exact command custody over actual BrowserClient', () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-22T12:00:00.000Z'));
     const scope = setup(); await scope.browser.refresh(); render(<BrowserEmailCampaigns client={scope.browser} />);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh campaigns' }));
+    await screen.findByText('Current campaign control loaded.');
+    expect(screen.getByText('Campaign policy and one-time approval').closest('details')?.open).toBe(false);
+    revealPolicy();
     await screen.findByRole('option', { name: /Published five-email/u });
     fireEvent.change(screen.getByLabelText('Approved sender'), { target: { value: id } });
     fireEvent.change(screen.getByLabelText('Approved email sequence'), { target: { value: other } });

@@ -11,9 +11,9 @@ const scratchBasis = (value: ReplyDraftContext): string => JSON.stringify([
   value.authorizationRevision, value.envelope, replyFactRefs(value),
 ]);
 
-export function BrowserReplyComposer({ client, attempts, messageId, initialScratch, onScratchChange, loadOnMount = false }: {
+export function BrowserReplyComposer({ client, attempts, messageId, initialScratch, onScratchChange }: {
   client: BrowserClient; attempts: ReplyAttempt; messageId: string;
-  initialScratch?: ReplyScratch | undefined; onScratchChange?: (value: ReplyScratch | null) => void; loadOnMount?: boolean;
+  initialScratch?: ReplyScratch | undefined; onScratchChange?: (value: ReplyScratch | null) => void;
 }): JSX.Element {
   const [context, setContext] = useState<ReplyDraftContext | null>(null);
   const [text, setText] = useState('');
@@ -118,7 +118,7 @@ export function BrowserReplyComposer({ client, attempts, messageId, initialScrat
   };
   const loadCurrent = useRef(load);
   loadCurrent.current = load;
-  useEffect(() => { if (loadOnMount) loadCurrent.current(); }, [client, attempts, messageId, loadOnMount]);
+  useEffect(() => { loadCurrent.current(); }, [client, attempts, messageId]);
   return <section aria-label="Reply composer" className="email-composition" aria-busy={busy}>
     <div className="email-history" tabIndex={0} role="region" aria-label="Available message history">
     <div className="email-context-toolbar"><button disabled={busy} onClick={load}>Refresh current reply context</button>{busy ? <span role="status">Loading current context or review…</span> : null}</div>

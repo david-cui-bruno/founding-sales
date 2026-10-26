@@ -13,7 +13,7 @@ export function BrowserSocialWorkspace({client}:WorkspaceScreenProps):JSX.Elemen
    <button type="button" aria-pressed={view==='conversations'} onClick={()=>setView('conversations')}>Conversations</button>
   </nav>
   <p className="social-route-note">LinkedIn personal profile · Facebook personal profile / groups · Publishing not activated</p>
-  {view==='posts'?<BrowserSocialReview client={client} autoList/>:<section className="social-conversations-unavailable" aria-label="Public conversations">
+  {view==='posts'?<BrowserSocialReview client={client}/>:<section className="social-conversations-unavailable" aria-label="Public conversations">
    <h2>Public conversations</h2><p>Public posts and group discussions, not direct messages.</p>
    <p>No supported retained public-discussion list or thread reader is available in this browser workspace. No discussions have been fetched or invented.</p>
    <button type="button" disabled aria-describedby="social-discussion-limit">Open public discussion</button>

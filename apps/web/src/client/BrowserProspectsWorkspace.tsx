@@ -41,7 +41,7 @@ export function BrowserProspectsWorkspace({ client, onOpenCalling }: WorkspaceSc
       <button aria-pressed={view === 'inventory'} onClick={() => selectView('inventory')}>Source inventory</button>
     </nav>
     {client.current?.status !== 'signed_in' ? <p role="status">Sign in to read your current prospect supply.</p>
-      : view === 'prepared' ? <BrowserResearchQueue client={client} workspace {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} />
+      : view === 'prepared' ? <BrowserResearchQueue client={client} {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} />
       : view === 'retained' ? client.current.role === 'admin' ? <BrowserManualProspects client={client} {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} /> : <p role="status">Retained review requires current administrator access.</p>
       : <div className="prospects-secondary"><BrowserCandidateInventory client={client} /></div>}
   </section>;

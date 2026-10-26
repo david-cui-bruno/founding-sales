@@ -6,12 +6,12 @@ import {BrowserVoicePreferences} from './BrowserVoicePreferences.tsx';
 import type {BrowserClient} from './BrowserClient.ts';
 
 /** Retained suggestion review plus explicitly saved private composition. */
-export function BrowserSocialReview({client,autoList=false}:{client:BrowserClient;autoList?:boolean}):JSX.Element{
+export function BrowserSocialReview({client}:{client:BrowserClient}):JSX.Element{
  const binding=useRef({client,key:0});
  if(binding.current.client!==client)binding.current={client,key:binding.current.key+1};
- return <SocialReviewSession key={binding.current.key} client={client} autoList={autoList}/>;
+ return <SocialReviewSession key={binding.current.key} client={client}/>;
 }
-function SocialReviewSession({client,autoList}:{client:BrowserClient;autoList:boolean}):JSX.Element|null{
+function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
  const [signedIn,setSignedIn]=useState(client.current?.status==='signed_in');
  const [epoch,setEpoch]=useState(client.epoch),[workspace,setWorkspace]=useState<SocialDraftWorkspace|null>(null);
  const [adoption,setAdoption]=useState<PrivateAdoption|null>(null);
@@ -58,7 +58,7 @@ function SocialReviewSession({client,autoList}:{client:BrowserClient;autoList:bo
  };
  if(!signedIn||client.current?.status!=='signed_in'||epoch!==client.epoch||scope.current!==client)return null;
  return <section aria-label="Private social review" className="social-review">
-  <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} autoList={autoList} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
+  <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
   <div className="social-secondary-toolbar">
   <button type="button" disabled={busy} onClick={()=>{void read();}}>Read retained social suggestions</button>
   </div>

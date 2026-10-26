@@ -161,7 +161,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
   it('unmount during pre-dispatch refresh prevents the abandoned read', async () => {
     const s = setup(); await s.client.refresh();
     const late = deferred(); s.send.mockImplementation(async () => await late.promise);
-    const view = render(<BrowserResearchQueue client={s.client} workspace />); view.unmount();
+    const view = render(<BrowserResearchQueue client={s.client} />); view.unmount();
     await act(async () => { late.resolve(json(s.session)); });
     expect(s.send.mock.calls.filter(([url]) => url !== '/browser/session')).toHaveLength(0);
     s.client.dispose();
@@ -213,10 +213,12 @@ describe('Prospects to Calling exact navigation composition', () => {
     });
     expect(open).not.toHaveBeenCalled(); await act(async () => { s.client.dispose(); });
   });
-  it('a new research read synchronously invalidates an opened proof even before replacement rendering', async () => {
+  it('returning to selection and starting a new read cannot reuse the previous proof action', async () => {
     const s = setup(), open = vi.fn(); await s.client.refresh(); render(<BrowserResearchQueue client={s.client} onOpenCalling={open} />); await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
     const stale = await screen.findByRole('button', { name: 'Open calling brief' });
+    fireEvent.click(screen.getByRole('button', { name: '← Back to prepared research' }));
+    fireEvent.click(screen.getByText('Qualified selection and existing research requests'));
     act(() => { fireEvent.click(screen.getByRole('button', { name: 'Load research candidates' })); fireEvent.click(stale); });
     expect(open).not.toHaveBeenCalled(); await act(async () => { s.client.dispose(); });
   });

@@ -26,7 +26,7 @@ export function BrowserEmailWorkspace({ client, selectedFollowUpDraftId, onFollo
     </nav>
     {view === 'replies' ? <BrowserReplies key={`replies:${epoch}`} client={client} /> : view === 'followups' ? <BrowserCallingFollowUps key={`followups:${epoch}`} client={client} selectedFollowUpDraftId={selectedFollowUpDraftId ?? null} {...(onFollowUpDraftSelectionChange ? { onFollowUpDraftSelectionChange } : {})} /> : <>
       <p>Approved campaigns admit eligible qualified Firms automatically, without per-recipient review. Incoming replies remain manual; automatic booking is not available here.</p>
-      {session.role === 'admin' ? <BrowserEmailCampaigns key={`outbound:${epoch}`} client={client} compact /> : <p>Campaign control is available to workspace administrators. No outbound activity is inferred from unavailable controls.</p>}
+      {session.role === 'admin' ? <BrowserEmailCampaigns key={`outbound:${epoch}`} client={client} /> : <p>Campaign control is available to workspace administrators. No outbound activity is inferred from unavailable controls.</p>}
     </>}
   </section>;
 }
