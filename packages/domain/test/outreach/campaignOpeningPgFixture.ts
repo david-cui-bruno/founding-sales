@@ -12,6 +12,9 @@ import { readTemplateVersion } from '../../templates/templates.ts';
 import { readCurrentCampaignOpening } from '../../outreach/campaignOpeningSource.ts';
 import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
 import { registerOpeningFixture } from './campaignOpeningPgRuntime.ts';
+import { recordEmailRouteValidation } from '../../crm/routes.ts';
+import { reserveOutreachEmail } from '../../outreach/touchReservations.ts';
+import { outboundSendHandoff } from '../../../../apps/worker/src/handlers/outboundSendHandoff.ts';
 
 /** PG-only reuse of accepted 741 seed owners. Both helpers read only app.fixture,
  * as inspected here. No browser server/assets/HTTPS/Chrome is started by this
@@ -30,8 +33,13 @@ export async function campaignOpeningPgFixture(policyEnabled = true) {
     const source = await seedCampaignResearch(app, `opening-${randomUUID()}`);
     const made = await tx(() => createQualifiedResearchFirm(admin, source.selection));
     assert(made.ok, made.ok ? '' : made.reason);
-    const admission = (await db.query<{ enrollment_id: string; plan_id: string }>('SELECT enrollment_id,plan_id FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND firm_id=$2', [w, made.value.firmId])).rows[0];
+    const admission = (await db.query<{ enrollment_id: string; plan_id: string; route_id: string }>('SELECT enrollment_id,plan_id,route_id FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND firm_id=$2', [w, made.value.firmId])).rows[0];
     assert(admission, 'ordinary qualified create must automatically admit before any opening work');
+    // Qualified admission deliberately does not invent technical validation.
+    // Explicit fictional passed evidence uses its ordinary owner, no provider.
+    const validation = await tx(() => recordEmailRouteValidation(admin, { routeId: admission.route_id,
+      routeVersion: 1, technicalValidation: 'passed', vouchedConfidence: null, detail: { fixture: true } }));
+    assert(validation.written, 'fictional technical validation prerequisite must be explicit');
     const execution = (await db.query<{ id: string }>('SELECT id FROM step_executions WHERE workspace_id=$1 AND enrollment_id=$2 AND ordinal=1', [w, admission.enrollment_id])).rows[0];
     assert(execution);
     const template = await readTemplateVersion(admin, prepared.templateIds[0]!); assert(template);
@@ -52,4 +60,17 @@ export async function campaignOpeningPgFixture(policyEnabled = true) {
     return { fixture, db, w, admin, worker, tx, source, policy, template, firmId: made.value.firmId,
       enrollmentId: admission.enrollment_id, planId: admission.plan_id, executionId: execution.id, at, stop };
   } catch (error) { await stop(); throw error; }
+}
+/** Fake handoff pins only the existing reservation owner's clock to the same
+ * fictional recipient window as runDueStepExecution. The real frozen prepare
+ * then reuses that same execution reservation, never a new cap or action ID.
+ * Dispatch remains separately fake and owner-OFF is never changed. */
+export function openingPgHandoff(at: string) {
+  const real = outboundSendHandoff();
+  return { ...real, prepare: async (...args: Parameters<typeof real.prepare>) => {
+    const [context, request] = args;
+    const reservation = await reserveOutreachEmail(context, request.stepExecutionId, at);
+    assert(reservation.ok, reservation.ok ? '' : reservation.reason);
+    return real.prepare(...args);
+  } };
 }

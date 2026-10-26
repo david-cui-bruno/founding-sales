@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
-import { campaignOpeningPgFixture } from './campaignOpeningPgFixture.ts';
+import { campaignOpeningPgFixture, openingPgHandoff } from './campaignOpeningPgFixture.ts';
 import { selectCampaignOpeningBeforeTransaction, readCampaignOpeningAttempt, verifyCampaignOpeningFence } from '../../outreach/campaignOpeningStore.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { runDueStepExecution } from '../../sequences/executions.ts';
-import { outboundSendHandoff } from '../../../../apps/worker/src/handlers/outboundSendHandoff.ts';
 import { readFenceByStepExecution, claimForDispatch } from '../../outbound/fence.ts';
 
 /** Authored, not run. These exercise actual migration/role behavior after root's
@@ -31,7 +30,7 @@ it('unclaimed prefix is physically stripped on source deletion, never silently s
   try {
     await selectCampaignOpeningBeforeTransaction(f.worker, f.db, { executionId: f.executionId, eligibility: allowAllEligibility(),
       selector: { select: async input => ({ kind: 'selected', choice: { variantId: 'local', citationIds: input.citationIds } }) } });
-    await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(), sendHandoff: outboundSendHandoff() }));
+    await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(), sendHandoff: openingPgHandoff(f.at) }));
     const before = await readFenceByStepExecution(f.worker, f.executionId); if (!before) throw new Error('fence missing');
     const prefix = `I noticed ${f.source.name} serves Dallas, TX.\n\n`; expect(before.body.startsWith(prefix)).toBe(true);
     const attemptId = (await readCampaignOpeningAttempt(f.worker, f.executionId))?.attempt_id;

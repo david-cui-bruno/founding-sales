@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
-import { campaignOpeningPgFixture } from './campaignOpeningPgFixture.ts';
+import { campaignOpeningPgFixture, openingPgHandoff } from './campaignOpeningPgFixture.ts';
 import { selectCampaignOpeningBeforeTransaction, readCampaignOpeningAttempt, readyCampaignOpening, verifyCampaignOpeningFence } from '../../outreach/campaignOpeningStore.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { runDueStepExecution } from '../../sequences/executions.ts';
-import { outboundSendHandoff } from '../../../../apps/worker/src/handlers/outboundSendHandoff.ts';
 import { sequenceActionJobHandler } from '../../../../apps/worker/src/handlers/sequenceAction.ts';
 import { readFenceByStepExecution, claimForDispatch, beginReconciling } from '../../outbound/fence.ts';
 import { renderTemplateVersion } from '../../templates/templates.ts';
@@ -29,7 +28,7 @@ it('admitted real first execution -> committed selection -> real frozen fence ->
       return { kind: 'selected' as const, choice: { variantId: 'local', citationIds: input.citationIds } };
     }) } satisfies CampaignOpeningSelector;
     const dispatch = vi.fn(async () => ({ ok: true as const }));
-    const handoff = { ...outboundSendHandoff(), dispatch };
+    const handoff = { ...openingPgHandoff(f.at), dispatch };
     const handler = sequenceActionJobHandler({ openingSelector: selector, eligibility: allowAllEligibility(), now: () => f.at, sendHandoff: handoff });
     await handler.handle({ session: f.db, scope: f.worker.scope,
       job: { id: randomUUID(), workspaceId: f.w, kind: 'sequence.action', payload: { stepExecutionId: f.executionId }, idempotencyKey: f.executionId,
@@ -90,7 +89,7 @@ it('real source erasure removes ready content/unclaimed prefix but cannot reset 
   try {
     await selectCampaignOpeningBeforeTransaction(f.worker, f.db, { executionId: f.executionId, eligibility: allowAllEligibility(),
       selector: { select: async input => ({ kind: 'selected', choice: { variantId: 'local', citationIds: input.citationIds } }) } });
-    const handoff = { ...outboundSendHandoff(), dispatch: vi.fn(async () => ({ ok: true as const })) };
+    const handoff = { ...openingPgHandoff(f.at), dispatch: vi.fn(async () => ({ ok: true as const })) };
     await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(), sendHandoff: handoff }));
     const fence = await readFenceByStepExecution(f.worker, f.executionId); if (!fence) throw new Error('fence missing');
     const attemptId = (await readCampaignOpeningAttempt(f.worker, f.executionId))?.attempt_id;
@@ -110,8 +109,9 @@ it('real source erasure removes ready content/unclaimed prefix but cannot reset 
 it('actual policy absence leaves old exact-template preparation, while foreign-workspace execution cannot read an attempt', async () => {
   const f = await campaignOpeningPgFixture(false);
   try {
-    const handoff = { ...outboundSendHandoff(), dispatch: vi.fn(async () => ({ ok: true as const })) };
-    await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(), sendHandoff: handoff }));
+    const handoff = { ...openingPgHandoff(f.at), dispatch: vi.fn(async () => ({ ok: true as const })) };
+    const outcome = await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(), sendHandoff: handoff }));
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ kind: 'handed_to_send' });
     const fence = await readFenceByStepExecution(f.worker, f.executionId); expect(fence).not.toBeNull(); expect(fence?.body).not.toContain('I noticed');
     expect(await readCampaignOpeningAttempt(f.worker, f.executionId)).toBeNull();
     const foreign = repositoryContext(workspaceScope(f.fixture.beta.workspaceId, { kind: 'system', component: 'worker' }), f.db);
