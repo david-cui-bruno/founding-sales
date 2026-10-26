@@ -21,9 +21,11 @@ import { glassCase, type GlassWorkspaceApp } from './glassWorkspaceApp.ts';
  * separate from app_runtime HTTP requests. No acquisition, workers or paid work. */
 export async function seedGlassWorkspace(app: GlassWorkspaceApp) {
   const f = app.fixture;
-  const runtime = await f.database.appRuntimeSession();
-  const ctx = repositoryContext(workspaceScope(f.alpha.workspaceId, { kind: 'user', userId: f.alpha.admin.userId, role: 'admin' }), runtime);
-  const tx = <T>(work: () => Promise<T>) => withTransaction(runtime, work);
+  // Privileged fixture owner only. Actual authenticated HTTP remains app_runtime.
+  // This does not qualify the separate createQualifiedResearchFirm runtime-write path.
+  const fixtureSession = f.db;
+  const ctx = repositoryContext(workspaceScope(f.alpha.workspaceId, { kind: 'user', userId: f.alpha.admin.userId, role: 'admin' }), fixtureSession);
+  const tx = <T>(work: () => Promise<T>) => withTransaction(fixtureSession, work);
   const candidateIds: string[] = [];
   for (const [index, name] of ['FICTIONAL Glass783 raw observation', 'FICTIONAL Glass783 other observation'].entries()) {
     const input = manualOrdinaryFixture(78300 + index);
@@ -76,7 +78,7 @@ export async function seedGlassWorkspace(app: GlassWorkspaceApp) {
   const socialSources = await tx(() => readSocialDraftSources(ctx, socialSelection));
   assert(socialSources.ok, socialSources.ok ? '' : socialSources.reason);
   const socialText = 'FICTIONAL goal783 retained suggestion. A maintenance intake feature is planned, not shipped.';
-  const social = (await runtime.query<{ id: string }>("INSERT INTO social_draft_requests(workspace_id,owner_user_id,source_selection,source_hash,prompt_version,model_name,state,concepts) VALUES($1,$2,$3::jsonb,$4,$5,$6,'ready',$7::jsonb) RETURNING id", [f.alpha.workspaceId, f.alpha.admin.userId, JSON.stringify(socialSelection), socialSources.value.hash, socialDraftPromptVersion(socialSelection.mode), SOCIAL_DRAFT_MODEL, JSON.stringify([{ theme: 'build', factRefs: [ref], variants: [{ platform: 'linkedin', text: socialText }] }])])).rows[0]!;
+  const social = (await fixtureSession.query<{ id: string }>("INSERT INTO social_draft_requests(workspace_id,owner_user_id,source_selection,source_hash,prompt_version,model_name,state,concepts) VALUES($1,$2,$3::jsonb,$4,$5,$6,'ready',$7::jsonb) RETURNING id", [f.alpha.workspaceId, f.alpha.admin.userId, JSON.stringify(socialSelection), socialSources.value.hash, socialDraftPromptVersion(socialSelection.mode), SOCIAL_DRAFT_MODEL, JSON.stringify([{ theme: 'build', factRefs: [ref], variants: [{ platform: 'linkedin', text: socialText }] }])])).rows[0]!;
   const secondFirmId = await seedFirm(f, { name: 'FICTIONAL Glass783 independent conversation', regionCode: 'TX', assignedUserId: f.alpha.salesperson.userId });
   const secondCase = { ...glassCase, firm: 'FICTIONAL Glass783 independent conversation', messages: glassCase.messages.map(message => ({ ...message, id: `${message.id}-OTHER`, body: `OTHER CONVERSATION: ${message.body}`, subject: 'FICTIONAL independent original' })) };
   const secondReply = await seedReplyBrief(f, secondFirmId, secondCase);
