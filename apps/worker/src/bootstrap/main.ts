@@ -26,6 +26,7 @@ import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDel
 import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts';
 import {routineReplyInterpretation} from '../outreach/replyInterpretation.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
+import {prospectPhoneDiscoveryHandler} from '../handlers/prospectPhoneDiscovery.ts';
 import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
 import {sourcingDiscoveryHandler,sourcingDiscoverySource,apolloDiscoverySource} from '../handlers/sourcingDiscovery.ts';
 import {apolloFromEnvironment} from '../sourcing/apolloSearch.ts';
@@ -287,6 +288,7 @@ export function registerHandlers(
   if(composition.discovery||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(composition.discovery,composition.apolloDiscovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
+    registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch}));
     registry.register(sourcingCheckHandler(composition.research.pageFetch));
     registry.register(sourcingMonitorHandler());
   }
