@@ -1,4 +1,5 @@
 import {randomUUID,createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
 import {afterAll,beforeAll,beforeEach,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
@@ -6,11 +7,10 @@ import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
-import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery,runProspectPhoneDiscovery} from '../../sourcing/prospectPhoneDiscovery.ts';
+import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery,runProspectPhoneDiscovery,currentProspectPhoneDiscoveryAuthority,ProspectPhoneDiscoveryAuthorityChanged,expireProspectPhoneDiscoveryInTransaction} from '../../sourcing/prospectPhoneDiscovery.ts';
 import {listManualProspects} from '../../sourcing/manualProspects.ts';
 import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceLoss.ts';
 import {candidateAcquisitionOutstanding} from '../../sourcing/retainedAcquisition.ts';
-import {sweepProspectPhoneDiscoveries} from '../../sourcing/prospectPhoneDiscoveryLifecycle.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 import {manualPhoneFixture,seedManualPhoneRun} from './support/manualPhoneFixture.ts';
 import type {PageFetchProvider,PageFetchRequest} from '../../research/providers.ts';
@@ -35,7 +35,10 @@ function provider(website:string,before?:((request:PageFetchRequest)=>Promise<vo
  }};
 }
 async function rawRun(id:string){return (await runtime.query('SELECT * FROM sourcing_prospect_phone_discoveries WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,id])).rows[0]!;}
-beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();
+ const directory=(await db.session.query<{directory:string}>("SELECT current_setting('data_directory') directory")).rows[0]!.directory;
+ console.error('PHONE_DISCOVERY_OWNED_PG',JSON.stringify({directory,pid:Number(readFileSync(`${directory}/postmaster.pid`,'utf8').split('\n')[0]),port:new URL(process.env['FSS_TEST_CLUSTER_URL']!).port,database:db.name}));
+});
 beforeEach(async()=>{
  await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM jobs');
  await db.session.query("UPDATE workspace_memberships SET role='admin',status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
@@ -68,12 +71,16 @@ it.each(['research_off','hold','revision','principal','source_loss','cap'] as co
   if(mode==='cap')await other.query('INSERT INTO research_settings(workspace_id,max_page_bytes) VALUES($1,10000)',[seed.alpha.workspaceId]);
   if(mode==='hold')await other.query("INSERT INTO active_holds(workspace_id,scope_kind,reason_code,blocked_action_kinds,source_event_kind) VALUES($1,'workspace','scoped_pause',ARRAY['research'],'phone-test')",[seed.alpha.workspaceId]);
   if(mode==='revision')await other.query('UPDATE sourcing_candidates SET revision=revision+1 WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,c.id]);
-  if(mode==='principal')await other.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+  if(mode==='principal'){
+   await other.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);
+   await other.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+  }
   if(mode==='source_loss')await withTransaction(other,()=>rememberExpiredManualSources(ctx(other),[c.sourceUrl]));
   expect(await input.shouldContinue?.()).toBe(false);
  });
  await runProspectPhoneDiscovery(worker(),{runId},{pageFetch:p});
  const stored=await rawRun(runId);expect(stored['state']).toBe('unavailable');expect(stored['content']).toBeNull();expect(stored['dispatch_finished_at']).not.toBeNull();
+ expect(stored['reason']).toBe({research_off:'research_disabled',hold:'research_held',revision:'candidate_changed',principal:'authority_changed',source_loss:'source_unavailable',cap:'bounded_capture_incomplete'}[mode]);
  await db.session.query("UPDATE active_holds SET released_at=clock_timestamp() WHERE workspace_id=$1 AND released_at IS NULL",[seed.alpha.workspaceId]);
 });
 it('scope/principal and stale revision refusals never enqueue a capture',async()=>{
@@ -91,7 +98,10 @@ it('preserves a conflicting legacy endpoint rather than overwriting it with fres
 it.each(['revision','member','source','candidate_delete'] as const)('physically erases original text on %s and cannot mint a second same-revision run',async mode=>{
  const c=await candidate(),runId=await request(c.id);await runProspectPhoneDiscovery(worker(),{runId},{pageFetch:provider(c.input.website!)});
  if(mode==='revision')await runtime.query('UPDATE sourcing_candidates SET revision=revision+1 WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,c.id]);
- if(mode==='member')await runtime.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+ if(mode==='member'){
+  await runtime.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);
+  await runtime.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+ }
  if(mode==='source')await withTransaction(runtime,()=>rememberExpiredManualSources(ctx(),[`${c.input.website}contact`]));
  if(mode==='candidate_delete')await runtime.query('DELETE FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,c.id]);
  const stored=await rawRun(runId);if(mode==='candidate_delete')expect(stored).toBeUndefined();else{expect(stored['content']).toBeNull();expect(stored['state']).toBe('unavailable');}
@@ -117,7 +127,16 @@ it('expired pending jobs are terminally erased by the existing bounded retention
  await runtime.query(`INSERT INTO sourcing_prospect_phone_discoveries(workspace_id,id,candidate_id,candidate_revision,creator_user_id,creator_ref,method,requested_at,deadline_at,expires_at,content)
  VALUES($1,$2,$3,1,$4,$4,'company-public-phone-v1',clock_timestamp()-interval '31 minutes',clock_timestamp()-interval '1 minute',clock_timestamp()+interval '1 day',$5::jsonb)`,
  [seed.alpha.workspaceId,runId,c.id,seed.alpha.admin.userId,JSON.stringify({website:c.input.website,sourceUrls:[c.sourceUrl.replace(/\/+$/u,'')],observations:[]})]);
- expect(await withTransaction(runtime,()=>sweepProspectPhoneDiscoveries(ctx(),{limit:10}))).toBe(1);
+ expect(await withTransaction(runtime,()=>expireProspectPhoneDiscoveryInTransaction(ctx()))).toBe(1);
  expect(await rawRun(runId)).toMatchObject({state:'unavailable',reason:'discovery_expired',content:null});
  let calls=0;await runProspectPhoneDiscovery(worker(),{runId},{pageFetch:provider(c.input.website!,async()=>{calls++;})});expect(calls).toBe(0);
+});
+it('typed beforeCommit authority loss rolls back pending run, job and consumed count',async()=>{
+ const c=await candidate();
+ await expect(withTransaction(runtime,async()=>{
+  const result=await requestProspectPhoneDiscovery(ctx(),{candidateId:c.id,expectedRevision:1});if(!result.ok)throw Error(result.reason);
+  await currentProspectPhoneDiscoveryAuthority(ctx(),{candidateId:c.id,expectedRevision:1},result.value.runId,async()=>false);
+ })).rejects.toBeInstanceOf(ProspectPhoneDiscoveryAuthorityChanged);
+ expect((await runtime.query('SELECT id FROM sourcing_prospect_phone_discoveries WHERE candidate_id=$1',[c.id])).rows).toHaveLength(0);
+ expect((await runtime.query("SELECT id FROM jobs WHERE kind='sourcing.phone_discover'")).rows).toHaveLength(0);
 });

@@ -50,12 +50,12 @@ CREATE TABLE sourcing_prospect_phone_discoveries (
  workspace_id uuid NOT NULL,
  id uuid NOT NULL,
  candidate_id uuid NOT NULL,
- candidate_revision integer NOT NULL CHECK(candidate_revision>0),
+ candidate_revision integer NOT NULL CONSTRAINT prospect_phone_revision_positive CHECK(candidate_revision>0),
  creator_user_id uuid NOT NULL,
  creator_ref uuid,
- method text NOT NULL CHECK(method='company-public-phone-v1'),
- state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','running','complete','unavailable')),
- reason text CHECK(reason IN ('candidate_unavailable','candidate_changed','source_unavailable','source_not_permitted','source_changed','source_expired','official_site_unknown','retained_only','research_disabled','research_held','daily_firm_ceiling','authority_changed','discovery_interrupted','discovery_expired','no_readable_text','bounded_capture_incomplete')),
+ method text NOT NULL CONSTRAINT prospect_phone_method_known CHECK(method='company-public-phone-v1'),
+ state text NOT NULL DEFAULT 'pending' CONSTRAINT prospect_phone_state_known CHECK(state IN ('pending','running','complete','unavailable')),
+ reason text CONSTRAINT prospect_phone_reason_known CHECK(reason IN ('candidate_unavailable','candidate_changed','source_unavailable','source_not_permitted','source_changed','source_expired','official_site_unknown','retained_only','research_disabled','research_held','daily_firm_ceiling','authority_changed','discovery_interrupted','discovery_expired','no_readable_text','bounded_capture_incomplete')),
  requested_at timestamptz NOT NULL,
  deadline_at timestamptz NOT NULL,
  checked_at timestamptz,
@@ -63,18 +63,18 @@ CREATE TABLE sourcing_prospect_phone_discoveries (
  dispatched_at timestamptz,
  dispatch_finished_at timestamptz,
  content jsonb,
- PRIMARY KEY(workspace_id,id),
- UNIQUE(workspace_id,candidate_id,candidate_revision,method),
- FOREIGN KEY(workspace_id,candidate_id) REFERENCES sourcing_candidates(workspace_id,id) ON DELETE CASCADE,
- FOREIGN KEY(workspace_id,creator_ref) REFERENCES workspace_memberships(workspace_id,user_id) ON DELETE SET NULL (creator_ref),
- CHECK(isfinite(requested_at) AND isfinite(deadline_at) AND isfinite(expires_at)),
- CHECK(deadline_at>requested_at AND deadline_at<=requested_at+interval '30 minutes'),
- CHECK(expires_at>requested_at AND expires_at<=requested_at+interval '7 days'),
- CHECK(dispatched_at IS NULL OR dispatched_at>=requested_at),
- CHECK(dispatch_finished_at IS NULL OR (dispatched_at IS NOT NULL AND dispatch_finished_at>=dispatched_at)),
- CHECK((state='unavailable' AND content IS NULL AND reason IS NOT NULL AND checked_at IS NOT NULL)
+ CONSTRAINT prospect_phone_pkey PRIMARY KEY(workspace_id,id),
+ CONSTRAINT prospect_phone_revision_once UNIQUE(workspace_id,candidate_id,candidate_revision,method),
+ CONSTRAINT prospect_phone_candidate_fkey FOREIGN KEY(workspace_id,candidate_id) REFERENCES sourcing_candidates(workspace_id,id) ON DELETE CASCADE,
+ CONSTRAINT prospect_phone_creator_fkey FOREIGN KEY(workspace_id,creator_ref) REFERENCES workspace_memberships(workspace_id,user_id) ON DELETE SET NULL (creator_ref),
+ CONSTRAINT prospect_phone_times_finite CHECK(isfinite(requested_at) AND isfinite(deadline_at) AND isfinite(expires_at)),
+ CONSTRAINT prospect_phone_deadline_bounded CHECK(deadline_at>requested_at AND deadline_at<=requested_at+interval '30 minutes'),
+ CONSTRAINT prospect_phone_expiry_bounded CHECK(expires_at>requested_at AND expires_at<=requested_at+interval '7 days'),
+ CONSTRAINT prospect_phone_dispatch_ordered CHECK(dispatched_at IS NULL OR dispatched_at>=requested_at),
+ CONSTRAINT prospect_phone_finish_ordered CHECK(dispatch_finished_at IS NULL OR (dispatched_at IS NOT NULL AND dispatch_finished_at>=dispatched_at)),
+ CONSTRAINT prospect_phone_content_shape CHECK((state='unavailable' AND content IS NULL AND reason IS NOT NULL AND checked_at IS NOT NULL)
   OR (state<>'unavailable' AND content IS NOT NULL AND reason IS NULL AND prospect_phone_content_valid(content) AND creator_ref=creator_user_id AND creator_ref IS NOT NULL)),
- CHECK((state='pending' AND dispatched_at IS NULL AND checked_at IS NULL AND dispatch_finished_at IS NULL AND jsonb_array_length(content->'observations')=0)
+ CONSTRAINT prospect_phone_lifecycle_shape CHECK((state='pending' AND dispatched_at IS NULL AND checked_at IS NULL AND dispatch_finished_at IS NULL AND jsonb_array_length(content->'observations')=0)
   OR (state='running' AND dispatched_at IS NOT NULL AND checked_at IS NULL AND dispatch_finished_at IS NULL AND jsonb_array_length(content->'observations')=0)
   OR (state='complete' AND dispatched_at IS NOT NULL AND dispatch_finished_at IS NOT NULL AND checked_at IS NOT NULL AND jsonb_array_length(content->'observations')>0)
   OR state='unavailable')

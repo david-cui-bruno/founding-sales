@@ -16,6 +16,26 @@ import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {phoneDiscoveryContext,phoneDiscoveryNow,phoneDiscoveryPrincipal,phoneDiscoveryResearchRefusal,phoneDiscoverySourceLimit,type PhoneDiscoveryAuthority} from './prospectPhoneDiscoveryAuthority.ts';
 import {invalidatePhoneDiscovery,lockPhoneDiscoveryCandidate,lockPhoneDiscoveryRun,phoneDiscoveryRun,validatePhoneDiscoveryRun} from './prospectPhoneDiscoveryStore.ts';
 import {prospectPhoneDiscoveryView} from './prospectPhoneDiscoveryProjection.ts';
+import {sweepProspectPhoneDiscoveries} from './prospectPhoneDiscoveryLifecycle.ts';
+
+export class ProspectPhoneDiscoveryAuthorityChanged extends Error {constructor(){super('phone_discovery_authority_changed');this.name='ProspectPhoneDiscoveryAuthorityChanged';}}
+export class ProspectPhoneDiscoveryUnavailable extends Error {constructor(readonly reason:string){super(reason);this.name='ProspectPhoneDiscoveryUnavailable';}}
+/** Command adapter invokes after receipt/audit waits and before transaction commit. */
+export async function currentProspectPhoneDiscoveryAuthority(ctx:RepositoryContext,input:ProspectPhoneDiscoveryInput,runId:string,authority:PhoneDiscoveryAuthority=async()=>true):Promise<void>{
+ if(!await phoneDiscoveryPrincipal(ctx,authority))throw new ProspectPhoneDiscoveryAuthorityChanged();
+ const candidate=await lockPhoneDiscoveryCandidate(ctx,input.candidateId);
+ if(!candidate||candidate.revision!==input.expectedRevision)throw new ProspectPhoneDiscoveryUnavailable(candidate?'candidate_changed':'candidate_unavailable');
+ const run=await phoneDiscoveryRun(ctx,input.candidateId,input.expectedRevision);
+ if(!run||run.id!==runId)throw new ProspectPhoneDiscoveryUnavailable('source_changed');
+ if(run.state!=='unavailable'){
+  const denial=await validatePhoneDiscoveryRun(ctx,run,true);
+  if(denial)throw new ProspectPhoneDiscoveryUnavailable(denial);
+ }else if(!await phoneDiscoveryContext(ctx,input.candidateId,input.expectedRevision))throw new ProspectPhoneDiscoveryUnavailable('source_unavailable');
+ if(!await phoneDiscoveryPrincipal(ctx,authority))throw new ProspectPhoneDiscoveryAuthorityChanged();
+ if(run.state!=='unavailable'){const denial=await validatePhoneDiscoveryRun(ctx,run,true);if(denial)throw new ProspectPhoneDiscoveryUnavailable(denial);}
+}
+/** Existing finite scheduler owns this transaction. No acquire/reclaim path. */
+export async function expireProspectPhoneDiscoveryInTransaction(ctx:RepositoryContext):Promise<number>{return sweepProspectPhoneDiscoveries(ctx,{limit:100});}
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 const refuse=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
@@ -60,7 +80,7 @@ export async function requestProspectPhoneDiscovery(ctx:RepositoryContext,input:
   at.toISOString(),new Date(at.getTime()+30*60000).toISOString(),expiresAt.toISOString(),JSON.stringify({...context,observations:[]})]);
  await enqueueJob(ctx.db,{workspaceId:ctx.scope.workspaceId,kind:'sourcing.phone_discover',idempotencyKey:jobIdempotencyKey.sourcingPhoneDiscover(runId),payload:{runId},maxAttempts:1});
  // Receipt/job uniqueness can wait. Recheck source and principal before acceptance.
- if(!await phoneDiscoveryPrincipal(ctx,authority))throw new Error('phone_discovery_authority_changed');
+ if(!await phoneDiscoveryPrincipal(ctx,authority))throw new ProspectPhoneDiscoveryAuthorityChanged();
  const saved=await phoneDiscoveryRun(ctx,input.candidateId,input.expectedRevision);
  if(!saved)throw new Error('phone_discovery_run_missing');
  const denial=await validatePhoneDiscoveryRun(ctx,saved,true);

@@ -8,9 +8,19 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from './support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 import {manualOrdinaryFixture} from '../sourcing/support/manualProspectFixture.ts';
 import {captureProspectPhonePages,requestProspectPhoneDiscovery} from '../../sourcing/prospectPhoneDiscovery.ts';
+import {PROSPECT_PHONE_DISCOVERY_CONSTRAINT_CASES} from './prospectPhoneDiscoveryConstraints.ts';
+import {TABLE_RETENTION_COVERAGE} from '../../retention/coverage.ts';
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable,serial=1000;
 beforeAll(async()=>{db=await createTestDatabase({throughVersion:138});seed=await seedTwoWorkspaces(db.session);await applyMigrations(db.session,{throughVersion:139});expect(await readAppliedSchemaVersion(db.session)).toBe(139);runtime=await db.appRuntimeSession();});
 afterAll(async()=>db?.drop());
+it.each(PROSPECT_PHONE_DISCOVERY_CONSTRAINT_CASES)('new strict SQL constraint $constraint refuses its isolated invalid row',async entry=>{
+ await db.session.query('BEGIN');try{await expect(entry.run({session:db.session,seeded:seed})).rejects.toMatchObject({constraint:entry.constraint});}finally{await db.session.query('ROLLBACK');}
+});
+it('new table exact constraint and retention catalogs cover every temporary original boundary',async()=>{
+ const names=(await db.session.query<{name:string}>("SELECT conname AS name FROM pg_constraint WHERE conrelid='sourcing_prospect_phone_discoveries'::regclass AND contype IN ('c','u','f','p','t','x')")).rows.map(row=>row.name).sort();
+ expect(names).toEqual(PROSPECT_PHONE_DISCOVERY_CONSTRAINT_CASES.map(entry=>entry.constraint).sort());
+ expect(TABLE_RETENTION_COVERAGE['sourcing_prospect_phone_discoveries']?.dispositions).toEqual(['deletion_removes','swept','departure_revokes']);
+});
 async function fixture(){
  const ctx=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime),input=manualOrdinaryFixture(++serial);input.sourceUrl=`${input.website}about`;
  const saved=await withTransaction(runtime,()=>saveCandidate(ctx,input));if(!saved.ok)throw Error(saved.reason);
