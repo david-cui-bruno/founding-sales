@@ -19,7 +19,7 @@ const promisedEmail=callingFollowUpContentSchema.extend({draftId:uuid,nextAction
 /** Reuse actual canonical outcome vocabulary without template consent or live dial reservation. */
 export const callingCanonicalReportSchema=logCallOutcomeCommandSchema.pick({
  outcome:true,contactId:true,routeId:true,occurredAt:true,note:true,direction:true,
- durationSeconds:true,callback:true,doNotCall:true,
+ durationSeconds:true,callback:true,doNotCall:true,callSessionId:true,
 }).extend({performedByUser:z.literal(true)});
 const candidateWrap=candidate.extend({attemptId:uuid,report:manualProspectActivityContentSchema,
  promisedEmail:promisedEmail.optional()}).superRefine((value,ctx)=>{

@@ -112,3 +112,4 @@ export * from './manualLiteralPhone.ts';
 export * from './manualProspectActivity.ts';
 export * from './calling.ts';
 export * from './prospectPhoneDiscovery.ts';
+export * from './callingExecution.ts';
