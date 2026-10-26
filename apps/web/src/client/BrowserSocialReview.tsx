@@ -60,7 +60,12 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
  if(!signedIn||client.current?.status!=='signed_in'||epoch!==client.epoch||scope.current!==client)return null;
  return <section aria-label="Private social review" className="social-review">
   <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
-  <BrowserSocialGeneration client={client} onCurrentRequest={request=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(request?expireWorkspace({sources:[],facts:[],requests:[request]}):null);}}/>
+  <BrowserSocialGeneration client={client} claimProjection={()=>{
+   // One explicit interaction owner spans guided projection and retained review.
+   // Superseding a projection never clears or replays its opaque command custody.
+   const token=++owner.current,generation=client.epoch;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);
+   return ()=>owner.current===token&&scope.current===client&&client.isCurrent(generation);
+  }} onCurrentRequest={request=>{setAdoption(null);setWorkspace(request?expireWorkspace({sources:[],facts:[],requests:[request]}):null);}}/>
   <div className="social-secondary-toolbar">
   <button type="button" disabled={busy} onClick={()=>{void read();}}>Read retained social suggestions</button>
   </div>

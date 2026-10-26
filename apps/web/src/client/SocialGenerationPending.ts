@@ -46,10 +46,3 @@ export class SocialGenerationCustody{
   this.storage.removeItem(binding.key);if(this.storage.getItem(binding.key)!==null)throw Error('Social generation storage unavailable');
  }
 }
-/** App-lifetime observation only. Never remove uncertain custody on navigation,
- * logout, expiry or another identity's login, and never replay/poll a request. */
-export function installSocialGenerationCustody(client:BrowserClient,storage?:SocialGenerationStorage):()=>void{
- const custody=new SocialGenerationCustody(client,storage);
- const observe=():void=>{try{custody.read();}catch{/* UI must explicitly reconcile or fail closed. */}};
- observe();return client.subscribe(observe);
-}

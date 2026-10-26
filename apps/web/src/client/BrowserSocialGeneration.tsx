@@ -7,7 +7,7 @@ import {revalidateSocialSelection} from './SocialGenerationDispatch.ts';
 const answerSchema=z.union([z.strictObject({status:z.literal('accepted'),replayed:z.boolean(),result:socialGuidedRequestSavedSchema}),z.strictObject({status:z.literal('refused'),replayed:z.boolean(),reason:z.string().min(1).max(100)})]);
 /** Explicit selection through existing request/read owners. Nothing is adopted,
  * saved, retried, polled or published as a side effect of request acceptance. */
-export function BrowserSocialGeneration({client,onCurrentRequest}:{client:BrowserClient;onCurrentRequest:(request:SocialDraftView|null)=>void}):JSX.Element|null{
+export function BrowserSocialGeneration({client,onCurrentRequest,claimProjection}:{client:BrowserClient;onCurrentRequest:(request:SocialDraftView|null)=>void;claimProjection?:()=>()=>boolean}):JSX.Element|null{
  const custody=useMemo(()=>new SocialGenerationCustody(client),[client]);
  const [workspace,setWorkspace]=useState<SocialDraftWorkspace|null>(null),[guide,setGuide]=useState<SocialVoiceGuide|null>(null);
  const [guideSelected,setGuideSelected]=useState(false),[facts,setFacts]=useState<string[]>([]),[pending,setPending]=useState<SocialGenerationPending|null>(null);
@@ -27,10 +27,11 @@ export function BrowserSocialGeneration({client,onCurrentRequest}:{client:Browse
  },[client,custody,held]);
  const operation=async(work:(current:()=>boolean)=>Promise<void>):Promise<void>=>{
   if(guard.current||blocked||client.current?.status!=='signed_in'||client.current.role!=='admin')return;
-  guard.current=true;setBusy(true);const id=++token.current,epoch=client.epoch;
-  const current=()=>mounted.current&&token.current===id&&client.isCurrent(epoch)&&client.current?.status==='signed_in'&&client.current.role==='admin';
+  guard.current=true;setBusy(true);const id=++token.current,epoch=client.epoch,projectionCurrent=claimProjection?.()??(()=>true);
+  const owned=()=>mounted.current&&token.current===id&&client.isCurrent(epoch)&&client.current?.status==='signed_in'&&client.current.role==='admin';
+  const current=()=>owned()&&projectionCurrent();
   try{await work(current);}catch{if(current()){held();clearSelection();callback.current(null);setNotice('Selection changed, access refused or request outcome unknown. Read current inputs again, or reconcile pending custody. No automatic retry or replacement.');}}
-  finally{if(current()){guard.current=false;setBusy(false);}}
+  finally{if(owned()){guard.current=false;setBusy(false);}}
  };
  const inputs=async(current:()=>boolean)=>{
   const check=()=>{if(!current())throw Error('Scope changed');};
