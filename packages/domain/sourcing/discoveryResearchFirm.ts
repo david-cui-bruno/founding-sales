@@ -35,14 +35,28 @@ export async function linkDiscoveryResearchFirm(ctx:RepositoryContext,input:Inpu
  const raw=(await ctx.db.query<{payload:unknown;revision:number;status:string}>('SELECT payload,revision,status FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,value.discoveryCandidateId])).rows[0];
  const legacy=(await ctx.db.query<{payload:CandidateInput}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,value.qualificationCandidateId])).rows[0];
  if(!raw||!legacy||raw.revision!==value.expectedRevision||raw.status==='dismissed'||!discoveryPreparationMatches(raw.payload,legacy.payload))return refused('candidate_changed');
- const promotion=(await ctx.db.query<{id:string}>('SELECT id FROM sourcing_discovery_promotions WHERE workspace_id=$1 AND raw_candidate_id=$2 AND raw_candidate_revision=$3 AND legacy_candidate_id=$4 FOR UPDATE',[w,value.discoveryCandidateId,value.expectedRevision,value.qualificationCandidateId])).rows[0];
+ // The candidate locks serialize competing links and candidate deletion. Promotion
+ // lineage is append-only: even SELECT FOR KEY SHARE would require UPDATE privilege.
+ const promotion=(await ctx.db.query<{id:string}>('SELECT id FROM sourcing_discovery_promotions WHERE workspace_id=$1 AND raw_candidate_id=$2 AND raw_candidate_revision=$3 AND legacy_candidate_id=$4',[w,value.discoveryCandidateId,value.expectedRevision,value.qualificationCandidateId])).rows[0];
  if(!promotion)return refused('preparation_unavailable');
  const prepared=await readDiscoveryPreparation(ctx,promotion.id);if(!prepared)return refused('preparation_unavailable');
  if(!matchesStoredIdentity(firm,legacy.payload))return refused('firm_identity_mismatch');
  if(!await unambiguous(ctx,firm))return refused('firm_identity_ambiguous');
  const previous=(await ctx.db.query<{firm_id:string}>('SELECT firm_id FROM sourcing_discovery_research_firms WHERE workspace_id=$1 AND promotion_id=$2',[w,promotion.id])).rows[0];
  if(previous)return previous.firm_id===firm.id?{ok:true,value:{promotionId:promotion.id,alreadyLinked:true}}:refused('research_firm_conflict');
- await ctx.db.query('INSERT INTO sourcing_discovery_research_firms(workspace_id,promotion_id,firm_id) VALUES($1,$2,$3)',[w,promotion.id,firm.id]);
+ // The FK obtains the promotion key-share lock without granting UPDATE on lineage.
+ // Source deletion either waits for this transaction or wins before INSERT. In the
+ // latter case contain only that exact FK race, leaving the caller transaction usable.
+ await ctx.db.query('SAVEPOINT discovery_research_firm_link');
+ try {
+  await ctx.db.query('INSERT INTO sourcing_discovery_research_firms(workspace_id,promotion_id,firm_id) VALUES($1,$2,$3)',[w,promotion.id,firm.id]);
+  await ctx.db.query('RELEASE SAVEPOINT discovery_research_firm_link');
+ } catch(error) {
+  await ctx.db.query('ROLLBACK TO SAVEPOINT discovery_research_firm_link');
+  await ctx.db.query('RELEASE SAVEPOINT discovery_research_firm_link');
+  if(error!==null&&typeof error==='object'&&'code' in error&&error.code==='23503'&&'constraint' in error&&error.constraint==='sourcing_discovery_research_firm_workspace_id_promotion_id_fkey')return refused('preparation_unavailable');
+  throw error;
+ }
  return {ok:true,value:{promotionId:promotion.id,alreadyLinked:false}};
 }
 
