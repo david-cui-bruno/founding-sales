@@ -4,9 +4,12 @@ import type {ManualProspect} from '@fss/contracts';
 type PhoneEvidence=ManualProspect['phoneEvidence'];
 function discoveryExpiry(evidence:PhoneEvidence):number{
  const sources=evidence?.state==='observed'||evidence?.state==='conflicting'?evidence.sources:[];
- return Math.min(...sources.flatMap(source=>{
-  if(!('method' in source)||source.authority.kind!=='phone_discovery')return [];
-  const expiry=Date.parse(source.authority.expiresAt);return Number.isFinite(expiry)?[expiry]:[];
+ const diagnostics=evidence?.state==='conflicting'?evidence.diagnostics?.entries??[]:[];
+ const authorities=[...sources.flatMap(source=>'method' in source?[source.authority]:[]),...diagnostics.map(entry=>entry.authority)];
+ const aggregate=evidence?.state==='conflicting'?evidence.diagnostics?.expiresAt:undefined;
+ return Math.min(...(aggregate?[Date.parse(aggregate)]:[]),...authorities.flatMap(authority=>{
+  if(authority.kind!=='phone_discovery')return [];
+  const expiry=Date.parse(authority.expiresAt);return Number.isFinite(expiry)?[expiry]:[0];
  }));
 }
 /** Display-only expiry. Losing any dependency clears the whole enrichment, never a surviving winner. */

@@ -101,8 +101,9 @@ export function projectManualPhone(snapshot:ManualPhoneSnapshot|undefined,now=Da
  if(sources.length>16)return {state:'not_extracted',reason:'bounded_scan_incomplete',coverage:{...scan.coverage,state:'bounded'}};
  const values=new Set(scan.sources.flatMap(source=>source.normalizedValue?[source.normalizedValue]:[]));
  if(factEvidence.state==='observed')values.add(factEvidence.value);
- if(factEvidence.state==='conflicting'||values.size>1)return {state:'conflicting',reason:'multiple_retained_numbers',sources,coverage:scan.coverage};
- if(scan.unresolved)return {state:'conflicting',reason:'unresolved_retained_literal',sources,coverage:scan.coverage};
+ const diagnostics=scan.diagnostics?{diagnostics:scan.diagnostics}:{};
+ if(factEvidence.state==='conflicting'||values.size>1)return {state:'conflicting',reason:'multiple_retained_numbers',sources,coverage:scan.coverage,...diagnostics};
+ if(scan.unresolved)return {state:'conflicting',reason:'unresolved_retained_literal',sources,coverage:scan.coverage,...diagnostics};
  if(values.size===1)return {state:'observed',value:[...values][0]!,sources,coverage:scan.coverage};
  return {state:'not_extracted',reason:'retained_text_not_extracted',coverage:scan.coverage};
 }

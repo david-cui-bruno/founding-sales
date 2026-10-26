@@ -1,6 +1,7 @@
 import type {JSX} from 'react';
 import type {ManualProspect} from '@fss/contracts';
 import {useCurrentPhoneEvidence} from './useCurrentPhoneEvidence.ts';
+import {PhoneRefusalDiagnostics} from './PhoneRefusalDiagnostics.tsx';
 
 type PhoneEvidence = ManualProspect['phoneEvidence'];
 function summary(evidence:PhoneEvidence):string{
@@ -24,6 +25,7 @@ export function RetainedPhoneEvidence({evidence:retained,compact=false}:{evidenc
   <details><summary>Phone-specific sources and coverage</summary>
    {evidence?.state==='not_extracted'||evidence?.state==='conflicting'?<p>Phone evidence: {evidence.reason.replaceAll('_',' ')}. Missing data is not explicit absence.</p>:null}
    {evidence?.coverage?<p>Retained phone scan: {evidence.coverage.state} · {evidence.coverage.observations} observations · {evidence.coverage.blocks} blocks · {evidence.coverage.parser}. Coverage is limited to permitted retained inputs, not the whole business.</p>:null}
+   <PhoneRefusalDiagnostics evidence={evidence}/>
    {sources.length?<ul aria-label="Phone-specific sources">{sources.map((source,index)=>{
     const href=safeSource(source.url);
     return <li key={`${source.runId}:${source.observationId}:${source.blockId}:${index}`}>

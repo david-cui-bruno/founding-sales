@@ -24,6 +24,24 @@ const lineage = z.discriminatedUnion('kind', [
   z.strictObject({kind: z.literal('retained_interpretation'), decisionId: uuid,
     originalRunId: uuid, originalRevision: revision, resultRevision: revision}),
 ]);
+/** A refusal location explains retained evidence, never a selected endpoint or new original export. */
+export const manualLiteralPhoneDiagnosticSchema = z.strictObject({
+  reason: z.enum(['unattached_label_content', 'unsupported_literal', 'ambiguous_context']),
+  runId: uuid, observationId: uuid, blockId: z.string().min(1).max(80),
+  url, retrievedAt: instant, contentHash: hash, relevantTextHash: hash,
+  parser: z.literal('manual-literal-phone-v1'),
+  label: z.string().min(1).max(200), labelStart: offset, labelEnd: offset,
+  authority, lineage,
+}).superRefine((value, ctx) => {
+  if(value.labelEnd <= value.labelStart || value.labelEnd-value.labelStart !== value.label.length)
+    ctx.addIssue({code:'custom', message:'Diagnostic label offsets must preserve its exact UTF-16 length.'});
+});
+export const manualLiteralPhoneDiagnosticsSchema = z.strictObject({
+  entries: z.array(manualLiteralPhoneDiagnosticSchema).max(16),
+  truncated: z.boolean(),
+  // Earliest discovery dependency, including entries omitted by diagnostic bounds.
+  expiresAt: instant.optional(),
+});
 /** A literal is an authorized original span, never verified ownership or calling authority. */
 export const manualLiteralPhoneSourceSchema = z.strictObject({
   method: z.literal('retained_original_literal'),
