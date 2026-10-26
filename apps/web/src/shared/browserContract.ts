@@ -31,6 +31,7 @@ export const BROWSER_REVISION_HEADER = 'x-callie-session';
 export const BROWSER_READ_PATHS = Object.freeze([
   '/today', '/firms', '/meetings/outcomes', '/today/actions/v3', '/today/actions/v4',
   '/meetings/firm', '/meetings/brief',
+  '/calls/calling', '/calls/history', '/calling-identities',
 ] as const);
 export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3', '/today/actions/open/v4',
@@ -47,7 +48,10 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/social/private-drafts/list', '/social/private-drafts/read', '/social/private-drafts/receipt',
   '/social/voice-preferences/read', '/social/voice-preferences/receipt',
   '/calling/follow-ups/list', '/calling/follow-ups/read', '/calling/follow-ups/receipt',
+  '/calling/execution/receipt',
 ] as const);
+/** Ephemeral outgoing-only Voice credential. Not a command, never persisted by the client. */
+export const BROWSER_VOICE_POST_PATHS = Object.freeze(['/calls/access-token'] as const);
 export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/meetings/notes', '/sourcing/research-firms/create',
   '/sourcing/candidates/prospects/feedback',
@@ -59,6 +63,7 @@ export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/replies/composer/generate',
   '/social/private-drafts/save', '/social/voice-preferences/save',
   '/calling/wrap', '/calling/follow-ups/save',
+  '/calls/session',
 ] as const);
 
 export const browserSignInSchema = z.strictObject({
@@ -71,5 +76,5 @@ export function browserApiPathAllowed(method: string, path: string): boolean {
   if (method === 'GET') {
     return BROWSER_READ_PATHS.some(value => value === path) || /^\/firms\/[0-9a-f-]{36}$/iu.test(path);
   }
-  return method === 'POST' && [...BROWSER_POST_READ_PATHS, ...BROWSER_COMMAND_PATHS].some(value => value === path);
+  return method === 'POST' && [...BROWSER_POST_READ_PATHS, ...BROWSER_COMMAND_PATHS, ...BROWSER_VOICE_POST_PATHS].some(value => value === path);
 }

@@ -49,6 +49,31 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it('pins explicit Voice start and leaves receipt identity unchanged', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const start = { commandId: id, firmId: id, routeId: id, routeVersion: 1, callingIdentityId: id };
+    expect((await handler(post('/browser/api/calls/session', start, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[0]?.[3].body).toEqual({ ...start, clientVersion: '1.4.0' });
+    const receipt = { firmId: id, commandId: id, payloadSHA256: 'a'.repeat(64) };
+    expect((await handler(post('/browser/api/calling/execution/receipt', receipt, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[1]?.[3].body).toEqual(receipt);
+    expect((await handler(post('/browser/api/calls/session', { ...start, clientVersion: '9.9.9' }, headers)))?.status).toBe(400);
+    expect(mocks.route).toHaveBeenCalledTimes(2);
+  });
+  it('requires current Voice token CSRF and revision before any mint dispatch', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    expect((await handler(post('/browser/api/calls/access-token', {}, { ...headers, 'x-callie-csrf': '' })))?.status).toBe(403);
+    expect((await handler(post('/browser/api/calls/access-token', {}, { ...headers, 'x-callie-session': 'stale' })))?.status).toBe(409);
+    expect(mocks.route).not.toHaveBeenCalled();
+    mocks.route.mockResolvedValueOnce({ status: 200, body: { token: 'fictional-voice-grant', identity: id, expiresAt } });
+    const result = await handler(post('/browser/api/calls/access-token', {}, headers));
+    expect(result?.status).toBe(200);
+    expect(result?.headers['cache-control']).toBe('private, no-store');
+    expect(result?.headers['permissions-policy']).toBe('camera=(), microphone=(self), geolocation=()');
+    expect(mocks.route.mock.calls[0]?.[3].body).toEqual({});
+  });
   it.each(['request', 'admit'])('preserves typed qualification %s product refusals without changing command identity', async action => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const body = { status: 'refused', replayed: true, reason: 'research_held' };
