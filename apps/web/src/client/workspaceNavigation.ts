@@ -8,6 +8,7 @@ export type WorkspaceSection = 'today' | 'prospects' | 'calling' | 'email' | 'so
 export interface WorkspaceScreenProps {
   client: BrowserClient;
   onNavigate?: (section: WorkspaceSection) => void;
+  onOpenCalling?: (selection: CallingSubject) => void;
 }
 
 /** Exact in-memory navigation, never a permission or retained private content cache. */
