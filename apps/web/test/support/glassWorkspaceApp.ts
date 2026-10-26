@@ -88,6 +88,11 @@ export async function navigateGlass(page: Page, name: 'Today' | 'Prospects' | 'C
   await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
   await expect(page.locator('#workspace-main')).toBeFocused();
 }
+export async function openGlassSettings(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Settings & account', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Settings', level: 1, exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Refresh access', exact: true })).toBeEnabled();
+}
 export async function assertGlassStorage(page: Page, privateTexts: string[]): Promise<void> {
   const storage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage }, cookie: document.cookie }));
   for (const text of privateTexts) expect(storage).not.toContain(text);

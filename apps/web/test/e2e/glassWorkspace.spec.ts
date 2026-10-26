@@ -1,6 +1,6 @@
 import { expect, test as base, type Page } from 'playwright/test';
 import { browserRequest, browserSession } from '../support/browser.ts';
-import { assertGlassFits, assertGlassNoExternalActions, assertGlassStorage, containGlass, glassCase, glassScreenshot, navigateGlass, requireGlassRuntimeGrant, signInGlass, startGlassWorkspace } from '../support/glassWorkspaceApp.ts';
+import { assertGlassFits, assertGlassNoExternalActions, assertGlassStorage, containGlass, glassCase, glassScreenshot, navigateGlass, openGlassSettings, requireGlassRuntimeGrant, signInGlass, startGlassWorkspace } from '../support/glassWorkspaceApp.ts';
 import { seedGlassWorkspace, type GlassWorkspaceSeed } from '../support/glassWorkspaceSeed.ts';
 import { acceptGlassCandidateContract } from '../support/glassWorkspaceContracts.ts';
 import { launchGlassContext } from '../support/glassWorkspaceBrowser.ts';
@@ -204,13 +204,13 @@ test('actual missing-source refusal and held real response cannot restore unmoun
   try {
     await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
     await arrived;
-    await navigateGlass(page, 'Social');
+    await openGlassSettings(page);
     const session = await browserSession(page);
     if (session.status !== 'signed_in') throw Error('Current signed identity required for revocation acceptance');
     await app().fixture.db.query("UPDATE devices SET status='revoked',revoked_at=now() WHERE id=$1", [session.deviceId]);
     const revoked = await browserRequest(page, '/calling/follow-ups/list', { body: {} });
     expect(revoked.status).toBe(401);
-    await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await page.getByRole('button', { name: 'Refresh access', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
     release();
     await completed;

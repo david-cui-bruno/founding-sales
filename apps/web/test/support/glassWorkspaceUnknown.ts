@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { expect, type BrowserContext, type Page } from 'playwright/test';
 import { callingFollowUpSaveInputSchema } from '@fss/contracts';
 import { browserRequest, browserSession } from './browser.ts';
-import { assertGlassStorage, navigateGlass, type GlassWorkspaceApp } from './glassWorkspaceApp.ts';
+import { assertGlassStorage, navigateGlass, openGlassSettings, type GlassWorkspaceApp } from './glassWorkspaceApp.ts';
 import { glassSaveAcceptance, glassWrapAcceptance } from './glassWorkspaceContracts.ts';
 import { privateDraftCanonicalJson } from '../../src/client/PrivateDraftCustody.ts';
 import type { GlassWorkspaceSeed } from './glassWorkspaceSeed.ts';
@@ -87,13 +87,14 @@ export async function acceptGlassTwoTabUnknown(page: Page, context: BrowserConte
     await openFollowUp(page, secondId);
     await expect(page.getByRole('button', { name: 'Save private follow-up', exact: true })).toBeDisabled();
     expect(await records(page)).toEqual(remaining);
-    await navigateGlass(page, 'Social');
-    await navigateGlass(other, 'Social');
+    await openGlassSettings(page);
+    await openGlassSettings(other);
     const session = await browserSession(page);
     if (session.status !== 'signed_in') throw Error('Real signed identity required');
     await app.fixture.db.query("UPDATE devices SET status='revoked',revoked_at=now() WHERE id=$1", [session.deviceId]);
-    // Actual mounted product request causes 401 and app-lifetime invalidation while Email is absent.
-    await page.getByRole('button', { name: 'List saved private drafts', exact: true }).click();
+    // Actual mounted access refresh observes revocation while Email is absent.
+    // Settings has no automatic data load racing the explicit refresh action.
+    await page.getByRole('button', { name: 'Refresh access', exact: true }).click();
     for (const target of [page, other]) {
       await expect(target.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
       await expect.poll(() => records(target)).toEqual([]);
