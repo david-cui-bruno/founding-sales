@@ -53,6 +53,7 @@ import {NOTIFICATION_PATHS,routeNotifications} from './notifications.ts';
 // The policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
 import { CALL_PATHS, routeCalls } from './calls.ts';
+import { CALLING_PATHS, routeCalling } from './calling.ts';
 // The call-to-booking milestone: Twilio call sessions and the two provider webhooks.
 import { CALL_SESSION_PATHS, routeCallSessions } from './callSessions.ts';
 // Slice 3a: a call's post-call analysis and David's notes.
@@ -224,6 +225,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('dial', { paths: DIAL_PATHS }, routeDial, routing),
     moduleOf('calling-identities', { paths: CALLING_IDENTITY_PATHS }, routeCallingIdentities, routing),
     moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
+    moduleOf('calling-workspace', { paths: CALLING_PATHS }, routeCalling, routing),
     moduleOf('callbacks', { paths: CALLBACK_PATHS }, routeCallbacks, routing),
     // The call-to-booking milestone (slice W). Exact paths. The webhooks are the only
     // paths that take a form body or keep their raw bytes (`limits.ts`), and each is 404
