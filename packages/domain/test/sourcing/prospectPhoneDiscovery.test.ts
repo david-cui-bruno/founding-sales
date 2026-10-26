@@ -122,6 +122,33 @@ it('requests waiting on the actual shared visibility lock recheck authority and 
  expect(requests[0]).toEqual(requests[1]);expect(requests[0]).toMatchObject({ok:true});
  expect((await runtime.query("SELECT count(*)::int n FROM jobs WHERE kind='sourcing.phone_discover'")).rows[0]?.['n']).toBe(1);
 });
+async function waitForBackendLock(pid:number):Promise<void>{
+ for(let attempt=0;attempt<100;attempt++){
+  const row=(await db.session.query<{waiting:boolean}>("SELECT wait_event_type='Lock' AND wait_event='advisory' waiting FROM pg_stat_activity WHERE pid=$1",[pid])).rows[0];
+  if(row?.waiting)return;
+  await new Promise(resolve=>setTimeout(resolve,5));
+ }
+ throw Error('expected real phone-discovery advisory lock wait');
+}
+it.each(['source_loss','revision','principal'] as const)('request revalidates %s after an observed PostgreSQL visibility-lock wait',async mode=>{
+ const c=await candidate(),other=await db.appRuntimeSession();
+ const pid=(await runtime.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0]!.pid;
+ await other.query('BEGIN');
+ await other.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-discovery-review:${seed.alpha.workspaceId}`]);
+ const waiting=withTransaction(runtime,()=>requestProspectPhoneDiscovery(ctx(),{candidateId:c.id,expectedRevision:1}));
+ try{
+  await waitForBackendLock(pid);
+  if(mode==='source_loss')await rememberExpiredManualSources(ctx(other),[c.sourceUrl]);
+  if(mode==='revision')await other.query('UPDATE sourcing_candidates SET revision=revision+1 WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,c.id]);
+  if(mode==='principal'){
+   await other.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);
+   await other.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+  }
+ }finally{await other.query('COMMIT');}
+ expect(await waiting).toMatchObject({ok:false,reason:{source_loss:'official_site_unknown',revision:'candidate_changed',principal:'authority_changed'}[mode]});
+ expect((await runtime.query('SELECT id FROM sourcing_prospect_phone_discoveries WHERE candidate_id=$1',[c.id])).rows).toHaveLength(0);
+ expect((await runtime.query("SELECT id FROM jobs WHERE kind='sourcing.phone_discover'")).rows).toHaveLength(0);
+});
 it('expired pending jobs are terminally erased by the existing bounded retention owner',async()=>{
  const c=await candidate(),runId=randomUUID();
  await runtime.query(`INSERT INTO sourcing_prospect_phone_discoveries(workspace_id,id,candidate_id,candidate_revision,creator_user_id,creator_ref,method,requested_at,deadline_at,expires_at,content)
@@ -133,10 +160,13 @@ it('expired pending jobs are terminally erased by the existing bounded retention
 });
 it('typed beforeCommit authority loss rolls back pending run, job and consumed count',async()=>{
  const c=await candidate();
+ const count=()=>runtime.query("SELECT COALESCE(sum(count),0)::int n FROM daily_counters WHERE workspace_id=$1 AND counter_kind='research_firm_runs'",[seed.alpha.workspaceId]);
+ const before=(await count()).rows;
  await expect(withTransaction(runtime,async()=>{
   const result=await requestProspectPhoneDiscovery(ctx(),{candidateId:c.id,expectedRevision:1});if(!result.ok)throw Error(result.reason);
   await currentProspectPhoneDiscoveryAuthority(ctx(),{candidateId:c.id,expectedRevision:1},result.value.runId,async()=>false);
  })).rejects.toBeInstanceOf(ProspectPhoneDiscoveryAuthorityChanged);
+ expect((await count()).rows).toEqual(before);
  expect((await runtime.query('SELECT id FROM sourcing_prospect_phone_discoveries WHERE candidate_id=$1',[c.id])).rows).toHaveLength(0);
  expect((await runtime.query("SELECT id FROM jobs WHERE kind='sourcing.phone_discover'")).rows).toHaveLength(0);
 });
