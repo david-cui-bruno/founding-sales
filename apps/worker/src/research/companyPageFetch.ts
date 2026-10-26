@@ -470,11 +470,24 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
       /**
        * Slice P1: once the caller's pause predicate says no, no further request is made
        * for this run. Asked before each robots read, each redirect hop and each page.
+       * Exact native source authority is the final async gate before dispatch. Its
+       * refusal invalidates the whole capture, including any already-read prefix.
        */
       let paused = false;
-      const mayRequest = async (): Promise<boolean> => {
-        if (paused || clock()>=deadline) return false;
+      let sourceAuthorityRefused = false;
+      const mayRequest = async (url: string): Promise<boolean> => {
+        if (paused || sourceAuthorityRefused || clock()>=deadline) return false;
         if (input.shouldContinue !== undefined && !(await input.shouldContinue())) paused = true;
+        if (!paused && input.mayFetchUrl !== undefined) {
+          if (clock()>=deadline) return false;
+          let permitted = false;
+          try { permitted = await input.mayFetchUrl(url); } catch { /* Native authority is unavailable, never permission. */ }
+          if (!permitted) {
+            sourceAuthorityRefused = true;
+            skips.bump('source_authority_refused');
+            return false;
+          }
+        }
         return !paused && clock()<deadline;
       };
 
@@ -493,7 +506,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
         let followed = 0;
         for (;;) {
           // Paused: unread, so the host's pages are not fetched, and the run stops below.
-          if (!(await mayRequest())) return { kind: 'unreadable' };
+          if (!(await mayRequest(url))) return { kind: 'unreadable' };
           let response: RawResponse;
           try {
             response = await request({
@@ -566,6 +579,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
       let discoveryDone = false;
 
       for (let index = 0; index < queue.length; index += 1) {
+        if (sourceAuthorityRefused) break;
         const initial = queue[index] ?? '';
         if (paused) {
           skips.bump('paused');
@@ -600,6 +614,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             break;
           }
           const robots = await robotsFor(hostname, address);
+          if (sourceAuthorityRefused) break;
           if (paused) {
             // A robots answer cut short by the pause is not a fact about the host: it is
             // not kept for another URL of this run, and nothing more is requested.
@@ -616,8 +631,8 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             break;
           }
 
-          if (!(await mayRequest())) {
-            skips.bump('paused');
+          if (!(await mayRequest(url))) {
+            if (!sourceAuthorityRefused) skips.bump('paused');
             break;
           }
           let response: RawResponse;
