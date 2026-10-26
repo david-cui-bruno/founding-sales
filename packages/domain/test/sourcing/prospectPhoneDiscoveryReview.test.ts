@@ -6,7 +6,10 @@ import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery,runProspectPhoneDiscovery} from '../../sourcing/prospectPhoneDiscovery.ts';
-import {manualOrdinaryFixture} from './support/manualProspectFixture.ts';
+import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
+import {manualPhoneFixture,seedManualPhoneRun} from './support/manualPhoneFixture.ts';
+import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {listManualProspects} from '../../sourcing/manualProspects.ts';
 import {MANUAL_SOURCE_LOSS_ACTION} from '../../sourcing/manualProspectSourceLoss.ts';
 import type {PageFetchProvider,PageFetchRequest} from '../../research/providers.ts';
 let db:TestDatabase,runtime:SessionQueryable,seed:TwoWorkspaces,serial=2000;
@@ -74,6 +77,57 @@ it('SPEC S2 actual provider pages plus skipped.page_over_bound cannot persist a 
  await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website,{page_over_bound:1})});
  expect(await read(f.input)).toMatchObject({ok:true,value:{state:'unavailable',reason:'bounded_capture_incomplete'}});
  expect((await runtime.query('SELECT content FROM sourcing_prospect_phone_discoveries WHERE id=$1',[result.value.runId])).rows[0]?.['content']).toBeNull();
+});
+it('STD4 explicit read and retained list both refuse competing qualification124 and discovery123',async()=>{
+ const f=await fixture();await seedManualPhoneRun(db.session,seed.alpha.workspaceId,f.id,manualPhoneFixture(f.sourceUrl,['2145550124']));
+ const result=await request(f.input);if(!result.ok)throw Error(result.reason);
+ await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website)});
+ const current=await read(f.input),listed=await withTransaction(runtime,()=>listManualProspects(ctx(),{state:'all',offset:0}));
+ if(!listed.ok)throw Error(listed.reason);
+ const prospect=listed.value.prospects.find(row=>row.candidateId===f.id)!;
+ expect(prospect.observedPhone).toBeNull();expect(prospect.phoneEvidence).toMatchObject({state:'conflicting',sources:[{},{}]});
+ expect(current).toMatchObject({ok:true,value:{state:'complete',phoneEvidence:prospect.phoneEvidence}});
+});
+it.each(['ambiguous','absent'] as const)('STD4 explicit read preserves current raw %s declaration instead of selecting discovery phone',async declaration=>{
+ const f=await fixture(),raw=manualDiscoveryFixture(`std4-${++serial}`);raw.row.website=f.website;
+ const saved=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx(),raw));if(!saved.ok)throw Error(saved.reason);
+ // Intake cannot assert first-party support. Seed the already-retained declaration
+ // directly to exercise current-read composition, not the intake command contract.
+ await db.session.query("UPDATE sourcing_candidates SET payload=jsonb_set(payload,'{row,officePhoneEvidence}',to_jsonb($2::text)) WHERE id=$1",[saved.value.id,declaration]);
+ const input={candidateId:saved.value.id,expectedRevision:1},result=await request(input);if(!result.ok)throw Error(result.reason);
+ await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website)});
+ expect(await read(input)).toMatchObject({ok:true,value:{state:'complete',phoneEvidence:{state:'conflicting',reason:'retained_source_ambiguous'}}});
+});
+it.each([false,true])('STD4 explicit read keeps supported standalone or matching current evidence with honest provenance, matching=%s',async matching=>{
+ const f=await fixture();if(matching)await seedManualPhoneRun(db.session,seed.alpha.workspaceId,f.id,manualPhoneFixture(f.sourceUrl,['2145550123']));
+ const result=await request(f.input);if(!result.ok)throw Error(result.reason);
+ await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website)});
+ const value=await read(f.input);expect(value).toMatchObject({ok:true,value:{phoneEvidence:{state:'observed',value:'+12145550123'}}});
+ if(!value.ok||!value.value)throw Error('missing STD4 view');
+ if(value.value.phoneEvidence.state!=='observed')throw Error('missing observed evidence');
+ expect(value.value.phoneEvidence.sources).toHaveLength(matching?2:1);
+});
+it('STD4 explicit read waits on retained source custody and cannot choose discovery after that dependency disappears',async()=>{
+ const f=await fixture(),legacy=manualPhoneFixture(`https://optional-source.example.test/phone-${++serial}`,['2145550124']);
+ await seedManualPhoneRun(db.session,seed.alpha.workspaceId,f.id,legacy);
+ const source=legacy.observations[0]!;
+ const firm=(await runtime.query<{id:string}>('INSERT INTO firms(workspace_id,name,assigned_user_id) VALUES($1,$2,$3) RETURNING id',[seed.alpha.workspaceId,'STD4 synthetic original parent',seed.alpha.admin.userId])).rows[0]!.id;
+ const evidenceId=(await runtime.query<{id:string}>("INSERT INTO evidence_items(workspace_id,firm_id,provider,source_reference,content_hash,retrieved_at) VALUES($1,$2,'website',$3,$4,$5) RETURNING id",[seed.alpha.workspaceId,firm,source.url,source.contentHash,source.retrievedAt])).rows[0]!.id;
+ const result=await request(f.input);if(!result.ok)throw Error(result.reason);
+ await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website)});
+ const other=await db.appRuntimeSession(),pid=(await runtime.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0]!.pid;
+ await other.query('BEGIN');await other.query('DELETE FROM evidence_items WHERE id=$1',[evidenceId]);
+ let settled=false,waited=false;
+ const reading=read(f.input).finally(()=>{settled=true;});
+ try{
+  for(let attempt=0;attempt<100&&!settled;attempt++){
+   waited=(await db.session.query<{waiting:boolean}>("SELECT wait_event_type='Lock' waiting FROM pg_stat_activity WHERE pid=$1",[pid])).rows[0]?.waiting??false;
+   if(waited)break;
+   await new Promise(resolve=>setTimeout(resolve,5));
+  }
+ }finally{await other.query('COMMIT');}
+ const value=await reading;expect(waited).toBe(true);
+ expect(value).toMatchObject({ok:true,value:{state:'complete',phoneEvidence:{state:'not_extracted',reason:'optional_source_changed',coverage:{state:'changed'}}}});
 });
 it.each(['firm_timeout','paused','request_failed','robots_unreadable','source_authority_refused'] as const)('RISK R2 interrupted provider prefix %s cannot become complete evidence',async reason=>{
  const f=await fixture(),result=await request(f.input);if(!result.ok)throw Error(result.reason);

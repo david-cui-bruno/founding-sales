@@ -15,7 +15,10 @@ import {isPublicResearchUrl,isSameResearchSite} from '../research/sourcePolicy.t
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {phoneDiscoveryContext,phoneDiscoveryNow,phoneDiscoveryPrincipal,phoneDiscoveryResearchRefusal,phoneDiscoverySourceLimit,type PhoneDiscoveryAuthority} from './prospectPhoneDiscoveryAuthority.ts';
 import {invalidatePhoneDiscovery,lockPhoneDiscoveryCandidate,lockPhoneDiscoveryRun,phoneDiscoveryRun,validatePhoneDiscoveryRun} from './prospectPhoneDiscoveryStore.ts';
-import {prospectPhoneDiscoveryView} from './prospectPhoneDiscoveryProjection.ts';
+import {prospectPhoneDiscoveryView,composeProspectPhoneDiscovery,projectProspectPhoneDiscovery} from './prospectPhoneDiscoveryProjection.ts';
+import {MANUAL_ACTIVITY_RAW_SQL} from './manualProspectActivityAccess.ts';
+import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
+import {manualPhoneSnapshots,recheckManualPhoneSnapshots,projectManualPhone,changedManualPhone} from './manualProspectPhone.ts';
 import {sweepProspectPhoneDiscoveries} from './prospectPhoneDiscoveryLifecycle.ts';
 
 export class ProspectPhoneDiscoveryAuthorityChanged extends Error {constructor(){super('phone_discovery_authority_changed');this.name='ProspectPhoneDiscoveryAuthorityChanged';}}
@@ -94,6 +97,11 @@ export async function readProspectPhoneDiscovery(ctx:RepositoryContext,input:Pro
  const candidate=await lockPhoneDiscoveryCandidate(ctx,input.candidateId);
  if(!candidate)return refuse('candidate_unavailable');
  if(candidate.revision!==input.expectedRevision)return refuse('candidate_changed');
+ const rawRows=()=>ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_ACTIVITY_RAW_SQL}) permitted WHERE id=$3 AND revision=$4`,[ctx.scope.workspaceId,'all',input.candidateId,input.expectedRevision]);
+ const rows=(await rawRows()).rows;
+ // Match list lock order: source/candidate, qualification ancestry/evidence,
+ // then discovery creator/run. The explicit result is not an isolated winner.
+ const phones=await manualPhoneSnapshots(ctx,rows);
  const run=await phoneDiscoveryRun(ctx,input.candidateId,input.expectedRevision);
  if(!await phoneDiscoveryPrincipal(ctx,authority))return refuse('authority_changed');
  if(!run)return {ok:true,value:null};
@@ -101,14 +109,21 @@ export async function readProspectPhoneDiscovery(ctx:RepositoryContext,input:Pro
   const denial=await validatePhoneDiscoveryRun(ctx,run,false);
   if(denial)await invalidatePhoneDiscovery(ctx,run.id,denial);
  }
+ const checked=await recheckManualPhoneSnapshots(ctx,rows,phones);
  if(!await phoneDiscoveryPrincipal(ctx,authority))return refuse('authority_changed');
+ const currentRows=(await rawRows()).rows,currentPhones=await recheckManualPhoneSnapshots(ctx,rows,phones);
  const current=await phoneDiscoveryRun(ctx,input.candidateId,input.expectedRevision);
  if(!current)return {ok:true,value:null};
  if(current.state!=='unavailable'){
   const denial=await validatePhoneDiscoveryRun(ctx,current,false);
   if(denial){await invalidatePhoneDiscovery(ctx,current.id,denial);current.state='unavailable';current.reason=denial;current.content=null;current.checked_at=await phoneDiscoveryNow(ctx);}
  }
- return {ok:true,value:prospectPhoneDiscoveryView(current,(await phoneDiscoveryNow(ctx)).getTime())};
+ // Clock rights and optional snapshot equality are evaluated after final waits.
+ const now=(await phoneDiscoveryNow(ctx)).getTime();
+ const retained=isDeepStrictEqual(phones,checked)&&isDeepStrictEqual(phones,currentPhones)?projectManualPhone(currentPhones[0],now):changedManualPhone();
+ const discovered=isDeepStrictEqual(run,current)?projectProspectPhoneDiscovery(current,now):changedManualPhone();
+ const evidence=isDeepStrictEqual(rows,currentRows)&&currentRows[0]?projectManualProspect(currentRows[0],composeProspectPhoneDiscovery(retained,discovered))?.phoneEvidence:undefined;
+ return {ok:true,value:prospectPhoneDiscoveryView(current,evidence??changedManualPhone())};
 }
 /** Validates a whole capture. No selected prefix survives incomplete pages/bounds. */
 export function captureProspectPhonePages(pages:PageFetchResult['pages'],website:string,maxPages:number,maxBytes:number,now:number):Result<SourceObservation[]>{

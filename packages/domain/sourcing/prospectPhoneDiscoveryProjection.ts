@@ -31,8 +31,8 @@ export function composeProspectPhoneDiscovery(legacy:Evidence,discovered:Evidenc
   (legacy.state==='observed'&&discovered.state==='observed'&&legacy.value!==discovered.value))return {state:'conflicting',reason:'retained_source_ambiguous',sources,...(discovered.coverage?{coverage:discovered.coverage}:{})};
  return legacy.state==='observed'?{...legacy,sources,...(discovered.coverage?{coverage:discovered.coverage}:{})}:discovered;
 }
-export function prospectPhoneDiscoveryView(run:PhoneDiscoveryRun,now:number):ProspectPhoneDiscoveryView{
+export function prospectPhoneDiscoveryView(run:PhoneDiscoveryRun,phoneEvidence:Evidence):ProspectPhoneDiscoveryView{
  return prospectPhoneDiscoveryViewSchema.parse({runId:run.id,candidateId:run.candidate_id,candidateRevision:run.candidate_revision,state:run.state,reason:run.reason,
   requestedAt:run.requested_at.toISOString(),checkedAt:run.checked_at?.toISOString()??null,expiresAt:run.expires_at.toISOString(),method:run.method,
-  phoneEvidence:projectProspectPhoneDiscovery(run,now),website:run.content?.website??null,channelAuthority:'not_granted'});
+  phoneEvidence,website:run.content?.website??null,channelAuthority:'not_granted'});
 }
