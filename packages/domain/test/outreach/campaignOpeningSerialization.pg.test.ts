@@ -9,6 +9,7 @@ import { runDueStepExecution } from '../../sequences/executions.ts';
 import { claimForDispatch, readFenceByStepExecution } from '../../outbound/fence.ts';
 import { repositoryContext } from '../../db/workspaceScope.ts';
 import { requestQualification } from '../../sourcing/qualificationStore.ts';
+import { runQualification } from '../../sourcing/qualificationRun.ts';
 import { saveCandidate } from '../../sourcing/candidates.ts';
 import { requestSourceCheck, runSourceCheck } from '../../sourcing/sourceCheck.ts';
 import { withTransaction } from '../../db/queryable.ts';
@@ -37,6 +38,52 @@ async function counters(f: Awaited<ReturnType<typeof campaignOpeningPgFixture>>)
     counters: (await f.db.query('SELECT * FROM daily_counters WHERE workspace_id=$1 ORDER BY counter_kind,subject_key', [f.w])).rows,
     runs: (await f.db.query('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 ORDER BY id', [f.w])).rows };
 }
+
+it.each(['serialization', 'ordinary-fetch-error'] as const)('risk STD1 qualification finish %s propagates without a second finish', async scenario => {
+  const f = await campaignOpeningPgFixture();
+  try {
+    const input = await newQualification(f);
+    const requested = await f.tx(() => requestQualification(f.admin, input));
+    if (!requested.ok) throw new Error(requested.reason);
+    const gate = await f.fixture.database.appRuntimeSession();
+    await registerOpeningDatabases();
+    const baseline = await counters(f), query = vi.spyOn(f.db, 'query');
+    const fetchPages = vi.fn(async () => {
+      if (scenario === 'ordinary-fetch-error') throw new Error('fictional local fetch exception');
+      // Initial running-state commit is complete before fetch. Introduce the
+      // exact row-first finish/send-gate inversion only at this async boundary.
+      await gate.query('BEGIN');
+      await gate.query("SELECT pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||$1::text,0))", [f.w]);
+      return { ok: false as const, costCents: 0, failureCode: 'fictional_local_unavailable' };
+    });
+    const countInputTokens = vi.fn(async () => { throw new Error('no model authority'); });
+    const extract = vi.fn(async () => { throw new Error('no model authority'); });
+    let failure: unknown;
+    try {
+      await runQualification(f.worker, { runId: requested.value.runId }, {
+        pageFetch: { providerKey: 'company_page', fetchPages },
+        extraction: { providerKey: 'aws_bedrock.sourcing_qualification', countInputTokens, extract },
+      });
+    } catch (error) { failure = error; }
+    finally { await gate.query('ROLLBACK'); }
+    const finishIndexes = query.mock.calls.flatMap(([sql], index) => sql.includes('UPDATE sourcing_qualification_runs SET state=$3,reason=$4') ? [index] : []);
+    expect(finishIndexes).toHaveLength(1);
+    if (scenario === 'serialization') {
+      expect(failure).toMatchObject({ code: '40001', constraint: 'campaign_opening_stop_serialization' });
+      const original = await Promise.resolve(query.mock.results[finishIndexes[0]!]!.value).then(() => null, error => error);
+      expect(failure).toBe(original); // Original PG error identity, not a translated retry/fallback.
+      expect((await f.db.query('SELECT state,reason FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2', [f.w, requested.value.runId])).rows).toEqual([{ state: 'running', reason: null }]);
+    } else {
+      expect(failure).toBeUndefined();
+      expect((await f.db.query('SELECT state,reason FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2', [f.w, requested.value.runId])).rows).toEqual([{ state: 'unavailable', reason: 'source_unavailable' }]);
+    }
+    expect(fetchPages).toHaveBeenCalledTimes(1);
+    expect(countInputTokens).not.toHaveBeenCalled(); expect(extract).not.toHaveBeenCalled();
+    expect(await counters(f)).toEqual(baseline);
+    expect((await f.db.query('SELECT id FROM provider_reservations WHERE workspace_id=$1', [f.w])).rows).toEqual([]);
+    query.mockRestore();
+  } finally { await f.stop(); }
+}, 60_000);
 
 it.each([false, true])('risk STD1 policy=%s candidate-first inversion refuses atomically while gate-first claim commits', async enabled => {
   const f = await campaignOpeningPgFixture(enabled);

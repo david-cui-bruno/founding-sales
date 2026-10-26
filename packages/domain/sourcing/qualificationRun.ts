@@ -76,7 +76,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
    return [{id:randomUUID(),url:page.url,contentHash:page.contentHash,relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),
     retrievedAt:page.retrievedAt,publishedAt:date?.value??null,publishedAtBlockId:date?.blockId??null,firstParty:page.firstParty,blocks,truncated:parsed.truncated||blocks.length<parsed.blocks.length}];
   });
- }catch{diagnose('fetch_exception');await finish('source_unavailable');return;}
+ }catch(error){if(error&&typeof error==='object'&&'code' in error&&error.code==='40001')throw error;diagnose('fetch_exception');await finish('source_unavailable');return;}
  if(!observations.length||Buffer.byteLength(JSON.stringify(observations))>100000){
   diagnose(observations.length?'observations_over_bound':'no_observations');
   observations=[];await finish('source_unavailable');return;
