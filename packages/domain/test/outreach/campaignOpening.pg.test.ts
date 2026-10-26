@@ -12,6 +12,9 @@ import { composeBodyForWorkspace } from '../../outbound/footer.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import { lockSendGateForDispatch } from '../../policy/sendGate.ts';
 import type { CampaignOpeningSelector } from '../../outreach/campaignOpening.ts';
+import { rememberExpiredManualSources } from '../../sourcing/manualProspectSourceLoss.ts';
+import { retentionTargetFor } from '../../retention/targets.ts';
+import { TABLE_RETENTION_COVERAGE } from '../../retention/coverage.ts';
 
 /** Authored actual-PG checks. NOT included in no-PG config and NOT executed by
  * this source owner. Root must allocate the exclusive PG slot before running. */
@@ -46,6 +49,20 @@ it('admitted real first execution -> committed selection -> real frozen fence ->
     expect((await f.db.query('SELECT 1 FROM step_executions WHERE workspace_id=$1 AND enrollment_id=$2 AND ordinal=1', [f.w, f.enrollmentId])).rows).toHaveLength(1);
     expect((await f.db.query("SELECT 1 FROM workspace_settings WHERE workspace_id=$1 AND setting_key='sending_enabled' AND value->>'enabled'='true'", [f.w])).rows).toEqual([]);
     expect(fence.state).toBe('prepared'); expect(fence.attemptToken).toBeNull();
+    const target = retentionTargetFor('research_evidence');
+    expect(target?.tables).toContain('outreach_campaign_opening_attempts');
+    expect(TABLE_RETENTION_COVERAGE['outreach_campaign_opening_attempts']?.dispositions).toContain('swept');
+    expect(TABLE_RETENTION_COVERAGE['outreach_campaign_opening_policies']).toBeDefined();
+    if (!target?.sweep) throw new Error('registered opening retention owner missing');
+    const sweep = () => f.tx(() => target.sweep!(f.worker, { now: new Date().toISOString(), boundaryAt: null, limit: 20 }));
+    expect((await sweep()).detail['outreach_campaign_opening_attempts']).toBe(0);
+    await f.tx(() => rememberExpiredManualSources(f.worker, [f.source.website]));
+    expect(await readCampaignOpeningAttempt(f.worker, f.executionId)).toMatchObject({ state: 'invalidated', content: null, attempt_id: attempt?.attempt_id, fence_id: fence.id });
+    expect((await readFenceByStepExecution(f.worker, f.executionId))?.body).toBe(composed.body);
+    expect(await verifyCampaignOpeningFence(f.worker, fence)).toBe(false);
+    expect((await sweep()).detail['outreach_campaign_opening_attempts']).toBe(0);
+    expect((await readCampaignOpeningAttempt(f.worker, f.executionId))?.attempt_id).toBe(attempt?.attempt_id);
+    expect((await f.db.query('SELECT 1 FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND enrollment_id=$2', [f.w, f.enrollmentId])).rows).toHaveLength(1);
   } finally { await f.stop(); }
 }, 60_000);
 it.each(['source', 'owner', 'policy', 'template'] as const)('actual delayed %s change holds and conserves the immutable UNKNOWN identity', async change => {

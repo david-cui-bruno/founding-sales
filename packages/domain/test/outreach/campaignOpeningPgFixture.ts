@@ -11,6 +11,7 @@ import { createQualifiedResearchFirm } from '../../sourcing/qualifiedResearch.ts
 import { readTemplateVersion } from '../../templates/templates.ts';
 import { readCurrentCampaignOpening } from '../../outreach/campaignOpeningSource.ts';
 import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
+import { registerOpeningFixture } from './campaignOpeningPgRuntime.ts';
 
 /** PG-only reuse of accepted 741 seed owners. Both helpers read only app.fixture,
  * as inspected here. No browser server/assets/HTTPS/Chrome is started by this
@@ -18,6 +19,7 @@ import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
  * NOT executed until root allocates the PG slot. */
 export async function campaignOpeningPgFixture(policyEnabled = true) {
   const fixture = await createAuthFixture();
+  const stop = await registerOpeningFixture(fixture);
   try {
     const app = { fixture } as ThinHostApp;
     const prepared = await seedEmailCampaign(app);
@@ -48,6 +50,6 @@ export async function campaignOpeningPgFixture(policyEnabled = true) {
     const enrollment = (await db.query<{ firm_time_zone: string }>('SELECT firm_time_zone FROM sequence_enrollments WHERE workspace_id=$1 AND id=$2', [w, admission.enrollment_id])).rows[0]!;
     const at = placeEmailSend(new Date().toISOString(), enrollment.firm_time_zone, { prospecting: true }).sendAt;
     return { fixture, db, w, admin, worker, tx, source, policy, template, firmId: made.value.firmId,
-      enrollmentId: admission.enrollment_id, planId: admission.plan_id, executionId: execution.id, at, stop: () => fixture.stop() };
-  } catch (error) { await fixture.stop(); throw error; }
+      enrollmentId: admission.enrollment_id, planId: admission.plan_id, executionId: execution.id, at, stop };
+  } catch (error) { await stop(); throw error; }
 }
