@@ -49,6 +49,15 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it('refuses unused call history including private notes before API dispatch', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-session': (session?.body as { revision: string }).revision };
+    for (const include of ['', 'notes', 'summary,outcome,notes']) {
+      const result = await handler(request('/browser/api/calls/history', { headers, query: new URLSearchParams({ firmId: id, include }) }));
+      expect(result?.status).toBe(404);
+    }
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
   it('normalizes only closed Voice product refusals through the actual gateway', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };

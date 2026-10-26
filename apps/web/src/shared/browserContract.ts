@@ -31,7 +31,7 @@ export const BROWSER_REVISION_HEADER = 'x-callie-session';
 export const BROWSER_READ_PATHS = Object.freeze([
   '/today', '/firms', '/meetings/outcomes', '/today/actions/v3', '/today/actions/v4',
   '/meetings/firm', '/meetings/brief',
-  '/calls/calling', '/calls/history', '/calling-identities',
+  '/calls/calling', '/calling-identities',
 ] as const);
 export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3', '/today/actions/open/v4',

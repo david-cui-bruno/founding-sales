@@ -3,7 +3,7 @@ import {BROWSER_SECURITY_HEADERS} from '../../src/server/httpPolicy.ts';
 import {browserApiPathAllowed,BROWSER_COMMAND_PATHS,BROWSER_VOICE_POST_PATHS} from '../../src/shared/browserContract.ts';
 describe('bounded browser call execution policy',()=>{
  it('exposes only existing session reads, explicit start and receipt-only recovery',()=>{
-  for(const path of ['/calls/calling','/calls/history','/calling-identities']){
+  for(const path of ['/calls/calling','/calling-identities']){
    expect(browserApiPathAllowed('GET',path)).toBe(true);
    expect(browserApiPathAllowed('POST',path)).toBe(false);
   }
@@ -11,7 +11,7 @@ describe('bounded browser call execution policy',()=>{
    expect(browserApiPathAllowed('POST',path)).toBe(true);
    expect(browserApiPathAllowed('GET',path)).toBe(false);
   }
-  for(const path of ['/calls/recording','/calls/transcript','/calls/cadence/resume','/calls/stop','/dial/handoff','/calling-identities/register','/calling-identities/disable'])
+  for(const path of ['/calls/history','/calls/recording','/calls/transcript','/calls/cadence/resume','/calls/stop','/dial/handoff','/calling-identities/register','/calling-identities/disable'])
    for(const method of ['GET','POST'])expect(browserApiPathAllowed(method,path)).toBe(false);
   expect(BROWSER_COMMAND_PATHS).toContain('/calls/session');
   expect(BROWSER_VOICE_POST_PATHS).toEqual(['/calls/access-token']);
