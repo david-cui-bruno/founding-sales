@@ -1,4 +1,4 @@
-import {useEffect,useMemo,useRef,useState,type JSX} from 'react';
+import {useCallback,useEffect,useMemo,useRef,useState,type JSX} from 'react';
 import {prospectPhoneDiscoveryViewSchema,type ProspectPhoneDiscoveryView} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
 import type {PendingQualification} from './QualificationPending.ts';
@@ -21,7 +21,7 @@ export function BrowserPhoneDiscovery({client,candidateId,revision}:{client:Brow
  const [result,setResult]=useState<{binding:typeof binding;view:ProspectPhoneDiscoveryView}|null>(null);
  const [status,setStatus]=useState<{binding:typeof binding;text:string}|null>(null);
  const [working,setWorking]=useState<typeof binding|null>(null);
- const current=():boolean=>latest.current===binding&&mounted.current===binding&&client.isCurrent(epoch)&&client.current?.status==='signed_in'&&client.current.role==='admin';
+ const current=useCallback(():boolean=>latest.current===binding&&mounted.current===binding&&client.isCurrent(epoch)&&client.current?.status==='signed_in'&&client.current.role==='admin',[binding,client,epoch]);
  useEffect(()=>{
   mounted.current=binding;operation.current=null;setWorking(null);setResult(null);setStatus(null);
   const update=():void=>{
@@ -31,7 +31,7 @@ export function BrowserPhoneDiscovery({client,candidateId,revision}:{client:Brow
   };
   update();const unsubscribe=client.subscribe(update);
   return()=>{mounted.current=null;operation.current=null;unsubscribe();};
- },[binding]);
+ },[binding,client,current]);
  const visible=result?.binding===binding&&current()&&evidenceExpiry(result.view)>Date.now()?result.view:null;
  // Expiry cleanup only. Never starts a read, capture, retry or polling loop.
  useEffect(()=>{

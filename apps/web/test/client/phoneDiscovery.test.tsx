@@ -48,6 +48,31 @@ it('phone discovery explicit request then separate read uses exact IDs and serve
  const bytes=localStorage.getItem(QUALIFICATION_PENDING_KEY)!;expect(bytes).not.toMatch(/12145550123|company\.example|phoneEvidence|clientVersion|checkedAt/u);
  expect(f.uuid).toHaveBeenCalledTimes(1);expect(f.calls.every(c=>!JSON.stringify(c.body).includes('clientVersion')&&c.path.startsWith(root))).toBe(true);
 });
+it('phone discovery scope dependencies retain result across same-binding rerenders and refresh, then clear for UNKNOWN',async()=>{
+ const f=await mount();await click('Read phone result');const epoch=f.client.epoch;
+ for(let index=0;index<3;index++){
+  f.view.rerender(<BrowserPhoneDiscovery client={f.client} candidateId={candidateId} revision={1}/>);
+  expect(screen.getByText('Phone +12145550123 · observed, not call-ready')).toBeTruthy();
+ }
+ await act(async()=>{await f.client.refresh();});
+ expect(f.client.epoch).toBe(epoch);expect(screen.getByText('Phone +12145550123 · observed, not call-ready')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Read phone result'}).matches(':disabled')).toBe(false);
+ expect(f.calls).toEqual([{path:`${root}read`,body:{candidateId,expectedRevision:1}}]);expect(f.uuid).not.toHaveBeenCalled();
+ act(()=>{f.client.qualification.prepare({kind:'phone_discovery',candidateId:other,expectedRevision:1});});
+ expect(screen.queryByLabelText('Current phone discovery result')).toBeNull();expect(screen.getByText(/Another command is unresolved/u)).toBeTruthy();
+ await click('Find business phone');await click('Read phone result');expect(f.calls).toHaveLength(1);
+});
+it.each(['forbidden','role'] as const)('phone discovery scope dependencies clear retained result on current %s revocation',async(revocation)=>{
+ const f=await mount();await click('Read phone result');expect(screen.getByLabelText('Current phone discovery result')).toBeTruthy();
+ f.fetcher.mockImplementationOnce(async()=>revocation==='forbidden'?new Response(null,{status:403}):Response.json({status:'signed_in',workspaceId:candidateId,userId:candidateId,deviceId:candidateId,role:'salesperson',revision:'session-one',csrfToken:'c'.repeat(40),expiresAt:new Date(Date.now()+60000).toISOString()}));
+ await act(async()=>{await expect(f.client.refresh()).rejects.toThrow();});
+ expect(screen.queryByLabelText('Current phone discovery result')).toBeNull();expect(screen.queryByText(/Phone \+12145550123/u)).toBeNull();
+ f.view.rerender(<BrowserPhoneDiscovery client={f.client} candidateId={candidateId} revision={1}/>);
+ expect(screen.queryByLabelText('Current phone discovery result')).toBeNull();
+ expect(screen.getByRole('button',{name:'Find business phone'}).matches(':disabled')).toBe(true);expect(screen.getByRole('button',{name:'Read phone result'}).matches(':disabled')).toBe(true);
+ await click('Find business phone');await click('Read phone result');
+ expect(f.calls).toEqual([{path:`${root}read`,body:{candidateId,expectedRevision:1}}]);expect(f.uuid).not.toHaveBeenCalled();
+});
 it('phone discovery lost response stays held across remount and recovers receipt only, never redispatches',async()=>{
  const f=await mount();f.lose();await click('Find business phone');expect(f.calls.map(c=>c.path)).toEqual([`${root}request`]);
  const bytes=localStorage.getItem(QUALIFICATION_PENDING_KEY);expect(f.client.qualification.read()?.receipt).toBeUndefined();
