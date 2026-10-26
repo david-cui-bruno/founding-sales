@@ -11,13 +11,13 @@ describe('browser boundary', () => {
     }
     for (const action of ['call', 'callback', 'today', 'consent', 'suppress', 'send', 'fetch', 'enable']) expect(browserApiPathAllowed('POST', `/sourcing/candidates/prospects/activity/${action}`)).toBe(false);
   });
-  it('admits only existing social suggestion reads, never generation or publication', () => {
-    for (const path of ['/social/drafts', '/social/drafts/read']) {
+  it('admits existing suggestion reads and explicit guided request/receipt, never publication', () => {
+    for (const path of ['/social/drafts', '/social/drafts/read', '/social/drafts/request', '/social/drafts/request/receipt']) {
       expect(browserApiPathAllowed('POST', path)).toBe(true);
       for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, path)).toBe(false);
       expect(browserApiPathAllowed('POST', `${path}/extra`)).toBe(false);
     }
-    for (const path of ['/social', '/social/drafts/request', '/social/posts/save', '/social/posts/approve', '/social/posts/cancel', '/social/weekly', '/social/weekly/save', '/social/accounts/connect', '/social/accounts/manual', '/social/manual-handoff/read', '/social/manual-handoff/confirm', '/social/delivery/queue', '/social/delivery/claim', '/social/delivery/begin', '/social/delivery/observe', '/social/assets']) {
+    for (const path of ['/social', '/social/posts/save', '/social/posts/approve', '/social/posts/cancel', '/social/weekly', '/social/weekly/save', '/social/accounts/connect', '/social/accounts/manual', '/social/manual-handoff/read', '/social/manual-handoff/confirm', '/social/delivery/queue', '/social/delivery/claim', '/social/delivery/begin', '/social/delivery/observe', '/social/assets']) {
       expect(browserApiPathAllowed('POST', path)).toBe(false);
     }
   });
