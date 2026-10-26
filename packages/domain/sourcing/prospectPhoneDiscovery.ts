@@ -149,6 +149,9 @@ function phoneDiscoverySkippedReason(skipped:PageFetchResult['skipped']):Prospec
  if((skipped['source_authority_refused']??0)>0)return 'source_not_permitted';
  if((skipped['page_over_bound']??0)>0)return 'bounded_capture_incomplete';
  if(['firm_timeout','paused','request_failed','robots_unreadable'].some(reason=>(skipped[reason]??0)>0))return 'discovery_interrupted';
+ // The adapter omits attempted HTTP failures from pages. A server-error page
+ // may contain conflicting input, unlike an ordinary absent guessed path.
+ if(Object.entries(skipped).some(([reason,count])=>/^status_5\d{2}$/u.test(reason)&&count>0))return 'discovery_interrupted';
  return null;
 }
 /** Owns committed claim/network/finalization phases. A running run is never reclaimed. */

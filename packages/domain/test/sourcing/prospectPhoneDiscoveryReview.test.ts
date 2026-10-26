@@ -78,6 +78,25 @@ it('SPEC S2 actual provider pages plus skipped.page_over_bound cannot persist a 
  expect(await read(f.input)).toMatchObject({ok:true,value:{state:'unavailable',reason:'bounded_capture_incomplete'}});
  expect((await runtime.query('SELECT content FROM sourcing_prospect_phone_discoveries WHERE id=$1',[result.value.runId])).rows[0]?.['content']).toBeNull();
 });
+it.each([503,500,599])('STD2 HTTP5xx published contact status_%i cannot select the surviving good homepage',async status=>{
+ const f=await fixture(),result=await request(f.input);if(!result.ok)throw Error(result.reason);
+ const contact=`${f.website}contact`,attempted:string[]=[];
+ const pageFetch:PageFetchProvider={providerKey:'controlled-published-contact-http-failure',fetchPages:async input=>{
+  // Match the actual adapter's successful pages/skipped envelope: the homepage
+  // publishes an in-scope contact link, whose attempted request fails with 5xx.
+  for(const url of [f.website,contact]){
+   if(!input.mayFetchUrl||!await input.mayFetchUrl(url))throw Error('missing current destination authority');
+   attempted.push(url);
+  }
+  const body=new TextEncoder().encode('<html><body><p>Office phone: (214) 555-0123</p><a href="/contact">Contact us</a></body></html>');
+  return {ok:true,value:{pages:[{url:f.website,body,contentHash:createHash('sha256').update(body).digest('hex'),contentType:'text/html',firstParty:true,retrievedAt:new Date().toISOString()}],skipped:{[`status_${status}`]:1}},costCents:0};
+ }};
+ await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch});
+ expect(attempted).toEqual([f.website,contact]);
+ expect(await read(f.input)).toMatchObject({ok:true,value:{state:'unavailable',reason:'discovery_interrupted',phoneEvidence:{state:'not_extracted'}}});
+ const stored=(await runtime.query<{state:string;content:unknown;dispatch_finished_at:Date|null}>('SELECT state,content,dispatch_finished_at FROM sourcing_prospect_phone_discoveries WHERE id=$1',[result.value.runId])).rows[0]!;
+ expect(stored.state).toBe('unavailable');expect(stored.content).toBeNull();expect(stored.dispatch_finished_at).toBeInstanceOf(Date);
+});
 it('STD4 explicit read and retained list both refuse competing qualification124 and discovery123',async()=>{
  const f=await fixture();await seedManualPhoneRun(db.session,seed.alpha.workspaceId,f.id,manualPhoneFixture(f.sourceUrl,['2145550124']));
  const result=await request(f.input);if(!result.ok)throw Error(result.reason);
