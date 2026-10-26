@@ -9,9 +9,9 @@ BEGIN
   IF jsonb_typeof(c->k) IS DISTINCT FROM 'string' THEN RETURN false; END IF;
   prose:=c->>k;
   IF btrim(prose,U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF')=''
-   OR octet_length(prose)>CASE WHEN k='subject' THEN 640 ELSE 16000 END THEN RETURN false; END IF;
+   OR octet_length(prose)>(CASE WHEN k='subject' THEN 640 ELSE 16000 END) THEN RETURN false; END IF;
   SELECT COALESCE(sum(CASE WHEN octet_length(ch)>3 THEN 2 ELSE 1 END),0) INTO units FROM regexp_split_to_table(prose,'') ch;
-  IF units>CASE WHEN k='subject' THEN 160 ELSE 4000 END THEN RETURN false; END IF;
+  IF units>(CASE WHEN k='subject' THEN 160 ELSE 4000 END) THEN RETURN false; END IF;
  END LOOP;
  RETURN true;
 EXCEPTION WHEN OTHERS THEN RETURN false;
