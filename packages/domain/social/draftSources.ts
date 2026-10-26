@@ -12,8 +12,8 @@ function textOf(utterances:unknown):string|null{
  for(const item of utterances){if(!item||typeof item!=='object'||typeof (item as {text?:unknown}).text!=='string')return null;text+=(item as {text:string}).text+'\n';if(Buffer.byteLength(text)>24*1024)return null;}
  return text;
 }
-/** Re-run before paid dispatch and before accepting its result. No raw source text
- * is returned or persisted, only generic enums, approved facts and private references. */
+/** Re-run before paid dispatch and result acceptance. No raw transcript text is
+ * returned. Curated style is ephemeral input only, never a persisted snapshot. */
 export async function readSocialDraftSources(ctx:RepositoryContext,raw:SocialDraftRequest):Promise<SocialResult<Prepared>>{
  if(ctx.scope.actor.kind!=='user')return {ok:false,reason:'user_required'};
  return readForOwner(ctx,ctx.scope.actor.userId,raw);

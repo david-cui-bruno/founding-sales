@@ -58,7 +58,8 @@ export async function refreshGroundedDraftRead(ctx:RepositoryContext,row:SocialD
  return row;
 }
 /** Run within the scheduler transaction even when processing is disabled.
- * A lost calling reservation is estimated, never treated as a free attempt. */
+ * A lost calling reservation is estimated, never treated as a free attempt.
+ * Guided invalidation leaves opaque reservations intact until this same sweep. */
 export async function expireSocialDraftRequests(ctx:RepositoryContext):Promise<number>{
  if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))throw new Error('system_required');
  if(!await tryLockResearchBudget(ctx))return 0;
@@ -66,6 +67,6 @@ export async function expireSocialDraftRequests(ctx:RepositoryContext):Promise<n
  const pending=(await ctx.db.query<{id:string}>("SELECT id FROM social_draft_requests r WHERE workspace_id=$1 AND deadline_at<=now() AND (state IN ('queued','calling') OR (state='review' AND source_selection ? 'voiceGuideRef' AND EXISTS(SELECT 1 FROM provider_reservations p WHERE p.workspace_id=r.workspace_id AND p.subject_kind='social_draft' AND p.subject_id=r.id AND p.state IN ('reserved','calling')))) ORDER BY deadline_at,id LIMIT 100 FOR UPDATE",[ctx.scope.workspaceId])).rows;
  for(const row of pending)await finaliseSubjectReservations(ctx,{subjectKind:'social_draft',subjectId:row.id,at});
  if(!pending.length)return 0;
- const rows=await ctx.db.query("UPDATE social_draft_requests SET state='expired',reason='deadline_expired',updated_at=now() WHERE workspace_id=$1 AND state IN ('queued','calling') AND id=ANY($2::uuid[]) RETURNING id",[ctx.scope.workspaceId,pending.map(row=>row.id)]);
- return Math.max(rows.rows.length,pending.length);
+ await ctx.db.query("UPDATE social_draft_requests SET state='expired',reason='deadline_expired',updated_at=now() WHERE workspace_id=$1 AND state IN ('queued','calling') AND id=ANY($2::uuid[]) RETURNING id",[ctx.scope.workspaceId,pending.map(row=>row.id)]);
+ return pending.length;
 }
