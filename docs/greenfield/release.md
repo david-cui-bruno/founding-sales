@@ -1,351 +1,113 @@
 # FSS release: the invariants
 
-**Spec:** 16.2, Appendix E, Appendix G · **Audience:** whoever is releasing a change to production, which has been live since 24 September 2026.
-
-[`runbooks/operate.md`](runbooks/operate.md) is how a release is performed — the commands, in order, for an app change, a schema or infrastructure release and a desktop build. **This document is what may not change:** where a digest comes from, what a release record is and when it is stored, which paths take a release off the automatic path, what the deploy workflow checks before every production write, and what the database and the sending gate will not do whatever anyone asks.
-
-Three pages hold what used to be here. The first release's one-off steps (sections 1, 2.0, part of 3.0 and 5) are in [`docs/archive/release-first.md`](../archive/release-first.md). The rehearsal's narrative, the CI deploy's set-up and section 8.1 are in [`docs/archive/release-history.md`](../archive/release-history.md). The records of the credentialed runs and the lanes before 25 September 2026 — every numbered reference such as 8.0u — are in [`docs/archive/release-records.md`](../archive/release-records.md). Each is cited below under the number this document used.
-
-> **The one sentence the whole document serves.** Specification 16.2: *"Production sending remains disabled until all mandatory scenarios for the affected release class pass, the deployed commit/image digests match the rehearsal artifacts, and an authenticated admin enables sending."* Nothing below turns sending on. Section 6 is what binds it, and only the owner can write the attestation.
-
----
+**Execution:** [lean release workflow](../operations/lean-release-workflow.md) is the sole supported production execution entrypoint. This page explains constraints, not an alternative local apply, rollback or approval recipe. [Current state](../operations/current-state.md) owns dated build/schema/sending observations. Earlier local production hand paths are retired.
 
 ## 0. Who does what
 
-| Step | Who | Why it cannot be the other one |
-|---|---|---|
-| Build, push and verify the images | CI (`greenfield-images.yml`, its `publish` job on a push to main that changes an image input) | One build per commit, pushed to `fss-rh-api` and `fss-rh-worker` as `ci-<commit>`, pulled back by digest and verified, with the digests published as `fss-image-digests`. That digest is the release's identity. |
-| **Deploy an app-only change** | **CI (`greenfield-deploy.yml`), as `fss-prod-ci-deploy`** | David's decision of 25 September: app-only changes deploy themselves. Anything that is not application code, or expects another schema, answers `manual` and touches nothing (4.0). |
-| **Promote the images of a schema or infrastructure release** | **The operator, with the admin profile** | `infra/scripts/images.sh promote` copies the two CI digests from `fss-rh-*` to `fss-prod-*` and reads production back (2.1). |
-| Run the rehearsal | CI (`greenfield-release.yml`) | It needs the `fss-rh-deploy` role, which only the OIDC provider may assume, and it must tear the environment down even when a step fails. |
-| Write the release record | The CI deploy, before each rollout (4.0); by hand for a manual release (`record.sh from-ci`, 4.2) | Since lane g96 it comes from the *Greenfield gate* run that was green on the deployed commit, not from a rehearsal. The script reads only GitHub and refuses unless the gate and the images run of that commit are green and name the digests, so a record can only exist for a commit CI passed. |
-| Apply production Terraform | The operator | A plan should be read by a person before it is applied. |
-| Put the secret values in | The operator | Terraform creates empty entries and never holds a value. |
-| **Build and sign the desktop app — last, after the apply** | **CI (`greenfield-desktop.yml`), on prerequisites only the owner can create** | It needs a Developer ID Application certificate, the signing and notarisation secrets, three repository variables and the `desktop-release` environment, and it refuses to build without `FSS_UPDATE_CHANNEL_URL`, which is the CloudFront hostname the production apply creates. `docs/greenfield/install.md` lists every one of them. |
-| Publish and install the desktop artifact | The operator | No AWS credential exists in that workflow. It is the one step that changes what every Mac sees. |
-| **Enable sending** | **The owner, as an authenticated admin** | 16.2. It is an act, not a step. |
+CI builds immutable images, verifies their digests and binds release records to passing exact-main gate/images runs. The hosted shared production queue executes application, maintenance and reviewed infrastructure changes with the appropriate scoped identity/protected approval. Root owns release integration and actual-state observation. Owner configuration and capability consent are separate from deployment approval.
 
-Nothing in this table can be done out of order without something below it refusing.
-
----
+The desktop build/signing/update path remains separately governed by [install](install.md). A signed client is not deployed API/schema acceptance or sending permission.
 
 ## 1. Before the first release
 
-Done once, before 24 September 2026, and archived: sections 1.1 to 1.7 are in [`docs/archive/release-first.md`](../archive/release-first.md) under the numbers this document still cites. **1.2 is the one still load-bearing:** `s3:BypassGovernanceRetention` is on `fss-rh-deploy`, for a same-day rehearsal teardown, and must never appear on `fss-prod-deploy` — a production suppression journal its deployer can empty is not an append-only record, and Appendix E step 2 stops being a recovery. `infra/scripts/policy.sh` renders it for the rehearsal prefix alone and refuses to emit it for production; `test/ops/deploymentRolePolicy.check.ts` asserts both halves.
-
----
+First-release history is retained in [release-first](../archive/release-first.md), not current authority. Production and rehearsal roles, namespaces and state keys remain separate. `s3:BypassGovernanceRetention` may exist for same-day rehearsal teardown, never on the production deployment role. The suppression journal must remain append-only to its deployer.
 
 ## 2. The images
 
-Nothing is built on a Mac, and nothing is ever rebuilt for production. The order the first release needed, and why the desktop build came last — section **2.0**, which other documents still cite — is in [`docs/archive/release-first.md`](../archive/release-first.md).
-
 ### 2.1 Where a digest comes from, and what makes it trustworthy
 
-1. **CI is the only source.** Every push to main that changes an image input runs *Greenfield images*. Its `publish` job pushes `fss-rh-api:ci-<commit>` and `fss-rh-worker:ci-<commit>`, pulls both back by digest, runs `infra/scripts/images.sh verify` on what it pulled, and uploads the artifact `fss-image-digests` (`image-digests.json`, `fss.image-digests.v1`), which also carries the schema range each image declares. Nothing is rebuilt after it. A commit that changed no image input has the images of the last one that did; `images.sh pin <commit> <file>` finds them and the green gate run of that images commit, which the release record is built from (4.2). The digests, `sha256:` and 64 hex characters, not the tags, are what everything downstream compares: `infra/modules/cluster` refuses a mutable tag.
-2. **Production gets a copy, never a rebuild.** `images.sh promote` copies each digest from `fss-rh-*` to `fss-prod-*` with `docker buildx imagetools create --prefer-index=false` — a carbon copy of CI's bare manifest — and reads the tag back. A digest production already holds under a tag is `already-present` and nothing is copied, so running it twice is running it once; one it holds untagged is tagged in place from its own manifest bytes; a tag that already names another image is never overwritten, because the repositories are IMMUTABLE. **Promotion is `images.sh promote` and nothing else.**
-3. **Provenance without a clock.** The rehearsal repositories are IMMUTABLE, so a tag names the first image pushed under it. The images run refuses a `ci-<commit>` tag that already exists unless an earlier attempt of the same run attests pushing that digest: each attempt uploads `fss-image-pushed-<attempt>` with `images.sh pushed` whatever its end, and a re-run reuses a tag only when `images.sh attested` finds such an artifact naming it. A first attempt that finds the tag, or a re-run with no attestation, fails, and that commit is released by hand. There is no ECR repository policy; what limits who can push `fss-rh-*` is the namespace of `fss-rh-deploy`.
-
-The **desktop commit stamp** is the release commit. The release record names it, and no Mac build has to produce it first.
-
----
+- CI is the only source. Nothing is rebuilt on a Mac for production. Greenfield images publishes immutable `ci-<commit>` tags, verifies pulled digests and emits `fss-image-digests` with commit/run/schema bindings. Production gets a copy of those bytes, never a rebuild. Mutable tags are not release identity.
+- Promotion preserves bare-manifest digest identity and reads production back. Existing tags naming different bytes are refused, not overwritten. Re-run provenance must attest an earlier attempt of the same run, not merely a plausible clock time.
+- A docs-only commit can use older image-input builds without relabeling them. Dispatch commit, image commit and gate/image runs are explicit separate bindings.
+- Plans must not destroy/replace ECR repositories. Repository destruction would remove the artifacts immutable release records identify.
 
 ## 3. The rehearsal
 
-Dispatch only, `mode: schema`, five stages (`plan`, `create`, `deploy`, `full`, `teardown`). It creates `fss-rh-<suffix>`, fills its own entries, migrates and deploys both digests, bootstraps a workspace, checks the declared ranges against the deployed images, checks the meeting-audio upload contract against real S3 (`rehearsal.sh meeting-audio`, stages `deploy` and `full`), smokes, tears down and guards. The dispatch is in [`runbooks/operate.md`](runbooks/operate.md); why it has this shape, what the stages cost, and the numbered list of what a `full` run does — items 1 to 15, of which **13 is the teardown and 14 the prefix guard** — are in [`docs/archive/release-history.md`](../archive/release-history.md).
+The existing `greenfield-release.yml` rehearsal uses only its own `fss-rh-*` namespace and scoped role, with teardown and empty-prefix guard even after failure. [Restore](runbooks/restore.md) and [release history](../archive/release-history.md) retain recovery context. A rehearsal result is not production deployment, restoration proof or feature activation. Required release-class rehearsal/upgrade checks remain mandatory; an ordinary local documentation edit does not create a new rehearsal campaign.
 
-The optional `availability_zones` choice is rehearsal-only: `us-east-1a,us-east-1b` by default or the capacity alternative `us-east-1a,us-east-1d`. The run validates and saves it in `run.auto.tfvars.json` for plan, create and teardown; deploy reads the applied stack's outputs. A separate orphan teardown must select the pair the original run used. Production keeps its fixed `a/b` topology and refuses an alternate shared-stack override. [Capacity-zone seam and test receipts](../archive/greenfield/pre-lean-docs-20261018/rehearsal-capacity-zones.md) describe the source change; offline plans do not replace a full release rehearsal and its cleanup guards.
+Infrastructure/release-script changes and migrations classified `touches-existing`, `privilege`, `destructive` or `unclassified` retain their required rehearsal. `additive`/`replaces-routine` migrations use actual deployed-baseline upgrade evidence instead, never an empty-database substitute. Every migration must qualify; replaced routines must actually be exercised. App-only/desktop-only changes do not create a schema rehearsal requirement. Retain the exact gate's upgrade artifact before hosted artifact expiry. The workflow's baseline bindings and live schema checks must agree, not merely copied repository variables.
 
-Three things about it are invariants rather than procedure:
-
-- **It cannot address production.** Production and rehearsal plans use distinct state keys, roles, secrets and resource namespaces (Appendix G 39). Every AWS call goes through `lib.sh`'s wrapper, which refuses an argument naming `fss-prod`; the session is an assumed-role session of `fss-rh-deploy`, whose policy is scoped to `fss-rh-*`; and `rehearsal.sh identity` proves that before the create and again before the teardown.
-- **Every stage tears down and every stage guards.** Items 13 and 14 keep `if: always()` and carry no stage condition at all, so that a mistyped stage condition cannot leave an environment standing with nothing to destroy it. `rehearsal.sh guard` fails closed: a reading it cannot make is not an absence.
-- **It writes no release record.** The record a release puts comes from the CI gate (4.2).
-
-**When it is needed (lane g97, 25 September 2026; narrowed by lane RS, 29 September 2026).** Before the production plan of every release that changes the infrastructure or a release script, and of a schema release whose migrations `infra/scripts/classify-migration.sh` calls `touches-existing`, `privilege`, `destructive` or `unclassified`. An app-only release needs none, because CI deploys it; a desktop-only one needs none either.
-
-**An `additive` or `replaces-routine` schema release needs none either.** What it needs instead is the upgrade test's evidence. David, 29 September 2026: *"The reported 48-minute rehearsal starts from an empty database, so it does not test the actual upgrade… 'Additive' and constraint tests alone don't satisfy that requirement. Removing the old rehearsal must not remove upgrade verification."* The rehearsal is removed from these releases because something stronger replaced it, not because the release got easier: `npm run upgrade:test` migrates a database that already holds representative data, as the roles production migrates with, and checks data preservation, privileges, constraints, both services' startup, the workflows and the recovery paths (`docs/greenfield/migrations.md`). The `upgrade` job of `greenfield.yml` runs it on every branch that touches a migration and uploads `upgrade-evidence-<sha>.txt`.
-
-So an additive schema release is:
-
-```
-prepare → record → plan → stop → apply → deploy → smoke
-```
-
-— the order of 4.1 with the rehearsal taken out. Every migration in the release must be `additive` or `replaces-routine`; one that is not puts the rehearsal back, and so does one the classifier calls `unclassified`, which is what it says about anything it does not recognise. A `replaces-routine` release additionally requires the upgrade test to show the replaced routine was **called** — `pg_stat_user_functions` counts it during the workflow step, and a replacement nothing exercised fails the run.
-
-**Two repository variables say what production runs, and production itself is asked.** The upgrade test migrates from the deployed schema, and neither a branch's base nor the last commit on main is that. `FSS_PROD_SCHEMA` is the schema production is on; **a schema release moves it by hand, in the same step that migrates**, because a CI deploy never changes the schema — a migration is a protected path and answers `manual` (4.0). `FSS_PROD_COMMIT` is the full sha of the commit production's images were built from. **Setting both variables by hand, with the release helper, is the mechanism of record** — CI cannot do it: updating a repository variable needs a token with Variables: write, and `GITHUB_TOKEN` has no such scope at all, so `permissions:` cannot grant it. What CI does instead is *tell you the value*: `greenfield-deploy.yml`'s read-back job asks ECR, after the rollout and the smoke, which commit production's running images were built from, and prints it as a notice. Not being able to ask — a refused call, an image with no commit tag — is a warning. ECR naming a **different** commit fails the job: after a green smoke and read-back that means production is not running what the release deployed. Nothing is lost by the variables being hand-set: the `upgrade` job fails closed when either is unset, unreadable, zero, not an ancestor of the branch or of `origin/main`, or disagrees with the schema production's public `/health` attests, so a stale variable stops a release rather than mis-testing one. Fix it, push again.
-
-**The record already names the evidence, and no field was added to it.** `upgrade` is a job of `greenfield.yml`, so the *Greenfield gate* run the record's `gateRunId` names is the run that produced `upgrade-evidence-<commit>.txt`. `record.sh from-ci` (line 121) checks only that the workflow run as a whole was `success`, and a workflow run is `success` only when every job of it was — so **a `ci-gate` record cannot exist for a commit whose upgrade test failed**, and no separate artifact check was needed. The evidence is one click from `gateRunUrl`. That is why nothing here writes an artifact id into the record: `fss.release-record.v1` is a strict object (`packages/contracts/src/release.ts`), an unknown field is refused rather than stripped, and a record that had to carry the id would be a record `record.sh from-ci` could not write. **Cite the artifact in the release log entry**, by the reference the record carries. **And file it.** GitHub drops an artifact after its retention window, so after every release the `upgrade-evidence-<sha>.txt` of the run the record names is downloaded into the coordinator's `.context/evidence/`, beside the release records, as `upgrade-<from>-<to>-<branch>-<sha>-<ci|local|hand>-<date>.txt` — the same commit the record's `gateRunId` points at, kept where a later reader can still open it.
-
----
+An empty Terraform state is not evidence that no cloud leftovers exist. The guard checks actual namespaced resources and locks. Unknown reads refuse absence. Reconcile the exact owned run/lock before cleanup, never unlock another active writer or broadly delete resources.
 
 ## 4. Production releases
 
-An app-only change is not applied by hand: CI deploys it (4.0). Everything else is the manual path, whose order is in [`runbooks/operate.md`](runbooks/operate.md) and whose guards are below.
-
-**`assume_deployment_role` is never passed here.** It defaults to `true` in every root, which is what a local apply wants: the provider assumes `fss-prod-deploy` for you. The flag is for a session that has already assumed its role — the rehearsal workflow, and nothing else.
-
-**A plan that proposes to destroy or replace an ECR repository is not to be applied.** The production registry was bootstrapped by a targeted apply and `create_registry` has since given that module a `count`, so the repositories appear under **"has moved to"** and under nothing else. Destroying one would delete the images every release record identifies.
-
-**Applying production while a rehearsal runs is safe** (lane g97): the rehearsal's guard reads only what carries its own run prefix and asks an absolute question rather than comparing inventories. Watch Actions anyway — a production apply and a rehearsal share the account's quotas, and a rehearsal cancelled to make room leaves what `rehearsal.sh leftovers` finds.
+All supported production writers serialize on `fss-production-deploy`, cancellation disabled. Local production preparation/read paths are not write permission. Routine local apply, direct secret/service mutation and standalone `rollback.sh --apply` are not substitutes for the hosted queue.
 
 ### 4.0 App-only changes deploy themselves: the protected paths and the gates (lane g91)
 
-When *Greenfield images* publishes the images of a push to main, *Greenfield deploy* deploys them as `fss-prod-ci-deploy`, the role `infra/roots/production/ci_deploy.tf` declares. It trusts one OIDC subject, this repository's `production-deploy` environment, and holds no state, secret, database or IAM write. Five jobs: `gates`, `deploy`, `smoke`, `read-back`, `summary`. Every step that reads or writes production is `infra/scripts/deploy.sh ci <subcommand>`.
+Automatic admission requires literal `FSS_RELEASE_HOLD=false`; missing means held. A merged PR or successful held run proves no production write. Current protected `application`, reviewed saved-plan and maintenance branches are documented in the sole execution procedure, not the historical five-job/manual-path recipe formerly here.
 
-**The protected paths.** The deploy job first assumes the existing scoped `fss-prod-ci-deploy` role and verifies this run's exact session identity and production region. Its own inline guard then reads production before running the candidate repository's code. It reads the commit production's images were built from — the `ci-<commit>` tag the promotion gave each running digest in `fss-prod-*`, or the bare commit an operator's push was tagged with — and lists what every commit between that one and the images commit touched. Commit by commit, so a change later reverted still counts; rename detection off, so a moved file counts at both paths; a merge judged against its first parent. It answers `manual` — a notice and a green run after read-only scoped-role inspection, with no production write or rollout — when any of these appears:
+Classification starts from observed running builds through the candidate history, including reverted protected changes. Infrastructure, migration/schema acceptance/runner, release-script/workflow and unknown paths cannot silently become ordinary app-only work. Existing migration bytes remain immutable. Only explicitly classified contiguous additive/routine migrations with actual deployed-to-candidate PostgreSQL upgrade evidence qualify for automatic maintenance. Destructive/privilege/ambiguous changes require review.
 
-- `infra/**`, every script in `infra/scripts/` included;
-- a migration;
-- `packages/domain/db/schemaRange.ts`, `migrationRunner.ts` or `queryable.ts` — the schema acceptance rule and the migration runner, with what they read (lane A1). `check` compares the declared ranges, so a change to how a version is accepted would otherwise pass unseen;
-- `scripts/productionSmoke.mjs` or another release script;
-- `.github/workflows/**`. `.github/dependabot.yml` is not protected: it only opens update pull requests and cannot change what CI runs;
-- a path the list does not know.
-
-It also answers `manual` when a running image carries no commit tag, or when production's commit is not behind the images commit.
-
-**After a protected change, the next release is by hand.** A protected change in the range keeps answering `manual` until production runs images built after it, and an infrastructure-only merge builds no images. So: apply the change by the manual path, then release the first app merge after it by hand. Production's commit tag is then past the change and the next app merge deploys itself again. There is no switch that tells CI a change was applied.
-
-**The gates, and the gate again before every production write** (reviews of PRs 273 and 278). The `gates` job holds no credential. It checks that the images run is a green `publish` of a push to main of this repository, then, from a checkout of `infra/scripts/` at that commit, runs `deploy.sh ci gates`, which asks GitHub two things: that *Greenfield gate* has a run of the push at that commit — found by its workflow file `.github/workflows/greenfield.yml`, never by its display name — whose newest attempt is `completed`/`success`; and that the commit is still on main (`compare/main...<commit>` answers `behind` or `identical`). It waits up to thirty minutes for a gate still running, then answers `pass` naming the run, or `manual` with the reason.
-
-That answer only decides whether the deploy job starts. **Every production write reads the gate again**, waiting for nothing, and must find the same run: `deploy.sh ci record` before it builds the record and again immediately before its put; `images.sh promote --gate-run-id` before each write to a production repository; `deploy.sh ci deploy` before each registration and again before each update. A newer run of the push, a re-run gone red, or the commit force-pushed off main fails the run at that point with nothing more written. What cannot be closed is the few seconds between the last read and the write itself.
-
-**`check` reads and writes nothing.** It answers `manual` when the images declare a schema range the running task definitions do not, when `/health` reports a database version the images do not accept, or when a service is not running exactly its declared count with nothing pending. It fails, touching nothing, when the session is not `fss-prod-ci-deploy` in account `326255650484` in `us-east-1`, when the cluster is not tagged `production` or a deployment is not `COMPLETED`, when the digests file is not the images run's own or names no ranges, when either digest differs from the one `fss-rh-<image>:ci-<commit>` names, or when `/health` does not answer.
-
-**A revision is deregistered on one evidence only** (review of PR 278): ECS itself failed the deployment of it and nothing of it is left running — exactly one deployment names the new revision, its `rolloutState` is `FAILED`, and the one `PRIMARY` deployment and the service both name the previous revision. Anything else leaves it ACTIVE, the run fails, and it must be reconciled before the next production plan, because Terraform reads the family's newest ACTIVE revision. After a failed `update-service` call nothing is deregistered at all: a call that failed and one accepted with its answer lost leave the same trace, and deregistering there would take away a revision the service is about to run.
-
-**What this accepts.** A job holding the role can register a revision of `fss-prod-api` or `fss-prod-worker` with any image in those two repositories and roll it out: IAM has no condition on a task definition's contents, and a main-branch workflow can deploy whatever main contains. That is the price of continuous deployment; the script narrows it by deriving every revision from the running one. The limits are the `production-deploy` environment restricted to main, no `id-token` in any job that runs images-commit code, the exact OIDC subject, ECR writes only to the two `fss-prod` repositories, and `iam:PassRole` naming only the two services' existing four roles. The set-up steps are archived in [`release-history.md`](../archive/release-history.md).
-
-**Terraform and CI share the two service task definitions.** Both carry `track_latest = true`, so Terraform reads the family's newest ACTIVE revision — CI's — as its own, and the services still re-point on an apply that registers a revision. The migration and operations definitions do not track: they are Terraform's, and carry the worker image of the last apply.
+Exact gate/image provenance is checked before production writes. A new failed gate attempt, changed main/source/state/configuration or mismatched saved-plan binding is not permission to reuse an older pass. Protected environment approval binds one exact execution, not a standing shared-hold override.
 
 ### 4.1 The order inside a release, and the policy that is not negotiable
 
-```
-[schema change: stop.sh]  →  terraform apply  →  every entry filled  →  fss release-prepare (migrate, database users)  →  fss verify  →  worker and API together  →  fss verify
-```
+The hosted implementation must preserve these checks and their actual readbacks:
 
-`deploy.sh release --schema-change` is six steps, in this order:
+1. Observe current build/digests/schema/task definitions/counts, reconcile unknown writes and validate candidate bindings. Pin a fresh PITR point before any migration. Backup retention/timestamp is measured, restoration remains UNTESTED unless demonstrated.
+2. Pause sending under the release's temporary control, preserving stored owner OFF and newer holds. Write the exact immutable release record before new workers can run. Populate required secret entries through the approved path before tasks needing them start, never expose values in plans/logs/artifacts.
+3. Before schema maintenance, authenticate the exact release migration image/credential against the expected database/role in bounded READ ONLY. Bind freshness to current credential-version/task metadata. Then drain, wait for idle and recheck authentication/activity/metadata before stopping writers. Refusal leaves services running and clears drain when appropriate. No force-idle/authentication bypass is an operating recipe.
+4. Stop schema-incompatible writers before migration. Apply only the authorized exact plan when required. Migrate forward, ensure database users and verify the new schema using the intended runtime credential before restart. An application-only branch must not invent a migration or Terraform rewrite.
+5. Start only the exact intended task definitions/digests/schema ranges at declared counts, then verify runtime and canary/public smokes. A generic stable waiter is insufficient: require sole PRIMARY rollout COMPLETED, correct revisions/digests/counts and no pending tasks. A same-digest circuit-breaker rollback can still be the wrong configuration revision.
+6. Read the exact stored release record back as `existing`, inspect final stored sending posture and cleanup state, and record actual success/failure/unknown phase. Only a healthy release may remove its own temporary block after fresh checks for already-authorized sending. Never enable stored owner OFF or clear newer stops.
 
-| | | |
-|---|---|---|
-| 1/6 | both services already at zero, **and each already on the revision this apply registered** | a refusal naming `stop.sh`, not a scale; and a refusal naming the apply. Read before the schema moves, where it costs nothing |
-| 2/6 | `fss release-prepare` | `fss migrate` and then `fss admin database-users ensure`, **in one** migration task |
-| 3/6 | `fss verify` | the operations task: the *runtime* credential against the new schema, before anything starts |
-| 4/6 | the worker and the API to their declared counts | back to back, then **one** `wait services-stable` naming both |
-| 5/6 | the rollout, polled until it has finished | per service: one PRIMARY deployment ECS calls `COMPLETED`, on the task definition the apply registered, `desiredCount` the declared count, `pendingCount` 0, and every running task on that revision carrying this release's digest. On timeout it fails and prints both services' events |
-| 6/6 | `fss verify` again | against what is deployed |
+Every supported range is strict at schema transitions. Migrations are forward-only, contiguous and checksummed. Editing an applied migration fails instead of undoing production. A failure after migration leaves the new schema in place. Failure before service restart leaves services stopped for forward repair, not an implied rollback.
 
-Without the flag it is two: one rolling deployment of both services and one wait (step 4 above), then the running digests — held to the apply's revision as well as to the digest and the count, because it is an infrastructure-only release, whose new revision carries the *same* image digest, that makes a circuit-breaker rollback invisible to a digest comparison, and an infrastructure-only release is exactly this path.
+Plan/live binding must include the actual service revision, not merely the family's latest ACTIVE definition. Read declared counts from the applicable deployment plan. Unknown or changed bindings refuse. During a restore every applicable plan must preserve the active restored database host rather than silently reverting to the managed instance.
 
-**Which revision is "the apply's"** (PR 310 second review). It is the one `terraform output deployment_plan` names — `<service>.task_definition`, beside the image and the schema range that apply was made with — and not the family's newest ACTIVE revision. The family lookup is wrong in both directions: a skipped apply that registered nothing leaves the old revision newest, so it passes; and `deploy.sh ci` registers a revision before it updates the service, so a correct hand apply would be refused while a CI deploy was in flight. Step 1 therefore requires, per service, that the service points at the plan's ARN, that the revision is ACTIVE, that its image is this release's digest, and that its `FSS_SCHEMA_MIN/MAX` are the apply's — "an apply ran" is not "the right apply ran". The same ARN is carried into the read after the wait on **both** paths, and a root whose `deployment_plan` names no revision is **refused before anything is scaled**, on both paths, rather than quietly falling back to the digest and the count: that fallback is the check a same-digest rollback slips through (PR 310 third review). Apply the current root first.
-
-**What this does not catch** (accepted, PR 310 third review). `terraform output` is the state as it is now, so an apply that was skipped when the plan would have changed *nothing* — identical digests, identical schema ranges — leaves ARNs that match, and the release proceeds. That release redeploys definitions identical to the ones already registered, and the release record still binds the digests an operator attested to, so there is nothing for it to get wrong. Binding a release to one reviewed plan by serial is a separate change and is not in this one.
-
-**Why `wait services-stable` is not the check** (PR 310 review). The AWS waiter returns on one deployment with `runningCount == desiredCount`; it does not require `rolloutState=COMPLETED`, so it can return while health checks are still running. And a digest cannot tell two revisions of one image apart, so an infrastructure-only release — a changed subnet, a new environment variable — would pass a digest comparison after a circuit-breaker rollback. The wait is the first gate; step 5 is the check.
-
-- **Every entry first.** Terraform creates the Secrets Manager entries empty, and an ECS task whose `secrets` block names an entry with no value does not start at all — `ResourceInitializationError … can't find the specified secret value`, before the container exists. Every task definition but the migration's names them all, so the values go in **before** the deploy, not after.
-- **Stop during migration.** From migration 0006 every declared range is a strict `{N,N}`, so there is no build of this software that straddles a schema change and no honest way to migrate without an outage. `stop.sh` scales the API to zero first — so no request reaches a schema about to move — then the worker, which is given time to release its job leases, and it does so **before** the apply registers task definitions that refuse the current schema. `deploy.sh release --schema-change` then refuses to migrate unless both are still at zero; it no longer stops them itself, because by then the apply has pointed them at definitions that refuse the schema and a quiet stop would make the wrong order look right. The apply cannot restart them: `ignore_changes = [desired_count]`.
-- **The database never rolls back.** There is no down migration in this repository and there will not be one. `packages/domain/db/migrations` is forward-only, `loadMigrations` refuses a gap, and the runner checksums an applied file's bytes, so editing one fails with `MIGRATION_CHECKSUM_MISMATCH` rather than diverging silently from production.
-- **After a successful migration and a failed deployment there are exactly two paths.** *Forward repair*: fix the code, build a new digest, deploy it. Or *a restore*: [`runbooks/restore.md`](runbooks/restore.md), with both services stopped and nothing sending until it restarts them. Redeploying the previous digests is a rollback only when their declared ranges accept the current schema version, which after a migration they usually do not. What is never a path is undoing the schema.
-- **The declared counts come from the plan**, not from a number in a shell file: the script scales each service to `terraform output deployment_plan`'s `declared_desired_count`. Terraform sets a count only when it creates a service; after that both ignore changes to it.
-- **The interruption is measured, not remembered** (lane RS-2, 29 September 2026). The 0022 release left the API unreachable for 8.7 minutes and almost none of it was work: three sequential one-off tasks at about a minute each of RunTask start latency, and then the worker started, waited on, forcibly redeployed and waited on again before the API was asked for at all. So `migrate` and `database-users ensure` are one task (`fss release-prepare`); both services are started together under one wait; and the forced second deployment is gone — `terraform apply` already updated each service's task definition while it sat at zero, so `--desired-count N` starts the definition the apply registered, and what proves the release is running is step 5, not a second rollout. Lane g80 had dropped the same forced rollout from the rolling path for the same reason. Every step line in the deploy log carries a UTC timestamp and the run ends with one line, also written into `release-deploy.txt`:
-
-  ```
-  release-timing: stop_to_migrate=…s migrate_tasks=…s services_start_to_stable=…s api_unreachable≈…s
-  ```
-
-  The first three come from the script's own clock. `api_unreachable` pairs the instant `stop.sh` recorded when the API's last task went away (`release-stop-instant.txt`, its own file beside `release-stop.txt`, carrying the root and prefix it belongs to, deleted by a stop that stopped nothing) with a "registered N targets" event **attributable to this rollout's own deployment** — ECS names the PRIMARY deployment this release created and when it created it, and a registration older than that was some other rollout's. Without the marker it falls back to the newest "has stopped N running tasks" event older than the scale-up. Anything that does not make a pair — no attributable registration, a marker naming another release, events that have rolled past the stop — is `unknown`, because a plausible wrong number is worse than none. It costs no extra AWS call (the events come out of the rollout poll's last read) and it is a measurement, never a gate.
-- **A failure before either service starts leaves both at zero**, and says so: `services remain stopped; repair and rerun release-prepare, or restore`. The database never rolls back, so a migration that committed stays committed; the forward repair is a new digest deployed again with `--schema-change`.
-- **Every one-off launch is checked before it is made.** `infra/scripts/lib.sh` refuses a bare cluster name, a wrong account, a wrong region, a cluster tagged as the other environment, a task definition whose image is not the digest this release is about, a network configuration that is not the root's own subnets under the worker security group, and a definition resolving a credential entry this release did not name. Afterwards it reads the `failures` array, refuses a task that never started and a stopped task with no exit code, and records the task ARN so a retry waits on the task already running rather than starting a second migration.
-
-**The drift rule: every production plan starts from what production runs, and every apply checks it again.**
-
-```bash
-infra/scripts/deploy.sh current fss-prod      # api_image=… worker_image=… and the two schema ranges
-(cd infra/roots/production && terraform plan -out=production.tfplan \
-   $(../../scripts/deploy.sh current fss-prod --var-flags))
-# immediately before the apply, with the two images the plan was made with:
-infra/scripts/deploy.sh current fss-prod --compare "<api_image>" "<worker_image>" \
-  && (cd infra/roots/production && terraform apply production.tfplan)
-```
-
-`deploy.sh current` refuses when a service's rollout is not finished (one `PRIMARY` deployment ECS calls `COMPLETED`, its declared count running, nothing pending, every running task reporting its digest); when a family's newest ACTIVE revision is not the one its service runs, which Terraform would otherwise read; and, with `--compare`, when either image differs from the one running — a CI deploy has landed since the plan, so plan again. A schema release plans with its own new images on purpose and passes `--allow-digest-change`.
-
-**During a restore, every plan names the copy** (W3-S8, PR 282). Between steps (f) and (g) of [`runbooks/restore.md`](runbooks/restore.md) production runs on a point-in-time copy, and every production plan and apply must carry `-var=active_database_host=<the copy's address>`, a routine release included; without it the plan puts the managed instance's address back into the four task definitions. `deploy.sh current fss-prod` prints `api_database_host=` and `worker_database_host=` after the four lines a plan is made from: equal to the root's `database_endpoint` without its port, production is on the managed instance and no plan names a host.
-
-**The release record goes in before the apply.** `record.sh put` does the put and nothing else, on the operations definition the root outputs now — the running release's definition, so the task runs that image while the record it stores names the new digests. `deploy.sh release --release-record <file>` then reads it back after the final verify and fails unless the answer is `existing`; `created` fails the deploy, because the services would have started without it. Only a bootstrap, which had no database to put into, may create it.
+One-off task launches validate account/region/production cluster, exact image, existing network/security-group and credential-entry bindings before dispatch. Retain the returned task ARN, inspect launch failures/exit status and reconcile that same task before retry. Missing exit status is unknown, not success. Production OIDC subjects/environment restrictions and scoped PassRole/resource rights remain enforced; IAM cannot by itself constrain every task-definition field, so exact hosted guards/review are load-bearing.
 
 ### 4.1b A schema release never stops production under a call: the idle check, the drain, and the timings (slice A4)
 
-**The production sequence** of `stop.sh --environment production --worker-digest "$worker_digest"`, before anything is scaled:
+Drain is a bounded audited release control, not the owner's sending switch. Idle checks include active calls, recent command work and non-chunked leased jobs. Unreadable activity is refusal, never idle. Fresh authentication after waiting prevents reuse across credential changes; check activity again because startup took time. Historical first-rollout force-idle exceptions are not current permission.
 
-0. **Migration authentication.** `migration-auth.sh` launches the exact release worker digest on the existing migration task definition (temporarily cloning only its image when necessary). The bounded `fss migration-auth-check` uses only the injected migration credential, verifies the expected host, database and `fss_admin` identity/migration membership in READ ONLY, and reads the current schema without applying DDL. The script binds its report to the existing secret's AWSCURRENT version metadata and rejects changed bindings or stale results. This check is required for additive migrations too; row-dependent schema preflight remains separate. Failure refuses before any drain or stop. Temporary task definitions are deregistered on success and refusal; credentials and password fingerprints are never reported.
-1. **Drain on.** `idle.sh drain-on` runs `fss admin release drain on` (default 20 minutes, `--minutes N`, capped at 60) on the operations task. It is an audited write (`audit_events`, actions `release.drain_on` and `release.drain_off`, `detail.until` the instant it lapses), and it is **not** the sending switch. `releaseDrainActive(db)` in `packages/domain/release/drain.ts` is what the API asks to refuse new call sessions; slice C1 wires that refusal when call sessions exist. The drain lapses by itself, so a release that fails before it is turned off leaves a bounded delay and never a locked-out product.
-2. **Wait for idle.** `idle.sh wait` runs `fss admin release idle-check` (one READ ONLY transaction) every `FSS_PROD_IDLE_POLL_SECONDS` (15) for up to `FSS_PROD_IDLE_WAIT_SECONDS` (600) and proceeds the moment it answers `idle: true`. Idle means all of: no call in progress (`call_sessions`, status `in_progress`, started in the last 4 hours; before migration 0027 the table does not exist and the answer says `telephony: "not_installed"`, which counts as idle); no row in `command_receipts` (the 5.3 command envelope table) in the last 5 minutes; and no running job whose lease has not expired and whose handler is not chunked. Queued and retryable jobs never count, an expired lease is a job nothing is running, and a chunked job (`research.firm`, the only one declared `chunked: true`; `CHUNKED_JOB_KINDS` in `releaseIdle.ts` is held to the handlers by a test) requeues itself at its next chunk boundary.
-3. **Fresh authentication, then stop.** After idle waiting, repeat the exact-image authentication check so a credential rotation during the wait cannot reuse the earlier result. Failure clears the drain and stops no service. The ordinary idle check then runs again because authentication task startup may have taken time; new activity refuses and clears the drain. Credential/task metadata and receipt freshness are then rechecked immediately before scale-down, without another task launch. Force-idle does not bypass either authentication check. Idle: the scale-down as before. Busy at the end of the wait: a refusal in plain words with the reasons, the drain turned off again, a non-zero exit, and nothing scaled. An idle check that cannot be run or read is a refusal, never a pass.
-4. **Drain off.** `deploy.sh release --schema-change` turns it off once the deployed `fss verify` passes (a failure only warns: the drain lapses). `rollback.sh` does the same after its smoke.
+Worker shutdown drains within its deadline. Uncommitted transactions roll back, expired leases are reclaimed, and chunked work resumes from committed cursors. Provider calls are different: outbound fences and reserved/calling/settled attempts preserve charged/unknown outcomes. A killed worker is not permission to dispatch again.
 
-**The first schema release after the idle check merges** still runs a pre-A4 image in production (release scripts are manual-deploy), which has no `release idle-check` or `release drain` command; `idle.sh` recognises the old tool's unknown-command answer and `stop.sh` refuses with "The deployed image predates the idle check (<digest>). Check by hand that no call is active and nobody is working, then rerun with FSS_PROD_FORCE_IDLE=1"; under `FSS_PROD_FORCE_IDLE=1` the missing drain is a warning recorded as `drain=unavailable` in `release-stop.txt` and the timings.
-
-`FSS_PROD_FORCE_IDLE=1` skips the wait in production: it prints `FORCED`, and records `idle=forced` in `release-stop.txt`, `release-idle.txt`, `release-stop-timing.txt` and the release timings. A rehearsal runs the check and never waits longer than one poll; it uses no drain. `FSS_REHEARSAL_DRY_RUN=1` prints every command.
-
-**What happens to a handler still running when the worker is stopped.** The worker drains for `FSS_DRAIN_TIMEOUT_MS` (100 s, `apps/worker/src/bootstrap/config.ts`) on SIGTERM (`worker.ts`, `loop.ts` `drain`); the container's `stopTimeout` is 120 s, after which ECS kills it. A non-chunked handler still inside its transaction is killed with the connection, the transaction rolls back, the job row still says `running`, and once its lease expires `reclaimExpiredLeases` makes it runnable again (attempt counted). A chunked handler commits its cursor with each chunk and requeues near its lease deadline (`runner/jobRunner.ts`), so a stop loses at most the chunk in flight. Handlers that make a provider call, and their protection: `sequence.action` (Gmail send) sits behind the outbound fence, whose state machine is what a retry reads; `research.firm`, `call.transcribe` and (since slice P1) `classify.reply` follow the reservation, calling, settle pattern in three committed chunks, so a kill between a model call and its commit leaves the attempt `calling` and charged, and the next claim estimates it rather than calling again for free.
-
-**Rolling deploys do not run `stop.sh`, and do not interrupt a call.** The API service is `deployment_maximum_percent = 200`, `deployment_minimum_healthy_percent = 100` (`infra/modules/cluster/main.tf`): ECS starts the new tasks, waits until they are healthy, and only then drains the old ones, so the API never has fewer healthy tasks than declared. A call's media never passes through the API, so replacing an API task does not touch it. The worker is `100` / `0`: it is replaced, not overlapped, and a replaced worker drains as above. None of this applies to a schema release, which stops both services, which is why that one waits for idle.
-
-**The release timings.** `deploy.sh release` ends with one line and a file, `release-timings.json` (`fss.release-timings.v1`) in the reports directory:
-
-```
-release-timings: preparation=340s automated_checks=600s operator=120s downtime=560s idle_wait=30s
-```
-
-It is deliberately **not** inside the stored `fss.release-record.v1`: that record is put before the rollout, compared byte for byte at the read-back and strict in `@fss/contracts`, and three of the numbers do not exist until the rollout ends. Each number comes only from a timestamp a script wrote, and is `null` (printed `unknown`, with the reason in the file's `nulls`) when no script saw it. Nothing is estimated.
-
-| Part | Source | Null when |
-|---|---|---|
-| `preparationSeconds` | the images run's own clock (`record.sh from-ci` writes `release-prepare-timing.txt`) plus the promotion (`images.sh promote` writes `release-promote-timing.txt`), both naming these digests | either is missing: never half of it |
-| `automatedChecksSeconds` | the gate run's own clock (it contains the upgrade job). A rehearsal run is not included: no script times one | no gate timing for these digests |
-| `operatorSeconds` | `stop.sh` finishing (`release-stop-timing.txt`) to `deploy.sh release` starting: the plan, the apply and the hand-offs a person does between the two | `stop.sh` did not run for this root and prefix, or the gap is over 6 hours |
-| `downtimeSeconds` | `stop.sh`'s API-stopped marker to the passing deployed verify | a rolling release, or no marker for this root and prefix |
-| `idleWaitSeconds` | `stop.sh`'s idle wait (`idle_wait_seconds`) | `stop.sh` recorded none |
+Timings are observations, not gates or estimates. Missing attributable timestamps remain unknown/null. They are separate from the immutable pre-rollout record because later phase timings did not exist when it was stored.
 
 ### 4.1a Rolling back: images only, and never across `beed2d90` or the applied-revision boundary
 
-`infra/scripts/rollback.sh` puts production back on a previous release's images. It runs from a checkout of main — an older commit has no copy of it — and plans the production root inside a second checkout at the previous release's commit. Without `--apply` it saves and prints the plan and stops; with `--apply` it plans again from the same reads, judges it the same way, applies, deploys on the rolling path (never `--schema-change`) and smokes, expecting the same sending state, so **a rollback never switches sending on or off**.
+Standalone production rollback application is retired. Any image repair uses the reviewed hosted path after actual-state reconciliation. Candidate images must accept the current schema. Prior Terraform must not resurrect the deleted restore drill, omit applied-revision outputs, change committed origin/alert/sending configuration, or redirect an active restore host. An image-only repair cannot smuggle infrastructure changes.
 
-It refuses in one `FAIL:` line, before anything is written:
-
-- **a checkout older than main `beed2d90`** (PR 272), or one that does not hold that commit. That merge deleted the restore drill's task definition, roles, policies, metric filter and alarm, and every older commit's Terraform declares them, so its plan would create them again. Across that boundary only the images roll back, without Terraform, and the infrastructure is repaired forward;
-- **a checkout whose `infra/modules/cluster/outputs.tf` does not publish `deployment_plan.<service>.task_definition`** (the second boundary, lane RS-2). `deploy.sh release` — which `--apply` runs at the end of the rollback — holds every running task to the revision the apply registered, and refuses a root that cannot name it; a target from before that output would apply cleanly and only then be refused, leaving production on a half-rolled-back plan. It is refused first instead, before anything is read from AWS: *this target predates the applied-revision release; a rollback across it is a hand reconciliation* — recovery is a forward fix or a restore (4.1). Unlike the `beed2d90` boundary this names no commit: the test is whether the field is in the target checkout's file, so there is no second SHA to keep in step with main;
-- **images that are not the checkout's**: each digest must be an image in `fss-prod-api`/`fss-prod-worker` tagged `ci-<commit>` or the bare `<commit>` for the checked-out commit, and a dirty checkout is refused for the same reason. That is what ties the code planned to the images that will run;
-- **a rollback across a schema change**: the database version the running API reports at `/health` must be inside both of the checkout's declared ranges. The database never rolls back (4.1);
-- **a service mid-rollout**, or a family whose newest revision is not the one that runs;
-- **a committed production value that is not what production runs.** Since 26 September 2026 `infra/roots/production` commits `certificate_arn`, `api_hostname`, `alert_emails` and `sending_enabled` as literals rather than taking them as variables; for each, the value the checkout commits must equal the one production runs, because the plan would otherwise change the listener, the origin, a subscription or sending;
-- **a restore in progress, unnamed**: while the two database hosts differ from the managed instance it refuses to plan unless `--active-database-host` names the host production runs on, and a host given that is not the running one is refused too;
-- **a plan that creates, replaces or destroys anything but an `aws_ecs_task_definition`, or updates anything but the two services.** It names every address and deletes the plan file. A difference in infrastructure between the two commits is the manual path, not a rollback.
+Never deregister a revision merely because an update response failed. It may have committed. The safe historical cleanup condition requires ECS-confirmed FAILED new rollout with no tasks on it and the service/sole PRIMARY naming the previous revision. Otherwise retain evidence and reconcile.
 
 ### 4.2 The release record, from the CI gate (lane g96)
 
-The worker sends only under a stored release record that names its image digest (lane g71), and since the owner's axiom 10B that record comes from the CI gate that was green on the deployed commit, not from a rehearsal. `infra/scripts/record.sh from-ci` writes it. It reads GitHub only, makes no AWS call, and refuses in one `FAIL:` line, writing nothing, unless all of these hold:
+The `fss.release-record.v1` record binds exact passing push-to-main gate/image runs, commit and API/worker digests. Validate workflow paths/repository/attempt/artifact identity, not display names. Records are immutable: identical bytes return `existing`, different bytes under the same reference refuse conflict. Keep the original bytes through readback rather than rebuilding after a gate re-run.
 
-- the gate run is a run of `.github/workflows/greenfield.yml`, judged by the run's `path` and never by the display name *Greenfield gate*, which another workflow could also carry; `completed`/`success` on its latest attempt, a push to `main` of this repository, at exactly the commit;
-- the images run, by its `path` as well, is a green push run of `.github/workflows/greenfield-images.yml` for that commit. `--images-run <id>` names it, and the CI deploy always passes the run it deploys; without it the newest such run of the commit is taken, which is the hand path's choice;
-- that run's `fss-image-digests` names that commit, that run and exactly the two digests passed.
+The record is stored before rollout. A post-smoke readback must find it already existing. Schema-valid storage alone does not authenticate GitHub provenance; the record builder and hosted gates establish that. A record stored for a failed rollout grants no effect to a different running digest. CI records claim no rehearsal drill.
 
-A commit that changed no image input has no images run of its own: record and deploy the commit whose images run built the digests — the gate ran on it too.
-
-```json
-{
-  "schema": "fss.release-record.v1",
-  "source": "ci-gate",
-  "releaseGateReference": "ci-gate-<gate run id>-<first 12 characters of the commit>",
-  "recordedAt": "<when the gate run concluded>",
-  "suite": "pass",
-  "commit": "<the commit, 40 characters>",
-  "gateRunId": "<gate run id>",
-  "gateRunUrl": "https://github.com/david-cui-bruno/founding-sales/actions/runs/<gate run id>",
-  "imagesRunId": "<images run id>",
-  "artifacts": { "api": "<api digest>", "worker": "<worker digest>", "desktopCommitStamp": "<the commit>" },
-  "enablesSending": false
-}
-```
-
-- **`enablesSending`** is `true` only with `--enables-sending`. Ordinary sending release binding ignores this field; the deployment flag and owner's attestation remain authoritative (section 6). Conditional email admission additionally requires a record with `enablesSending: true` in its exact activation evidence. Use the flag only after freshly verifying the existing deployment and owner's sending posture; it never overrides a sending pause or activates sending, admission or routine replies. Choose the value before the immutable record is stored, and keep the concrete release approval and all admission gates separate.
-- **No drill fields.** The record has no `rehearsalPrefix` or `rehearsalScenarios`, because a CI run drills nothing, and the contract refuses a `ci-gate` record that claims one. No new rehearsal record is accepted either: the rehearsal stopped writing them with W3-S8, and `fss admin release-record put` refuses one.
-- **The same bytes twice, while the gate run is not re-run.** `recordedAt` is when the gate run last concluded, so a record rebuilt for the same gate run and images run is identical and a second put answers `existing`. A re-run of the gate run moves it, the rebuilt record differs, and the put is refused `release_record_conflict` — which is why the CI read-back puts the file the deploy job put rather than a rebuilt one, and why the hand path keeps its `release-record.json` from the record to the read-back.
-- **Records are never replaced.** A different record under the same reference is refused `release_record_conflict`.
-
-**The record is stored before the rollout, always.** The worker admits a send only while a stored record names its own digest, so a put after the rollout would leave every worker task that starts during it without one (`release_record_unknown`). In CI, `deploy.sh ci record --before-rollout` is the deploy job's **first write**, after `check` and before anything is promoted: when it fails the run is red and nothing was promoted or deployed. A record stored for a rollout that then fails is inert — no running process has its digests. `deploy.sh ci record --after-rollout` runs in a separate job after the smoke, on the exact bytes the deploy job put, and requires `existing`; it never rebuilds the record.
-
-**What the put trusts.** A schema-valid `ci-gate` record put by whoever can run the operations task is trusted: `fss admin release-record put` checks the record's shape and stores it, and does not verify its GitHub evidence. `record.sh from-ci` is what makes a record true; the put is not.
-
----
+`enablesSending` is not activation permission. Conditional email admission's release evidence, deployment configuration, owner consent, current campaign/source and all runtime fences remain separate.
 
 ## 5. The manual steps after the first apply
 
-Done once, on 24 September 2026, and archived in [`docs/archive/release-first.md`](../archive/release-first.md) under the numbers this document cites: the secret values (5.1), the first workspace and its admin (5.1a), the DNS alias, the first sign-in, the SNS confirmation and the Gmail push grant.
-
----
+Historical first workspace/secret/DNS/sign-in setup is in [release-first](../archive/release-first.md). It is not a current local production mutation procedure. Never commit or print secrets, Terraform state/provider values, private runtime payloads or recovery credentials.
 
 ## 6. Sending: what binds it
 
-Three facts must hold before an automated email leaves FSS, and each is checked by a different thing. `packages/domain/outbound/gate.ts` reads all of it before every dispatch and names what said no.
+The [outbound gate](../../packages/domain/outbound/gate.ts) rechecks deployment sending configuration, domain authentication/checklist and authenticated owner attestation against a passing record naming the running image. A process-form attestation such as `ci-gate:main` avoids per-release reapproval only for already-authorized configuration. It does not enable a stored OFF switch, grant recipients/content or waive current readiness/eligibility/campaign/source/caps/holds/unknown-write checks.
 
-1. **The deployment flag.** `FSS_SENDING_ENABLED` is `true` only when the value is exactly `true`; anything else is a refusal, never a send. Since 26 September 2026 it comes from the committed `sending_enabled = true` in `infra/roots/production/main.tf`, so changing it is a pull request, a read plan and an apply.
-2. **The domain's authentication.** The database enforces it: `sending_domains.automated_sending_enabled` cannot be true without SPF, DKIM, DMARC and a recorded Postmaster review. If the checklist refuses, a check is missing — fix the DNS, not the constraint. How the row comes to exist is in `docs/greenfield/sending.md`.
-3. **The owner's attestation, naming a stored release record.** From the desktop settings page, or:
+Deployment enablement requires literal `true`. Domain automated sending requires SPF, DKIM, DMARC and recorded Postmaster review. Fix missing evidence/configuration, never bypass the database constraint. Owner enablement is authenticated/admin, versioned and release-bound, not a side effect of a healthy release. The thirty-day mailbox reply-reception rule remains an operating obligation, not a claim of complete software enforcement.
 
-   ```
-   POST /settings/update
-   { "settingKey": "sending_enabled",
-     "value": { "enabled": true, "releaseGateReference": "<the reference the put printed>" },
-     "changeNote": "<why>" }
-   ```
-
-   It refuses a non-admin caller and an enable that names no release gate: "an admin clicked yes" is not the gate. Turning sending off (`"enabled": false`) is always accepted. The desktop's *Release gate reference* field takes the same text.
-
-Both the enable and each send compare their own half of the record, in the same transaction as the write:
-
-| Refusal | Means |
-|---|---|
-| `release_record_unknown` | no stored record has that reference; under the process form, no `ci-gate` record names this image — the hold after a deploy whose record was not put |
-| `release_record_not_passing` | the record's `suite` is not `pass` |
-| `release_record_digest_mismatch` | the record's `artifacts.api` is not the API image serving the request |
-| `release_record_identity_unknown` | the process could not read its own digest from the ECS task metadata. Fail-closed: the fix is the task, not the setting |
-
-**The process form** (lane g100). The attestation may name `ci-gate:main` instead of one record, so that automatic deploys keep sending on without an attestation each time:
-
-```
-{ "settingKey": "sending_enabled",
-  "value": { "enabled": true, "releaseGateReference": "ci-gate:main" },
-  "changeNote": "I attest to the release process: a worker may send under any ci-gate release record for a commit on main, put by the CI deploy before its rollout" }
-```
- `ci-gate:main` means any stored record with `source: "ci-gate"`, and only `record.sh from-ci` writes one, and only from a green *Greenfield gate* run of a push to main at the record's commit. The enable still needs a passing `ci-gate` record naming the running API's digest, and the worker still sends only while one names its own. A rehearsal record is never admitted by the process form even when it names the running digest: production binds `ci-gate` records alone (PR 279). `ci-gate:main` is reserved, so the contract refuses a record carrying it as its reference. Every claimed send records which form admitted it and which record it bound, in its `prepared → dispatching` row of `outbound_message_events`. To go back to one release at a time, attest again naming a reference.
-
-**Withdrawing it.** Either half stops sending, and so does deploying other digests: the worker holds every send when no admitted record names its image. The attestation (`enabled: false`) stops it immediately and is a versioned change with a reason; the deployment flag stops it at the apply and deployment after its pull request. Neither cancels a fence that has already entered `dispatching` — that message may have gone, and Appendix B is how it settles.
-
-**What enabling sending commits the workspace to.** A mailbox that has sent automated mail in the last thirty days is not disconnected and its Google authorization is not revoked, so that a late reply-based "stop" is still received and honoured (12.6's reply-only opt-out). This is an operating rule, not a guard the software enforces yet; see `docs/greenfield/mail.md`, "Mailbox lifecycle: the thirty-day rule".
-
----
+Release-record unknown/not-passing/digest-mismatch/identity-unknown states fail closed. Turning owner sending off is always accepted, but cannot recall a fence already dispatching. Preserve reply-only opt-out reception and the [mailbox lifecycle](mail.md) rule for recently sent mail. Public health's process `sendingEnabled` flag is not stored owner consent.
 
 ## 7. If the release has to be undone
 
-**Preferred.** Deploy the previous image digests, if and only if their declared schema ranges accept the current schema version: `infra/scripts/rollback.sh`, which refuses otherwise (4.1a). Across main `beed2d90` only the images roll back and infrastructure is repaired forward. Where the ranges do not overlap there is nothing to roll back to, and the honest answer is forward repair.
+Contain sending, hold further releases, observe actual services/schema/state and fix forward. Cancellation can leave provider or migration writes unknown. A disconnected observer is not a failed/cancelled hosted job. Never blindly replay a plan, migration or outbound command.
 
-**If the data is wrong rather than the code.** Restore to a point in time with [`runbooks/restore.md`](runbooks/restore.md): stop both services, restore to a new instance, point production at it, replay the suppression journal, reconcile the Sent folders read-only, put the release record again, and restart. There is no faster version.
-
-**Never.** The old stack. Its data tables were destroyed on 17 September 2026.
-
----
+A data restore uses [restore](runbooks/restore.md) under separate authority for potential write loss: stopped writers, new point-in-time instance, suppression-journal replay, read-only Sent reconciliation, release binding and verified restart. PITR availability alone is not proof that restoration works. No schema-down migration or incompatible old-image rollback exists.
 
 ## 8. Records, and what is still unverified
 
-The records of what each credentialed run proved and refuted, and of what each lane's change did, 8.0 to 8.0aw, are in [`docs/archive/release-records.md`](../archive/release-records.md), unchanged: a numbered reference such as "8.0u", in this document or anywhere else, names one of them. From 25 September 2026 a change is its merged pull request instead. **8.1, what production still has not proved**, moved with the rest of the history to [`docs/archive/release-history.md`](../archive/release-history.md).
-
----
+[Release records](../archive/release-records.md) preserve numbered historical observations. They grant no current authority. [Current state](../operations/current-state.md) links current dated receipts and limitations rather than copying a production ledger here.
 
 ## 9. Dependency updates
 
-`.github/dependabot.yml` opens the dependency pull requests: npm at the repository root
-(one manifest and one lockfile for every workspace) and the GitHub Actions used by the
-workflows, both monthly, at most three open at a time, with `deps` as the commit prefix.
-Non-major npm updates arrive as one grouped pull request, `minor-and-patch`; the desktop
-chain (`electron` and the `@electron/*` packages) arrives as one major pull request,
-because the signing and update path is exercised by *Greenfield desktop* and not by the
-gate; every other major is its own pull request. A Dependabot pull request is a pull
-request: *Greenfield gate* runs on it exactly as it runs on ours, and it merges the same
-way. A green gate and the coordinator's read merge a grouped minor/patch pull request; a
-major waits for the coordinator's decision, and a desktop major is not merged until
-someone is ready to build and publish a desktop release. **Nothing auto-merges** — there
-is no auto-merge rule, no `dependabot merge` command in CI, and a red gate on a
-dependency pull request is a red gate like any other.
+Dependabot updates remain normal reviewed PRs through required CI, never automatic merge authority. Desktop major changes also require the actual packaging/signing/update path when released, not merely ordinary source checks.
 
 ## Operations image retention and availability
 
-Tagged release images are retained; only untagged images expire after seven days. A numerical cap cannot prove an older operations, migration or compatible rollback image is unused. Any future pruning must inventory current service and one-off task definitions and designated compatible rollback images before removing tags or manifests. Storage grows with retained releases; review usage without deleting referenced images.
+Retain an actually pullable operations image for recovery. IMMUTABLE tags are not a retention guarantee. The protected branch checks the exact operations/migration image and actual availability; a stale task-definition ARN alone is insufficient. Preserve current images/recovery artifacts and unknown-write evidence until the owning release establishes safe cleanup.
 
-Before a CI release-record task starts, the deploy script verifies its exact operations digest exists in the production worker repository. A missing/unreadable image refuses the release with no task launched. Restore the exact manifest and layers from the durable rehearsal repository, verify the original digest and retain its immutable release tag. Do not substitute a new digest in an old release record or change task roles/definitions to bypass this check. Once restored, rerun the failed workflow job so its gate evidence is checked again.
-
-For compact read-only diagnostics, run `AWS_PROFILE=default python3 scripts/productionStatus.py --expected-commit <full-sha> --deploy-run <run-id> --out .context/production-status.json`. It checks public health, stable service counts, referenced image presence/tags and completed workflow smoke/readback jobs. It neither changes mailbox controls nor replaces the existing exact release-record readback and full smoke checks. Production cluster, origin and account are fixed to the repo's production environment; custom profiles can be supplied through the ordinary AWS environment. Consult `docs/operations/current-state.md` for the dated operating snapshot and unresolved evidence.
-
-Rehearsal registry policy repair uses `.github/workflows/registry-retention.yml` from reviewed main. It assumes the existing `rehearsal` OIDC role, verifies its identity, validates both targeted policy resources and refuses every other resource write before applying the exact saved plan. Default dispatch is plan-only; `apply=true` performs the repair. Local operator inability to assume the rehearsal role is expected; keep its existing trust policy.
+Tagged release images are retained; only untagged images expire after seven days. Any future pruning must inventory service/one-off references and designated schema-compatible recovery images before removing tags/manifests. Never substitute a new digest in an old release record or widen task roles to bypass missing-image refusal.

@@ -1,0 +1,53 @@
+# Selling journeys
+
+[Map index](README.md) · [Setup/verification](verification.md) · [Current queue/evidence](../../apps/web/PLAN.md). Navigation below is derived from current source and retained tests, **not newly executed by this documentation lane**. Root's completed bounded hosted navigation/request/current-read observation is retained in the verification guide, not an instruction to replay it.
+
+## Today and next action
+
+**Reach:** normal sign-in → **Today**. Use the presented prospect/context action to reach **Prospects** or **Calling**, not a guessed URL. **Goal:** decide the next legitimate action from current due work and source context.
+
+**Owners/checks:** [BrowserToday](../../apps/web/src/client/BrowserToday.tsx), [Today behavior](../greenfield/today.md), [glass workspace journey](../../apps/web/test/e2e/glassWorkspace.spec.ts), [automatic supply](../../apps/web/test/e2e/automaticSupply.spec.ts) and [holds](../../apps/web/test/e2e/automaticSupplyHolds.spec.ts).
+
+**Observe:** exact subject/context survives navigation without changing identity. Reading Today is not a write, acquisition or call. Where a separate permitted action changes business state, use its exact receipt and later authoritative read, not an optimistic card. Retained hosted reads and local glass acceptance are in PLAN. Callback intentions are display/history, not proved reminder execution; real daily usefulness remains partial.
+
+## Supply and prospects
+
+**Reach:** **Prospects → Prepared research / Retained review / Source inventory**. Retained review requires current admin access. Select the exact row/observation, inspect its source/website/context and use its existing Calling action. In Calling, the **Business phone discovery** region has **Find business phone** and **Read phone result**. Reading/listing never acquires pages. Find is an explicit acquisition; Root's ten-record authority is exhausted, so this map authorizes no further request.
+
+**Owners:** [Prospects workspace](../../apps/web/src/client/BrowserProspectsWorkspace.tsx), [manual inspector](../../apps/web/src/client/ManualProspectCard.tsx), [phone discovery](../../apps/web/src/client/BrowserPhoneDiscovery.tsx), [browser boundary](../../apps/web/src/server/prospectPhoneDiscoveryBoundary.ts), [worker](../../apps/worker/src/handlers/prospectPhoneDiscovery.ts), [ADR0026](../adr/0026-explicit-public-business-phone-discovery.md). [Research](../greenfield/research.md) and existing [CRM module map](../agents/crm-ask-modules.md) distinguish source/candidate/qualification/Firm owners.
+
+**Existing checks:** [inventory](../../apps/web/test/e2e/candidateInventory.spec.ts), [inspector](../../apps/web/test/e2e/manualProspectInspector.spec.ts), [literal phones](../../apps/web/test/e2e/manualProspectLiteralPhones.spec.ts), [phone discovery](../../apps/web/test/e2e/phoneDiscovery.spec.ts) with [setup, fixture/job/readback helpers](../../apps/web/test/support/phoneDiscoveryApp.ts), [qualification completion](../../apps/web/test/e2e/qualificationCompletion.spec.ts), [originals](../../apps/web/test/e2e/qualificationOriginals.spec.ts) and [retained recovery](../../apps/web/test/e2e/retainedRecovery.spec.ts).
+
+**Persisted acceptance:** one exact candidate/revision request commits one run/job before guarded fetch. Recover a lost response by exact receipt without redispatch. Explicit current read and reload must return the same run/evidence, phone/URL/check time/type or honest unavailable state. Retained local test covers fictional guarded PageFetch, durable evidence and source erasure, with three earlier fixture failures retained in PLAN. Do not run that deletion step on production.
+
+**Refusals/limits:** changed candidate/source/principal, denied/expired originals, unsafe URL, research OFF/holds/budgets and unresolved attempts stop acquisition/save. Four pages/1MB, bounded originals and retention remain; no model/enrichment/new provider. Phone completeness grants no qualification/CRM admission/contact permission. Unknown/missing phone never hides an otherwise permitted raw prospect. Completed bounded yield is prepared0/10, target5 unmet; complete/conflicting results select no number and do not prove competing numbers. Continuous replenishment-to-prepared handoff remains incomplete, not another foundational proof wait or permission to fetch more.
+
+## Calling and follow-through
+
+**Reach:** exact prepared/retained selection → **Calling**, or select from its current queue. Inspect current name/location/website, phone-specific provenance and current verdicts. Device setup/real media is a separate authorized action. After real activity, fill actual outcome and independently authored promised-email text only when actually promised. The recorded outcome can open the same private draft in **Email → Follow-ups**.
+
+**Owners/checks:** [CallingWorkspace](../../apps/web/src/client/CallingWorkspace.tsx), [CallingContext](../../apps/web/src/client/CallingContext.tsx), [execution](../../apps/web/src/client/CallingExecution.tsx), [wrap](../../apps/web/src/client/CallingWrap.tsx), [follow-up editor](../../apps/web/src/client/CallingFollowUpEditor.tsx), [calling behavior](../greenfield/calling.md), [signed fake-device journey](../../apps/web/test/e2e/callingExecution.spec.ts) and [glass outcome/draft/reload journey](../../apps/web/test/e2e/glassWorkspace.spec.ts).
+
+**Observe:** exact command receipt, outcome readback, one same draft ID and edited revision after reopen/reload, stale unsent introduction cancellation, preserved attempted/UNKNOWN history. Private notes never become recipient copy. UNKNOWN holds Next and requires exact receipt recovery, not a second UUID. Local fake-device/actual-PG coverage is retained, not real audio or hosted outcome/draft-write acceptance. Hosted current-context reads are separate evidence.
+
+**Refusals/limits:** office phone is not identity/eligibility. Preserve source expiry, DNC/suppression/personal-cell refusal/hours/state controls, attempt limits, current device/provider permissions and no autonomous calling. Browser preferred, honest unavailable/fallback where appropriate. No microphone/recording/provider activation follows from this guide. iPhone lane stays closed; past GOs are consumed.
+
+## Email and sequences
+
+**Reach:** **Email → Replies / Follow-ups / Automatic outreach**. Campaign controls require admin. Existing desktop **Sequences** and firm enrollment remain separate supported surfaces, not new browser menu items.
+
+**Owners/checks:** [Email workspace](../../apps/web/src/client/BrowserEmailWorkspace.tsx), [campaign controls](../../apps/web/src/client/BrowserEmailCampaigns.tsx), [replies](../../apps/web/src/client/BrowserReplies.tsx), [follow-ups](../../apps/web/src/client/BrowserCallingFollowUps.tsx), [mail](../greenfield/mail.md), [sequences](../greenfield/sequences.md), [sending](../greenfield/sending.md), [campaign composition](../../apps/web/test/e2e/campaignComposition.spec.ts), [admission](../../apps/web/test/e2e/emailCampaignAdmission.spec.ts), [reply brief](../../apps/web/test/e2e/replyBrief.spec.ts), [reply custody](../../apps/web/test/e2e/replyCustody.spec.ts).
+
+**Observe in isolated acceptance:** exact campaign policy/admission/enrollment IDs persist and converge on duplicate/reload, owner OFF stays OFF, no send effect. Opening selection must bind approved current source/content. Manual incoming flow reads the actual original/context, explicitly drafts/reviews and revalidates before any separately authorized dispatch. Follow-up edits reopen the same private draft revision. Scratch preview is not a persisted send. A provider effect requires its actual fence/provider identity and subsequent readback, never a screenshot or queued job alone.
+
+**Status/refusals:** bounded approved-choice opening is not full generated-copy acceptance. Campaign/source/content/recipient eligibility, caps/lower ramps/windows, suppression/reply/refusal/closed-opportunity/UNKNOWN stops remain. Recipient address is not invented from call notes. Hosted empty Replies/Follow-ups reads do not exercise composition or dispatch. Incoming remains manual, automatic incoming/booking/coaching deferred. Routine batch review is not the desired outbound operating model, but owner OFF is not overridden to reach that target.
+
+## Social and founder voice
+
+**Reach:** **Social → Posts** for private review/composition/voice preferences, **Conversations** for the explicit public-thread limitation. Private drafts are destination-independent. The UI names LinkedIn personal-profile and Facebook personal-profile/group limits; it does not connect/publish/schedule or fetch public threads.
+
+**Owners/checks:** [Social workspace](../../apps/web/src/client/BrowserSocialWorkspace.tsx), [review](../../apps/web/src/client/BrowserSocialReview.tsx), [voice preferences](../../apps/web/src/client/BrowserVoicePreferences.tsx), [private composer](../../apps/web/src/client/BrowserPrivateComposer.tsx), [review journey](../../apps/web/test/e2e/socialReview.spec.ts), [durable drafts](../../apps/web/test/e2e/socialPrivateDrafts.spec.ts), [voice preferences](../../apps/web/test/e2e/socialVoicePreferences.spec.ts), [LinkedIn policy](../greenfield/linkedin-policy.md).
+
+**Observe:** curated private guide/explicit edits condition a permitted generation request; selecting one result creates the private draft, then reopen/refine reads the same ID/revision. Generation completion alone is not selected-draft persistence. Logout/access/source/guide changes clear stale private state and invalidate adoption/publication. Existing controlled fake-generation/domain/API checks and hosted unedited revision2 read are retained separately in PLAN, not live-model quality.
+
+**Gaps/refusals:** supported automatic publishing remains target scope, not blanket human review or activation. Real model/adapters/account/platform/route/data/budget authority remain unproven. Public Conversations need a supported retained-thread original reader with thread identity, access and retention; that reader is missing. Candidate pages and outgoing posts cannot substitute. Conversations are not DMs; posting authority is not invitation/DM/contact authority. No implicit training/reference import or unsupported personal-profile/group action is invented.
