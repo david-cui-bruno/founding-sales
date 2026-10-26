@@ -7,6 +7,8 @@ import {manualProspectRows,MANUAL_PROSPECT_ROWS_SQL} from './manualProspectRows.
 import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
 import {manualPhoneSnapshots,recheckManualPhoneSnapshots,projectManualPhone,changedManualPhone} from './manualProspectPhone.ts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
+import {phoneDiscoverySnapshots} from './prospectPhoneDiscoveryStore.ts';
+import {composeProspectPhoneDiscovery,projectProspectPhoneDiscovery} from './prospectPhoneDiscoveryProjection.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 const refuse=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
@@ -21,11 +23,13 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
  const rows=await manualProspectRows(ctx,input.state,input.offset),page=rows.slice(0,50);
  if(page.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,page.map(row=>row.id)]);
  const phones=await manualPhoneSnapshots(ctx,page);
+ const discoveries=await phoneDiscoverySnapshots(ctx,page);
  if(ctx.scope.actor.kind==='user')await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,ctx.scope.actor.userId]);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
  const checked=await recheckManualPhoneSnapshots(ctx,page,phones);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
  const currentRows=await manualProspectRows(ctx,input.state,input.offset),currentPhones=await recheckManualPhoneSnapshots(ctx,page,phones);
+ const currentDiscoveries=await phoneDiscoverySnapshots(ctx,page);
  if(!isDeepStrictEqual(rows,currentRows))return refuse('authority_changed');
  // Authority owns session/device/membership SHARE locks through this transaction.
  // Read clock-based rights after that final authority wait, not before it.
@@ -36,7 +40,10 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
   const after=currentPhones.find(phone=>phone.candidate_id===row.id&&phone.candidate_revision===row.revision);
   const middle=checked.find(phone=>phone.candidate_id===row.id&&phone.candidate_revision===row.revision);
   const evidence=isDeepStrictEqual(before,middle)&&isDeepStrictEqual(before,after)?projectManualPhone(after,wall):changedManualPhone();
-  const p=projectManualProspect(row,evidence);return p?[p]:[];
+  const discovered=discoveries.find(run=>run.candidate_id===row.id&&run.candidate_revision===row.revision);
+  const currentDiscovery=currentDiscoveries.find(run=>run.candidate_id===row.id&&run.candidate_revision===row.revision);
+  const discoveryEvidence=!isDeepStrictEqual(discovered,currentDiscovery)?changedManualPhone():currentDiscovery?projectProspectPhoneDiscovery(currentDiscovery,wall):null;
+  const p=projectManualProspect(row,composeProspectPhoneDiscovery(evidence,discoveryEvidence));return p?[p]:[];
  });
  return {ok:true,value:manualProspectListSchema.parse({prospects,hasMore:rows.length>50})};
 }
