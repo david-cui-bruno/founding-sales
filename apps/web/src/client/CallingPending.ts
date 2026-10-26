@@ -49,11 +49,10 @@ export class CallingCustody{
  }
  assert(held:CallingPending):void{if(JSON.stringify(this.read(held.target))!==JSON.stringify(held))throw Error('Calling custody changed');}
  async complete(held:CallingPending,current:()=>boolean):Promise<void>{await this.mutate(current,()=>{this.assert(held);this.write(this.stored().filter(p=>p.commandId!==held.commandId&&Date.parse(p.expiresAt)>Date.now()));});}
- async clear(identity:string|null):Promise<void>{
+ async clear(identity:string):Promise<void>{
   // Authentication invalidates consumption synchronously. Physical removal joins the
   // same storage order, without erasing a later identity's newly prepared command.
   try{if(!globalThis.navigator?.locks)return;await navigator.locks.request(storageLock,{mode:'exclusive'},()=>{
-   if(identity===null){if(this.binding()===null)this.storage.removeItem(CALLING_PENDING_KEY);return;}
    const bytes=this.storage.getItem(CALLING_PENDING_KEY);if(bytes===null)return;
    if(bytes.length>131072)throw Error('Calling custody exceeds finite bound');
    const retained=records.parse(JSON.parse(bytes)).filter(p=>p.identity!==identity);
@@ -64,5 +63,5 @@ export class CallingCustody{
 /** App lifetime observer, not screen lifetime. Unmount must never discard uncertainty. */
 export function installCallingCustody(client:BrowserClient,storage:CallingStorage=globalThis.localStorage):()=>void{
  const custody=new CallingCustody(client,storage);let identity=custody.binding()?.identity??null;
- return client.subscribe(()=>{const next=custody.binding()?.identity??null;if(next===null||(identity!==null&&identity!==next))void custody.clear(identity);identity=next;});
+ return client.subscribe(()=>{const next=custody.binding()?.identity??null;if(identity!==null&&identity!==next)void custody.clear(identity);identity=next;});
 }
