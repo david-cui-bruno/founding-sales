@@ -43,7 +43,8 @@ export class CallingFollowUpDispatch {
       if (this.custody.read(input.draftId)) return { state: 'unknown' };
       const { held, payload } = await this.custody.prepare(input, current);
       try {
-        const answer = await this.client.request('/calling/follow-ups/save', saveAnswer, { ...payload, commandId: held.commandId, clientVersion: '0.0.0' }, () => {
+        // The browser gateway injects its configured version. It is not part of the payload hash.
+        const answer = await this.client.request('/calling/follow-ups/save', saveAnswer, { ...payload, commandId: held.commandId }, () => {
           check(current); this.custody.assert(held);
         });
         check(current);

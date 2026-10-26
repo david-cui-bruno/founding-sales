@@ -4,15 +4,17 @@ import { TextEncoder } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '../../src/client/schemaRuntime.ts';
-import { type CallingFollowUpMetadata, type CallingFollowUpView, type CallingFollowUpSaveCommand } from '@fss/contracts';
+import { callingFollowUpSaveCommandSchema, type CallingFollowUpMetadata, type CallingFollowUpView, type CallingFollowUpSaveInput } from '@fss/contracts';
 import { BrowserClient } from '../../src/client/BrowserClient.ts';
 import { BrowserEmailWorkspace } from '../../src/client/BrowserEmailWorkspace.tsx';
 import { CALLING_FOLLOW_UP_PENDING_KEY, installCallingFollowUpCustody } from '../../src/client/CallingFollowUpPending.ts';
 import { privateDraftCanonicalJson, privateDraftSHA256 } from '../../src/client/PrivateDraftCustody.ts';
+import { payloadHashOf } from '../../../api/src/auth/tokens.ts';
 
 const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const a = id(1), b = id(2), date = '2026-10-25T12:00:00Z';
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status });
+type BrowserSave = CallingFollowUpSaveInput & { commandId: string };
 function metadata(draftId = a, revision = 1): CallingFollowUpMetadata {
   return { draftId, revision, availability: 'available', source: { kind: 'candidate', candidateId: id(3), candidateRevision: 7, attemptId: id(4) }, createdAt: date, updatedAt: date };
 }
@@ -28,11 +30,11 @@ afterEach(() => { cleanup(); for (const client of clients.splice(0)) client.disp
 function setup() {
   let list: (input: { afterId?: string }) => Promise<Response> = async () => json({ drafts: [metadata(a), metadata(b)], nextAfterId: null });
   let read: (input: { draftId: string; expectedRevision: number }) => Promise<Response> = async input => json({ draft: available(input.draftId, input.expectedRevision) });
-  let save: (input: CallingFollowUpSaveCommand) => Promise<Response> = async input => json({ status: 'accepted', replayed: false, result: { draftId: input.draftId, revision: input.expectedRevision + 1 } });
+  let save: (input: BrowserSave) => Promise<Response> = async input => json({ status: 'accepted', replayed: false, result: { draftId: input.draftId, revision: input.expectedRevision + 1 } });
   let receipt: () => Promise<Response> = async () => json({ state: 'unknown' });
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json({ status: 'signed_in', workspaceId: a, userId: a, deviceId: a, role: 'admin', revision: 'one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120000).toISOString() });
-    const input = JSON.parse(String(init?.body)) as CallingFollowUpSaveCommand & { afterId?: string };
+    const input = JSON.parse(String(init?.body)) as BrowserSave & { afterId?: string };
     if (url === '/browser/api/calling/follow-ups/list') return list(input);
     if (url === '/browser/api/calling/follow-ups/read') return read(input);
     if (url === '/browser/api/calling/follow-ups/save') { expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toContain(input.commandId); return save(input); }
@@ -77,14 +79,15 @@ it('lists metadata only and reads exactly selected revision, never notes or infe
 });
 
 it('saves explicit edits using CAS, durable hash-only custody and a fresh exact accepted-revision read', async () => {
-  const scope = setup(); let saved: CallingFollowUpSaveCommand | undefined;
+  const scope = setup(); let saved: BrowserSave | undefined;
   scope.save(async input => { saved = input; return json({ status: 'accepted', replayed: false, result: { draftId: a, revision: 2 } }); });
   scope.read(async input => json({ draft: available(a, input.expectedRevision, input.expectedRevision === 2 ? 'Current saved content' : 'Original saved content') }));
   await mount(scope); fireEvent.change(await open(), { target: { value: 'My exact edited promise' } });
   fireEvent.change(screen.getByRole('textbox', { name: 'Follow-up subject' }), { target: { value: 'Edited subject' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
   await screen.findByText(/saved for review at revision 2/u);
-  expect(saved).toMatchObject({ operation: 'update', draftId: a, expectedRevision: 1, subject: 'Edited subject', body: 'My exact edited promise', clientVersion: '0.0.0' });
+  expect(saved).toMatchObject({ operation: 'update', draftId: a, expectedRevision: 1, subject: 'Edited subject', body: 'My exact edited promise' });
+  expect(saved).not.toHaveProperty('clientVersion');
   expect((screen.getByRole('textbox', { name: 'Follow-up body' }) as HTMLTextAreaElement).value).toBe('Current saved content');
   expect(JSON.parse(String(calls(scope, '/read').at(-1)?.[1]?.body))).toEqual({ draftId: a, expectedRevision: 2 });
   expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
@@ -302,4 +305,38 @@ it('fences save preparation after hashing if selection changed, before UUID mint
   await waitFor(() => { expect(release).toBeDefined(); }); await open(b);
   await act(async () => { release?.(); await new Promise(resolve => { setTimeout(resolve, 0); }); });
   expect(mint).not.toHaveBeenCalled(); expect(calls(scope, '/save')).toHaveLength(0); expect(sessionStorage.length).toBe(0);
+});
+
+it.each(['update', 'withdraw'] as const)('omits browser clientVersion for %s while preserving envelope-free hash and exact receipt identity', async operation => {
+  const scope = setup(), mint = vi.spyOn(crypto, 'randomUUID');
+  const input: CallingFollowUpSaveInput = operation === 'update'
+    ? { operation, draftId: a, expectedRevision: 1, subject: 'Promised material', body: 'Version-independent promise' }
+    : { operation, draftId: a, expectedRevision: 1 };
+  let serverPayloadHash: string | undefined;
+  scope.save(async browserCommand => {
+    expect(browserCommand).not.toHaveProperty('clientVersion');
+    expect(browserCommand).toEqual({ ...input, commandId: expect.any(String) });
+    // Model the existing gateway injection followed by runRouteCommand's envelope removal.
+    const parsed = callingFollowUpSaveCommandSchema.parse({ ...browserCommand, clientVersion: '1.4.7' });
+    const { commandId, clientVersion, ...payload } = parsed;
+    expect(clientVersion).toBe('1.4.7'); expect(commandId).toBe(browserCommand.commandId);
+    serverPayloadHash = payloadHashOf(payload);
+    throw Error('Accepted response lost');
+  });
+  await mount(scope); fireEvent.change(await open(), { target: { value: 'Version-independent promise' } });
+  if (operation === 'withdraw') {
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw private follow-up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm permanent withdrawal' }));
+  } else fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
+  await screen.findByText(/Save outcome UNKNOWN/u);
+  const bytes = sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)!;
+  const [held] = JSON.parse(bytes) as { commandId: string; payloadSHA256: string }[];
+  expect(serverPayloadHash).toBe(await privateDraftSHA256(privateDraftCanonicalJson(input)));
+  expect(held?.payloadSHA256).toBe(serverPayloadHash);
+  fireEvent.click(screen.getByRole('button', { name: 'Check same follow-up receipt' }));
+  await waitFor(() => { expect(calls(scope, '/receipt')).toHaveLength(1); });
+  await waitFor(() => { expect((screen.getByRole('button', { name: 'Check same follow-up receipt' }) as HTMLButtonElement).disabled).toBe(false); });
+  expect(JSON.parse(String(calls(scope, '/receipt')[0]?.[1]?.body))).toEqual({ operation: 'save', commandId: held?.commandId, payloadSHA256: serverPayloadHash });
+  expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(bytes);
+  expect(calls(scope, '/save')).toHaveLength(1); expect(mint).toHaveBeenCalledTimes(1);
 });
