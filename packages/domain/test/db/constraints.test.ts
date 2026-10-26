@@ -1,5 +1,6 @@
 import { campaignCompositionCases } from './support/campaignCompositionCases.ts'; import { AUTOMATIC_SUPPLY_CONSTRAINT_CASES } from './support/automaticSupplyCases.ts'; import { PHONE_HANDOFF_CONSTRAINT_CASES } from './support/phoneHandoffCases.ts'; import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {BOOKING_CHANGE_CONSTRAINT_CASES} from './support/bookingChangeConstraints.ts';
+import {CAMPAIGN_OPENING_CONSTRAINT_CASES} from './campaignOpeningConstraints.ts';
 import {CALLING_IDENTITY_CONSTRAINT_CASES,CALLING_DRAFT_CONSTRAINT_CASES} from './support/callingCases.ts'; import {PROSPECT_PHONE_DISCOVERY_CONSTRAINT_CASES} from './prospectPhoneDiscoveryConstraints.ts';
 import {BOOKING_MESSAGE_CONSTRAINT_CASES,BOOKING_MESSAGE_GUARD_CASES} from './support/bookingMessageCases.ts';
 import {BOOKING_CONVERSATION_CONSTRAINT_CASES} from './support/bookingConversationCases.ts';
@@ -1140,7 +1141,7 @@ const cases: readonly Case[] = [
   },
 
   ...CALLING_IDENTITY_CONSTRAINT_CASES,
-  ...CALLING_DRAFT_CONSTRAINT_CASES, ...PROSPECT_PHONE_DISCOVERY_CONSTRAINT_CASES,
+  ...CALLING_DRAFT_CONSTRAINT_CASES, ...PROSPECT_PHONE_DISCOVERY_CONSTRAINT_CASES, ...CAMPAIGN_OPENING_CONSTRAINT_CASES,
 
   // --------------------------------------------------------- command_receipts
   {
