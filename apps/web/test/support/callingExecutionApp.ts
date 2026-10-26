@@ -23,9 +23,9 @@ async function fakeSDKAssets(){
  return (original:BrowserAssets):BrowserAssets=>new Map([...original,['/renderer.js',{body:js.contents,contentType:'text/javascript; charset=utf-8'}],['/styles.css',{body:css.contents,contentType:'text/css; charset=utf-8'}]]);
 }
 export async function startCallingExecutionApp(){
- requireGlassRuntimeGrant();assert.equal(process.env['FSS_CALLING_EXECUTION_RUNTIME_GRANT'],'aefb95a4d');
+ requireGlassRuntimeGrant();const grant=process.env['FSS_CALLING_EXECUTION_RUNTIME_GRANT'];assert(grant==='aefb95a4d'||grant==='229d9a53d');
  const homebrew=execFileSync('ps',['-p','1106','-o','command='],{encoding:'utf8'}).trim();assert(homebrew.includes('/opt/homebrew/opt/postgresql@17/bin/postgres'));
- console.log('CALLING_EXECUTION_RESOURCES_RESERVED',JSON.stringify({owner:'swan',grant:'fox-20261026-105435',resources:['sole disposable PG/template/fixture','loopback HTTPS/signed OIDC','isolated installed Chrome'],artifacts:process.env['FSS_GLASS_PRIVATE_ARTIFACTS'],homebrew1106:homebrew,workers:1,provider:'FAKE ONLY',audio:'FAKE ONLY'}));
+ console.log('CALLING_EXECUTION_RESOURCES_RESERVED',JSON.stringify({owner:'swan',grant,resources:['sole disposable PG/template/fixture','loopback HTTPS/signed OIDC','isolated installed Chrome'],artifacts:process.env['FSS_GLASS_PRIVATE_ARTIFACTS'],homebrew1106:homebrew,workers:1,provider:'FAKE ONLY',audio:'FAKE ONLY'}));
  const decorateAssets=await fakeSDKAssets();const release=await reserveLocalBrowserDatabase();let app:Awaited<ReturnType<typeof startReplyBriefApp>>|undefined;
  const counters={tokens:0,connects:0,providerNetwork:0,externalBrowser:0,externalNode:0};
  const originalFetch=globalThis.fetch;
