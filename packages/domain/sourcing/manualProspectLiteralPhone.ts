@@ -6,8 +6,9 @@ type Evidence=NonNullable<ManualProspect['phoneEvidence']>;
 export type LiteralSource=Extract<Extract<Evidence,{state:'observed'}>['sources'][number],{method:string}>;
 export type LiteralAuthority=LiteralSource['authority'];
 export type LiteralLineage=LiteralSource['lineage'];
+export type LiteralDiagnostics=NonNullable<Extract<Evidence,{state:'conflicting'}>['diagnostics']>;
 export interface LiteralInput {runId:string;observations:unknown;website:string|null;authorities:Record<string,LiteralAuthority>;lineage:LiteralLineage;now:number}
-export interface LiteralScan {sources:LiteralSource[];coverage:NonNullable<Evidence['coverage']>;unresolved:boolean;reason?:'original_not_usable'|'bounded_scan_incomplete'}
+export interface LiteralScan {sources:LiteralSource[];coverage:NonNullable<Evidence['coverage']>;unresolved:boolean;diagnostics?:LiteralDiagnostics;reason?:'original_not_usable'|'bounded_scan_incomplete'}
 const parser='manual-literal-phone-v1' as const;
 const host=(value:string|null)=>{try{const url=new URL(value??'');return ['http:','https:'].includes(url.protocol)&&!url.username&&!url.password?url.hostname.toLowerCase().replace(/^www\./u,''):null;}catch{return null;}};
 // Labels, not arbitrary prose, introduce a phone-bearing segment in one block.
@@ -32,8 +33,8 @@ const splitSurrogate=(text:string,at:number)=>at>0&&at<text.length&&/[\uD800-\uD
 export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
  const coverage:LiteralScan['coverage']={parser,state:'complete',observations:0,blocks:0};
  const result:LiteralScan={sources:[],coverage,unresolved:false};
- const unusable=()=>({...result,sources:[],coverage:{...coverage,state:'unavailable' as const},reason:'original_not_usable' as const});
- const bounded=()=>({...result,sources:[],coverage:{...coverage,state:'bounded' as const},reason:'bounded_scan_incomplete' as const});
+ const unusable=():LiteralScan=>({sources:[],unresolved:result.unresolved,coverage:{...coverage,state:'unavailable'},reason:'original_not_usable'});
+ const bounded=():LiteralScan=>({sources:[],unresolved:result.unresolved,coverage:{...coverage,state:'bounded'},reason:'bounded_scan_incomplete'});
  if(!Array.isArray(input.observations))return unusable();
  if(input.observations.length>8||Buffer.byteLength(JSON.stringify(input.observations))>100000)return bounded();
  const parsed=input.observations.map(value=>sourceObservationSchema.safeParse(value));
@@ -52,19 +53,29 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
     const start=label.index+label[0].length,end=found[index+1]?.index??block.text.length;
     const segment=block.text.slice(start,end);
     const attached=attachedLiterals(segment),candidates=attached.matches;
-    if(!attached.complete)result.unresolved=true;
+    const reasons=new Set<LiteralDiagnostics['entries'][number]['reason']>();
+    if(!attached.complete){result.unresolved=true;reasons.add('unattached_label_content');}
     for(const token of candidates){
      const literal=token[0].trimEnd(),at=start+token.index,to=at+literal.length;
      if(literal.length>200||label[0].length>200||result.sources.length>=16)return bounded();
      const adjacent=(block.text[at-1]??'')+(block.text[to]??'');
      const ambiguous=/\b(?:fax|mobile|personal|emergency|vendor|powered\s+by|website\s+by|testimonial|customer\s+review)\b/iu.test(block.text)||/[\p{L}\p{N}]/u.test(adjacent)||splitSurrogate(block.text,at)||splitSurrogate(block.text,to);
      const normalized=canonicalizePhone(literal),supported=normalized.ok&&!ambiguous&&attached.complete&&/^[0-9+(). \t-]+$/u.test(literal);
-     if(!supported)result.unresolved=true;
+     if(!supported){result.unresolved=true;reasons.add(ambiguous?'ambiguous_context':!normalized.ok||!/^[0-9+(). \t-]+$/u.test(literal)?'unsupported_literal':'unattached_label_content');}
      result.sources.push(literalSource(input,source,block.id,label[0],label.index,literal,at,supported&&normalized.ok?normalized.handle.value:null));
     }
     // An explicit phone label with unresolved nonempty content cannot disappear
     // beside a valid alternate (including malformed/vanity phone attempts).
     if(candidates.length===0&&/\S/u.test(segment.replace(/^[\s:.-]+/u,'')))result.unresolved=true;
+    for(const reason of reasons){
+     const diagnostics=result.diagnostics??={entries:[],truncated:false};
+     const authority=input.authorities[source.id]!;
+     if(authority.kind==='phone_discovery'&&(!diagnostics.expiresAt||Date.parse(authority.expiresAt)<Date.parse(diagnostics.expiresAt)))diagnostics.expiresAt=authority.expiresAt;
+     if(label[0].length>200||diagnostics.entries.length>=16){diagnostics.truncated=true;continue;}
+     diagnostics.entries.push({reason,runId:input.runId,observationId:source.id,blockId:block.id,url:source.url,retrievedAt:source.retrievedAt,
+      contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,parser,label:label[0],labelStart:label.index,labelEnd:start,
+      authority,lineage:input.lineage});
+    }
    }
   }
  }

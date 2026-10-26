@@ -2,6 +2,7 @@ import type {JSX} from 'react';
 import type {ManualProspect} from '@fss/contracts';
 import {manualPhoneLabel,manualProspectLabel,manualProspectSite} from './manualProspectPresentation.ts';
 import {useCurrentPhoneEvidence} from './useCurrentPhoneEvidence.ts';
+import {PhoneRefusalDiagnostics} from './PhoneRefusalDiagnostics.tsx';
 function Reference({url,label}:{url:string|null;label:string}):JSX.Element{
  let href:string|undefined;
  try{if(url){const parsed=new URL(url);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)href=parsed.href;}}catch{/* Retained text is not executable. */}
@@ -37,6 +38,7 @@ export function ManualProspectCard({prospect:p,disabled,feedback,activity,prepar
    <ul aria-label="Source licenses and notices">{p.sourceNotices.map((notice,i)=><li key={i}><Reference url={notice.url} label={notice.label}/></li>)}</ul>
    {phone?.state==='not_extracted'?<p>Phone evidence: {phone.reason.replaceAll('_',' ')}. Missing data is not explicit absence.</p>:null}
    {phone?.state==='conflicting'?<p>Phone evidence: {phone.reason.replaceAll('_',' ')}</p>:null}
+   <PhoneRefusalDiagnostics evidence={phone}/>
    {phone?.coverage?<p>Retained phone scan: {phone.coverage.state} · {phone.coverage.observations} observations · {phone.coverage.blocks} blocks · {phone.coverage.parser}. Coverage is limited to permitted retained inputs, not the whole business.</p>:null}
    {phone?.state==='observed'||phone?.state==='conflicting'?<ul aria-label="Retained phone provenance">{phone.sources.map((source,i)=><li key={i}><Reference url={source.url} label={source.url}/> · Retrieved {source.retrievedAt} · Run {source.runId} · Observation {source.observationId} · Block {source.blockId}
     {'method' in source?<>
