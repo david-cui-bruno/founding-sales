@@ -1,19 +1,19 @@
 import {MANUAL_SOURCE_LOSS_ACTION} from './manualProspectSourceLoss.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import type {ManualProspectRow} from './manualProspectProjection.ts';
+import {manualProspectSubjectPermitted,type ManualProspectRow,type ManualProspectSubject} from './manualProspectProjection.ts';
 
 /** Retained inventory only. No owner/evaluation/phone or canonical keep prerequisite.
  * Known terms/source loss hides a row even if another retained observation survives.
  * No qualification horizon is invented for these raw retained records.
  */
-export const MANUAL_PROSPECT_ROWS_SQL=`WITH raw AS (
+function permittedManualProspectsSql(exactSubject:boolean):string {return `WITH raw AS (
  SELECT c.id,c.workspace_id,c.payload,c.revision,c.created_at,c.status,c.source_check,
  COALESCE(s.state,'new') AS manual_state,
  CASE WHEN c.payload->>'kind'='discovery-v1' THEN c.payload->'row' ELSE c.payload END AS observed,
  (SELECT jsonb_agg(jsonb_build_object('source',o.source,'sourceMetadata',o.source_metadata,'licenses',o.licenses,'notices',o.notices) ORDER BY o.provider,o.release,o.record_id)
   FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=c.workspace_id AND o.candidate_id=c.id) AS origins
  FROM sourcing_candidates c LEFT JOIN sourcing_manual_prospect_states s ON s.workspace_id=c.workspace_id AND s.candidate_id=c.id AND s.candidate_revision=c.revision
- WHERE c.workspace_id=$1 AND c.status<>'dismissed'
+ WHERE c.workspace_id=$1${exactSubject?' AND c.id=$2 AND c.revision=$3':''} AND c.status<>'dismissed'
  AND NOT COALESCE(c.source_check->>'state'='unavailable' AND c.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text'),false)
 ), referenced AS (
  SELECT raw.*,ARRAY(SELECT DISTINCT rtrim(url,'/') FROM unnest(ARRAY[payload->>'sourceUrl',source_check->'lastSuccess'->>'url'] ||
@@ -32,7 +32,8 @@ export const MANUAL_PROSPECT_ROWS_SQL=`WITH raw AS (
   AND lost.source_check->>'state'='unavailable' AND lost.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text')
   AND (rtrim(lost.payload->>'sourceUrl','/')=ANY(raw.source_urls) OR rtrim(lost.source_check->'lastSuccess'->>'url','/')=ANY(raw.source_urls)
    OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=lost.workspace_id AND o.candidate_id=lost.id AND rtrim(o.source->>'sourceUrl','/')=ANY(raw.source_urls))))
-), keyed AS (
+)`;}
+export const MANUAL_PROSPECT_ROWS_SQL=`${permittedManualProspectsSql(false)}, keyed AS (
  SELECT permitted.*,CASE WHEN NULLIF(trim(observed->>'website'),'') IS NULL THEN id::text
  ELSE jsonb_build_array(lower(trim(observed->>'firmName')),observed->>'website',lower(trim(observed->>'locality')),observed->>'region')::text END AS duplicate_key FROM permitted
 ), ranked AS (
@@ -42,4 +43,12 @@ export const MANUAL_PROSPECT_ROWS_SQL=`WITH raw AS (
 
 export async function manualProspectRows(ctx:RepositoryContext,state:string,offset:number):Promise<ManualProspectRow[]> {
  return (await ctx.db.query<ManualProspectRow>(`${MANUAL_PROSPECT_ROWS_SQL} LIMIT 51 OFFSET $3`,[ctx.scope.workspaceId,state,offset])).rows;
+}
+
+/** Exact raw subject only, never a deduplicated inventory winner. Only the outer
+ * candidate is narrowed: same-workspace source-loss vetoes still see all records.
+ * Caller retains the existing lifecycle locks and post-wait authority checks. */
+export async function readManualProspectSubject(ctx:RepositoryContext,input:{candidateId:string;expectedRevision:number}):Promise<ManualProspectSubject|null> {
+ const row=(await ctx.db.query<ManualProspectSubject>(`${permittedManualProspectsSql(true)} SELECT * FROM permitted`,[ctx.scope.workspaceId,input.candidateId,input.expectedRevision])).rows[0];
+ return row&&manualProspectSubjectPermitted(row)?row:null;
 }

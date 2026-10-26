@@ -1,7 +1,6 @@
 import {candidateInputSchema,discoveryCandidatePayloadSchema,type ProspectPhoneDiscoveryReason} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {MANUAL_ACTIVITY_RAW_SQL} from './manualProspectActivityAccess.ts';
-import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
+import {readManualProspectSubject} from './manualProspectRows.ts';
 import {isPublicResearchUrl} from '../research/sourcePolicy.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {listApplicableHolds} from '../policy/holds.ts';
@@ -23,8 +22,8 @@ export async function phoneDiscoveryPrincipal(ctx:RepositoryContext,authority:Ph
 }
 /** Exact non-deduplicated retained candidate visibility, not a host-based grant. */
 export async function phoneDiscoveryContext(ctx:RepositoryContext,candidateId:string,revision:number):Promise<PhoneDiscoveryContext|null>{
- const row=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_ACTIVITY_RAW_SQL}) permitted WHERE id=$3 AND revision=$4`,[ctx.scope.workspaceId,'all',candidateId,revision])).rows[0];
- if(!row||!projectManualProspect(row))return null;
+ const row=await readManualProspectSubject(ctx,{candidateId,expectedRevision:revision});
+ if(!row)return null;
  const ordinary=candidateInputSchema.safeParse(row.payload),raw=discoveryCandidatePayloadSchema.safeParse(row.payload);
  const observed=ordinary.success?ordinary.data:raw.success?raw.data.row:null;
  if(!observed?.website)return null;
