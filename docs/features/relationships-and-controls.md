@@ -1,0 +1,39 @@
+# Relationships, evidence and owner controls
+
+[Map index](README.md) · [Verification](verification.md). These retained groups remain in full product scope alongside the five primary browser screens. Browser coverage is explicitly partial. The following navigation is **draft/unrun by this documentation lane**; existing behavior/test references are retained, not new acceptance or live permission.
+
+## Records and human work
+
+**Goal/reach:** inspect a Firm, its people/contacts/endpoints/routes and opportunities, then decide or complete existing human work. Desktop **Firms**, **Pipeline**, **Ask** and **Today** retain those surfaces; browser exposes selected Firm/context reads through Today/research, not a complete Firms/Pipeline/Ask replacement. Use [CRM surface behavior](../greenfield/crm-surface.md) and [desktop routes](../../apps/desktop/src/renderer/routes.ts) rather than inventing browser menu paths.
+
+**Owners/harness:** [CRM/Ask module map](../agents/crm-ask-modules.md) locates API/domain handlers and existing command/SQL/privacy tests. [Desktop App](../../apps/desktop/src/renderer/app/App.tsx) composes [firms](../../apps/desktop/src/renderer/firms/), [Pipeline](../../apps/desktop/src/renderer/pipeline/) and [Ask](../../apps/desktop/src/renderer/ask/). Existing [API tests](../../apps/api/test/) include the `ask*.test.ts` and `leanAskRemoval.test.ts` checks named in the module map. Use the [workspace test setup](../greenfield/workspace.md), not a guessed new harness.
+
+**Observe/refuse:** a permitted correction or existing-task completion needs its exact receipt and an authoritative reread/reload under current workspace/source access. Search returns exact records/state/original keyword passages, not generated answers or factual certainty. Dates/source versions/access still apply after waits. Relationships and observed endpoints do not establish consent or eligibility. Retained task completion is not creation of an answer-derived task. Current installed compatibility tests are not fresh installed acceptance.
+
+## Gmail, evidence and privacy
+
+**Goal/reach:** capture permitted new business conversation originals, extract supported claims/commitments/decisions, inspect coverage and correct errors. Existing desktop **Settings** owns capability setup, records/Today expose resulting context; browser **Email → Replies** exposes supported retained reply originals, not mailbox-wide capture administration. Read [CRM](../greenfield/crm.md), [mail](../greenfield/mail.md), [classification](../greenfield/classification.md) and [retention](../greenfield/retention.md).
+
+**Owners/harness:** [CRM/Ask map](../agents/crm-ask-modules.md) links source ownership for capture/original read, history/recovery, processing/evidence/decisions/commitments, plain search and deletion. [API](../../apps/api/src/bootstrap/main.ts) and [worker](../../apps/worker/src/bootstrap/main.ts) determine actual mounted/registered behavior. Browser [reply brief](../../apps/web/test/e2e/replyBrief.spec.ts), [custody](../../apps/web/test/e2e/replyCustody.spec.ts), [retained authority](../../apps/web/test/e2e/retainedAuthority.spec.ts) and [recovery](../../apps/web/test/e2e/retainedRecovery.spec.ts) reuse signed auth/disposable PostgreSQL and controlled ports.
+
+**Observable effect:** captured source identity/version and actual readable original precede derived interpretation. A metadata row/empty body is not an original. Derived claims/commitments need grounded evidence and explicit unknown/correction state. After permitted source retirement/access loss, current reads/search/derived views and workers must no longer expose unavailable content, including after lock waits. Test deletion only in disposable fixtures; irrecoverable production CRM/Gmail/conversation deletion requires owner approval.
+
+**Limits:** incoming+Sent business-only new originals, no history, approved Haiku4.5/$1day/$20month scope remains. No reconnect/backfill/import or extra model export merely to make a map pass. Source version/permission/generation, cancellation, unknown dispatched attempts, budgets and retention refuse stale work. Current capture copied empty bodies, so real-original usefulness remains unproven. Local/synthetic replies are not measured business quality. Legacy Answer/Embedding setup does not reactivate removed adapters.
+
+## Meetings and recordings
+
+**Goal/reach:** from an existing Firm/Today context, read retained meeting preparation and existing notes; save private notes only where authorized. Existing browser components [preparation](../../apps/web/src/client/BrowserMeetingPreparation.tsx) and [notes](../../apps/web/src/client/BrowserMeetingNotes.tsx) are exercised by the synthetic harness, not evidence of a standalone Meetings destination in the current shell. Desktop [meetings](../../apps/desktop/src/renderer/meetings/) and [recordings](../../apps/desktop/src/renderer/recordings/) retain their own context. [Meetings behavior](../greenfield/meetings.md) describes the domain.
+
+**Harness/observable:** [existing synthetic instructions](../../apps/web/scripts/localdemo.md), [synthetic browser test](../../apps/web/test/e2e/syntheticBrowser781.spec.ts) and [initial local browser acceptance](../../apps/web/test/e2e/localBrowser.spec.ts) cover signed access and actual notes persistence. Save an explicitly fictional note, then reopen the same meeting UUID/revision after reload and check the stored note, not just a success label. The existing fixture contains an invented agreed time, not a real calendar booking.
+
+**Limits:** retained preparation/notes/transcription/follow-through source is not booking, actual media upload/transcription or live inference evidence. Cal.com remains disconnected. Recording and microphone/data/provider authority are independent. Existing proposed work is not a confirmed human commitment. Do not launch real recording or scheduling to test the map.
+
+## Access and owner controls
+
+**Reach:** existing workspace's normal sign-in, then **Settings & account** for browser appearance/current workspace/role/expiry and **Refresh access**. **Sign out** is in the sidebar. [BrowserSettings](../../apps/web/src/client/BrowserSettings.tsx) explicitly does not configure capture/calling/channels. Appearance is page-local, not a saved preference. Desktop **Settings** retains devices/mailbox/domain/capability/sending and other operational setup. See [settings](../greenfield/settings.md), [identity](../greenfield/identity.md), [sending](../greenfield/sending.md) and [suppression](../greenfield/suppression.md).
+
+**Owners/harness:** [ADR0012](../adr/0012-browser-session-boundary.md), [browser server](../../apps/web/src/server/browser.ts), [BrowserClient](../../apps/web/src/client/BrowserClient.ts), [thin host](../../apps/web/test/e2e/thinHost.spec.ts), [founder host](../../apps/web/test/e2e/founderHost.spec.ts), [glass workspace](../../apps/web/test/e2e/glassWorkspace.spec.ts) and desktop [settings source](../../apps/desktop/src/renderer/settings/).
+
+**Observe/refuse:** real signed session/API access, not an injected principal. Logout/revocation/expiry/role/source changes clear private view/custody and late responses cannot restore it. CSRF/origin/session mismatch refuses. Remote logout uncertainty must remain visible. Never inspect codes/cookies/tokens, bypass auth or reset credentials to make navigation pass. Normal2FA belongs to David.
+
+Owner changes require exact current readback/audit, not process-health flags. Stored owner OFF survives healthy releases, newer holds and cap/ramp/eligibility checks remain. Device/config availability is not consent or a provider effect. Operations/diagnostics/release/recovery use the sole [hosted entrypoint](../operations/lean-release-workflow.md) and [invariant reference](../greenfield/release.md), never an invented browser control or local production-write recipe.

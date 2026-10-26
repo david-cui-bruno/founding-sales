@@ -1,6 +1,6 @@
 # API and worker processes
 
-The API and worker share domain rules and schema declarations. The desktop is an authenticated client, not a replacement policy engine. This page locates current source; the protected [release invariants](release.md), [operate runbook](runbooks/operate.md) and [lean release procedure](../operations/lean-release-workflow.md) remain the operational instructions.
+The API and worker share domain rules and schema declarations. Browser and desktop are authenticated clients, not replacement policy engines. This page locates source; the [feature map](../features/README.md) owns user journeys. The [lean release procedure](../operations/lean-release-workflow.md) is the sole production execution entrypoint; [release invariants](release.md) explain its constraints.
 
 ## API composition
 
@@ -12,7 +12,7 @@ The API and worker share domain rules and schema declarations. The desktop is an
 
 `apps/worker/src/bootstrap/main.ts` constructs adapters, registers handlers and due-work sources. `bootstrap/worker.ts` starts bounded scheduler passes, runner slots and metrics on separate sessions. It checks supported database schema before ordinary execution. Current source includes mail, replies, regular sequences, calls, retained meeting work, Today, retention, research/sourcing and separately authorized CRM capture/extraction. Provider-dependent handlers may be conditional or fail closed without an adapter.
 
-Removed generated-answer/index, AI booking lifecycle, automatic email admission and recurring posting modules are not restored by historical rows or archived documentation. Retained meeting follow-through, manual social drafting and research-only verified-firm intake are different capabilities with their own boundaries.
+Historical generated-answer/index, AI booking, older automatic-admission and recurring-posting module removals are not permanent restrictions on approved replacement capability. Current direction includes eligible automatic outbound and supported automatic public publishing, with partial implementation/activation labeled in the feature map and PLAN. Plain Ask remains lexical; automatic incoming replies/booking/coaching remain deferred. Retained meeting follow-through and manual activity have separate boundaries.
 
 The scheduler materializes work; a leased job is not proof of an external effect. Runner fencing, business uniqueness and outbound uncertainty are described in [jobs](jobs.md). Process shutdown drains in-flight work before sessions close, subject to its deadline. Heartbeats and metrics are operational signals, not business consent or provider-quality evidence.
 

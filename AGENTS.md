@@ -4,7 +4,7 @@
 
 Read after compaction: [tracker](docs/agents/issue-tracker.md), [labels](docs/agents/triage-labels.md); use `david-cui-bruno/founding-sales` Issues. Before exploration read [domain](docs/agents/domain.md), `GLOSSARY.md`, relevant ADRs. Before roadmap/release/sending read [current-state](docs/operations/current-state.md) and its roadmap. History is not authority; exclude `docs/archive` except historical questions.
 
-Prioritize selling/Gmail/manual-first LinkedIn, then release simplification. Root owns integration/interfaces/production. Assign exclusive outcomes with acceptance/dependencies/resources. Refill on completion/blocking. Tracker/PLAN: backlog; todos: active.
+Prioritize the [selling journeys](docs/features/README.md): supply, browser calling, eligible outbound/manual incoming email and founder-voice public social. Root owns integration/interfaces/production. Assign exclusive outcomes with acceptance/dependencies/resources. Refill on completion/blocking. Tracker/PLAN: backlog; todos: active.
 
 ## Decisions and approvals
 
@@ -16,14 +16,14 @@ Ask before new/higher spending, new paid services, AWS changes above ~$20/month,
 
 ## Proof and review
 
-Match proof to risk. Normal checks and one review suffice for local code, tests, docs and refactors. Avoid hash sealing, proof packets, per-run approvals and requalification loops. Production, money, sending, credentials and data loss need stronger checks.
+Normal checks and one review suffice for ordinary changes. Avoid hash sealing, proof packets, per-run approvals and requalification loops. Consequential risks need stronger checks.
 
-Use combined review for docs/low-risk; spec plus standards otherwise; add risk review for sending, credentials, privacy or production. Review finished changes once; return fixes to the same reviewers. Read [.jcode/skills/fss-review/SKILL.md](.jcode/skills/fss-review/SKILL.md).
+Use one combined spec/correctness and standards/simplicity review for ordinary changes. Add specialists for actual migration/authentication/money/sending/credentials/privacy/production/data-loss risks. Preserve hard gates/in-flight reviews; return fixes to the same reviewers. Read [.jcode/skills/fss-review/SKILL.md](.jcode/skills/fss-review/SKILL.md).
 
 ## Maintenance and delivery
 
-Build. Research must unblock decisions; new `docs/sourcing` research needs a current ticket. Archive obsolete research/history. Replace current entries, never append logs.
+Build. New sourcing research needs a current ticket. Replace current entries, not logs. Maintain affected [journey/drive links](docs/features/README.md) with features. Reuse applicable evidence; changed behavior/harness/environment needs relevant checks. Remove stale comments, retain legal/tool/safety rationale.
 
-Budgets: AGENTS 400 words, current-state 800, roadmap 1,500. Run workflow fast gate. Counts over 800/2,000 file lines and 500 JS/TS function lines cannot increase. Split touched hotspots, not wholesale refactors.
+Budgets: AGENTS/review skill 400 words, current-state 800, roadmap 1,500. Run `npm run gate:workflow`. Threshold counts above 800/2,000 file lines and 500 JS/TS function lines cannot increase. Never inflate baselines. Split touched hotspots, not wholesale refactors.
 
-Keep full todos through production milestones. Label blocked todos `waiting on: <who or what>` and, on auto-pokes, advance unblocked work or reply `blocked, waiting on X` and stop, never inventing busywork, reruns or side work or marking done to silence pokes. Updates: production/main schema, selling readiness, Gmail/LinkedIn, merged PRs/open issues, deleted lines/size counts and pending approvals.
+Keep todos through production. Mark blockers `waiting on: <who or what>`; advance approved ready work or report the wait and stop. Updates: outcome/evidence, production/main/schema, selling/Gmail/LinkedIn, merged PRs/open issues, approvals. Size/deletion counts are diagnostic unless gated; report deltas for relevant cleanup/gate changes, not delivery scores.
