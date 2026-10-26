@@ -18,7 +18,7 @@ export async function voiceGenerationSelection(ctx:RepositoryContext):Promise<So
  return {mode:'linkedin_grounded',sourceRefs:[],factBlocks:[{id:fact.value.id,version:1}],voiceGuideRef:guide.value};
 }
 export async function queueVoiceGeneration(ctx:RepositoryContext){
- const selection=await voiceGenerationSelection(ctx),requested=await requestSocialDrafts(ctx,selection);if(!requested.ok)throw Error(requested.reason);
+ const selection=await voiceGenerationSelection(ctx),requested=await requestSocialDrafts(ctx,selection,async()=>true);if(!requested.ok)throw Error(requested.reason);
  return {selection,requestId:requested.value.requestId};
 }
 export function fakeVoicePort(hooks:{count?:(input:SocialDraftInput)=>Promise<void>;generate?:(input:SocialDraftInput)=>Promise<void>;unknown?:boolean}={}):SocialDraftPort{

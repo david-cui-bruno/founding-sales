@@ -14,15 +14,17 @@ import {updateResearchSettings} from '../../research/settings.ts';
 import {reserveAttempt,markCalling} from '../../research/reservations.ts';
 import {openHold} from '../../policy/holds.ts';
 import {queueVoiceGeneration,voiceEntries,fakeVoicePort,voiceOrigin,voiceText} from './voiceGenerationFixtures.ts';
+import {registerVoiceDatabase} from './voiceGenerationPgRuntime.ts';
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
+let stop:()=>Promise<void>;
 const ctx=(session=runtime,userId=seed.alpha.admin.userId,workspaceId=seed.alpha.workspaceId)=>repositoryContext(workspaceScope(workspaceId,{kind:'user',userId,role:'admin'}),session);
 const worker=(session=runtime)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'worker'}),session);
 const authority=async()=>true;
 const queued=()=>withTransaction(runtime,()=>queueVoiceGeneration(ctx()));
 const manual={operation:'create' as const,kind:'post' as const,text:'Independent owner-authored neutral private text.',origin:{kind:'manual' as const}};
-beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
+beforeAll(async()=>{db=await createTestDatabase();stop=await registerVoiceDatabase(db);seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
 beforeEach(async()=>{for(const table of ['social_private_drafts','social_draft_requests','social_voice_preferences','provider_reservations'])await runtime.query(`DELETE FROM ${table}`);await withTransaction(runtime,()=>updateResearchSettings(ctx(),{enabled:true,dailyCostCeilingCents:100,monthlyCostCeilingCents:1000}));});
-afterAll(async()=>db?.drop());
+afterAll(async()=>stop?.());
 async function adopted(){
  const q=await queued();await runSocialDraft(worker(),q.requestId,fakeVoicePort());
  const origin=await withTransaction(runtime,()=>voiceOrigin(ctx(),q.requestId));
@@ -128,7 +130,7 @@ it('existing budget disablement blocks a capable port before generation and pres
 it('exact adoption fingerprint including guide identity cannot be replaced by a stale selection hash',async()=>{
  const q=await queued();await runSocialDraft(worker(),q.requestId,fakeVoicePort());const origin=await withTransaction(runtime,()=>voiceOrigin(ctx(),q.requestId));
  expect(await withTransaction(runtime,()=>saveSocialPrivateDraft(ctx(),{...manual,origin:{...origin,selectionSHA256:'f'.repeat(64)}},authority))).toMatchObject({ok:false,reason:'suggestion_changed_or_expired'});
- expect(await withTransaction(runtime,()=>requestSocialDrafts(ctx(),{...q.selection,voiceGuideRef:{...q.selection.voiceGuideRef!,revision:2}}))).toMatchObject({ok:false});
+ expect(await withTransaction(runtime,()=>requestSocialDrafts(ctx(),{...q.selection,voiceGuideRef:{...q.selection.voiceGuideRef!,revision:2}},authority))).toMatchObject({ok:false});
 });
 it('content-only guide changes also alter the source fingerprint without silently renewing the selected revision',async()=>{
  const q=await queued(),before=await withTransaction(runtime,()=>readSocialDraftSources(ctx(),q.selection));if(!before.ok)throw Error(before.reason);

@@ -38,9 +38,26 @@ AFTER UPDATE OF revision,entries,removed_at,workspace_id,owner_user_id,id OR DEL
 ON social_voice_preferences FOR EACH ROW
 EXECUTE FUNCTION erase_changed_social_voice_generation();
 
--- Membership lifecycle already holds its parent row. Lock guide before dependent
--- request/private rows, matching reads/adoption. Existing0136 clears guide content
--- on departure; the guide DELETE trigger covers cascade ordering independently.
+-- Lock before ANY membership AFTER trigger (including0135's private erasure).
+-- Direct guide mutation already owns guide -> private, so membership must match.
+CREATE FUNCTION lock_departed_social_voice_generation() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' THEN
+  PERFORM id FROM social_voice_preferences
+   WHERE workspace_id=OLD.workspace_id AND owner_user_id=OLD.user_id ORDER BY id FOR UPDATE;
+  RETURN OLD;
+ ELSIF NEW.status IS DISTINCT FROM 'active' OR NEW.role IS DISTINCT FROM OLD.role THEN
+  PERFORM id FROM social_voice_preferences
+   WHERE workspace_id=OLD.workspace_id AND owner_user_id=OLD.user_id ORDER BY id FOR UPDATE;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER social_voice_generation_owner_lock
+BEFORE UPDATE OF status,role OR DELETE ON workspace_memberships
+FOR EACH ROW EXECUTE FUNCTION lock_departed_social_voice_generation();
+
+-- Existing0135/0136 retain their terminal reasons and owner-content erasure.
 CREATE FUNCTION erase_departed_social_voice_generation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE guide record;

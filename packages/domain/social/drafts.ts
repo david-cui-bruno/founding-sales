@@ -8,6 +8,7 @@ import {SOCIAL_DRAFT_MODEL,socialDraftPromptVersion,type SocialDraftConcept} fro
 import {readSocialDraftSources,readSocialDraftSourcesForWorker} from './draftSources.ts';
 import type {SocialResult} from './posts.ts';
 import {readPrivateVoiceGuide} from './voiceGeneration.ts';
+import {requirePrivateDraftAuthority,type PrivateDraftAuthority} from './privateDrafts.ts';
 export interface SocialDraftRow {
  [key:string]:unknown;
  id:string;owner_user_id:string;weekly_revision:number|null;source_selection:SocialDraftRequest;source_hash:string;
@@ -16,17 +17,23 @@ export interface SocialDraftRow {
  created_at:Date;deadline_at:Date;updated_at:Date;
 }
 /** Called within the command transaction; the request contains no transcript text. */
-export async function requestSocialDrafts(ctx:RepositoryContext,input:SocialDraftRequest):Promise<SocialResult<{requestId:string}>>{
+export async function requestSocialDrafts(ctx:RepositoryContext,input:SocialDraftRequest,authority?:PrivateDraftAuthority):Promise<SocialResult<{requestId:string}>>{
  if(ctx.scope.actor.kind!=='user')return {ok:false,reason:'user_required'};
+ if(input.voiceGuideRef&&!authority)return {ok:false,reason:'current_principal_required'};
+ const check=async()=>{if(input.voiceGuideRef&&authority)await requirePrivateDraftAuthority(authority);};
  const owner=ctx.scope.actor.userId;
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`social-drafts:${ctx.scope.workspaceId}:${owner}`]);
- const prepared=await readSocialDraftSources(ctx,input);if(!prepared.ok)return prepared;
+ const prepared=await readSocialDraftSources(ctx,input,authority);if(!prepared.ok)return prepared;
+ await check();
  const existing=(await ctx.db.query<{id:string}>("SELECT id FROM social_draft_requests WHERE workspace_id=$1 AND owner_user_id=$2 AND source_hash=$3 AND prompt_version=$4 AND state IN ('queued','calling')",[ctx.scope.workspaceId,owner,prepared.value.hash,socialDraftPromptVersion(input.mode)])).rows[0];
+ await check();
  if(existing)return {ok:true,value:{requestId:existing.id}};
  const count=(await ctx.db.query<{count:number}>("SELECT count(*)::integer AS count FROM social_draft_requests WHERE workspace_id=$1 AND owner_user_id=$2 AND state IN ('queued','calling')",[ctx.scope.workspaceId,owner])).rows[0]!.count;
  if(count>=3)return {ok:false,reason:'draft_requests_pending'};
+ await check();
  const row=(await ctx.db.query<{id:string}>(`INSERT INTO social_draft_requests(workspace_id,owner_user_id,source_selection,source_hash,prompt_version,model_name) VALUES($1,$2,$3::jsonb,$4,$5,$6) RETURNING id`,[ctx.scope.workspaceId,owner,JSON.stringify(input),prepared.value.hash,socialDraftPromptVersion(input.mode),SOCIAL_DRAFT_MODEL])).rows[0]!;
  await recordCrmAuditEvent(ctx,{action:'social.drafts_requested',subjectKind:'social_draft_request',subjectId:row.id,detail:{sourceCount:input.sourceRefs.length}});
+ await check();
  return {ok:true,value:{requestId:row.id}};
 }
 export async function readSocialDraftRequest(ctx:RepositoryContext,id:string):Promise<SocialDraftRow|null>{

@@ -91,7 +91,12 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
   if(!await standing())return null;
   if(!await socialWeeklyRequestAllowed(ctx,row.owner_user_id,row.weekly_revision)){await review('weekly_setting_changed');return null;}
   if(row.deadline_at.getTime()<=Date.parse(await wallclock())){await review('deadline_expired');return null;}
-  return current.value.input;
+  // Prelocking above preserves lifecycle order, not time-dependent eligibility.
+  // Budget/request/standing waits may cross the news source's local-day boundary.
+  const fresh=await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
+  if(!fresh.ok||fresh.value.hash!==row.source_hash||fresh.value.hash!==source.value.hash){await review('source_changed_or_unavailable');return null;}
+  if(row.deadline_at.getTime()<=Date.parse(await wallclock())){await review('deadline_expired');return null;}
+  return fresh.value.input;
  });
  if(!handoff){await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}}));return;}
  let outcome:{raw:string;costCents:number;costEstimated:boolean};

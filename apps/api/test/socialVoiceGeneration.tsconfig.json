@@ -1,1 +1,1 @@
-{"extends":"../tsconfig.json","include":["socialVoiceGeneration.test.ts"]}
+{"extends":"../tsconfig.json","include":["socialVoiceGeneration.test.ts","socialVoiceGeneration.config.ts"]}

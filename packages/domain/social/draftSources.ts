@@ -6,6 +6,7 @@ import {buildSocialDraftRequest,prepareSocialDraftInput,prepareGroundedSocialDra
 import type {SocialResult} from './posts.ts';
 import {lockSocialMeetingSource} from './draftMeetingLocks.ts';
 import {readPrivateVoiceGuide} from './voiceGeneration.ts';
+import type {PrivateDraftAuthority} from './privateDrafts.ts';
 interface Prepared{input:SocialDraftInput;provenance:SocialDraftProvenance[];hash:string}
 function textOf(utterances:unknown):string|null{
  if(!Array.isArray(utterances))return null;let text='';
@@ -14,22 +15,22 @@ function textOf(utterances:unknown):string|null{
 }
 /** Re-run before paid dispatch and result acceptance. No raw transcript text is
  * returned. Curated style is ephemeral input only, never a persisted snapshot. */
-export async function readSocialDraftSources(ctx:RepositoryContext,raw:SocialDraftRequest):Promise<SocialResult<Prepared>>{
+export async function readSocialDraftSources(ctx:RepositoryContext,raw:SocialDraftRequest,authority?:PrivateDraftAuthority):Promise<SocialResult<Prepared>>{
  if(ctx.scope.actor.kind!=='user')return {ok:false,reason:'user_required'};
- return readForOwner(ctx,ctx.scope.actor.userId,raw);
+ return readForOwner(ctx,ctx.scope.actor.userId,raw,authority);
 }
 /** Background identity remains system; owner comes from the durable request, not a renderer. */
 export async function readSocialDraftSourcesForWorker(ctx:RepositoryContext,ownerUserId:string,raw:SocialDraftRequest):Promise<SocialResult<Prepared>>{
  if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))return {ok:false,reason:'worker_required'};
  return readForOwner(ctx,ownerUserId,raw);
 }
-async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftRequest):Promise<SocialResult<Prepared>>{
+async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftRequest,authority?:PrivateDraftAuthority):Promise<SocialResult<Prepared>>{
  const parsed=socialDraftRequestSchema.safeParse(raw);if(!parsed.success)return {ok:false,reason:'invalid_input'};
  const input=parsed.data,workspace=ctx.scope.workspaceId;
  const active=(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' FOR SHARE",[workspace,user])).rows.length>0;
  if(!active)return {ok:false,reason:'owner_unavailable'};
  if(input.mode==='linkedin_grounded'){
-  const voice=await readPrivateVoiceGuide(ctx,user,input);if(!voice.ok)return voice;
+  const voice=await readPrivateVoiceGuide(ctx,user,input,authority);if(!voice.ok)return voice;
   if(!(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' AND role='admin'",[workspace,user])).rows.length)return {ok:false,reason:'owner_required'};
   if(input.sourceRefs.some(r=>r.kind!=='public')||!input.factBlocks.length)return {ok:false,reason:'sanitized_facts_required'};
   await ctx.db.query('SELECT b.id FROM outreach_answer_blocks b JOIN outreach_answer_block_versions v ON v.workspace_id=b.workspace_id AND v.block_id=b.id AND v.version=b.current_version WHERE b.workspace_id=$1 AND b.id=ANY($2::uuid[]) ORDER BY b.id FOR SHARE OF b,v',[workspace,input.factBlocks.map(b=>b.id)]);
