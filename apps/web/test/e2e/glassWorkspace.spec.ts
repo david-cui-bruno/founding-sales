@@ -6,6 +6,7 @@ import { acceptGlassCandidateContract } from '../support/glassWorkspaceContracts
 import { launchGlassContext } from '../support/glassWorkspaceBrowser.ts';
 import { assertGlassHistoryUnchanged, seedGlassIntroductions, type GlassIntroductions } from '../support/glassWorkspaceHistory.ts';
 import { editGlassPromisedEmail, saveGlassCanonicalWrap } from '../support/glassWorkspaceCalling.ts';
+import { acceptGlassTwoTabUnknown } from '../support/glassWorkspaceUnknown.ts';
 
 const test = base.extend({ context: async ({ browserName }, use) => {
   expect(browserName).toBe('chromium');
@@ -172,6 +173,10 @@ test('Social metadata stays body-free and one selected private editor saves/reop
 
 test('new Calling candidate contract persists exact IDs, excludes notes, and never mutates canonical state', async ({ page }) => {
   await acceptGlassCandidateContract(page, app(), seed);
+});
+
+test('real two-tab lost responses conserve exact UNKNOWN records and inactive auth clears both tabs', async ({ page, context }) => {
+  await acceptGlassTwoTabUnknown(page, context, app(), seed);
 });
 
 test('actual missing-source refusal and held real response cannot restore unmounted or signed-out Email', async ({ page, context }) => {

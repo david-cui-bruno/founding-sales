@@ -4,6 +4,7 @@ import { access, chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, type BrowserContext, type Page } from 'playwright/test';
 import { createOwnedTeardown } from '@fss/domain/db/testing/globalSetup.ts';
+import { CURRENT_CLIENT_VERSION } from '../../../api/test/support/authFixture.ts';
 import { reserveLocalBrowserDatabase } from './database.ts';
 import { startReplyBriefApp, type ReplyBriefApp } from './replyBriefApp.ts';
 import { containSyntheticBrowser, requireLocalDemo } from './syntheticBrowserApp.ts';
@@ -44,6 +45,7 @@ export async function startGlassWorkspace() {
     app = await startReplyBriefApp({ conversation: glassCase, requestDatabaseRole: 'app_runtime' });
     const owned = app;
     const httpsPort = Number(new URL(owned.origin).port), oidcPort = Number(new URL(owned.fixture.google.issuer).port);
+    console.log('GLASS783_REGISTERED_RUNTIME', JSON.stringify({ origin: owned.origin, oidcIssuer: owned.fixture.google.issuer, httpsPort, oidcPort, clientVersion: CURRENT_CLIENT_VERSION, supportedClientVersions: owned.fixture.deps.config.supportedClientVersions, database: owned.fixture.database.name, template: process.env['FSS_TEST_TEMPLATE_DATABASE'], postgresPid: owned.postgresPid, storagePath: owned.storagePath, tlsPath: owned.tlsPath, requestRole: 'app_runtime', sendingEnabled: false, homebrew1106 }));
     return { app: owned, stop: createOwnedTeardown([
       () => owned.stop(),
       async () => { await listenerAbsent(httpsPort, 'localhost'); await listenerAbsent(oidcPort, 'localhost'); },
@@ -52,6 +54,7 @@ export async function startGlassWorkspace() {
         await access(owned.storagePath).then(() => { throw Error('Owned PG storage remains'); }, error => { assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT'); });
         assert.throws(() => process.kill(owned.postgresPid, 0), { code: 'ESRCH' });
         assert.equal(execFileSync('ps', ['-p', '1106', '-o', 'command='], { encoding: 'utf8' }).trim(), homebrew1106, 'Homebrew1106 remains untouched');
+        console.log('GLASS783_RUNTIME_RELEASED', JSON.stringify({ postgresPid: owned.postgresPid, storagePath: owned.storagePath, httpsPort, oidcPort, homebrew1106Unchanged: true }));
       },
     ]) };
   } catch (error) {
