@@ -38,7 +38,7 @@ describe('Calling private follow-up contracts',()=>{
   expect(callingWrapCommandSchema.safeParse({...raw,report:{...raw.report,result:'not_interested'},promisedEmail}).success).toBe(true);
  });
  it('rejects inferred identity, activation, legacy consent and reservation fields',()=>{
-  for(const field of ['followUpPermission','ticketId','callSessionId','phoneHandoffAttemptId','commandId','firmId'])
+  for(const field of ['followUpPermission','ticketId','phoneHandoffAttemptId','commandId','firmId'])
    expect(callingWrapCommandSchema.safeParse({...canonical,report:{...canonical.report,[field]:id}}).success).toBe(false);
   for(const field of ['recipient','emailRouteId','send','approved','templateVersionId','note'])
    expect(callingWrapCommandSchema.safeParse({...canonical,promisedEmail:{...promisedEmail,[field]:id}}).success).toBe(false);

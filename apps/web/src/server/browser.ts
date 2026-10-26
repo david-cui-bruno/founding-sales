@@ -11,18 +11,11 @@ import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCo
 import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
+import { callingExecutionBrowserResult } from './callingExecutionBoundary.ts';
 import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
 import { PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS, prospectPhoneDiscoveryBrowserResult } from './prospectPhoneDiscoveryBoundary.ts';
+import { BROWSER_SECURITY_HEADERS as SECURITY_HEADERS } from './httpPolicy.ts';
 
-const SECURITY_HEADERS = Object.freeze({
-  'cache-control': 'private, no-store',
-  'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-  'x-content-type-options': 'nosniff',
-  'referrer-policy': 'no-referrer',
-  'cross-origin-resource-policy': 'same-origin',
-  'x-frame-options': 'DENY',
-  'permissions-policy': 'camera=(), microphone=(), geolocation=()',
-});
 class Refusal extends Error {
   constructor(readonly status: number) { super('browser_request_refused'); }
 }
@@ -204,6 +197,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (manual !== null) return response(manual.status, manual.body, cookies);
   const calling = callingBrowserResult(path, result.status, result.body);
   if (calling !== null) return response(calling.status, calling.body, cookies);
+  const execution = callingExecutionBrowserResult(path, result.status, result.body);
+  if (execution !== null) return response(execution.status, execution.body, cookies);
   const qualification = qualificationBrowserResult(path, result.status, result.body);
   if (qualification !== null) return response(qualification.status, qualification.body, cookies);
   const phoneDiscovery = prospectPhoneDiscoveryBrowserResult(path, result.status, result.body);

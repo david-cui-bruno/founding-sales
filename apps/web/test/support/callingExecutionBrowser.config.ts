@@ -1,0 +1,2 @@
+import {defineConfig} from 'playwright/test';
+export default defineConfig({testDir:'../e2e',testMatch:'callingExecution.spec.ts',workers:1,fullyParallel:false,retries:0,reporter:'list',timeout:120000,outputDir:process.env['FSS_GLASS_PRIVATE_ARTIFACTS']??'calling-execution-test-results',use:{browserName:'chromium',ignoreHTTPSErrors:true,actionTimeout:15000,screenshot:'off',video:'off',trace:'off'}});

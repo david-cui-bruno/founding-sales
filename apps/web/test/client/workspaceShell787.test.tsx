@@ -11,6 +11,7 @@ import { PRIVATE_DRAFT_PENDING_KEY } from '../../src/client/PrivateDraftCustody.
 import { VOICE_PENDING_KEY } from '../../src/client/VoicePreferenceCustody.ts';
 import { CALLING_PENDING_KEY } from '../../src/client/CallingPending.ts';
 import { CALLING_FOLLOW_UP_PENDING_KEY } from '../../src/client/CallingFollowUpPending.ts';
+import { CALLING_EXECUTION_KEY } from '../../src/client/CallingExecutionPending.ts';
 
 const id = '00000000-0000-4000-8000-000000000001';
 const other = '00000000-0000-4000-8000-000000000002';
@@ -197,6 +198,26 @@ describe('issue787 mounted real-client shell', () => {
     expect(localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY)).toBeNull(); expect(localStorage.getItem(VOICE_PENDING_KEY)).toBeNull();
     expect(sessionStorage.getItem(CAMPAIGN_PENDING_KEY)).toBeNull(); expect(sessionStorage.getItem(REPLY_PENDING_KEY)).toBeNull();
     expect(localStorage.getItem(CALLING_PENDING_KEY)).toBeNull(); expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+  });
+  it.each([401, 403, 409])('clears valid offscreen execution custody on %s without dispatch or replay', async code => {
+    const prior = Object.getOwnPropertyDescriptor(navigator, 'locks');
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: async (_name: string, _options: unknown, work: () => unknown) => work() } });
+    try {
+      const s = setup(); const view = render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
+      const current = s.client.current;
+      if (current?.status !== 'signed_in') throw Error('Expected current test session');
+      const bytes = JSON.stringify([{ identity: JSON.stringify([current.workspaceId, current.userId, current.deviceId, current.role, current.revision]), expiresAt: current.expiresAt, operation: 'create_session', commandId: other, payloadSHA256: 'a'.repeat(64), firmId: id, routeId: id, routeVersion: 1, callingIdentityId: id }]);
+      localStorage.setItem(CALLING_EXECUTION_KEY, bytes);
+      navigate('Social'); await screen.findByRole('heading', { name: 'Social' });
+      expect(localStorage.getItem(CALLING_EXECUTION_KEY)).toBe(bytes);
+      s.answer({}, code); navigate('Today');
+      await screen.findByRole('heading', { name: 'Sign in' });
+      await waitFor(() => expect(JSON.parse(localStorage.getItem(CALLING_EXECUTION_KEY) ?? '[]')).toEqual([]));
+      expect(s.send.mock.calls.some(([url]) => /\/calls\/|\/calling\/execution/u.test(String(url)))).toBe(false);
+      view.unmount();
+    } finally {
+      if (prior) Object.defineProperty(navigator, 'locks', prior); else Reflect.deleteProperty(navigator, 'locks');
+    }
   });
   it('ignores late Today after page navigation, then loads a fresh Today on return', async () => {
     const s = setup(); const held = s.delayToday(); render(<BrowserApp client={s.client} />); await screen.findByText('Loading Today…');

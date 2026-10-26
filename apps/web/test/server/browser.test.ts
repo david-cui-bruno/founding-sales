@@ -49,6 +49,55 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it('refuses unused call history including private notes before API dispatch', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-session': (session?.body as { revision: string }).revision };
+    for (const include of ['', 'notes', 'summary,outcome,notes']) {
+      const result = await handler(request('/browser/api/calls/history', { headers, query: new URLSearchParams({ firmId: id, include }) }));
+      expect(result?.status).toBe(404);
+    }
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
+  it('normalizes only closed Voice product refusals through the actual gateway', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const body = { status: 'refused', replayed: false, reason: 'telephony_budget_disabled' };
+    mocks.route.mockResolvedValueOnce({ status: 409, body });
+    expect(await handler(post('/browser/api/calls/session', { commandId: id }, headers))).toMatchObject({ status: 200, body });
+    for (const reason of ['command_payload_mismatch', 'command_device_mismatch', 'session_changed', 'unknown_reason']) {
+      mocks.route.mockResolvedValueOnce({ status: 409, body: { ...body, reason } });
+      expect(await handler(post('/browser/api/calls/session', { commandId: id }, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+    }
+    mocks.route.mockResolvedValueOnce({ status: 503, body: { error: 'integration_unconfigured' } });
+    expect(await handler(post('/browser/api/calls/access-token', {}, headers))).toMatchObject({ status: 200, body: { availability: 'unavailable', reason: 'integration_unconfigured' } });
+    mocks.route.mockResolvedValueOnce({ status: 503, body: { error: 'integration_unconfigured' } });
+    expect(await handler(post('/browser/api/calling/execution/receipt', { firmId: id, commandId: id, payloadSHA256: 'a'.repeat(64) }, headers))).toMatchObject({ status: 503, body: { error: 'browser_request_refused' } });
+  });
+  it('pins explicit Voice start and leaves receipt identity unchanged', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const start = { commandId: id, firmId: id, routeId: id, routeVersion: 1, callingIdentityId: id };
+    expect((await handler(post('/browser/api/calls/session', start, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[0]?.[3].body).toEqual({ ...start, clientVersion: '1.4.0' });
+    const receipt = { firmId: id, commandId: id, payloadSHA256: 'a'.repeat(64) };
+    expect((await handler(post('/browser/api/calling/execution/receipt', receipt, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[1]?.[3].body).toEqual(receipt);
+    expect((await handler(post('/browser/api/calls/session', { ...start, clientVersion: '9.9.9' }, headers)))?.status).toBe(400);
+    expect(mocks.route).toHaveBeenCalledTimes(2);
+  });
+  it('requires current Voice token CSRF and revision before any mint dispatch', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    expect((await handler(post('/browser/api/calls/access-token', {}, { ...headers, 'x-callie-csrf': '' })))?.status).toBe(403);
+    expect((await handler(post('/browser/api/calls/access-token', {}, { ...headers, 'x-callie-session': 'stale' })))?.status).toBe(409);
+    expect(mocks.route).not.toHaveBeenCalled();
+    mocks.route.mockResolvedValueOnce({ status: 200, body: { token: 'fictional-voice-grant', identity: id, expiresAt } });
+    const result = await handler(post('/browser/api/calls/access-token', {}, headers));
+    expect(result?.status).toBe(200);
+    expect(result?.headers['cache-control']).toBe('private, no-store');
+    expect(result?.headers['permissions-policy']).toBe('camera=(), microphone=(self), geolocation=()');
+    expect(mocks.route.mock.calls[0]?.[3].body).toEqual({});
+  });
   it.each(['request', 'admit'])('preserves typed qualification %s product refusals without changing command identity', async action => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const body = { status: 'refused', replayed: true, reason: 'research_held' };

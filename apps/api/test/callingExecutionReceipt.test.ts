@@ -1,0 +1,18 @@
+import {beforeEach,expect,it,vi} from 'vitest';
+import type {ApiRequest,RoutingOptions} from '../src/routes/types.ts';
+const f=vi.hoisted(()=>({prepared:vi.fn(),context:vi.fn(),retained:vi.fn(),current:vi.fn(),read:vi.fn(),query:vi.fn()}));
+vi.mock('../src/routes/dialSupport.ts',()=>({policyRouteDeps:f.prepared}));
+vi.mock('../src/routes/routeSupport.ts',()=>({contextForPrincipal:f.context}));
+vi.mock('../src/routes/retainedPrincipalAuthority.ts',()=>({retainedPrincipalAuthority:f.retained}));
+vi.mock('../src/routes/privateReadAuthority.ts',()=>({privatePrincipalIsCurrent:f.current}));
+vi.mock('@fss/domain/calls/executionReceipt.ts',()=>({readCallingExecutionReceipt:f.read}));
+import {routeCallingExecutionReceipt} from '../src/routes/callingExecutionReceipt.ts';
+import {CallingAuthorityChanged} from '@fss/domain/calling/followUpDraftAccess.ts';
+const id='00000000-0000-4000-8000-000000000001',body={firmId:id,commandId:id,payloadSHA256:'a'.repeat(64)};
+const request=(overrides:Partial<ApiRequest>={}):ApiRequest=>({method:'POST',path:'/calling/execution/receipt',headers:{},query:new URLSearchParams(),body,...overrides});
+const options={} as RoutingOptions;
+beforeEach(()=>{vi.clearAllMocks();f.prepared.mockResolvedValue({ok:true,deps:{auth:{db:{query:f.query}},principal:{deviceId:id}}});f.context.mockReturnValue({ok:true,context:{}});f.retained.mockReturnValue(async()=>true);f.current.mockResolvedValue(true);f.read.mockResolvedValue({state:'unknown'});f.query.mockResolvedValue({rows:[],rowCount:0});});
+it('closed POST validates exact IDs/hash and runs a read transaction with fresh authority',async()=>{expect(await routeCallingExecutionReceipt(request(),options)).toEqual({status:200,body:{state:'unknown'}});expect(f.read).toHaveBeenCalledWith({},body,id,expect.any(Function));expect(f.query.mock.calls.map(c=>c[0])).toEqual(['BEGIN','COMMIT']);expect(f.current).toHaveBeenCalledTimes(1);});
+it('wrong method/path/body cannot reach the domain',async()=>{expect(await routeCallingExecutionReceipt(request({path:'/calls/stop'}),options)).toBeNull();expect(await routeCallingExecutionReceipt(request({method:'GET'}),options)).toMatchObject({status:405});expect(await routeCallingExecutionReceipt(request({body:{...body,token:'forbidden'}}),options)).toMatchObject({status:400});expect(f.read).not.toHaveBeenCalled();});
+it('authentication denial and final principal changes remain auth refusals',async()=>{f.prepared.mockResolvedValueOnce({ok:false,result:{status:401,body:{error:'unauthenticated'}}});expect(await routeCallingExecutionReceipt(request(),options)).toMatchObject({status:401});f.current.mockResolvedValueOnce(false);expect(await routeCallingExecutionReceipt(request(),options)).toEqual({status:401,body:{error:'session_changed'}});});
+it('authority exception rolls back the read transaction without publishing historical status',async()=>{f.read.mockRejectedValueOnce(new CallingAuthorityChanged());expect(await routeCallingExecutionReceipt(request(),options)).toEqual({status:401,body:{error:'session_changed'}});expect(f.query.mock.calls.map(c=>c[0])).toEqual(['BEGIN','ROLLBACK']);});

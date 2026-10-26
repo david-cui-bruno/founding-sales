@@ -95,7 +95,7 @@ describe('thin host HTTP transport', () => {
     assets.clear();
     const result = await send(port);
     expect(result.body).toBe('public');
-    expect(result.headers).toMatchObject({ 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY', 'permissions-policy': 'camera=(), microphone=(), geolocation=()' });
+    expect(result.headers).toMatchObject({ 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY', 'permissions-policy': 'camera=(), microphone=(self), geolocation=()' });
     expect(result.headers['content-security-policy']).toContain("script-src 'self'");
     expect(result.headers['content-security-policy']).not.toMatch(/unsafe-inline|unsafe-eval/u);
     const head = await send(port, '/', 'HEAD');
