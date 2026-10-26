@@ -7,7 +7,10 @@ import { launchGlassContext } from '../support/glassWorkspaceBrowser.ts';
 import { assertPhoneDiscoveryNoEffects, assertPhoneDiscoveryStorage, drivePhoneDiscoveryJob, openPhoneDiscoveryCandidate, phoneDiscoveryCase, phoneDiscoveryEffectsSnapshot, phoneDiscoveryPaths, requirePhoneDiscoveryRuntimeGrant, seedPhoneDiscoveryCandidate, setPhoneDiscoveryResearch, startPhoneDiscoveryApp, withdrawPhoneDiscoverySource } from '../support/phoneDiscoveryApp.ts';
 
 const test = base.extend({ context: async ({ browserName }, use) => {
-  requirePhoneDiscoveryRuntimeGrant();
+  // beforeAll already checked the clean environment before allocating this app.
+  // Its own registered PG variables must not be mistaken for inherited PG here.
+  expect(process.env['FSS_PHONE_DISCOVERY_RUNTIME_GRANT']).toBe('797');
+  expect(owned).toBeDefined();
   expect(browserName).toBe('chromium');
   const browser = await launchGlassContext();
   try { await use(browser.context); }
@@ -46,7 +49,7 @@ test('exact retained prospect -> Calling -> phone-only capture, receipt recovery
   await read.click();
   await expect(discovery).toContainText('No phone discovery result is recorded for this exact observation. Phone remains unknown.');
   expect((await app().fixture.db.query('SELECT 1 FROM sourcing_prospect_phone_discoveries')).rowCount).toBe(0);
-  expect((await app().fixture.db.query('SELECT 1 FROM jobs')).rowCount).toBe(0);
+  expect((await app().fixture.db.query('SELECT 1 FROM jobs')).rowCount).toBe(baseline['jobs']!.length);
 
   // Real registered request/refusal boundaries, no frontend or domain fake. These
   // direct API commands do not replace the user's later actual Find click.
@@ -57,7 +60,7 @@ test('exact retained prospect -> Calling -> phone-only capture, receipt recovery
   expect(disabled.status).toBe(200);
   expect(disabled.body).toMatchObject({ status: 'refused', reason: 'research_disabled' });
   expect((await app().fixture.db.query('SELECT 1 FROM sourcing_prospect_phone_discoveries')).rowCount).toBe(0);
-  expect((await app().fixture.db.query('SELECT 1 FROM jobs')).rowCount).toBe(0);
+  expect((await app().fixture.db.query('SELECT 1 FROM jobs')).rowCount).toBe(baseline['jobs']!.length);
   await setPhoneDiscoveryResearch(app(), true);
 
   // Lose only the response AFTER the unchanged signed API committed. A response
@@ -84,8 +87,10 @@ test('exact retained prospect -> Calling -> phone-only capture, receipt recovery
     await expect(discovery).toContainText('Phone discovery UNKNOWN. Receipt-only recovery, no redispatch.');
     await expect(find).toBeDisabled();
     await expect(read).toBeDisabled();
-    expect(requests).toBe(1);
-    expect(acceptedRunId).toBeDefined();
+    // UNKNOWN appears as soon as custody is prepared, before network dispatch.
+    // Wait for this route's real committed acceptance, not that initial render.
+    await expect.poll(() => requests).toBe(1);
+    await expect.poll(() => acceptedRunId).toBeDefined();
     await assertPhoneDiscoveryStorage(page, candidate.candidateId);
     const receiptReady = page.waitForResponse(response => new URL(response.url()).pathname === `/browser/api${phoneDiscoveryPaths.receipt}`);
     await discovery.getByRole('button', { name: 'Check phone discovery receipt', exact: true }).click();

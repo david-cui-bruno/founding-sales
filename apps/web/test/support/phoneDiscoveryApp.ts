@@ -74,13 +74,14 @@ const unchangedTables = [
 export async function phoneDiscoveryEffectsSnapshot(app: GlassWorkspaceApp): Promise<Record<string, unknown[]>> {
   const snapshot: Record<string, unknown[]> = {};
   for (const table of unchangedTables) snapshot[table] = (await app.fixture.db.query(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows;
+  snapshot['jobs'] = (await app.fixture.db.query("SELECT to_jsonb(t) AS row FROM jobs t WHERE kind <> 'sourcing.phone_discover' ORDER BY to_jsonb(t)::text")).rows;
   return snapshot;
 }
 export async function assertPhoneDiscoveryNoEffects(app: GlassWorkspaceApp, before: Record<string, unknown[]>): Promise<void> {
   expect(await phoneDiscoveryEffectsSnapshot(app)).toEqual(before);
   expect(app.calls()).toBe(0);
   expect(app.runtimeRoleChecks()).toBeGreaterThan(0);
-  const jobs = (await app.fixture.db.query<{ kind: string; state: string; max_attempts: number }>('SELECT kind,state,max_attempts FROM jobs')).rows;
+  const jobs = (await app.fixture.db.query<{ kind: string; state: string; max_attempts: number }>("SELECT kind,state,max_attempts FROM jobs WHERE kind='sourcing.phone_discover'")).rows;
   expect(jobs).toEqual([{ kind: 'sourcing.phone_discover', state: 'done', max_attempts: 1 }]);
 }
 
