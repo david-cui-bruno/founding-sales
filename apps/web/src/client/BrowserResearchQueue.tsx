@@ -36,7 +36,7 @@ export function ResearchProof({ proof }: { proof: QualifiedResearchFirm }): JSX.
 }
 
 /** A current-proof queue and one explicit noncontact command, not a second command engine. */
-export function BrowserResearchQueue({ client, workspace = false, onOpenCalling }: { client: BrowserClient; workspace?: boolean; onOpenCalling?: (subject: CallingSubject) => void }): JSX.Element {
+export function BrowserResearchQueue({ client, onOpenCalling }: { client: BrowserClient; onOpenCalling?: (subject: CallingSubject) => void }): JSX.Element {
   const inFlight = useRef<{ epoch: number; token: symbol } | null>(null);
   const mounted = useRef(false);
   const selectionLease = useRef(0);
@@ -52,8 +52,8 @@ export function BrowserResearchQueue({ client, workspace = false, onOpenCalling 
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   useEffect(() => {
-    if (workspace && (proof !== null || automaticProof !== null)) detail.current?.querySelector<HTMLElement>('h3')?.focus();
-  }, [workspace, proof, automaticProof]);
+    if (proof !== null || automaticProof !== null) detail.current?.querySelector<HTMLElement>('h3')?.focus();
+  }, [proof, automaticProof]);
   useEffect(() => {
     mounted.current = true;
     selectionLease.current++;
@@ -151,7 +151,7 @@ export function BrowserResearchQueue({ client, workspace = false, onOpenCalling 
     setProof(answer.research);
   };
   const prepared = actions?.filter(action => action.target.kind === 'qualified_research' || action.target.kind === 'automatic_research');
-  const hasDetail = workspace && (proof !== null || automaticProof !== null);
+  const hasDetail = proof !== null || automaticProof !== null;
   const lease = selectionLease.current, selectionEpoch = client.epoch;
   const openedProof = automaticProof ?? proof;
   const openCalling = (): void => {
@@ -172,23 +172,21 @@ export function BrowserResearchQueue({ client, workspace = false, onOpenCalling 
     {pending !== null ? <div><p>{pending.createdFirmId === undefined ? 'Unresolved research request' : 'Confirmed research request'} {pending.commandId}. Candidate {pending.selection.candidateId}, revision {pending.selection.candidateRevision}.</p>
       {pending.createdFirmId === undefined ? <Button disabled={busy} onClick={() => { void run(epoch => create(epoch)); }}>Retry exact research command</Button> : <div><p>Created Firm {pending.createdFirmId}. Review its current Today action. No new command was generated.</p><Button disabled={busy} onClick={() => { void run(readConfirmed); }}>Read current research Firm</Button></div>}</div> : null}
   </section>;
-  return <div className={workspace ? 'prospects-research' : 'space-y-4'}>
+  return <div className="prospects-research">
     {hasDetail ? <div ref={detail} className="prospects-detail"><button onClick={() => { selectionLease.current++; setProof(null); setAutomaticProof(null); requestAnimationFrame(() => list.current?.focus()); }}>← Back to prepared research</button>
       {automaticProof !== null ? <AutomaticResearchProof proof={automaticProof} /> : null}{proof !== null ? <ResearchProof proof={proof} /> : null}
       {callingAction}
-    </div> : <><section aria-label={workspace ? 'Prepared source-backed supply' : 'Action queue'} className="prospects-supply" ref={list} tabIndex={-1}>
-    <div className="prospects-supply-heading"><div><h3>{workspace ? 'Prepared research' : 'Action queue'}</h3>
-    {workspace ? <p>{prepared === undefined ? 'Current supply has not been read.' : `${prepared.length} source-backed research items in this read`} · Not a callable count.</p> : null}</div>
+    </div> : <><section aria-label="Prepared source-backed supply" className="prospects-supply" ref={list} tabIndex={-1}>
+    <div className="prospects-supply-heading"><div><h3>Prepared research</h3>
+    <p>{prepared === undefined ? 'Current supply has not been read.' : `${prepared.length} source-backed research items in this read`} · Not a callable count.</p></div>
     <Button disabled={busy} onClick={() => { void run(loadQueue); }}>Refresh action queue</Button>
     </div>
-    {(workspace ? prepared?.length : actions?.length) === 0 ? <p>{workspace ? 'No prepared research returned. Retained review and source inventory are separate.' : 'No current actions.'}</p> : null}
-    {(workspace ? prepared : actions)?.map(action => <article key={action.actionId} className="prospects-supply-row"><div><h4>{action.subject}</h4>
-      {action.target.kind === 'qualified_research' || action.target.kind === 'automatic_research' ? <p>{action.target.kind === 'automatic_research' ? 'Automatic source-backed publication' : 'Qualified retained research'} · Open for exact source context.</p> : null}</div>
-      {action.target.kind === 'qualified_research' || action.target.kind === 'automatic_research' ? <Button disabled={busy} onClick={() => { void run(epoch => open(epoch, action)); }}>Review current research</Button>
-        : <p>This action is unsupported in this browser. Use the existing supported client. No action was performed.</p>}</article>)}
-    {workspace ? <p className="prospects-authority">Prepared context, not contact permission. Maintenance need and phone ownership are not established.</p> : null}
+    {prepared?.length === 0 ? <p>No prepared research returned. Retained review and source inventory are separate.</p> : null}
+    {prepared?.map(action => <article key={action.actionId} className="prospects-supply-row"><div><h4>{action.subject}</h4>
+      <p>{action.target.kind === 'automatic_research' ? 'Automatic source-backed publication' : 'Qualified retained research'} · Open for exact source context.</p></div>
+      <Button disabled={busy} onClick={() => { void run(epoch => open(epoch, action)); }}>Review current research</Button></article>)}
+    <p className="prospects-authority">Prepared context, not contact permission. Maintenance need and phone ownership are not established.</p>
   </section>
-  {workspace ? <details className="prospects-secondary" open={pending !== null || undefined}><summary>Qualified selection and existing research requests</summary>{candidatesView}</details> : candidatesView}
-  {!workspace && automaticProof !== null ? <AutomaticResearchProof proof={automaticProof} /> : null}{!workspace && proof !== null ? <ResearchProof proof={proof} /> : null}{!workspace ? callingAction : null}</>}
-  {busy && workspace ? <p role="status">Reading current research or resolving the exact request.</p> : null}{notice ? <p role="status">{notice}</p> : null}</div>;
+  <details className="prospects-secondary" open={pending !== null || undefined}><summary>Qualified selection and existing research requests</summary>{candidatesView}</details></>}
+  {busy ? <p role="status">Reading current research or resolving the exact request.</p> : null}{notice ? <p role="status">{notice}</p> : null}</div>;
 }

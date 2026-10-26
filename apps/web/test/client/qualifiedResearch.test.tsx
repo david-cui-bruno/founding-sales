@@ -53,6 +53,8 @@ function setup() {
 }
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 async function createFromList(): Promise<void> {
+  const disclosure = screen.getByText('Qualified selection and existing research requests').closest('details')!;
+  if (!disclosure.open) fireEvent.click(within(disclosure).getByText('Qualified selection and existing research requests'));
   const load = await screen.findByRole('button', { name: 'Load research candidates' });
   await waitFor(() => { expect(load.hasAttribute('disabled')).toBe(false); });
   fireEvent.click(load);
