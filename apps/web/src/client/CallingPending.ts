@@ -8,38 +8,61 @@ export const callingPendingSchema=z.strictObject({identity:z.string().min(1).max
  :p.subject===undefined&&p.attemptId===undefined&&p.draftId!==undefined&&p.expectedRevision!==undefined&&p.target===`draft:${p.draftId}`,'Exact Calling custody required');
 export type CallingPending=z.infer<typeof callingPendingSchema>;
 export type CallingStorage=Pick<Storage,'getItem'|'setItem'|'removeItem'>;
-const records=z.array(callingPendingSchema).max(100).refine(values=>new Set(values.map(v=>v.target)).size===values.length&&new Set(values.map(v=>v.commandId)).size===values.length,'Duplicate Calling custody');
+const records=z.array(callingPendingSchema).max(100).refine(values=>new Set(values.map(v=>JSON.stringify([v.identity,v.target]))).size===values.length&&new Set(values.map(v=>v.commandId)).size===values.length,'Duplicate Calling custody');
 export function callingTarget(subject:CallingSubject):string{return subject.kind==='candidate'?`candidate:${subject.candidateId}:${subject.expectedCandidateRevision}`:`firm:${subject.firmId}`;}
-/** Cross-tab IDs/hash custody only. All mutations occur inside an exact-target WebLock. */
+const storageLock='callie.calling-records';
+/** Cross-tab IDs/hash custody. Target locks own dispatch, short storage locks own mutations. */
 export class CallingCustody{
  constructor(readonly client:BrowserClient,private readonly storage:CallingStorage=globalThis.localStorage){}
  binding():{identity:string;expiresAt:string}|null{const s=this.client.current;return s?.status==='signed_in'&&this.client.isCurrent(this.client.epoch)?{identity:JSON.stringify([s.workspaceId,s.userId,s.deviceId,s.role,s.revision]),expiresAt:s.expiresAt}:null;}
+ private stored():CallingPending[]{
+  const bytes=this.storage.getItem(CALLING_PENDING_KEY);if(bytes===null)return [];if(bytes.length>131072)throw Error('Calling custody exceeds finite bound');
+  return records.parse(JSON.parse(bytes));
+ }
  all():CallingPending[]{
   const binding=this.binding();if(!binding)return [];
-  const bytes=this.storage.getItem(CALLING_PENDING_KEY);if(bytes===null)return [];if(bytes.length>131072)throw Error('Calling custody exceeds finite bound');
-  const parsed=records.parse(JSON.parse(bytes)),current=parsed.filter(p=>p.identity===binding.identity&&Date.parse(p.expiresAt)>Date.now()&&Date.parse(p.expiresAt)<=Date.parse(binding.expiresAt));
-  if(current.length!==parsed.length)this.write(current);return current;
+  // Reads never rewrite the shared array. Another tab may have a longer current lease.
+  return this.stored().filter(p=>p.identity===binding.identity&&Date.parse(p.expiresAt)>Date.now());
  }
  read(target:string):CallingPending|null{return this.all().find(p=>p.target===target)??null;}
  private write(value:CallingPending[]):void{const bytes=JSON.stringify(records.parse(value));if(bytes.length>131072)throw Error('Calling custody exceeds finite bound');this.storage.setItem(CALLING_PENDING_KEY,bytes);if(this.storage.getItem(CALLING_PENDING_KEY)!==bytes)throw Error('Calling custody storage unavailable');}
- async exclusive<T>(target:string,work:()=>Promise<T>):Promise<T>{const binding=this.binding();if(!binding||!globalThis.navigator?.locks)throw Error('Calling custody unavailable');return navigator.locks.request(`callie.calling:${binding.identity}:${target}`,{mode:'exclusive'},work);}
+ async exclusive<T>(target:string,work:()=>Promise<T>):Promise<T>{const binding=this.binding(),epoch=this.client.epoch;if(!binding||!globalThis.navigator?.locks)throw Error('Calling custody unavailable');return navigator.locks.request(`callie.calling:${binding.identity}:${target}`,{mode:'exclusive'},()=>{if(!this.client.isCurrent(epoch)||this.binding()?.identity!==binding.identity)throw Error('Calling authority changed');return work();});}
+ private async mutate<T>(current:()=>boolean,work:()=>T):Promise<T>{
+  const binding=this.binding(),epoch=this.client.epoch;if(!binding||!current()||!globalThis.navigator?.locks)throw Error('Calling custody unavailable');
+  return navigator.locks.request(storageLock,{mode:'exclusive'},()=>{
+   if(!current()||!this.client.isCurrent(epoch)||this.binding()?.identity!==binding.identity)throw Error('Calling authority changed');
+   return work();
+  });
+ }
  async prepare(operation:'wrap'|'save',payload:CallingWrapInput|CallingFollowUpSaveInput,current:()=>boolean):Promise<CallingPending>{
-  const binding=this.binding();if(!binding||!current())throw Error('Calling authority changed');
+  const binding=this.binding(),epoch=this.client.epoch;if(!binding||!current())throw Error('Calling authority changed');
   const wrap=operation==='wrap'?payload as CallingWrapInput:null,save=operation==='save'?payload as CallingFollowUpSaveInput:null;
   const subject:CallingSubject|undefined=wrap?(wrap.kind==='candidate'?{kind:'candidate',candidateId:wrap.candidateId,expectedCandidateRevision:wrap.expectedCandidateRevision}:{kind:'firm',firmId:wrap.firmId,...(wrap.itemId?{itemId:wrap.itemId}:{}),...(wrap.opportunityId?{opportunityId:wrap.opportunityId}:{})}):undefined;
   const target=subject?callingTarget(subject):`draft:${save!.draftId}`;
   if(this.read(target))throw Error('Reconcile pending Calling command');
   const payloadSHA256=await privateDraftSHA256(privateDraftCanonicalJson(payload));
-  if(!current()||this.binding()?.identity!==binding.identity||this.read(target))throw Error('Calling authority changed');
-  const held=callingPendingSchema.parse({...binding,commandId:crypto.randomUUID(),payloadSHA256,target,operation,...(subject?{subject}:{}),...(wrap?.kind==='candidate'?{attemptId:wrap.attemptId}:{}),...(wrap?.promisedEmail?{draftId:wrap.promisedEmail.draftId}:{}),...(save?{draftId:save.draftId,expectedRevision:save.expectedRevision}:{})});
-  this.write([...this.all(),held]);return held;
+  return this.mutate(current,()=>{
+   if(!this.client.isCurrent(epoch)||this.binding()?.identity!==binding.identity||this.read(target))throw Error('Calling authority changed');
+   const held=callingPendingSchema.parse({...binding,commandId:crypto.randomUUID(),payloadSHA256,target,operation,...(subject?{subject}:{}),...(wrap?.kind==='candidate'?{attemptId:wrap.attemptId}:{}),...(wrap?.promisedEmail?{draftId:wrap.promisedEmail.draftId}:{}),...(save?{draftId:save.draftId,expectedRevision:save.expectedRevision}:{})});
+   this.write([...this.stored().filter(p=>Date.parse(p.expiresAt)>Date.now()),held]);return held;
+  });
  }
  assert(held:CallingPending):void{if(JSON.stringify(this.read(held.target))!==JSON.stringify(held))throw Error('Calling custody changed');}
- complete(held:CallingPending):void{this.assert(held);this.write(this.all().filter(p=>p.commandId!==held.commandId));}
- clear():void{try{this.storage.removeItem(CALLING_PENDING_KEY);}catch{/* Invalid authority cannot consume stored custody. */}}
+ async complete(held:CallingPending,current:()=>boolean):Promise<void>{await this.mutate(current,()=>{this.assert(held);this.write(this.stored().filter(p=>p.commandId!==held.commandId&&Date.parse(p.expiresAt)>Date.now()));});}
+ async clear(identity:string|null):Promise<void>{
+  // Authentication invalidates consumption synchronously. Physical removal joins the
+  // same storage order, without erasing a later identity's newly prepared command.
+  try{if(!globalThis.navigator?.locks)return;await navigator.locks.request(storageLock,{mode:'exclusive'},()=>{
+   if(identity===null){if(this.binding()===null)this.storage.removeItem(CALLING_PENDING_KEY);return;}
+   const bytes=this.storage.getItem(CALLING_PENDING_KEY);if(bytes===null)return;
+   if(bytes.length>131072)throw Error('Calling custody exceeds finite bound');
+   const retained=records.parse(JSON.parse(bytes)).filter(p=>p.identity!==identity);
+   if(retained.length)this.write(retained);else this.storage.removeItem(CALLING_PENDING_KEY);
+  });}catch{/* Invalid authority cannot consume stored custody. */}
+ }
 }
 /** App lifetime observer, not screen lifetime. Unmount must never discard uncertainty. */
 export function installCallingCustody(client:BrowserClient,storage:CallingStorage=globalThis.localStorage):()=>void{
  const custody=new CallingCustody(client,storage);let identity=custody.binding()?.identity??null;
- return client.subscribe(()=>{const next=custody.binding()?.identity??null;if(next===null||(identity!==null&&identity!==next))custody.clear();identity=next;});
+ return client.subscribe(()=>{const next=custody.binding()?.identity??null;if(next===null||(identity!==null&&identity!==next))void custody.clear(identity);identity=next;});
 }

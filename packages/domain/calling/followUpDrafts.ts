@@ -37,6 +37,8 @@ export async function readCallingDraft(ctx:RepositoryContext,raw:z.infer<typeof 
  const input=callingFollowUpReadInputSchema.parse(raw),before=await findCallingDraft(ctx,input.draftId);
  if(!before){await requireCallingAuthority(ctx,authority);return null;}
  if(before.reason===null)await lockCallingSource(ctx,callingDraftSource(before));
+ // Membership departure holds membership before its erasure trigger locks drafts.
+ await requireCallingAuthority(ctx,authority);
  const row=await findCallingDraft(ctx,input.draftId,true);
  await requireCallingAuthority(ctx,authority);
  if(!row)return null;
@@ -65,6 +67,7 @@ export async function saveCallingDraft(ctx:RepositoryContext,raw:CallingFollowUp
  if(!before){await requireCallingAuthority(ctx,authority);return {ok:false as const,reason:'draft_unavailable'};}
  if(before.reason!==null)return {ok:false as const,reason:'draft_unavailable'};
  const source=callingDraftSource(before);await lockCallingSource(ctx,source);
+ await requireCallingAuthority(ctx,authority);
  const row=await findCallingDraft(ctx,input.draftId,true);await currentCallingSource(ctx,source,authority);
  if(!row||row.reason!==null)return {ok:false as const,reason:'draft_unavailable'};
  if(row.revision!==input.expectedRevision)return {ok:false as const,reason:'stale_revision'};

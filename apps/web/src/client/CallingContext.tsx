@@ -9,7 +9,15 @@ export function callingWebsiteIdentitySupported(website:string|null,identityUrls
 /** Current source-backed compact brief. The link is deliberate, never fetched or embedded. */
 export function CallingContext({client,entry,onReady}:{client:BrowserClient;entry:CallingQueueEntry;onReady:(data:CallingContextData|null)=>void}):JSX.Element{
  const [data,setData]=useState<CallingContextData|null>(null),[notice,setNotice]=useState('Loading current brief…');
- useEffect(()=>{let mounted=true;const epoch=client.epoch,current=():boolean=>mounted&&client.isCurrent(epoch)&&client.current?.status==='signed_in';setData(null);onReady(null);setNotice('Loading current brief…');
+ useEffect(()=>{let mounted=true,timer:ReturnType<typeof setTimeout>|undefined,loadedData:CallingContextData|null=null;const epoch=client.epoch,current=():boolean=>mounted&&client.isCurrent(epoch)&&client.current?.status==='signed_in';setData(null);onReady(null);setNotice('Loading current brief…');
+  const project=():void=>{
+   clearTimeout(timer);if(!current()||!loadedData)return;
+   if(loadedData.proof){const remaining=Date.parse(loadedData.proof.validUntil)-Date.now();
+    if(remaining<=0){const {proof:_expired,...recorded}=loadedData;loadedData=recorded;}
+    else timer=setTimeout(project,Math.min(remaining,2_147_483_647));
+   }
+   setData(loadedData);onReady(loadedData);setNotice('');
+  };
   const read=async():Promise<void>=>{try{let loaded:CallingContextData;
    if(entry.subject.kind==='candidate'){
     // Queue rows came from the current retained projection. Exact incoming links
@@ -22,13 +30,13 @@ export function CallingContext({client,entry,onReady}:{client:BrowserClient;entr
     const firm=await client.request('/crm/firm-page-v3',pluralFirmPageResponseSchema,{firmId:entry.subject.firmId,pageVersion:2,include:['stops','tasks','timeline','meeting_tasks']},()=>{if(!current())throw Error('Brief changed');});
     if(!current())return;if(firm.read.firm.id!==entry.subject.firmId||firm.read.visibility!=='assigned_or_admin'||firm.read.firm.status!=='active')throw Error('Firm access changed');
     loaded={entry,firm};
-    if(entry.action){const answer=await client.request('/today/actions/open/v4',todayActionOpenV4ResponseSchema,{actionId:entry.action.actionId,target:entry.action.target},()=>{if(!current())throw Error('Brief changed');});const proof=answer.research??answer.automaticResearch;const id=proof&&('firmId' in proof?proof.firmId:proof.target.firmId);if(!proof||id!==entry.subject.firmId||Date.parse(proof.validUntil)<=Date.now())throw Error('Prepared source changed');loaded={...loaded,proof};}
+    if(entry.action){const answer=await client.request('/today/actions/open/v4',todayActionOpenV4ResponseSchema,{actionId:entry.action.actionId,target:entry.action.target},()=>{if(!current())throw Error('Brief changed');});const proof=answer.research??answer.automaticResearch;const id=proof&&('firmId' in proof?proof.firmId:proof.target.firmId);if(!proof||id!==entry.subject.firmId)throw Error('Prepared source changed');if(Date.parse(proof.validUntil)>Date.now())loaded={...loaded,proof};}
    }
-   if(current()){setData(loaded);onReady(loaded);setNotice('');}
+   if(current()){loadedData=loaded;project();}
   }catch{if(current()){setData(null);onReady(null);setNotice('Current brief unavailable or source changed. Select a current list row or refresh. No call has been started.');}}};void read();
-  const unsub=client.subscribe(()=>{if(!current()){setData(null);onReady(null);setNotice('Current session required.');}});return()=>{mounted=false;unsub();};
+  const unsub=client.subscribe(()=>{if(!current()){loadedData=null;clearTimeout(timer);setData(null);onReady(null);setNotice('Current session required.');}else project();});return()=>{mounted=false;clearTimeout(timer);loadedData=null;unsub();};
  },[client,entry,onReady]);
- const p=data?.prospect,f=data?.firm?.read.firm,proof=data?.proof,name=p?manualProspectLabel(p):f?.name??entry.label;
+ const p=data?.prospect,f=data?.firm?.read.firm,proof=data?.proof&&Date.parse(data.proof.validUntil)>Date.now()?data.proof:undefined,name=p?manualProspectLabel(p):f?.name??entry.label;
  const site=callingSafeWebsite(proof?.website??p?.website??f?.website??null);
  const identitySite=!!proof&&callingWebsiteIdentitySupported(site,proof.citations.filter(c=>c.kind==='firm_identity').map(c=>c.url));
  return <section className="calling-brief workspace-glass" aria-label="Current calling brief">{notice?<p role="status">{notice}</p>:null}<p className="workspace-eyebrow">{entry.subject.kind==='candidate'?'Retained observation · unverified':'Explicit canonical Firm'}</p><h2>{name}</h2><p>{p?[p.locality,p.region].filter(Boolean).join(', ')||'Location unknown':f?[f.locality,f.regionCode].filter(Boolean).join(', ')||'Location unknown':'Current location unavailable'}</p>{p?<p>{manualPhoneLabel(p)}</p>:data?.firm?.read.visibility==='assigned_or_admin'?<><p>{data.firm.read.firm.phoneRoutes.length?data.firm.read.firm.phoneRoutes.map(r=>`${r.value} · ${r.eligibility}`).join(' / '):'Phone unknown · no current recorded route'}</p><p>{data.firm.read.firm.contacts.filter(c=>c.status==='active').map(c=>[c.fullName,c.title].filter(Boolean).join(' · ')).join(' / ')||'Person unknown'}</p></>:null}

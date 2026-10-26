@@ -26,9 +26,9 @@ export async function dispatchCallingWrap(custody:CallingCustody,raw:CallingWrap
   try{
    const answer=await custody.client.request('/calling/wrap',wrapAnswer,{...payload,commandId:held.commandId},()=>{if(!current())throw Error('Calling view changed');custody.assert(held);});
    if(!current())return {state:'unknown'};
-   if('status' in answer&&answer.status==='accepted'){assertAcceptance(held,{state:'accepted',acceptance:{operation:'wrap',result:answer.result}});custody.complete(held);return {state:'accepted',result:answer.result};}
+   if('status' in answer&&answer.status==='accepted'){assertAcceptance(held,{state:'accepted',acceptance:{operation:'wrap',result:answer.result}});await custody.complete(held,current);return {state:'accepted',result:answer.result};}
    // Only a command receipt refusal proves that this UUID cannot have committed.
-   if('status' in answer){custody.complete(held);return {state:'refused',reason:answer.reason};}
+   if('status' in answer){await custody.complete(held,current);return {state:'refused',reason:answer.reason};}
    return {state:'unknown'};
   }catch{return {state:'unknown'};}
  });
@@ -41,8 +41,8 @@ export async function dispatchCallingSave(custody:CallingCustody,raw:CallingFoll
   try{
    const answer=await custody.client.request('/calling/follow-ups/save',saveAnswer,{...payload,commandId:held.commandId},()=>{if(!current())throw Error('Calling view changed');custody.assert(held);});
    if(!current())return {state:'unknown'};
-   if('status' in answer&&answer.status==='accepted'){assertAcceptance(held,{state:'accepted',acceptance:{operation:'save',result:answer.result}});custody.complete(held);return {state:'accepted',result:answer.result};}
-   if('status' in answer){custody.complete(held);return {state:'refused',reason:answer.reason};}
+   if('status' in answer&&answer.status==='accepted'){assertAcceptance(held,{state:'accepted',acceptance:{operation:'save',result:answer.result}});await custody.complete(held,current);return {state:'accepted',result:answer.result};}
+   if('status' in answer){await custody.complete(held,current);return {state:'refused',reason:answer.reason};}
    return {state:'unknown'};
   }catch{return {state:'unknown'};}
  });
@@ -53,7 +53,7 @@ export async function reconcileCalling(custody:CallingCustody,held:CallingPendin
   custody.assert(held);
   const receipt=await custody.client.request('/calling/follow-ups/receipt',callingReceiptSchema,{operation:held.operation,commandId:held.commandId,payloadSHA256:held.payloadSHA256},()=>{if(!current())throw Error('Calling view changed');custody.assert(held);});
   if(!current())throw Error('Calling view changed');assertAcceptance(held,receipt);
-  if(receipt.state!=='unknown')custody.complete(held);
+  if(receipt.state!=='unknown')await custody.complete(held,current);
   return receipt;
  });
 }
