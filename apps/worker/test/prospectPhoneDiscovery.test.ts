@@ -30,7 +30,7 @@ it('does not swallow an unknown dispatch outcome or initiate an adapter retry',a
  expect(mocks.run).toHaveBeenCalledTimes(1);expect(pageFetch.fetchPages).not.toHaveBeenCalled();
 });
 it('expires only due workspace runs through the existing domain owner and never returns capture jobs',async()=>{
- const other='20000000-0000-4000-8000-000000000002',now=new Date('2026-10-26T06:05:00Z');
+ const other='20000000-0000-4000-8000-000000000002',now='2026-10-26T06:05:00Z';
  const query=vi.fn(async()=>({rows:[{workspace_id:other},{workspace_id:id}],rowCount:2}));
  const schedulerSession:SessionQueryable={query:async<Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[])=>{
   expect(sql).toContain('sourcing_prospect_phone_discoveries');expect(sql).toContain("state IN ('pending','running')");
@@ -48,9 +48,9 @@ it('expires only due workspace runs through the existing domain owner and never 
 });
 it('does no work for an empty due-workspace batch and propagates expiry failure without capture fallback',async()=>{
  const empty:SessionQueryable={query:async()=>({rows:[],rowCount:0})};
- expect(await prospectPhoneDiscoverySource().find(empty,new Date())).toEqual([]);expect(mocks.expire).not.toHaveBeenCalled();
+ expect(await prospectPhoneDiscoverySource().find(empty,'2026-10-26T06:05:00Z')).toEqual([]);expect(mocks.expire).not.toHaveBeenCalled();
  const due:SessionQueryable={query:async<Row extends QueryResultRowLike>()=>({rows:[{workspace_id:id}] as unknown as Row[],rowCount:1})};
  const error=Error('controlled expiry failure');mocks.expire.mockRejectedValueOnce(error);
- await expect(prospectPhoneDiscoverySource().find(due,new Date())).rejects.toBe(error);
+ await expect(prospectPhoneDiscoverySource().find(due,'2026-10-26T06:05:00Z')).rejects.toBe(error);
  expect(mocks.run).not.toHaveBeenCalled();expect(pageFetch.fetchPages).not.toHaveBeenCalled();
 });

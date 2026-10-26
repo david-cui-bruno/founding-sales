@@ -1,20 +1,43 @@
 import {
  PROSPECT_PHONE_DISCOVERY_PATHS,prospectPhoneDiscoveryCommandSchema,prospectPhoneDiscoveryInputSchema,
  prospectPhoneDiscoveryQueuedSchema,prospectPhoneDiscoveryReceiptInputSchema,prospectPhoneDiscoveryReceiptSchema,
- prospectPhoneDiscoveryViewSchema,
+ prospectPhoneDiscoveryViewSchema,prospectPhoneDiscoveryReasonSchema,
 } from '@fss/contracts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
-import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery} from '@fss/domain/sourcing/prospectPhoneDiscovery.ts';
-import {contextForPrincipal,runRouteCommand,type RouteDeps} from './routeSupport.ts';
+import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery,currentProspectPhoneDiscoveryAuthority,ProspectPhoneDiscoveryAuthorityChanged,ProspectPhoneDiscoveryUnavailable} from '@fss/domain/sourcing/prospectPhoneDiscovery.ts';
+import type {RepositoryContext} from '@fss/domain/db/workspaceScope.ts';
+import {contextForPrincipal,runRouteCommand,commandReply,type RouteDeps} from './routeSupport.ts';
 import {retainedPrincipalAuthority} from './retainedPrincipalAuthority.ts';
 import {privatePrincipalIsCurrent,privateAuthorityRefusal} from './privateReadAuthority.ts';
-import type {RouteResult} from './types.ts';
+import {policyRouteDeps} from './dialSupport.ts';
+import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
 
 export const PROSPECT_PHONE_DISCOVERY_COMMAND_KIND='sourcing.phone_discover' as const;
 
+/** Public Router contract used directly by moduleOf, with normal authentication. */
+export async function routeProspectPhoneDiscovery(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
+ if(!(PROSPECT_PHONE_DISCOVERY_PATHS as readonly string[]).includes(request.path))return null;
+ const prepared=await policyRouteDeps(request,options);if(!prepared.ok)return prepared.result;
+ return routeProspectPhoneDiscoveryForPrincipal(prepared.deps);
+}
+
+/** Principal-scoped composition seam for controlled adapter tests. */
+export async function routeProspectPhoneDiscoveryForPrincipal(deps:RouteDeps):Promise<RouteResult> {
+ try{return await routePhoneDiscoveryWithAuthority(deps);}
+ catch(error){
+  if(error instanceof ProspectPhoneDiscoveryAuthorityChanged)return privateAuthorityRefusal();
+  if(error instanceof ProspectPhoneDiscoveryUnavailable){
+   const reason=prospectPhoneDiscoveryReasonSchema.safeParse(error.reason);
+   if(!reason.success)return {status:409,body:{error:'discovery_unavailable'}};
+   return reason.data==='authority_changed'?privateAuthorityRefusal():commandReply({status:'refused',replayed:false,reason:reason.data});
+  }
+  throw error;
+ }
+}
+
 /** Three closed adapters. Requests commit in the ordinary command transaction;
  * reads and receipt reconciliation cannot request, renew or redispatch capture. */
-export async function routeProspectPhoneDiscovery(deps:RouteDeps):Promise<RouteResult> {
+async function routePhoneDiscoveryWithAuthority(deps:RouteDeps):Promise<RouteResult> {
  const {request,principal}=deps;
  if(!(PROSPECT_PHONE_DISCOVERY_PATHS as readonly string[]).includes(request.path))return {status:404,body:{error:'not_found'}};
  if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
@@ -22,11 +45,17 @@ export async function routeProspectPhoneDiscovery(deps:RouteDeps):Promise<RouteR
  const scoped=contextForPrincipal(deps.auth,principal);if(!scoped.ok)return scoped.result;
  let answer:RouteResult;
  if(request.path===PROSPECT_PHONE_DISCOVERY_PATHS[0]){
+  let beforeCommit:((ctx:RepositoryContext)=>Promise<void>)|undefined;
   answer=await runRouteCommand(deps,prospectPhoneDiscoveryCommandSchema,PROSPECT_PHONE_DISCOVERY_COMMAND_KIND,async(ctx,body)=>{
    const {commandId:_id,clientVersion:_version,...input}=body;
    const result=await requestProspectPhoneDiscovery(ctx,input,retainedPrincipalAuthority(deps,ctx));
-   return result.ok?{ok:true,value:prospectPhoneDiscoveryQueuedSchema.parse(result.value)}:result;
-  });
+   if(!result.ok)return result;
+   const queued=prospectPhoneDiscoveryQueuedSchema.parse(result.value);
+   // The receipt INSERT/audit trigger can wait after the domain request returns.
+   // Throwing here rolls run/job/receipt back together, never re-dispatches.
+   beforeCommit=current=>currentProspectPhoneDiscoveryAuthority(current,input,queued.runId,retainedPrincipalAuthority(deps,current));
+   return {ok:true,value:queued};
+  },async ctx=>{await beforeCommit?.(ctx);});
  }else if(request.path===PROSPECT_PHONE_DISCOVERY_PATHS[1]){
   const parsed=prospectPhoneDiscoveryInputSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'malformed_body'}};
   const result=await withTransaction(deps.auth.db,()=>readProspectPhoneDiscovery(scoped.context,parsed.data,retainedPrincipalAuthority(deps,scoped.context)));
