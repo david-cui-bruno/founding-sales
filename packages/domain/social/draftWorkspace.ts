@@ -4,7 +4,7 @@ import {refreshGroundedDraftRead,type SocialDraftRow} from './drafts.ts';
 import {prepareGroundedSocialDraftInput} from './draftPolicy.ts';
 import {readApprovedAnswerBlocks} from '../outreach/facts.ts';
 import {lockSocialMeetingSource} from './draftMeetingLocks.ts';
-export const socialDraftView=(row:SocialDraftRow):SocialDraftView=>({id:row.id,...(row.source_selection.mode?{mode:row.source_selection.mode}:{}),state:row.state,sourceRefs:row.source_selection.sourceRefs,factBlocks:row.source_selection.factBlocks,concepts:row.concepts,reason:row.reason,createdAt:row.created_at.toISOString(),deadlineAt:row.deadline_at.toISOString()});
+export const socialDraftView=(row:SocialDraftRow):SocialDraftView=>({id:row.id,...(row.source_selection.mode?{mode:row.source_selection.mode}:{}),...(row.source_selection.voiceGuideRef?{voiceGuideRef:row.source_selection.voiceGuideRef}:{}),state:row.state,sourceRefs:row.source_selection.sourceRefs,factBlocks:row.source_selection.factBlocks,concepts:row.concepts,reason:row.reason,createdAt:row.created_at.toISOString(),deadlineAt:row.deadline_at.toISOString()});
 /** Recent source metadata only; transcript bytes never reach the picker. */
 export async function readSocialDraftWorkspace(ctx:RepositoryContext):Promise<SocialDraftWorkspace>{
  const empty:SocialDraftWorkspace={sources:[],facts:[],requests:[]};if(ctx.scope.actor.kind!=='user')return empty;

@@ -2,9 +2,10 @@ import {createHash} from 'node:crypto';
 import {socialDraftRequestSchema,candidateSourceCheckSchema,type SocialDraftRequest} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readApprovedAnswerBlocks} from '../outreach/facts.ts';
-import {prepareSocialDraftInput,prepareGroundedSocialDraftInput,type SocialDraftSource,type SocialDraftInput,type SocialDraftProvenance} from './draftPolicy.ts';
+import {buildSocialDraftRequest,prepareSocialDraftInput,prepareGroundedSocialDraftInput,type SocialDraftSource,type SocialDraftInput,type SocialDraftProvenance} from './draftPolicy.ts';
 import type {SocialResult} from './posts.ts';
 import {lockSocialMeetingSource} from './draftMeetingLocks.ts';
+import {readPrivateVoiceGuide} from './voiceGeneration.ts';
 interface Prepared{input:SocialDraftInput;provenance:SocialDraftProvenance[];hash:string}
 function textOf(utterances:unknown):string|null{
  if(!Array.isArray(utterances))return null;let text='';
@@ -28,18 +29,21 @@ async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftReq
  const active=(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' FOR SHARE",[workspace,user])).rows.length>0;
  if(!active)return {ok:false,reason:'owner_unavailable'};
  if(input.mode==='linkedin_grounded'){
+  const voice=await readPrivateVoiceGuide(ctx,user,input);if(!voice.ok)return voice;
   if(!(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' AND role='admin'",[workspace,user])).rows.length)return {ok:false,reason:'owner_required'};
   if(input.sourceRefs.some(r=>r.kind!=='public')||!input.factBlocks.length)return {ok:false,reason:'sanitized_facts_required'};
   await ctx.db.query('SELECT b.id FROM outreach_answer_blocks b JOIN outreach_answer_block_versions v ON v.workspace_id=b.workspace_id AND v.block_id=b.id AND v.version=b.current_version WHERE b.workspace_id=$1 AND b.id=ANY($2::uuid[]) ORDER BY b.id FOR SHARE OF b,v',[workspace,input.factBlocks.map(b=>b.id)]);
   const blocks=await readApprovedAnswerBlocks(ctx,input.factBlocks);if(!blocks.ok)return blocks;
   const prepared=prepareGroundedSocialDraftInput(blocks.value);if(!prepared)return {ok:false,reason:'sanitized_facts_required'};
+  if(voice.value)prepared.privateVoiceGuide=voice.value;
+  if(!buildSocialDraftRequest(prepared))return {ok:false,reason:'input_too_large'};
   const publicHashes:string[]=[];
   for(const block of blocks.value){
    const meta=block.socialInput!,ref=meta.sourceRef;
    if(meta.topic==='news'&&!ref)return {ok:false,reason:'news_original_required'};
    if(!ref)continue;
    const row=(await ctx.db.query<{payload:{sourceUrl?:string};source_check:unknown}>("SELECT payload,source_check FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 AND revision=$3 AND status<>'dismissed' FOR SHARE",[workspace,ref.id,ref.revision])).rows[0];
-   const now=(await ctx.db.query<{now:Date}>('SELECT now() AS now')).rows[0]!.now.getTime();
+   const now=(await ctx.db.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0]!.now.getTime();
    const checked=candidateSourceCheckSchema.safeParse(row?.source_check),snapshot=checked.success&&checked.data.state==='checked'?checked.data.lastSuccess:null;
    // Current news uses an ordinary sourcing.check first-party observation from this New York day.
    const date=(at:number)=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(at);

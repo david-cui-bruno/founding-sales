@@ -3,6 +3,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {SocialResult} from './posts.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {requirePrivateDraftAuthority,type PrivateDraftAuthority} from './privateDrafts.ts';
+import {invalidatePrivateVoiceOutputs} from './voiceGeneration.ts';
 interface Row extends Record<string,unknown>{id:string;revision:number;entries:SocialVoicePreference[]|null;removed_at:Date|null;created_at:Date;updated_at:Date}
 const owner=(ctx:RepositoryContext)=>ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;
 /** Exclusive parent lock serializes absence as well as lifecycle before guide locks. */
@@ -30,6 +31,7 @@ export async function saveSocialVoicePreferences(ctx:RepositoryContext,raw:Socia
   ?(await ctx.db.query<Row>('INSERT INTO social_voice_preferences(workspace_id,owner_user_id,entries) VALUES($1,$2,$3::jsonb) RETURNING *',[ctx.scope.workspaceId,owner(ctx),JSON.stringify(input.entries)])).rows[0]!
   :(await ctx.db.query<Row>('UPDATE social_voice_preferences SET entries=$3::jsonb,removed_at=CASE WHEN $3::jsonb IS NULL THEN clock_timestamp() ELSE NULL END,revision=revision+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND owner_user_id=$2 RETURNING *',[ctx.scope.workspaceId,owner(ctx),input.operation==='remove'?null:JSON.stringify(input.entries)])).rows[0]!;
  await requirePrivateDraftAuthority(authority);
+ if(current)await invalidatePrivateVoiceOutputs(ctx,owner(ctx)!,current.id);
  await recordCrmAuditEvent(ctx,{action:'social.voice_preferences_saved',subjectKind:'social_voice_preferences',subjectId:result.id,detail:{operation:input.operation,revision:result.revision}});
  return {ok:true,value:{guideId:result.id,revision:result.revision}};
 }

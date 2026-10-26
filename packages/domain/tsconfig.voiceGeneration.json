@@ -1,0 +1,5 @@
+{
+ "extends":"../../tsconfig.base.json",
+ "compilerOptions":{"baseUrl":".","paths":{"@fss/contracts":["../contracts/src/index.ts"],"@fss/domain/*":["./*"]}},
+ "include":["social/voiceGeneration.ts","social/draftSources.ts","social/draftPolicy.ts","social/draftRun.ts","social/drafts.ts","social/draftWorkspace.ts","social/privateDraftSources.ts","social/voicePreferences.ts","test/social/voiceGeneration*.ts","vitest.voiceGeneration.config.ts"]
+}
