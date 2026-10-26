@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
-import {manualLiteralPhoneCoverageSchema, manualLiteralPhoneSourceSchema} from './manualLiteralPhone.ts';
+import {manualLiteralPhoneCoverageSchema, manualLiteralPhoneSourceSchema, manualLiteralPhoneDiagnosticsSchema} from './manualLiteralPhone.ts';
 
 /** Private manual worklist only. Raw observations are never canonical Firms or contact authority. */
 export const manualProspectStateSchema = z.enum(['new', 'kept', 'skipped', 'wrong_number']);
@@ -33,7 +33,7 @@ export const manualProspectPhoneEvidenceSchema = z.discriminatedUnion('state', [
   z.strictObject({state: z.literal('absent'), basis: z.literal('retained_source_declares_absent'), coverage}),
   z.strictObject({state: z.literal('conflicting'), reason: z.enum([
     'multiple_retained_numbers', 'retained_source_ambiguous', 'unresolved_retained_literal',
-  ]), sources: z.array(manualPhoneSourceSchema).max(16), coverage}),
+  ]), sources: z.array(manualPhoneSourceSchema).max(16), coverage, diagnostics: manualLiteralPhoneDiagnosticsSchema.optional()}),
   z.strictObject({state: z.literal('observed'), value: z.string().regex(/^\+[1-9]\d{7,14}$/u),
     sources: z.array(manualPhoneSourceSchema).min(1).max(16), coverage}),
 ]).superRefine((value, ctx) => {
