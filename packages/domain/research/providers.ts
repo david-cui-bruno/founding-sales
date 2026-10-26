@@ -81,6 +81,15 @@ export interface PageFetchRequest {
    * Absent means never paused, which is what a direct caller and a test without one want.
    */
   readonly shouldContinue?: (() => Promise<boolean>) | undefined;
+  /**
+   * Optional current source authority for the exact destination, checked immediately
+   * before every HTTP request, including robots, discovered pages and redirect hops.
+   * This supplements, never replaces, URL/DNS/robots and global pause checks. False
+   * stops the entire capture with `source_authority_refused` in skipped, not just
+   * that page. A caller must not select evidence from that interrupted prefix.
+   * A thrown check fails closed. Absent preserves existing callers' behavior.
+   */
+  readonly mayFetchUrl?: ((url: string) => Promise<boolean>) | undefined;
 }
 
 export interface FetchedPage {
