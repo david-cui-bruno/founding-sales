@@ -40,8 +40,8 @@ it.each(['denial', 'expiry', 'delete', 'reference', 'attempted'] as const)('risk
       VALUES($1,$2,'website',$3,$4,true) RETURNING id`, [f.w, f.firmId, url, 'e'.repeat(64)])).rows[0]!;
     const attempt = await ready(f);
     const handoff = { ...openingPgHandoff(f.at), dispatch: async () => ({ ok: true as const }) };
-    await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(), sendHandoff: handoff }));
-    const before = await readFenceByStepExecution(f.worker, f.executionId); if (!before) throw new Error('fence missing');
+    const outcome = await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(), sendHandoff: handoff }));
+    const before = await readFenceByStepExecution(f.worker, f.executionId); if (!before) throw new Error(`fence missing: ${JSON.stringify(outcome)}`);
     if (change === 'attempted') await f.tx(async () => {
       await lockSendGateForDispatch(f.worker);
       expect((await claimForDispatch(f.worker, { outboundMessageId: before.id })).ok).toBe(true);

@@ -17,9 +17,9 @@ import { withTransaction } from '../../db/queryable.ts';
 async function prepared(f: Awaited<ReturnType<typeof campaignOpeningPgFixture>>) {
   await selectCampaignOpeningBeforeTransaction(f.worker, f.db, { executionId: f.executionId, eligibility: allowAllEligibility(),
     selector: { select: async input => ({ kind: 'selected', choice: { variantId: 'local', citationIds: input.citationIds } }) } });
-  await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(),
+  const outcome = await f.tx(() => runDueStepExecution(f.worker, { stepExecutionId: f.executionId, now: f.at, eligibility: allowAllEligibility(),
     sendHandoff: { ...openingPgHandoff(f.at), dispatch: async () => ({ ok: true as const }) } }));
-  const fence = await readFenceByStepExecution(f.worker, f.executionId); if (!fence) throw new Error('fence missing'); return fence;
+  const fence = await readFenceByStepExecution(f.worker, f.executionId); if (!fence) throw new Error(`fence missing: ${JSON.stringify(outcome)}`); return fence;
 }
 async function newQualification(f: Awaited<ReturnType<typeof campaignOpeningPgFixture>>) {
   // Age only the existing fictional qualification request identity before any

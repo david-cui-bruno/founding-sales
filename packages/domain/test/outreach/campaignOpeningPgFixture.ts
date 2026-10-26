@@ -15,6 +15,7 @@ import { registerOpeningFixture } from './campaignOpeningPgRuntime.ts';
 import { recordEmailRouteValidation } from '../../crm/routes.ts';
 import { reserveOutreachEmail } from '../../outreach/touchReservations.ts';
 import { outboundSendHandoff } from '../../../../apps/worker/src/handlers/outboundSendHandoff.ts';
+import { readOutreachCadence, outreachStepDue } from '../../outreach/timing.ts';
 
 /** PG-only reuse of accepted 741 seed owners. Both helpers read only app.fixture,
  * as inspected here. No browser server/assets/HTTPS/Chrome is started by this
@@ -56,7 +57,11 @@ export async function campaignOpeningPgFixture(policyEnabled = true, openingExpi
     const current = await readCurrentCampaignOpening(worker, execution.id);
     assert.equal(current.kind, policyEnabled ? 'current' : 'exact_template');
     const enrollment = (await db.query<{ firm_time_zone: string }>('SELECT firm_time_zone FROM sequence_enrollments WHERE workspace_id=$1 AND id=$2', [w, admission.enrollment_id])).rows[0]!;
-    const at = placeEmailSend(new Date().toISOString(), enrollment.firm_time_zone, { prospecting: true }).sendAt;
+    const cadence = await readOutreachCadence(worker, admission.plan_id); assert(cadence);
+    const due = outreachStepDue(cadence, { channel: 'email', channelOrdinal: 1, lastTouch: null }); assert(due);
+    // The admitted cadence can start at10am even while the general9am window
+    // is already open. Advance only the fictional test clock, never due gates.
+    const at = placeEmailSend(new Date(Math.max(Date.now(), Date.parse(due.dueAt))).toISOString(), enrollment.firm_time_zone, { prospecting: true }).sendAt;
     return { fixture, db, w, admin, worker, tx, source, policy, template, firmId: made.value.firmId,
       enrollmentId: admission.enrollment_id, planId: admission.plan_id, executionId: execution.id, at, stop };
   } catch (error) { await stop(); throw error; }
