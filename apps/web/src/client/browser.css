@@ -111,14 +111,11 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .manual-toolbar select { height: 38px; padding: 0 10px; font-size: 13px; }
 .manual-toolbar button { font-size: 12px; min-height: 38px; margin: 0; }
 .manual-toolbar p { font-size: 11px; color: var(--manual-muted); margin-left: auto; }
-.manual-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
 .manual-list-surface { border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; background: var(--manual-paper); min-width: 0; }
 .manual-list-bar { padding: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; background: var(--panel); flex-wrap: wrap; }
 .manual-list-bar span { color: var(--manual-muted); font-size: 11px; }
-.manual-table-scroll { overflow-x: auto; max-height: 72vh; }
-.manual-table { border-collapse: collapse; width: 100%; font-size: 12px; text-align: left; }
+.manual-table { text-align: left; }
 .manual-table th { background: var(--panel-strong); font-size: 11px; font-weight: 700; color: var(--muted); position: sticky; top: 0; z-index: 1; }
-.manual-table td, .manual-table th { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .manual-table tr:last-child td { border-bottom: 0; }
 .manual-table tbody tr:hover { background: var(--panel-hover); }
 .manual-table .manual-current { background: var(--sage); box-shadow: inset 4px 0 var(--manual-sage); }
@@ -127,7 +124,6 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .manual-table td:nth-child(3) { min-width: 100px; }
 .manual-company-button { border: 0; background: transparent; margin: 0; padding: 0; text-align: left; font-size: 14px; font-weight: 650; line-height: 1.45; }
 .manual-company-button:hover { background: transparent; text-decoration: underline; text-underline-offset: 3px; }
-.manual-company-button span, .manual-row-kind { display: block; font-size: 11px; font-weight: 500; color: var(--manual-muted); margin-top: 4px; }
 .manual-phone-state { font-weight: 600; line-height: 1.5; }
 .manual-phone-observed { color: var(--sage-ink); }
 .manual-phone-conflicting { color: var(--sand-ink); }
@@ -139,14 +135,12 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .manual-inspector-nav, .manual-inspector-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--manual-muted); margin-bottom: 16px; }
 .manual-inspector-nav button { padding: 4px 10px; margin: 0 0 0 6px; font-size: 14px; min-height: 32px; }
 .manual-prospect-row { background: transparent; border: 0; padding: 0; margin: 0; overflow-wrap: anywhere; }
-.manual-prospect-overview { display: grid; gap: 16px; }
 .manual-prospect-identity h3 { font-size: 22px; font-weight: 650; letter-spacing: -.65px; margin: 0 0 8px; }
 .manual-prospect-identity p, .manual-prospect-overview > p { font-size: 12px; color: var(--manual-muted); line-height: 1.6; }
 .manual-prospect-phone { background: var(--panel); border-radius: 4px; padding: 16px; font-size: 12px; line-height: 1.6; }
 .manual-prospect-phone p:first-of-type { font-size: 17px; font-weight: 650; margin: 10px 0 8px; }
 .manual-prospect-phone p + p { color: var(--manual-muted); }
 .manual-prospect-phone .manual-wrong-note, .manual-wrong-note { color: var(--rose-ink); }
-.manual-prospect-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .manual-prospect-actions button { margin: 0; min-height: 40px; font-size: 13px; padding: 9px 10px; }
 .manual-prospect-actions button:first-child { background: var(--ink); border-color: var(--ink); color: var(--ink-text); }
 .manual-prospect-actions button:nth-child(n+3) { grid-column: 1 / -1; font-size: 12px; }
@@ -162,21 +156,14 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .manual-empty h3 { font-size: 20px; font-weight: 650; margin: 0 0 12px; }
 .manual-empty p { font-size: 13px; color: var(--manual-muted); }
 .manual-workspace.manual-focus { grid-template-columns: minmax(0, 1fr); max-width: 890px; margin-inline: auto; }
-.manual-focus .manual-inspector { position: static; padding: 28px; }
-.manual-focus .manual-prospect-overview { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 18px 32px; }
-.manual-focus .manual-prospect-overview > * { grid-column: 1; }
-.manual-focus .manual-prospect-actions { grid-column: 2; grid-row: 2 / span 2; align-content: start; padding: 16px; background: var(--panel); border-radius: 4px; }
-.manual-focus .manual-prospect-overview > .manual-decision-note { grid-column: 2; grid-row: 4; }
+.manual-focus .manual-prospect-actions { align-content: start; border-radius: 4px; }
 .manual-focus .manual-prospect-identity h3 { font-size: 29px; }
-.manual-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .browser-main .manual-list-surface, .browser-main .manual-inspector, .browser-main .manual-empty { border-radius: 18px; box-shadow: var(--shadow); }
 .browser-main .manual-list-bar { border-radius: 18px 18px 0 0; }
 .browser-workspace .manual-company-button { display: block; border: 0; padding: 0; background: transparent; text-align: left; min-height: 0; }
-.browser-workspace .manual-company-button span { display: block; }
 .browser-workspace summary { cursor: pointer; }
-@media (min-width: 1600px) { .manual-workspace { grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; } }
-@media (max-width: 1150px) { .browser-workspace { grid-template-columns: 190px minmax(0, 1fr); } .browser-main { padding: 28px 24px; } .workspace-today-grid { grid-template-columns: minmax(0,1fr); } .workspace-context-links { display: none; } .manual-workspace { grid-template-columns: minmax(0, 1fr) 285px; gap: 16px; } }
-@media (max-width: 900px) { .manual-workspace { grid-template-columns: minmax(0, 1fr); } .manual-inspector { position: static; } .manual-table-scroll { max-height: 55vh; } .browser-main .workspace-call-banner { grid-template-columns: minmax(0,1fr); gap: 16px; } .workspace-banner-actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; } }
+@media (max-width: 1150px) { .browser-workspace { grid-template-columns: 190px minmax(0, 1fr); } .browser-main { padding: 28px 24px; } .workspace-today-grid { grid-template-columns: minmax(0,1fr); } .workspace-context-links { display: none; } }
+@media (max-width: 900px) { .manual-inspector { position: static; } .browser-main .workspace-call-banner { grid-template-columns: minmax(0,1fr); gap: 16px; } .workspace-banner-actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; } }
 @media (max-width: 760px) {
   .browser-workspace { grid-template-columns: minmax(0,1fr); gap: 0; padding: 8px; }
   .browser-sidebar { position: static; height: auto; padding: 18px 14px 10px; border-radius: 20px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; }
@@ -209,8 +196,5 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   .manual-toolbar p { width: 100%; margin: 0; }
   .manual-toolbar label { flex: 1; }
   .manual-toolbar > button { align-self: end; }
-  .manual-focus .manual-inspector { padding: 18px; }
-  .manual-focus .manual-prospect-overview { grid-template-columns: minmax(0, 1fr); }
-  .manual-focus .manual-prospect-overview > *, .manual-focus .manual-prospect-actions, .manual-focus .manual-prospect-overview > .manual-decision-note { grid-column: auto; grid-row: auto; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
