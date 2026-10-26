@@ -37,7 +37,7 @@ function setup() {
     if (url === '/browser/api/crm/firm-page-v3') return json({ version: 3, visibility: 'assigned_or_admin', read: { visibility: 'assigned_or_admin', firm }, opportunities: [], holds: [], followUpPermissions: [] });
     if (url === '/browser/api/calling/wrap') {
       const { commandId, ...payload } = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(commandId).toBeTruthy(); expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toContain(commandId);
+      expect(commandId).toBeTruthy(); expect(localStorage.getItem(CALLING_PENDING_KEY)).toContain(commandId);
       const input = callingWrapInputSchema.parse(payload); commands.push(input);
       if (input.kind !== 'firm') throw Error('Only exact Firm fixture supported');
       if (input.promisedEmail) promised = input.promisedEmail;
@@ -52,7 +52,7 @@ function setup() {
     }
     if (url === '/browser/api/calling/follow-ups/save') {
       const input = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toContain(input['commandId']); commands.push(input);
+      expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toContain(input['commandId']); commands.push(input);
       if (loseFollowUp) throw Error('Lost follow-up response');
       throw Error('Unexpected successful follow-up mutation');
     }
@@ -134,37 +134,37 @@ describe('BrowserApp real shared presentation', () => {
         fireEvent.click(screen.getByRole('checkbox', { name: /I personally performed/u }));
         fireEvent.click(screen.getByRole('button', { name: 'Save outcome' }));
         await screen.findByText('Outcome UNKNOWN for this exact subject.');
-        const wrap = sessionStorage.getItem(CALLING_PENDING_KEY); expect(wrap).not.toBeNull();
+        const wrap = localStorage.getItem(CALLING_PENDING_KEY); expect(wrap).not.toBeNull();
         s.seedDraft(); navigate('Email');
-        expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBe(wrap);
+        expect(localStorage.getItem(CALLING_PENDING_KEY)).toBe(wrap);
         fireEvent.click(screen.getByRole('button', { name: 'Follow-ups' }));
         fireEvent.click(await screen.findByRole('button', { name: /Draft 00000000/u }));
         const body = await screen.findByRole('textbox', { name: 'Follow-up body' });
         fireEvent.change(body, { target: { value: 'PRIVATE uncertain edit' } });
         fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
         await screen.findByText(/Save outcome UNKNOWN. Exact command retained/u);
-        const followUp = sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY); expect(followUp).not.toBeNull();
+        const followUp = localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY); expect(followUp).not.toBeNull();
         navigate('Today'); await screen.findByRole('button', { name: 'Open firm' });
-        expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBe(wrap);
-        expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(followUp);
+        expect(localStorage.getItem(CALLING_PENDING_KEY)).toBe(wrap);
+        expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(followUp);
         expect(`${wrap}${followUp}`).not.toContain('PRIVATE');
         const writes = s.commands.length, requests = s.send.mock.calls.length;
         act(() => { s.client.invalidate(); });
-        expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBeNull();
-        expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+        expect(localStorage.getItem(CALLING_PENDING_KEY)).toBeNull();
+        expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
         expect(s.commands).toHaveLength(writes); expect(s.send).toHaveBeenCalledTimes(requests);
         expect(screen.queryByRole('textbox', { name: 'Follow-up body' })).toBeNull();
       } finally { s.client.dispose(); }
     });
     it('app cleanup only unsubscribes the new custody observers without erasing uncertainty', async () => {
       const s = setup(); const ui = render(<BrowserApp client={s.client} />); await screen.findByRole('button', { name: 'Open firm' });
-      sessionStorage.setItem(CALLING_PENDING_KEY, 'opaque-calling-unknown'); sessionStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, 'opaque-follow-up-unknown');
+      localStorage.setItem(CALLING_PENDING_KEY, 'opaque-calling-unknown'); localStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, 'opaque-follow-up-unknown');
       ui.unmount();
-      expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBe('opaque-calling-unknown');
-      expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe('opaque-follow-up-unknown');
+      expect(localStorage.getItem(CALLING_PENDING_KEY)).toBe('opaque-calling-unknown');
+      expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe('opaque-follow-up-unknown');
       s.client.invalidate();
-      expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBe('opaque-calling-unknown');
-      expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe('opaque-follow-up-unknown'); s.client.dispose();
+      expect(localStorage.getItem(CALLING_PENDING_KEY)).toBe('opaque-calling-unknown');
+      expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe('opaque-follow-up-unknown'); s.client.dispose();
     });
   });
   describe('exact navigation', () => {

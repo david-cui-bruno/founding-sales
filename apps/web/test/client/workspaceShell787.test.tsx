@@ -190,13 +190,13 @@ describe('issue787 mounted real-client shell', () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
     localStorage.setItem(PRIVATE_DRAFT_PENDING_KEY, 'inactive-ids-only'); localStorage.setItem(VOICE_PENDING_KEY, 'inactive-ids-only');
     sessionStorage.setItem(CAMPAIGN_PENDING_KEY, 'inactive-ids-only'); sessionStorage.setItem(REPLY_PENDING_KEY, 'inactive-ids-only');
-    sessionStorage.setItem(CALLING_PENDING_KEY, 'inactive-ids-only'); sessionStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, 'inactive-ids-only');
+    localStorage.setItem(CALLING_PENDING_KEY, 'inactive-ids-only'); localStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, 'inactive-ids-only');
     s.answer({}, code); fireEvent.click(screen.getByRole('button', { name: 'Refresh Today' }));
     await screen.findByRole('heading', { name: 'Sign in' });
     expect(screen.queryByText(card.firmName)).toBeNull();
     expect(localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY)).toBeNull(); expect(localStorage.getItem(VOICE_PENDING_KEY)).toBeNull();
     expect(sessionStorage.getItem(CAMPAIGN_PENDING_KEY)).toBeNull(); expect(sessionStorage.getItem(REPLY_PENDING_KEY)).toBeNull();
-    expect(sessionStorage.getItem(CALLING_PENDING_KEY)).toBeNull(); expect(sessionStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+    expect(localStorage.getItem(CALLING_PENDING_KEY)).toBeNull(); expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
   });
   it('ignores late Today after page navigation, then loads a fresh Today on return', async () => {
     const s = setup(); const held = s.delayToday(); render(<BrowserApp client={s.client} />); await screen.findByText('Loading Today…');
