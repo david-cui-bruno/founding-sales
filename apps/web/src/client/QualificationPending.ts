@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { instant, qualificationRequestCommandSchema, qualificationAdmissionCommandSchema,
   qualificationQueuedSchema, qualificationAdmittedSchema, type QualificationView } from '@fss/contracts';
+import {prospectPhoneDiscoveryCommandSchema,prospectPhoneDiscoveryQueuedSchema} from '@fss/contracts';
 import {commandIdSchema,retainedIdentityDecisionInputSchema,retainedInterpretationInputSchema,retainedIdentityDecisionResultSchema,retainedInterpretationResultSchema,type RetainedIdentityDecisionInput,type RetainedInterpretationInput} from '@fss/contracts';
 
 export const QUALIFICATION_PENDING_KEY = 'callie.browser.pending-qualification.v1';
 export const qualificationCommandSchema = z.discriminatedUnion('kind', [
+  z.strictObject({kind:z.literal('phone_discovery'),payload:prospectPhoneDiscoveryCommandSchema.omit({clientVersion:true})}),
   z.strictObject({ kind: z.literal('request'), payload: qualificationRequestCommandSchema.omit({ clientVersion: true }) }),
   z.strictObject({ kind: z.literal('admit'), payload: qualificationAdmissionCommandSchema.omit({ clientVersion: true }) }),
   z.strictObject({kind:z.literal('identity'),payload:retainedIdentityDecisionInputSchema.safeExtend({commandId:commandIdSchema})}),
@@ -13,6 +15,7 @@ export const qualificationCommandSchema = z.discriminatedUnion('kind', [
 export const qualificationPendingSchema = z.strictObject({
   identity: z.string(), expiresAt: instant, command: qualificationCommandSchema,
   receipt: z.discriminatedUnion('kind', [
+    z.strictObject({kind:z.literal('phone_discovery'),result:prospectPhoneDiscoveryQueuedSchema}),
     z.strictObject({ kind: z.literal('refused') }),
     z.strictObject({ kind: z.literal('request'), result: qualificationQueuedSchema }),
     z.strictObject({ kind: z.literal('admit'), result: qualificationAdmittedSchema }),
@@ -70,6 +73,7 @@ export class QualificationCustody {
     this.changed();
   }
   prepare(input: { kind: 'request'; candidateId: string; expectedRevision: number }
+    | {kind:'phone_discovery';candidateId:string;expectedRevision:number}
     | { kind: 'admit'; candidateId: string; expectedRevision: number; qualificationRunId: string }
     | ({kind:'identity'}&RetainedIdentityDecisionInput) | ({kind:'retained_interpretation'}&RetainedInterpretationInput)): PendingQualification {
     const binding = this.binding();

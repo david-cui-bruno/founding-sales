@@ -1,6 +1,7 @@
 import {sweepPrivateDrafts} from './socialDrafts.ts';
 import {sweepManualActivity} from '../sourcing/manualProspectActivityLifecycle.ts';
 import {sweepCallingDrafts} from '../calling/followUpDraftLifecycle.ts';
+import {sweepProspectPhoneDiscoveries} from '../sourcing/prospectPhoneDiscoveryLifecycle.ts';
 import {rememberExpiredManualSources} from '../sourcing/manualProspectSourceLoss.ts';
 import {sweepOfficeSources} from './officeAssessments.ts';
 import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources,sweepDiscoveryReviews} from '../sourcing/discoveryReviewVisibility.ts';
@@ -211,13 +212,14 @@ const rawMime: RetentionTarget = {
 const researchEvidence: RetentionTarget = {
   dataKind: 'research_evidence',
   state: 'implemented',
-  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts'],
+  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts','sourcing_prospect_phone_discoveries'],
   note: 'Evidence whose provider terms have expired is deleted at its own expiry; evidence whose terms permit retention stays with the firm.',
   sweep: async (context, input) => {
     await lockDiscoveryReviewSources(context);
     const discoveryDeleted=await sweepDiscoveryReviews(context,input);
     const activityCleared=await sweepManualActivity(context,input);
     const callingCleared=await sweepCallingDrafts(context,input);
+    const phoneCleared=await sweepProspectPhoneDiscoveries(context,input);
     const officeDeleted=await sweepOfficeSources(context,input);
     const expiring = await context.db.query<{ id: string;source_reference:string }>(
       `SELECT id,source_reference FROM evidence_items
@@ -230,7 +232,7 @@ const researchEvidence: RetentionTarget = {
     await rememberExpiredManualSources(context,expiring.rows.map(row=>row.source_reference));
     const sourceDeleted=await eraseDiscoveryReviewsForSources(context,expiring.rows.map(row=>row.source_reference));
     const discoveryTotal=discoveryDeleted+sourceDeleted;
-    if (ids.length === 0) return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:activityCleared+callingCleared,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared}};
+    if (ids.length === 0) return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:activityCleared+callingCleared+phoneCleared,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared}};
 
     const deleted = await context.db.query(
       'DELETE FROM evidence_items WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
@@ -239,8 +241,8 @@ const researchEvidence: RetentionTarget = {
     return {
       boundaryAt: input.now,
       rowsDeleted: (deleted.rowCount ?? 0)+officeDeleted+discoveryTotal,
-      rowsRedacted: activityCleared+callingCleared,
-      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared },
+      rowsRedacted: activityCleared+callingCleared+phoneCleared,
+      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared },
     };
   },
 };

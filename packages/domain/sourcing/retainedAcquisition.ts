@@ -22,6 +22,7 @@ export async function lockRetainedAdmin(ctx:RepositoryContext):Promise<boolean>{
 /** A missing/dead job is not proof that its run/provider call did not happen. */
 export async function candidateAcquisitionOutstanding(ctx:RepositoryContext,candidateId:string):Promise<boolean>{
  return (await ctx.db.query(`SELECT 1 WHERE EXISTS(SELECT 1 FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 AND state IN ('pending','running'))
+ OR EXISTS(SELECT 1 FROM sourcing_prospect_phone_discoveries WHERE workspace_id=$1 AND candidate_id=$2 AND (state IN ('pending','running') OR (dispatched_at IS NOT NULL AND dispatch_finished_at IS NULL)))
  OR EXISTS(SELECT 1 FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 AND source_check->>'state'='pending')
  OR EXISTS(SELECT 1 FROM jobs WHERE workspace_id=$1 AND state IN ('queued','retryable','running') AND kind IN ('sourcing.qualify','sourcing.check') AND payload->>'candidateId'=$2::text)
  OR EXISTS(SELECT 1 FROM provider_reservations p JOIN sourcing_qualification_runs r ON r.workspace_id=p.workspace_id AND r.id=p.subject_id WHERE r.workspace_id=$1 AND r.candidate_id=$2 AND p.subject_kind='sourcing_qualification' AND p.state IN ('reserved','calling','estimated'))`,[ctx.scope.workspaceId,candidateId])).rows.length>0;

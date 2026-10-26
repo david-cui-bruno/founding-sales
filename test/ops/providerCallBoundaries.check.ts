@@ -57,6 +57,16 @@ export const BOUNDARIES: readonly Boundary[] = [
   {name:'human reply suggestion',site:'packages/domain/replies/composerGeneration.ts',owner:'generateReplyDraft',methods:{countInputTokens:1,prepareReplyDraft:1}},
   {name:'candidate qualification provider calls',site:'packages/domain/sourcing/qualificationRun.ts',owner:'runQualification',methods:{fetchPages:1,countInputTokens:1,extract:1}},
   {
+    name: 'explicit prospect phone discovery',
+    site: 'packages/domain/sourcing/prospectPhoneDiscovery.ts',
+    // The explicit request commits its daily count and one-attempt job first. This
+    // owner commits the pending-to-running claim, revalidates current authority,
+    // source/research/deadline gates before IO and each URL/continuation, then
+    // rechecks before saving. Running/unknown captures are never reclaimed.
+    owner: 'runProspectPhoneDiscovery',
+    methods: { fetchPages: 1 },
+  },
+  {
     name: 'strict office assessment provider calls',
     site: 'packages/domain/research/officeAssessmentRun.ts',
     // The registered research worker commits the existing calling reservation and takes
@@ -437,6 +447,44 @@ describe('the check itself', () => {
 
   it('passes the clean fixture', () => {
     expect(withSite('')).toEqual([]);
+  });
+
+  it('enforces the phone fetch owner without exempting its file or merging shared-owner counts', () => {
+    const phone = BOUNDARIES.find(boundary => boundary.owner === 'runProspectPhoneDiscovery');
+    expect(phone?.methods).toEqual({ fetchPages: 1 });
+    if (phone === undefined) throw new Error('missing phone discovery boundary');
+    expect(ALLOWED_ELSEWHERE.some(entry => entry.file === phone.site && entry.method === 'fetchPages')).toBe(false);
+    const files: Record<string, string> = {};
+    for (const boundary of BOUNDARIES) files[boundary.site] = real(boundary.site);
+    expect(findViolations(scratch(files))).toEqual([]);
+    const shared = BOUNDARIES.filter(boundary => 'fetchPages' in boundary.methods);
+    for (const bypass of [
+      'function bypass(p: any) { return p.fetchPages({}); }',
+      'const detached = p.fetchPages;',
+      'const { fetchPages: detached } = p;',
+      'p["fetchPages"]?.({});',
+    ]) {
+      const found = findViolations(scratch({ ...files, [phone.site]: `${files[phone.site]}\n${bypass}` }));
+      expect(found.map(v => ({ boundary: v.boundary, file: v.file, method: v.method, kind: v.kind })), bypass).toEqual(
+        shared.map(boundary => ({ boundary: boundary.name, file: phone.site, method: 'fetchPages', kind: 'outside-owner' })),
+      );
+    }
+    // Each shared fetch owner must still have its own exact call/reference count.
+    for (const boundary of shared) {
+      const original = files[boundary.site]!;
+      const call = '.fetchPages(';
+      expect(original.split(call)).toHaveLength(2);
+      for (const replacement of [
+        '.unguardedMethod(',
+        '.fetchPages(p.fetchPages({}),',
+        '.fetchPages(p.fetchPages,',
+      ]) {
+        const found = findViolations(scratch({ ...files, [boundary.site]: original.replace(call, replacement) }));
+        expect(found.map(v => ({ boundary: v.boundary, file: v.file, method: v.method, kind: v.kind })), `${boundary.owner}: ${replacement}`).toEqual([
+          { boundary: boundary.name, file: boundary.site, method: 'fetchPages', kind: 'owner-calls' },
+        ]);
+      }
+    }
   });
 
   it('enforces each strict office method at its exact owner, not anywhere in its file', () => {

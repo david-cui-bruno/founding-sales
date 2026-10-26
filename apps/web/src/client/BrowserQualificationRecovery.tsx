@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
 import type { BrowserClient } from './BrowserClient.ts';
 import type { PendingQualification } from './QualificationPending.ts';
-import { dispatchQualification } from './QualificationDispatch.ts';
+import { dispatchQualification, reconcilePhoneDiscovery } from './QualificationDispatch.ts';
 
 /** Survives inventory page/filter changes and reload without replaying or retaining evidence text. */
 export function BrowserQualificationRecovery({ client }: { client: BrowserClient }): JSX.Element | null {
@@ -29,7 +29,9 @@ export function BrowserQualificationRecovery({ client }: { client: BrowserClient
     operation.current = token; setBusy(true); setNotice('');
     const current = (): boolean => mounted.current && operation.current === token && client.isCurrent(epoch);
     try {
-      const message = await dispatchQualification(client, held, current);
+      const message = held.command.kind==='phone_discovery'
+        ? `Phone discovery receipt: ${await reconcilePhoneDiscovery(client,held,current)}. Read current evidence separately.`
+        : await dispatchQualification(client, held, current);
       if (current()) setNotice(message);
     } catch { if (current()) setNotice('No definite response. Keep this exact command identity. No automatic retry or replacement command.'); }
     finally { if (current()) { operation.current = null; setBusy(false); } }
@@ -37,14 +39,15 @@ export function BrowserQualificationRecovery({ client }: { client: BrowserClient
   if (held === null && !notice) return null;
   return <section aria-label="Qualification command custody">
     {held === null ? null : <>
-      <p>{held.receipt === undefined ? 'Unresolved' : 'Confirmed'} qualification {held.command.kind} command {held.command.payload.commandId}. Candidate {held.command.payload.candidateId} revision {held.command.payload.expectedRevision}.</p>
+      <p>{held.receipt === undefined ? 'Unresolved' : 'Confirmed'} {held.command.kind==='phone_discovery'?'phone discovery':`qualification ${held.command.kind}`} command {held.command.payload.commandId}. Candidate {held.command.payload.candidateId} revision {held.command.payload.expectedRevision}.</p>
       {held.command.kind === 'admit' ? <p>Reviewed run {held.command.payload.qualificationRunId}.</p> : null}
       {held.receipt?.kind === 'request' ? <p>Recorded qualification run {held.receipt.result.runId}. Read current evidence explicitly.</p> : null}
+      {held.receipt?.kind === 'phone_discovery' ? <p>Recorded phone discovery run {held.receipt.result.runId}. Read current evidence explicitly. No qualification or calling permission.</p> : null}
       {held.receipt?.kind === 'admit' ? <p>Admitted exact Firm {held.receipt.result.firmId}. Route {held.receipt.result.routeId}. No contact or sending authority.</p> : null}
       {held.receipt?.kind==='identity'?<p>Recorded identity decision {held.receipt.result.decisionId}, candidate revision {held.receipt.result.revision}. No qualification or admission.</p>:null}
       {held.receipt?.kind==='retained_interpretation'?<p>Recorded human-retained interpretation {held.receipt.result.runId}. Explicitly read current evidence before separate admission.</p>:null}
       {held.receipt?.kind === 'refused' ? <p>Command definitively refused. No admission or qualification success is implied.</p> : null}
-      {held.receipt === undefined ? <button type="button" disabled={busy} onClick={() => { void reconcile(); }}>Reconcile exact qualification command</button> : null}
+      {held.receipt === undefined ? <button type="button" disabled={busy} onClick={() => { void reconcile(); }}>{held.command.kind==='phone_discovery'?'Check phone discovery receipt':'Reconcile exact qualification command'}</button> : null}
     </>}
     {notice ? <p role="status">{notice}</p> : null}
   </section>;

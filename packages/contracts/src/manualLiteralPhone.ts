@@ -17,6 +17,7 @@ const authority = z.discriminatedUnion('kind', [
     provider: z.string().min(1).max(100), release: z.string().min(1).max(300),
     recordId: z.string().min(1).max(500), retrievedAt: instant.nullable()}),
   z.strictObject({kind: z.literal('retained_evidence'), evidenceId: uuid}),
+  z.strictObject({kind: z.literal('phone_discovery'), runId: uuid, expiresAt: instant}),
 ]);
 const lineage = z.discriminatedUnion('kind', [
   z.strictObject({kind: z.literal('provider_original')}),

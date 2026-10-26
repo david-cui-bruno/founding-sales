@@ -12,6 +12,7 @@ import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
 import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
+import { PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS, prospectPhoneDiscoveryBrowserResult } from './prospectPhoneDiscoveryBoundary.ts';
 
 const SECURITY_HEADERS = Object.freeze({
   'cache-control': 'private, no-store',
@@ -162,6 +163,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
         }
         if (!equal(request.headers[BROWSER_REVISION_HEADER], revision(principal))) throw new Refusal(409);
         if (apiPath !== null && QUALIFICATION_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
+        if (apiPath !== null && PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if (request.path === BROWSER_PATHS.signOut) {
           // Clear local custody on uncertainty, but never claim remote revocation succeeded.
           outgoing.push(...Object.values(COOKIE_NAMES).map(clearCookie));
@@ -204,6 +206,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (calling !== null) return response(calling.status, calling.body, cookies);
   const qualification = qualificationBrowserResult(path, result.status, result.body);
   if (qualification !== null) return response(qualification.status, qualification.body, cookies);
+  const phoneDiscovery = prospectPhoneDiscoveryBrowserResult(path, result.status, result.body);
+  if (phoneDiscovery !== null) return response(phoneDiscovery.status, phoneDiscovery.body, cookies);
   // Context refresh is also an authority boundary. Only this exact domain
   // refusal means absent/revoked mailbox authorization, not operational readiness.
   if (path === '/replies/composer/context' && result.status === 200

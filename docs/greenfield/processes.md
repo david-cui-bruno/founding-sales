@@ -38,6 +38,7 @@ The default `workerDueWorkSources()` registry contains exactly the following nam
 | `terminal-stop` | Consumption of terminal stop events. |
 | `send-day-close` | Closing due sender-day accounting. |
 | `retention-batch` | Due bounded retention/privacy batches. |
+| `prospect-phone-discovery-expiry` | Terminalizes pending/running phone-discovery runs whose deadline or evidence lifetime has elapsed, visiting at most 25 workspaces per pass. Enqueues no capture and grants no new authority; physical erasure remains with retention. |
 | `social-assets-cleanup` | Cleanup of eligible social assets. |
 | `research-sweep` | Daily research scheduling and abandoned-run recovery. |
 | `sourcing-monitor` | Eligible sourcing-monitor work when that composition is enabled. |
