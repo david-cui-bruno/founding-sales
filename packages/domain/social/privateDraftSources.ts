@@ -11,6 +11,7 @@ export async function privateSourceBasis(ctx:RepositoryContext,selection:SocialD
  const current=await readSocialDraftSources(ctx,selection);if(!current.ok)return {ok:false,reason:'source_changed_or_unavailable'};
  const dependencies:Record<string,string[]>={};
  const add=(key:string,id:string):void=>{const values=dependencies[key]??=[];if(!values.includes(id))values.push(id);};
+ if(selection.voiceGuideRef)add('social_voice_preferences',selection.voiceGuideRef.guideId);
  const blocks=selection.factBlocks.length?await readApprovedAnswerBlocks(ctx,selection.factBlocks):{ok:true as const,value:[]};
  if(!blocks.ok)return {ok:false,reason:'source_changed_or_unavailable'};
  for(const block of blocks.value){add('outreach_answer_blocks',block.id);const ref=block.socialInput?.sourceRef;if(ref)add('sourcing_candidates',ref.id);}

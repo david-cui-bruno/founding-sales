@@ -12,6 +12,7 @@ import {
   type SendFooterPolicy,
 } from '../src/rules/templates.ts';
 import { rewritePreparedBody, type OutboundFenceRow } from './fence.ts';
+import { verifyCampaignOpeningFence } from '../outreach/campaignOpeningStore.ts';
 
 /**
  * The footer, composed at send (specification 12.6; lane W3-F, 27 September 2026).
@@ -147,6 +148,7 @@ export async function reconcileFenceFooter(
   fence: OutboundFenceRow,
   options: { readonly actor?: string | undefined; readonly policy?: SendFooterPolicy | undefined } = {},
 ): Promise<FenceFooterReconciliation> {
+  if (!await verifyCampaignOpeningFence(context, fence)) return { reconciled: false, reason: 'footer_not_composed', detail: 'opening_frozen_bytes_changed' };
   const source = await footerSourceFor(context, fence.templateVersionId);
   if (source === null) {
     // No template version to read a sign-off from. The fence's own bytes are all there

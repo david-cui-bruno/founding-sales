@@ -113,3 +113,4 @@ export * from './manualProspectActivity.ts';
 export * from './calling.ts';
 export * from './prospectPhoneDiscovery.ts';
 export * from './callingExecution.ts';
+export * from './campaignOpening.ts';

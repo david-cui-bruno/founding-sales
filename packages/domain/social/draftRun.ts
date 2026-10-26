@@ -17,8 +17,10 @@ export async function postingSpend(ctx:RepositoryContext,at:string):Promise<{tod
 import type {SocialDraftRow} from './drafts.ts';
 import {readSocialDraftSourcesForWorker} from './draftSources.ts';
 import {SOCIAL_DRAFT_MODEL,socialDraftPromptVersion,SOCIAL_DRAFT_LIMITS,validateSocialDrafts,type SocialDraftInput} from './draftPolicy.ts';
+import {socialVoicePortAllowed,readPrivateVoiceGuide,type PRIVATE_VOICE_GUIDE_VERSION} from './voiceGeneration.ts';
 export interface SocialDraftPort {
  readonly providerKey:'aws_bedrock.social_draft';
+ readonly privateVoiceGuideVersion?:typeof PRIVATE_VOICE_GUIDE_VERSION;
  countInputTokens(input:SocialDraftInput):Promise<number>;
  generate(input:SocialDraftInput):Promise<{raw:string;costCents:number;costEstimated:boolean}>;
 }
@@ -27,13 +29,15 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
  if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')throw new Error('worker_required');
  if(!port||port.providerKey!=='aws_bedrock.social_draft')return;
  const db=ctx.db as SessionQueryable;
+ const wallclock=async()=>(await db.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
  const read=async(lock=false)=>(await db.query<SocialDraftRow>(`SELECT * FROM social_draft_requests WHERE workspace_id=$1 AND id=$2${lock?' FOR UPDATE':''}`,[ctx.scope.workspaceId,id])).rows[0];
  const initial=await read();if(!initial||initial.state!=='queued')return;
- const review=async(reason:string)=>{await db.query("UPDATE social_draft_requests SET state='review',reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state IN ('queued','calling')",[ctx.scope.workspaceId,id,reason]);};
+ const review=async(reason:string)=>{await db.query("UPDATE social_draft_requests SET state='review',concepts=NULL,reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state IN ('queued','calling')",[ctx.scope.workspaceId,id,reason]);};
+ if(!socialVoicePortAllowed(initial.source_selection,port)){await review('voice_guide_port_unavailable');return;}
  const standing=async()=>{const reason=await retiredPostingDraftReason(ctx,id);if(reason)await review(reason);return reason===null;};
  if(!await withTransaction(db,standing))return;
  if(!await socialWeeklyRequestAllowed(ctx,initial.owner_user_id,initial.weekly_revision)){await review('weekly_setting_changed');return;}
- const source=await readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection);
+ const source=await withTransaction(db,()=>readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection));
  if(!source.ok||source.value.hash!==initial.source_hash){await review('source_changed_or_unavailable');return;}
  let tokens:number;try{tokens=await port.countInputTokens(source.value.input);}catch{await review('token_count_unavailable');return;}
  if(!await withTransaction(db,standing))return;
@@ -41,9 +45,13 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
  let cents:number;try{cents=centsOf(SOCIAL_DRAFT_MODEL,{inputTokens:tokens,outputTokens:SOCIAL_DRAFT_LIMITS.maxOutputTokens},'bedrock');}catch{await review('cost_bound_unavailable');return;}
  if(!Number.isSafeInteger(cents)||cents<=0){await review('cost_bound_unavailable');return;}
  const claim=await withTransaction(db,async()=>{
+  // Guide lifecycle writers own membership/guide before request rows. Acquire
+  // those same locks first, never a guide lock from beneath a request lock.
+  const guide=await readPrivateVoiceGuide(ctx,initial.owner_user_id,initial.source_selection);
+  if(!guide.ok){await review('source_changed_or_unavailable');return null;}
   if(!await standing())return null;
   await lockResearchBudget(ctx);
-  const row=await read(true),at=await databaseNow(ctx);
+  const row=await read(true),at=await wallclock();
   if(!await standing())return null;
   if(!row||row.state!=='queued'||row.paid_attempts>=SOCIAL_DRAFT_LIMITS.maxAttempts||row.deadline_at.getTime()<=Date.parse(at)||row.model_name!==SOCIAL_DRAFT_MODEL||row.prompt_version!==socialDraftPromptVersion(row.source_selection.mode))return null;
   if(!await socialWeeklyRequestAllowed(ctx,row.owner_user_id,row.weekly_revision)){await review('weekly_setting_changed');return null;}
@@ -67,10 +75,36 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
   return reserved;
  });
  if(!claim)return;
+ // Reservation/standing/budget waits above cannot authorize stale style. This
+ // claim alone knows no generation call has happened, so it can release here.
+ const handoff=await withTransaction(db,async()=>{
+  const current=await readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection);
+  await lockResearchBudget(ctx);
+  const row=await read(true);
+  const valid=current.ok&&current.value.hash===source.value.hash&&row?.state==='calling'&&row.source_hash===current.value.hash&&row.deadline_at.getTime()>Date.parse(await wallclock());
+  if(!valid){await review('source_changed_or_unavailable');return null;}
+  if(row.source_selection.mode){
+   const settings=await readResearchSettings(ctx),at=await wallclock(),zone=await workspaceBusinessZone(ctx),shared=await readCreditSpend(ctx,{at,businessTimeZone:zone}),lane=await postingSpend(ctx,at);
+   if(!settings.enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length){await review('drafting_held');return null;}
+   if(shared.todayCents>settings.dailyCostCeilingCents||shared.monthToDateCents>settings.monthlyCostCeilingCents||lane.today>100||lane.month>1000){await review('cost_bound_or_budget_changed');return null;}
+  }
+  if(!await standing())return null;
+  if(!await socialWeeklyRequestAllowed(ctx,row.owner_user_id,row.weekly_revision)){await review('weekly_setting_changed');return null;}
+  if(row.deadline_at.getTime()<=Date.parse(await wallclock())){await review('deadline_expired');return null;}
+  // Prelocking above preserves lifecycle order, not time-dependent eligibility.
+  // Budget/request/standing waits may cross the news source's local-day boundary.
+  const fresh=await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
+  if(!fresh.ok||fresh.value.hash!==row.source_hash||fresh.value.hash!==source.value.hash){await review('source_changed_or_unavailable');return null;}
+  if(row.deadline_at.getTime()<=Date.parse(await wallclock())){await review('deadline_expired');return null;}
+  return fresh.value.input;
+ });
+ if(!handoff){await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}}));return;}
  let outcome:{raw:string;costCents:number;costEstimated:boolean};
- try{outcome=await port.generate(source.value.input);}catch{outcome={raw:'',costCents:claim.cents,costEstimated:true};}
+ try{outcome=await port.generate(handoff);}catch{outcome={raw:'',costCents:claim.cents,costEstimated:true};}
  await withTransaction(db,async()=>{await settleAttempt(ctx,{reservationId:claim.id,at:await databaseNow(ctx),outcome:outcome.costEstimated||!Number.isSafeInteger(outcome.costCents)||outcome.costCents<0?{kind:'estimated'}:{kind:'settled',cents:outcome.costCents}});});
  await withTransaction(db,async()=>{
+  const guide=await readPrivateVoiceGuide(ctx,initial.owner_user_id,initial.source_selection);
+  if(!guide.ok){await review('source_changed_or_unavailable');return;}
   if(!await standing())return;
   await lockResearchBudget(ctx);
   const row=await read(true);if(!row||row.state!=='calling')return;
@@ -82,7 +116,7 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
   if(!await socialWeeklyRequestAllowed(ctx,row.owner_user_id,row.weekly_revision)){await review('weekly_setting_changed');return;}
   const current=await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
   if(!current.ok||current.value.hash!==row.source_hash){await review('source_changed_or_unavailable');return;}
-  if(row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx))){await db.query("UPDATE social_draft_requests SET state='expired',reason='deadline_expired',updated_at=now() WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,id]);return;}
+  if(row.deadline_at.getTime()<=Date.parse(await wallclock())){await db.query("UPDATE social_draft_requests SET state='expired',reason='deadline_expired',updated_at=now() WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,id]);return;}
   const concepts=validateSocialDrafts(outcome.raw,current.value.input);
   await db.query('UPDATE social_draft_requests SET state=$3,concepts=$4::jsonb,reason=$5,updated_at=now() WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,id,concepts?'ready':!row.source_selection.mode&&row.paid_attempts<SOCIAL_DRAFT_LIMITS.maxAttempts?'queued':'review',concepts?JSON.stringify(concepts):null,concepts?null:'generation_unavailable_or_invalid']);
  });

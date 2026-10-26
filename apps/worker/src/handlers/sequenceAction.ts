@@ -7,6 +7,8 @@ import { composeEligibility, type StepEligibility } from '@fss/domain/sequences/
 import { dispatchPreparedStep, runDueStepExecution } from '@fss/domain/sequences/executions.ts';
 import { unavailableSendHandoff, type SendHandoff } from '@fss/domain/sequences/sendHandoff.ts';
 import { listStepWakes } from '@fss/domain/sequences/wake.ts';
+import { selectCampaignOpeningBeforeTransaction } from '@fss/domain/outreach/campaignOpeningStore.ts';
+import type { CampaignOpeningSelector } from '@fss/domain/outreach/campaignOpening.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**
@@ -62,6 +64,8 @@ export interface SequenceActionHandlerOptions {
   readonly sendHandoff?: SendHandoff | undefined;
   /** The composed eligibility read. Absent is the default eleven-question composition. */
   readonly eligibility?: StepEligibility | undefined;
+  /** Internal fake-port source slice only. Production installs no selector. */
+  readonly openingSelector?: CampaignOpeningSelector | undefined;
 }
 
 export function sequenceActionJobHandler(options: SequenceActionHandlerOptions = {}): JobHandler {
@@ -86,6 +90,9 @@ export function sequenceActionJobHandler(options: SequenceActionHandlerOptions =
         workspaceScope(input.scope.workspaceId, { kind: 'system', component: 'worker' }),
         input.session,
       );
+      await selectCampaignOpeningBeforeTransaction(context, input.session, {
+        executionId: stepExecutionId, selector: options.openingSelector, eligibility,
+      });
 
       // 11.2: eligibility is re-read "inside the claiming transaction", and the fence
       // is prepared in it. The runner does not open one for an `outbound_fence`

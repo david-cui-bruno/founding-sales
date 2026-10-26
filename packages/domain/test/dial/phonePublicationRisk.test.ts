@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { registerOpeningCompatibilityDatabases, verifyOpeningDatabaseAbsent } from '../outreach/campaignOpeningPgRuntime.ts';
 import { createTestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext } from '../../db/workspaceScope.ts';
 import { withTransaction } from '../../db/queryable.ts';
@@ -14,8 +15,8 @@ import { ownerRiskFixture, riskEndpoint, type OwnerRiskFixture } from './phoneOw
 import { admitOffice, connection, waitsOn } from './phoneOfficeRiskFixtures.ts';
 
 let f: OwnerRiskFixture | undefined;
-afterEach(async () => { await f?.database.drop(); f = undefined; });
-async function fixture(self = false) { f = await ownerRiskFixture(self); if (!self) await f.assess(); return f; }
+afterEach(async () => { if (f) { await f.database.drop(); await verifyOpeningDatabaseAbsent(f.database.name); } f = undefined; });
+async function fixture(self = false) { f = await ownerRiskFixture(self); await registerOpeningCompatibilityDatabases(); if (!self) await f.assess(); return f; }
 async function reserved(value: OwnerRiskFixture) {
   const result = await value.reserve(); expect(result.ok, JSON.stringify(result)).toBe(true);
   if (!result.ok) throw new Error(result.reason);
@@ -179,6 +180,7 @@ describe('owner-risk final current policy and exact frozen office proof', () => 
     const value = await fixture(); const admission = await admitOffice(value);
     await value.database.session.query('DELETE FROM firm_office_assessments WHERE workspace_id=$1', [value.w]);
     const writer = await connection(value); const reader = await connection(value);
+    await registerOpeningCompatibilityDatabases();
     const writerContext = repositoryContext(value.context.scope, writer.session);
     await writer.session.query('BEGIN');
     await writer.session.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [value.w, admission.candidateId]);
