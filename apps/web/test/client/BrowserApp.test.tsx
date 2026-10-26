@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BrowserApp } from '../../src/client/BrowserApp.tsx';
 import { BrowserClient, PENDING_KEY } from '../../src/client/BrowserClient.ts';
 import { REPLY_PENDING_KEY } from '../../src/client/ReplyAttempt.ts';
@@ -35,27 +35,42 @@ function setup() {
   const client = new BrowserClient({ fetch: send, storage, navigate: vi.fn(), randomUUID: () => id });
   return { client, storage, commands, send, lose: () => { loseResponse = true; }, recover: () => { loseResponse = false; } };
 }
-afterEach(() => { cleanup(); sessionStorage.clear(); });
+afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); });
+function navigate(name: string): void {
+  fireEvent.click(within(screen.getByRole('navigation', { name: 'Workspace sections' })).getByRole('button', { name }));
+}
 async function openNotes(): Promise<void> {
   fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
   await screen.findByText('Fixture Person · Owner');
+  fireEvent.click(screen.getByRole('button', { name: 'Meeting notes' }));
   fireEvent.change(screen.getByLabelText('Meeting ID'), { target: { value: id } });
   fireEvent.click(screen.getByRole('button', { name: 'Read meeting notes' }));
   await screen.findByLabelText('Your notes');
 }
 
 describe('BrowserApp real shared presentation', () => {
-  it('mounts ordinary inventory explicitly and safely loads separate manual prospects only in signed-in Today', async () => {
+  it('opens Today alone and retains manual prospects and ordinary inventory behind explicit destinations', async () => {
     const { client, commands, send } = setup();
     render(<BrowserApp client={client} />);
-    await screen.findByRole('heading', { name: 'Ordinary sourcing inventory' });
+    await screen.findByRole('button', { name: 'Open firm' });
+    expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
+    expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(false);
+    navigate('Prospects');
     expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/list')).toBe(false);
     await waitFor(() => { expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(true); });
     expect(send.mock.calls.some(([url]) => String(url).includes('/sourcing/qualification/'))).toBe(false);
     expect(commands).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Source inventory' }));
+    await screen.findByRole('heading', { name: 'Ordinary sourcing inventory' });
+    expect(screen.queryByRole('region', { name: 'Selected prospect inspector' })).toBeNull();
+    navigate('Today');
     fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
     await screen.findByText('Fixture Person · Owner');
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: firm.name }));
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '← Back to Today' }));
+    await screen.findByRole('button', { name: 'Open firm' });
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Today' }));
     await act(async () => { client.invalidate(false); });
     await screen.findByRole('heading', { name: 'Sign in' });
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
@@ -72,12 +87,17 @@ describe('BrowserApp real shared presentation', () => {
     expect(screen.queryByRole('heading', { name: 'Replies' })).toBeNull();
   });
 
-  it('mounts reviewed replies in Today and existing preparation on the selected Firm without automatic generation', async () => {
+  it('opens reviewed replies in Email and existing preparation through Firm context without automatic generation', async () => {
     const { client, commands, send } = setup();
     render(<BrowserApp client={client} />);
+    await screen.findByRole('button', { name: 'Open firm' });
+    expect(screen.queryByRole('heading', { name: 'Replies' })).toBeNull();
+    navigate('Email');
     await screen.findByRole('heading', { name: 'Replies' });
     expect(screen.getByRole('button', { name: 'Refresh replies' })).toBeTruthy();
+    navigate('Today');
     fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Meeting preparation' }));
     await screen.findByRole('heading', { name: 'Meeting preparation' });
     expect(screen.getByRole('button', { name: 'Load existing meetings' })).toBeTruthy();
     expect(commands).toHaveLength(0);
@@ -97,7 +117,7 @@ describe('BrowserApp real shared presentation', () => {
     await screen.findByRole('heading', { name: 'Sign in' });
     expect(screen.queryByText(firm.name)).toBeNull();
     expect(screen.queryByLabelText('Your notes')).toBeNull();
-    expect(screen.getByText(/OFF \/ unavailable/u)).toBeTruthy();
+    expect(screen.queryByRole('navigation', { name: 'Workspace sections' })).toBeNull();
   });
   it('locks an uncertain draft, reloads without replay, explicitly retries same command identity', async () => {
     const scope = setup();
