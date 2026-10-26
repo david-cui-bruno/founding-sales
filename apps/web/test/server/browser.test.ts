@@ -49,6 +49,22 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it('preserves guided Social business refusals but not custody or authority failures', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const input = { commandId: id, mode: 'linkedin_grounded', sourceRefs: [], factBlocks: [{ id, version: 1 }], voiceGuideRef: { guideId: id, revision: 2 } };
+    const business = { status: 'refused', replayed: false, reason: 'voice_guide_changed_or_unavailable' };
+    mocks.route.mockResolvedValueOnce({ status: 409, body: business });
+    expect(await handler(post('/browser/api/social/drafts/request', input, headers))).toMatchObject({ status: 200, body: business });
+    for (const reason of ['command_payload_mismatch', 'command_device_mismatch', 'command_kind_mismatch', 'session_changed', 'arbitrary_private_detail']) {
+      mocks.route.mockResolvedValueOnce({ status: 409, body: { ...business, reason } });
+      expect(await handler(post('/browser/api/social/drafts/request', input, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+    }
+    mocks.route.mockResolvedValueOnce({ status: 409, body: { ...business, private: 'not exposed' } });
+    expect(await handler(post('/browser/api/social/drafts/request', input, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+    mocks.route.mockResolvedValueOnce({ status: 409, body: business });
+    expect(await handler(post('/browser/api/social/drafts/request/receipt', { commandId: id, payloadSHA256: 'a'.repeat(64) }, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+  });
   it('admits only exact guided Social commands and pins the gateway version', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
