@@ -168,7 +168,7 @@ describe('BrowserApp real shared presentation', () => {
     });
   });
   describe('exact navigation', () => {
-    it('opens only the current exact Firm in memory without dispatching requests or granting readiness', async () => {
+    it('opens only the current exact Firm with current reads, no command or calling-readiness claim', async () => {
       const { client, send, storage } = setup(); render(<BrowserApp client={client} />);
       fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
       const open = await screen.findByRole('button', { name: 'Open calling brief' });
