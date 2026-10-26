@@ -1,5 +1,6 @@
 import { campaignCompositionCases } from './support/campaignCompositionCases.ts'; import { AUTOMATIC_SUPPLY_CONSTRAINT_CASES } from './support/automaticSupplyCases.ts'; import { PHONE_HANDOFF_CONSTRAINT_CASES } from './support/phoneHandoffCases.ts'; import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {BOOKING_CHANGE_CONSTRAINT_CASES} from './support/bookingChangeConstraints.ts';
+import {CALLING_IDENTITY_CONSTRAINT_CASES,CALLING_DRAFT_CONSTRAINT_CASES} from './support/callingCases.ts';
 import {BOOKING_MESSAGE_CONSTRAINT_CASES,BOOKING_MESSAGE_GUARD_CASES} from './support/bookingMessageCases.ts';
 import {BOOKING_CONVERSATION_CONSTRAINT_CASES} from './support/bookingConversationCases.ts';
 import {
@@ -1138,125 +1139,8 @@ const cases: readonly Case[] = [
       ),
   },
 
-  // -------------------------------------------------------- calling_identities
-  {
-    constraint: "calling_identities_pkey",
-    run: async (f) => {
-      const created = await f.session.query<{ id: string }>(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164) VALUES ($1, $2, '+14015550200') RETURNING id",
-        [workspace(f), admin(f)],
-      );
-      return await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, id, owner_user_id, e164) VALUES ($1, $2, $3, '+14015550201')",
-        [workspace(f), created.rows[0]?.id, admin(f)],
-      );
-    },
-  },
-  {
-    constraint: "calling_identities_number_unique",
-    run: async (f) => {
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164) VALUES ($1, $2, '+14015550202')",
-        [workspace(f), admin(f)],
-      );
-      return await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164) VALUES ($1, $2, '+14015550202')",
-        [workspace(f), salesperson(f)],
-      );
-    },
-  },
-  {
-    constraint: "calling_identities_owner_fkey",
-    run: async (f) =>
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164) VALUES ($1, $2, '+14015550203')",
-        [workspace(f), f.seeded.beta.admin.userId],
-      ),
-  },
-  {
-    constraint: "calling_identities_workspace_id_fkey",
-    run: async (f) =>
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, e164) VALUES ('00000000-0000-4000-8000-000000000000', '+14015550204')",
-      ),
-  },
-  {
-    constraint: "calling_identities_e164_shape",
-    run: async (f) =>
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164) VALUES ($1, $2, '401-555-0205')",
-        [workspace(f), admin(f)],
-      ),
-  },
-  {
-    constraint: "calling_identities_verification_known",
-    run: async (f) =>
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status) VALUES ($1, $2, '+14015550206', 'probably')",
-        [workspace(f), admin(f)],
-      ),
-  },
-  {
-    // The reserved shared line: a null-owner row may exist, but never enabled.
-    constraint: "calling_identities_shared_line_disabled",
-    run: async (f) =>
-      await f.session.query(
-        // With its attestation recorded (lane g60), so the missing owner is the only
-        // thing this row gets wrong.
-        `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
-                                         verified_at, verified_by_user_id, verification_method)
-         VALUES ($1, NULL, '+14015550207', 'verified', true, now(), $2, 'admin_attestation')`,
-        [workspace(f), admin(f)],
-      ),
-  },
-  // Migration 0016 (lane g60): who attested a number, how, and when it was retired.
-  {
-    constraint: "calling_identities_verification_method_known",
-    run: async (f) =>
-      await f.session.query(
-        `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
-                                         verified_at, verified_by_user_id, verification_method)
-         VALUES ($1, $2, '+14015550210', 'verified', true, now(), $2, 'caller_id_looked_right')`,
-        [workspace(f), admin(f)],
-      ),
-  },
-  {
-    // The attester is a member of this workspace, never of another.
-    constraint: "calling_identities_verified_by_fkey",
-    run: async (f) =>
-      await f.session.query(
-        `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
-                                         verified_at, verified_by_user_id, verification_method)
-         VALUES ($1, $2, '+14015550211', 'verified', true, now(), $3, 'admin_attestation')`,
-        [workspace(f), admin(f), f.seeded.beta.admin.userId],
-      ),
-  },
-  {
-    constraint: "calling_identities_disabled_by_fkey",
-    run: async (f) =>
-      await f.session.query(
-        `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, disabled_at, disabled_by_user_id)
-         VALUES ($1, $2, '+14015550212', now(), $3)`,
-        [workspace(f), admin(f), f.seeded.beta.admin.userId],
-      ),
-  },
-  {
-    // A retirement names who and when, and a retired number is not enabled.
-    constraint: "calling_identities_disable_recorded",
-    run: async (f) =>
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, disabled_at) VALUES ($1, $2, '+14015550213', now())",
-        [workspace(f), admin(f)],
-      ),
-  },
-  {
-    constraint: "calling_identities_label_shape",
-    run: async (f) =>
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, label) VALUES ($1, $2, '+14015550214', '')",
-        [workspace(f), admin(f)],
-      ),
-  },
+  ...CALLING_IDENTITY_CONSTRAINT_CASES,
+  ...CALLING_DRAFT_CONSTRAINT_CASES,
 
   // --------------------------------------------------------- command_receipts
   {

@@ -1,4 +1,4 @@
--- changes: calling_follow_up_drafts
+-- changes: calling_follow_up_drafts, call_logs, sourcing_manual_prospect_attempts
 -- Current private preparation only, never a recipient, permission or outbound fence.
 CREATE FUNCTION calling_follow_up_content_valid(c jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE k text; prose text; units integer;
