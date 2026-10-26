@@ -9,3 +9,7 @@ it('adapts only finite operational refusals, not actual auth or command collisio
  expect(callingExecutionBrowserResult('/calling/execution/receipt',404,{error:'not_found'})).toBeNull();
  expect(callingExecutionBrowserResult('/calls/stop',409,{status:'refused',replayed:false,reason:'route_version_stale'})).toBeNull();
 });
+it('review excludes the removed browser history route from operational normalization',()=>{
+ expect(callingExecutionBrowserResult('/calls/history',404,{error:'not_found'})).toBeNull();
+ expect(callingExecutionBrowserResult('/calls/history',503,{error:'integration_unconfigured'})).toBeNull();
+});

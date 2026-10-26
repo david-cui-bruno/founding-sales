@@ -15,10 +15,12 @@ export class CallingExecutionController{
  private device:CallingVoiceDevice|null=null;
  private call:CallingVoiceCall|null=null;
  private release:(()=>void)|null=null;
+ private deviceErrorCleanup:(()=>void)|null=null;
+ private cancelSetup:(()=>void)|null=null;
  private state:CallingExecutionState={phase:'idle',message:'No browser call started.',muted:false,link:null};
  constructor(readonly custody:CallingExecutionCustody,private readonly publish:(state:CallingExecutionState)=>void,private readonly ports:CallingExecutionPorts={}){}
  private update(state:CallingExecutionState):void{this.state=state;this.publish(state);}
- private teardown():void{const call=this.call,device=this.device;this.call=null;this.device=null;try{call?.disconnect();}catch{/* Keep uncertainty. */}try{device?.destroy();}catch{/* Keep uncertainty. */}this.release?.();this.release=null;}
+ private teardown():void{const call=this.call,device=this.device;this.call=null;this.device=null;this.cancelSetup?.();this.cancelSetup=null;this.deviceErrorCleanup?.();this.deviceErrorCleanup=null;try{call?.disconnect();}catch{/* Keep uncertainty. */}try{device?.destroy();}catch{/* Keep uncertainty. */}this.release?.();this.release=null;}
  stop():void{this.generation++;this.teardown();this.update({phase:'unknown',message:'Local audio stopped or setup abandoned. Remote termination is not confirmed. Recover the exact receipt.',muted:false,link:null});}
  dispose():void{this.generation++;this.teardown();}
  mute():void{if(!this.call)return;try{const muted=!this.state.muted;this.call.mute(muted);this.update({...this.state,muted});}catch{this.stop();}}
@@ -53,7 +55,11 @@ export class CallingExecutionController{
    const made=await (this.ports.device??browserCallingVoiceDevice)(token.token);
    if(!current()){made.destroy();return;}this.device=made;
    if(Date.parse(created.result.expiresAt)<=Date.now()){made.destroy();throw Error('Session expired during device setup');}
-   const placed=await made.connect({sessionId:created.result.sessionId});
+   const interrupted=new Promise<never>((_resolve,reject)=>{this.cancelSetup=()=>{reject(Error('Voice setup ended'));};});
+   this.deviceErrorCleanup=made.onError(()=>{if(current())this.stop();});
+   if(!current()){await interrupted;return;}
+   const connecting=made.connect({sessionId:created.result.sessionId}).then(placed=>{if(!current()){placed.disconnect();made.destroy();throw Error('Late voice setup ended');}return placed;});
+   const placed=await Promise.race([connecting,interrupted]);this.cancelSetup=null;
    if(!current()){placed.disconnect();made.destroy();return;}
    this.call=placed;
    const end=():void=>{if(current())this.stop();};
@@ -74,11 +80,18 @@ export class CallingExecutionController{
    if(!current())return null;
    if(receipt.state==='accepted'&&(receipt.firmId!==held.firmId||held.sessionId!==undefined&&held.sessionId!==receipt.sessionId))throw Error('Receipt identity changed');
    if(receipt.state==='refused'||receipt.state==='accepted'&&(terminal.has(receipt.status)||receipt.status==='expired_unconsumed')){
-    await this.custody.complete(held,current);
     const link=receipt.state==='accepted'&&terminal.has(receipt.status)?{firmId:held.firmId,sessionId:receipt.sessionId,routeId:held.routeId,callingIdentityId:held.callingIdentityId,...(held.contactId?{contactId:held.contactId}:{})}:null;
+    // Terminal is not disposal: retain opaque custody until deliberate handoff resolution.
+    if(link){if(!held.sessionId)await this.custody.session(held,link.sessionId,current);}else await this.custody.complete(held,current);
+    if(!current())return null;
     this.update({phase:'terminal',message:link?'Server confirmed call termination. Select the actual disposition, no outcome is inferred.':'Server confirmed refusal or expiry without consumption. No call disposition is inferred.',muted:false,link});
    }else this.update({phase:'unknown',message:'Call remains UNKNOWN or active on the server. No reconnect or replacement call.',muted:false,link:null});
    return receipt;
   });}catch{if(current())this.update({phase:'unknown',message:'Receipt unavailable. Uncertainty remains held, no reconnect or replacement call.',muted:false,link:null});return null;}
+ }
+ async resolveHandoff(isScopeCurrent:()=>boolean):Promise<void>{
+  const link=this.state.link,held=this.custody.read();if(!link||!held||held.firmId!==link.firmId||held.sessionId!==link.sessionId||held.routeId!==link.routeId)return;
+  const epoch=this.custody.client.epoch,current=():boolean=>isScopeCurrent()&&this.custody.client.isCurrent(epoch)&&this.custody.binding()!==null;
+  await this.custody.complete(held,current);if(current())this.update({phase:'idle',message:'Terminated call handoff explicitly finished. No disposition was inferred.',muted:false,link:null});
  }
 }

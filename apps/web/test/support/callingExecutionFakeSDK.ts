@@ -2,6 +2,8 @@
 // It cannot reach a provider, obtain audio, or mint a ticket. The production SDK is unchanged.
 declare global { interface Window { __callingFake:{constructed:number;connects:{sessionId:string}[];destroyed:number;disconnects:number;microphones:number}; __callingFakeConnect:(input:{sessionId:string})=>Promise<void>; } }
 export class Device{
+ on(_event:string,_listener:()=>void){return this;}
+ removeListener(_event:string,_listener:()=>void){return this;}
  constructor(_token:string,_options:unknown){window.__callingFake.constructed++;}
  async connect({params}:{params:{sessionId:string}}){
   if(Object.keys(params).join(',')!=='sessionId')throw Error('Only sessionId allowed');
