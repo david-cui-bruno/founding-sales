@@ -26,7 +26,7 @@ import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDel
 import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts';
 import {routineReplyInterpretation} from '../outreach/replyInterpretation.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
-import {prospectPhoneDiscoveryHandler} from '../handlers/prospectPhoneDiscovery.ts';
+import {prospectPhoneDiscoveryHandler,prospectPhoneDiscoverySource} from '../handlers/prospectPhoneDiscovery.ts';
 import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
 import {sourcingDiscoveryHandler,sourcingDiscoverySource,apolloDiscoverySource} from '../handlers/sourcingDiscovery.ts';
 import {apolloFromEnvironment} from '../sourcing/apolloSearch.ts';
@@ -559,6 +559,7 @@ export function workerDueWorkSources(
     researchSweepSource(),
     sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
     sourcingQualificationSource(options.qualification===true),
+    prospectPhoneDiscoverySource(),
     sourcingDiscoverySource(options.discovery === true),
     apolloDiscoverySource(options.apolloDiscovery),
     telephonySweepSource(),
