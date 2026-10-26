@@ -39,6 +39,8 @@ export const manualLiteralPhoneDiagnosticSchema = z.strictObject({
 export const manualLiteralPhoneDiagnosticsSchema = z.strictObject({
   entries: z.array(manualLiteralPhoneDiagnosticSchema).max(16),
   truncated: z.boolean(),
+  // Earliest discovery dependency, including entries omitted by diagnostic bounds.
+  expiresAt: instant.optional(),
 });
 /** A literal is an authorized original span, never verified ownership or calling authority. */
 export const manualLiteralPhoneSourceSchema = z.strictObject({
