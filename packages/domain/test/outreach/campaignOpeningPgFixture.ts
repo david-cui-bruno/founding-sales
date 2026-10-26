@@ -4,7 +4,7 @@ import type { CampaignOpeningPolicy } from '@fss/contracts';
 import { createAuthFixture } from '../../../../apps/api/test/support/authFixture.ts';
 import { seedEmailCampaign, seedCampaignResearch } from '../../../../apps/web/test/support/emailCampaignSeed.ts';
 import type { ThinHostApp } from '../../../../apps/web/test/support/thinHostApp.ts';
-import { withTransaction } from '../../db/queryable.ts';
+import { withTransaction, type Queryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import { approveEmailCampaign } from '../../outreach/emailCampaign.ts';
 import { createQualifiedResearchFirm } from '../../sourcing/qualifiedResearch.ts';
@@ -66,9 +66,10 @@ export async function campaignOpeningPgFixture(policyEnabled = true, openingExpi
       enrollmentId: admission.enrollment_id, planId: admission.plan_id, executionId: execution.id, at, stop };
   } catch (error) { await stop(); throw error; }
 }
-/** Fake handoff pins only the existing reservation owner's clock to the same
- * fictional recipient window as runDueStepExecution. The real frozen prepare
- * then reuses that same execution reservation, never a new cap or action ID.
+/** The fake journey and its real reservation owner must share one fictional
+ * instant, including when recipient-window placement crosses a local date.
+ * Only prepare's explicit databaseNow read is parameterized on this context.
+ * SQL wall-time policy/source/expiry gates and all other sessions stay real.
  * Dispatch remains separately fake and owner-OFF is never changed. */
 export function openingPgHandoff(at: string) {
   const real = outboundSendHandoff();
@@ -76,6 +77,11 @@ export function openingPgHandoff(at: string) {
     const [context, request] = args;
     const reservation = await reserveOutreachEmail(context, request.stepExecutionId, at);
     assert(reservation.ok, reservation.ok ? '' : reservation.reason);
-    return real.prepare(...args);
+    // Keep the ordinary claim and replay path, with identical dates on both
+    // reads. Preclaim alone is insufficient: prepare rechecks the action date.
+    const clockDb: Queryable = { query: (text, values) => text === 'SELECT now() AS now'
+      ? context.db.query('SELECT $1::timestamptz AS now', [at])
+      : context.db.query(text, values) };
+    return real.prepare(repositoryContext(context.scope, clockDb), request);
   } };
 }
