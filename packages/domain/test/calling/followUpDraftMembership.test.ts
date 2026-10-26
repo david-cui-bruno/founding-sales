@@ -9,7 +9,10 @@ import {CallingAuthorityChanged} from '../../calling/followUpDraftAccess.ts';
 let db:TestDatabase,seed:TwoWorkspaces;
 const authority=async()=>true;
 function latch(){let release!:()=>void;const promise=new Promise<void>(resolve=>{release=resolve;});return {promise,release};}
-beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);console.info('Calling correction membership DB',{database:db.name,template:process.env['FSS_TEST_TEMPLATE_DATABASE'],port:new URL(process.env['FSS_TEST_CLUSTER_URL']!).port});});
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);
+ // The tested creator may depart only while a different active admin remains.
+ await db.session.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);
+ console.info('Calling correction membership DB',{database:db.name,template:process.env['FSS_TEST_TEMPLATE_DATABASE'],port:new URL(process.env['FSS_TEST_CLUSTER_URL']!).port});});
 afterAll(async()=>db?.drop());
 const cases=(['read','update'] as const).flatMap(operation=>(['deactivation','role'] as const).flatMap(change=>(['membership','operation'] as const).map(winner=>({operation,change,winner}))));
 it.each(cases)('$operation versus $change, $winner obtains membership first, serializes and erases without deadlock',async({operation,change,winner})=>{
