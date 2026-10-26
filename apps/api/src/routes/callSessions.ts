@@ -32,6 +32,7 @@ import { readAnalysisSummaries } from '@fss/domain/calls/analysisPaid.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
+import { privateAuthorityRefusal, privatePrincipalIsCurrent } from './privateReadAuthority.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -213,6 +214,9 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
   }
 
   if (request.path === '/calls/access-token') {
+    // Provider settings awaited above. Reauthenticate the exact captured actor after
+    // that wait, with no further await between current authority and mint/publication.
+    if (!await privatePrincipalIsCurrent(deps)) return privateAuthorityRefusal();
     const minted = twilio.mintAccessToken(deps.principal.userId, Math.floor(Date.now() / 1000));
     return {
       status: 200,
