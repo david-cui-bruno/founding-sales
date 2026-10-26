@@ -44,7 +44,7 @@ it('serializes independent registry mutations, never network waits, and reconcil
  expect(await Promise.all([x,y])).toEqual([{state:'unknown'},{state:'unknown'}]);const held=a.custody.all();expect(held).toHaveLength(2);expect(b.custody.all()).toEqual(held);
  // Complete X while a third target is appended. X alone is removed.
  a.receipt({state:'refused',reason:'invalid_input'});const thirdInput={kind:'firm' as const,firmId:other,report:{performedByUser:true as const,outcome:'no_answer' as const}};
- await Promise.all([reconcileCalling(a.custody,held[0]!,()=>true),dispatchCallingWrap(b.custody,thirdInput,()=>true)]);
+ await Promise.all([reconcileCalling(a.custody,a.custody.read(callingTarget(input()))!,()=>true),dispatchCallingWrap(b.custody,thirdInput,()=>true)]);
  expect(a.custody.all().map(p=>p.target).sort()).toEqual([callingTarget({...input(),candidateId:third}),`firm:${other}`].sort());
  expect(await dispatchCallingWrap(a.custody,{...input(),candidateId:third},()=>true)).toEqual({state:'unknown'});expect(b.writes).toHaveLength(2);a.client.dispose();b.client.dispose();
 });
