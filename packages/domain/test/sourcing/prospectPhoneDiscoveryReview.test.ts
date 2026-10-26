@@ -75,6 +75,40 @@ it('SPEC S2 actual provider pages plus skipped.page_over_bound cannot persist a 
  expect(await read(f.input)).toMatchObject({ok:true,value:{state:'unavailable',reason:'bounded_capture_incomplete'}});
  expect((await runtime.query('SELECT content FROM sourcing_prospect_phone_discoveries WHERE id=$1',[result.value.runId])).rows[0]?.['content']).toBeNull();
 });
+it.each(['firm_timeout','paused','request_failed','robots_unreadable','source_authority_refused'] as const)('RISK R2 interrupted provider prefix %s cannot become complete evidence',async reason=>{
+ const f=await fixture(),result=await request(f.input);if(!result.ok)throw Error(result.reason);
+ await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website,{[reason]:1})});
+ expect(await read(f.input)).toMatchObject({ok:true,value:{state:'unavailable',reason:reason==='source_authority_refused'?'source_not_permitted':'discovery_interrupted'}});
+ expect((await runtime.query('SELECT content FROM sourcing_prospect_phone_discoveries WHERE id=$1',[result.value.runId])).rows[0]?.['content']).toBeNull();
+});
+it.each(['contact','redirect-destination','robots.txt'] as const)('RISK R1 exact denied discovered or redirect destination %s has zero body requests',async path=>{
+ const f=await fixture(),destination=`${f.website}${path}`;await deny(destination);
+ const result=await request(f.input);if(!result.ok)throw Error(result.reason);
+ let bodies=0,hook=false;
+ const pageFetch:PageFetchProvider={providerKey:'controlled-exact-destination',fetchPages:async input=>{
+  hook=typeof input.mayFetchUrl==='function';
+  if(!input.mayFetchUrl||await input.mayFetchUrl(destination)){bodies++;return provider(f.website).fetchPages(input);}
+  const prefix=await provider(f.website).fetchPages(input);if(!prefix.ok)return prefix;
+  return {...prefix,value:{...prefix.value,skipped:{source_authority_refused:1}}};
+ }};
+ await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch});
+ expect(hook).toBe(true);expect(bodies).toBe(0);
+ expect(await read(f.input)).toMatchObject({ok:true,value:{state:'unavailable',reason:'source_not_permitted'}});
+});
+it('RISK R1 exact destination shorter expiry commits before the simulated HTTP body phase',async()=>{
+ const f=await fixture(),destination=`${f.website}contact`,expiry=new Date(Date.now()+1800000);
+ const result=await request(f.input);if(!result.ok)throw Error(result.reason);
+ await evidence(destination,expiry);
+ const pid=(await runtime.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0]!.pid;
+ let permission:boolean|undefined,committedExpiry:string|undefined,idle=false;
+ await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website,{},async input=>{
+  permission=await input.mayFetchUrl?.(destination);
+  committedExpiry=(await db.session.query<{expires_at:Date}>('SELECT expires_at FROM sourcing_prospect_phone_discoveries WHERE id=$1',[result.value.runId])).rows[0]!.expires_at.toISOString();
+  idle=(await db.session.query<{state:string}>('SELECT state FROM pg_stat_activity WHERE pid=$1',[pid])).rows[0]?.state==='idle';
+ })});
+ expect(permission).toBe(true);expect(committedExpiry).toBe(expiry.toISOString());expect(idle).toBe(true);
+ expect(await read(f.input)).toMatchObject({ok:true,value:{state:'complete',expiresAt:expiry.toISOString()}});
+});
 it.each(['page_budget_reached','robots_disallowed','url_not_permitted','address_not_public','url_has_query','status_404'] as const)('SPEC S2 intentional bound or unrelated policy skip %s does not reject current bounded originals',async reason=>{
  const f=await fixture(),result=await request(f.input);if(!result.ok)throw Error(result.reason);
  await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website,{[reason]:1})});

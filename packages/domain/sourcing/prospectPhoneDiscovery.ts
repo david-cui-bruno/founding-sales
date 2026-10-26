@@ -130,6 +130,12 @@ export function captureProspectPhonePages(pages:PageFetchResult['pages'],website
  if(new Set(observations.map(source=>source.url)).size!==observations.length||Buffer.byteLength(JSON.stringify(observations))>100000)return refuse('bounded_capture_incomplete');
  return {ok:true,value:observations};
 }
+function phoneDiscoverySkippedReason(skipped:PageFetchResult['skipped']):ProspectPhoneDiscoveryReason|null{
+ if((skipped['source_authority_refused']??0)>0)return 'source_not_permitted';
+ if((skipped['page_over_bound']??0)>0)return 'bounded_capture_incomplete';
+ if(['firm_timeout','paused','request_failed','robots_unreadable'].some(reason=>(skipped[reason]??0)>0))return 'discovery_interrupted';
+ return null;
+}
 /** Owns committed claim/network/finalization phases. A running run is never reclaimed. */
 export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{runId:string},deps:{pageFetch:PageFetchProvider}):Promise<void>{
  const initial=await withTransaction(ctx.db,async()=>{
@@ -143,12 +149,20 @@ export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{run
  if(!initial?.content)return;
  let interruption:ProspectPhoneDiscoveryReason|null=null;
  const settings=await readResearchSettings(ctx),maxPages=Math.min(settings.maxPagesPerFirm,4),maxBytes=Math.min(settings.maxPageBytes,1000000);
- const allowed=()=>withTransaction(ctx.db,async()=>{
+ const allowed=(destination?:string)=>withTransaction(ctx.db,async()=>{
   const run=await lockPhoneDiscoveryRun(ctx,initial.id);
   if(!run||run.state!=='running'){interruption='discovery_interrupted';return false;}
   interruption=await validatePhoneDiscoveryRun(ctx,run,true);
   const liveSettings=await readResearchSettings(ctx);
   if(!interruption&&(Math.min(liveSettings.maxPagesPerFirm,4)<maxPages||Math.min(liveSettings.maxPageBytes,1000000)<maxBytes))interruption='bounded_capture_incomplete';
+  if(!interruption&&destination!==undefined){
+   if(!isPublicResearchUrl(destination)||!isSameResearchSite(run.content!.website,destination))interruption='source_not_permitted';
+   else{
+    const limits=await phoneDiscoverySourceLimit(ctx,[destination]),now=await phoneDiscoveryNow(ctx);
+    if(limits.denied||limits.expiresAt&&limits.expiresAt<=now)interruption='source_not_permitted';
+    else if(limits.expiresAt&&limits.expiresAt<run.expires_at)await ctx.db.query('UPDATE sourcing_prospect_phone_discoveries SET expires_at=$3 WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,run.id,limits.expiresAt]);
+   }
+  }
   if(interruption){await invalidatePhoneDiscovery(ctx,run.id,interruption);return false;}
   return true;
  });
@@ -158,11 +172,12 @@ export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{run
   else{
    const {website,sourceUrls}=initial.content;
    const urls=[...new Set([website,...sourceUrls.filter(url=>isPublicResearchUrl(url)&&isSameResearchSite(website,url))])];
-   const answer=await deps.pageFetch.fetchPages({urls,firmWebsite:website,links:urls,prioritizeContactPages:true,maxPagesPerFirm:maxPages,maxBytes,shouldContinue:allowed});
-   // The real provider omits an aborted over-byte-cap page. Its surviving
-   // prefix cannot establish complete phone coverage. Intentional page-budget
-   // limits and policy refusals are not evidence of an over-bound original.
-   captured=!answer.ok?refuse('source_unavailable'):(answer.value.skipped['page_over_bound']??0)>0?refuse('bounded_capture_incomplete'):
+   const answer=await deps.pageFetch.fetchPages({urls,firmWebsite:website,links:urls,prioritizeContactPages:true,maxPagesPerFirm:maxPages,maxBytes,shouldContinue:allowed,mayFetchUrl:allowed});
+   // The provider drops over-bound/interrupted originals. No surviving prefix
+   // can resolve a phone. Intentional page budgets, policy skips and absent
+   // guessed paths are not interruption, so do not blanket-refuse all skips.
+   const skipped=answer.ok?phoneDiscoverySkippedReason(answer.value.skipped):null;
+   captured=!answer.ok?refuse('source_unavailable'):skipped?refuse(skipped):
     captureProspectPhonePages(answer.value.pages,website,maxPages,maxBytes,(await phoneDiscoveryNow(ctx)).getTime());
   }
  }catch{captured=refuse('source_unavailable');}
