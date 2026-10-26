@@ -1,6 +1,7 @@
 import type {JSX} from 'react';
 import type {ManualProspect} from '@fss/contracts';
 import {manualPhoneLabel,manualProspectLabel,manualProspectSite} from './manualProspectPresentation.ts';
+import {useCurrentPhoneEvidence} from './useCurrentPhoneEvidence.ts';
 function Reference({url,label}:{url:string|null;label:string}):JSX.Element{
  let href:string|undefined;
  try{if(url){const parsed=new URL(url);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)href=parsed.href;}}catch{/* Retained text is not executable. */}
@@ -8,14 +9,14 @@ function Reference({url,label}:{url:string|null;label:string}):JSX.Element{
 }
 export function ManualProspectCard({prospect:p,disabled,feedback,activity,prepare}:{prospect:ManualProspect;disabled:boolean;feedback:(state:'kept'|'skipped'|'wrong_number')=>void;activity?:()=>void;prepare?:()=>void}):JSX.Element{
  const label=manualProspectLabel(p),kind=p.presentation?.kind.replaceAll('_',' ')??'unresolved';
- const phone=p.phoneEvidence;
+ const phone=useCurrentPhoneEvidence(p.phoneEvidence);
  const site=manualProspectSite(p);
  return <article aria-label={`Manual prospect ${p.candidateId}`} className="manual-prospect-row">
   <div className="manual-prospect-overview">
    <div className="manual-inspector-top"><span className="manual-eyebrow">Selected prospect</span><span className={`manual-state manual-state-${p.state}`}>{p.state.replaceAll('_',' ')}</span></div>
    <div className="manual-prospect-identity"><h3 tabIndex={-1}>{label}</h3><p>{kind} · UNVERIFIED</p><p>Site {site?<Reference url={p.website} label={site}/>:'unknown'}</p></div>
    <p>Apparent area {p.locality??'unknown'}, {p.region??'unknown'}</p>
-   <div className="manual-prospect-phone"><span className="manual-eyebrow">Retained phone evidence</span><p>{manualPhoneLabel(p)}</p><p>Ownership and reachability are not verified. Unknown phones remain reviewable.</p>{p.state==='wrong_number'?<p className="manual-wrong-note">Manual flag: wrong number. Original phone evidence is unchanged.</p>:null}</div>
+   <div className="manual-prospect-phone"><span className="manual-eyebrow">Retained phone evidence</span><p>{manualPhoneLabel({...p,phoneEvidence:phone})}</p><p>Ownership and reachability are not verified. Unknown phones remain reviewable.</p>{p.state==='wrong_number'?<p className="manual-wrong-note">Manual flag: wrong number. Original phone evidence is unchanged.</p>:null}</div>
    <p>Manual state {p.state.replaceAll('_',' ')} · Revision {p.revision}</p>
    <div className="manual-prospect-actions" role="group" aria-label="Feedback for this exact observation">
     <button disabled={disabled} onClick={()=>{feedback('kept');}}>Keep</button>

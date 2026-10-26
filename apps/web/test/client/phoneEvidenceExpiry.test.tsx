@@ -6,6 +6,8 @@ import {RetainedPhoneEvidence} from '../../src/client/RetainedPhoneEvidence.tsx'
 import {CallingContext} from '../../src/client/CallingContext.tsx';
 import {CallingQueue,type CallingQueueEntry} from '../../src/client/CallingQueue.tsx';
 import {BrowserClient} from '../../src/client/BrowserClient.ts';
+import {ManualProspectCard} from '../../src/client/ManualProspectCard.tsx';
+import {ManualProspectTable} from '../../src/client/ManualProspectTable.tsx';
 
 const id='00000000-0000-4000-8000-000000000001',other='00000000-0000-4000-8000-000000000002';
 const now=Date.parse('2026-10-26T07:00:00.000Z'),value='+12145550123';
@@ -66,6 +68,38 @@ it('retained expiry preserves evidence without finite discovery authority and ca
 });
 
 function prospect(){return manualProspectSchema.parse({candidateId:id,revision:1,observedName:'Expiry fixture',website:'https://company.example.test/',locality:'Dallas',region:'TX',observedPhone:value,phoneBasis:'retained_observation',phoneEvidence:evidence(),sources:[{label:'Raw retained source',url:'https://company.example.test/',observedAt:source.retrievedAt}],sourceNotices:[],retainedAt:source.retrievedAt,state:'new',unknowns:['Identity unknown'],possibleDuplicateCount:0,qualification:'unverified',contactAuthority:'not_granted'});}
+it('retained expiry clears actual ManualProspectCard inspector enrichment while preserving raw review',()=>{
+ clock();const p=prospect(),feedback=vi.fn(),activity=vi.fn(),prepare=vi.fn();
+ render(<ManualProspectCard prospect={p} disabled={false} feedback={feedback} activity={activity} prepare={prepare}/>);
+ const card=within(screen.getByRole('article',{name:`Manual prospect ${id}`}));
+ fireEvent.click(card.getByText('Observed name, sources and details'));
+ expect(card.getByText(`Phone ${value} · observed, not call-ready`)).toBeTruthy();
+ expect(card.getAllByRole('link',{name:source.url})).toHaveLength(3);
+ act(()=>vi.advanceTimersByTime(1000));
+ expect(card.getByText('Phone unknown · not extracted')).toBeTruthy();
+ expect(screen.getByRole('article').textContent).not.toContain(value);
+ expect(card.queryByRole('link',{name:source.url})).toBeNull();
+ expect(card.queryByText(/Retained phone scan:|Retained original literal:|Captured content hash|Authority:/u)).toBeNull();
+ expect(card.getByRole('heading',{name:p.observedName})).toBeTruthy();
+ expect(card.getByRole('link',{name:'Raw retained source'})).toBeTruthy();
+ expect(card.getByRole('button',{name:'Keep'}).hasAttribute('disabled')).toBe(false);
+ expect(feedback).not.toHaveBeenCalled();expect(activity).not.toHaveBeenCalled();expect(prepare).not.toHaveBeenCalled();
+});
+it('retained expiry clears actual ManualProspectTable row without changing its timeless neighbor or selection',()=>{
+ clock();const p=prospect(),select=vi.fn();
+ const timeless=manualProspectSchema.parse({...p,candidateId:other,observedName:'Timeless fixture',phoneEvidence:{state:'observed',value,sources:[source]}});
+ render(<ManualProspectTable prospects={[p,timeless]} selected={p.candidateId} select={select}/>);
+ const table=within(screen.getByRole('table'));
+ const row=table.getByRole('row',{name:/Expiry fixture/u}),neighbor=table.getByRole('row',{name:/Timeless fixture/u});
+ expect(within(row).getByText(`Phone ${value} · observed, not call-ready`)).toBeTruthy();
+ act(()=>vi.advanceTimersByTime(1000));
+ expect(within(row).getByText('Phone unknown · not extracted')).toBeTruthy();expect(row.textContent).not.toContain(value);
+ expect(row.querySelector('.manual-phone-not_extracted')).not.toBeNull();
+ expect(within(neighbor).getByText(`Phone ${value} · observed, not call-ready`)).toBeTruthy();
+ const button=within(row).getByRole('button',{name:/Expiry fixture/u});expect(button.getAttribute('aria-current')).toBe('true');
+ expect(select).not.toHaveBeenCalled();fireEvent.click(button);expect(select).toHaveBeenCalledExactlyOnceWith(p.candidateId);
+ expect(p.phoneEvidence?.state).toBe('observed');expect(p.observedPhone).toBe(value);
+});
 async function clientFixture(){
  const fetcher=vi.fn<typeof fetch>(async url=>{
   const path=String(url);

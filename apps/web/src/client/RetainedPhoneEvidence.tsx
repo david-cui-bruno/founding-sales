@@ -1,14 +1,8 @@
-import {useEffect,useState,type JSX} from 'react';
+import type {JSX} from 'react';
 import type {ManualProspect} from '@fss/contracts';
+import {useCurrentPhoneEvidence} from './useCurrentPhoneEvidence.ts';
 
 type PhoneEvidence = ManualProspect['phoneEvidence'];
-function discoveryExpiry(evidence:PhoneEvidence):number{
- const sources=evidence?.state==='observed'||evidence?.state==='conflicting'?evidence.sources:[];
- return Math.min(...sources.flatMap(source=>{
-  if(!('method' in source)||source.authority.kind!=='phone_discovery')return [];
-  const expiry=Date.parse(source.authority.expiresAt);return Number.isFinite(expiry)?[expiry]:[];
- }));
-}
 function summary(evidence:PhoneEvidence):string{
  if(evidence?.state==='observed')return `Phone ${evidence.value} · observed, not call-ready`;
  if(evidence?.state==='absent')return 'Phone absent · retained source explicitly declares absent';
@@ -21,15 +15,7 @@ function safeSource(value:string):string|null{
 }
 /** Retained endpoint evidence only, never phone ownership, identity or permission. */
 export function RetainedPhoneEvidence({evidence:retained,compact=false}:{evidence:PhoneEvidence;compact?:boolean}):JSX.Element{
- const expiry=discoveryExpiry(retained),[,renderExpiry]=useState(0);
- // Local erasure only. Discovery authority is at most seven days, never renewed here.
- useEffect(()=>{
-  const remaining=expiry-Date.now();if(!Number.isFinite(expiry)||remaining<=0)return;
-  const timer=setTimeout(()=>renderExpiry(version=>version+1),remaining);
-  return()=>clearTimeout(timer);
- },[expiry]);
- // Losing any dependency clears the entire enrichment, not just its expired sources.
- const evidence=expiry<=Date.now()?undefined:retained;
+ const evidence=useCurrentPhoneEvidence(retained);
  if(compact)return <span>{summary(evidence)}</span>;
  const sources=evidence?.state==='observed'||evidence?.state==='conflicting'?evidence.sources:[];
  return <div aria-label="Retained phone evidence">
