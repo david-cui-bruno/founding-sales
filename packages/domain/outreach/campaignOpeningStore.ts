@@ -22,6 +22,16 @@ export async function readCampaignOpeningAttempt(ctx: RepositoryContext, executi
 export async function eraseCampaignOpening(ctx: RepositoryContext, executionId: string): Promise<void> {
   await ctx.db.query('SELECT erase_campaign_opening($1,$2)', [ctx.scope.workspaceId, executionId]);
 }
+async function executionEligible(ctx: RepositoryContext, executionId: string, eligibility: StepEligibility): Promise<boolean> {
+  const execution = await readStepExecution(ctx, executionId);
+  const enrollment = execution ? await readEnrollment(ctx, { enrollmentId: execution.enrollmentId }) : null;
+  const now = await campaignDatabaseNow(ctx);
+  if (!execution || !enrollment || enrollment.endedAt || !['pending', 'held'].includes(execution.state)
+    || Date.parse(execution.notBefore) > Date.parse(now) || Date.parse(execution.dueAt) > Date.parse(now)) return false;
+  return (await eligibility.evaluate(ctx, { execution, opportunityId: enrollment.opportunityId,
+    firmId: enrollment.firmId, contactId: enrollment.contactId, ownerUserId: enrollment.assignedUserId,
+    channel: 'email', actionKind: 'email_send', now })).ok;
+}
 /** Worker calls this OUTSIDE its normal preparation transaction. Claim commits
  * first. A thrown/lost/ambiguous selector result remains unknown forever without
  * automatic retry or a new attempt ID, including after job lease loss. */
@@ -33,6 +43,7 @@ export async function selectCampaignOpeningBeforeTransaction(
   const claims: { snapshot: CampaignOpeningSnapshot; attemptId: string }[] = [];
   await withTransaction(session, async () => {
     await lockSendGateForStopFact(ctx);
+    if (!await executionEligible(ctx, input.executionId, input.eligibility)) return;
     const current = await readCurrentCampaignOpening(ctx, input.executionId);
     if (current.kind !== 'current') {
       if (current.kind === 'held') await eraseCampaignOpening(ctx, input.executionId);
@@ -41,15 +52,6 @@ export async function selectCampaignOpeningBeforeTransaction(
     if (await readCampaignOpeningAttempt(ctx, input.executionId)) return;
     // No retroactive selection after a baseline fence already exists.
     if ((await ctx.db.query('SELECT 1 FROM outbound_messages WHERE workspace_id=$1 AND step_execution_id=$2', [ctx.scope.workspaceId, input.executionId])).rows.length) return;
-    const execution = await readStepExecution(ctx, input.executionId);
-    const enrollment = execution ? await readEnrollment(ctx, { enrollmentId: execution.enrollmentId }) : null;
-    const now = await campaignDatabaseNow(ctx);
-    if (!execution || !enrollment || enrollment.endedAt || !['pending', 'held'].includes(execution.state)
-      || Date.parse(execution.notBefore) > Date.parse(now) || Date.parse(execution.dueAt) > Date.parse(now)) return;
-    const eligible = await input.eligibility.evaluate(ctx, { execution, opportunityId: enrollment.opportunityId,
-      firmId: enrollment.firmId, contactId: enrollment.contactId, ownerUserId: enrollment.assignedUserId,
-      channel: 'email', actionKind: 'email_send', now });
-    if (!eligible.ok) return;
     const fresh = await readCurrentCampaignOpening(ctx, input.executionId);
     if (fresh.kind !== 'current' || openingSnapshotKey(fresh.snapshot) !== openingSnapshotKey(current.snapshot)) return;
     const attemptId = randomUUID();
@@ -67,6 +69,7 @@ export async function selectCampaignOpeningBeforeTransaction(
     await lockSendGateForStopFact(ctx);
     const row = await readCampaignOpeningAttempt(ctx, input.executionId);
     if (!row || row.attempt_id !== claim.attemptId || row.state !== 'unknown' || row.invalidated_at) return;
+    if (!await executionEligible(ctx, input.executionId, input.eligibility)) { await eraseCampaignOpening(ctx, input.executionId); return; }
     const current = await readCurrentCampaignOpening(ctx, input.executionId);
     if (current.kind !== 'current' || row.snapshot_hash !== openingSnapshotKey(current.snapshot)) {
       await eraseCampaignOpening(ctx, input.executionId); return;
@@ -91,6 +94,7 @@ export async function readyCampaignOpening(ctx: RepositoryContext, executionId: 
     if (attempt) await eraseCampaignOpening(ctx, executionId);
     return { kind: 'held' };
   }
+  if (attempt.invalidated_at) { if (attempt.content) await eraseCampaignOpening(ctx, executionId); return { kind: 'held' }; }
   if (attempt.state !== 'ready' || !attempt.content) return { kind: 'held' };
   const opening = resolveCampaignOpening(current.snapshot, attempt.content.choice, await campaignDatabaseNow(ctx));
   if (opening !== attempt.content.opening) { await eraseCampaignOpening(ctx, executionId); return { kind: 'held' }; }

@@ -75,6 +75,7 @@ CREATE TABLE outreach_campaign_opening_attempts (
  content jsonb, fence_id uuid, subject_hash text, body_hash text,
  PRIMARY KEY(workspace_id,execution_id), UNIQUE(workspace_id,attempt_id),
  CONSTRAINT campaign_opening_content_shape CHECK((state='ready' AND content IS NOT NULL) OR (state<>'ready' AND content IS NULL)),
+ CONSTRAINT campaign_opening_invalidated CHECK(invalidated_at IS NULL OR (content IS NULL AND state<>'ready')),
  CONSTRAINT campaign_opening_finished CHECK((state IN ('ready','refused'))=(finished_at IS NOT NULL) OR state='invalidated'),
  CONSTRAINT campaign_opening_times CHECK(isfinite(claimed_at) AND (finished_at IS NULL OR (isfinite(finished_at) AND finished_at>=claimed_at))
   AND (invalidated_at IS NULL OR (isfinite(invalidated_at) AND invalidated_at>=claimed_at))),
@@ -91,7 +92,8 @@ BEGIN
  ELSE
   IF (NEW.workspace_id,NEW.execution_id,NEW.attempt_id,NEW.binding,NEW.snapshot_hash,NEW.claimed_at) IS DISTINCT FROM
      (OLD.workspace_id,OLD.execution_id,OLD.attempt_id,OLD.binding,OLD.snapshot_hash,OLD.claimed_at)
-   OR (OLD.invalidated_at IS NOT NULL AND (NEW.invalidated_at IS DISTINCT FROM OLD.invalidated_at OR NEW.state IS DISTINCT FROM OLD.state OR NEW.content IS NOT NULL))
+   OR (OLD.invalidated_at IS NOT NULL AND (NEW.invalidated_at IS DISTINCT FROM OLD.invalidated_at
+    OR NEW.state IS DISTINCT FROM CASE WHEN OLD.state='ready' THEN 'invalidated' ELSE OLD.state END OR NEW.content IS NOT NULL))
    OR (OLD.finished_at IS NOT NULL AND NEW.finished_at IS DISTINCT FROM OLD.finished_at)
    OR (OLD.state='unknown' AND NEW.state NOT IN ('unknown','ready','refused'))
    OR (OLD.state='ready' AND NEW.state NOT IN ('ready','invalidated'))
@@ -188,16 +190,16 @@ CREATE FUNCTION erase_campaign_opening(w uuid,x uuid) RETURNS integer LANGUAGE p
 DECLARE a outreach_campaign_opening_attempts%ROWTYPE; n integer;
 BEGIN
  SELECT * INTO a FROM outreach_campaign_opening_attempts WHERE workspace_id=w AND execution_id=x FOR UPDATE;
- IF NOT FOUND OR a.invalidated_at IS NOT NULL THEN RETURN 0; END IF;
+ IF NOT FOUND OR (a.invalidated_at IS NOT NULL AND a.content IS NULL) THEN RETURN 0; END IF;
  IF a.content IS NOT NULL AND a.fence_id IS NOT NULL THEN
   UPDATE outbound_messages o SET body=substring(o.body FROM length(a.content->>'opening')+3),
    rendered_hash=encode(sha256(convert_to(o.subject||E'\n\n'||substring(o.body FROM length(a.content->>'opening')+3),'UTF8')),'hex'),updated_at=now()
    WHERE o.workspace_id=w AND o.id=a.fence_id AND o.attempt_token IS NULL AND o.state IN ('prepared','held')
    AND left(o.body,length(a.content->>'opening')+2)=(a.content->>'opening')||E'\n\n';
  END IF;
- UPDATE outreach_campaign_opening_attempts SET content=NULL,invalidated_at=clock_timestamp(),
+ UPDATE outreach_campaign_opening_attempts SET content=NULL,invalidated_at=coalesce(invalidated_at,clock_timestamp()),
   state=CASE WHEN state='ready' THEN 'invalidated' ELSE state END
-  WHERE workspace_id=w AND execution_id=x AND invalidated_at IS NULL;
+  WHERE workspace_id=w AND execution_id=x AND (invalidated_at IS NULL OR content IS NOT NULL);
  GET DIAGNOSTICS n=ROW_COUNT; RETURN n;
 END $$;
 CREATE FUNCTION campaign_opening_source_erasure() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -206,7 +208,11 @@ BEGIN
  w:=OLD.workspace_id;
  IF TG_OP='UPDATE' AND to_jsonb(NEW)=to_jsonb(OLD) THEN RETURN NEW; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||w::text,0));
- FOR a IN SELECT execution_id FROM outreach_campaign_opening_attempts r WHERE r.workspace_id=w AND r.invalidated_at IS NULL AND (
+ IF TG_TABLE_NAME='evidence_items' THEN
+  PERFORM erase_campaign_opening_sources(w,ARRAY[OLD.source_reference]);
+  IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW;
+ END IF;
+ FOR a IN SELECT execution_id FROM outreach_campaign_opening_attempts r WHERE r.workspace_id=w AND (r.invalidated_at IS NULL OR r.content IS NOT NULL) AND (
   (TG_TABLE_NAME='sourcing_candidates' AND (r.binding->>'candidateId'=to_jsonb(OLD)->>'id'
    OR EXISTS(SELECT 1 FROM sourcing_discovery_promotions p WHERE p.workspace_id=w AND p.raw_candidate_id=(to_jsonb(OLD)->>'id')::uuid AND p.legacy_candidate_id=(r.binding->>'candidateId')::uuid)))
   OR (TG_TABLE_NAME='sourcing_qualification_runs' AND r.binding->>'candidateId'=to_jsonb(OLD)->>'candidate_id')
@@ -218,8 +224,6 @@ BEGIN
   OR (TG_TABLE_NAME IN ('sourcing_discovery_research_firms','sourcing_automatic_research_firms') AND r.binding->>'firmId'=to_jsonb(OLD)->>'firm_id')
   OR (TG_TABLE_NAME='sourcing_discovery_promotions' AND r.binding->>'candidateId'=to_jsonb(OLD)->>'legacy_candidate_id')
   OR (TG_TABLE_NAME='sourcing_candidate_discovery_origins' AND EXISTS(SELECT 1 FROM sourcing_discovery_promotions p WHERE p.workspace_id=w AND p.raw_candidate_id=(to_jsonb(OLD)->>'candidate_id')::uuid AND p.legacy_candidate_id=(r.binding->>'candidateId')::uuid))
-  OR (TG_TABLE_NAME='evidence_items' AND EXISTS(SELECT 1 FROM sourcing_qualification_runs q,jsonb_array_elements(q.observations) o
-   WHERE q.workspace_id=w AND q.id=(r.binding->>'qualificationRunId')::uuid AND rtrim(o->>'url','/')=rtrim(to_jsonb(OLD)->>'source_reference','/')))
  ) ORDER BY execution_id LOOP
   target:=a.execution_id; PERFORM erase_campaign_opening(w,target);
  END LOOP;
@@ -229,7 +233,7 @@ CREATE FUNCTION erase_campaign_opening_sources(w uuid,urls text[]) RETURNS integ
 DECLARE a record; n integer:=0;
 BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||w::text,0));
- FOR a IN SELECT r.execution_id FROM outreach_campaign_opening_attempts r WHERE r.workspace_id=w AND r.invalidated_at IS NULL AND (
+ FOR a IN SELECT r.execution_id FROM outreach_campaign_opening_attempts r WHERE r.workspace_id=w AND (r.invalidated_at IS NULL OR r.content IS NOT NULL) AND (
   EXISTS(SELECT 1 FROM sourcing_qualification_runs q,jsonb_array_elements(q.observations) o WHERE q.workspace_id=w AND q.id=(r.binding->>'qualificationRunId')::uuid AND rtrim(o->>'url','/')=ANY(ARRAY(SELECT rtrim(u,'/') FROM unnest(urls) u)))
   OR EXISTS(SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w AND c.id=(r.binding->>'candidateId')::uuid AND rtrim(c.payload->>'sourceUrl','/')=ANY(ARRAY(SELECT rtrim(u,'/') FROM unnest(urls) u)))
   OR EXISTS(SELECT 1 FROM sourcing_discovery_promotions p JOIN sourcing_candidate_discovery_origins o ON o.workspace_id=p.workspace_id AND o.candidate_id=p.raw_candidate_id WHERE p.workspace_id=w AND p.legacy_candidate_id=(r.binding->>'candidateId')::uuid AND rtrim(o.source->>'sourceUrl','/')=ANY(ARRAY(SELECT rtrim(u,'/') FROM unnest(urls) u)))
@@ -272,8 +276,9 @@ CREATE FUNCTION sweep_campaign_openings(w uuid,batch integer) RETURNS integer LA
 DECLARE a record; n integer:=0;
 BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('fss.send-gate:'||w::text,0));
- FOR a IN SELECT execution_id FROM outreach_campaign_opening_attempts WHERE workspace_id=w AND invalidated_at IS NULL
-  AND (binding->>'validUntil')::timestamptz<=clock_timestamp() ORDER BY execution_id LIMIT greatest(0,least(batch,500)) FOR UPDATE SKIP LOCKED LOOP
+ FOR a IN SELECT execution_id FROM outreach_campaign_opening_attempts WHERE workspace_id=w
+  AND ((invalidated_at IS NULL AND (binding->>'validUntil')::timestamptz<=clock_timestamp()) OR (invalidated_at IS NOT NULL AND content IS NOT NULL))
+  ORDER BY execution_id LIMIT greatest(0,least(batch,500)) FOR UPDATE SKIP LOCKED LOOP
   n:=n+erase_campaign_opening(w,a.execution_id);
  END LOOP;
  RETURN n;

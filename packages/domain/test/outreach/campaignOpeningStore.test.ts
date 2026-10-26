@@ -111,3 +111,24 @@ it('dispatch requires exact frozen fence and bytes, revalidates current source, 
   expect(await verifyCampaignOpeningFence(ctx, fence)).toBe(false);
   expect(attempt).toMatchObject({ state: 'invalidated', content: null, attempt_id: identity, fence_id: id });
 });
+it('invalidated content is held and repaired instead of exposed as ready', async () => {
+  await select({ select: async () => ({ kind: 'selected', choice }) });
+  if (!attempt) throw new Error('fixture');
+  attempt.invalidated_at = new Date(now);
+  expect(await readyCampaignOpening(ctx, id)).toEqual({ kind: 'held' });
+  expect(attempt).toMatchObject({ state: 'invalidated', content: null });
+});
+it('gate and ordinary eligibility precede qualification, including after a selector wait', async () => {
+  const order: string[] = [];
+  mocks.gate.mockImplementation(async () => { order.push('gate'); });
+  mocks.eligibility.mockImplementation(async () => { order.push('eligibility'); return { ok: true }; });
+  mocks.current.mockImplementation(async () => { order.push('current'); return structuredClone(current); });
+  await select({ select: async () => { order.push('selector'); return { kind: 'selected', choice }; } });
+  expect(order).toEqual(['gate', 'eligibility', 'current', 'current', 'selector', 'gate', 'eligibility', 'current']);
+});
+it('eligibility stop learned during wait conserves UNKNOWN and avoids another qualification read', async () => {
+  await select({ select: async () => { mocks.eligibility.mockResolvedValue({ ok: false, reasonCode: 'scoped_pause' }); return { kind: 'selected', choice }; } });
+  expect(attempt).toMatchObject({ state: 'unknown', content: null });
+  expect(attempt?.invalidated_at).not.toBeNull();
+  expect(mocks.current).toHaveBeenCalledTimes(2);
+});

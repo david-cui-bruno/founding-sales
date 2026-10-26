@@ -11,7 +11,7 @@ const policies = 'outreach_campaign_opening_policies';
 const attempts = 'outreach_campaign_opening_attempts';
 const attemptChecks = [
   'outreach_campaign_opening_attempts_snapshot_hash_check', 'outreach_campaign_opening_attempts_state_check',
-  'campaign_opening_content_shape', 'campaign_opening_finished', 'campaign_opening_times',
+  'campaign_opening_content_shape', 'campaign_opening_invalidated', 'campaign_opening_finished', 'campaign_opening_times',
   'campaign_opening_fence_hashes', 'campaign_opening_binding_shape',
 ] as const;
 const insert = (f: Fixture, table: string, row: Row) => f.session.query(
@@ -81,6 +81,7 @@ export const CAMPAIGN_OPENING_CONSTRAINT_CASES: readonly Case[] = [
   invalidAttempt('outreach_campaign_opening_attempts_snapshot_hash_check', { snapshot_hash: 'not-a-hash' }),
   invalidAttempt('outreach_campaign_opening_attempts_state_check', { state: 'retry' }),
   invalidAttempt('campaign_opening_content_shape', { state: 'ready', content: null }),
+  invalidAttempt('campaign_opening_invalidated', { state: 'ready', content: '{}', invalidated_at: '2026-10-26T12:01:00Z' }),
   invalidAttempt('campaign_opening_finished', { state: 'refused', finished_at: null }),
   invalidAttempt('campaign_opening_times', { claimed_at: '-infinity' }),
   invalidAttempt('campaign_opening_fence_hashes', { fence_id: randomUUID(), subject_hash: 'not-a-hash', body_hash: 'b'.repeat(64) }),
