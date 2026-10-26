@@ -3,22 +3,34 @@
 body { margin: 0; -webkit-font-smoothing: antialiased; }
 .browser-workspace { --bg: #e9ecf0; --text: #25282e; --muted: #596370; --panel: rgba(255,255,255,.65); --panel-strong: rgba(255,255,255,.88); --panel-hover: rgba(255,255,255,.9); --line: rgba(108,117,137,.2); --line-strong: rgba(108,117,137,.32); --glass-edge: rgba(255,255,255,.9); --ink: #282b31; --ink-text: #fff; --blue: #e1e8f3; --blue-ink: #49617b; --sage: #e2ece7; --sage-ink: #365c45; --sand: #eee9dc; --sand-ink: #6c592e; --rose: #eee2e5; --rose-ink: #843e4d; --shadow: 0 8px 28px rgba(49,58,80,.035), inset 0 1px 0 var(--glass-edge); --manual-ink: var(--text); --manual-muted: var(--muted); --manual-edge: var(--line-strong); --manual-paper: var(--panel-strong); --manual-sage: #526a8d; color-scheme: light; color: var(--text); background: radial-gradient(ellipse at 95% 0%, #dce1eb80, transparent 55%), radial-gradient(ellipse at 45% 100%, #d7dce980, transparent 55%), var(--bg); display: grid; grid-template-columns: 218px minmax(0,1fr); gap: 12px; padding: 12px; min-height: 100dvh; }
 .browser-workspace[data-theme=dark] { --bg: #171b23; --text: #eaedf3; --muted: #b0bbcc; --panel: rgba(41,48,62,.78); --panel-strong: rgba(43,51,66,.96); --panel-hover: rgba(57,67,84,.94); --line: rgba(194,209,236,.18); --line-strong: rgba(194,209,236,.34); --glass-edge: rgba(213,226,250,.13); --ink: #e0e6ef; --ink-text: #232a36; --blue: #2c3c52; --blue-ink: #b5cdeb; --sage: #2a4038; --sage-ink: #b5d6c1; --sand: #423f2d; --sand-ink: #e0cf9b; --rose: #49343d; --rose-ink: #f0baca; --manual-sage: #b2c6eb; color-scheme: dark; background: radial-gradient(ellipse at 95% 0%, #29344960, transparent 55%), var(--bg); }
-.browser-workspace h1, .browser-workspace h2, .browser-workspace h3 { line-height: 1.3; margin: 0; font-weight: 600; }
-.browser-workspace h1 { font-size: 31px; letter-spacing: -1.2px; }
-.browser-workspace h2 { font-size: 20px; letter-spacing: -.5px; }
-.browser-workspace h3 { font-size: 13px; }
-.browser-workspace p { margin: 8px 0; }
-.browser-workspace label { display: block; margin: 12px 0; }
-.browser-workspace input:not([type=checkbox]):not([type=radio]), .browser-workspace textarea, .browser-workspace select { display: block; max-width: 100%; width: 100%; border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; font: inherit; margin-top: 5px; background: var(--panel); color: var(--text); }
-.browser-workspace textarea { min-height: 10rem; }
-.browser-workspace button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: inherit; font-size: 12px; font-weight: 550; border: 1px solid var(--line); background: var(--panel); color: inherit; border-radius: 12px; padding: 10px 15px; margin: 0; cursor: pointer; min-height: 38px; }
-.browser-workspace button:hover:not(:disabled) { background: var(--panel-hover); }
-.browser-workspace button:disabled { opacity: .5; cursor: not-allowed; }
-.browser-workspace :focus-visible { outline: 2px solid var(--manual-sage); outline-offset: 4px; }
-.browser-workspace a { color: inherit; text-underline-offset: 3px; }
-.browser-workspace blockquote { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid var(--line-strong); padding-left: 1rem; }
-.browser-main section:not(.manual-worklist), .browser-main aside { border: 1px solid var(--line); background: var(--panel); border-radius: 20px; padding: 22px; margin: 18px 0; }
-.browser-main article:not(.manual-prospect-row):not(.workspace-action-row) { border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 12px 0; }
+/* Feature CSS consumes one palette in either theme. Values resolve on this shell. */
+.browser-workspace {
+  --workspace-bg: var(--bg);
+  --workspace-text: var(--text);
+  --workspace-muted: var(--muted);
+  --workspace-border: var(--line-strong);
+  --workspace-panel: var(--panel);
+  --workspace-accent: var(--manual-sage);
+}
+/* Defaults must not beat feature styles just because browser.css loads last. */
+:where(.browser-workspace) :is(h1, h2, h3) { line-height: 1.3; margin: 0; font-weight: 600; }
+:where(.browser-workspace) h1 { font-size: 31px; letter-spacing: -1.2px; }
+:where(.browser-workspace) h2 { font-size: 20px; letter-spacing: -.5px; }
+:where(.browser-workspace) h3 { font-size: 13px; }
+:where(.browser-workspace) p { margin: 8px 0; }
+:where(.browser-workspace) label { display: block; margin: 12px 0; }
+:where(.browser-workspace) :where(input:not([type=checkbox]):not([type=radio]), textarea, select) { display: block; max-width: 100%; width: 100%; border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; font: inherit; margin-top: 5px; background: var(--panel); color: var(--text); }
+:where(.browser-workspace) textarea { min-height: 10rem; }
+:where(.browser-workspace) button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: inherit; font-size: 12px; font-weight: 550; border: 1px solid var(--line); background: var(--panel); color: inherit; border-radius: 12px; padding: 10px 15px; margin: 0; cursor: pointer; min-height: 38px; }
+:where(.browser-workspace) :where(button:hover:not(:disabled)) { background: var(--panel-hover); }
+:where(.browser-workspace) button:disabled { opacity: .5; cursor: not-allowed; }
+:where(.browser-workspace) :focus-visible { outline: 2px solid var(--manual-sage); outline-offset: 4px; }
+:where(.browser-workspace) a { color: inherit; text-underline-offset: 3px; }
+:where(.browser-workspace) blockquote { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid var(--line-strong); padding-left: 1rem; }
+/* Legacy meeting/settings cards only. Feature workspaces own every nested surface,
+   including unstyled structural sections and narrow list/editor panels. */
+:where(.browser-main section:not(.manual-worklist), .browser-main aside):not(:where(.workspace-prospects, .workspace-prospects *, .email-workspace, .email-workspace *, .social-workspace, .social-workspace *)) { border: 1px solid var(--line); background: var(--panel); border-radius: 20px; padding: 22px; margin: 18px 0; }
+:where(.browser-main article:not(.manual-prospect-row):not(.workspace-action-row)):not(:where(.workspace-prospects, .workspace-prospects *, .email-workspace, .email-workspace *, .social-workspace, .social-workspace *)) { border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 12px 0; }
 [hidden] { display: none !important; }
 .browser-sidebar { position: sticky; top: 12px; height: calc(100dvh - 24px); display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 28px 14px 14px; border: 1px solid var(--glass-edge); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(28px); }
 .browser-brand { display: flex; align-items: center; gap: 12px; padding: 0 13px; margin-bottom: 38px; font-size: 30px; letter-spacing: -1.8px; font-weight: 650; line-height: 1; }
@@ -69,9 +81,9 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .workspace-context-links button:last-child { border-bottom: 0; padding-bottom: 0; }
 .workspace-context-links span, .workspace-snapshot { color: var(--muted); font-size: 11px; font-weight: 400; }
 .workspace-state, .workspace-notice { padding: 12px 0; color: var(--muted); }
-.workspace-tabs, .workspace-secondary-nav { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 24px; }
-.workspace-tabs button, .workspace-secondary-nav button { background: transparent; border-color: transparent; color: var(--muted); }
-.workspace-tabs button[aria-pressed=true], .workspace-secondary-nav button[aria-pressed=true] { background: var(--panel-strong); color: var(--text); box-shadow: var(--shadow); border-color: var(--glass-edge); }
+.workspace-tabs { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 24px; }
+.workspace-tabs button { background: transparent; border-color: transparent; color: var(--muted); }
+.workspace-tabs button[aria-pressed=true] { background: var(--panel-strong); color: var(--text); box-shadow: var(--shadow); border-color: var(--glass-edge); }
 .browser-main .workspace-empty { padding: 32px; }
 .workspace-empty button { margin-top: 12px; }
 .workspace-settings { max-width: 760px; }
@@ -180,7 +192,7 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   .workspace-topbar { min-height: 52px; padding: 0 10px; }
   .browser-main { padding: 18px 10px 36px; }
   .workspace-page-head { align-items: flex-start; gap: 12px; margin-bottom: 22px; flex-wrap: wrap; }
-  .browser-workspace h1 { font-size: 28px; }
+  :where(.browser-workspace) h1 { font-size: 28px; }
   .browser-main .workspace-call-banner { padding: 24px; }
   .workspace-call-banner h2 { font-size: 22px; }
   .workspace-action-list { padding: 2px 14px; }

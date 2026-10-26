@@ -19,6 +19,7 @@ function setup() {
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json(session);
     if (url === '/browser/sign-out') return json({ status: 'signed_out', csrfToken: 'a'.repeat(40) });
+    if (url === '/browser/api/today/actions/v4') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-25T12:00:00.000Z', actions: [], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     if (String(url).startsWith('/browser/api/today')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [{ firmId: id, firmName: firm.name, lane: 'new_firm', dueAt: '2026-10-22T00:00:00.000Z', counts: { replies: 0, emailsDue: 0, callsDue: 0 } }] });
     if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: [], hasMore: false });
     if (url === '/browser/api/crm/firm-page-v3') return json({ version: 3, visibility: 'assigned_or_admin', read: { visibility: 'assigned_or_admin', firm }, opportunities: [], holds: [], followUpPermissions: [] });
@@ -56,6 +57,9 @@ describe('BrowserApp real shared presentation', () => {
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
     expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(false);
     navigate('Prospects');
+    await screen.findByRole('region', { name: 'Prepared source-backed supply' });
+    expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
     expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/list')).toBe(false);
     await waitFor(() => { expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(true); });
     expect(send.mock.calls.some(([url]) => String(url).includes('/sourcing/qualification/'))).toBe(false);

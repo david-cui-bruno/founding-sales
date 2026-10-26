@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { URL as NodeURL } from 'node:url';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BrowserApp } from '../../src/client/BrowserApp.tsx';
 import { BrowserClient } from '../../src/client/BrowserClient.ts';
@@ -31,6 +33,8 @@ function setup() {
   const navigate = vi.fn();
   const send = vi.fn<typeof fetch>(async url => {
     if (url === '/browser/session') return sessionWait ? await sessionWait.promise : json(status === 'signed_out' ? { status, csrfToken: 'c'.repeat(40) } : { status, workspaceId: id, userId: id, deviceId: id, role, revision, csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() });
+    if (url === '/browser/api/today/actions/v4') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-25T12:00:00.000Z', actions: [], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
+    if (url === '/browser/api/social/private-drafts/list') return json({ drafts: [], nextAfterId: null });
     if (String(url).startsWith('/browser/api/today')) {
       const held = todayWait; todayWait = undefined;
       return held ? await held.promise : json(todayAnswer, todayStatus);
@@ -59,6 +63,56 @@ function navigate(name: string): void { fireEvent.click(within(screen.getByRole(
 afterEach(() => { cleanup(); for (const client of clients.splice(0)) client.dispose(); sessionStorage.clear(); localStorage.clear(); });
 
 describe('issue787 mounted real-client shell', () => {
+  it('composes the committed single-page feature workspaces without legacy stacked mounts or writes', async () => {
+    const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
+    navigate('Prospects');
+    await screen.findByRole('region', { name: 'Prepared source-backed supply' });
+    expect(screen.getByRole('region', { name: 'Prospects workspace' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Manual prospect worklist' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
+    await screen.findByRole('region', { name: 'Manual prospect worklist' });
+    expect(screen.queryByRole('region', { name: 'Prepared source-backed supply' })).toBeNull();
+    navigate('Email');
+    expect(screen.getByRole('region', { name: 'Email workspace' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Email views' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Prospects workspace' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Automatic outreach' }));
+    expect(screen.queryByRole('region', { name: 'Replies' })).toBeNull();
+    navigate('Social');
+    expect(screen.getByRole('region', { name: 'Social workspace' })).toBeTruthy();
+    await screen.findByText('No saved private drafts. Start a new manual draft.');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Private social text' }), { target: { value: 'Unsaved private text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    expect(screen.getByRole('region', { name: 'Public conversations' })).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'Private social text' })).toBeNull();
+    navigate('Calling');
+    expect(screen.getByRole('heading', { name: 'Calling sessions are not available yet.' })).toBeTruthy();
+    expect(screen.queryByText('Unsaved private text')).toBeNull();
+    const routes = s.send.mock.calls.map(([url]) => String(url));
+    expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks', '/browser/api/today/actions/v4', '/browser/api/sourcing/candidates/prospects/list', '/browser/api/social/private-drafts/list'].includes(url))).toBe(true);
+    expect(routes.filter(url => url === '/browser/api/social/private-drafts/list')).toHaveLength(1);
+  });
+  it('exposes six theme aliases and excludes feature structural panels from legacy card rules', () => {
+    const style = document.createElement('style');
+    style.textContent = readFileSync(new NodeURL('../../src/client/browser.css', import.meta.url), 'utf8');
+    document.head.append(style);
+    try {
+      const rules = Array.from(style.sheet!.cssRules).filter((rule): rule is CSSStyleRule => 'selectorText' in rule);
+      const aliases = rules.find(rule => rule.style.getPropertyValue('--workspace-bg'))!;
+      for (const [name, token] of Object.entries({ bg: '--bg', text: '--text', muted: '--muted', border: '--line-strong', panel: '--panel', accent: '--manual-sage' })) {
+        expect(aliases.style.getPropertyValue(`--workspace-${name}`).trim()).toBe(`var(${token})`);
+      }
+      expect(rules.find(rule => rule.selectorText === '.browser-workspace')?.style.getPropertyValue('--bg')).toBeTruthy();
+      expect(rules.find(rule => rule.selectorText === '.browser-workspace[data-theme=dark]')?.style.getPropertyValue('--bg')).toBeTruthy();
+      const cards = rules.filter(rule => rule.selectorText.startsWith(':where(.browser-main section') || rule.selectorText.startsWith(':where(.browser-main article'));
+      expect(cards).toHaveLength(2);
+      const ui = render(<main className="browser-main">{['workspace-prospects', 'email-workspace', 'social-workspace'].map(name => <section key={name} className={name}><section /><article /><aside /></section>)}<section data-legacy="true" /></main>);
+      for (const feature of ui.container.querySelectorAll('.workspace-prospects, .workspace-prospects *, .email-workspace, .email-workspace *, .social-workspace, .social-workspace *')) {
+        expect(cards.some(rule => feature.matches(rule.selectorText))).toBe(false);
+      }
+      expect(cards.some(rule => ui.container.querySelector('[data-legacy]')!.matches(rule.selectorText))).toBe(true);
+    } finally { style.remove(); }
+  });
   it('mounts only real Today, escapes content and uses the shared five destinations', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />);
     await screen.findByText(card.firmName);

@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { BrowserClient } from './BrowserClient.ts';
-import { BrowserResearchQueue } from './BrowserResearchQueue.tsx';
-import { BrowserEmailCampaigns } from './BrowserEmailCampaigns.tsx';
-import { BrowserReplies } from './BrowserReplies.tsx';
-import { BrowserManualProspects } from './BrowserManualProspects.tsx';
-import { BrowserSocialReview } from './BrowserSocialReview.tsx';
-import { BrowserCandidateInventory } from './BrowserCandidateInventory.tsx';
+import { BrowserProspectsWorkspace } from './BrowserProspectsWorkspace.tsx';
+import { BrowserEmailWorkspace } from './BrowserEmailWorkspace.tsx';
+import { BrowserSocialWorkspace } from './BrowserSocialWorkspace.tsx';
 import { BrowserToday } from './BrowserToday.tsx';
 import { BrowserSettings } from './BrowserSettings.tsx';
 import { WorkspaceShell, type WorkspaceTheme } from './WorkspaceShell.tsx';
@@ -13,27 +10,12 @@ import { ReplyAttempt } from './ReplyAttempt.ts';
 import { EmailCampaignClient } from './EmailCampaignClient.ts';
 import { PrivateDraftCustody } from './PrivateDraftCustody.ts';
 import { VoicePreferenceCustody } from './VoicePreferenceCustody.ts';
-import type { WorkspaceScreenProps, WorkspaceSection } from './workspaceNavigation.ts';
+import type { WorkspaceSection } from './workspaceNavigation.ts';
 
 export function createBrowserClient(): BrowserClient {
   return new BrowserClient({ fetch: globalThis.fetch.bind(globalThis), storage: globalThis.sessionStorage,
     ...(typeof BroadcastChannel === 'undefined' ? {} : { channel: new BroadcastChannel('callie.browser.session.v1') }),
     navigate: url => { globalThis.location.assign(url); }, randomUUID: () => globalThis.crypto.randomUUID() });
-}
-
-function ProspectPage({ client }: WorkspaceScreenProps): JSX.Element {
-  const [view, setView] = useState<'worklist' | 'research' | 'inventory'>('worklist');
-  return <div><div className="workspace-secondary-nav" role="group" aria-label="Prospect tools"><button aria-pressed={view === 'worklist'} onClick={() => { setView('worklist'); }}>Retained prospects</button>{client.current?.status === 'signed_in' && client.current.role === 'admin' ? <><button aria-pressed={view === 'research'} onClick={() => { setView('research'); }}>Research & firm links</button><button aria-pressed={view === 'inventory'} onClick={() => { setView('inventory'); }}>Source inventory</button></> : null}</div>
-    {view === 'worklist' ? client.current?.status === 'signed_in' && client.current.role === 'admin' ? <BrowserManualProspects client={client} /> : <div className="workspace-empty workspace-glass"><h1>Prospects</h1><p>The retained prospect worklist requires administrator access. Existing assigned firms remain available in Today.</p></div> : null}
-    {view === 'research' ? <BrowserResearchQueue client={client} /> : null}
-    {view === 'inventory' ? <BrowserCandidateInventory client={client} /> : null}
-  </div>;
-}
-
-/** Compile-compatible seam for issue788's focused Email workspace. Only one existing tool mounts. */
-function EmailPage({ client }: WorkspaceScreenProps): JSX.Element {
-  const [view, setView] = useState<'replies' | 'outbound'>('replies');
-  return <div><div className="workspace-page-head"><div><p className="workspace-eyebrow">Conversations & activity</p><h1>Email</h1><p>Personal replies and existing outbound campaigns.</p></div></div><div className="workspace-tabs" role="group" aria-label="Email view"><button aria-pressed={view === 'replies'} onClick={() => { setView('replies'); }}>Replies</button><button aria-pressed={view === 'outbound'} onClick={() => { setView('outbound'); }}>Outbound activity</button></div>{view === 'replies' ? <BrowserReplies client={client} /> : <BrowserEmailCampaigns client={client} />}</div>;
 }
 
 export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient } = {}): JSX.Element {
@@ -102,10 +84,10 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     {notice ? <p role="status" className="workspace-notice">{notice}</p> : null}
     {!signedIn ? <section aria-label="Sign in" className="workspace-glass workspace-signin"><p className="workspace-eyebrow">Your private workspace</p><h1>Sign in</h1><p>Use your existing workspace to continue.</p><form onSubmit={event => { event.preventDefault(); void run(() => client.signIn(workspaceId, deviceLabel)); }}><label>Workspace ID<input autoComplete="off" name="workspace" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); }} required /></label><label>Browser label<input name="deviceLabel" value={deviceLabel} onChange={event => { setDeviceLabel(event.target.value); }} required /></label><div className="workspace-inline-actions"><button type="submit" className="workspace-primary" disabled={busy}>Sign in</button><button type="button" disabled={busy} onClick={() => { void run(() => client.refresh()); }}>Refresh access</button></div></form></section> : <div key={generation}>
       {section === 'today' ? <BrowserToday client={client} onNavigate={navigate} /> : null}
-      {section === 'prospects' ? <ProspectPage client={client} onNavigate={navigate} /> : null}
+      {section === 'prospects' ? <BrowserProspectsWorkspace client={client} onNavigate={navigate} /> : null}
       {section === 'calling' ? <div><div className="workspace-page-head"><div><p className="workspace-eyebrow">Calling workspace</p><h1>Calling</h1></div></div><section className="workspace-glass workspace-empty"><h2>Calling sessions are not available yet.</h2><p>No dialer, session or callable queue is connected here. You can review retained prospects and their existing context without starting a call.</p><button type="button" className="workspace-primary" onClick={() => { navigate('prospects'); }}>Review prospects</button></section></div> : null}
-      {section === 'email' ? <EmailPage client={client} onNavigate={navigate} /> : null}
-      {section === 'social' ? <BrowserSocialReview client={client} /> : null}
+      {section === 'email' ? <BrowserEmailWorkspace client={client} onNavigate={navigate} /> : null}
+      {section === 'social' ? <BrowserSocialWorkspace client={client} onNavigate={navigate} /> : null}
       {section === 'settings' ? <BrowserSettings client={client} theme={theme} onTheme={toggleTheme} busy={busy} onRefresh={() => { void run(() => client.refresh()); }} /> : null}
     </div>}
   </WorkspaceShell>;
