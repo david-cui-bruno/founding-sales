@@ -1,6 +1,6 @@
 # Selling journeys
 
-[Map index](README.md) · [Setup/verification](verification.md) · [Current queue/evidence](../../apps/web/PLAN.md). Navigation below is derived from current source and retained tests, **not newly executed by this documentation lane**. Root's existing run can establish the bounded hosted observation described in the verification guide without replaying prior acceptance.
+[Map index](README.md) · [Setup/verification](verification.md) · [Current queue/evidence](../../apps/web/PLAN.md). Navigation below is derived from current source and retained tests, **not newly executed by this documentation lane**. Root's completed bounded hosted navigation/request/current-read observation is retained in the verification guide, not an instruction to replay it.
 
 ## Today and next action
 
@@ -12,7 +12,7 @@
 
 ## Supply and prospects
 
-**Reach:** **Prospects → Prepared research / Retained review / Source inventory**. Retained review requires current admin access. Select the exact row/observation, inspect its source/website/context and use its existing Calling action. In Calling, the **Business phone discovery** region has **Find business phone** and **Read phone result**. Reading/listing never acquires pages. Find is an explicit acquisition, only within Root's existing bounded authority.
+**Reach:** **Prospects → Prepared research / Retained review / Source inventory**. Retained review requires current admin access. Select the exact row/observation, inspect its source/website/context and use its existing Calling action. In Calling, the **Business phone discovery** region has **Find business phone** and **Read phone result**. Reading/listing never acquires pages. Find is an explicit acquisition; Root's ten-record authority is exhausted, so this map authorizes no further request.
 
 **Owners:** [Prospects workspace](../../apps/web/src/client/BrowserProspectsWorkspace.tsx), [manual inspector](../../apps/web/src/client/ManualProspectCard.tsx), [phone discovery](../../apps/web/src/client/BrowserPhoneDiscovery.tsx), [browser boundary](../../apps/web/src/server/prospectPhoneDiscoveryBoundary.ts), [worker](../../apps/worker/src/handlers/prospectPhoneDiscovery.ts), [ADR0026](../adr/0026-explicit-public-business-phone-discovery.md). [Research](../greenfield/research.md) and existing [CRM module map](../agents/crm-ask-modules.md) distinguish source/candidate/qualification/Firm owners.
 
@@ -20,7 +20,7 @@
 
 **Persisted acceptance:** one exact candidate/revision request commits one run/job before guarded fetch. Recover a lost response by exact receipt without redispatch. Explicit current read and reload must return the same run/evidence, phone/URL/check time/type or honest unavailable state. Retained local test covers fictional guarded PageFetch, durable evidence and source erasure, with three earlier fixture failures retained in PLAN. Do not run that deletion step on production.
 
-**Refusals/limits:** changed candidate/source/principal, denied/expired originals, unsafe URL, research OFF/holds/budgets and unresolved attempts stop acquisition/save. Four pages/1MB, bounded originals and retention remain; no model/enrichment/new provider. Phone completeness grants no qualification/CRM admission/contact permission. Unknown/missing phone never hides an otherwise permitted raw prospect. Continuous replenishment-to-prepared handoff and bounded real-source yield remain incomplete, not another foundational proof wait.
+**Refusals/limits:** changed candidate/source/principal, denied/expired originals, unsafe URL, research OFF/holds/budgets and unresolved attempts stop acquisition/save. Four pages/1MB, bounded originals and retention remain; no model/enrichment/new provider. Phone completeness grants no qualification/CRM admission/contact permission. Unknown/missing phone never hides an otherwise permitted raw prospect. Completed bounded yield is prepared0/10, target5 unmet; complete/conflicting results select no number and do not prove competing numbers. Continuous replenishment-to-prepared handoff remains incomplete, not another foundational proof wait or permission to fetch more.
 
 ## Calling and follow-through
 

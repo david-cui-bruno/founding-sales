@@ -1,10 +1,10 @@
 # Current operating state
 
-## October26 2026, 20:09UTC: corrective release accepted, bounded supply unresolved
+## October26 2026, 20:17UTC: corrective release accepted, bounded acquisition exhausted
 
 **Production/main1236e6f4/schema141, API1582/2, worker1591/1.** Protected application40379912220 completed SUCCESS19:10:49 after exact-main gate40376270166/images40376270050 and finished PR801 reviews/CI. Fresh stored-OFF, recovery, smokes and exact existing-record readback passed in the hosted workflow; no migration was started. Independent health/stability and exact operations-task cleanup are retained. PITR was pinned, restoration remains UNTESTED. Exact evidence and historical normal-auth diagnosis: private receipt `~/.jcode/scratch/fss-candidate-authority-20261023/PR801-PROTECTED-RELEASE.md`. This is retained Root evidence, not a fresh observation by the documentation lane.
 
-David completed normal2FA; Root Fox resumes only the remaining5 of the approved maximum10 phone-discovery records. First5 distinct records remain unavailable/discovery_interrupted, prepared0/5. No new batch yield or production lookup-performance result is claimed. Source correction/local performance evidence is not prepared supply.
+Root completed all10 distinct phone-discovery records through normal signed UI, each requested once. Prepared0/10, target5 unmet; acquisition cap exhausted, no remaining batch or auth/release wait. First5 were unavailable/discovery_interrupted. The final5 yielded three unavailable/bounded_capture_incomplete and two complete/conflicting with no selected number. Conflict does not prove competing numbers. The private receipt retains exact request/current-read evidence and observed navigation. No callability, source-backed chosen number, phone type, complete prepared prospect or controlled performance comparison is established. No further acquisition/replay follows.
 
 **Deployment is not activation.** Earlier normal-founder five-screen reads and controlled Calling/Email/Social acceptance remain in [PLAN](../../apps/web/PLAN.md). Hosted reads do not prove outcome/draft writes, real audio, provider dispatch, live generation/model usefulness or publishing. Issue797 remains open. No accepted-proof replay or new product proof campaign is needed for this documentation reconciliation.
 
