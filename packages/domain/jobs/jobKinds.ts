@@ -51,6 +51,7 @@ export const JOB_KINDS = [
   'route.validate',
   'sourcing.check',
   'sourcing.qualify',
+  'sourcing.phone_discover',
   'outreach.reply',
   'reply.human_send',
   'outreach.email_admit',
@@ -153,6 +154,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // fetches nothing. See `packages/domain/research/runs.ts`.
   'sourcing.check': 'business_uniqueness',
   'sourcing.qualify': 'outbound_fence',
+  'sourcing.phone_discover': 'outbound_fence',
   'outreach.reply': 'outbound_fence',
   'reply.human_send': 'outbound_fence',
   'outreach.email_admit': 'outbound_fence',
@@ -210,6 +212,7 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
   sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
+  sourcingPhoneDiscover: (runId:string):string => `sourcing-phone-discover:${runId}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
   meetingAnalyze: (meetingId: string, notes: number, transcript: number): string => `meeting-analyze:${meetingId}:n${String(notes)}:t${String(transcript)}`,
   meetingAnalysisRequest: (requestId: string, revision: number): string => `meeting-analysis-request:${requestId}:r${String(revision)}`,
@@ -390,6 +393,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // import of two hundred firms is two hundred of these.
   'sourcing.check': 'bulk',
   'sourcing.qualify': 'bulk',
+  'sourcing.phone_discover': 'bulk',
   'outreach.reply': 'urgent',
   'reply.human_send': 'urgent',
   'outreach.email_admit': 'bulk',
