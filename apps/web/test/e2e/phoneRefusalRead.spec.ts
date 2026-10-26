@@ -7,8 +7,9 @@ import {assertGlassNoExternalActions,containGlass,signInGlass} from '../support/
 import {launchGlassContext} from '../support/glassWorkspaceBrowser.ts';
 import {openPhoneDiscoveryCandidate,phoneDiscoveryCase,phoneDiscoveryPaths,requirePhoneDiscoveryRuntimeGrant,seedPhoneDiscoveryCandidate,startPhoneDiscoveryApp,withdrawPhoneDiscoverySource} from '../support/phoneDiscoveryApp.ts';
 
-// AUTHORED, NOT EXECUTED. Fresh Root allocation is mandatory. Only crafted
-// retained originals are seeded. No request, job dispatch or provider is used.
+// One controlled local case passed October26 at6cd768275, then all resources
+// were released. Fresh Root allocation is mandatory for any future run. Only
+// crafted retained originals are seeded, no request, job dispatch or provider.
 const test=base.extend({context:async({browserName},use)=>{
  expect(owned).toBeDefined();expect(browserName).toBe('chromium');
  const browser=await launchGlassContext();try{await use(browser.context);}finally{await browser.stop();}

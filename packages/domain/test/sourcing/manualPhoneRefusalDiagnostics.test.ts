@@ -113,3 +113,18 @@ it('keeps exact existing evidence authority and retained interpretation lineage,
  expect(projectManualPhone(s,now)).toMatchObject({state:'conflicting',diagnostics:{entries:[{authority:{kind:'retained_evidence',evidenceId},lineage:{kind:'retained_interpretation',decisionId:s.retained_identity_decision_id,originalRunId:s.original_run_id,originalRevision:1,resultRevision:1}}]}});
  s.original_observations=[];expect(projectManualPhone(s,now)).not.toHaveProperty('diagnostics');
 });
+it.each(['Phone;','Phone ,'])('P2 punctuation-only zero-literal veto preserves location and deadline: %s',text=>{
+ const f=fixture([text]),run=discovery([text]);
+ expect(manualProspectPhoneEvidenceSchema.parse(projectManualPhone(f.snapshot,now))).toMatchObject({state:'conflicting',reason:'unresolved_retained_literal',sources:[],diagnostics:{truncated:false,entries:[{reason:'unattached_label_content',label:'Phone',labelStart:0,labelEnd:5}]}});
+ expect(manualProspectPhoneEvidenceSchema.parse(projectProspectPhoneDiscovery(run,now))).toMatchObject({state:'conflicting',reason:'unresolved_retained_literal',sources:[],diagnostics:{truncated:false,expiresAt:run.expires_at.toISOString(),entries:[{reason:'unattached_label_content'}]}});
+});
+it('P2 oversized punctuation label omits only its location without losing existing conflict or expiry',()=>{
+ const text=`Office${' '.repeat(210)}phone;`,run=discovery([text]);
+ expect(manualProspectPhoneEvidenceSchema.parse(projectProspectPhoneDiscovery(run,now))).toMatchObject({state:'conflicting',reason:'unresolved_retained_literal',sources:[],diagnostics:{entries:[],truncated:true,expiresAt:run.expires_at.toISOString()}});
+});
+it('P2 punctuation veto composes with an observed legacy endpoint without discarding expiry or selecting survivor',()=>{
+ const legacy=manualProspectPhoneEvidenceSchema.parse({state:'observed',value:'+12145550123',sources:[{runId:randomUUID(),observationId:randomUUID(),blockId:'legacy',url:'https://source.example.test/legacy',retrievedAt:new Date(now-1000).toISOString()}]});
+ if(legacy.state!=='observed')throw Error('Expected observed legacy fixture');
+ const run=discovery(['Phone ,']),combined=manualProspectPhoneEvidenceSchema.parse(composeProspectPhoneDiscovery(legacy,projectProspectPhoneDiscovery(run,now)));
+ expect(combined).toMatchObject({state:'conflicting',reason:'retained_source_ambiguous',sources:legacy.sources,diagnostics:{expiresAt:run.expires_at.toISOString(),entries:[{reason:'unattached_label_content'}]}});
+});

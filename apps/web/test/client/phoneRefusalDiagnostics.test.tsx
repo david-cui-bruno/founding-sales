@@ -4,6 +4,9 @@ import {act,cleanup,render,screen} from '@testing-library/react';
 import {manualProspectPhoneEvidenceSchema,manualProspectSchema} from '@fss/contracts';
 import {RetainedPhoneEvidence} from '../../src/client/RetainedPhoneEvidence.tsx';
 import {ManualProspectCard} from '../../src/client/ManualProspectCard.tsx';
+import {createHash} from 'node:crypto';
+import {composeProspectPhoneDiscovery,projectProspectPhoneDiscovery} from '@fss/domain/sourcing/prospectPhoneDiscoveryProjection.ts';
+import type {PhoneDiscoveryRun} from '@fss/domain/sourcing/prospectPhoneDiscoveryStore.ts';
 const runId='00000000-0000-4000-8000-000000000001';
 const entry={reason:'unattached_label_content',runId,observationId:'00000000-0000-4000-8000-000000000002',blockId:'contact',url:'https://phone.example.test/contact',retrievedAt:'2026-10-25T12:34:56.000Z',contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),parser:'manual-literal-phone-v1',label:'Phone',labelStart:3,labelEnd:8,authority:{kind:'phone_discovery',runId,expiresAt:'2026-10-26T20:00:01.000Z'},lineage:{kind:'provider_original'}};
 function evidence(entries=[entry],truncated=false){return manualProspectPhoneEvidenceSchema.parse({state:'conflicting',reason:'unresolved_retained_literal',sources:[],diagnostics:{entries,truncated}});}
@@ -59,4 +62,18 @@ it('aggregate expiry clears an empty truncated explanation in the actual inspect
  expect(screen.getByText('Phone unknown · not extracted')).toBeTruthy();expect(screen.queryByText(/Additional refusal/u)).toBeNull();expect(view.container.textContent).not.toContain('unresolved retained literal');
  expect(screen.getByRole('button',{name:'Keep'})).toBeTruthy();expect(feedback).not.toHaveBeenCalled();
  view.rerender(<ManualProspectCard prospect={prospect} disabled={false} feedback={feedback}/>);expect(screen.queryByText(/Additional refusal/u)).toBeNull();
+});
+it.each(['Phone;','Phone ,',`Office${' '.repeat(210)}phone;`])('P2 actual punctuation projection expires whole composed legacy enrichment: %s',async text=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date('2026-10-26T20:00:00.000Z'));
+ const fetch=vi.fn(()=>{throw Error('No acquisition or replay');});vi.stubGlobal('fetch',fetch);
+ const blocks=[{id:'punctuation',text}],retrievedAt=new Date(Date.now()-1000).toISOString();
+ const run:PhoneDiscoveryRun={id:runId,candidate_id:runId,candidate_revision:1,creator_user_id:runId,creator_ref:runId,method:'company-public-phone-v1',state:'complete',reason:null,requested_at:new Date(Date.now()-2000),deadline_at:new Date(Date.now()+10000),checked_at:new Date(),expires_at:new Date(Date.now()+1000),dispatched_at:new Date(Date.now()-1500),dispatch_finished_at:new Date(),content:{website:'https://phone.example.test/',sourceUrls:[entry.url],observations:[{id:entry.observationId,url:entry.url,retrievedAt,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks}]}};
+ const legacy=manualProspectPhoneEvidenceSchema.parse({state:'observed',value:'+12145550123',sources:[{runId,observationId:entry.observationId,blockId:'legacy',url:'https://legacy.example.test/phone',retrievedAt}]});
+ const combined=manualProspectPhoneEvidenceSchema.parse(composeProspectPhoneDiscovery(legacy,projectProspectPhoneDiscovery(run,Date.now())));
+ const view=render(<RetainedPhoneEvidence evidence={combined}/>);
+ expect(screen.getByText('Phone conflicting · no number selected')).toBeTruthy();
+ if(text.length>200)expect(screen.getByText(/Additional refusal locations were omitted/u)).toBeTruthy();else expect(screen.getByText(/Unattached label content/u)).toBeTruthy();
+ expect(screen.getByRole('link',{name:'https://legacy.example.test/phone'})).toBeTruthy();
+ await act(async()=>{await vi.advanceTimersByTimeAsync(1001);});
+ expect(screen.getByText('Phone unknown · not extracted')).toBeTruthy();expect(screen.queryByRole('link')).toBeNull();expect(view.container.textContent).not.toContain('Unattached label content');expect(view.container.textContent).not.toContain('Additional refusal');expect(fetch).not.toHaveBeenCalled();
 });

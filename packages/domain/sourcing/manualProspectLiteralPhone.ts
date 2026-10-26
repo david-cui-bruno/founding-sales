@@ -66,7 +66,7 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
     }
     // An explicit phone label with unresolved nonempty content cannot disappear
     // beside a valid alternate (including malformed/vanity phone attempts).
-    if(candidates.length===0&&/\S/u.test(segment.replace(/^[\s:.-]+/u,'')))result.unresolved=true;
+    if(candidates.length===0&&/\S/u.test(segment.replace(/^[\s:.-]+/u,''))){result.unresolved=true;reasons.add('unattached_label_content');}
     for(const reason of reasons){
      const diagnostics=result.diagnostics??={entries:[],truncated:false};
      const authority=input.authorities[source.id]!;
