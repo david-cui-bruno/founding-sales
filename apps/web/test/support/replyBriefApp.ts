@@ -18,6 +18,7 @@ import type { BrowserRuntime } from '../../src/server/runtime.ts';
 import { localCertificate } from './tls.ts';
 import { seedReplyBrief } from './replyBriefSeed.ts';
 import type { SyntheticCase } from './syntheticBusinessFixture.ts';
+import type { RoutingOptions } from '../../../api/src/routes/types.ts';
 import type { BrowserAssets } from '../../src/server/hostContract.ts';
 
 async function reservePort(): Promise<number> {
@@ -30,7 +31,7 @@ async function reservePort(): Promise<number> {
 
 /** Actual exported HTTPS host, bundled UI, signed OIDC/PKCE/JWKS and request-owned API.
  * Only the local identity-provider navigation and paid draft port are controlled. */
-export async function startReplyBriefApp(options: { conversation?: SyntheticCase; decorateAssets?: (assets: BrowserAssets) => BrowserAssets; requestDatabaseRole?: 'app_runtime' } = {}) {
+export async function startReplyBriefApp(options: { conversation?: SyntheticCase; decorateAssets?: (assets: BrowserAssets) => BrowserAssets; requestDatabaseRole?: 'app_runtime'; apiIntegrations?: RoutingOptions['integrations'] } = {}) {
   const fixture = await createAuthFixture();
   const certificate = await localCertificate().catch(async error => { await fixture.stop(); throw error; });
   let server: Server | undefined;
@@ -86,7 +87,7 @@ export async function startReplyBriefApp(options: { conversation?: SyntheticCase
           }
           const session = asSession({ query: async (text, values) => await client.query(text, values), connect: async () => { await client.connect(); }, end: async () => { await client.end(); } });
           const auth = { ...fixture.deps, config, db: session };
-          return await work({ auth, api: { session, auth, supportedClientVersions: config.supportedClientVersions, sendingEnabled: false, production: false, replyComposer: port } });
+          return await work({ auth, api: { session, auth, supportedClientVersions: config.supportedClientVersions, sendingEnabled: false, production: false, replyComposer: port, ...(options.apiIntegrations ? { integrations: options.apiIntegrations } : {}) } });
         } finally { await client.end(); }
       },
     };
