@@ -147,9 +147,12 @@ it.each(['source_loss','revision','principal'] as const)('request revalidates %s
 });
 it('expired pending jobs are terminally erased by the existing bounded retention owner',async()=>{
  const c=await candidate(),runId=randomUUID();
- await runtime.query(`INSERT INTO sourcing_prospect_phone_discoveries(workspace_id,id,candidate_id,candidate_revision,creator_user_id,creator_ref,method,requested_at,deadline_at,expires_at,content)
- VALUES($1,$2,$3,1,$4,$4,'company-public-phone-v1',clock_timestamp()-interval '31 minutes',clock_timestamp()-interval '1 minute',clock_timestamp()+interval '1 day',$5::jsonb)`,
+ // One statement-stable anchor keeps the exact 30-minute deadline within its SQL constraint.
+ const inserted=await runtime.query(`INSERT INTO sourcing_prospect_phone_discoveries(workspace_id,id,candidate_id,candidate_revision,creator_user_id,creator_ref,method,requested_at,deadline_at,expires_at,content)
+ VALUES($1,$2,$3,1,$4,$4,'company-public-phone-v1',statement_timestamp()-interval '31 minutes',statement_timestamp()-interval '1 minute',statement_timestamp()+interval '1 day',$5::jsonb)
+ RETURNING deadline_at-requested_at=interval '30 minutes' AS exact_deadline,deadline_at<statement_timestamp() AS expired`,
  [seed.alpha.workspaceId,runId,c.id,seed.alpha.admin.userId,JSON.stringify({website:c.input.website,sourceUrls:[c.sourceUrl.replace(/\/+$/u,'')],observations:[]})]);
+ expect(inserted.rows).toEqual([{exact_deadline:true,expired:true}]);
  expect(await withTransaction(runtime,()=>expireProspectPhoneDiscoveryInTransaction(ctx()))).toBe(1);
  expect(await rawRun(runId)).toMatchObject({state:'unavailable',reason:'discovery_expired',content:null});
  let calls=0;await runProspectPhoneDiscovery(worker(),{runId},{pageFetch:provider(c.input.website!,async()=>{calls++;})});expect(calls).toBe(0);
