@@ -57,6 +57,7 @@ export * from './outreachControl.ts';
 export * from './social.ts';
 export * from './socialPrivateDrafts.ts';
 export * from './socialVoicePreferences.ts';
+export * from './socialGuidedRequest.ts';
 export { todayActionTargetSchema, todayActionSchema, todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOpenResponseSchema } from './today.ts';
 export type { TodayActionTarget, TodayAction, TodayActionsResponse } from './today.ts';
 export * from './replyComposer.ts';
