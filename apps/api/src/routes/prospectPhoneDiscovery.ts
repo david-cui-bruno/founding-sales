@@ -2,8 +2,10 @@ import {
  PROSPECT_PHONE_DISCOVERY_PATHS,prospectPhoneDiscoveryCommandSchema,prospectPhoneDiscoveryInputSchema,
  prospectPhoneDiscoveryQueuedSchema,prospectPhoneDiscoveryReceiptInputSchema,prospectPhoneDiscoveryReceiptSchema,
  prospectPhoneDiscoveryViewSchema,prospectPhoneDiscoveryReasonSchema,
+ PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH,prospectPhoneRefusalOriginalInputSchema,prospectPhoneRefusalOriginalSchema,
 } from '@fss/contracts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {readProspectPhoneRefusalOriginal} from '@fss/domain/sourcing/prospectPhoneRefusalOriginal.ts';
 import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery,currentProspectPhoneDiscoveryAuthority,ProspectPhoneDiscoveryAuthorityChanged,ProspectPhoneDiscoveryUnavailable} from '@fss/domain/sourcing/prospectPhoneDiscovery.ts';
 import type {RepositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {contextForPrincipal,runRouteCommand,commandReply,type RouteDeps} from './routeSupport.ts';
@@ -13,10 +15,11 @@ import {policyRouteDeps} from './dialSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
 
 export const PROSPECT_PHONE_DISCOVERY_COMMAND_KIND='sourcing.phone_discover' as const;
+const readPaths=[...PROSPECT_PHONE_DISCOVERY_PATHS,PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH];
 
 /** Public Router contract used directly by moduleOf, with normal authentication. */
 export async function routeProspectPhoneDiscovery(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
- if(!(PROSPECT_PHONE_DISCOVERY_PATHS as readonly string[]).includes(request.path))return null;
+ if(!(readPaths as readonly string[]).includes(request.path))return null;
  const prepared=await policyRouteDeps(request,options);if(!prepared.ok)return prepared.result;
  return routeProspectPhoneDiscoveryForPrincipal(prepared.deps);
 }
@@ -35,14 +38,25 @@ export async function routeProspectPhoneDiscoveryForPrincipal(deps:RouteDeps):Pr
  }
 }
 
-/** Three closed adapters. Requests commit in the ordinary command transaction;
+/** Closed adapters. Requests commit in the ordinary command transaction;
  * reads and receipt reconciliation cannot request, renew or redispatch capture. */
 async function routePhoneDiscoveryWithAuthority(deps:RouteDeps):Promise<RouteResult> {
  const {request,principal}=deps;
- if(!(PROSPECT_PHONE_DISCOVERY_PATHS as readonly string[]).includes(request.path))return {status:404,body:{error:'not_found'}};
+ if(!(readPaths as readonly string[]).includes(request.path))return {status:404,body:{error:'not_found'}};
  if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  if(principal.role!=='admin')return {status:403,body:{error:'admin_only'}};
  const scoped=contextForPrincipal(deps.auth,principal);if(!scoped.ok)return scoped.result;
+ if(request.path===PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH){
+  const parsed=prospectPhoneRefusalOriginalInputSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'malformed_body'}};
+  return withTransaction(deps.auth.db,async()=>{
+   // Authenticate inside the transaction before the final locked current reads.
+   // There is no post-read authentication wait outside the source/run locks.
+   if(!await privatePrincipalIsCurrent(deps))return privateAuthorityRefusal();
+   const result=await readProspectPhoneRefusalOriginal(scoped.context,parsed.data,retainedPrincipalAuthority(deps,scoped.context));
+   return !result.ok?result.reason==='authority_changed'?privateAuthorityRefusal():{status:409,body:{error:result.reason}}:
+    {status:200,body:prospectPhoneRefusalOriginalSchema.parse(result.value)};
+  });
+ }
  let answer:RouteResult;
  if(request.path===PROSPECT_PHONE_DISCOVERY_PATHS[0]){
   let beforeCommit:((ctx:RepositoryContext)=>Promise<void>)|undefined;
