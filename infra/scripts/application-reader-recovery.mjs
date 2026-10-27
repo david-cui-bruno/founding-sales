@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { normalizeTaskDefinition, readerTaskDocument } from './release-safety.mjs';
 import { parseFailedReaderCustody } from './application-reader-custody.mjs';
+import { proveReaderHistory } from './application-reader-history.mjs';
 
 const requireThat = (condition, reason) => { if (!condition) throw new Error(reason); };
 const knownStatuses = ['PROVISIONING', 'PENDING', 'ACTIVATING', 'RUNNING', 'DEACTIVATING', 'STOPPING', 'DEPROVISIONING', 'STOPPED'];
@@ -16,8 +17,12 @@ export function readerRecoveryCommandEnvironment(environment, program, args) {
 
 // Historical custody only. This never executes/stops a task, retries a write, or
 // changes safety.off's fail-closed handling of unknown current-run outcomes.
-export async function recoverApplicationReader({ custody, cluster, source, baseline, state, save, beforeWrite, aws, gh, commit, repository }) {
+export async function recoverApplicationReader({ custody, cluster, source, baseline, state, save, beforeWrite, aws, gh, ghText, commit, repository }) {
   state.readerRecovery = { ...custody, outcome: 'observing' }; save();
+  const historical = custody.evidenceBasis === 'historical-readonly-retirement';
+  if (historical) {
+    Object.assign(state.readerRecovery, { historicalExecution: 'UNKNOWN', historicalEffects: 'UNKNOWN' }); save();
+  }
   const readDefinition = async arn => aws('ecs', 'describe-task-definition', ['--task-definition', arn, '--include', 'TAGS']);
   const readTasks = async arns => {
     const result = await aws('ecs', 'describe-tasks', ['--cluster', cluster, '--tasks', ...arns]);
@@ -34,6 +39,14 @@ export async function recoverApplicationReader({ custody, cluster, source, basel
     requireThat(actualSource.taskDefinition?.taskDefinitionArn === custody.sourceOperationsDefinitionArn && actualSource.taskDefinition.status === 'ACTIVE' && actualSource.taskDefinition.registeredBy === owner && isDeepStrictEqual(actualSource.taskDefinition, source.definition) && isDeepStrictEqual(actualSource.tags, source.tags), 'reader_recovery_source_changed');
     const expected = readerTaskDocument(source);
     requireThat(reader.taskDefinition?.taskDefinitionArn === custody.readerDefinitionArn && reader.taskDefinition.status === 'ACTIVE' && reader.taskDefinition.registeredBy === owner && head.taskDefinition?.taskDefinitionArn === custody.readerDefinitionArn && isDeepStrictEqual(head, reader) && isDeepStrictEqual(normalizeTaskDefinition(reader.taskDefinition), normalizeTaskDefinition(expected)) && isDeepStrictEqual(reader.tags, expected.tags), 'reader_recovery_definition_changed');
+    if (historical) {
+      requireThat(state.fromSchema === 142 && state.targetSchema === 142 && state.observedSchema === 142 && isDeepStrictEqual(reader.taskDefinition.containerDefinitions[0]?.entryPoint, expected.containerDefinitions[0].entryPoint) && isDeepStrictEqual(reader.taskDefinition.containerDefinitions[0]?.command, []), 'reader_recovery_history_scope_changed');
+      const history = await proveReaderHistory({ custody, run, commit, repository, gh, ghText });
+      const missing = await aws('ecs', 'describe-tasks', ['--cluster', cluster, '--tasks', custody.taskArn]);
+      requireThat(isDeepStrictEqual(missing.tasks, []) && isDeepStrictEqual(missing.failures, [{ arn: custody.taskArn, reason: 'MISSING' }]), 'reader_recovery_history_not_missing');
+      Object.assign(state.readerRecovery, history); save();
+      return;
+    }
     const [task] = await readTasks([custody.taskArn]);
     const container = task.containers?.[0];
     const image = source.definition.containerDefinitions[0].image;
@@ -61,6 +74,7 @@ export async function recoverApplicationReader({ custody, cluster, source, basel
       all.push(...listed.taskArns);
     }
     requireThat(new Set(all).size === all.length, 'reader_recovery_inventory_unknown');
+    requireThat(!historical || !all.includes(custody.taskArn), 'reader_recovery_missing_task_listed');
     // ECS DescribeTasks accepts at most100. Each complete list above is bounded.
     const tasks = [];
     for (let offset = 0; offset < all.length; offset += 100) tasks.push(...await readTasks(all.slice(offset, offset + 100)));

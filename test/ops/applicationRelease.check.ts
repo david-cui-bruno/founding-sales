@@ -43,7 +43,7 @@ const modulePath = repositoryPath('infra/scripts/application-release.mjs');
 const release = await import(modulePath) as { runRelease(io: IO, env: Record<string, string>): Promise<Status>; offRead: string };
 const execute = promisify(execFile);
 const CURRENT_SCHEMA = API_SCHEMA_RANGE.maximum, PREVIOUS_SCHEMA = CURRENT_SCHEMA - 1;
-const COMMIT = 'b'.repeat(40), BASE = 'a'.repeat(40), DISPATCH = 'c'.repeat(40);
+const COMMIT = 'bced9eebcc4c3fef4ee51d7eefd0f92e66f318c7', BASE = 'a'.repeat(40), DISPATCH = 'c'.repeat(40);
 const ACCOUNT = '326255650484';
 const subnets = ['subnet-07ae1d846228e9e83', 'subnet-01f53573964548294'];
 const workerSG = 'sg-11111111111111111', apiSG = 'sg-22222222222222222', albSG = 'sg-33333333333333333';
@@ -78,7 +78,7 @@ function securityGroups() {
 }
 interface Options {
   from?: number; to?: number; fault?: string;
-  recovery?: boolean;
+  recovery?: boolean; historical?: boolean;
   migrate?: () => Promise<void>; verify?: () => Promise<unknown>; off?: () => Promise<unknown>;
   docker?: (args: string[]) => Promise<string>;
 }
@@ -98,7 +98,7 @@ function harness(options: Options = {}) {
   const failedTask = `${cluster.replace(':cluster/', ':task/')}/a91d7da900aa401789560498b29d7b12`;
   const failedOwner = 'fss-app-40522197864-off-3';
   if (options.recovery) {
-    env['FSS_FAILED_READER_CUSTODY'] = JSON.stringify({ taskArn: failedTask, readerDefinitionArn: arn('operations', 337), startedBy: failedOwner, sourceOperationsDefinitionArn: arn('operations', 335) });
+    env['FSS_FAILED_READER_CUSTODY'] = JSON.stringify({ taskArn: failedTask, readerDefinitionArn: arn('operations', 337), startedBy: failedOwner, sourceOperationsDefinitionArn: arn('operations', 335), ...(options.historical ? { evidenceBasis: 'historical-readonly-retirement' } : {}) });
     for (const name of ['api', 'worker', 'operations', 'migration']) definitions[arn(name)]!.taskDefinition.containerDefinitions[0]!.image = `${registry}/fss-prod-${side(name)}@${NEW[side(name)]}`;
     const source = structuredClone(definitions[arn('operations')]!);
     source.taskDefinition.taskDefinitionArn = arn('operations', 335); source.taskDefinition.status = 'ACTIVE';
@@ -127,6 +127,15 @@ function harness(options: Options = {}) {
       if (options.fault === 'cancel' && current() === 'migrate') throw new Error('cancelled');
       if (program === 'gh') {
         checks++;
+        if (options.historical && args[1]?.includes('/actions/jobs/')) {
+          if (args[1].endsWith('/logs')) {
+            const priorStatus = { phase: 'smoke', outcome: 'repair-required', writesStarted: true, migrationStarted: false, fromSchema: 142, targetSchema: 142, observedSchema: 142, recoveryPoint: null, reason: 'task_failed_or_foreign', rollback: null, currentTaskArn: failedTask, currentTaskOwner: failedOwner, lastStoppedTaskArn: null, lastTaskExitCode: 0, temporaryReaderDefinition: arn('operations', 337), previousDefinitions: {}, candidateDefinitions: { operations: arn('operations', 335) } };
+            return ['##[group]Run if [ -f "$RUNNER_TEMP/application/status.json" ]; then', `  COMMIT: ${COMMIT}`, '  RUN_ID: 40519161322', '  RUN_ATTEMPT: 1', '  GATE_RUN_ID: 40519161282', '##[endgroup]', ...JSON.stringify(priorStatus, null, 2).split('\n'), 'Post job cleanup.', 'Cleaning up orphan processes'].map((line, n) => `2026-10-27T14:51:22.${String(n).padStart(7, '0')}Z ${line}`).join('\n') + '\n';
+          }
+          return JSON.stringify({ id: 122252105573, run_id: 40522197864, run_attempt: 1, head_sha: COMMIT, name: 'Opt-in protected application release (legacy remains default)', status: 'completed', conclusion: 'failure', steps: [{ number: 6, name: 'Execute only this approved application release', status: 'completed', conclusion: 'failure', started_at: '2026-10-27T14:34:28Z', completed_at: '2026-10-27T14:51:22Z' }, { number: 7, name: 'Actual application phase and recovery boundary', status: 'completed', conclusion: 'success', started_at: '2026-10-27T14:51:22Z', completed_at: '2026-10-27T14:51:22Z' }] });
+        }
+        if (options.historical && args[1]?.endsWith('/attempts/1/jobs?per_page=100')) return JSON.stringify({ total_count: 1, jobs: [JSON.parse(await io.run('gh', ['api', 'repos/david-cui-bruno/founding-sales/actions/jobs/122252105573'])) as unknown] });
+        if (options.historical && args[1]?.endsWith('/attempts/1')) return JSON.stringify({ ...run('greenfield-deploy', 40522197864), event: 'workflow_dispatch', conclusion: 'failure' });
         if (args[1]?.endsWith('/actions/runs/40522197864')) return JSON.stringify({ ...run('greenfield-deploy', 40522197864), event: 'workflow_dispatch', conclusion: 'failure' });
         if (promotionGateChanged && args[1]?.includes('/actions/runs/22')) return JSON.stringify({ ...run('greenfield', 22), conclusion: 'failure' });
         if (options.fault === 'gate-later' && checks > 12) return JSON.stringify({ ...run('greenfield', 22), conclusion: 'failure' });
@@ -217,7 +226,7 @@ function harness(options: Options = {}) {
         return JSON.stringify({ service: s });
       }
       if (action === 'list-tasks') {
-        if (!args.includes('--service-name')) return JSON.stringify({ taskArns: options.recovery && current() === 'reader-recovery' ? (args.includes('STOPPED') ? [failedTask] : ['api', 'worker'].flatMap(name => Array.from({ length: name === 'api' ? 2 : 1 }, (_, n) => serviceTaskArn(name, n)))) : [] });
+        if (!args.includes('--service-name')) return JSON.stringify({ taskArns: options.recovery && current() === 'reader-recovery' ? (args.includes('STOPPED') ? (options.historical ? [] : [failedTask]) : ['api', 'worker'].flatMap(name => Array.from({ length: name === 'api' ? 2 : 1 }, (_, n) => serviceTaskArn(name, n)))) : [] });
         const name = arg(args, '--service-name').endsWith('api') ? 'api' : 'worker';
         return JSON.stringify({ taskArns: Array.from({ length: services[name].desiredCount }, (_, n) => serviceTaskArn(name, n)) });
       }
@@ -246,6 +255,7 @@ function harness(options: Options = {}) {
       }
       if (action === 'describe-tasks') {
         const ids = args.slice(args.indexOf('--tasks') + 1, args.indexOf('--output'));
+        if (options.historical && ids.length === 1 && ids[0] === failedTask) return JSON.stringify({ tasks: [], failures: [{ arn: failedTask, reason: 'MISSING' }] });
         return JSON.stringify({ tasks: ids.map(named => {
           if (options.recovery && named === failedTask) return { taskArn: named, clusterArn: cluster, startedBy: failedOwner, taskDefinitionArn: arn('operations', 337), lastStatus: 'STOPPED', stopCode: 'TaskFailedToStart', stoppedReason: 'CannotPullContainerError: unavailable', containers: [{ name: 'operations', image: `${registry}/fss-prod-worker@${NEW.worker}` }], overrides: { containerOverrides: [{ name: 'operations', command: [] }], inferenceAcceleratorOverrides: [] } };
           const taskId = named.split('/').at(-1) ?? '', task = tasks.get(taskId);
@@ -261,10 +271,11 @@ function harness(options: Options = {}) {
 }
 
 describe('historical reader custody followed by the full normal release (transport model)', () => {
-  it('reconciles337 from335, preserves the original record and completes all same-candidate gates', async () => {
-    const h = harness({ recovery: true, from: 142, to: 142 }); const result = await h.run();
+  it.each([false, true])('reconciles337 from335 with historical=%s, preserves record and completes all normal gates', async historical => {
+    const h = harness({ recovery: true, historical, from: 142, to: 142 }); const result = await h.run();
     expect(result.outcome, result.reason).toBe('completed');
     expect(result.readerRecovery).toMatchObject({ outcome: 'completed', readerDefinitionArn: arn('operations', 337), sourceOperationsDefinitionArn: arn('operations', 335) });
+    if (historical) expect(result.readerRecovery).toMatchObject({ evidenceBasis: 'historical-readonly-retirement', failedRunAttempt: 1, applicationJobId: 122252105573, historicalExecution: 'UNKNOWN', historicalEffects: 'UNKNOWN' });
     expect(result.migrationStarted).toBe(false);
     const phases = h.states.map(state => state.phase);
     for (const phase of ['reader-recovery', 'observe-stored-off', 'release-record', 'promote-images', 'recovery-pinned', 'schema-verify', 'deploy', 'runtime-verify', 'smoke', 'completed']) expect(phases).toContain(phase);
@@ -284,15 +295,15 @@ describe('historical reader custody followed by the full normal release (transpo
     const h = harness(); h.env['FSS_FAILED_READER_CUSTODY'] = '{}';
     const result = await h.run(); expect(result.reason).toBe('failed_reader_custody_invalid'); expect(h.calls).toHaveLength(0);
   });
-  it('retains exact custody and repair-required after a lost deregistration answer', async () => {
-    const h = harness({ recovery: true, fault: 'recovery-lost-write' }); const result = await h.run();
+  it.each([false, true])('retains custody and repair-required after lost deregistration with historical=%s', async historical => {
+    const h = harness({ recovery: true, historical, from: 142, to: 142, fault: 'recovery-lost-write' }); const result = await h.run();
     expect(result.outcome).toBe('repair-required'); expect(result.phase).toBe('reader-recovery');
     expect(result.readerRecovery).toMatchObject({ outcome: 'deregister-requested', readerDefinitionArn: arn('operations', 337), sourceOperationsDefinitionArn: arn('operations', 335) });
     expect(h.calls.filter(call => call.args[1] === 'deregister-task-definition')).toHaveLength(1);
     expect(h.calls.some(call => ['run-task', 'update-service'].includes(call.args[1] ?? ''))).toBe(false);
   });
-  it('does not replace a conflicting original record or roll out after it', async () => {
-    const h = harness({ recovery: true, fault: 'record-conflict' }); const result = await h.run();
+  it.each([false, true])('refuses a conflicting original record with historical=%s', async historical => {
+    const h = harness({ recovery: true, historical, from: 142, to: 142, fault: 'record-conflict' }); const result = await h.run();
     expect(result.outcome).toBe('repair-required'); expect(result.reason).toBe('task_nonzero_exit');
     expect(result.phase).toBe('release-record'); expect(result.readerRecovery?.outcome).toBe('completed');
     expect(h.calls.some(call => call.args[1] === 'update-service')).toBe(false);
@@ -303,8 +314,8 @@ describe('historical reader custody followed by the full normal release (transpo
     expect(result.readerRecovery).toMatchObject({ outcome: 'observing', readerDefinitionArn: arn('operations', 337) });
     expect(h.calls.some(call => call.args[1] === 'deregister-task-definition')).toBe(false);
   });
-  it.each(['initially-missing', 'recovery-tag-lost'])('never republishes candidate image when %s', async fault => {
-    const h = harness({ recovery: true, fault });
+  it.each([['initially-missing', false], ['recovery-tag-lost', false], ['initially-missing', true], ['recovery-tag-lost', true]] as const)('never republishes when %s historical=%s', async (fault, historical) => {
+    const h = harness({ recovery: true, historical, from: 142, to: 142, fault });
     if (fault === 'initially-missing') delete h.productionTags.api;
     const result = await h.run(); expect(result.reason).toBe('reader_recovery_promotion_missing');
     expect(h.calls.some(call => call.program === 'docker' && call.args[0] === 'buildx')).toBe(false);
