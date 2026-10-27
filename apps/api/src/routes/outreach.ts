@@ -3,8 +3,8 @@ import {z} from 'zod';
 import {routineSettingsCommandSchema,outreachCohortInputSchema,outreachCohortCommandSchema,routineManualCommandSchema} from '@fss/contracts';
 import {readOutreachControl,readOutreachSenderStanding,readOutreachSenderStandingV2,saveRoutineSettings,handleRoutineManually} from '@fss/domain/outreach/settings.ts';
 import {previewOutreachCohort,enableOutreachCohort} from '@fss/domain/outreach/cohorts.ts';
-import {saveAnswerBlock,approveAnswerBlock,retireAnswerBlock,listAnswerBlocks} from '@fss/domain/outreach/facts.ts';
-import {prospectingAuthorizationReadSchema,prospectingAuthorizationSaveSchema,saveAnswerBlockCommandSchema,answerBlockApprovalCommandSchema,answerBlocksReadSchema} from '@fss/contracts';
+import {routeOutreachFacts} from './outreachFacts.ts';
+import {prospectingAuthorizationReadSchema,prospectingAuthorizationSaveSchema} from '@fss/contracts';
 import {authorizationForMailbox,setProspectingAuthorization} from '@fss/domain/outreach/authorization.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
@@ -33,17 +33,7 @@ export async function routeOutreach(request:ApiRequest,options:RoutingOptions):P
  }
  if(request.path==='/outreach/cohort/enable')return runRouteCommand({auth,request,principal:principal.principal},outreachCohortCommandSchema,'outreach_cohort_enable',async(ctx,input)=>{const {commandId:_id,clientVersion:_version,...value}=input;return enableOutreachCohort(ctx,value);});
  if(request.path==='/outreach/reply/manual')return runRouteCommand({auth,request,principal:principal.principal},routineManualCommandSchema,'outreach_reply_manual',handleRoutineManually);
- if(request.path==='/outreach/answer-blocks'){
-  const input=answerBlocksReadSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'invalid_input'}};
-  return {status:200,body:{blocks:await listAnswerBlocks(scoped.context,input.data.afterId)}};
- }
- if(request.path==='/outreach/answer-blocks/save')return runRouteCommand({auth,request,principal:principal.principal},saveAnswerBlockCommandSchema,'outreach_answer_save',async(ctx,input)=>{
-  const {commandId:_command,clientVersion:_client,...content}=input;
-  const result=await saveAnswerBlock(ctx,content);return result.ok?{ok:true as const,value:{id:result.value.id,version:result.value.version}}:result;
- });
- if(request.path==='/outreach/answer-blocks/approve'||request.path==='/outreach/answer-blocks/retire')return runRouteCommand({auth,request,principal:principal.principal},answerBlockApprovalCommandSchema,request.path.endsWith('/approve')?'outreach_answer_approve':'outreach_answer_retire',async(ctx,input)=>{
-  const result=await (request.path.endsWith('/approve')?approveAnswerBlock:retireAnswerBlock)(ctx,input);return result.ok?{ok:true as const,value:{id:result.value.id,version:result.value.version}}:result;
- });
+ if(['/outreach/answer-blocks','/outreach/answer-blocks/save','/outreach/answer-blocks/approve','/outreach/answer-blocks/retire'].includes(request.path))return routeOutreachFacts({auth,request,principal:principal.principal});
  if(request.path==='/outreach/authorization'){
   const parsed=prospectingAuthorizationReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
   const exists=await scoped.context.db.query('SELECT 1 FROM mailboxes WHERE workspace_id=$1 AND id=$2',[scoped.context.scope.workspaceId,parsed.data.mailboxId]);
