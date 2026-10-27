@@ -43,6 +43,10 @@ on:
         description: 'Application only: exact reviewed reader custody JSON and explicit evidence basis, blank for normal release'
         type: string
         default: ''
+      observe_reader_off:
+        description: 'Application historical custody only: collect stored-OFF, preserve failed reader, do not release'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -86,8 +90,9 @@ jobs:
         env:
           FAILED_READER_CUSTODY: ${{ inputs.failed_reader_custody }}
           RELEASE_MODE: ${{ inputs.release_mode }}
+          OBSERVE_READER_OFF: ${{ inputs.observe_reader_off }}
         run: |
-          if [ -n "$FAILED_READER_CUSTODY" ]; then
+          if [ -n "$FAILED_READER_CUSTODY" ] || [ "$OBSERVE_READER_OFF" = true ]; then
             [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$RELEASE_MODE" = application ] \
               || { echo '::error::failed reader custody requires protected application mode'; exit 1; }
           fi
@@ -539,6 +544,7 @@ jobs:
       GATE_RUN_ID: ${{ needs.gates.outputs.gate_run_id }}
       GH_TOKEN: ${{ github.token }}
       FSS_FAILED_READER_CUSTODY: ${{ inputs.failed_reader_custody }}
+      FSS_READER_OBSERVATION_ONLY: ${{ inputs.observe_reader_off && 'true' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -552,7 +558,7 @@ jobs:
         run: |
           set -euo pipefail
           [ "$GITHUB_REF" = refs/heads/main ]
-          node --input-type=module -e 'import {parseFailedReaderCustody} from "./infra/scripts/application-reader-custody.mjs"; parseFailedReaderCustody(process.env.FSS_FAILED_READER_CUSTODY, process.env.GITHUB_RUN_ID);'
+          node --input-type=module -e 'import {parseFailedReaderCustody} from "./infra/scripts/application-reader-custody.mjs"; import {readerObservationRequested} from "./infra/scripts/application-off-observation.mjs"; const custody=parseFailedReaderCustody(process.env.FSS_FAILED_READER_CUSTODY, process.env.GITHUB_RUN_ID); readerObservationRequested(process.env.FSS_READER_OBSERVATION_ONLY, custody);'
           for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
             [ -z "${!name:-}" ] || { echo "::error::ambient cloud credentials refused"; exit 1; }
           done
@@ -584,7 +590,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/application/status.json" ]; then
             # Trusted local-only fallback for cancelled/timed-out execution. Never replay or clean a remote write.
             node infra/scripts/application-release.mjs --finalize --status "$RUNNER_TEMP/application/status.json"
-            jq '{phase,outcome,writesStarted,migrationStarted,fromSchema,targetSchema,observedSchema,recoveryPoint,reason,rollback,currentTaskArn,currentTaskOwner,lastStoppedTaskArn,lastTaskExitCode,temporaryReaderDefinition,previousDefinitions,candidateDefinitions,readerRecovery}' "$RUNNER_TEMP/application/status.json" | tee -a "$GITHUB_STEP_SUMMARY"
+            jq '{phase,outcome,writesStarted,migrationStarted,fromSchema,targetSchema,observedSchema,recoveryPoint,reason,rollback,currentTaskArn,currentTaskOwner,lastStoppedTaskArn,lastTaskExitCode,temporaryReaderDefinition,previousDefinitions,candidateDefinitions,readerRecovery,offObservation,off}' "$RUNNER_TEMP/application/status.json" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo 'Replacement stopped before execution. No replacement writes claimed.' >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -700,6 +706,7 @@ jobs:
           PLAN_RESULT: ${{ needs.review-prepare.result }}
           REVIEWED_RESULT: ${{ needs.reviewed.result }}
           APPLICATION_RESULT: ${{ needs.application.result }}
+          OBSERVE_READER_OFF: ${{ inputs.observe_reader_off }}
           RELEASE_MODE: ${{ inputs.release_mode }}
           RELEASE_HOLD: ${{ vars.FSS_RELEASE_HOLD || 'true' }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
@@ -722,6 +729,9 @@ jobs:
           elif [ "$RELEASE_MODE" = reviewed ]; then
             line="Reviewed production release $REVIEWED_RESULT; its job reports actual phase, schema and repair status."
             [ "$REVIEWED_RESULT" = success ] || level=error
+          elif [ "$RELEASE_MODE" = application ] && [ "$OBSERVE_READER_OFF" = true ]; then
+            line="Protected stored-OFF observation $APPLICATION_RESULT; no application replacement. Original release remains incomplete; inspect aggregate OFF and cleanup custody."
+            [ "$APPLICATION_RESULT" = success ] || level=error
           elif [ "$RELEASE_MODE" = application ]; then
             line="Protected application replacement $APPLICATION_RESULT; its job reports actual phase/schema and repair status. Legacy remains available."
             [ "$APPLICATION_RESULT" = success ] || level=error
