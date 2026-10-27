@@ -5,7 +5,7 @@ import type {BrowserClient} from './BrowserClient.ts';
 import {VoicePreferenceCustody,VOICE_PENDING_KEY,type VoicePending} from './VoicePreferenceCustody.ts';
 const saveAnswer=z.union([z.strictObject({status:z.literal('accepted'),replayed:z.boolean(),result:socialVoiceSavedSchema}),z.strictObject({status:z.literal('refused'),replayed:z.boolean(),reason:z.string()})]);
 const dimensions=['tone','formality','concision','structure','vocabulary','formatting','avoid'] as const;
-/** Independent explicit curation. No composer, fact, suggestion or provider consumer. */
+/** Independent explicit curation. Guided requests separately read saved revisions. */
 export function BrowserVoicePreferences({client}:{client:BrowserClient}):JSX.Element{
  const custody=useMemo(()=>new VoicePreferenceCustody(client),[client]);
  const [guide,setGuide]=useState<SocialVoiceGuide|null>(null),[entries,setEntries]=useState<SocialVoicePreference[]>([]),[restarting,setRestarting]=useState(false);
@@ -62,7 +62,7 @@ export function BrowserVoicePreferences({client}:{client:BrowserClient}):JSX.Ele
  const editable=guide!==null&&(guide.state!=='removed'||restarting);
  const valid=socialVoiceEntriesSchema.safeParse(entries).success;
  return <section aria-label="Private voice preferences" className="space-y-2 rounded-md border p-3">
-  <h3>Private voice preferences</h3><p>Explicit human-curated, unverified style instructions, not customer facts, quotations, results, commitments or product truth. Pasted text cannot be verified free of private facts. No automatic learning from draft edits, generation, training, source fetching, consent or platform activation.</p>
+  <h3>Private voice preferences</h3><p>Explicit human-curated, unverified style instructions, not customer facts, quotations, results, commitments or product truth. Pasted text cannot be verified free of private facts. Guided requests use only explicitly selected saved revisions, never unsaved editor text. No automatic learning from draft edits, training, source fetching, consent or platform activation.</p>
   <p>Only explicit Save stores current guidance. Durable until explicit removal or ordinary owner/workspace erasure. No examples, prose history or 90-day draft expiry. Unsaved edits are lost on refresh.</p>
   <p role="status">{notice}</p>
   <button type="button" disabled={unavailable} onClick={()=>{void operation(read);}}>Read private voice guide</button>

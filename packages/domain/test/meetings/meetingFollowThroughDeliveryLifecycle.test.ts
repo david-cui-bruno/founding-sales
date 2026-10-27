@@ -2,6 +2,7 @@ import { recordSuppression } from '../../suppression/events.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { meetingDispatchFixture } from './support/meetingDispatchFixture.ts';
+import { OPEN_INSTANT } from '../outbound/support/outboundWorld.ts';
 import { dispatchOutboundMessage } from '../../outbound/send.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
 import { composeEligibility } from '../../sequences/eligibility.ts';
@@ -43,9 +44,20 @@ describe('delivery drives meeting follow-through work', () => {
   });
   it('holds restored sent mail whose actual bytes were not verified', async () => {
     f = await meetingDispatchFixture(); const x = f, fence = await x.prepare();
-    expect(await withTransaction(x.db, () => markPreDispatchFenceSent(x.context, { outboundMessageId: fence.id, sentAt: x.at, providerMessageId: 'restored-message', providerThreadId: 'restored-thread' }))).toMatchObject({ ok: true });
+    // The fixture's scheduling instant can be future, but observed delivery is history.
+    const observedSentAt = OPEN_INSTANT;
+    const clock = (await x.db.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]!.at;
+    expect(Date.parse(observedSentAt)).toBeLessThanOrEqual(clock.getTime());
+    expect(await withTransaction(x.db, () => markPreDispatchFenceSent(x.context, { outboundMessageId: fence.id, sentAt: observedSentAt, providerMessageId: 'restored-message', providerThreadId: 'restored-thread' }))).toMatchObject({ ok: true });
     await withTransaction(x.db, () => runMeetingFollowThrough(x.context, { meetingId: x.meetingId, at: x.at }));
     expect(await readMeetingFollowThrough(x.admin, { meetingId: x.meetingId })).toMatchObject({ status: 'needs_review', blockers: expect.arrayContaining(['delivery_bytes_unverified']) });
+    expect(await meetingDeliveryHistory(x.context, x.planId)).toEqual([]);
+  });
+  it('refuses restored sent mail with a future observed delivery timestamp', async () => {
+    f = await meetingDispatchFixture(); const x = f, fence = await x.prepare();
+    const future = (await x.db.query<{ at: Date }>("SELECT clock_timestamp() + interval '1 day' AS at")).rows[0]!.at.toISOString();
+    await expect(withTransaction(x.db, () => markPreDispatchFenceSent(x.context, { outboundMessageId: fence.id, sentAt: future, providerMessageId: 'future-message', providerThreadId: 'future-thread' }))).rejects.toMatchObject({ code: '23514', constraint: 'campaign_opening_historical_terminal' });
+    expect(await readOutboundOutcome(x.context, x.executionId)).toMatchObject({ state: 'prepared', outboundMessageId: fence.id, dispatchedAt: null });
     expect(await meetingDeliveryHistory(x.context, x.planId)).toEqual([]);
   });
   it.each(['none','stop','source','reassigned'])('rechecks %s before fulfilling an exact linked material task', async change => {

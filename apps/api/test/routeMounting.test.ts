@@ -340,6 +340,7 @@ describe('what the API mounts', () => {
       '/social/drafts',
       '/social/drafts/read',
       '/social/drafts/request',
+      '/social/drafts/request/receipt',
       '/social/linkedin-policy/check-current',
       '/social/linkedin-policy/disable',
       '/social/linkedin-policy/read',

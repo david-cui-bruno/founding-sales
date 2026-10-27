@@ -3,6 +3,7 @@ import {socialDraftWorkspaceSchema,socialDraftViewSchema,type SocialDraftWorkspa
 import {z} from 'zod';
 import {BrowserPrivateComposer,type PrivateAdoption} from './BrowserPrivateComposer.tsx';
 import {BrowserVoicePreferences} from './BrowserVoicePreferences.tsx';
+import {BrowserSocialGeneration} from './BrowserSocialGeneration.tsx';
 import type {BrowserClient} from './BrowserClient.ts';
 
 /** Retained suggestion review plus explicitly saved private composition. */
@@ -59,12 +60,18 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
  if(!signedIn||client.current?.status!=='signed_in'||epoch!==client.epoch||scope.current!==client)return null;
  return <section aria-label="Private social review" className="social-review">
   <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
+  <BrowserSocialGeneration client={client} claimProjection={()=>{
+   // One explicit interaction owner spans guided projection and retained review.
+   // Superseding a projection never clears or replays its opaque command custody.
+   const token=++owner.current,generation=client.epoch;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);
+   return ()=>owner.current===token&&scope.current===client&&client.isCurrent(generation);
+  }} onCurrentRequest={request=>{setAdoption(null);setWorkspace(request?expireWorkspace({sources:[],facts:[],requests:[request]}):null);}}/>
   <div className="social-secondary-toolbar">
   <button type="button" disabled={busy} onClick={()=>{void read();}}>Read retained social suggestions</button>
   </div>
   <p role="status" className="social-notice">{notice}</p>
   <details className="social-details" open={workspace!==null||busy}><summary>Retained suggestions & sources</summary>
-  <p>No generation, automatic voice learning, source acquisition or platform action is available. Retained source metadata is dated provenance, not current coverage or semantic support.</p>
+  <p>Guided requests require explicit current guide and approved fact selection above. No automatic voice learning, source acquisition or platform action is available. Retained source metadata is dated provenance, not current coverage or semantic support.</p>
   {workspace!==null?<div className="space-y-3">
    <details><summary>Retained source metadata ({workspace.sources.length}, at most 60)</summary><ul>{workspace.sources.map(source=><li key={`${source.kind}:${source.id}`}>{source.label} · {source.kind} {source.id} revision {source.revision} · Observed {source.observedAt}</li>)}</ul></details>
    <details><summary>Current approved factual inputs ({workspace.facts.length}, at most 20)</summary><ul>{workspace.facts.map(fact=><li key={fact.id}>{fact.text}<small className="block">Fact {fact.id} version {fact.version}{fact.socialInput?` · ${fact.socialInput.topic} · ${fact.socialInput.status}${fact.socialInput.sourceRef?` · Public original ${fact.socialInput.sourceRef.id} revision ${fact.socialInput.sourceRef.revision} · ${fact.socialInput.sourceRef.url} · Checked ${fact.socialInput.sourceRef.checkedAt}`:''}`:''}</small></li>)}</ul></details>

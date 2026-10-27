@@ -11,6 +11,7 @@ import {socialWeeklyCommandSchema} from '@fss/contracts';
 import {readSocialWeekly,saveSocialWeekly} from '@fss/domain/social/weekly.ts';
 import {readSocialDraftRoute} from './socialDraftReads.ts';
 import {requestSocialDraftRoute} from './socialDraftRequest.ts';
+import {socialDraftRequestReceipt} from './socialDraftRequestReceipt.ts';
 import {socialConnectionCommandSchema,socialDisconnectCommandSchema} from '@fss/contracts';
 import {saveSocialConnection,disconnectSocialAccount} from '@fss/domain/social/accounts.ts';
 import {socialPostSaveCommandSchema,socialPostActionCommandSchema,socialBeginCommandSchema,socialObservationCommandSchema} from '@fss/contracts';
@@ -23,7 +24,7 @@ import {uuid,socialAssetRegisterCommandSchema,socialAssetCompleteCommandSchema,s
 import {readSocialAsset,registerSocialAsset,completeSocialAsset,deleteSocialAsset,listSocialAssets,socialAssetObject} from '@fss/domain/social/assets.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOCIAL_PATHS=[...SOCIAL_VOICE_PATHS,...SOCIAL_PRIVATE_PATHS,'/social/linkedin-policy/read','/social/linkedin-policy/save','/social/linkedin-policy/disable','/social/linkedin-policy/revoke','/social/linkedin-policy/check-current','/social/accounts/manual','/social/manual-handoff/read','/social/manual-handoff/confirm','/social/delivery/hold','/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
+export const SOCIAL_PATHS=[...SOCIAL_VOICE_PATHS,...SOCIAL_PRIVATE_PATHS,'/social/linkedin-policy/read','/social/linkedin-policy/save','/social/linkedin-policy/disable','/social/linkedin-policy/revoke','/social/linkedin-policy/check-current','/social/accounts/manual','/social/manual-handoff/read','/social/manual-handoff/confirm','/social/delivery/hold','/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request/receipt','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
 export async function routeSocial(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOCIAL_PATHS.includes(request.path))return null;if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
@@ -50,6 +51,7 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  if(request.path==='/social/weekly'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialWeekly(ctx)};}
  if(request.path==='/social/weekly/save')return runRouteCommand(deps,socialWeeklyCommandSchema,'social_weekly_save',(c,input)=>saveSocialWeekly(c,{enabled:input.enabled,expectedRevision:input.expectedRevision}));
  if(request.path==='/social/drafts'||request.path==='/social/drafts/read')return readSocialDraftRoute(deps);
+ if(request.path==='/social/drafts/request/receipt')return socialDraftRequestReceipt(deps);
  if(request.path==='/social/drafts/request')return requestSocialDraftRoute(deps);
  if(request.path==='/social/accounts/manual')return runRouteCommand(deps,socialConnectionCommandSchema,'social_manual_destination',(c,body)=>{const {commandId:_id,clientVersion:_client,...input}=body;return registerSocialManualDestination(c,input);});
  if(request.path==='/social/accounts/connect')return runRouteCommand(deps,socialConnectionCommandSchema,'social_account_connect',(c,input)=>{const {commandId:_id,clientVersion:_client,...connection}=input;return saveSocialConnection(c,connection);});

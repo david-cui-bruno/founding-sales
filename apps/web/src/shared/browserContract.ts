@@ -44,7 +44,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/sourcing/candidates/phone-discovery/read', '/sourcing/candidates/phone-discovery/receipt',
   '/outreach/email-campaigns/control',
   '/replies', '/replies/card', '/replies/composer/context', '/replies/composer/preview',
-  '/social/drafts', '/social/drafts/read',
+  '/social/drafts', '/social/drafts/read', '/social/drafts/request/receipt',
   '/social/private-drafts/list', '/social/private-drafts/read', '/social/private-drafts/receipt',
   '/social/voice-preferences/read', '/social/voice-preferences/receipt',
   '/calling/follow-ups/list', '/calling/follow-ups/read', '/calling/follow-ups/receipt',
@@ -62,6 +62,7 @@ export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/outreach/email-campaigns/approve', '/outreach/email-campaigns/revoke',
   '/replies/composer/generate',
   '/social/private-drafts/save', '/social/voice-preferences/save',
+  '/social/drafts/request',
   '/calling/wrap', '/calling/follow-ups/save',
   '/calls/session',
 ] as const);

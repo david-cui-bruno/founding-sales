@@ -49,6 +49,52 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it('preserves guided Social business refusals but not custody or authority failures', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const input = { commandId: id, mode: 'linkedin_grounded', sourceRefs: [], factBlocks: [{ id, version: 1 }], voiceGuideRef: { guideId: id, revision: 2 } };
+    const business = { status: 'refused', replayed: false, reason: 'voice_guide_changed_or_unavailable' };
+    mocks.route.mockResolvedValueOnce({ status: 409, body: business });
+    expect(await handler(post('/browser/api/social/drafts/request', input, headers))).toMatchObject({ status: 200, body: business });
+    for (const reason of ['command_payload_mismatch', 'command_device_mismatch', 'command_kind_mismatch', 'session_changed', 'arbitrary_private_detail']) {
+      mocks.route.mockResolvedValueOnce({ status: 409, body: { ...business, reason } });
+      expect(await handler(post('/browser/api/social/drafts/request', input, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+    }
+    mocks.route.mockResolvedValueOnce({ status: 409, body: { ...business, private: 'not exposed' } });
+    expect(await handler(post('/browser/api/social/drafts/request', input, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+    mocks.route.mockResolvedValueOnce({ status: 409, body: business });
+    expect(await handler(post('/browser/api/social/drafts/request/receipt', { commandId: id, payloadSHA256: 'a'.repeat(64) }, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+  });
+  it('admits only exact guided Social commands and pins the gateway version', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const body = { commandId: id, mode: 'linkedin_grounded', sourceRefs: [], factBlocks: [{ id, version: 1 }], voiceGuideRef: { guideId: id, revision: 2 } };
+    expect((await handler(post('/browser/api/social/drafts/request', body, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[0]?.[3].body).toEqual({ ...body, clientVersion: '1.4.0' });
+    for (const invalid of [
+      { ...body, mode: undefined }, { ...body, voiceGuideRef: undefined }, { ...body, factBlocks: [] },
+      { ...body, sourceRefs: [{ kind: 'call', id, revision: 1 }] },
+      { ...body, guidance: 'private content' }, { ...body, clientVersion: '9.9.9' },
+    ]) expect((await handler(post('/browser/api/social/drafts/request', invalid, headers)))?.status).toBe(400);
+    const receipt = { commandId: id, payloadSHA256: 'a'.repeat(64) };
+    expect((await handler(post('/browser/api/social/drafts/request/receipt', receipt, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[1]?.[3].body).toEqual(receipt);
+    expect(mocks.route).toHaveBeenCalledTimes(2);
+  });
+  it('fences guided Social requests and receipts by current admin, CSRF and session revision', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    for (const path of ['/social/drafts/request', '/social/drafts/request/receipt']) {
+      expect((await handler(post(`/browser/api${path}`, {}, { ...headers, 'x-callie-csrf': '' })))?.status).toBe(403);
+      expect((await handler(post(`/browser/api${path}`, {}, { ...headers, 'x-callie-session': 'stale' })))?.status).toBe(409);
+    }
+    mocks.authenticate.mockResolvedValue({ authenticated: true, principal: { ...principal, role: 'salesperson' } });
+    const memberSession = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    for (const path of ['/social/drafts/request', '/social/drafts/request/receipt']) {
+      expect((await handler(post(`/browser/api${path}`, {}, { ...headers, 'x-callie-session': (memberSession?.body as { revision: string }).revision })))?.status).toBe(403);
+    }
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
   it('refuses unused call history including private notes before API dispatch', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-session': (session?.body as { revision: string }).revision };

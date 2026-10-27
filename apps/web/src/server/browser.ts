@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
+import { commandIdSchema, semanticVersionSchema, socialGuidedRequestInputSchema } from '@fss/contracts';
 import { startSignIn, handleCallback, claimSignIn } from '../../../api/src/auth/signIn.ts';
 import { authenticate, endSession, type AuthenticatedPrincipal } from '../../../api/src/auth/sessions.ts';
 import { route } from '../../../api/src/server.ts';
@@ -9,6 +10,7 @@ import { BROWSER_PATHS, BROWSER_COMMAND_PATHS, BROWSER_CSRF_HEADER, BROWSER_REVI
 import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestContext } from './runtime.ts';
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
 import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
+import { socialGenerationBrowserResult } from './socialGenerationBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
 import { callingExecutionBrowserResult } from './callingExecutionBoundary.ts';
@@ -19,6 +21,8 @@ import { BROWSER_SECURITY_HEADERS as SECURITY_HEADERS } from './httpPolicy.ts';
 class Refusal extends Error {
   constructor(readonly status: number) { super('browser_request_refused'); }
 }
+
+const guidedSocialCommandSchema = socialGuidedRequestInputSchema.safeExtend({ commandId: commandIdSchema, clientVersion: semanticVersionSchema.optional() });
 
 const generationRefusalSchema = z.strictObject({
   status: z.literal('refused'), replayed: z.boolean(), reason: z.string().regex(/^[a-z_]{1,100}$/u),
@@ -157,6 +161,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
         if (!equal(request.headers[BROWSER_REVISION_HEADER], revision(principal))) throw new Refusal(409);
         if (apiPath !== null && QUALIFICATION_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if (apiPath !== null && PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
+        if ((apiPath === '/social/drafts/request' || apiPath === '/social/drafts/request/receipt') && principal.role !== 'admin') throw new Refusal(403);
         if (request.path === BROWSER_PATHS.signOut) {
           // Clear local custody on uncertainty, but never claim remote revocation succeeded.
           outgoing.push(...Object.values(COOKIE_NAMES).map(clearCookie));
@@ -173,6 +178,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
 
 async function product(request: ApiRequest, path: string, context: BrowserRequestContext, token: string, cookies: string[], clientVersion: string): Promise<BrowserResponse> {
   let body = request.body;
+  if (path === '/social/drafts/request' && !guidedSocialCommandSchema.safeParse(body).success) throw new Refusal(400);
   if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
     for (const name of Object.keys(body)) {
       if (['authorization', 'cookie', 'headers', 'origin'].includes(name.toLowerCase())
@@ -193,6 +199,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   });
   const privateDraft = privateDraftBrowserResult(path, result.status, result.body);
   if (privateDraft !== null) return response(privateDraft.status, privateDraft.body, cookies);
+  const socialGeneration = socialGenerationBrowserResult(path, result.status, result.body);
+  if (socialGeneration !== null) return response(socialGeneration.status, socialGeneration.body, cookies);
   const manual = manualProspectBrowserResult(path, result.status, result.body);
   if (manual !== null) return response(manual.status, manual.body, cookies);
   const calling = callingBrowserResult(path, result.status, result.body);
