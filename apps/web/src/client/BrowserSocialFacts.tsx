@@ -1,4 +1,4 @@
-import {useEffect,useMemo,useRef,useState,type JSX} from 'react';
+import {useCallback,useEffect,useMemo,useRef,useState,type JSX} from 'react';
 import {z} from 'zod';
 import {answerBlockSchema,saveAnswerBlockCommandSchema,answerBlockApprovalCommandSchema,uuid,type AnswerBlock,type OutreachMutation,type SaveAnswerBlock} from '@fss/contracts';
 import {ApprovedFactsEditor} from '../../../desktop/src/renderer/outreach/ApprovedFactsEditor.tsx';
@@ -16,7 +16,7 @@ export function BrowserSocialFacts({client,onFactsChanged}:{client:BrowserClient
  const [afterId,setAfterId]=useState<string|undefined>(),[notice,setNotice]=useState('Read current facts to author or approve an exact version.');
  const mounted=useRef(false),token=useRef(0),lock=useRef(false),epoch=useRef(client.epoch),changed=useRef(onFactsChanged);changed.current=onFactsChanged;
  const clear=():void=>{token.current++;lock.current=false;setBusy(false);setBlocks([]);setDraft(empty());setLoaded(false);setRefresh(false);setAfterId(undefined);};
- const readCustody=():void=>{try{setHeld(custody.read()!==null);}catch{setHeld(true);}};
+ const readCustody=useCallback(():void=>{try{setHeld(custody.read()!==null);}catch{setHeld(true);}},[custody]);
  useEffect(()=>{
   mounted.current=true;readCustody();
   const unsubscribe=client.subscribe(()=>{if(epoch.current!==client.epoch||client.current?.status!=='signed_in'){epoch.current=client.epoch;clear();}});
@@ -24,7 +24,7 @@ export function BrowserSocialFacts({client,onFactsChanged}:{client:BrowserClient
   window.addEventListener('storage',storageChanged);
   const owner=token;
   return ()=>{mounted.current=false;owner.current++;lock.current=false;unsubscribe();window.removeEventListener('storage',storageChanged);};
- },[client,custody]);
+ },[client,custody,readCustody]);
  const operation=async(work:(current:()=>boolean)=>Promise<void>):Promise<void>=>{
   if(lock.current||client.current?.status!=='signed_in'||client.current.role!=='admin')return;
   lock.current=true;setBusy(true);const id=++token.current,generation=client.epoch;
@@ -45,7 +45,10 @@ export function BrowserSocialFacts({client,onFactsChanged}:{client:BrowserClient
   if(!current()||custody.read()||!loaded||refresh)throw Error('Read current facts first');
   if(input.action!=='fact_save'&&input.action!=='fact_approve'&&input.action!=='fact_retire')throw Error('Unsupported action');
   const {action,...raw}=input;
-  const payload=action==='fact_save'?saveAnswerBlockCommandSchema.omit({clientVersion:true}).parse(raw):answerBlockApprovalCommandSchema.omit({clientVersion:true}).parse(raw);
+  // The validation-only default preserves the locked schema's refinement. It is
+  // never sent. Only the signed browser gateway injects the trusted version.
+  const parsed=action==='fact_save'?saveAnswerBlockCommandSchema.parse({...raw,clientVersion:'0.0.0'}):answerBlockApprovalCommandSchema.parse({...raw,clientVersion:'0.0.0'});
+  const {clientVersion:_validationVersion,...payload}=parsed;
   if(action==='fact_save'&&'id' in payload&&payload.id&&blocks.find(b=>b.id===payload.id)?.version!==('expectedVersion' in payload?payload.expectedVersion:undefined))throw Error('Compare current fact version');
   // Clear guided input selections before dispatch. Its existing preparation owner
   // still re-reads exact approved refs and will never silently upgrade a version.
@@ -67,7 +70,7 @@ export function BrowserSocialFacts({client,onFactsChanged}:{client:BrowserClient
   {afterId?<button type="button" disabled={busy} onClick={()=>{void read(true);}}>Read more current facts</button>:null}
   <p role="status">{notice}</p>
   {held?<p role="alert">A fact write is pending or UNKNOWN, or its custody is unavailable. New fact writes are held. Reading facts does not clear custody or prove an ambiguous write absent. No resend control is available.</p>:null}
-  <ApprovedFactsEditor blocks={blocks} draft={draft} blocked={busy||held||!loaded} refreshRequired={refresh||!loaded}
+  <ApprovedFactsEditor loadPublicSources={null} blocks={blocks} draft={draft} blocked={busy||held||!loaded} refreshRequired={refresh||!loaded}
    onChange={setDraft} onBegin={value=>{setDraft(value);setRefresh(false);}}
    onAdopt={version=>{setDraft(value=>({...value,expectedVersion:version}));setRefresh(false);}}
    onMutate={input=>{void mutate(input);}}/>

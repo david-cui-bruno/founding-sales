@@ -11,6 +11,7 @@ import { BROWSER_PATHS, BROWSER_COMMAND_PATHS, BROWSER_CSRF_HEADER, BROWSER_REVI
 import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestContext } from './runtime.ts';
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
 import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
+import { socialFactsBrowserResult, socialFactsBrowserSchemas, isSocialFactsBrowserPath } from './socialFactsBoundary.ts';
 import { socialGenerationBrowserResult } from './socialGenerationBoundary.ts';
 import { campaignOpeningBrowserResult } from './campaignOpeningBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
@@ -170,6 +171,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
         if (!equal(request.headers[BROWSER_REVISION_HEADER], revision(principal))) throw new Refusal(409);
         if (apiPath !== null && QUALIFICATION_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if (apiPath !== null && PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
+        if (apiPath !== null && isSocialFactsBrowserPath(apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if ((apiPath === '/social/drafts/request' || apiPath === '/social/drafts/request/receipt') && principal.role !== 'admin') throw new Refusal(403);
         if (apiPath !== null && Object.hasOwn(openingBrowserSchemas, apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if (request.path === BROWSER_PATHS.signOut) {
@@ -178,7 +180,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
           await endSession(context.auth, principal);
           return response(200, { status: 'signed_out' }, outgoing);
         }
-        return await product(request, apiPath!, context, access.token, outgoing, runtime.clientVersion);
+        return await product(request, apiPath!, context, access.token, outgoing, runtime.clientVersion, principal);
       });
     } catch (error) {
       return response(error instanceof Refusal ? error.status : 503, { error: 'browser_request_refused' }, outgoing);
@@ -186,7 +188,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
   };
 }
 
-async function product(request: ApiRequest, path: string, context: BrowserRequestContext, token: string, cookies: string[], clientVersion: string): Promise<BrowserResponse> {
+async function product(request: ApiRequest, path: string, context: BrowserRequestContext, token: string, cookies: string[], clientVersion: string, principal: AuthenticatedPrincipal): Promise<BrowserResponse> {
   let body = request.body;
   if (path === '/social/drafts/request' && !guidedSocialCommandSchema.safeParse(body).success) throw new Refusal(400);
   if (openingBrowserSchemas[path] && !openingBrowserSchemas[path].safeParse(body).success) throw new Refusal(400);
@@ -202,12 +204,19 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
     if (command['clientVersion'] !== undefined && command['clientVersion'] !== clientVersion) throw new Refusal(400);
     body = { ...command, clientVersion };
   }
+  if (isSocialFactsBrowserPath(path) && !socialFactsBrowserSchemas[path]!.safeParse(body).success) throw new Refusal(400);
   // Construct a closed transport envelope. Neither body nor browser headers set API credentials.
   const result = await route(request.method, path, { ...context.api, auth: context.auth }, {
     query: request.query,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
   });
+  if (isSocialFactsBrowserPath(path)) {
+    const fresh = await authenticate(context.auth, `Bearer ${token}`);
+    if (!fresh.authenticated || fresh.principal.role !== 'admin' || revision(fresh.principal) !== revision(principal)) throw new Refusal(401);
+    const facts = socialFactsBrowserResult(path, result.status, result.body)!;
+    return response(facts.status, facts.body, cookies);
+  }
   const privateDraft = privateDraftBrowserResult(path, result.status, result.body);
   if (privateDraft !== null) return response(privateDraft.status, privateDraft.body, cookies);
   const socialGeneration = socialGenerationBrowserResult(path, result.status, result.body);
