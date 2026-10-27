@@ -1,6 +1,6 @@
 # Current operating state
 
-## October27 2026, 04:23UTC: reviewed correction deployed
+## October27 2026, 04:49UTC: deployed correction and bounded yield
 
 **Latest integration:** PR805 merged `d03fbed77` at03:36:58UTC, schema142, all five required checks passed on reviewed `0aa362852`. Upgrade141→142 passed17 workflows and four validator calls. PR806 guidance cleanup merged `cbbe039c` at04:23:13 after exact `af3c38353` required checks and Terraform passed. Its one-sentence warning correction preserved the existing assertion. Expanded sourcing permission is settled.
 
@@ -8,7 +8,7 @@
 
 **Retained local acceptance, now included in deployed d03:** Guided Social's six fake-engine outcomes remain accepted. Email control has clean combined/privacy reviews and3 signed app_runtime PG plus4 signed-browser first-run passes, separate from79 source checks; resources released02:18. Phone correction has clean combined/source-privacy reviews and12 new actual-PG first-run passes plus one signed-browser case, cleanup02:41:31. These remain controlled evidence, not real model or useful-prospect proof. Root resumed normal founder sign-in04:25 for the separately approved additional-record batch. [PLAN](../../apps/web/PLAN.md) owns active source assignments and actual yield; [verification](../features/verification.md) retains local acceptance pins.
 
-The first bounded batch completed10 distinct records: prepared0/10, target5 unmet. First5 were unavailable/discovery_interrupted; final5 included three bounded-capture refusals and two complete/conflicting without a selected number. Conflict does not prove competing numbers. David expanded sourcing00:27:49 and reaffirmed01:44:23. Root selected up to10 additional distinct retained records targeting5 useful sourced manual-call prospects after correction. Release is complete; actual additional yield remains open. No blind replay, invented phone identity or automatic eligibility follows.
+Historical first batch remains prepared0/10. Under David's expanded allowance00:27:49/01:44:23, Root completed ten additional distinct attempts04:49: nine admitted runs/current reads, one explicit refusal/no run. RPM Boston and J Butler provide two company-site source-backed manual-review leads, but canonical selection, phone type/identity and eligibility remain unknown. Target five genuinely prepared remains unmet. Exact provenance/briefs/next actions are retained in the private PR805 receipt. No retries or live contact. Expanded authority remains settled, not a renewed permission blocker. Ladybug fixes the observed later-page incoming Calling handoff; the supported paginated Calling queue worked. Fish owns Social fact authoring; stale executable guidance corrections continue independently. Restore-runbook correction passed review, new automation/rehearsal is explicitly deferred.
 
 **Deployment is not activation.** Earlier normal-founder five-screen reads and controlled Calling/Email/Social acceptance remain in [PLAN](../../apps/web/PLAN.md). Hosted reads do not prove outcome/draft writes, real audio, provider dispatch, live generation/model usefulness or publishing. Issue797 remains open. No accepted-proof replay or new product proof campaign is needed for this documentation reconciliation.
 
