@@ -54,7 +54,10 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
    createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash)return unusable();
   coverage.observations++;coverage.blocks+=source.blocks.length;
   for(const block of source.blocks){
-   const found=[...block.text.matchAll(labels)];
+   // Ordinary "personal touch" prose is not a phone label. Keep every
+   // digit-bearing block conservative, including Unicode/unsupported numbers.
+   const found=[...block.text.matchAll(labels)].filter(label=>
+    !(/^personal$/iu.test(label[0])&&/^\s+touch\b/iu.test(block.text.slice(label.index+label[0].length))&&!/\p{N}/u.test(block.text)));
    for(const [index,label] of found.entries()){
     const start=label.index+label[0].length,end=found[index+1]?.index??block.text.length;
     const segment=block.text.slice(start,end);

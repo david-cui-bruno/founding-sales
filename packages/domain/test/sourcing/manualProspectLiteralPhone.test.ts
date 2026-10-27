@@ -36,6 +36,28 @@ it('does not lose unsupported alternate beside a supported number or coerce no-m
  expect(projectManualPhone(snapshot(['No endpoint retained']))).toMatchObject({state:'not_extracted',reason:'retained_text_not_extracted',coverage:{state:'complete'}});
  expect(scanManualLiteralPhones(input(['Unlabelled 2145550123'])).sources).toEqual([]);
 });
+it.each(['Our team brings a personal touch to every building.','Residents appreciate our PERSONAL\nTOUCH and attentive service.'])('does not classify digit-free personal-touch prose as a phone label: %s',text=>{
+ expect(scanManualLiteralPhones(input([text]))).toMatchObject({sources:[],unresolved:false,coverage:{state:'complete'}});
+ expect(projectManualPhone(snapshot([text]))).toMatchObject({state:'not_extracted',reason:'retained_text_not_extracted'});
+ // Independent valid evidence remains necessary, and attachment stays in its own block.
+ expect(projectManualPhone(snapshot([text,'Office phone: 2145550123']))).toMatchObject({state:'observed',value:'+12145550123',sources:[{label:'Office phone'}]});
+});
+it.each([
+ 'Personal: unavailable', 'Personal phone: unavailable', 'Personal phone: 2145550123',
+ 'Personal: 2145550123', 'Personal touch: 2145550123', 'Our personal touch serves 2 buildings.',
+ 'Our personal touch serves ２ buildings.', 'Personal touchstone unavailable',
+ 'Personal: touch unavailable', 'Mobile: unavailable', 'Fax: unavailable',
+ 'Our personal touch. Personal phone: unavailable',
+ 'Our personal touch. Mobile: unavailable', 'Our personal touch. Fax: unavailable',
+])('preserves unresolved phone labels and numbered personal ambiguity: %s',text=>{
+ expect(scanManualLiteralPhones(input([text])).unresolved).toBe(true);
+ expect(projectManualPhone(snapshot([text,'Office phone: 2145550123']))).toMatchObject({state:'conflicting',reason:'unresolved_retained_literal'});
+});
+it('does not attach a number from another block after digit-free personal-touch prose',()=>{
+ expect(scanManualLiteralPhones(input(['Our personal touch matters.','2145550123']))).toMatchObject({sources:[],unresolved:false});
+ expect(projectManualPhone(snapshot(['Our personal touch matters.','2145550123']))).toMatchObject({state:'not_extracted'});
+ expect(projectManualPhone(snapshot(['Phone office','2145550123']))).toMatchObject({state:'conflicting'});
+});
 it.each([
  ['Phone: 2145550123 / ２１４５５５０１２４','２１４５５５０１２４'],
  ['Phone: 2145550123 / ٢١٤٥٥٥٠١٢٤','٢١٤٥٥٥٠١٢٤'],
