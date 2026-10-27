@@ -1,6 +1,6 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
-import {PROSPECT_PHONE_DISCOVERY_VERSION,prospectPhoneDiscoveryInputSchema,sourceObservationSchema,type ProspectPhoneDiscoveryInput,type ProspectPhoneDiscoveryView,type ProspectPhoneDiscoveryReason,type SourceObservation} from '@fss/contracts';
+import {PROSPECT_PHONE_DISCOVERY_VERSION,PROSPECT_PHONE_CAPTURE_LIMITS,prospectPhoneDiscoveryInputSchema,prospectPhoneObservationSchema,type ProspectPhoneDiscoveryInput,type ProspectPhoneDiscoveryView,type ProspectPhoneDiscoveryReason,type ProspectPhoneObservation} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {withTransaction} from '../db/queryable.ts';
 import {enqueueJob} from '../jobs/jobStore.ts';
@@ -126,23 +126,23 @@ export async function readProspectPhoneDiscovery(ctx:RepositoryContext,input:Pro
  return {ok:true,value:prospectPhoneDiscoveryView(current,evidence??changedManualPhone())};
 }
 /** Validates a whole capture. No selected prefix survives incomplete pages/bounds. */
-export function captureProspectPhonePages(pages:PageFetchResult['pages'],website:string,maxPages:number,maxBytes:number,now:number):Result<SourceObservation[]>{
+export function captureProspectPhonePages(pages:PageFetchResult['pages'],website:string,maxPages:number,maxBytes:number,now:number):Result<ProspectPhoneObservation[]>{
  if(pages.length===0)return refuse('source_unavailable');
  if(pages.length>maxPages||pages.length>4)return refuse('bounded_capture_incomplete');
- const observations:SourceObservation[]=[];
+ const observations:ProspectPhoneObservation[]=[];
  for(const page of pages){
   if(!page.firstParty||!isPublicResearchUrl(page.url)||!isSameResearchSite(website,page.url))return refuse('source_not_permitted');
   if(page.body.byteLength>maxBytes)return refuse('bounded_capture_incomplete');
-  const parsed=parsePageText(page.body,page.contentType,{omitNavigation:true,includeArticles:true});
-  if(parsed.truncated||parsed.blocks.some(block=>block.text.length>4000))return refuse('bounded_capture_incomplete');
+  const parsed=parsePageText(page.body,page.contentType,{omitNavigation:true,includeArticles:true,profile:'phone_discovery'});
+  if(parsed.truncated)return refuse('bounded_capture_incomplete');
   if(!parsed.blocks.length)return refuse('no_readable_text');
   const blocks=parsed.blocks.map(block=>({...block}));
-  const source=sourceObservationSchema.safeParse({id:randomUUID(),url:page.url,contentHash:page.contentHash,relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),
+  const source=prospectPhoneObservationSchema.safeParse({id:randomUUID(),url:page.url,contentHash:page.contentHash,relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),
    retrievedAt:page.retrievedAt,publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks});
   if(!source.success||Date.parse(source.data.retrievedAt)>now)return refuse('source_unavailable');
   observations.push(source.data);
  }
- if(new Set(observations.map(source=>source.url)).size!==observations.length||Buffer.byteLength(JSON.stringify(observations))>100000)return refuse('bounded_capture_incomplete');
+ if(new Set(observations.map(source=>source.url)).size!==observations.length||Buffer.byteLength(JSON.stringify(observations))>PROSPECT_PHONE_CAPTURE_LIMITS.maxObservationBytes)return refuse('bounded_capture_incomplete');
  return {ok:true,value:observations};
 }
 function phoneDiscoverySkippedReason(skipped:PageFetchResult['skipped']):ProspectPhoneDiscoveryReason|null{
@@ -184,7 +184,7 @@ export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{run
   if(interruption){await invalidatePhoneDiscovery(ctx,run.id,interruption);return false;}
   return true;
  });
- let captured:Result<SourceObservation[]>;
+ let captured:Result<ProspectPhoneObservation[]>;
  try{
   if(!await allowed())captured=refuse(interruption??'discovery_interrupted');
   else{

@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {sourceObservationSchema,type ManualProspect,type SourceObservation} from '@fss/contracts';
+import {sourceObservationSchema,prospectPhoneObservationSchema,PROSPECT_PHONE_CAPTURE_LIMITS,type ManualProspect,type SourceObservation} from '@fss/contracts';
 import {canonicalizePhone} from '../src/rules/suppressionCanonicalization.ts';
 
 type Evidence=NonNullable<ManualProspect['phoneEvidence']>;
@@ -36,8 +36,14 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
  const unusable=():LiteralScan=>({sources:[],unresolved:result.unresolved,coverage:{...coverage,state:'unavailable'},reason:'original_not_usable'});
  const bounded=():LiteralScan=>({sources:[],unresolved:result.unresolved,coverage:{...coverage,state:'bounded'},reason:'bounded_scan_incomplete'});
  if(!Array.isArray(input.observations))return unusable();
- if(input.observations.length>8||Buffer.byteLength(JSON.stringify(input.observations))>100000)return bounded();
- const parsed=input.observations.map(value=>sourceObservationSchema.safeParse(value));
+ const authorities=input.observations.map(value=>typeof value==='object'&&value!==null&&'id' in value&&typeof value.id==='string'?input.authorities[value.id]:undefined);
+ const phone=authorities.some(authority=>authority?.kind==='phone_discovery');
+ if(input.observations.length>(phone?4:8)||Buffer.byteLength(JSON.stringify(input.observations))>PROSPECT_PHONE_CAPTURE_LIMITS.maxObservationBytes)return bounded();
+ // Only the trusted discovery projection supplies this whole-run binding.
+ // An observation's shape or a loose flag never promotes retained evidence.
+ if(phone&&(input.lineage.kind!=='provider_original'||authorities.some(authority=>authority?.kind!=='phone_discovery'||authority.runId!==input.runId||
+  !Number.isFinite(Date.parse(authority.expiresAt))||Date.parse(authority.expiresAt)<=input.now)))return unusable();
+ const parsed=input.observations.map(value=>(phone?prospectPhoneObservationSchema:sourceObservationSchema).safeParse(value));
  if(parsed.some(value=>!value.success))return unusable();
  const sources=parsed.flatMap(value=>value.success?[value.data]:[]);
  if(new Set(sources.map(source=>source.id)).size!==sources.length)return unusable();

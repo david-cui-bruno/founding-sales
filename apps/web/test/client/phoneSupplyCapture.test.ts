@@ -22,19 +22,23 @@ it.each([
  ['single oversized block',`<p>${'a'.repeat(4001)}</p>`,false],
  ['block count',Array.from({length:101},(_,index)=>`<p>Published text ${index}</p>`).join(''),true],
  ['character total',Array.from({length:4},()=>`<p>${'a'.repeat(3000)}</p>`).join(''),true],
-] as const)('reproduces whole-capture refusal for %s despite a useful successful contact page',(_name,html,truncated)=>{
+] as const)('captures the complete formerly refused %s without dropping a useful contact page',(_name,html,truncated)=>{
  const phone=page('<p>Office phone: 214-555-0123</p>');
  const other=page(html,'about');
  expect(parsePageText(other.body,other.contentType,{omitNavigation:true,includeArticles:true}).truncated).toBe(truncated);
  expect(capture([phone]).ok).toBe(true);
- const failed=capture([phone,other]);expect(failed).toEqual({ok:false,reason:'bounded_capture_incomplete'});
- expect(failed).not.toHaveProperty('value');
+ const complete=capture([phone,other]);expect(complete.ok).toBe(true);
+ if(!complete.ok)throw Error(complete.reason);
+ expect(complete.value).toHaveLength(2);
+ expect(complete.value[1]!.blocks).toEqual(parsePageText(other.body,other.contentType,{omitNavigation:true,includeArticles:true,profile:'phone_discovery'}).blocks);
+ expect(complete.value[1]!.contentHash).toBe(other.contentHash);
 });
-it('keeps the 4000-character block boundary rather than splitting or accepting a prefix',()=>{
+it('retains both old 4000 and formerly refused 4001-character blocks whole',()=>{
  const accepted=page(`<p>${'a'.repeat(4000)}</p>`),rejected=page(`<p>${'a'.repeat(4001)}</p>`);
  const result=capture([accepted]);expect(result.ok).toBe(true);
  if(result.ok)expect(result.value[0]!.blocks).toEqual([{id:'b1',text:'a'.repeat(4000)}]);
- expect(capture([rejected])).toEqual({ok:false,reason:'bounded_capture_incomplete'});
+ const corrected=capture([rejected]);expect(corrected.ok).toBe(true);
+ if(corrected.ok)expect(corrected.value[0]!.blocks).toEqual([{id:'b1',text:'a'.repeat(4001)}]);
 });
 it('does not recover a survivor after exact source association, future timestamp, duplicate URL or byte budget failure',()=>{
  const phone=page('<p>Office phone: 214-555-0123</p>');

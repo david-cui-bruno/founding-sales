@@ -1,9 +1,12 @@
+import {PROSPECT_PHONE_CAPTURE_LIMITS} from '@fss/contracts';
+
 /**
  * Turning fetched page bytes into bounded blocks of published text.
  *
  * Ported from `59b3e1bb^:packages/domain/research/pageText.ts`, unchanged except that
  * `mailtoTargets` did not come across: v1 records no contact fact, so a page's
- * `mailto:` links are not read at all.
+ * `mailto:` links are not read at all. The explicit phone-discovery profile
+ * changes only whole-block capacity; the default retains the original bounds.
  *
  * Three rules, all inherited, all about not manufacturing a fact:
  *
@@ -70,7 +73,7 @@ export function mediaTypeOf(contentType: string): string {
  * `body` is the exact bytes the fetch read, so the caller's content hash and these
  * blocks describe the same thing.
  */
-export function parsePageText(body: Uint8Array, contentType: string, options: {omitNavigation?:boolean; includeArticles?:boolean} = {}): PageText {
+export function parsePageText(body: Uint8Array, contentType: string, options: {omitNavigation?:boolean; includeArticles?:boolean; profile?:'phone_discovery'} = {}): PageText {
   const empty: PageText = { blocks: [], text: '', truncated: false };
   if (body.byteLength > MAX_PAGE_BYTES) return { ...empty, truncated: true };
   const mime = mediaTypeOf(contentType);
@@ -78,7 +81,7 @@ export function parsePageText(body: Uint8Array, contentType: string, options: {o
 
   const decoded = new TextDecoder('utf-8').decode(body).replaceAll(String.fromCharCode(0),'\uFFFD');
   const candidates = mime === 'text/plain' ? decoded.split(/\r?\n/u) : htmlLines(decoded,options.omitNavigation===true,options.includeArticles===true);
-  return assemble(mime === 'text/plain' ? candidates : candidates.map(decodeMarkupEntities));
+  return assemble(mime === 'text/plain' ? candidates : candidates.map(decodeMarkupEntities),options.profile);
 }
 
 /** The same bounds applied to already-plain text, for a provider that supplies it. */
@@ -139,7 +142,10 @@ function codePoint(value: number): string {
   return String.fromCodePoint(value);
 }
 
-function assemble(candidates: readonly string[]): PageText {
+function assemble(candidates: readonly string[],profile?:'phone_discovery'): PageText {
+  const phone=profile==='phone_discovery';
+  const maxBlocks=phone?PROSPECT_PHONE_CAPTURE_LIMITS.maxBlocks:MAX_BLOCKS;
+  const maxCharacters=phone?PROSPECT_PHONE_CAPTURE_LIMITS.maxTextCharacters:MAX_TEXT_CHARACTERS;
   const blocks: PageBlock[] = [];
   let text = '';
   let truncated = false;
@@ -147,7 +153,8 @@ function assemble(candidates: readonly string[]): PageText {
     const normalized = candidate.replace(/\s+/gu, ' ').trim();
     if (normalized === '') continue;
     const separator = blocks.length === 0 ? '' : '\n\n';
-    if (blocks.length >= MAX_BLOCKS || text.length + separator.length + normalized.length > MAX_TEXT_CHARACTERS) {
+    if (blocks.length >= maxBlocks || text.length + separator.length + normalized.length > maxCharacters ||
+      (phone && normalized.length>PROSPECT_PHONE_CAPTURE_LIMITS.maxBlockCharacters)) {
       // Dropped whole, never cut. A half block would be a quote nobody published.
       truncated = true;
       continue;
