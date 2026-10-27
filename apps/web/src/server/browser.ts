@@ -12,6 +12,7 @@ import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestCon
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
 import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
 import { socialGenerationBrowserResult } from './socialGenerationBoundary.ts';
+import { campaignOpeningBrowserResult } from './campaignOpeningBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
 import { callingExecutionBrowserResult } from './callingExecutionBoundary.ts';
@@ -211,6 +212,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (privateDraft !== null) return response(privateDraft.status, privateDraft.body, cookies);
   const socialGeneration = socialGenerationBrowserResult(path, result.status, result.body);
   if (socialGeneration !== null) return response(socialGeneration.status, socialGeneration.body, cookies);
+  const opening = campaignOpeningBrowserResult(path, result.status, result.body);
+  if (opening !== null) return response(opening.status, opening.body, cookies);
   const manual = manualProspectBrowserResult(path, result.status, result.body);
   if (manual !== null) return response(manual.status, manual.body, cookies);
   const calling = callingBrowserResult(path, result.status, result.body);

@@ -49,6 +49,26 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it('normalizes only finite opening business refusals without exposing authority or receipt errors', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const path = '/browser/api/outreach/email-campaigns/opening/revoke';
+    const input = { commandId: id, campaignId: id, expectedCampaignRevision: 1, policyId: id, policyRevision: 1 };
+    const business = { status: 'refused', replayed: false, reason: 'policy_changed' };
+    mocks.route.mockResolvedValueOnce({ status: 409, body: business });
+    expect(await handler(post(path, input, headers))).toMatchObject({ status: 200, body: business });
+    for (const reason of ['authority_changed', 'session_changed', 'command_payload_mismatch',
+      'command_device_mismatch', 'command_kind_mismatch', 'unrecognized_private_detail']) {
+      mocks.route.mockResolvedValueOnce({ status: 409, body: { ...business, reason } });
+      expect(await handler(post(path, input, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+    }
+    mocks.route.mockResolvedValueOnce({ status: 409, body: { ...business, private: 'not exposed' } });
+    expect(await handler(post(path, input, headers))).toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+    mocks.route.mockResolvedValueOnce({ status: 409, body: business });
+    expect(await handler(post('/browser/api/outreach/email-campaigns/opening/receipt',
+      { commandId: id, payloadSHA256: 'a'.repeat(64), action: 'revoke' }, headers)))
+      .toMatchObject({ status: 409, body: { error: 'browser_request_refused' } });
+  });
   it('admits strict opening approval and pins only its command envelope', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
