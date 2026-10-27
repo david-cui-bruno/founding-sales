@@ -1,6 +1,8 @@
 # Current operating state
 
-## October27 2026, 02:43UTC: local Email and complete-phone correction accepted
+## October27 2026, 03:37UTC: Email and complete-phone correction merged
+
+**Latest integration:** PR805 merged `d03fbed77` at03:36:58UTC, schema142, all five required checks passed on reviewed `0aa362852`. The two fixture corrections preserved every assertion; the added upgrade workflow passed141→142 with17 workflows and four validator calls. Private `PR805-MERGED.md` records the exact SHA/checks. This supersedes integration/CI waits below, not production or usefulness evidence. Exact protected workflow approval remains required under existing release authority, not renewed generic owner permission. Expanded sourcing permission is settled.
 
 **Retained production1236e6f4/schema141, API1582/2, worker1591/1.** Protected application40379912220 completed SUCCESS19:10:49 after exact-main gate40376270166/images40376270050 and finished PR801 reviews/CI. Fresh stored-OFF, recovery, smokes and exact existing-record readback passed in the hosted workflow; no migration was started. Independent health/stability and exact operations-task cleanup are retained. PITR was pinned, restoration remains UNTESTED. Exact evidence and historical normal-auth diagnosis: private receipt `~/.jcode/scratch/fss-candidate-authority-20261023/PR801-PROTECTED-RELEASE.md`. This is retained Root evidence, not a fresh observation by the documentation lane.
 

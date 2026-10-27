@@ -1,6 +1,8 @@
 # Browser delivery plan
 
-## Current parent783 direction, October27 2026 02:43UTC
+## Current parent783 direction, October27 2026 03:37UTC
+
+**Integration complete:** PR805 merged `d03fbed77ec8485b7833172f628f23b53eff90fb` at03:36:58UTC after all five required checks passed on reviewed head `0aa362852`. This supersedes the local integration/CI waits in the milestone rows below. Exact receipt: private `PR805-MERGED.md`. Production remains last-observed schema141; the protected schema142 workflow approval and additional-record usefulness batch remain open under existing release authority. The independent leaf-guidance cleanup is not part of this merge.
 
 David's full-build approval05:48 and workflow approval07:11 control: **continuous prospect/contact supply → browser-first calling/follow-through → automatic eligible outbound email with manual incoming replies → founder-voice social generation, supported automatic publishing and public Conversations.** Older review-first social/undefined-scope cards below are historical, not current restrictions or an unbounded backlog. Broad residential PM pool; hundreds/thousands of units and AppFolio/Buildium are soft preferences, not hard qualification. No understaffing/dissatisfaction proof is required. Unknown facts stay unknown.
 

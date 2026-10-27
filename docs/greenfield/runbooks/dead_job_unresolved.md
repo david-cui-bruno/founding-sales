@@ -4,8 +4,8 @@
 
 ## Symptoms
 
-A job exhausted its attempt budget and has been dead for more than an hour. Whatever it
-was going to do has not been done.
+A job exhausted its attempt budget and has been dead for more than an hour. A dead
+queue state does not establish whether an external effect occurred.
 
 ## First checks
 
@@ -16,20 +16,24 @@ was going to do has not been done.
 
 ## Diagnosis
 
-The default budget is four attempts with bounded exponential backoff, so a dead job has
-failed four times over roughly eight minutes. Read the recorded error before anything
-else: the detail is redacted but names the stage.
+Read the actual kind, attempt budget and recorded error before anything else: the
+detail is redacted but names the stage. Do not assume every kind uses the default
+retry policy; some external operations deliberately permit only one attempt.
 
 Common causes: an external provider refusing, a business precondition that changed
 between materialization and execution, and a handler bug on one payload shape.
 
 ## Safe recovery
 
-- Fix the cause first. `POST /admin/jobs/requeue` is admin-only and audited, and it
-  writes its state transition and its audit event in one transaction.
-- The idempotency key is **unchanged** by a requeue, so a requeue can never materialize
-  a second copy of work that already exists. Requeueing a job whose effect already
-  happened is safe for exactly this reason.
+- Fix the cause and establish the owning operation's permitted recovery first.
+  `POST /admin/jobs/requeue` is admin-only and audited, but that does not make every
+  job safe to replay. See [jobs and recovery](../jobs.md).
+- An unchanged queue idempotency key is not proof of external-effect safety. For
+  dispatched, UNKNOWN or possibly accepted work, reconcile the same attempt through
+  the supported operation-specific path, never reset it for an automatic retry.
+  Single-attempt phone discovery must not be re-fetched to clear a dead-job alarm.
+  A pre-dispatch failure may be requeued only when its owning contract and current
+  authority permit it, with current source/access/hold checks preserved.
 - A dead job is never archived, precisely so a requeue has something to run.
 
 ## Escalation

@@ -2,6 +2,8 @@
 
 Research date: October 11, 2026. Read-only research against current source, ADR0009/0010, #547/#549 and Google primary documentation. No OAuth consent, provider reads, cloud application, source deployment or activation occurred. This is a proposed contract revision, not operational permission.
 
+**Historical research:** ADR0010's [approved October11 amendment](../adr/0010-isolate-acquisition-acceptance-from-activation.md) subsequently selected the local-isolation contract. Its accepted amendment supersedes the pending-decision/cloud-only wording below. The proposed diagnostic runbook was not retained; use the ADR for the contract and current operating guidance for readiness, not this source checkpoint as an execution recipe. ADR0009's later lean-owner amendment governs current consent, not the earlier independent-receipt proposal.
+
 ## Finding and recommendation
 
 Google does **not** require a temporary AWS deployment to verify Gmail acquisition. Google explicitly permits web application callbacks on localhost for testing. Our 140-resource proposal follows our own ADR0010 and AWS-specific physical-isolation implementation. A browser can help perform the real product lifecycle and Codex can verify the resulting state, but reading Gmail in a browser does not establish that Callie's OAuth, parser, database, worker or deletion path works. [Google web-server OAuth](https://developers.google.com/identity/protocols/oauth2/web-server), [ADR0010](../adr/0010-isolate-acquisition-acceptance-from-activation.md), [#547](https://github.com/david-cui-bruno/founding-sales/issues/547).
@@ -46,7 +48,7 @@ Google says token revocation invalidates scopes and issued access/refresh tokens
 
 Ordinary continuous capture is a different acceptance scope. Gmail partial synchronization uses saved history IDs; expired history returns404 and requires recovery. Push can trigger partial sync but notifications may be delayed/dropped, so fallback synchronization remains necessary. Watches need renewal at least every seven days (Google recommends daily). Polling is a supported mechanism; do not add another queue/product just for this diagnostic. Existing product uses push/history and already implements recovery, so removing that production path is not required to simplify acceptance. [Synchronization](https://developers.google.com/workspace/gmail/api/guides/sync), [Push guide](https://developers.google.com/workspace/gmail/api/guides/push).
 
-Our prepared scope remains two messages, max8reads/160units. Source accounting expects84units for the complete eight-read lifecycle, with consent callback profile allowance separate. Google's current table lists profile1, message-get20 and history-list2; preserve actual attempt accounting and never treat unused headroom as authorization to fetch more. [Quota table](https://developers.google.com/workspace/gmail/api/reference/quota), [diagnostic runbook](../greenfield/runbooks/crm-acquisition-diagnostic.md).
+Our prepared scope remains two messages, max8reads/160units. Source accounting expects84units for the complete eight-read lifecycle, with consent callback profile allowance separate. Google's table at research time lists profile1, message-get20 and history-list2; preserve actual attempt accounting and never treat unused headroom as authorization to fetch more. [Quota table](https://developers.google.com/workspace/gmail/api/reference/quota), [accepted diagnostic contract](../adr/0010-isolate-acquisition-acceptance-from-activation.md).
 
 ## Actual reusable code and work needed
 
@@ -55,7 +57,7 @@ Reusable normal boundaries:
 - `apps/api/src/routes/crmAcquisitionDiagnostic.ts`: authenticated request/progress commands and independent pretransaction witness preparation.
 - `packages/domain/mail/crmAcquisitionDiagnostic.ts` and `crmAcquisitionDiagnosticCapture.ts`: current authority checks, exact selected originals, conserved usage, reserved copy identity and capture processing.
 - `packages/domain/mail/gmailClient.ts`: actual Google consent/exchange/refresh/revoke and message transport.
-- Canonical `/crm/business/mail/list`, `/state/read`, `/read/v2`, `/delete` and supported diagnostic disconnect/revoke commands from the runbook.
+- Canonical `/crm/business/mail/list`, `/state/read`, `/read/v2`, `/delete` and diagnostic disconnect/revoke boundaries identified in this research checkpoint. Consult the accepted ADR and actual supported interfaces before execution, not the unretained runbook.
 - `packages/domain/db` migrations, registered worker dispatch and existing real disposable PostgreSQL test seams.
 
 Required source changes, not theoretical config flags:

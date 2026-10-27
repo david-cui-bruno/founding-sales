@@ -21,13 +21,13 @@ apps/desktop/src/main/updateChannel.ts what the Mac will and will not install
 .github/workflows/greenfield-desktop.yml
 ```
 
-**Where this sits in a release.** The desktop build is the *last* step, after the
-rehearsal and after the production apply, because it needs a CloudFront hostname that
-the apply creates. `docs/greenfield/release.md` section 2.0 is the order, and it is not
-rearrangeable. As of 20 September 2026 eight of the nine signing secrets are not set and
-`FSS_UPDATE_CHANNEL_URL` does not exist, so the release job fails closed at its first
-step and names them; the host job, which needs nothing, runs nightly and on every
-dispatch (not on pull requests: the desktop's typecheck and unit tests are in the gate).
+**Where this sits in a release.** Desktop packaging needs the configured update-channel
+hostname and current backend/client compatibility. Backend delivery uses the
+[sole hosted release workflow](../operations/lean-release-workflow.md), not a local
+production apply from this guide. Verify current prerequisites rather than replaying
+the September20 missing-signing-secrets checkpoint. Desktop signing, notarization,
+package verification and update-signature safeguards below remain separate from API/schema
+acceptance and grant no sending or provider authority.
 
 ## What David must set
 
@@ -104,7 +104,7 @@ ticked and `desktop_commit_stamp` set to that same commit. Without **release**, 
 workflow runs only the host job, which needs no credential at all and also runs
 nightly.
 
-The stamp field is the release record's (`docs/greenfield/release.md` section 2.0): the
+The desktop stamp binds the selected build commit, not a new backend release grant: the
 desktop commit stamp *is* the release commit, known before any build, and the workflow
 refuses a value that is not the commit the run is on. Leave it empty only for a build
 that precedes its rehearsal.
@@ -409,7 +409,13 @@ reason to install something unsigned. That is Appendix G scenario 40, and it is 
 `apps/desktop/test/updateInstall.test.ts`: fake filesystem, fake `codesign`, fake
 relauncher.
 
-## The throwaway build David runs once
+## Historical first-build walkthrough, not an execution checklist
+
+The version1.0.0–1.0.5 walkthrough below records early installation/update behavior.
+Its old UI, account-connection, calling, publication and adversarial channel steps are
+historical, not current instructions or reusable action grants. Do not replay them on
+production or reconnect a mailbox to test installation. Use the packaging/update
+contracts above and [current operating guidance](../operations/how-to-sell.md).
 
 G13a deliverable 3. It proves two things no test can: that a fresh Mac opens the app
 without a Gatekeeper prompt, and that a real update arrives from the real channel.
@@ -527,11 +533,9 @@ attested, and until lane g60 nothing could attest one (`docs/greenfield/release.
 8.0ab). 1.0.2 is the build with **Your calling number** on the Settings screen. Build it
 from a commit that carries lane g60.
 
-**First, the API, with its migration.** Lane g60 raises `CONTAINER_CLIENT_VERSIONS` to
-`{ minimum: 1.0.0, maximum: 1.0.2 }` and adds migration 0016, so this API is a schema
-release: apply with both schema ranges at `{16, 16}`, then deploy with
-`deploy.sh release infra/roots/production fss-prod --schema-change`
-(`docs/greenfield/release.md` 4.1 and 8.0ab). Then confirm it:
+**Historical API prerequisite.** Lane g60 added migration0016 and maximum client1.0.2.
+Its local release recipe is retired. Current backend changes follow the hosted workflow
+and actual deployed-baseline checks. The following version read is historical context:
 
 ```bash
 curl -fsS https://api.usecallie.com/auth/client-version
@@ -563,12 +567,9 @@ Desktop 1.0.2 signs in to a device card and a bare list, with the real Today lis
 list, with the status sidebar, the last seven days and a **Needs you** list
 (`docs/greenfield/release.md` 8.0ad). Build it from a commit that carries lane g65.
 
-**First, the API.** Lane g65 raises `CONTAINER_CLIENT_VERSIONS` to
-`{ minimum: 1.0.0, maximum: 1.0.3 }` and adds no migration, so this is an app-only
-release: build both images at the release commit and deploy with
-`deploy.sh release infra/roots/production fss-prod --api-digest … --worker-digest …`
-and no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0ad). Smoke, then
-confirm it:
+**Historical API prerequisite.** Lane g65 added maximum client1.0.3 without a migration.
+Its local app-only release recipe is retired. The following read records that old
+compatibility checkpoint, not today's required version:
 
 ```bash
 curl -fsS https://api.usecallie.com/auth/client-version
@@ -585,8 +586,9 @@ step 1, **zip first, manifest second**, and receive it on the Mac as in step 5.
 **Then look at Home.** Open Callie. The window opens on the date and today's lanes
 without a press; there is no Today window any more, and **⌘1** brings this one forward.
 The sidebar's **Status** should read *Mailbox connected · callie@usecallie.com*,
-*Calling from* and your number, masked, *Sending off* until section 6 of the release runbook turns
-it on, *Domain passes* once the checklist is recorded, and *Callie 1.0.3 · online*.
+*Calling from* and your number, masked, *Sending off*, *Domain passes* once the checklist
+is recorded, and *Callie 1.0.3 · online*. Installation/release never turns owner sending
+OFF to ON; current consent, eligibility and newer stops remain independent.
 Anything amber is also a row under **Needs you**: hover it and press its button.
 **Dashboard ⌘6** opens Administration on its Dashboard screen. If the heading reads
 *Today* rather than a date, the list has not been read: press **Refresh**.
@@ -600,12 +602,9 @@ failed sending read with **Retry** instead of nothing, applies the role a renewa
 and says **Attest your calling number** when a number is saved but not attested. Build it
 from a commit that carries lane g69.
 
-**First, the API.** Lane g69 raises `CONTAINER_CLIENT_VERSIONS` to
-`{ minimum: 1.0.0, maximum: 1.0.4 }` and adds no migration, so this is an app-only
-release: build both images at the release commit and deploy with
-`deploy.sh release infra/roots/production fss-prod --api-digest … --worker-digest …`
-and no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0ae). Smoke, then
-confirm it:
+**Historical API prerequisite.** Lane g69 added maximum client1.0.4 without a migration.
+Its local app-only release recipe is retired. The following read records that old
+compatibility checkpoint, not today's required version:
 
 ```bash
 curl -fsS https://api.usecallie.com/auth/client-version
@@ -645,15 +644,11 @@ with the same schemas the API's own tests hold the routes to
 
 Build it from a commit that carries lane g78.
 
-**First, the API, this one last time.** Lane g78 replaces the exact maximum with a
-compatibility ceiling: `CONTAINER_CLIENT_VERSIONS` is
-`{ minimum: 1.0.0, ceiling: 1.x, incompatible: [] }`, published as the range
-`{ minimum: 1.0.0, maximum: 1.999.999 }`. The API in production still publishes 1.0.4 as
-its maximum and would refuse 1.0.5 everything, so it goes first. There is no migration,
-so this is an app-only release: build both images at the release commit and deploy with
-`deploy.sh release infra/roots/production fss-prod --api-digest … --worker-digest …` and
-no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0aj). Smoke, then
-confirm it:
+**Historical API prerequisite.** Lane g78 replaced the exact maximum with a
+compatibility ceiling, published as `{ minimum: 1.0.0, maximum: 1.999.999 }`.
+The earlier maximum1.0.4 would have refused1.0.5, so that backend change preceded the
+client. Its local app-only release recipe is retired. The following read records
+that compatibility transition, not a fresh production observation:
 
 ```bash
 curl -fsS https://api.usecallie.com/auth/client-version
@@ -678,9 +673,9 @@ step 1, **zip first, manifest second**, and receive it on the Mac as in step 5.
 4. The Sequences window shows no grey *Callie could not read …* line. Production has no
    sequences yet, so it is otherwise empty.
 
-**From now on** a 1.x desktop build publishes without an API deployment, unless
-`docs/greenfield/release.md` 2.0 says the API goes first: a new route, a new response
-field the desktop reads, or a migration.
+Desktop/backend compatibility must still be checked when a client needs a new route,
+response field or schema. Use current contracts and the hosted workflow rather than
+the obsolete release.md section2.0 ordering or these historical version milestones.
 
 ### 6 — the adversarial half, which is the part worth doing
 

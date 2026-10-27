@@ -34,10 +34,10 @@ The mailbox heartbeat is the only workspace-scoped one. Its absence means the
 one-minute reconciliation is not running for that mailbox, which is one of:
 
 - the worker is down (see `worker_heartbeat_missed`);
-- the worker is up but saturated: one runner slot by default, claiming in `run_at`
-  order, so a burst of other jobs queued ahead of the `mail.sync` delays the check for as
-  long as they take. `OldestRunnableJobAgeSeconds` rises with it (see
-  `oldest_runnable_job_*`);
+- the worker is up but capacity or claiming is delayed: inspect actual supported
+  kinds, leases and urgent/bulk allocation under the [current jobs contract](../jobs.md).
+  Do not assume a default one-slot FIFO model. Compare the observed queue/runner state
+  with `OldestRunnableJobAgeSeconds` (see `oldest_runnable_job_*`);
 - the `mail.sync` job for that mailbox is `retryable` (waiting out a backoff after Gmail
   failed) or `dead`, which the sweep will not revive (see `dead_job_unresolved`);
 - the grant was revoked, so every call fails and the mailbox is held;

@@ -1,9 +1,11 @@
-# Migrations: expand, migrate, contract
+# Migrations: strict-schema maintenance and safe evolution
 
-Specification revision 3, sections 4.2 and 16.1. This is the rule every greenfield
-migration follows. It exists because production and the binaries that talk to it are
-never updated at the same instant: under a rolling deployment an old API and a new
-worker run side by side, and a restore can put the database behind both.
+Specification revision 3, sections 4.2 and 16.1. Current rollout uses strict-schema
+stop/migrate/start maintenance under [ADR0011](../adr/0011-lean-automatic-releases-with-maintenance.md)
+and the [sole hosted release workflow](../operations/lean-release-workflow.md).
+Expand/migrate/contract is a useful data-evolution technique, not a requirement to
+build rolling compatibility or split every change across multiple releases. Preserve
+the current release classification, upgrade checks and consequential-change review.
 
 ## The shape of a migration
 
@@ -305,7 +307,12 @@ bare `SELECT seed_…(…)` or a `DO` block with an `EXCEPTION` clause whose eff
 classifier cannot read. That is the fail-closed answer working as intended, not a finding
 about those migrations.
 
-## The three phases
+## Expand/migrate/contract when needed
+
+Use these phases when data or consumer compatibility requires staging. They describe
+that technique, not a rolling deployment path across strict schema versions. A
+destructive/privilege-changing/ambiguous change still requires the review and checks
+in [release classification](release.md#3-the-rehearsal); this guide does not waive them.
 
 **Expand.** Add the new column, table, index or constraint in a form the *currently
 deployed* binaries already accept. Additive only: a new column is nullable or has a
@@ -332,13 +339,12 @@ Both services declare the range of schema versions they accept, in
   rehearsal's `rehearsal.sh ranges` step (Appendix G 22). It is not what the previous
   release's images accept: those declare the schema before this one and refuse this one.
 
-From migration 0006 every declared range is a strict `{N,N}`, so no two ranges overlap,
-there is never a rolling path across a migration, and the order is stop, apply, deploy:
-`infra/scripts/stop.sh` scales both services to zero **before** the apply that
-registers the new task definitions, the apply replaces them and starts nothing, and
-`infra/scripts/deploy.sh release --schema-change` refuses unless both are still at zero,
-migrates and ensures the database users in one task, verifies, and starts the worker and
-the API together under one wait (`docs/greenfield/release.md` 4.1 and 8.0af; lane RS-2). The worker exits non-zero when the database is outside its range
+From migration 0006 every declared range is a strict `{N,N}`, so no two ranges overlap
+and there is never a rolling path across a migration. The hosted workflow drains and
+stops incompatible writers, applies the authorized change, migrates/ensures database
+users, verifies and restarts exact intended services under the [release invariants](release.md).
+Local stop/apply/deploy commands are not an alternative production execution path.
+The worker exits non-zero when the database is outside its range
 (`WORKER_EXIT_CODES.schemaOutOfRange`) rather than writing rows another binary cannot
 read; the API reports `degraded` on `/health` with the reason.
 
@@ -362,8 +368,9 @@ raising it without the migration.
 
 ## Adding a migration: the checklist
 
-1. Write `NNNN_description.sql`. Additive only.
-2. If a service needs the new shape, raise `REQUIRED_SCHEMA` in
+1. Write `NNNN_description.sql` with explicit classification. Additive/routine changes
+   may qualify for maintenance; other classes require the current concrete review.
+2. For the schema transition, raise `REQUIRED_SCHEMA` in
    `packages/domain/db/schemaRange.ts`. Every range in that file derives from it, so
    there is nothing else to change there.
 3. Add a failing-insert case in `packages/domain/test/db/constraints.test.ts` for **every** new

@@ -32,14 +32,14 @@ Before an unchecked handoff, the call panel must visibly say **“Not checked ag
 - Preserve immediate internal DNC/suppression, assignment/current device and membership, calling identity, actual calling hours, state posture, applicable holds, the shared **four attempts in fourteen days**, and refusal/reply stops. No provider switch, higher cap or new contact group is implicit.
 - Keep national matches blocked when known. No general bypass flag, fabricated registry evidence or silent substitution of the unknown state is permitted. Normal Twilio authorization remains registry-gated and Twilio remains off.
 
-## Single owner-number acceptance test
+## Historical owner-number acceptance, now closed
 
-David separately authorizes **one** normal iPhone handoff to his own number **ending8262**, on the exact internal **Callie Phone Test** record. This is an owner self-test, not first-party business-office evidence or prospect permission. Bind it to the same dated decision and record the actual durable attempt separately. A committed/unknown handoff consumes the test permanently; replay, OS failure or outcome correction cannot authorize another test.
+The October19 decision included one owner-number iPhone self-test. The [current operating state](../../operations/current-state.md) records the iPhone lane closed and prior GOs consumed. There is no available test grant here. A committed/unknown handoff consumes its grant permanently; replay, OS failure or outcome correction cannot authorize another test. Historical self-test evidence is not first-party business-office evidence or prospect permission.
 
-**Tell David immediately before triggering it**, so he can confirm on his iPhone. Do not call a prospect as a substitute. Preserve all other safeguards, record only the outcome actually observed, and distinguish phone-app opening from an answered call. Sending remains OFF unless David himself enables it.
+Do not trigger or replay that test, or call a prospect as a substitute. Preserve the historical attempt and only the outcome actually observed; phone-app opening is not an answered call. No sending or browser/Twilio calling authority follows from this history.
 
 ## Implementation and proof boundaries
 
-Existing registry tables and handoff gates were deployed with #702/PR703. **The full importer and revised unchecked-risk policy are not yet released or activated.** #707 owns complete import/scrubbing. #702 owns authenticated iPhone acceptance and the visible, receipted risk path. No completed download, full scrub, actionable risk receipt, test call or legal clearance is claimed by this document.
+The October19 implementation checkpoint referenced registry tables/handoff gates from #702/PR703 and complete import/scrubbing work in #707. It is historical, not a current release or open iPhone acceptance queue. Use [current state](../../operations/current-state.md) and its linked PLAN for implementation/readiness. This policy does not establish a completed download, full scrub, current actionable risk receipt or legal clearance, and the old iPhone-only risk allowance does not extend to browser/Twilio calling.
 
 Primary operational guidance: [FTC Q&A for telemarketers and sellers](https://www.ftc.gov/business-guidance/resources/qa-telemarketers-sellers-about-dnc-provisions-tsr-0) and the [official National DNC Telemarketer portal](https://telemarketing.donotcall.gov/). Public format guidance was checked October19; actual downloaded bytes and current subscription scope must still be verified privately. National registry policy does not replace state-law posture or any other calling restriction.

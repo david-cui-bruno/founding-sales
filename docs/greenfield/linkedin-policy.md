@@ -2,9 +2,9 @@
 
 Settings → LinkedIn exposes account connection only. Connecting does not authorize outreach or posting. The retained product supports manual drafting and an account-bound manual activity ledger, not recurring automatic publication or a promise of supported invitation/message automation.
 
-## Desired direction, October22 2026
+## Desired direction, superseding October22
 
-David's completed product interview changes desired scope, not the retained implementation above. LinkedIn browser-automation platform permission is already obtained, do not ask again. Plan review-first sequence/message/post/comment drafts for PM-company customers, roughly one post/day, with exact approved work later performed by existing Jcode/Dot/other runners plus scheduling/shared CRM history. No new automation platform or unattended LinkedIn DMs/posts. Facebook personal-profile/business-group work remains research-only, no groups vetted or publication authorized. See the [canonical plan](../../apps/web/PLAN.md). No provider actions, channels, limits or current holds change from this documentation.
+The October26 full-build decision supersedes the October22 manual-only/review-first target with founder-voice automatic publishing on supported public platform/account/routes, without blanket per-post review. Public Conversations are not DMs. LinkedIn browser-automation platform permission is already obtained, do not ask again. See the [canonical plan](../../apps/web/PLAN.md) for the finite implementation queue and [current state](../operations/current-state.md) for actual adapters and holds. Desired scope is not a claim of live support or permission for a current LinkedIn action, new channel/contact group, provider, spend or higher limit. Manual drafting/ledger fallback remains supported.
 
 ## Operational authority
 

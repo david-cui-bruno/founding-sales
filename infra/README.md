@@ -35,7 +35,7 @@ infra/
                                         simulation), put (put, read back, compared)
     rehearsal.sh                        the schema rehearsal's steps: prefix, identity, run-task, ranges,
                                         teardown, leftovers, guard
-    rollback.sh                         production back on a previous release's images (release.md 4.1a)
+    rollback.sh                         read-only planning/controlled rehearsal only, real production apply retired
 ```
 
 The rehearsal root retains default-null `crm_acquisition_diagnostic` configuration for existing state compatibility. Production refuses it. The retired acquisition diagnostic workflows are no longer available. This configuration does not authorize mailbox acquisition or production activation.
@@ -53,9 +53,9 @@ The policy half of the gate is not here: `infra/policies/**` is judged by `npm r
 
 ## Reading order
 
-1. `docs/greenfield/release.md` — how a change reaches production: app-only by CI, schema and infrastructure by hand.
+1. [Lean release workflow](../docs/operations/lean-release-workflow.md) is the sole supported production execution path for application, maintenance and reviewed infrastructure. [Release invariants](../docs/greenfield/release.md) explain its safeguards, not a local alternative.
 2. `docs/greenfield/infra-topology.md` — what gets created and what each line is billed on.
-3. `docs/greenfield/infra-apply-runbook.md` — how the stack was built the first time, and how to rebuild it from zero.
+3. `docs/greenfield/infra-apply-runbook.md` is first-build history/reference, not a current local production recipe. A rebuild needs the applicable current authority and execution design.
 4. `docs/greenfield/runbooks/restore.md` — a point-in-time restore of production, and its quarterly hand smoke.
 5. `docs/archive/decisions/g1-*.md` — every choice the specification left open.
 

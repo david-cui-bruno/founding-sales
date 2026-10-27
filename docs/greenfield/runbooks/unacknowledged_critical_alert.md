@@ -5,7 +5,7 @@
 ## Symptoms
 
 A critical condition has been open and unacknowledged past its repeat interval. The
-critical alert mail is repeating.
+repeat warning appears in alarm state and the daily digest, not repeated alert mail.
 
 ## First checks
 
@@ -18,17 +18,12 @@ critical alert mail is repeating.
 
 ## Diagnosis
 
-CloudWatch notifies on state transitions, so an alarm that stays in `ALARM` is silent.
-`docs/archive/decisions/g1-alert-repetition.md` is the reason this metric exists: while a
-critical condition is open and unacknowledged the worker publishes its age, the alarm
-cycles, and each cycle mails. When none is open the worker publishes nothing and the
-alarm's `notBreaching` treatment of missing data says so.
-
-Since lane g62 the mail is `<prefix>-warning`'s, not this alarm's: this alarm is a
-member of the warning composite and sends nothing itself. So while
-`oldest_runnable_job_warning` or `dead_job_unresolved` already holds the warning
-composite in `ALARM`, this alarm's transitions reach nobody's inbox. Read its state
-rather than waiting for mail:
+While a critical condition is open and unacknowledged the worker publishes its age.
+When none is open the worker publishes nothing and the alarm's `notBreaching`
+treatment of missing data says so. Historical repeated-mail/composite behavior was
+superseded by the September25 daily-digest decision. No alarm mails when it trips;
+the daily digest arrives at 07:00 America/New_York. See the [runbook index](README.md)
+for current digest and alarm-reading semantics. Read current state rather than waiting:
 `aws cloudwatch describe-alarms --alarm-names fss-prod-unacknowledged-critical-alert`.
 
 So this firing means one of:
@@ -48,13 +43,13 @@ So this firing means one of:
 
 ## Escalation
 
-Escalate the underlying alert, never this one. If nobody acknowledged a critical alert
-for an hour, also check that the SNS email subscriptions are confirmed — an unconfirmed
-subscription is created successfully by Terraform and delivers nothing.
+Escalate the underlying alert, never this one. Do not wait for per-alarm mail. If the
+daily digest is missing, check its delivery and confirmed SNS subscriptions under the
+index's digest procedure; that is separate from ownership of the underlying incident.
 
 ## What must stay held
 
-- Acknowledging silences the mail and changes nothing else. No hold is released by an
+- Acknowledging stops this repeat warning, not an alarm-mail stream. No hold is released by an
   acknowledgement and none should be.
 - Do not acknowledge an alert you are not working. The acknowledgement is a claim of
   ownership and is recorded as one.

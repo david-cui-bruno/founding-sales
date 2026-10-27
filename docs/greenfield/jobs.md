@@ -10,7 +10,7 @@ A lease or retry counter is not proof of a provider effect. Handlers must be ide
 
 ## Registered capabilities
 
-Current composition includes ordinary mail/classification, sequences/outbound, Today, retention, research/sourcing, calls and retained meeting work. Some handlers are conditional on a real adapter. Capture/extraction provider absence is an unavailable capability, not permission to construct a fallback. Generated Ask/index jobs, AI booking lifecycle, automatic email admission and recurring posting are not retained capabilities.
+Current composition includes ordinary mail/classification, sequences/outbound, Today, retention, research/sourcing, calls and retained meeting work. Some handlers are conditional on a real adapter. Capture/extraction provider absence is an unavailable capability, not permission to construct a fallback. Generated Ask/index jobs and AI booking lifecycle are removed. Removal of the old automatic-admission and recurring-posting machinery is not a permanent product prohibition: see [sequences](sequences.md), the [current plan](../../apps/web/PLAN.md) and [operating state](../operations/current-state.md) for approved replacements, deployed scope and remaining live acceptance. No job registration or source completion grants sending/publication authority.
 
 Old queued kinds and dead jobs require truthful supported diagnosis/recovery, not resurrection of removed source or deletion of their evidence. Consult [processes](processes.md) for composition and [runbooks](runbooks/README.md) for actual operator actions. Do not use job completion as a model-quality or contact-delivery claim.
 
