@@ -3,13 +3,16 @@ import {prospectPhoneDiscoveryViewSchema,type ProspectPhoneDiscoveryView} from '
 import type {BrowserClient} from './BrowserClient.ts';
 import type {PendingQualification} from './QualificationPending.ts';
 import {dispatchQualification,reconcilePhoneDiscovery} from './QualificationDispatch.ts';
-import {RetainedPhoneEvidence} from './RetainedPhoneEvidence.tsx';
+import {PhoneRefusalOriginalReview} from './PhoneRefusalOriginalReview.tsx';
 
 type Action='request'|'read'|'receipt';
 function evidenceExpiry(view:ProspectPhoneDiscoveryView):number{
  const evidence=view.phoneEvidence;
  const sources=evidence.state==='observed'||evidence.state==='conflicting'?evidence.sources:[];
- return Math.min(Date.parse(view.expiresAt),...sources.flatMap(source=>'method' in source&&source.authority.kind==='phone_discovery'?[Date.parse(source.authority.expiresAt)]:[]));
+ const diagnostics=evidence.state==='conflicting'?evidence.diagnostics:undefined;
+ return Math.min(Date.parse(view.expiresAt),...(diagnostics?.expiresAt?[Date.parse(diagnostics.expiresAt)]:[]),
+  ...(diagnostics?.entries??[]).flatMap(entry=>entry.authority.kind==='phone_discovery'?[Date.parse(entry.authority.expiresAt)]:[]),
+  ...sources.flatMap(source=>'method' in source&&source.authority.kind==='phone_discovery'?[Date.parse(source.authority.expiresAt)]:[]));
 }
 /** Explicit phone-only acquisition. No mount/list IO, qualification, admission or retry. */
 export function BrowserPhoneDiscovery({client,candidateId,revision}:{client:BrowserClient;candidateId:string;revision:number}):JSX.Element{
@@ -87,6 +90,6 @@ export function BrowserPhoneDiscovery({client,candidateId,revision}:{client:Brow
   {exact&&held?.receipt?.kind==='refused'?<p>Phone discovery request refused. Phone remains unverified.</p>:null}
   {custody?.binding===binding&&custody.failed?<p>Command custody unavailable. No request can be dispatched.</p>:null}
   {status?.binding===binding?<p role="status">{status.text}</p>:null}
-  {visible?<div aria-label="Current phone discovery result"><p>Phone discovery {visible.state}{visible.reason?` · ${visible.reason.replaceAll('_',' ')}`:''}. No channel authority granted.</p><p>Requested {visible.requestedAt} · Checked {visible.checkedAt??'unknown'} · Expires {visible.expiresAt}</p>{visible.state==='complete'?<RetainedPhoneEvidence evidence={visible.phoneEvidence}/>:<p>Phone evidence unavailable while discovery is {visible.state}. Phone remains unknown.</p>}</div>:null}
+  {visible?<div aria-label="Current phone discovery result"><p>Phone discovery {visible.state}{visible.reason?` · ${visible.reason.replaceAll('_',' ')}`:''}. No channel authority granted.</p><p>Requested {visible.requestedAt} · Checked {visible.checkedAt??'unknown'} · Expires {visible.expiresAt}</p>{visible.state==='complete'?<PhoneRefusalOriginalReview client={client} view={visible} expiresAt={evidenceExpiry(visible)}/>:<p>Phone evidence unavailable while discovery is {visible.state}. Phone remains unknown.</p>}</div>:null}
  </section>;
 }

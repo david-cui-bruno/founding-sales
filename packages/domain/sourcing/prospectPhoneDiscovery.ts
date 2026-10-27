@@ -14,7 +14,7 @@ import {parsePageText} from '../research/pageText.ts';
 import {isPublicResearchUrl,isSameResearchSite} from '../research/sourcePolicy.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {phoneDiscoveryContext,phoneDiscoveryNow,phoneDiscoveryPrincipal,phoneDiscoveryResearchRefusal,phoneDiscoverySourceLimit,type PhoneDiscoveryAuthority} from './prospectPhoneDiscoveryAuthority.ts';
-import {invalidatePhoneDiscovery,lockPhoneDiscoveryCandidate,lockPhoneDiscoveryRun,phoneDiscoveryRun,validatePhoneDiscoveryRun} from './prospectPhoneDiscoveryStore.ts';
+import {invalidatePhoneDiscovery,lockPhoneDiscoveryCandidate,lockPhoneDiscoveryRun,phoneDiscoveryRun,validatePhoneDiscoveryRun,type PhoneDiscoveryRun} from './prospectPhoneDiscoveryStore.ts';
 import {prospectPhoneDiscoveryView,composeProspectPhoneDiscovery,projectProspectPhoneDiscovery} from './prospectPhoneDiscoveryProjection.ts';
 import {MANUAL_ACTIVITY_RAW_SQL} from './manualProspectActivityAccess.ts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
@@ -92,6 +92,11 @@ export async function requestProspectPhoneDiscovery(ctx:RepositoryContext,input:
 }
 /** Caller owns read transaction. Never enqueues, refreshes or fetches. */
 export async function readProspectPhoneDiscovery(ctx:RepositoryContext,input:ProspectPhoneDiscoveryInput,authority:PhoneDiscoveryAuthority=async()=>true):Promise<Result<ProspectPhoneDiscoveryView|null>>{
+ const result=await readProspectPhoneDiscoverySnapshot(ctx,input,authority);
+ return result.ok?{ok:true,value:result.value?.view??null}:result;
+}
+/** Private domain snapshot for the selected refusal read. Never an API DTO. */
+export async function readProspectPhoneDiscoverySnapshot(ctx:RepositoryContext,input:ProspectPhoneDiscoveryInput,authority:PhoneDiscoveryAuthority=async()=>true):Promise<Result<{view:ProspectPhoneDiscoveryView;run:PhoneDiscoveryRun;now:number}|null>>{
  if(ctx.scope.actor.kind!=='user'||ctx.scope.actor.role!=='admin')return refuse('admin_only');
  if(!prospectPhoneDiscoveryInputSchema.safeParse(input).success)return refuse('invalid_input');
  const candidate=await lockPhoneDiscoveryCandidate(ctx,input.candidateId);
@@ -118,12 +123,17 @@ export async function readProspectPhoneDiscovery(ctx:RepositoryContext,input:Pro
   const denial=await validatePhoneDiscoveryRun(ctx,current,false);
   if(denial){await invalidatePhoneDiscovery(ctx,current.id,denial);current.state='unavailable';current.reason=denial;current.content=null;current.checked_at=await phoneDiscoveryNow(ctx);}
  }
+ if(!await phoneDiscoveryPrincipal(ctx,authority))return refuse('authority_changed');
+ if(current.state!=='unavailable'){
+  const denial=await validatePhoneDiscoveryRun(ctx,current,false);
+  if(denial){await invalidatePhoneDiscovery(ctx,current.id,denial);current.state='unavailable';current.reason=denial;current.content=null;current.checked_at=await phoneDiscoveryNow(ctx);}
+ }
  // Clock rights and optional snapshot equality are evaluated after final waits.
  const now=(await phoneDiscoveryNow(ctx)).getTime();
  const retained=isDeepStrictEqual(phones,checked)&&isDeepStrictEqual(phones,currentPhones)?projectManualPhone(currentPhones[0],now):changedManualPhone();
  const discovered=isDeepStrictEqual(run,current)?projectProspectPhoneDiscovery(current,now):changedManualPhone();
  const evidence=isDeepStrictEqual(rows,currentRows)&&currentRows[0]?projectManualProspect(currentRows[0],composeProspectPhoneDiscovery(retained,discovered))?.phoneEvidence:undefined;
- return {ok:true,value:prospectPhoneDiscoveryView(current,evidence??changedManualPhone())};
+ return {ok:true,value:{view:prospectPhoneDiscoveryView(current,evidence??changedManualPhone()),run:current,now}};
 }
 /** Validates a whole capture. No selected prefix survives incomplete pages/bounds. */
 export function captureProspectPhonePages(pages:PageFetchResult['pages'],website:string,maxPages:number,maxBytes:number,now:number):Result<ProspectPhoneObservation[]>{
