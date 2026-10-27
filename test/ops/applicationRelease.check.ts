@@ -78,7 +78,7 @@ function securityGroups() {
 }
 interface Options {
   from?: number; to?: number; fault?: string;
-  recovery?: boolean; historical?: boolean;
+  recovery?: boolean; historical?: boolean; historyEscapes?: boolean;
   migrate?: () => Promise<void>; verify?: () => Promise<unknown>; off?: () => Promise<unknown>;
   docker?: (args: string[]) => Promise<string>;
 }
@@ -129,8 +129,9 @@ function harness(options: Options = {}) {
         checks++;
         if (options.historical && args[1]?.includes('/actions/jobs/')) {
           if (args[1].endsWith('/logs')) {
+            if (options.historyEscapes && !args.includes('--allow-escape-sequences')) throw new Error('command_gh_failed');
             const priorStatus = { phase: 'smoke', outcome: 'repair-required', writesStarted: true, migrationStarted: false, fromSchema: 142, targetSchema: 142, observedSchema: 142, recoveryPoint: null, reason: 'task_failed_or_foreign', rollback: null, currentTaskArn: failedTask, currentTaskOwner: failedOwner, lastStoppedTaskArn: null, lastTaskExitCode: 0, temporaryReaderDefinition: arn('operations', 337), previousDefinitions: {}, candidateDefinitions: { operations: arn('operations', 335) } };
-            return ['##[group]Run if [ -f "$RUNNER_TEMP/application/status.json" ]; then', `  COMMIT: ${COMMIT}`, '  RUN_ID: 40519161322', '  RUN_ATTEMPT: 1', '  GATE_RUN_ID: 40519161282', '##[endgroup]', ...JSON.stringify(priorStatus, null, 2).split('\n'), 'Post job cleanup.', 'Cleaning up orphan processes'].map((line, n) => `2026-10-27T14:51:22.${String(n).padStart(7, '0')}Z ${line}`).join('\n') + '\n';
+            return [...(options.historyEscapes ? ['\u001b[32mEarlier runner output\u001b[0m'] : []), '##[group]Run if [ -f "$RUNNER_TEMP/application/status.json" ]; then', `  COMMIT: ${COMMIT}`, '  RUN_ID: 40519161322', '  RUN_ATTEMPT: 1', '  GATE_RUN_ID: 40519161282', '##[endgroup]', ...JSON.stringify(priorStatus, null, 2).split('\n'), 'Post job cleanup.', 'Cleaning up orphan processes'].map((line, n) => `2026-10-27T14:51:22.${String(n).padStart(7, '0')}Z ${line}`).join('\n') + '\n';
           }
           return JSON.stringify({ id: 122252105573, run_id: 40522197864, run_attempt: 1, head_sha: COMMIT, name: 'Opt-in protected application release (legacy remains default)', status: 'completed', conclusion: 'failure', steps: [{ number: 6, name: 'Execute only this approved application release', status: 'completed', conclusion: 'failure', started_at: '2026-10-27T14:34:28Z', completed_at: '2026-10-27T14:51:22Z' }, { number: 7, name: 'Actual application phase and recovery boundary', status: 'completed', conclusion: 'success', started_at: '2026-10-27T14:51:22Z', completed_at: '2026-10-27T14:51:22Z' }] });
         }
@@ -271,6 +272,17 @@ function harness(options: Options = {}) {
 }
 
 describe('historical reader custody followed by the full normal release (transport model)', () => {
+  it('captures escape-bearing historical logs without publishing their raw bytes', async () => {
+    const h = harness({ recovery: true, historical: true, historyEscapes: true, from: 142, to: 142 });
+    const result = await h.run();
+    expect(result.outcome, result.reason).toBe('completed');
+    const allowed = h.calls.filter(call => call.args.includes('--allow-escape-sequences'));
+    expect(allowed).toHaveLength(2);
+    expect(allowed.every(call => call.program === 'gh' && call.args[1] === 'repos/david-cui-bruno/founding-sales/actions/jobs/122252105573/logs')).toBe(true);
+    expect(JSON.stringify(h.states)).not.toContain('Earlier runner output');
+    expect(JSON.stringify(h.states)).not.toContain('\\u001b');
+    expect(result.readerRecovery).toMatchObject({ historicalExecution: 'UNKNOWN', historicalEffects: 'UNKNOWN' });
+  });
   it.each([false, true])('reconciles337 from335 with historical=%s, preserves record and completes all normal gates', async historical => {
     const h = harness({ recovery: true, historical, from: 142, to: 142 }); const result = await h.run();
     expect(result.outcome, result.reason).toBe('completed');

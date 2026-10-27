@@ -39,7 +39,9 @@ export async function runRelease(io, environment) {
   const phase = name => { state.phase = name; save(); };
   const json = async (program, args) => JSON.parse(await io.run(program, args));
   const gh = path => json('gh', ['api', `repos/${e.GITHUB_REPOSITORY}/${path}`]);
-  const ghText = path => io.run('gh', ['api', `repos/${e.GITHUB_REPOSITORY}/${path}`]);
+  // Historical runner logs may contain ANSI bytes. Capture them for the strict
+  // validator, never the terminal/status; preserve the original log unchanged.
+  const ghText = path => io.run('gh', ['api', `repos/${e.GITHUB_REPOSITORY}/${path}`, '--allow-escape-sequences']);
   let images, gate, baseline, definitions, network, database, cluster, registry, taskSequence = 0;
   const runInfo = (run, workflow, commit, runId) => {
     requireThat(String(run.id) === runId && run.path?.split('@')[0] === `.github/workflows/${workflow}.yml` && run.event === 'push' && run.head_branch === 'main' && run.head_repository?.full_name === e.GITHUB_REPOSITORY && run.status === 'completed' && run.conclusion === 'success' && run.head_sha === commit, 'provenance_changed');
