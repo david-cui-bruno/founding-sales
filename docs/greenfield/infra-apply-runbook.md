@@ -6,7 +6,7 @@ Production was first applied on 23 September 2026. Sections1–4 and6 below reta
 
 Production uses the [current backend identity/encryption contract](../operations/release-backend-contract.md): explicit existing SSE-S3 (`encrypt=true`), only `-backend-config=backend.hcl`, and no `kms_key_id` override. Provider-role assumption does not supply backend credentials. [AGENTS](../../AGENTS.md) defines standing read-only inspection/release-path infrastructure authority and owner-reserved exceptions. Do not ask again for every already-authorized read or plan. Exact protected workflow/plan review, current readback, holds and serialization remain mandatory; standing authority is not a local production writer or permission for new spend/data scope. Historical rehearsal encryption examples below do not change current configuration.
 
-The historical ordering explains dependencies such as ACM validation and Google consent. It is not a request to recreate resources, grants or credentials.
+The historical ordering explains dependencies such as ACM validation and Google consent. These examples are not operational approval or a request to recreate resources, grants or credentials.
 
 ## 0. Tooling
 
