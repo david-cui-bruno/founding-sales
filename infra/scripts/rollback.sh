@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# Put production back on a previous release's images, in one command (lane R1; P7, 27
-# September 2026).
+# Read-only rollback planning and controlled offline rehearsal (original lane R1).
+# Real-production standalone --apply is retired, including from GitHub Actions.
 #
 #   infra/scripts/rollback.sh <root> <prefix> --api-digest D --worker-digest D \
-#       [--active-database-host H] [--apply]
+#       [--active-database-host H]                                    # planning only
 #
-#   git -C ~/fss-prod checkout --detach <the previous release's commit>   # then terraform init, as section 4
-#   infra/scripts/rollback.sh ~/fss-prod/infra/roots/production fss-prod \
-#       --api-digest sha256:… --worker-digest sha256:…                    # plans, prints the plan, stops
-#   infra/scripts/rollback.sh ~/fss-prod/infra/roots/production fss-prod \
-#       --api-digest sha256:… --worker-digest sha256:… --apply            # plans again, applies, deploys, smokes
+# Repair production through the protected serialized greenfield-deploy.yml workflow,
+# following docs/operations/lean-release-workflow.md. No local apply or hold bypass.
+# --apply below describes retained controlled rehearsal behavior, not a production path.
 #
-# `docs/greenfield/release.md` 4.1a is the operator's page; this is the why.
+# `docs/greenfield/release.md` 4.1a retains rollback limits and historical context.
 #
 # ## Which code is planned
 #
@@ -55,7 +53,7 @@
 #      (26 September 2026) `infra/roots/production` commits `certificate_arn`,
 #      `api_hostname`, `alert_emails` and `sending_enabled` as literals instead of taking
 #      them as variables. For each one the checkout commits, the value production runs
-#      (below) must equal it; a difference is refused with the manual recovery, because
+#      (below) must equal it; a difference requires reviewed hosted repair, because
 #      the plan would change the listener, the origin, a subscription or sending.
 #   5. **A restore in progress, unnamed** (W3-S8's restore runbook, PR 282). Between the
 #      runbook's steps (f) and (g) production runs on a point-in-time copy:
@@ -70,8 +68,8 @@
 #      re-points the two services. A plan that creates, replaces or destroys anything but
 #      an `aws_ecs_task_definition`, or updates anything but the `api` and `worker`
 #      `aws_ecs_service`, is refused and its file deleted, naming every address. An
-#      infrastructure difference between the two commits is the manual path of 4.0, read
-#      and applied by hand, not a five-minute rollback.
+#      infrastructure difference requires exact reviewed hosted repair under the lean
+#      release workflow, not a standalone rollback apply.
 #
 # ## What it keeps as production has it
 #
@@ -100,10 +98,10 @@
 # ## The plan, and --apply
 #
 # Without `--apply` it stops after the plan, leaving `rollback.tfplan` in the root and the
-# plan's text in the reports directory. With `--apply` it plans again from the same
+# plan's text in the reports directory. In controlled rehearsal, `--apply` plans from the same
 # reads, judges that plan the same way, applies it, runs `deploy.sh release` on the rolling
 # path (never `--schema-change`: nothing migrates), then the canary age and the six smoke
-# checks. The root must be initialised as for section 4; after checking out another
+# checks. The rehearsal root must be initialised appropriately; after checking out another
 # commit, run that `terraform init` again. Terraform runs with every Google credential
 # path removed: production has had no Google provider since PR 224, and a commit that still
 # had one fails its plan here instead of reaching for a credential.
@@ -236,7 +234,7 @@ fi
 CLUSTER_OUTPUTS="$CHECKOUT/infra/modules/cluster/outputs.tf"
 if ! grep -qE '^[[:space:]]*task_definition[[:space:]]*=[[:space:]]*aws_ecs_task_definition\.api\.arn' "$CLUSTER_OUTPUTS" 2>/dev/null \
   || ! grep -qE '^[[:space:]]*task_definition[[:space:]]*=[[:space:]]*aws_ecs_task_definition\.worker\.arn' "$CLUSTER_OUTPUTS" 2>/dev/null; then
-  rollback_fail "$COMMIT's infra/modules/cluster/outputs.tf does not publish deployment_plan.<service>.task_definition: this target predates the applied-revision release; a rollback across it is a hand reconciliation (release.md: recovery is a forward fix or a restore). Nothing was read or planned."
+  rollback_fail "$COMMIT's infra/modules/cluster/outputs.tf does not publish deployment_plan.<service>.task_definition: this target predates the applied-revision release; reconcile and repair through the protected greenfield-deploy.yml workflow (docs/operations/lean-release-workflow.md), never a local apply. Nothing was read or planned."
 fi
 
 # A copy to stay on needs a root that can name it (refusal 5).
@@ -314,7 +312,7 @@ else
   # managed instance" and the plan carries no active_database_host, which during a restore
   # points production back at the old instance (review of PR 292). It is unknown, not empty.
   [ "$LIVE_DATABASE_HOST" != "<none>" ] \
-    || rollback_fail "deploy.sh current reports FSS_DATABASE_HOST=<none> for $PREFIX-api and $PREFIX-worker: nothing can say which database production runs on, and a plan made without knowing it would point production at the managed instance. Read the two task definitions by hand. Nothing was planned."
+    || rollback_fail "deploy.sh current reports FSS_DATABASE_HOST=<none> for $PREFIX-api and $PREFIX-worker: nothing can say which database production runs on, and a plan made without knowing it would point production at the managed instance. Inspect both task definitions read-only, then use protected hosted repair (docs/operations/lean-release-workflow.md). Nothing was planned."
   rehearsal_log "production runs $RUNNING_API and $RUNNING_WORKER"
   # Whether there is anything to roll back is decided here and acted on after the database
   # host is judged: a rollback that has nothing to do still says so from a known host.
@@ -510,7 +508,7 @@ for name, pattern in literal.items():
             mismatched.append("{} is {} in production and {} in {}".format(name, live, committed, commit))
     print(name, "committed")
 if mismatched:
-    sys.exit("FAIL: " + "; ".join(mismatched) + ". A rollback moves images and nothing an operator decided, and this plan would change what production runs, so nothing was planned. Manual recovery: decide which value is right. If production's, roll back by hand on the manual path (release.md 4.0) and correct the literal in infra/roots/production in a pull request; if the committed one, production has drifted, so put it back with a plan and apply of main (release.md 4.0) and run this again.")
+    sys.exit("FAIL: " + "; ".join(mismatched) + ". A rollback moves images and nothing an operator decided, and this plan would change what production runs, so nothing was planned. Reconcile intended values in a pull request, then prepare and review the exact repair through protected greenfield-deploy.yml (docs/operations/lean-release-workflow.md). Do not apply locally or overwrite owner controls.")
 PY
 )" || exit 1
 declared() { printf '%s\n' "$SETTINGS" | grep -qx "$1 var"; }
@@ -572,7 +570,7 @@ for change in plan.get("resource_changes") or []:
 for line in allowed + refused:
     print("  " + line)
 if refused:
-    sys.exit("FAIL: the rollback plan would " + ", ".join(refused) + ". A rollback registers task definitions and re-points the api and worker services, nothing else; the plan file is deleted. An infrastructure difference between the two commits is the manual path (release.md 4.0).")
+    sys.exit("FAIL: the rollback plan would " + ", ".join(refused) + ". A rollback registers task definitions and re-points the api and worker services, nothing else; the plan file is deleted. Infrastructure differences require exact reviewed repair through protected greenfield-deploy.yml (docs/operations/lean-release-workflow.md), never a local apply.")
 if not allowed:
     sys.exit("FAIL: the rollback plan changes nothing, and production does not run these digests; the plan file is deleted")
 '; then
@@ -583,7 +581,7 @@ fi
 
 if [ "$APPLY" != 1 ]; then
   rehearsal_log "plan saved: $ROOT_DIRECTORY/$PLAN_FILE; the whole of it is in $PLAN_TEXT"
-  rehearsal_log "read it: each task definition replaced with $API_DIGEST or $WORKER_DIGEST and the ranges above, FSS_SENDING_ENABLED still $SENDING, and each service re-pointed. Then run this again with --apply, which plans again, judges it the same way and applies it."
+  rehearsal_log "read it: each task definition replaced with $API_DIGEST or $WORKER_DIGEST and the ranges above, FSS_SENDING_ENABLED still $SENDING, and each service re-pointed. Production repair uses protected greenfield-deploy.yml (docs/operations/lean-release-workflow.md), never standalone --apply. Only controlled offline rehearsal may repeat with --apply."
   rehearsal_write_report "release-rollback.txt" \
     "prefix=$PREFIX commit=$COMMIT api_digest=$API_DIGEST worker_digest=$WORKER_DIGEST sending_enabled=$SENDING database_version=$DATABASE_VERSION applied=no"
   exit 0

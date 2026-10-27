@@ -198,7 +198,7 @@ jobs:
           mkdir -p "$work"
           manual() {
             printf 'decision=manual\nreason=%s\n' "$1" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Not deployed by CI; the manual path applies::$1"
+            echo "::notice title=Not deployed automatically; protected hosted review required::$1 (docs/operations/lean-release-workflow.md)"
             exit 0
           }
           : > "$work/production-commits"
@@ -231,7 +231,7 @@ jobs:
           done
           sort -u "$work/paths" | sed '/^$/d' > "$work/touched"
           echo "$(wc -l < "$work/touched" | tr -d ' ') path(s) touched by the commits since production's"
-          # Application code deploys; everything else, an unknown path included, is manual.
+          # Application code deploys; other/unknown paths require protected hosted review.
           : > "$work/protected"
           while IFS= read -r path; do
             case "$path" in
@@ -263,14 +263,14 @@ jobs:
             fi
           fi
           if [ -s "$work/protected" ]; then
-            { echo '### Paths that keep this release on the manual path'; echo ''; sed 's/^/- /' "$work/protected"; } >> "$GITHUB_STEP_SUMMARY"
+            { echo '### Paths requiring protected hosted review'; echo ''; sed 's/^/- /' "$work/protected"; } >> "$GITHUB_STEP_SUMMARY"
             first="$(head -3 "$work/protected" | paste -sd ';' - | sed 's/;/; /g')"
-            manual "the commits since production's touch $(wc -l < "$work/protected" | tr -d ' ') path(s) that are not application code: $first. Release this one by hand (release.md 4); the next app merge after it deploys itself"
+            manual "the commits since production's touch $(wc -l < "$work/protected" | tr -d ' ') path(s) that are not application code: $first. Use protected review_prepare then reviewed execution in this workflow (docs/operations/lean-release-workflow.md), never a local apply"
           fi
           echo "decision=pass" >> "$GITHUB_OUTPUT"
           echo "no protected path in any commit since production's"
 
-      - name: Download the digests and decide - app-only, already running, or the manual path
+      - name: Download the digests and decide - app-only, already running, or hosted review
         id: check
         if: steps.guard.outputs.decision == 'pass'
         run: |
@@ -720,7 +720,7 @@ jobs:
               line="Routine maintenance release $short FAILED ($MAINTENANCE_RESULT); inspect its actual phase/schema and repair status. No schema rollback or blind retry is authorized."
             fi
           elif [ "$GATES_RESULT" = success ] && [ "$GATES_DECISION" = manual ]; then
-            line="Not deployed: $GATES_REASON. The manual path applies (docs/greenfield/release.md 4)."
+            line="Not deployed: $GATES_REASON. Use protected hosted review (docs/operations/lean-release-workflow.md), never a local apply."
           elif [ "$DEPLOY_RESULT" != success ] || { [ "$DECISION" = deploy ] && [ "$SMOKE_RESULT $READ_BACK_RESULT" != 'success success' ]; }; then
             level=error
             line="Production deploy of ${short:-an unknown commit} FAILED (gates ${GATES_RESULT:-not run}, deploy ${DEPLOY_RESULT:-not run}, smoke ${SMOKE_RESULT:-not run}, read-back ${READ_BACK_RESULT:-not run}, decision ${DECISION:-none})."
@@ -731,7 +731,7 @@ jobs:
             case "$DECISION" in
               deploy) line="Deployed $short to production: release record $RECORD before the rollout and $READ_BACK after the smoke passed, worker ${WORKER##*/}, api ${API##*/}, each held to its digest." ;;
               current) line="Production already runs $short. Nothing deployed." ;;
-              manual) line="Not deployed: $REASON. The manual path applies (docs/greenfield/release.md 4)." ;;
+              manual) line="Not deployed: $REASON. Use protected hosted review (docs/operations/lean-release-workflow.md), never a local apply." ;;
               *) line="Nothing decided." ;;
             esac
           fi
