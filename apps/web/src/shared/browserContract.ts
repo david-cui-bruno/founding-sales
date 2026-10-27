@@ -42,6 +42,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/sourcing/candidates/prospects/activity/receipt',
   '/sourcing/qualification/read',
   '/sourcing/candidates/phone-discovery/read', '/sourcing/candidates/phone-discovery/receipt',
+  '/sourcing/candidates/phone-discovery/refusal-original/read',
   '/outreach/answer-blocks',
   '/outreach/email-campaigns/control',
   '/outreach/email-campaigns/opening/control', '/outreach/email-campaigns/opening/receipt',

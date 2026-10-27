@@ -3,6 +3,7 @@ import {commandIdSchema} from './auth.ts';
 import {semanticVersionSchema} from './clientVersion.ts';
 import {instant,uuid} from './foundationRows.ts';
 import {manualProspectPhoneEvidenceSchema} from './manualProspects.ts';
+import {PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH} from './prospectPhoneRefusalOriginal.ts';
 
 /** Explicit bounded public-page capture, not qualification, admission or outreach. */
 export const PROSPECT_PHONE_DISCOVERY_VERSION='company-public-phone-v1' as const;
@@ -10,6 +11,7 @@ export const PROSPECT_PHONE_DISCOVERY_PATHS=[
  '/sourcing/candidates/phone-discovery/request',
  '/sourcing/candidates/phone-discovery/read',
  '/sourcing/candidates/phone-discovery/receipt',
+ PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH,
 ] as const;
 export const prospectPhoneDiscoveryInputSchema=z.strictObject({candidateId:uuid,expectedRevision:z.number().int().positive()});
 export const prospectPhoneDiscoveryCommandSchema=prospectPhoneDiscoveryInputSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
