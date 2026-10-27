@@ -3,18 +3,20 @@ const taskArn = /^arn:aws:ecs:us-east-1:326255650484:task\/fss-prod-cluster\/[0-
 const definitionArn = /^arn:aws:ecs:us-east-1:326255650484:task-definition\/fss-prod-operations:([1-9][0-9]{0,9})$/u;
 const owner = /^fss-app-([1-9][0-9]{0,19})-off-([1-9][0-9]{0,9})$/u;
 const keys = ['readerDefinitionArn', 'sourceOperationsDefinitionArn', 'startedBy', 'taskArn'];
+const historicalKeys = ['evidenceBasis', ...keys];
 const invalid = () => { throw new Error('failed_reader_custody_invalid'); };
 
-// Input identity is not cleanup authority. Live custody and terminal-state proof
-// must succeed inside the protected application job before any recovery write.
+// Input identity is not cleanup authority. The explicitly selected evidence and
+// current reference proofs must succeed inside the protected application job.
 export function parseFailedReaderCustody(value, currentRunId) {
   if (value === undefined || value === '') return null;
   if (typeof value !== 'string' || value.length > 4096 || !runId.test(currentRunId || '')) return invalid();
   let parsed;
   try { parsed = JSON.parse(value); } catch { return invalid(); }
   if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' ||
-      Object.keys(parsed).sort().join(',') !== keys.join(',') ||
+      ![keys.join(','), historicalKeys.join(',')].includes(Object.keys(parsed).sort().join(',')) ||
       Object.values(parsed).some(item => typeof item !== 'string')) return invalid();
+  if (Object.hasOwn(parsed, 'evidenceBasis') && parsed.evidenceBasis !== 'historical-readonly-retirement') return invalid();
   const reader = definitionArn.exec(parsed.readerDefinitionArn);
   const source = definitionArn.exec(parsed.sourceOperationsDefinitionArn);
   const prior = owner.exec(parsed.startedBy);

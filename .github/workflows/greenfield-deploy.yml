@@ -40,7 +40,7 @@ on:
         type: string
         default: ''
       failed_reader_custody:
-        description: 'Application only: exact reviewed never-started reader custody JSON, blank for normal release'
+        description: 'Application only: exact reviewed reader custody JSON and explicit evidence basis, blank for normal release'
         type: string
         default: ''
 
