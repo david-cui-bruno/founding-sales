@@ -37,6 +37,10 @@ test('signed registered API and Calling explicitly read one whole original, eras
  await region.getByRole('button',{name:'Read phone result',exact:true}).click();await expect(selected).toHaveCount(0);expect(counts.original).toBe(1);
  await result.getByText('Phone-specific sources and coverage',{exact:true}).click();
  await result.getByRole('button',{name:'Read this retained refusal original',exact:true}).click();await expect(selected.locator('pre')).toHaveText(refusalOriginalText);
- await withdrawPhoneDiscoverySource(app());await result.getByRole('button',{name:'Read this retained refusal original',exact:true}).click();await expect(page.getByText(refusalOriginalText,{exact:true})).toHaveCount(0);
+ await withdrawPhoneDiscoverySource(app());
+ const refusalResponse=page.waitForResponse(value=>new URL(value.url()).pathname===`/browser/api${PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH}`);
+ await result.getByRole('button',{name:'Read this retained refusal original',exact:true}).click();
+ const refused=await refusalResponse;expect(refused.status()).toBe(409);expect(JSON.stringify(await refused.json())).not.toContain(refusalOriginalText);
+ await expect(page.getByText(refusalOriginalText,{exact:true})).toHaveCount(0);
  expect(counts.capture).toBe(0);expect(counts.original).toBe(3);expect(app().calls()).toBe(0);expect((await app().fixture.db.query('SELECT to_jsonb(j) AS row FROM jobs j ORDER BY id')).rows).toEqual(before);await assertGlassStorage(page,[refusalOriginalText]);
 });
