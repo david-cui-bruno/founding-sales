@@ -14,6 +14,9 @@ describe('bounded browser call execution policy',()=>{
   for(const path of ['/calls/history','/calls/recording','/calls/transcript','/calls/cadence/resume','/calls/stop','/dial/handoff','/calling-identities/register','/calling-identities/disable'])
    for(const method of ['GET','POST'])expect(browserApiPathAllowed(method,path)).toBe(false);
   expect(BROWSER_COMMAND_PATHS).toContain('/calls/session');
+  expect(browserApiPathAllowed('POST','/dial/check')).toBe(true);
+  expect(browserApiPathAllowed('GET','/dial/check')).toBe(false);
+  expect(BROWSER_COMMAND_PATHS).not.toContain('/dial/check');
   expect(BROWSER_VOICE_POST_PATHS).toEqual(['/calls/access-token']);
  });
  it('keeps scripts local and limits signalling/media to the existing default-edge SDK',()=>{

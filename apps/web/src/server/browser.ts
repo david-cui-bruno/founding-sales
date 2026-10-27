@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { commandIdSchema, semanticVersionSchema, socialGuidedRequestInputSchema } from '@fss/contracts';
+import { commandIdSchema, semanticVersionSchema, socialGuidedRequestInputSchema, dialCheckRequestSchema } from '@fss/contracts';
 import { campaignOpeningApproveInputSchema, campaignOpeningRevokeInputSchema, campaignOpeningControlRequestSchema, campaignOpeningReceiptInputSchema } from '@fss/contracts';
 import { startSignIn, handleCallback, claimSignIn } from '../../../api/src/auth/signIn.ts';
 import { authenticate, endSession, type AuthenticatedPrincipal } from '../../../api/src/auth/sessions.ts';
@@ -17,6 +17,7 @@ import { campaignOpeningBrowserResult } from './campaignOpeningBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
 import { callingExecutionBrowserResult } from './callingExecutionBoundary.ts';
+import { callingReadinessAccess } from './callingReadinessAccess.ts';
 import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
 import { PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS, prospectPhoneDiscoveryBrowserResult } from './prospectPhoneDiscoveryBoundary.ts';
 import { BROWSER_SECURITY_HEADERS as SECURITY_HEADERS } from './httpPolicy.ts';
@@ -190,6 +191,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
 
 async function product(request: ApiRequest, path: string, context: BrowserRequestContext, token: string, cookies: string[], clientVersion: string, principal: AuthenticatedPrincipal): Promise<BrowserResponse> {
   let body = request.body;
+  if (path === '/dial/check' && !dialCheckRequestSchema.safeParse(body).success) throw new Refusal(400);
   if (path === '/social/drafts/request' && !guidedSocialCommandSchema.safeParse(body).success) throw new Refusal(400);
   if (openingBrowserSchemas[path] && !openingBrowserSchemas[path].safeParse(body).success) throw new Refusal(400);
   if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
@@ -211,6 +213,10 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
   });
+  if (path === '/dial/check') {
+    const input = dialCheckRequestSchema.parse(body);
+    if (!await callingReadinessAccess(context.auth, token, principal, input.firmId)) throw new Refusal(401);
+  }
   if (isSocialFactsBrowserPath(path)) {
     const fresh = await authenticate(context.auth, `Bearer ${token}`);
     if (!fresh.authenticated || fresh.principal.role !== 'admin' || revision(fresh.principal) !== revision(principal)) throw new Refusal(401);

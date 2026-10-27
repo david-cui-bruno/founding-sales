@@ -17,7 +17,10 @@ const id = '11111111-1111-4111-8111-111111111111';
 const csrf = 'c'.repeat(43);
 const token = 't'.repeat(50);
 const principal = { workspaceId: id, userId: id, deviceId: id, sessionId: 'session-one', role: 'admin', membershipStatus: 'active', deviceStatus: 'active' };
-const auth = { now: () => now, config: { oidc: { redirectUri: `${origin}/browser/callback` } } } as AuthDeps;
+const query = vi.fn();
+const db: AuthDeps['db'] = {query};
+let firm = { id,workspace_id:id,status:'active',assigned_user_id:id };
+const auth = { db, now: () => now, config: { oidc: { redirectUri: `${origin}/browser/callback` } } } as AuthDeps;
 const withRequest = vi.fn();
 const handler = createBrowserHandler({ origin, cookieKey: key, clientVersion: '1.4.0', withRequest: async work => { withRequest(); return work({ auth, api: {} as ApiOptions }); } });
 function cookie(name: string, value: Custody): string { return `${name}=${sealCookie(key, origin, name, value)}`; }
@@ -34,9 +37,56 @@ function sets(result: BrowserResponse | null): readonly string[] {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  firm = { id,workspace_id:id,status:'active',assigned_user_id:id };
+  query.mockImplementation(async (sql:string)=>({rows:sql.includes('FROM firms')?[firm]:[],rowCount:sql.includes('FROM firms')?1:0}));
   mocks.authenticate.mockResolvedValue({ authenticated: true, principal });
   mocks.route.mockResolvedValue({ status: 200, body: { firms: [] } });
   mocks.end.mockResolvedValue(undefined);
+});
+describe('explicit calling readiness read', () => {
+  const path = '/browser/api/dial/check';
+  async function headers(): Promise<Record<string, string>> {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    return { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+  }
+  it('forwards only the existing strict advisory input without a command envelope', async () => {
+    const authHeaders = await headers(), input = { firmId: id, routeId: id };
+    const body = { advice: { firmId: id, callable: false, reasons: ['not_assigned'] } };
+    mocks.route.mockResolvedValueOnce({ status: 200, body });
+    expect(await handler(post(path, input, authHeaders))).toMatchObject({ status: 200, body });
+    expect(mocks.route).toHaveBeenCalledExactlyOnceWith('POST', '/dial/check', expect.anything(), expect.objectContaining({ body: input }));
+    expect(mocks.authenticate).toHaveBeenCalledTimes(3);
+    for (const invalid of [{ ...input, commandId: id }, { ...input, clientVersion: '1.4.0' }, { ...input, at: now.toISOString() }, { ...input, headers: {} }, { firmId: 'bad' }])
+      expect((await handler(post(path, invalid, authHeaders)))?.status).toBe(400);
+    expect(mocks.route).toHaveBeenCalledTimes(1);
+  });
+  it.each(['revoked', 'role_changed'] as const)('erases the advisory response after a wait when access is %s', async change => {
+    const authHeaders = await headers();
+    mocks.route.mockImplementationOnce(async () => {
+      mocks.authenticate.mockResolvedValueOnce(change === 'revoked' ? { authenticated: false } : { authenticated: true, principal: { ...principal, role: 'salesperson' } });
+      return { status: 200, body: { advice: 'private advisory response' } };
+    });
+    const result = await handler(post(path, { firmId: id, routeId: id }, authHeaders));
+    expect(result).toMatchObject({ status: 401, body: { error: 'browser_request_refused' } });
+    expect(JSON.stringify(result)).not.toContain('private advisory response');
+  });
+  it.each(['reassigned','merged'] as const)('erases advice if the Firm becomes %s during policy reads',async change=>{
+    mocks.authenticate.mockResolvedValue({authenticated:true,principal:{...principal,role:'salesperson'}});
+    const authHeaders=await headers();
+    mocks.route.mockImplementationOnce(async()=>{firm=change==='merged'?{...firm,status:'merged'}:{...firm,assigned_user_id:'another-user'};return {status:200,body:{advice:'private advisory response'}};});
+    const result=await handler(post(path,{firmId:id,routeId:id},authHeaders));
+    expect(result).toMatchObject({status:401,body:{error:'browser_request_refused'}});
+    expect(JSON.stringify(result)).not.toContain('private advisory response');
+    expect(query.mock.calls.map(([sql])=>sql)).toEqual(['BEGIN',expect.stringContaining('FOR SHARE'),expect.stringContaining('FROM firms'),'COMMIT']);
+  });
+  it('retains Origin, CSRF and revision gates and excludes dispatch relatives', async () => {
+    const authHeaders = await headers();
+    for (const bad of [{ ...authHeaders, origin: 'https://other.test' }, { ...authHeaders, 'x-callie-csrf': '' }, { ...authHeaders, 'x-callie-session': 'stale' }])
+      expect((await handler(post(path, { firmId: id }, bad)))?.status).not.toBe(200);
+    for (const relative of ['/dial/handoff', '/dial/authorize', '/dial/check/extra'])
+      expect((await handler(post(`/browser/api${relative}`, { firmId: id }, authHeaders)))?.status).toBe(404);
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
 });
 describe('cookie custody', () => {
   it('encrypts and authenticates purpose, origin and key', () => {
