@@ -3,6 +3,7 @@ import { emailCampaignPolicySchema, type EmailCampaignControl } from '@fss/contr
 import { type BrowserClient } from './BrowserClient.ts';
 import { EmailCampaignClient } from './EmailCampaignClient.ts';
 import { type CampaignAction } from './CampaignPending.ts';
+import { BrowserCampaignOpening } from './BrowserCampaignOpening.tsx';
 import './workspaceEmail.css';
 
 export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JSX.Element {
@@ -18,6 +19,7 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
   const [regions, setRegions] = useState<('TX' | 'RI' | 'MA')[]>([]);
   const [daily, setDaily] = useState('1'), [lifetime, setLifetime] = useState('25');
   const [expiry, setExpiry] = useState('');
+  const [openingCampaignId, setOpeningCampaignId] = useState('');
   useEffect(() => {
     live.current = true;
     let generation = client.epoch;
@@ -83,6 +85,8 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
     {control ? <><h3>Current campaigns</h3>{control.campaigns.length === 0 ? <p>No current campaigns.</p> : null}{control.campaigns.map(campaign => <article key={campaign.id}><p>Campaign {campaign.id} revision {campaign.revision} · {campaign.state} · {campaign.regions.join(', ')} · admitted {campaign.admittedCount}/{campaign.maxEnrollments} · daily limit {campaign.dailyAdmissionLimit} · expires {campaign.expiresAt}</p>
         <button aria-label={`Revoke campaign ${campaign.id}`} disabled={busy || pending !== null || campaign.revokedAt !== null} onClick={() => { command({ kind: 'revoke', id: campaign.id, expectedRevision: campaign.revision }); }}>Revoke campaign</button></article>)}
       <h3>Automatic admission activity</h3><p>Admissions are not sent-message history or confirmation of delivery.</p>{control.admissions.length === 0 ? <p>No current admissions.</p> : null}{control.admissions.map(admission => <details key={admission.enrollmentId}><summary>Firm {admission.firmId} · admitted {admission.admittedAt}</summary><p>Campaign {admission.campaignId} · Contact {admission.contactId} · Route {admission.routeId} · Plan {admission.planId} · Enrollment {admission.enrollmentId} · Candidate {admission.candidateId} · Qualification run {admission.qualificationRunId}</p></details>)}
+      <label>Opening policy campaign<select aria-label="Opening policy campaign" value={openingCampaignId} onChange={event => { setOpeningCampaignId(event.target.value); }}><option value="">Select current owned campaign</option>{control.campaigns.map(campaign => <option key={campaign.id} value={campaign.id}>{campaign.id} · revision {campaign.revision}</option>)}</select></label>
+      {control.campaigns.some(campaign => campaign.id === openingCampaignId) ? <BrowserCampaignOpening key={openingCampaignId} client={client} campaignId={openingCampaignId} /> : null}
       <details className="email-campaign-policy"><summary>Campaign policy and one-time approval</summary><p>Approve a bounded campaign, not each recipient. Existing sending controls remain authoritative.</p>
       <label>Approved sender<select aria-label="Approved sender" disabled={busy || pending !== null} value={mailboxId} onChange={event => { setMailboxId(event.target.value); }}><option value="">Select sender</option>{control.senders.map(sender => <option key={sender.id} value={sender.id}>{sender.label} · authorization revision {sender.authorizationRevision}</option>)}</select></label>
       <label>Approved email sequence<select aria-label="Approved email sequence" disabled={busy || pending !== null} value={sequenceVersionId} onChange={event => { setSequenceVersionId(event.target.value); }}><option value="">Select sequence</option>{control.sequences.map(sequence => <option key={sequence.id} value={sequence.id}>{sequence.label}</option>)}</select></label>
