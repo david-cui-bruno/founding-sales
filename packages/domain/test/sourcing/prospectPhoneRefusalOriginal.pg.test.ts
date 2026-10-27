@@ -30,7 +30,11 @@ async function fixture({invalidHash=false}:{invalidHash?:boolean}={}){
  VALUES($1,$2,$3,1,$4,$4,'company-public-phone-v1','pending',$5,$5::timestamptz+interval '30 minutes',$5::timestamptz+interval '1 hour',$6::jsonb)`,[seed.alpha.workspaceId,runId,saved.value.id,seed.alpha.admin.userId,requestedAt,JSON.stringify(content)]);
  await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET state='running',dispatched_at=clock_timestamp() WHERE id=$1",[runId]);
  const observation={id:observationId,url:`${candidate.website}contact`,contentHash:createHash('sha256').update(text).digest('hex'),relevantTextHash:invalidHash?'c'.repeat(64):createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date().toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks};
- await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET state='complete',checked_at=clock_timestamp(),dispatch_finished_at=clock_timestamp(),content=$2::jsonb WHERE id=$1",[runId,JSON.stringify({...content,observations:[observation]})]);
+ const complete=runtime.query("UPDATE sourcing_prospect_phone_discoveries SET state='complete',checked_at=clock_timestamp(),dispatch_finished_at=clock_timestamp(),content=$2::jsonb WHERE id=$1",[runId,JSON.stringify({...content,observations:[observation]})]);
+ // Actual storage refuses corrupt hashes before a current read can see them.
+ // Do not disable this guard to manufacture persisted corruption for the test.
+ if(invalidHash)await expect(complete).rejects.toMatchObject({code:'23514',constraint:'prospect_phone_content_shape'});
+ else await complete;
  return {sourceUrl:candidate.sourceUrl,input:{candidateId:saved.value.id,expectedRevision:1,runId,observationId,blockId:'whole',labelStart:3,labelEnd:8,reason:'unattached_label_content' as const}};
 }
 it('actual app_runtime current composed read returns exactly one whole retained block without creating jobs, receipts or endpoint effects',async()=>{
