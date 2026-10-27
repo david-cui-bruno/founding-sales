@@ -36,11 +36,13 @@ test('signed navigation authors two versions, separately approves exact v2 and p
  await social();await page.getByRole('button',{name:'Author shared facts',exact:true}).click();
  const facts=page.getByRole('region',{name:'Social fact authoring',exact:true}),generation=page.getByRole('region',{name:'Guided social suggestion request',exact:true});
  const read=async()=>{await facts.getByRole('button',{name:'Read current facts',exact:true}).click();await expect(facts).toContainText('Current shared facts read.');await expect(facts.getByRole('button',{name:'Read current facts',exact:true})).toBeEnabled();};
- await read();await facts.getByLabel('Answer fact',{exact:true}).fill(first);await facts.getByLabel('Sanitized LinkedIn factual input',{exact:true}).check();await facts.getByRole('button',{name:'Save fact draft',exact:true}).click();await expect(facts).toContainText('version 1 saved unapproved');
+ await read();await facts.getByRole('textbox',{name:'Answer fact',exact:true}).fill(first);await facts.getByLabel('Sanitized LinkedIn factual input',{exact:true}).check();await facts.getByRole('button',{name:'Save fact draft',exact:true}).click();await expect(facts).toContainText('version 1 saved unapproved');
  const parent=(await f.db.query<{id:string;current_version:number}>('SELECT id,current_version FROM outreach_answer_blocks WHERE workspace_id=$1',[f.alpha.workspaceId])).rows;expect(parent).toHaveLength(1);const id=parent[0]!.id;expect(parent[0]!.current_version).toBe(1);
  const versions=async()=>(await f.db.query('SELECT version,text,approved_at IS NOT NULL AS approved,retired_at IS NOT NULL AS retired FROM outreach_answer_block_versions WHERE workspace_id=$1 AND block_id=$2 ORDER BY version',[f.alpha.workspaceId,id])).rows;
  expect(await versions()).toEqual([{version:1,text:first,approved:false,retired:false}]);
- await read();await facts.getByRole('button',{name:'Edit fact',exact:true}).click();await facts.getByLabel('Answer fact',{exact:true}).fill(revised);await facts.getByRole('button',{name:'Save fact draft',exact:true}).click();await expect(facts).toContainText('version 2 saved unapproved');
+ // Exact label-text matching also includes React's textarea default text after
+ // editing. Use its stable accessible textbox name, not descendant label text.
+ await read();await facts.getByRole('button',{name:'Edit fact',exact:true}).click();await facts.getByRole('textbox',{name:'Answer fact',exact:true}).fill(revised);await facts.getByRole('button',{name:'Save fact draft',exact:true}).click();await expect(facts).toContainText('version 2 saved unapproved');
  expect(await versions()).toEqual([{version:1,text:first,approved:false,retired:false},{version:2,text:revised,approved:false,retired:false}]);
  // A saved but unapproved version cannot be selected for preparation.
  await generation.getByRole('button',{name:'Read current generation inputs',exact:true}).click();await expect(generation).toContainText('No current approved social facts.');await expect(generation.getByRole('button',{name:'Request guided social suggestion',exact:true})).toBeDisabled();

@@ -57,6 +57,13 @@ it('news exposes its unavailable source prerequisite without desktop bridge or s
  expect(screen.queryByLabelText('Original public news source')).toBeNull();
  expect(s.calls.some(c=>/sourcing|source-check|fetch/u.test(c.path))).toBe(false);s.client.dispose();
 });
+it('edited controlled textarea keeps its accessible textbox name when wrapping label text includes the retained value',async()=>{
+ const s=await mount();s.setBlocks([fact()]);await read();fireEvent.click(button('Edit fact'));
+ const input=screen.getByRole('textbox',{name:'Answer fact'});
+ expect(input).toHaveProperty('value',fact().text);
+ expect(input.closest('label')?.textContent).toBe('Answer fact'+fact().text);
+ s.client.dispose();
+});
 function typeFact(text='A local fact workspace is planned.'){
  fireEvent.change(screen.getByLabelText('Answer fact'),{target:{value:text}});
  fireEvent.click(screen.getByLabelText('Sanitized LinkedIn factual input'));
