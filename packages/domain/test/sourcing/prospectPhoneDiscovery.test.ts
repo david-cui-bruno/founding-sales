@@ -41,6 +41,33 @@ beforeEach(async()=>{
  await db.session.query('DELETE FROM research_settings');
 });
 afterAll(async()=>{await db.drop();});
+it('diagnostic yields to a final research stop after provider failure',async()=>{
+ const c=await candidate(),runId=await request(c.id);
+ const p:PageFetchProvider={providerKey:'controlled',fetchPages:async()=>{
+  await db.session.query('INSERT INTO research_settings(workspace_id,enabled) VALUES($1,false)',[seed.alpha.workspaceId]);
+  return {ok:false,costCents:0,failureCode:'private provider details'};
+ }};
+ expect(await runProspectPhoneDiscovery(worker(),{runId},{pageFetch:p})).toBeUndefined();
+ const stored=await rawRun(runId);expect(stored['reason']).toBe('research_disabled');expect(stored['state']).toBe('unavailable');expect(stored['content']).toBeNull();expect(stored['dispatch_finished_at']).not.toBeNull();
+});
+it.each(['provider_failed','empty_pages','observation_invalid','exception','authority_refused'] as const)('diagnostic distinguishes %s without changing refusal or persisting private diagnostics',async branch=>{
+ const c=await candidate(),runId=await request(c.id);let calls=0;
+ if(branch==='authority_refused')await withTransaction(runtime,()=>rememberExpiredManualSources(ctx(),[c.sourceUrl]));
+ const p:PageFetchProvider={providerKey:'controlled',fetchPages:async()=>{
+  calls++;
+  if(branch==='exception')throw Error('private URL/body/credential must never be logged');
+  if(branch==='provider_failed')return {ok:false,costCents:0,failureCode:'private provider details'};
+  if(branch==='empty_pages')return {ok:true,costCents:0,value:{pages:[],skipped:{robots_disallowed:1,'private source URL':9}}};
+  return {ok:true,costCents:0,value:{pages:[{url:`${c.input.website}contact`,body:new TextEncoder().encode('private source body'),contentType:'text/plain',contentHash:'invalid',retrievedAt:new Date().toISOString(),firstParty:true}],skipped:{}}};
+ }};
+ const diagnostic=await runProspectPhoneDiscovery(worker(),{runId},{pageFetch:p});
+ expect(diagnostic).toMatchObject({branch,stage:branch==='authority_refused'?'claim':branch==='exception'||branch==='provider_failed'?'fetch_or_authority':'parse'});
+ expect(JSON.stringify(diagnostic)).not.toMatch(/private|credential|URL|body/);
+ expect(calls).toBe(branch==='authority_refused'?0:1);
+ const stored=await rawRun(runId);expect(stored['state']).toBe('unavailable');expect(stored['reason']).toBe('source_unavailable');expect(stored['content']).toBeNull();
+ if(branch!=='authority_refused')expect(stored['dispatch_finished_at']).not.toBeNull();
+ expect(await read(c.id)).toMatchObject({ok:true,value:{state:'unavailable',reason:'source_unavailable',channelAuthority:'not_granted'}});
+});
 it.each([false,true])('persists exact company pages and normalized evidence on ordinary/raw retained candidate, raw=%s',async raw=>{
  const c=await candidate(raw),runId=await request(c.id);let calls=0;
  const p=provider(c.input.website!,async()=>{calls++;});await runProspectPhoneDiscovery(worker(),{runId},{pageFetch:p});

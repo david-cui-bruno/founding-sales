@@ -214,6 +214,7 @@ export function describeResearch(options: ResearchWorkerOptions | undefined): {
 export function registerHandlers(
   registry: HandlerRegistry,
   composition: HandlerComposition,
+  log?:Logger,
 ): HandlerRegistry {
   const { classifier } = composition;
   registry.register(canaryHandler()); registerCaptureReadHandlers(registry,composition);
@@ -286,7 +287,7 @@ export function registerHandlers(
   if(composition.discovery||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(composition.discovery,composition.apolloDiscovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
-    registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch}));
+    registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch,...log?{log}:{}}));
     registry.register(sourcingCheckHandler(composition.research.pageFetch));
     registry.register(sourcingMonitorHandler());
   }
@@ -725,7 +726,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         runners: sessions.slice(1, 1 + config.concurrency),
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
-      registry: diagnosticRuntime?new HandlerRegistry().register(businessMailCaptureHandler({provider:{async read(){throw new Error('ordinary_capture_unavailable');}},...diagnostic?{diagnostic}:{}})):registerHandlers(new HandlerRegistry(), composition),
+      registry: diagnosticRuntime?new HandlerRegistry().register(businessMailCaptureHandler({provider:{async read(){throw new Error('ordinary_capture_unavailable');}},...diagnostic?{diagnostic}:{}})):registerHandlers(new HandlerRegistry(), composition, log),
       sources: diagnosticRuntime?[]:workerDueWorkSources(workerSourceFlags(composition)),
       sink,
       log,

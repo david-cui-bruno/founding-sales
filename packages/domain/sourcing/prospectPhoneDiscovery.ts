@@ -20,6 +20,7 @@ import {MANUAL_ACTIVITY_RAW_SQL} from './manualProspectActivityAccess.ts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
 import {manualPhoneSnapshots,recheckManualPhoneSnapshots,projectManualPhone,changedManualPhone} from './manualProspectPhone.ts';
 import {sweepProspectPhoneDiscoveries} from './prospectPhoneDiscoveryLifecycle.ts';
+import {phoneDiscoveryDiagnostic,type PhoneDiscoveryDiagnostic,type PhoneDiscoveryStage} from './phoneDiscoveryDiagnostic.ts';
 
 export class ProspectPhoneDiscoveryAuthorityChanged extends Error {constructor(){super('phone_discovery_authority_changed');this.name='ProspectPhoneDiscoveryAuthorityChanged';}}
 export class ProspectPhoneDiscoveryUnavailable extends Error {constructor(readonly reason:string){super(reason);this.name='ProspectPhoneDiscoveryUnavailable';}}
@@ -165,16 +166,18 @@ function phoneDiscoverySkippedReason(skipped:PageFetchResult['skipped']):Prospec
  return null;
 }
 /** Owns committed claim/network/finalization phases. A running run is never reclaimed. */
-export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{runId:string},deps:{pageFetch:PageFetchProvider}):Promise<void>{
+export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{runId:string},deps:{pageFetch:PageFetchProvider}):Promise<PhoneDiscoveryDiagnostic|undefined>{
+ let diagnostic:PhoneDiscoveryDiagnostic|undefined;
  const initial=await withTransaction(ctx.db,async()=>{
   const run=await lockPhoneDiscoveryRun(ctx,input.runId);
+  if(run?.state==='unavailable'&&!run.dispatched_at&&run.reason==='source_unavailable')diagnostic=phoneDiscoveryDiagnostic('authority_refused','claim');
   if(!run||run.state!=='pending')return null;
   const denial=await validatePhoneDiscoveryRun(ctx,run,true);
-  if(denial){await invalidatePhoneDiscovery(ctx,run.id,denial);return null;}
+  if(denial){await invalidatePhoneDiscovery(ctx,run.id,denial);if(denial==='source_unavailable')diagnostic=phoneDiscoveryDiagnostic('authority_refused','claim');return null;}
   await ctx.db.query("UPDATE sourcing_prospect_phone_discoveries SET state='running',dispatched_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND state='pending'",[ctx.scope.workspaceId,run.id]);
   return run;
  });
- if(!initial?.content)return;
+ if(!initial?.content)return diagnostic;
  let interruption:ProspectPhoneDiscoveryReason|null=null;
  const settings=await readResearchSettings(ctx),maxPages=Math.min(settings.maxPagesPerFirm,4),maxBytes=Math.min(settings.maxPageBytes,1000000);
  const allowed=(destination?:string)=>withTransaction(ctx.db,async()=>{
@@ -195,30 +198,43 @@ export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{run
   return true;
  });
  let captured:Result<ProspectPhoneObservation[]>;
+ let stage:PhoneDiscoveryStage='authority';
  try{
   if(!await allowed())captured=refuse(interruption??'discovery_interrupted');
   else{
    const {website,sourceUrls}=initial.content;
    const urls=[...new Set([website,...sourceUrls.filter(url=>isPublicResearchUrl(url)&&isSameResearchSite(website,url))])];
+   stage='fetch_or_authority';
    const answer=await deps.pageFetch.fetchPages({urls,firmWebsite:website,links:urls,prioritizeContactPages:true,maxPagesPerFirm:maxPages,maxBytes,shouldContinue:allowed,mayFetchUrl:allowed});
    // The provider drops over-bound/interrupted originals. No surviving prefix
    // can resolve a phone. Intentional page budgets, policy skips and absent
    // guessed paths are not interruption, so do not blanket-refuse all skips.
    const skipped=answer.ok?phoneDiscoverySkippedReason(answer.value.skipped):null;
-   captured=!answer.ok?refuse('source_unavailable'):skipped?refuse(skipped):
-    captureProspectPhonePages(answer.value.pages,website,maxPages,maxBytes,(await phoneDiscoveryNow(ctx)).getTime());
+   if(!answer.ok){captured=refuse('source_unavailable');diagnostic=phoneDiscoveryDiagnostic('provider_failed',stage);}
+   else if(skipped)captured=refuse(skipped);
+   else{
+    stage='clock';const now=(await phoneDiscoveryNow(ctx)).getTime();stage='parse';
+    captured=captureProspectPhonePages(answer.value.pages,website,maxPages,maxBytes,now);
+    if(!captured.ok&&captured.reason==='source_unavailable')diagnostic=phoneDiscoveryDiagnostic(answer.value.pages.length?'observation_invalid':'empty_pages',stage,answer.value.pages.length,answer.value.skipped);
+   }
   }
- }catch{captured=refuse('source_unavailable');}
+ }catch{captured=refuse('source_unavailable');diagnostic=phoneDiscoveryDiagnostic('exception',stage);}
  await withTransaction(ctx.db,async()=>{
   const run=await lockPhoneDiscoveryRun(ctx,initial.id);
-  if(!run)return;
+  if(!run){diagnostic=undefined;return;}
   if(run.state!=='running'){
+   diagnostic=run.state==='unavailable'&&run.reason==='source_unavailable'?phoneDiscoveryDiagnostic('authority_refused','finalize'):undefined;
    // Record dispatch completion without resurrecting content erased during IO.
    if(run.dispatched_at&&!run.dispatch_finished_at)await ctx.db.query('UPDATE sourcing_prospect_phone_discoveries SET dispatch_finished_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,run.id]);
    return;
   }
   const denial=await validatePhoneDiscoveryRun(ctx,run,true);
-  if(denial||interruption||!captured.ok){await invalidatePhoneDiscovery(ctx,run.id,denial??interruption??(!captured.ok?captured.reason as ProspectPhoneDiscoveryReason:'discovery_interrupted'),true);return;}
+  if(denial||interruption||!captured.ok){
+   const reason=denial??interruption??(!captured.ok?captured.reason as ProspectPhoneDiscoveryReason:'discovery_interrupted');
+   await invalidatePhoneDiscovery(ctx,run.id,reason,true);
+   diagnostic=reason==='source_unavailable'?(denial??interruption)?phoneDiscoveryDiagnostic('authority_refused','finalize'):diagnostic:undefined;
+   return;
+  }
   const currentSettings=await readResearchSettings(ctx);
   if(captured.value.length>Math.min(currentSettings.maxPagesPerFirm,4)||Math.min(currentSettings.maxPageBytes,1000000)<maxBytes||captured.value.some(source=>Date.parse(source.retrievedAt)<run.requested_at.getTime())){
    await invalidatePhoneDiscovery(ctx,run.id,'bounded_capture_incomplete',true);return;
@@ -233,4 +249,5 @@ export async function runProspectPhoneDiscovery(ctx:RepositoryContext,input:{run
   await ctx.db.query(`UPDATE sourcing_prospect_phone_discoveries SET state='complete',checked_at=clock_timestamp(),dispatch_finished_at=clock_timestamp(),expires_at=$3,
    content=$4::jsonb WHERE workspace_id=$1 AND id=$2 AND state='running'`,[ctx.scope.workspaceId,run.id,expiresAt.toISOString(),content]);
  });
+ return diagnostic;
 }

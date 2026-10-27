@@ -4,6 +4,8 @@ import type {JobHandlerInput} from '@fss/domain/jobs/handlerRegistry.ts';
 import type {PageFetchProvider} from '@fss/domain/research/providers.ts';
 import type {QueryResultRowLike,SessionQueryable} from '@fss/domain/db/queryable.ts';
 import {prospectPhoneDiscoveryHandler,prospectPhoneDiscoverySource} from '../src/handlers/prospectPhoneDiscovery.ts';
+import {recordingLogger} from '../src/bootstrap/log.ts';
+import {phoneDiscoveryDiagnostic} from '@fss/domain/sourcing/phoneDiscoveryDiagnostic.ts';
 const mocks=vi.hoisted(()=>({run:vi.fn(),expire:vi.fn()}));
 vi.mock('@fss/domain/sourcing/prospectPhoneDiscovery.ts',()=>({runProspectPhoneDiscovery:mocks.run,expireProspectPhoneDiscoveryInTransaction:mocks.expire}));
 const id='10000000-0000-4000-8000-000000000001';
@@ -28,6 +30,17 @@ it('does not swallow an unknown dispatch outcome or initiate an adapter retry',a
  const failure=Error('controlled uncertain outcome');mocks.run.mockRejectedValueOnce(failure);
  await expect(prospectPhoneDiscoveryHandler({pageFetch}).handle(input({runId:id}))).rejects.toBe(failure);
  expect(mocks.run).toHaveBeenCalledTimes(1);expect(pageFetch.fetchPages).not.toHaveBeenCalled();
+});
+it('logs only closed diagnostics after domain completion and cannot redispatch on sink failure',async()=>{
+ const log=recordingLogger();let finalized=false;
+ mocks.run.mockImplementationOnce(async()=>{finalized=true;return phoneDiscoveryDiagnostic('empty_pages','parse',0,{robots_disallowed:2,url_not_permitted:3,url_has_query:4,'private source URL':1});});
+ await prospectPhoneDiscoveryHandler({pageFetch,log:{log:(...args)=>{expect(finalized).toBe(true);log.log(...args);}}}).handle(input({runId:id}));
+ expect(log.lines).toHaveLength(1);expect(log.lines[0]).toMatchObject({event:'phone_discovery_source_unavailable',run_id:id,branch:'empty_pages',stage:'parse',page_count:0,skip_robots_disallowed:2,skip_policy_refused:3,skip_query_refused:4});
+ expect(JSON.stringify(log.lines)).not.toContain('[redacted]');
+ expect(JSON.stringify(log.lines)).not.toContain('private source');
+ mocks.run.mockResolvedValueOnce(phoneDiscoveryDiagnostic('exception','fetch_or_authority'));
+ await expect(prospectPhoneDiscoveryHandler({pageFetch,log:{log:()=>{throw Error('sink failed');}}}).handle(input({runId:id}))).resolves.toBeUndefined();
+ expect(mocks.run).toHaveBeenCalledTimes(2);expect(pageFetch.fetchPages).not.toHaveBeenCalled();
 });
 it('expires only due workspace runs through the existing domain owner and never returns capture jobs',async()=>{
  const other='20000000-0000-4000-8000-000000000002',now='2026-10-26T06:05:00Z';
