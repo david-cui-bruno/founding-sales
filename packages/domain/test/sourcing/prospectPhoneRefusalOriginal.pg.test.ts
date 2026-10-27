@@ -14,14 +14,14 @@ const ctx=(session=runtime)=>repositoryContext(workspaceScope(seed.alpha.workspa
 const text='🏡 PHONE: <b>Ask the office</b> for help. Whole retained tail.';
 beforeAll(async()=>{if(process.env['FSS_PHONE_REFUSAL_ORIGINAL_PG_GRANT']!=='retained-only')throw Error('Fresh Root exclusive PG grant required');db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();expect((await runtime.query('SELECT current_user AS role')).rows[0]?.['role']).toBe('app_runtime');});
 afterAll(async()=>db?.drop());
-async function fixture(){
+async function fixture({invalidHash=false}:{invalidHash?:boolean}={}){
  const candidate=manualOrdinaryFixture(++serial),saved=await withTransaction(runtime,()=>saveCandidate(ctx(),candidate));if(!saved.ok)throw Error(saved.reason);
  const runId=randomUUID(),observationId=randomUUID(),blocks=[{id:'whole',text}],requestedAt=(await runtime.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at;
  const content={website:candidate.website!,sourceUrls:[candidate.sourceUrl.replace(/\/+$/u,'')],observations:[]};
  await runtime.query(`INSERT INTO sourcing_prospect_phone_discoveries(workspace_id,id,candidate_id,candidate_revision,creator_user_id,creator_ref,method,state,requested_at,deadline_at,expires_at,content)
  VALUES($1,$2,$3,1,$4,$4,'company-public-phone-v1','pending',$5,$5::timestamptz+interval '30 minutes',$5::timestamptz+interval '1 hour',$6::jsonb)`,[seed.alpha.workspaceId,runId,saved.value.id,seed.alpha.admin.userId,requestedAt,JSON.stringify(content)]);
  await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET state='running',dispatched_at=clock_timestamp() WHERE id=$1",[runId]);
- const observation={id:observationId,url:`${candidate.website}contact`,contentHash:createHash('sha256').update(text).digest('hex'),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date().toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks};
+ const observation={id:observationId,url:`${candidate.website}contact`,contentHash:createHash('sha256').update(text).digest('hex'),relevantTextHash:invalidHash?'c'.repeat(64):createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date().toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks};
  await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET state='complete',checked_at=clock_timestamp(),dispatch_finished_at=clock_timestamp(),content=$2::jsonb WHERE id=$1",[runId,JSON.stringify({...content,observations:[observation]})]);
  return {sourceUrl:candidate.sourceUrl,input:{candidateId:saved.value.id,expectedRevision:1,runId,observationId,blockId:'whole',labelStart:3,labelEnd:8,reason:'unattached_label_content' as const}};
 }
@@ -32,10 +32,12 @@ it('actual app_runtime current composed read returns exactly one whole retained 
  const view=await withTransaction(runtime,()=>readProspectPhoneDiscovery(ctx(),f.input));expect(JSON.stringify(view)).not.toContain(text);
 });
 it.each(['foreign_run','hash','expiry','source','deleted'] as const)('actual retained read refuses %s without any prefix',async mode=>{
- const f=await fixture();
+ const f=await fixture({invalidHash:mode==='hash'});
  if(mode==='foreign_run')f.input.runId=randomUUID();
- if(mode==='hash')await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET content=jsonb_set(content,'{observations,0,relevantTextHash}',to_jsonb($2::text)) WHERE id=$1",[f.input.runId,'c'.repeat(64)]);
- if(mode==='expiry')await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[f.input.runId]);
+ if(mode==='expiry'){
+  await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '100 milliseconds' WHERE id=$1",[f.input.runId]);
+  await runtime.query('SELECT pg_sleep(0.12)');
+ }
  if(mode==='source')await withTransaction(runtime,()=>rememberExpiredManualSources(ctx(),[f.sourceUrl]));
  if(mode==='deleted')await runtime.query('DELETE FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,f.input.candidateId]);
  const result=await withTransaction(runtime,()=>readProspectPhoneRefusalOriginal(ctx(),f.input));expect(result.ok).toBe(false);expect(JSON.stringify(result)).not.toContain(text);
