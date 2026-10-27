@@ -105,6 +105,7 @@ export * from './nationalDnc.ts';
 export * from './crmCaptureReadRecovery.ts';
 export * from './qualifiedResearch.ts';
 export * from './emailCampaign.ts';
+export * from './campaignOpeningControl.ts';
 export * from './automaticResearch.ts';
 export * from './sourcingCandidateAuthority.ts';
 export * from './sourcingRetainedRecovery.ts';
