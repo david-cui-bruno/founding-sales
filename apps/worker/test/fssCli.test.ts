@@ -20,9 +20,10 @@ import { MIGRATION_IDENTITY_COMMANDS } from '../src/tools/fss.ts';
  * ## What W3-S8 changed
  *
  * The restore drill and its evidence seeder are deleted with `fss drill`,
- * `fss admin counts` and `fss admin drill seed-evidence`; the restore is a runbook
- * (`docs/greenfield/runbooks/restore.md`), whose commands are spelled out at the end of
- * this file. Every script that still invokes the tool is read, because a floor drawn
+ * `fss admin counts` and `fss admin drill seed-evidence`. The restore runbook is now
+ * design only, not an executable recipe. Explicit synthetic parser cases below cover
+ * retained restore primitives, not operational support. Every release script is read,
+ * because a floor drawn
  * from one of them would go quiet the moment another grew a command.
  *
  * ## The vacuous-pass trap, named
@@ -203,16 +204,9 @@ describe('the commands deploy.sh release runs on the migration task definition',
 });
 
 /**
- * The restore runbook's commands (lane W3-S8), read from the runbook itself.
- *
- * They are the ones an operator types under the most pressure, so the runbook's text is
- * the input, not a copy of it. Every `bash` fence of `docs/greenfield/runbooks/restore.md`
- * is extracted with its line numbers (a continued line joined to the next), and every
- * `fss_task` in one must be a call the extractor can read —
- * `fss_task <step> <migration|operations> [--capture F] [--env NAME=VALUE]... -- <words>` —
- * so a misspelt task kind or a missing `--` fails here rather than dropping out of the
- * check (the second W3-S8 review). Then each call's words are parsed as `fss` parses them.
- * A command named only in prose does not count.
+ * Retain the former runbook extractor's malformed-call probes, but do not require
+ * executable recipes in a design-only document. Synthetic argv below exercise the
+ * retained parser independently of documentation and never launch a task.
  */
 interface RunbookCall {
   readonly line: number;
@@ -312,20 +306,33 @@ function scanRunbook(markdown: string): RunbookScan {
   return { fences, calls, unreadable };
 }
 
-const runbook = scanRunbook(
-  readFileSync(fileURLToPath(new URL('../../../docs/greenfield/runbooks/restore.md', import.meta.url)), 'utf8'),
-);
+const restoreDesign = readFileSync(fileURLToPath(new URL('../../../docs/greenfield/runbooks/restore.md', import.meta.url)), 'utf8');
+const reconcile = [
+  'admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z',
+  '--inventory-host', 'old.example.test', '--inventory-marker', '11111111-1111-4111-8111-111111111111',
+  '--inventory-instance', 'db-OLDINSTANCE', '--restore-point', '2026-09-20T00:10:00Z',
+];
+const releaseHold = ['admin', 'holds', 'release-restore', '--note', 'Checked duplicate risk', '--hold', '22222222-2222-4222-8222-222222222222', '--resolution', 'checked-no-duplicate'];
+const restoreParserCases = [
+  ['migrate'],
+  ['admin', 'database-users', 'ensure', '--rotate-password'],
+  ['schema-version'],
+  ['admin', 'suppression-journal', 'replay', '--from', '2026-09-20T00:00:00Z'],
+  reconcile,
+  [...reconcile, '--hold-unattached'],
+  ['admin', 'restore-marker', 'put', '--marker', '11111111-1111-4111-8111-111111111111', '--restore-point', '2026-09-20T00:10:00Z', '--instance', 'db-OLDINSTANCE'],
+  ['admin', 'holds', 'list', '--reason', 'restore_in_progress'],
+  releaseHold,
+];
 
-describe('the restore runbook’s commands (lane W3-S8)', () => {
-  const commands = runbook.calls.map(found => found.argv);
-  const nameOf = (argv: readonly string[]): string => {
-    const flagAt = argv.findIndex(word => word.startsWith('--'));
-    return (flagAt < 0 ? argv : argv.slice(0, flagAt)).join(' ');
-  };
+describe('retained restore parser primitives, not hosted execution', () => {
+  it('keeps the runbook design-only and makes no operational support claim', () => {
+    expect(restoreDesign).toContain('Hosted restore orchestration: NOT IMPLEMENTED');
+    expect(restoreDesign).toContain('Restoration and hosted recovery rehearsal: UNTESTED');
+    expect(scanRunbook(restoreDesign)).toEqual({ fences: 0, calls: [], unreadable: [] });
+  });
 
   it('reads every fss_task in a bash fence as a call, and cannot drop a malformed one', () => {
-    expect(runbook.fences).toBeGreaterThan(5);
-    expect(runbook.unreadable, 'fss_task lines the extractor could not read').toEqual([]);
     // The extractor itself: a misspelt kind, a missing separator, and an unknown option are
     // each reported, with their lines, never skipped; prose and other fences are not read.
     const probe = scanRunbook(
@@ -344,48 +351,41 @@ describe('the restore runbook’s commands (lane W3-S8)', () => {
         '```',
       ].join('\n'),
     );
+    expect(probe.fences).toBe(1);
     expect(probe.unreadable.map(found => found.line)).toEqual([3, 4, 5, 6]);
     expect(probe.calls).toEqual([{ line: 7, argv: ['admin', 'holds', 'list', '--reason', 'restore_in_progress'] }]);
   });
 
-  it('finds, in its bash fences, each command it must run', () => {
-    const names = commands.map(nameOf);
-    for (const expected of [
-      'migrate',
-      'admin database-users ensure',
-      'schema-version',
-      'admin suppression-journal replay',
-      'admin mailbox reconcile-sent',
-      'admin restore-marker put',
-      'admin holds list',
-      'admin holds release-restore',
-    ]) {
-      expect(names, `the runbook no longer runs fss ${expected} in a bash fence`).toContain(expected);
-    }
-  });
-
-  it.each(runbook.calls.map(found => [`line ${String(found.line)}: ${found.argv.join(' ')}`, found.argv] as const))(
-    'parses %s',
+  it.each(restoreParserCases.map(argv => [argv.join(' '), argv] as const))(
+    'parses synthetic %s and refuses an unknown flag',
     (_text, argv) => {
       expect(parseFssCommand(argv)).toMatchObject({ ok: true });
+      expect(parseFssCommand([...argv, '--not-a-restore-option'])).toMatchObject({ ok: false, reason: 'flag_unknown' });
     },
   );
 
-  it('reads the inventory from the instance being replaced on every reconciliation, never from a typed list', () => {
-    const reconciles = commands.filter(argv => nameOf(argv) === 'admin mailbox reconcile-sent');
-    expect(reconciles.length).toBeGreaterThanOrEqual(2);
-    for (const argv of reconciles) {
-      expect(argv).toContain('--inventory-host');
-      expect(argv).toContain('--inventory-marker');
-      expect(argv).toContain('--inventory-instance');
-      expect(argv).toContain('--restore-point');
-      expect(argv).not.toContain('--inventory');
+  it('requires every old-instance inventory and scan binding, never a typed list', () => {
+    for (const flag of ['--since', '--inventory-host', '--inventory-marker', '--inventory-instance', '--restore-point']) {
+      const at = reconcile.indexOf(flag);
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(parseFssCommand(reconcile.filter((_word, index) => index !== at && index !== at + 1)))
+        .toMatchObject({ ok: false, reason: 'flag_missing', detail: flag });
     }
+    expect(parseFssCommand([...reconcile, '--inventory', 'mailbox@example.test'])).toMatchObject({ ok: false, reason: 'flag_unknown' });
+    expect(parseFssCommand([...reconcile, '--all-mailboxes'])).toMatchObject({ ok: false, reason: 'flag_unknown' });
   });
 
-  it('releases an unattached-send hold only by id and with a resolution', () => {
-    const releases = commands.filter(argv => nameOf(argv) === 'admin holds release-restore');
-    expect(releases.some(argv => argv.includes('--hold') && argv.includes('--resolution'))).toBe(true);
-    for (const argv of releases) expect(argv).not.toContain('--admin-user');
+  it('parses exact-hold settlement, with value guards and no caller-named administrator', () => {
+    expect(parseFssCommand(releaseHold)).toMatchObject({ ok: true, value: { options: {
+      '--hold': '22222222-2222-4222-8222-222222222222', '--resolution': 'checked-no-duplicate',
+    } } });
+    for (const flag of ['--hold', '--resolution', '--note']) {
+      expect(parseFssCommand(['admin', 'holds', 'release-restore', flag])).toMatchObject({ ok: false, reason: 'flag_value_missing', detail: flag });
+    }
+    expect(parseFssCommand([...releaseHold, '--admin-user', 'someone'])).toMatchObject({ ok: false, reason: 'flag_unknown' });
+    // The parser permits legacy non-unattached settlement. The handler, not argv
+    // parsing, requires an unattached hold's resolution. This checks the design only.
+    expect(restoreDesign).toContain('Release only the exact hold with a meaningful note.');
+    expect(restoreDesign).toContain('An unattached-send hold requires `checked-no-duplicate` resolution');
   });
 });
