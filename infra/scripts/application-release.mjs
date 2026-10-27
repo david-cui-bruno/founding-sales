@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { createReleaseSafety } from './release-safety.mjs';
 import { parseFailedReaderCustody } from './application-reader-custody.mjs';
 import { recoverApplicationReader, readerRecoveryCommandEnvironment } from './application-reader-recovery.mjs';
+import { observeReaderOff, readerObservationRequested } from './application-off-observation.mjs';
 export { offRead } from './release-safety.mjs';
 
 const execute = promisify(execFile);
@@ -201,6 +202,7 @@ export async function runRelease(io, environment) {
     requireThat(e.GITHUB_ACTIONS === 'true' && e.GITHUB_REF === 'refs/heads/main' && e.FSS_RELEASE_HOLD === 'false' && sha.test(e.GITHUB_SHA || '') && sha.test(e.COMMIT || '') && id.test(e.RUN_ID || '') && id.test(e.GATE_RUN_ID || '') && id.test(e.GITHUB_RUN_ID || '') && e.GATE_RUN_ID !== e.RUN_ID && e.GITHUB_REPOSITORY === 'david-cui-bruno/founding-sales' && e.FSS_PRODUCTION_ORIGIN === 'https://api.usecallie.com', 'unapproved_execution');
     requireThat(!Object.keys(e).some(key => /^(FSS_RELEASE_OUTPUT_|FSS_REHEARSAL_|FSS_PROD_FORCE_IDLE|FSS_APPLICATION_RELEASE_TEST)/u.test(key)), 'ambient_override_forbidden');
     const custody = parseFailedReaderCustody(e.FSS_FAILED_READER_CUSTODY, e.GITHUB_RUN_ID);
+    const observeOnly = readerObservationRequested(e.FSS_READER_OBSERVATION_ONLY, custody);
     if (custody) { state.readerRecovery = { ...custody, outcome: 'observing' }; save(); }
     images = io.read('images');
     requireThat(images.schema === 'fss.image-digests.v1' && images.commit === e.COMMIT && String(images.workflowRunId) === e.RUN_ID, 'artifact_binding_changed');
@@ -286,7 +288,12 @@ export async function runRelease(io, environment) {
         await gateCheck();
       };
       await verifyRecoveryRuntime();
-      await recoverApplicationReader({ custody, cluster, source: definitions.operations, baseline, state, save, beforeWrite: verifyRecoveryRuntime, aws, gh, ghText, commit: e.COMMIT, repository: e.GITHUB_REPOSITORY });
+      await recoverApplicationReader({ custody, cluster, source: definitions.operations, baseline, state, save, beforeWrite: verifyRecoveryRuntime, aws, gh, ghText, commit: e.COMMIT, repository: e.GITHUB_REPOSITORY, observeOnly });
+      if (observeOnly) {
+        phase('observe-stored-off');
+        await observeReaderOff({ aws, waitFor, now: io.now, state, save, cluster, network, owner: `fss-app-${e.GITHUB_RUN_ID}`, source: definitions.operations, custody });
+        return state;
+      }
       // Never keep the explicit source override for ordinary execution. Resolve
       // normal family bindings again and apply every original definition guard.
       await loadDefinitions();
@@ -399,7 +406,7 @@ export async function runRelease(io, environment) {
 // Trusted always-step only: normalize interrupted local status, never issue a release action.
 export function finalizeInterrupted(state) {
   requireThat(state && typeof state === 'object' && typeof state.writesStarted === 'boolean', 'status_unreadable');
-  if (['completed', 'repair-required', 'refused'].includes(state.outcome)) return state;
+  if (['completed', 'observation-completed', 'repair-required', 'refused'].includes(state.outcome)) return state;
   const result = { ...state, outcome: state.writesStarted ? 'repair-required' : 'refused', reason: 'release_interrupted' };
   if (state.migrationStarted && state.phase === 'migrate') result.observedSchema = 'unknown';
   return result;
@@ -436,6 +443,6 @@ async function main() {
     },
   };
   const result = await runRelease(io, process.env);
-  process.exitCode = result.outcome === 'completed' ? 0 : 1;
+  process.exitCode = ['completed', 'observation-completed'].includes(result.outcome) ? 0 : 1;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();

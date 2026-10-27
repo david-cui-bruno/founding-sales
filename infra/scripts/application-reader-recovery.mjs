@@ -9,6 +9,7 @@ const knownStatuses = ['PROVISIONING', 'PENDING', 'ACTIVATING', 'RUNNING', 'DEAC
 // One application call must also mean one native CLI attempt, even when an
 // ambient retry setting would otherwise replay an ambiguous provider write.
 export function readerRecoveryCommandEnvironment(environment, program, args) {
+  if (environment.FSS_READER_OBSERVATION_ONLY === 'true' && program === 'aws' && args[0] === 'ecs' && ['register-task-definition', 'run-task', 'deregister-task-definition'].includes(args[1])) return { ...environment, AWS_MAX_ATTEMPTS: '1' };
   if (!environment.FSS_FAILED_READER_CUSTODY || program !== 'aws' || args[0] !== 'ecs' || args[1] !== 'deregister-task-definition') return environment;
   const custody = parseFailedReaderCustody(environment.FSS_FAILED_READER_CUSTODY, environment.GITHUB_RUN_ID);
   if (!isDeepStrictEqual(args, ['ecs', 'deregister-task-definition', '--task-definition', custody.readerDefinitionArn, '--output', 'json'])) return environment;
@@ -17,7 +18,7 @@ export function readerRecoveryCommandEnvironment(environment, program, args) {
 
 // Historical custody only. This never executes/stops a task, retries a write, or
 // changes safety.off's fail-closed handling of unknown current-run outcomes.
-export async function recoverApplicationReader({ custody, cluster, source, baseline, state, save, beforeWrite, aws, gh, ghText, commit, repository }) {
+export async function recoverApplicationReader({ custody, cluster, source, baseline, state, save, beforeWrite, aws, gh, ghText, commit, repository, observeOnly = false }) {
   state.readerRecovery = { ...custody, outcome: 'observing' }; save();
   const historical = custody.evidenceBasis === 'historical-readonly-retirement';
   if (historical) {
@@ -89,6 +90,7 @@ export async function recoverApplicationReader({ custody, cluster, source, basel
   // refresh all custody/reference proofs immediately before the single write.
   await beforeWrite();
   await proveIdentity(); await proveReferences();
+  if (observeOnly) { state.readerRecovery.outcome = 'observed'; save(); return; }
   state.readerRecovery.outcome = 'deregister-requested'; save();
   await aws('ecs', 'deregister-task-definition', ['--task-definition', custody.readerDefinitionArn], true);
   const inactive = await readDefinition(custody.readerDefinitionArn);
