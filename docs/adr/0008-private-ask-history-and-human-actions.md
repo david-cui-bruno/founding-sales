@@ -1,5 +1,9 @@
 # Private Ask history and explicit human actions
 
+## Supersession: retained human work, not answer creation
+
+The private answer/history UI and answer-derived creation direction below is historical. [Current CRM/search boundaries](../agents/crm-ask-modules.md) retain plain search and existing human-task reads/completion, not generated answers or new answer-derived actions. Preserve historical data, source-access checks, deletion/redaction closure and separately committed human work described here. This supersession does not authorize erasing retained records.
+
 Approved #479/#494 saves source-scoped investigations under their existing request IDs. Opening history reads the current evidence and access closure without rerunning inference. Titles are private copied content. Global exact and record reads retain their existing behavior.
 
 An explicitly confirmed task, record annotation or preference proposal is an independent human leaf action. It owns its text once and freezes the complete original input scope, identity contexts, original access closure and bounded canonical support tuples. Admission binds those snapshots and the owner/version to the current request. Reads and task completion revalidate all original inputs and current authority, including uncited inputs; arbitrary historical firms cannot become action targets. Preferences remain proposals and annotations do not automatically become canonical evidence or trigger extraction/indexing.

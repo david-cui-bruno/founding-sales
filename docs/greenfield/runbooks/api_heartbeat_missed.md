@@ -13,8 +13,9 @@ expiring stale Today view and every mutation fails closed (4.2). Sign-in fails.
    and is what the target group reads; `/health` answers 200 even when degraded.
 2. ECS service events for the API service: task count, recent stopped tasks, stop
    reasons.
-3. `GET /diagnostics` if any API task is answering — schema version and restore
-   generation are the two startup refusals that look like a crash loop.
+3. `GET /diagnostics` if any API task is answering: inspect schema compatibility,
+   current holds and the recorded refusal. Restore-generation startup refusal is
+   retired; use [current hold diagnostics](all_sequences_held.md), not that old cause.
 4. ALB target health and the 5xx count.
 
 ## Diagnosis

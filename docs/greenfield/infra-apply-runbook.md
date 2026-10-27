@@ -1,12 +1,12 @@
-# FSS greenfield infrastructure: apply runbook
+# FSS infrastructure: historical first-build reference
 
-**Lane:** G1 · **Roots:** `infra/roots/production`, `infra/roots/rehearsal` · **Audience:** David, running the applies.
+**Historical lane:** G1 · **Roots:** `infra/roots/production`, `infra/roots/rehearsal`.
 
-Production was first applied on 23 September 2026 and has run since 24 September, in account 326255650484. This runbook is how the stack was built the first time, and what rebuilding it from zero would follow; the procedure for a release to the running stack is `docs/greenfield/release.md`. The plan commands below are those of the current roots.
+Production was first applied on 23 September 2026. Sections1–4 and6 below retain first-build configuration, rationale and observations, not an executable current rebuild or release checklist. Their commands, trust assumptions and open-status claims are historical. Do not replay them on production. Current application, migration and reviewed infrastructure execution uses the [sole hosted release workflow](../operations/lean-release-workflow.md); [release invariants](release.md) retain its safety constraints. A from-zero rebuild requires a current owner-reviewed design, not assumptions that these old prerequisites remain absent.
 
-Production uses the [current backend identity/encryption contract](../operations/release-backend-contract.md): explicit existing SSE-S3 (`encrypt=true`), only `-backend-config=backend.hcl`, and no `kms_key_id` override. Provider-role assumption does not supply backend credentials. The production examples below are not operational approval or a bypass of the [supported reviewed release workflow](../operations/lean-release-workflow.md), current hold or serialization. Any local human preparation/bootstrap exception, credential/production inspection, role change or apply needs its own explicit approval and current readback. Rehearsal encryption below is unchanged.
+Production uses the [current backend identity/encryption contract](../operations/release-backend-contract.md): explicit existing SSE-S3 (`encrypt=true`), only `-backend-config=backend.hcl`, and no `kms_key_id` override. Provider-role assumption does not supply backend credentials. [AGENTS](../../AGENTS.md) defines standing read-only inspection/release-path infrastructure authority and owner-reserved exceptions. Do not ask again for every already-authorized read or plan. Exact protected workflow/plan review, current readback, holds and serialization remain mandatory; standing authority is not a local production writer or permission for new spend/data scope. Historical rehearsal encryption examples below do not change current configuration.
 
-Read section 1 in full before running anything in section 3. The order matters: several resources cannot be created until something outside Terraform exists first, and two of them (the ACM certificate and the Google OAuth consent screen) involve waiting on external validation.
+The historical ordering explains dependencies such as ACM validation and Google consent. It is not a request to recreate resources, grants or credentials.
 
 ## 0. Tooling
 
@@ -47,7 +47,7 @@ Create two roles in `326255650484`:
 | `fss-prod-deploy` | David's admin principal (and, later, the release workflow's OIDC provider) | may act on resources whose name begins `fss-prod`, plus the account-wide services that have no resource namespace |
 | `fss-rh-deploy` | the CI rehearsal workflow's OIDC provider | **may act only on resources whose name begins `fss-rh-`** |
 
-**You never assume `fss-rh-deploy`.** It trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal` alone, so every apply and every teardown in the `fss-rh-` namespace is a workflow run in the `rehearsal` environment: the release rehearsal (`greenfield-release.yml`) and, once, the registry apply (section 2.1), whose workflow was deleted on 26 September 2026. A local `terraform apply` against either rehearsal root is refused `sts:AssumeRole`, and that refusal is the boundary working. `fss-prod-deploy`, by contrast, is yours: section 3.2's production applies are local commands.
+The first-build model isolated `fss-rh-deploy` to the `rehearsal` OIDC environment; its one-time registry workflow was deleted on September26. Its then-local production trust/execution model is superseded by the hosted release contract. Do not infer current role trust, missing identities or local write permission from this history; verify actual bindings under the current workflow.
 
 The scoping on `fss-rh-deploy` is what makes Appendix G scenario 39 true in the cloud rather than only in the plan. The `fss-rh` condition belongs on every statement that supports a resource ARN, including `iam:DeleteRole`, `rds:DeleteDBInstance`, `s3:DeleteBucket`, `ecs:DeleteService`, `secretsmanager:DeleteSecret` and `kms:ScheduleKeyDeletion`. Where a service has no resource-level permission, use a `aws:ResourceTag/NamePrefix` condition against the tag the stack sets on every resource.
 
@@ -271,9 +271,9 @@ module.stack.module.registry.aws_ecr_repository.this["api"] has moved to module.
 
 and reports **no changes** to either repository. **If a production plan ever proposes to destroy an ECR repository, stop and do not apply it.** Destroying `fss-prod-api` or `fss-prod-worker` deletes the images every release is identified by, including the earlier compatible binaries 4.2's preferred rollback depends on, and the digests in every past release record stop resolving.
 
-### 2.2 The production repositories — the one use of `-target`
+### 2.2 Historical production-repository bootstrap, already completed
 
-Unlike 2.1, this one **is** a local command. `fss-prod-deploy` is trusted by your admin principal; `fss-rh-deploy` is not trusted by anything but the `rehearsal` environment, which is why the rehearsal registry apply above was a workflow run and this is not. Nothing here passes `assume_deployment_role`: its default is `true`, and the provider assuming `fss-prod-deploy` on your behalf is exactly what should happen when a person runs this.
+The following records the original local bootstrap, already completed as noted below. It is not a command to replay, current trust evidence or a second execution path. Current production changes use the hosted workflow and its explicit identity/backend contract.
 
 ```bash
 # First apply: create the registries only.
@@ -303,7 +303,7 @@ The same digests are then pushed to `fss-rh-api` and `fss-rh-worker` so the rehe
 
 ### 3.0 Plan first
 
-**After any change to `infra/`, the first credentialed action is a local production plan, written to a file and not applied. It comes before dispatching a rehearsal.**
+The original bootstrap used a local production plan to catch errors before an expensive rehearsal. That ordering is historical. Current reviewed preparation, exact saved-plan approval and execution are defined by the hosted workflow; do not substitute this local plan recipe.
 
 The reason is arithmetic rather than caution. Three credentialed runs have now been spent, and each one stopped on a different error that no offline layer in this repository can see:
 
@@ -342,9 +342,9 @@ A clean first plan shows:
 
 **Terraform reports every independent plan-time error in one run.** It does not stop at the first: the third rehearsal printed the Google credential failure and the `count` failure together, from different parts of the graph. So when a plan fails, send the **whole** list, not the first paragraph; two errors mean two changes, and fixing one and re-dispatching a rehearsal is how a run gets spent on an error that was already on the screen.
 
-### 3.1 Rehearsal first, always
+### 3.1 Historical rehearsal mechanics
 
-A release that changes the schema, the infrastructure or a release script is rehearsed before production sees it (`release.md` 3). The rehearsal root deploys **the exact digests proposed for production**. The restore drill that used to run here was deleted on 26 September 2026 (W3-S8): a restore is rehearsed by hand from [`runbooks/restore.md`](runbooks/restore.md) and its quarterly smoke.
+Current [release classification](release.md#3-the-rehearsal) determines the required rehearsal or deployed-baseline upgrade checks. It supersedes the old blanket rehearsal rule: classified additive/routine migrations use actual upgrade evidence, while consequential/infrastructure/release-script classes retain their required checks. The historical rehearsal mechanics below explain namespace/identity/cleanup boundaries, not a new dispatch instruction. The removed restore drill is separate from ordinary release validation; [restore](runbooks/restore.md) remains separately governed and is not requalified here.
 
 **This is a workflow run, not a command you type.** `fss-rh-deploy` is assumable only from the `rehearsal` environment (section 1.1), so the commands below are what `.github/workflows/greenfield-release.yml` runs, written out so you can read them; typed on your Mac they are refused `sts:AssumeRole`, and that refusal is the boundary working. Dispatch the workflow instead: `docs/greenfield/release.md` section 3.
 
@@ -405,42 +405,11 @@ The database it creates is empty, and both binaries refuse to start unless the a
 
 `bootstrap` decides the count a service is *created* at and nothing after that: both services carry `ignore_changes = [desired_count]` (lane g70), so passing `true` to an environment that is already running no longer scales it, and it is still never what an ordinary release wants. Every apply after the first one omits it; the default is `false`.
 
-**A schema-change release on a running environment stops the services before this apply.** Its task definitions declare a strict `{N,N}` range the database has not reached yet, and an apply against running services repoints them at those definitions, so ECS starts tasks that exit 12 before anything has migrated (`docs/greenfield/release.md` 8.0af). The order is: plan to a file and read it, then stop, then apply the plan, then 3.2a:
+For a running environment, the hosted workflow alone sequences the authorized plan, strict-schema drain/stop, migration, verification and restart. The former local stop/apply recipe is retired. A schema-incompatible task definition must never be rolled against the old schema; current invariants and actual deployed-baseline checks still apply.
 
-```bash
-infra/scripts/stop.sh infra/roots/production fss-prod --environment production
-(cd infra/roots/production && terraform apply production.tfplan)
-```
+### 3.2a Retired local migrate/start recipe
 
-The apply replaces the task definitions and leaves both services at zero. A release with no migration needs no stop: the apply replaces the task definitions and ECS rolls the running services on to them at their current counts.
-
-### 3.2a Migrate and start the services — the same script CI runs
-
-```bash
-cd <repository root>
-export FSS_REHEARSAL_REPORTS="$HOME/fss-release-$(date -u +%Y%m%d%H%M)"
-
-# Read it first. No credential is used and nothing is launched.
-FSS_REHEARSAL_DRY_RUN=1 \
-  infra/scripts/deploy.sh release infra/roots/production fss-prod \
-    --schema-change --api-digest "<api digest>" --worker-digest "<worker digest>"
-
-# A schema change on a running environment: this ran before the apply (3.2).
-#   infra/scripts/stop.sh infra/roots/production fss-prod --environment production
-
-infra/scripts/deploy.sh release infra/roots/production fss-prod \
-  --schema-change \
-  --api-digest "<api digest>" \
-  --worker-digest "<worker digest>"
-```
-
-In order: with `--schema-change`, refuse unless both services are already at zero (the first apply created them there, or `stop.sh` put them there before the apply, in 3.2) and each is already on the revision this apply registered (`deployment_plan`.<service>.task_definition, ACTIVE, on this release's digest and the apply's schema range); `fss release-prepare` as a one-off ECS task (`fss migrate` and then `fss admin database-users ensure`, in that one task, lane RS-2), `fss verify`, the worker and the API to their declared counts together under one wait with no forced second rollout, the rollout polled until ECS calls it COMPLETED on that revision for both, and `fss verify` again against the running deployment. It no longer stops the services itself, because by the time it runs the apply has already registered task definitions that refuse the old schema. Terraform no longer moves a count after the first apply, so steps 5 and 6 here are what put the declared numbers on the services. Without `--schema-change` it is the rolling path (`release.md` 4.1 and 8.0am): no one-off task at all, and the same start — both declared counts, one wait for both, no forced deployment — and the same read afterwards, holding each service to the apply's revision as well as to the release's digest and its declared count.
-
-This is **the same script** `.github/workflows/greenfield-release.yml` runs for a rehearsal. The differences are the root in argument one and the credentials in your shell; production applies stay local by decision, because `fss-prod-deploy` trusts no OIDC subject and giving it one is a separate decision nobody has made. `infra/scripts/lib.sh` refuses a production command that names a rehearsal resource exactly as it refuses the reverse.
-
-It runs the migration as a task inside the VPC because there is no other way: the production database is `publicly_accessible = false`, there is no NAT gateway and no bastion, and nothing on your Mac has a route to it. `docs/greenfield/release.md` 4.1 lists every guard the launch is checked against.
-
-`assume_deployment_role` is not in that list and must not be: its default is `true`, so the provider assumes `fss-prod-deploy` for you, which is the whole point of a local apply. The flag exists for a session that has *already* assumed its role, which is CI and never you (section 1.1). Passing `false` here would apply as your own admin principal rather than as the scoped deployment role, and nothing in the plan would say so.
+Use the [hosted release workflow](../operations/lean-release-workflow.md) and its backend identities, not a local deploy.sh invocation. The workflow must preserve exact task revisions/digests/counts, paused sending, PITR before migration, migration/user/schema verification, runtime/canary smokes and release-record readback. A successful public health read alone is insufficient. Source script reuse does not make a local shell an authorized production writer.
 
 `google_hosted_domain` is not a variable at all since wave 1: `infra/modules/stack` sets it to the literal `usecallie.com`, and `-var="google_hosted_domain=…"` is now an "undeclared variable" error. Changing the Workspace domain is a pull request that edits that literal and a read plan. It may never be empty: an empty `hd` restriction admits every Google account there is.
 
@@ -584,16 +553,13 @@ aws cloudwatch get-metric-statistics --namespace FSS/fss-prod \
 
 A freshly applied stack will show several alarms in `INSUFFICIENT_DATA` until the applications start emitting. The heartbeat alarms treat missing data as **breaching**, so they will go to `ALARM` if the tasks are not publishing. That is correct: a worker that is not heartbeating is a worker that is not running.
 
-## 5. Ongoing operations
+## 5. Current operations navigation
 
-| Operation | Command |
+| Operation | Current path |
 |---|---|
-| Deploy a new digest (app-only) | promote CI's digests (`images.sh promote image-digests.json --app-only`, `release.md` 2.1), set `api_image` / `worker_image` to them, `terraform plan` and read it — only the two service task definitions and the services' `task_definition` change — `terraform apply`, then `deploy.sh release --api-digest … --worker-digest …` without `--schema-change` (3.2a): no one-off task, the declared counts, one wait, and the running-digest check, which also fails a service the circuit breaker rolled back. Smoke after (`release.md` 8.0am). |
-| Widen a schema range | change `api_schema_range` / `worker_schema_range` and apply. Expand, migrate, contract: additive migration first, both binaries accepting the range, backfill, then behaviour. A strict `{N,N}` move is not a widening: plan, `stop.sh … --environment production`, apply, `deploy.sh release --schema-change` (3.2). |
-| Change an alarm threshold | the thresholds are variables in `infra/modules/alerts`; surface the one you need in the root and apply. Spec 13.3 says thresholds are configuration versioned with the release. |
-| Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. **Except `app-runtime-database`**, whose value is a live PostgreSQL password: a put on its own leaves a secret the database refuses. Put the new value, then `fss admin database-users ensure --rotate-password` to alter the role to match, then force the deployment — and never re-put it as part of a redeploy (`release.md` 5.1 and 8.0s). |
-| Add an alert recipient | append to the `alert_emails` literal in `infra/roots/production/main.tf` in a pull request, plan and apply, then confirm the subscription. |
-| Point production at a restored copy | `docs/greenfield/runbooks/restore.md` (c): `terraform plan -var="active_database_host=<the copy's address>"` with the rest of the section 3.0 list. The plan must replace exactly the `api`, `worker`, `migration` and `operations` task definitions, differing only in `FSS_DATABASE_HOST`, and update the two services in place. Unset (`null`), every task definition carries the managed instance's address, as before the variable existed. |
+| Application, schema or infrastructure change | [Lean hosted release workflow](../operations/lean-release-workflow.md), classified from actual deployed builds with required checks and exact protected review. No local production apply/deploy alternative. |
+| Alarm/configuration or secret change | Root-owned applicable authority and reviewed current workflow, with actual readback. Database-password rotation must keep the secret and database role consistent; never blindly replace a value on redeploy. No secret values in logs/plans/source. |
+| Data restore | [Separate restore procedure](runbooks/restore.md), subject to its current owner decision and potential-write-loss approval. This reference does not define a new restore execution path. |
 | Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal.sh teardown`: caller-identity check, `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`, then the reading that nothing still carries the prefix. Mind the object-lock caveat in 3.1. |
 | Read what a rehearsal run left behind | `infra/scripts/rehearsal.sh leftovers <prefix>` as the `fss-rh-deploy` session: one line per resource still carrying the prefix, and per stale state lock. It judges nothing; `guard` is what fails on it. |
 
