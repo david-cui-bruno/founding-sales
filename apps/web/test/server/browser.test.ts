@@ -49,6 +49,43 @@ describe('cookie custody', () => {
   it.each(['a=1; a=2', 'missing', 'a=bad value', 'a=1;', '=oops'])('rejects ambiguous or malformed cookies %s', input => expect(() => parseCookies(input)).toThrow());
 });
 describe('browser request boundary', () => {
+  it('admits strict opening approval and pins only its command envelope', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    const base = '/browser/api/outreach/email-campaigns/opening/';
+    const approval = { commandId: id, campaignId: id, expectedCampaignRevision: 1, templateVersionId: id,
+      templateContentHash: 'a'.repeat(64), variants: [{ id: 'office', text: 'For {{firm_name}}.' }], expiresAt };
+    expect((await handler(post(`${base}approve`, approval, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[0]?.[3].body).toEqual({ ...approval, clientVersion: '1.4.0' });
+    for (const invalid of [{ ...approval, ownerUserId: id }, { ...approval, approvedAt: expiresAt },
+      { ...approval, variants: [] }, { ...approval, sendingEnabled: true }, { ...approval, clientVersion: '9.9.9' }])
+      expect((await handler(post(`${base}approve`, invalid, headers)))?.status).toBe(400);
+    const revoke = { commandId: id, campaignId: id, expectedCampaignRevision: 1, policyId: id, policyRevision: 1 };
+    expect((await handler(post(`${base}revoke`, revoke, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[1]?.[3].body).toEqual({ ...revoke, clientVersion: '1.4.0' });
+    const receipt = { commandId: id, payloadSHA256: 'b'.repeat(64), action: 'approve' };
+    expect((await handler(post(`${base}receipt`, receipt, headers)))?.status).toBe(200);
+    expect(mocks.route.mock.calls[2]?.[3].body).toEqual(receipt);
+    expect((await handler(post(`${base}control`, { campaignId: id }, headers)))?.status).toBe(200);
+    expect((await handler(post(`${base}receipt`, { ...receipt, variants: approval.variants }, headers)))?.status).toBe(400);
+    expect((await handler(post(`${base}control`, { campaignId: id, include: 'credentials' }, headers)))?.status).toBe(400);
+    expect(mocks.route).toHaveBeenCalledTimes(4);
+  });
+  it('fences all opening control operations before dispatch on CSRF, revision and role loss', async () => {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+    for (const action of ['control', 'approve', 'revoke', 'receipt']) {
+      const path = `/browser/api/outreach/email-campaigns/opening/${action}`;
+      expect((await handler(post(path, {}, { ...headers, 'x-callie-csrf': '' })))?.status).toBe(403);
+      expect((await handler(post(path, {}, { ...headers, 'x-callie-session': 'stale' })))?.status).toBe(409);
+    }
+    mocks.authenticate.mockResolvedValue({ authenticated: true, principal: { ...principal, role: 'salesperson' } });
+    const memberSession = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    for (const action of ['control', 'approve', 'revoke', 'receipt'])
+      expect((await handler(post(`/browser/api/outreach/email-campaigns/opening/${action}`, {}, { ...headers,
+        'x-callie-session': (memberSession?.body as { revision: string }).revision })))?.status).toBe(403);
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
   it('preserves guided Social business refusals but not custody or authority failures', async () => {
     const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
     const headers = { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };

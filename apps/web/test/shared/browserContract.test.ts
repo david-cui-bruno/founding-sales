@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { browserApiPathAllowed, browserSessionSchema } from '../../src/shared/browserContract.ts';
 
 describe('browser boundary', () => {
+  it('admits only explicit opening policy control and receipt, never activation or replacement', () => {
+    for (const action of ['control', 'approve', 'revoke', 'receipt']) {
+      const path = `/outreach/email-campaigns/opening/${action}`;
+      expect(browserApiPathAllowed('POST', path)).toBe(true);
+      for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, path)).toBe(false);
+      expect(browserApiPathAllowed('POST', `${path}/extra`)).toBe(false);
+    }
+    for (const action of ['send', 'enable', 'select', 'replace', 'delete', 'retry', 'generate'])
+      expect(browserApiPathAllowed('POST', `/outreach/email-campaigns/opening/${action}`)).toBe(false);
+  });
   it('admits only the four recording-only manual activity POST routes', () => {
     for (const action of ['list', 'read', 'save', 'receipt']) {
       const path = `/sourcing/candidates/prospects/activity/${action}`;
