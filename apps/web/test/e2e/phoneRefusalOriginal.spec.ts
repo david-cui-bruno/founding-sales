@@ -53,9 +53,10 @@ test('signed registered API and Calling explicitly read one whole original, eras
  await withdrawPhoneDiscoverySource(app());
  const refusalResponse=page.waitForResponse(value=>new URL(value.url()).pathname===`/browser/api${PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH}`);
  await result.getByRole('button',{name:'Read this retained refusal original',exact:true}).click();
- const refused=await refusalResponse;expect(refused.status()).toBe(409);refusalTransportEvent('body_read_start',3);
- try{const body=await refused.json();refusalTransportEvent('body_read_complete',3);expect(JSON.stringify(body)).not.toContain(refusalOriginalText);}
- catch(error){refusalTransportEvent('body_read_error',3,{closed:page.isClosed(),error:'body_read_failed'});throw error;}
+ const refused=await refusalResponse;expect(refused.status()).toBe(409);expect(counts.original).toBe(3);
+ // Chromium does not report completion for this unread refusal body. Prove the
+ // exact real server write/end bytes, not browser body consumption or a refetch.
+ expect(await owned.thirdRefusalReceipt()).toEqual({ordinal:3,status:409,finished:true,length:35,overflow:false,exactBytes:true,hashMatches:true,noOriginal:true});
  await expect(page.getByText(refusalOriginalText,{exact:true})).toHaveCount(0);
  expect(counts.capture).toBe(0);expect(counts.original).toBe(3);expect(app().calls()).toBe(0);expect((await app().fixture.db.query('SELECT to_jsonb(j) AS row FROM jobs j ORDER BY id')).rows).toEqual(before);await assertGlassStorage(page,[refusalOriginalText]);
 });

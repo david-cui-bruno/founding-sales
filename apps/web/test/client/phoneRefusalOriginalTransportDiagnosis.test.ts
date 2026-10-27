@@ -5,9 +5,57 @@ import {z} from 'zod';
 import {PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH} from '@fss/contracts';
 import {BrowserClient} from '../../src/client/BrowserClient.ts';
 import {createBrowserHostHandler} from '../../src/server/host.ts';
+import {observeRefusalResponseBytes} from '../support/phoneRefusalOriginalApp.ts';
 const mocked=vi.hoisted(()=>({browser:vi.fn()}));
 vi.mock('../../src/server/browser.ts',()=>({createBrowserHandler:()=>mocked.browser}));
+vi.mock('../support/phoneDiscoveryApp.ts',()=>({}));
 const id='10000000-0000-4000-8000-000000000001',body={error:'browser_request_refused'};
+
+it('byte observer: forwards exact write/end args, callbacks, receiver and return values once while proving exact split bytes',async()=>{
+ const socket=new Socket(),request=new IncomingMessage(socket),response=new ServerResponse(request),callback=vi.fn();
+ const first=Buffer.from('{"error":'),last='"browser_request_refused"}',snapshot=Buffer.from(first);
+ const write=vi.spyOn(response,'write').mockImplementation(function(this:ServerResponse){expect(this).toBe(response);return false;});
+ const end=vi.spyOn(response,'end').mockImplementation(function(this:ServerResponse){expect(this).toBe(response);return response;});
+ try{
+  response.statusCode=409;const receipt=observeRefusalResponseBytes(response,3);
+  expect(response.write(first,callback)).toBe(false);expect(response.end(last,'utf8',callback)).toBe(response);
+  expect(write).toHaveBeenCalledExactlyOnceWith(first,callback);expect(end).toHaveBeenCalledExactlyOnceWith(last,'utf8',callback);expect(first).toEqual(snapshot);expect(callback).not.toHaveBeenCalled();
+  Object.defineProperty(response,'writableFinished',{value:true});response.emit('finish');
+  expect(await receipt).toMatchObject({ordinal:3,status:409,finished:true,length:35,overflow:false,exactBytes:true,hashMatches:true,noOriginal:true});
+ }finally{write.mockRestore();end.mockRestore();request.destroy();socket.destroy();}
+});
+
+it('byte observer: stops capture and refuses overflow without truncating or suppressing original writes',async()=>{
+ const socket=new Socket(),request=new IncomingMessage(socket),response=new ServerResponse(request),chunk=Buffer.alloc(36,120);
+ const write=vi.spyOn(response,'write').mockReturnValue(true),end=vi.spyOn(response,'end').mockReturnValue(response);
+ try{
+  const receipt=observeRefusalResponseBytes(response,3);response.write(chunk);response.end('tail');response.emit('finish');
+  expect(write).toHaveBeenCalledExactlyOnceWith(chunk);expect(end).toHaveBeenCalledExactlyOnceWith('tail');
+  expect(await receipt).toMatchObject({length:40,overflow:true,exactBytes:false,hashMatches:false,noOriginal:false});
+  expect(JSON.stringify(await receipt)).not.toContain('xxxx');expect(chunk).toEqual(Buffer.alloc(36,120));
+ }finally{write.mockRestore();end.mockRestore();request.destroy();socket.destroy();}
+});
+
+it('byte observer: preserves callback-only end and refuses incomplete close',async()=>{
+ const socket=new Socket(),request=new IncomingMessage(socket),response=new ServerResponse(request),callback=vi.fn();
+ const end=vi.spyOn(response,'end').mockReturnValue(response);
+ try{
+  const receipt=observeRefusalResponseBytes(response,3);response.end(callback);response.emit('close');
+  expect(end).toHaveBeenCalledExactlyOnceWith(callback);expect(callback).not.toHaveBeenCalled();
+  expect(await receipt).toMatchObject({finished:false,length:0,overflow:false,exactBytes:false,hashMatches:false});
+ }finally{end.mockRestore();request.destroy();socket.destroy();}
+});
+
+it('byte observer: observation errors cannot suppress original end arguments or replace its exception',async()=>{
+ const socket=new Socket(),request=new IncomingMessage(socket),response=new ServerResponse(request),failure=Error('original failure');
+ const end=vi.spyOn(response,'end').mockImplementation(()=>{throw failure;});
+ try{
+  const receipt=observeRefusalResponseBytes(response,3);
+  expect(()=>Reflect.apply(response.end,response,['x','invalid-encoding'])).toThrow(failure);
+  expect(end).toHaveBeenCalledExactlyOnceWith('x','invalid-encoding');response.emit('close');
+  expect(await receipt).toMatchObject({finished:false,overflow:true,exactBytes:false,hashMatches:false});
+ }finally{end.mockRestore();request.destroy();socket.destroy();}
+});
 
 it('diagnosis: real BrowserClient invalidates on409 without consuming or explicitly cancelling the native response body',async()=>{
  const cancel=vi.fn(),bytes=new TextEncoder().encode(JSON.stringify(body));
