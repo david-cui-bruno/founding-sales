@@ -7,12 +7,17 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {repositoryContext,workspaceScope,type RepositoryContext} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
-import {readRoutineSettings,saveRoutineSettings} from '../../outreach/settings.ts';
+import {readRoutineSettings} from '../../outreach/settings.ts';
 import {readBookingCapacity} from '../../meetings/bookingCapacity.ts';
 const NOW='2026-10-08T12:00:00.000Z';
 describe('Cal.com capacity and recorded bookings',()=>{
   let db:TestDatabase,seed:TwoWorkspaces;
   const ctx=():RepositoryContext=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),db.session);
+  // Historical metadata changes still invalidate a pending read, without a current policy-write API.
+  const replaceHistoricalLink=async(expectedRevision:number,url:string|null)=>{
+    const changed=await db.session.query('UPDATE outreach_settings SET booking_url=$3,revision=revision+1 WHERE workspace_id=$1 AND revision=$2',[seed.alpha.workspaceId,expectedRevision,url]);
+    expect(changed.rowCount).toBe(1);
+  };
   beforeAll(async()=>{
     db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);
     await db.session.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value) VALUES($1,'calendar_integration',1,'{\"integration\":\"calcom\"}')",[seed.alpha.workspaceId]);
@@ -55,12 +60,12 @@ describe('Cal.com capacity and recorded bookings',()=>{
     const result=await readBookingCapacity(ctx(),{now:NOW,client:{
       async readProfile(){return {id:42,username:'callie-founder'};},
       async readEventTypes(){
-        expect(await withTransaction(db.session,()=>saveRoutineSettings(ctx(),{expectedRevision:1,enabled:false,sequenceVersionId:null,bookingUrl:'https://cal.com/callie-founder/new-intro'}))).toMatchObject({ok:true});
+        await replaceHistoricalLink(1,'https://cal.com/callie-founder/new-intro');
         return [{id:73,ownerId:42,slug:'intro',bookingUrl:'https://cal.com/callie-founder/intro',bookingLimitsCount:{week:3}}];
       },
     }});
     expect(result.provider).toMatchObject({status:'unavailable',reason:'configuration_changed',observedAt:null,eventTypeId:null,weeklyLimit:null});
-    await withTransaction(db.session,()=>saveRoutineSettings(ctx(),{expectedRevision:2,enabled:false,sequenceVersionId:null,bookingUrl:'https://cal.com/callie-founder/intro'}));
+    await replaceHistoricalLink(2,'https://cal.com/callie-founder/intro');
   });
 
   it.each([
@@ -74,10 +79,10 @@ describe('Cal.com capacity and recorded bookings',()=>{
 
   it('does not query a team booking link through a personal-account read or guess its capacity',async()=>{
     const before=await readRoutineSettings(ctx());
-    expect(await withTransaction(db.session,()=>saveRoutineSettings(ctx(),{enabled:before.enabled,sequenceVersionId:before.sequenceVersionId,expectedRevision:before.revision,bookingUrl:'https://cal.com/team/callie/intro'}))).toMatchObject({ok:true});
+    await replaceHistoricalLink(before.revision,'https://cal.com/team/callie/intro');
     const result=await readBookingCapacity(ctx(),{now:NOW,client:{async readProfile(){throw new Error('not authorized for guessed team scope');},async readEventTypes(){return [];}}});
     expect(result.provider.reason).toBe('booking_link_unsupported');
-    const current=await readRoutineSettings(ctx());await withTransaction(db.session,()=>saveRoutineSettings(ctx(),{enabled:before.enabled,sequenceVersionId:before.sequenceVersionId,bookingUrl:before.bookingUrl,expectedRevision:current.revision}));
+    const current=await readRoutineSettings(ctx());await replaceHistoricalLink(current.revision,before.bookingUrl);
   });
 
   it('shows only assigned matched firms to salespeople and hides unresolved attendee identities',async()=>{

@@ -1,7 +1,7 @@
 import { withTransaction } from '../db/queryable.ts';
 import { readyCampaignOpening, attachCampaignOpeningFence } from '../outreach/campaignOpeningStore.ts';
 import { prefixCampaignOpening } from '../outreach/campaignOpening.ts';
-import {routineDraftForExecution,attachRoutineFence} from '../outreach/replyDelivery.ts';
+import {routineDraftForExecution} from '../outreach/replyDelivery.ts';
 import {readOutreachCadence,outreachStepDue,lastOutreachTouch,outreachExecutionTiming} from '../outreach/timing.ts';
 import { meetingSuccessorDue } from '../meetings/followThroughSuccessor.ts';
 import { hasOptOutLink, type HoldReasonCode } from '@fss/contracts';
@@ -498,9 +498,7 @@ async function runEmailStep(
   if (meetingDraft !== null && !meetingDraft.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [meetingDraft.reason] });
   const routine = await routineDraftForExecution(context, execution.id);
   if (routine !== null && !routine.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [routine.reason] });
-  const rendered = routine?.ok === true
-    ? { rendered: true as const, subject: routine.value.subject, body: routine.value.body }
-    : meetingDraft?.ok === true
+  const rendered = meetingDraft?.ok === true
     ? { rendered: true as const, subject: meetingDraft.value.subject, body: meetingDraft.value.body }
     : renderTemplateVersion(template, await templateVariablesFor(context, { firmId: enrollment.firmId, contactId: enrollment.contactId }));
   if (!rendered.rendered) {
@@ -566,7 +564,6 @@ async function runEmailStep(
   const prepared = await input.sendHandoff.prepare(context, request);
   if (!prepared.ok) return await holdExecution(context, execution, prepared.reason);
   if (opening.kind === 'ready') await attachCampaignOpeningFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId, subject: request.subject, body: request.body });
-  if (routine?.ok === true) await attachRoutineFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
   if (meetingPlan !== null) await attachMeetingFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
 
   await context.db.query(

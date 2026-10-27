@@ -1,4 +1,4 @@
-import {routineSettingsSaveSchema,type OutreachControl,type OutreachSenderStandingResponse,type OutreachSenderStandingV2Response} from '@fss/contracts';
+import type {OutreachControl,OutreachSenderStandingResponse,OutreachSenderStandingV2Response} from '@fss/contracts';
 import {readProviderIncidents} from '../outbound/providerIncidents.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
@@ -10,29 +10,18 @@ import {authorizationForMailbox} from './authorization.ts';
 import {describeRampStanding,ensureRamp,readRampStanding} from '../outbound/ramp.ts';
 import {stopEnrollments} from '../sequences/enrollments.ts';
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
-export async function campaignKind(ctx:RepositoryContext,id:string):Promise<'reply'|'email_first'|'call_first'|null>{
+export async function campaignKind(ctx:RepositoryContext,id:string):Promise<'email_first'|'call_first'|null>{
  const v=await readSequenceVersion(ctx,id);if(!v||v.state!=='published')return null;
  const channels=v.steps.map(s=>s.channel).join(',');
- const kind=channels==='email'?'reply':channels==='email,email,email,email,email'?'email_first':channels==='call_task,email,call_task,email,call_task,email,call_task,email'?'call_first':null;
+ const kind=channels==='email,email,email,email,email'?'email_first':channels==='call_task,email,call_task,email,call_task,email,call_task,email'?'call_first':null;
  if(!kind)return null;
  for(const step of v.steps.filter(s=>s.channel==='email')){const t=step.templateVersionId?await readTemplateVersion(ctx,step.templateVersionId):null;if(!t||!t.approvedAt||t.retiredAt)return null;}
  return kind;
 }
 export async function readRoutineSettings(ctx:RepositoryContext):Promise<OutreachControl['settings']>{
  const row=(await ctx.db.query<{revision:number;routine_replies_enabled:boolean;reply_sequence_version_id:string|null;booking_url:string|null}>('SELECT * FROM outreach_settings WHERE workspace_id=$1',[ctx.scope.workspaceId])).rows[0];
- return row?{revision:row.revision,enabled:row.routine_replies_enabled,sequenceVersionId:row.reply_sequence_version_id,bookingUrl:row.booking_url}:{revision:0,enabled:false,sequenceVersionId:null,bookingUrl:null};
-}
-export async function saveRoutineSettings(ctx:RepositoryContext,input:unknown):Promise<Result<{revision:number}>>{
- const actor=ctx.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'admin_required'};
- const parsed=routineSettingsSaveSchema.safeParse(input);if(!parsed.success)return {ok:false,reason:'invalid_input'};const v=parsed.data;
- await lockSendGateForStopFact(ctx);const old=await readRoutineSettings(ctx);if(v.expectedRevision!==old.revision)return {ok:false,reason:'stale_revision'};
- if(v.bookingUrl!==null){try{const u=new URL(v.bookingUrl);if(u.protocol!=='https:'||u.hostname!=='cal.com'||u.username||u.password||u.hash)return {ok:false,reason:'booking_link_invalid'};}catch{return {ok:false,reason:'booking_link_invalid'};}}
- if(v.sequenceVersionId!==null&&await campaignKind(ctx,v.sequenceVersionId)!=='reply')return {ok:false,reason:'one_reply_sequence_required'};
- if(v.enabled&&(!v.sequenceVersionId||!(await listAnswerBlocks(ctx)).some(b=>b.approvedAt&&!b.retiredAt)))return {ok:false,reason:'approved_reply_content_required'};
- const revision=old.revision+1;
- await ctx.db.query(`INSERT INTO outreach_settings(workspace_id,revision,routine_replies_enabled,reply_sequence_version_id,booking_url) VALUES($1,$2,$3,$4,$5) ON CONFLICT(workspace_id) DO UPDATE SET revision=EXCLUDED.revision,routine_replies_enabled=EXCLUDED.routine_replies_enabled,reply_sequence_version_id=EXCLUDED.reply_sequence_version_id,booking_url=EXCLUDED.booking_url,updated_at=now()`,[ctx.scope.workspaceId,revision,v.enabled,v.sequenceVersionId,v.bookingUrl]);
- await recordCrmAuditEvent(ctx,{action:'outreach.reply_policy_saved',subjectKind:'workspace',subjectId:ctx.scope.workspaceId,detail:{revision,enabled:v.enabled,sequenceVersionId:v.sequenceVersionId}});
- return {ok:true,value:{revision}};
+ // Preserve stored metadata for history and booking-capacity reads, never activation.
+ return row?{revision:row.revision,enabled:false,sequenceVersionId:row.reply_sequence_version_id,bookingUrl:row.booking_url}:{revision:0,enabled:false,sequenceVersionId:null,bookingUrl:null};
 }
 export async function readOutreachControl(ctx:RepositoryContext):Promise<OutreachControl>{
  if(ctx.scope.actor.kind!=='user'||ctx.scope.actor.role!=='admin')throw new Error('admin_required');

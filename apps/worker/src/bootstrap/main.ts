@@ -23,8 +23,7 @@ import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
 import {socialDraftModel} from '../social/draftModel.ts';
 import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
-import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts';
-import {routineReplyInterpretation} from '../outreach/replyInterpretation.ts';
+import {outreachReplySource} from '../handlers/outreach.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
 import {prospectPhoneDiscoveryHandler,prospectPhoneDiscoverySource} from '../handlers/prospectPhoneDiscovery.ts';
 import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
@@ -284,7 +283,6 @@ export function registerHandlers(
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
-  registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
   if(composition.discovery||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(composition.discovery,composition.apolloDiscovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
