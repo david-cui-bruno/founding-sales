@@ -2,6 +2,7 @@ import {seedSequences} from '../sequences/support/sequenceFixtures.ts';
 import {randomUUID} from 'node:crypto';
 import {beforeAll,afterAll,beforeEach,it,expect} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import type {Queryable} from '../../db/queryable.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {seedCrm,type SeededCrm} from '../db/support/crmFixtures.ts';
 import {seedMail,type SeededMail} from '../db/support/mailFixtures.ts';
@@ -22,6 +23,19 @@ const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'use
 beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);crm=await seedCrm(db.session,seed);mail=await seedMail(db.session,seed,crm);policy=await seedPolicy(db.session,seed,crm);});
 afterAll(async()=>db.drop());
 beforeEach(async()=>{await db.session.query('BEGIN');return async()=>{await db.session.query('ROLLBACK');};});
+async function enrollAtJourneyStart(input:Parameters<typeof enrollContact>[1]){
+ const context=ctx();let clockReads=0;
+ // Enrollment and recovery share this fictional journey instant. All other SQL,
+ // including wall-clock expiry predicates, still runs on the real PG session.
+ const clockDb:Queryable={query:(text,values)=>{
+  if(text==='SELECT now() AS now'){clockReads++;return db.session.query('SELECT $1::timestamptz AS now',[at]);}
+  return db.session.query(text,values);
+ }};
+ const enrolled=await enrollContact(repositoryContext(context.scope,clockDb),input);
+ expect(clockReads).toBe(1);
+ if(enrolled.ok)expect((await db.session.query('SELECT started_at FROM sequence_enrollments WHERE id=$1',[enrolled.value.enrollmentId])).rows).toEqual([{started_at:new Date(at)}]);
+ return enrolled;
+}
 async function plan(lane:'call_first'|'email_first'){
  const w=seed.alpha.workspaceId,c=randomUUID(),r=randomUUID(),p=randomUUID(),cadence=buildOutreachCadence({lane,startsAt:at,timeZone:'America/New_York'});
  await db.session.query("INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload,status,revision) VALUES($1,$2,$3,'{}','needs_review',1)",[w,c,randomUUID().replaceAll('-','').repeat(2)]);
@@ -48,7 +62,7 @@ it('wakes an unchanged manual call again when the next cadence slot arrives',asy
  const v=(await db.session.query<{id:string}>('INSERT INTO sequence_versions(workspace_id,sequence_id,version) VALUES($1,$2,1) RETURNING id',[w,s])).rows[0]!.id;
  await db.session.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,on_no_answer) VALUES($1,$2,1,'call_task','elapsed',0,'retry_call')",[w,v]);
  await db.session.query("UPDATE sequence_versions SET state='published',published_at=now(),published_by_user_id=$2 WHERE id=$1",[v,seed.alpha.salesperson.userId]);
- const enrolled=await enrollContact(ctx(),{subject:{kind:'outreach',outreachPlanId:p.id},originKind:'prospecting',sequenceVersionId:v,firmId:crm.alpha.firmId,contactId:crm.alpha.contactId});expect(enrolled.ok,JSON.stringify(enrolled)).toBe(true);if(!enrolled.ok)throw new Error(enrolled.reason);
+ const enrolled=await enrollAtJourneyStart({subject:{kind:'outreach',outreachPlanId:p.id},originKind:'prospecting',sequenceVersionId:v,firmId:crm.alpha.firmId,contactId:crm.alpha.contactId});expect(enrolled.ok,JSON.stringify(enrolled)).toBe(true);if(!enrolled.ok)throw new Error(enrolled.reason);
  const id=enrolled.value.firstExecutionId;
  await db.session.query('UPDATE step_executions SET due_at=$2,not_before=$2 WHERE id=$1',[id,at]);
  const initial=(await listStepWakes(db.session,{now:at})).find(x=>x.stepExecutionId===id)!;
@@ -66,7 +80,7 @@ it('moves a real outreach enrollment with an old afternoon cadence to morning an
  const legacy={...p.cadence,touches:p.cadence.touches.map(t=>({...t,dueAt:t.dueAt.replace('14:00:00','17:36:00')}))};
  await db.session.query('UPDATE outreach_plans SET cadence=$2::jsonb WHERE id=$1',[p.id,JSON.stringify(legacy)]);
  const sequences=await seedSequences(db.session,seed);
- const enrolled=await enrollContact(ctx(),{subject:{kind:'outreach',outreachPlanId:p.id},originKind:'prospecting',sequenceVersionId:sequences.alpha.publishedVersionId,firmId:crm.alpha.firmId,contactId:crm.alpha.contactId});
+ const enrolled=await enrollAtJourneyStart({subject:{kind:'outreach',outreachPlanId:p.id},originKind:'prospecting',sequenceVersionId:sequences.alpha.publishedVersionId,firmId:crm.alpha.firmId,contactId:crm.alpha.contactId});
  expect(enrolled.ok,JSON.stringify(enrolled)).toBe(true);if(!enrolled.ok)throw new Error(enrolled.reason);
  const id=enrolled.value.firstExecutionId,fenceId=randomUUID();
  await db.session.query("UPDATE step_executions SET state='held',hold_reason_code='scoped_pause',due_at='2026-10-05T17:36:00Z',not_before='2026-10-05T18:36:00Z' WHERE id=$1",[id]);
