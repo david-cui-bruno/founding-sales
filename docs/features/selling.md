@@ -28,6 +28,8 @@
 
 **Refusals/limits:** changed candidate/source/principal, denied/expired originals, unsafe URL, research OFF/holds/budgets and unresolved attempts stop acquisition/save. Four pages/1MB, bounded originals and retention remain; no model/enrichment/new provider. Phone completeness grants no qualification/CRM admission/contact permission. Unknown/missing phone never hides permitted raw prospects. Historical first-batch yield remains0/10, target5 unmet; complete/conflicting does not prove competing numbers. Root owns correction integration/release and the separately approved extended batch. Useful manual source options remain distinct from canonical selection and automatic eligibility. Continuous supply is still incomplete.
 
+**Local prose correction, not deployed:** `79c666dac` excludes only bare personal followed by whitespace and the word touch in a whole original block without Unicode numbers. Genuine personal-phone labels, numbered ambiguity, other refusal labels and cross-block attachment rules remain conservative. Synthetic scanner/projection checks passed113; independent review/integration remain separate. This removes a demonstrated false refusal, not a phone requirement or evidence/eligibility check, and does not add a useful lead.
+
 ## Calling and follow-through
 
 **Reach:** exact prepared/retained selection → **Calling**, or select from its current queue. Inspect current name/location/website, phone-specific provenance and current verdicts. Device setup/real media is a separate authorized action. After real activity, fill actual outcome and independently authored promised-email text only when actually promised. The recorded outcome can open the same private draft in **Email → Follow-ups**.
