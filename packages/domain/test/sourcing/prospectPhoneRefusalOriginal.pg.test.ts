@@ -1,7 +1,7 @@
-import {createHash,randomUUID} from 'node:crypto';
+import {createHash,randomUUID,randomBytes} from 'node:crypto';
 import {afterAll,beforeAll,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
-import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
+import {withTransaction,type SessionQueryable,type QueryResultRowLike} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {manualOrdinaryFixture} from './support/manualProspectFixture.ts';
@@ -9,6 +9,14 @@ import {saveCandidate} from '../../sourcing/candidates.ts';
 import {readProspectPhoneDiscovery} from '../../sourcing/prospectPhoneDiscovery.ts';
 import {readProspectPhoneRefusalOriginal} from '../../sourcing/prospectPhoneRefusalOriginal.ts';
 import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceLoss.ts';
+import {dispatch} from '../../../../apps/api/src/server.ts';
+import {startGoogleStub} from '../../../../apps/api/test/support/googleStub.ts';
+import {authConfigFor,nonceOf,stateOf} from '../../../../apps/api/test/support/authFixture.ts';
+import {createGoogleClient,httpFetch} from '../../../../apps/api/src/auth/googleClient.ts';
+import {startSignIn,handleCallback,claimSignIn} from '../../../../apps/api/src/auth/signIn.ts';
+import {authenticate} from '../../../../apps/api/src/auth/sessions.ts';
+import type {AuthDeps} from '../../../../apps/api/src/auth/config.ts';
+import {PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH} from '@fss/contracts';
 let db:TestDatabase,runtime:SessionQueryable,seed:TwoWorkspaces,serial=7200;
 const ctx=(session=runtime)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),session);
 const text='🏡 PHONE: <b>Ask the office</b> for help. Whole retained tail.';
@@ -60,4 +68,35 @@ it('source loss at the final principal callback is rechecked after that wait, no
  const f=await fixture();let calls=0;
  const result=await withTransaction(runtime,()=>readProspectPhoneRefusalOriginal(ctx(),f.input,async()=>{calls++;if(calls===6)await rememberExpiredManualSources(ctx(),[f.sourceUrl]);return true;}));
  expect(calls).toBeGreaterThanOrEqual(6);expect(result.ok).toBe(false);expect(JSON.stringify(result)).not.toContain(text);
+});
+it.each(['session','reauthentication'] as const)('R1 signed registered API refuses %s expiry during final clock wait with valid unchanged source',async mode=>{
+ const f=await fixture(),google=await startGoogleStub();
+ try{
+  let now=Date.now(),captures=0,crossed=false,armed=false;
+  const wrapped:SessionQueryable={query:async<Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[])=>{
+   if(armed&&captures===6&&sql==='SELECT clock_timestamp() AS at'&&!crossed){
+    // This is after the successful final principal callback, inside final
+    // source validation. Execute a real PG wait, then move only trusted auth time.
+    await runtime.query('SELECT pg_sleep(0.02)');now+=60000;crossed=true;
+   }
+   const result=await runtime.query<Row>(sql,values);
+   if(armed&&sql.startsWith('SELECT expires_at,reauthenticate_after FROM sessions')){expect(result.rows).toHaveLength(1);captures++;}
+   return result;
+  }};
+  const config=authConfigFor(google),auth:AuthDeps={db:wrapped,config:{...config,oidc:{...config.oidc,hostedDomain:'example.test'},sessions:{...config.sessions,accessSessionSeconds:mode==='session'?60:120,fullSignInSeconds:mode==='session'?120:60}},now:()=>new Date(now),randomSecret:()=>randomBytes(32).toString('base64url'),google:createGoogleClient({fetch:httpFetch,now:()=>new Date(now)})};
+  const user=(await runtime.query<{google_sub:string;email:string}>('SELECT google_sub,email FROM users WHERE id=$1',[seed.alpha.admin.userId])).rows[0]!;
+  const started=await startSignIn(auth,{workspaceId:seed.alpha.workspaceId,deviceLabel:'FICTIONAL R1 retained-only',clientVersion:'1.4.0'});if(!started.started)throw Error(started.refusal);
+  const code=randomUUID();google.issueCode(code);google.nextIdToken(google.signIdToken({sub:user.google_sub,email:user.email,hd:'example.test',nonce:nonceOf(started.authorizationUrl)}));
+  const callback=await handleCallback(auth,{state:stateOf(started.authorizationUrl),code});expect(callback.authenticated).toBe(true);
+  const claimed=await claimSignIn(auth,{handoffSecret:started.handoffSecret,clientVersion:'1.4.0'});if(!claimed.claimed)throw Error(claimed.refusal);
+  const header=`Bearer ${claimed.grant.accessToken}`,before=(await runtime.query('SELECT to_jsonb(r) row FROM sourcing_prospect_phone_discoveries r WHERE id=$1',[f.input.runId])).rows;
+  expect((await authenticate(auth,header)).authenticated).toBe(true);
+  armed=true;
+  const result=await dispatch({method:'POST',path:PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH,query:new URLSearchParams(),headers:{authorization:header},body:f.input},{session:wrapped,auth,sendingEnabled:false,supportedClientVersions:auth.config.supportedClientVersions});
+  expect(captures).toBe(6);expect(crossed).toBe(true);expect(result).toMatchObject({status:401,body:{error:'session_changed'}});expect(JSON.stringify(result)).not.toContain(text);
+  expect(await authenticate(auth,header)).toEqual({authenticated:false,refusal:mode==='session'?'session_expired':'reauthentication_required'});
+  expect((await runtime.query('SELECT to_jsonb(r) row FROM sourcing_prospect_phone_discoveries r WHERE id=$1',[f.input.runId])).rows).toEqual(before);
+  expect((await withTransaction(runtime,()=>readProspectPhoneRefusalOriginal(ctx(),f.input))).ok).toBe(true);
+  expect((await runtime.query('SELECT id FROM jobs')).rows).toEqual([]);
+ }finally{await google.stop();}
 });

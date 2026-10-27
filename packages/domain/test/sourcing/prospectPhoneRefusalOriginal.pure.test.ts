@@ -48,3 +48,11 @@ it('final clock expiry erases the whole selected original even with unchanged re
  mocks.read.mockResolvedValueOnce({ok:true,value:fixture()});const last=fixture();last.now=now+60001;mocks.read.mockResolvedValueOnce({ok:true,value:last});
  expect(await readProspectPhoneRefusalOriginal(ctx,input)).toEqual({ok:false,reason:'source_changed'});
 });
+it.each([null,NaN,now-1])('publication principal clock %s refuses without any surviving text',async clock=>{
+ const publication=vi.fn(()=>clock);
+ expect(await readProspectPhoneRefusalOriginal(ctx,input,async()=>true,publication)).toEqual({ok:false,reason:'authority_changed'});
+ expect(mocks.read).toHaveBeenCalledTimes(2);expect(publication).toHaveBeenCalledExactlyOnceWith(now);
+});
+it('publication clock advances source deadlines too, not just principal deadlines',async()=>{
+ expect(await readProspectPhoneRefusalOriginal(ctx,input,async()=>true,()=>now+60000)).toEqual({ok:false,reason:'source_changed'});
+});

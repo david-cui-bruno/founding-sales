@@ -33,7 +33,7 @@ function selected(snapshot:Snapshot,input:ProspectPhoneRefusalOriginalInput,now:
 }
 /** Caller owns the current read transaction and its ordinary source/principal locks.
  * No acquisition, receipt, persistence, historical lookup or retention renewal. */
-export async function readProspectPhoneRefusalOriginal(ctx:RepositoryContext,input:ProspectPhoneRefusalOriginalInput,authority:PhoneDiscoveryAuthority=async()=>true):Promise<Result>{
+export async function readProspectPhoneRefusalOriginal(ctx:RepositoryContext,input:ProspectPhoneRefusalOriginalInput,authority:PhoneDiscoveryAuthority=async()=>true,publicationNow:(databaseNow:number)=>number|null=now=>now):Promise<Result>{
  if(!prospectPhoneRefusalOriginalInputSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
  const binding={candidateId:input.candidateId,expectedRevision:input.expectedRevision};
  const first=await readProspectPhoneDiscoverySnapshot(ctx,binding,authority);
@@ -45,6 +45,8 @@ export async function readProspectPhoneRefusalOriginal(ctx:RepositoryContext,inp
  if(!last.ok)return last;
  if(!last.value||!isDeepStrictEqual(first.value.view,last.value.view)||!isDeepStrictEqual(first.value.run,last.value.run))return changed();
  // No new awaits after the current read's final clock and locked rechecks.
- const value=selected(last.value,input,last.value.now);
+ const now=publicationNow(last.value.now);
+ if(now===null||!Number.isFinite(now)||now<last.value.now)return {ok:false,reason:'authority_changed'};
+ const value=selected(last.value,input,now);
  return value&&isDeepStrictEqual(before,value)?{ok:true,value}:changed();
 }

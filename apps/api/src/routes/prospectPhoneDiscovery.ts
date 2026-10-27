@@ -9,7 +9,7 @@ import {readProspectPhoneRefusalOriginal} from '@fss/domain/sourcing/prospectPho
 import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery,currentProspectPhoneDiscoveryAuthority,ProspectPhoneDiscoveryAuthorityChanged,ProspectPhoneDiscoveryUnavailable} from '@fss/domain/sourcing/prospectPhoneDiscovery.ts';
 import type {RepositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {contextForPrincipal,runRouteCommand,commandReply,type RouteDeps} from './routeSupport.ts';
-import {retainedPrincipalAuthority} from './retainedPrincipalAuthority.ts';
+import {retainedPrincipalAuthority,retainedPrincipalPublicationAuthority} from './retainedPrincipalAuthority.ts';
 import {privatePrincipalIsCurrent,privateAuthorityRefusal} from './privateReadAuthority.ts';
 import {policyRouteDeps} from './dialSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
@@ -52,7 +52,8 @@ async function routePhoneDiscoveryWithAuthority(deps:RouteDeps):Promise<RouteRes
    // Authenticate inside the transaction before the final locked current reads.
    // There is no post-read authentication wait outside the source/run locks.
    if(!await privatePrincipalIsCurrent(deps))return privateAuthorityRefusal();
-   const result=await readProspectPhoneRefusalOriginal(scoped.context,parsed.data,retainedPrincipalAuthority(deps,scoped.context));
+   const publication=retainedPrincipalPublicationAuthority(deps,scoped.context);
+   const result=await readProspectPhoneRefusalOriginal(scoped.context,parsed.data,publication.authority,publication.publicationNow);
    return !result.ok?result.reason==='authority_changed'?privateAuthorityRefusal():{status:409,body:{error:result.reason}}:
     {status:200,body:prospectPhoneRefusalOriginalSchema.parse(result.value)};
   });
