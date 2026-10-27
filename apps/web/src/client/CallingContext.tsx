@@ -1,15 +1,17 @@
 import {useEffect,useState,type JSX} from 'react';
-import {pluralFirmPageResponseSchema,manualProspectListSchema,todayActionOpenV4ResponseSchema,type PluralFirmPageResponse,type QualifiedResearchFirm,type AutomaticResearchFirm,type ManualProspect} from '@fss/contracts';
+import {pluralFirmPageResponseSchema,manualProspectListSchema,manualProspectListInputSchema,todayActionOpenV4ResponseSchema,type PluralFirmPageResponse,type QualifiedResearchFirm,type AutomaticResearchFirm,type ManualProspect} from '@fss/contracts';
 import type {CallingQueueEntry} from './CallingQueue.tsx';
+import type {CallingSelection} from './workspaceNavigation.ts';
 import type {BrowserClient} from './BrowserClient.ts';
 import {manualProspectLabel} from './manualProspectPresentation.ts';
 import {RetainedPhoneEvidence} from './RetainedPhoneEvidence.tsx';
 import {BrowserPhoneDiscovery} from './BrowserPhoneDiscovery.tsx';
-export interface CallingContextData{entry:CallingQueueEntry;prospect?:ManualProspect;firm?:PluralFirmPageResponse;proof?:QualifiedResearchFirm|AutomaticResearchFirm;}
+export type CallingContextEntry=CallingQueueEntry&Pick<CallingSelection,'prospectPage'>;
+export interface CallingContextData{entry:CallingContextEntry;prospect?:ManualProspect;firm?:PluralFirmPageResponse;proof?:QualifiedResearchFirm|AutomaticResearchFirm;}
 export function callingSafeWebsite(value:string|null):string|null{try{if(value){const url=new URL(value);if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)return url.href;}}catch{/* Observations are never executed. */}return null;}
 export function callingWebsiteIdentitySupported(website:string|null,identityUrls:readonly string[]):boolean{const site=callingSafeWebsite(website);return site!==null&&identityUrls.some(value=>{const evidence=callingSafeWebsite(value);return evidence!==null&&new URL(evidence).hostname===new URL(site).hostname;});}
 /** Current source-backed compact brief. The link is deliberate, never fetched or embedded. */
-export function CallingContext({client,entry,onReady}:{client:BrowserClient;entry:CallingQueueEntry;onReady:(data:CallingContextData|null)=>void}):JSX.Element{
+export function CallingContext({client,entry,onReady}:{client:BrowserClient;entry:CallingContextEntry;onReady:(data:CallingContextData|null)=>void}):JSX.Element{
  const [data,setData]=useState<CallingContextData|null>(null),[notice,setNotice]=useState('Loading current brief…');
  useEffect(()=>{let mounted=true,timer:ReturnType<typeof setTimeout>|undefined,loadedData:CallingContextData|null=null;const epoch=client.epoch,current=():boolean=>mounted&&client.isCurrent(epoch)&&client.current?.status==='signed_in';setData(null);onReady(null);setNotice('Loading current brief…');
   const project=():void=>{
@@ -23,9 +25,9 @@ export function CallingContext({client,entry,onReady}:{client:BrowserClient;entr
   const read=async():Promise<void>=>{try{let loaded:CallingContextData;
    if(entry.subject.kind==='candidate'){
     // Queue rows came from the current retained projection. Exact incoming links
-    // are resolved only against a fresh bounded projection, never inferred Firms.
+    // use only a bounded page hint for a fresh read, never inferred Firms or a scan.
     let prospect=entry.prospect;
-    if(!prospect){const page=await client.request('/sourcing/candidates/prospects/list',manualProspectListSchema,{state:'all',offset:0},()=>{if(!current())throw Error('Brief changed');});const subject=entry.subject;prospect=page.prospects.find(p=>p.candidateId===subject.candidateId&&p.revision===subject.expectedCandidateRevision);}
+    if(!prospect){const input=manualProspectListInputSchema.parse(entry.prospectPage??{state:'all',offset:0});const page=await client.request('/sourcing/candidates/prospects/list',manualProspectListSchema,input,()=>{if(!current())throw Error('Brief changed');});const subject=entry.subject;prospect=page.prospects.find(p=>p.candidateId===subject.candidateId&&p.revision===subject.expectedCandidateRevision);}
     if(!prospect||prospect.candidateId!==entry.subject.candidateId||prospect.revision!==entry.subject.expectedCandidateRevision)throw Error('Exact current observation unavailable');
     loaded={entry,prospect};
    }else{
