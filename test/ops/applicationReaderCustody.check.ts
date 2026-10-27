@@ -9,13 +9,13 @@ interface TestTask {
   lastStatus?: string; stopCode: string; stoppedReason: string; startedAt?: string;
   containers: TestContainer[]; overrides: unknown;
 }
-interface Custody { taskArn: string; readerDefinitionArn: string; sourceOperationsDefinitionArn: string; startedBy: string; failedRunId: string }
+interface Custody { taskArn: string; readerDefinitionArn: string; sourceOperationsDefinitionArn: string; startedBy: string; failedRunId: string; evidenceBasis?: string }
 interface RecoveryOptions {
   custody: Custody; cluster: string; source: { definition: Json; tags: Json[] };
   baseline: Record<string, Json>; network: Json; state: Json; save(): void;
   beforeWrite(): Promise<void>;
   aws(service: string, action: string, args?: string[], write?: boolean): Promise<unknown>;
-  gh(path: string): Promise<unknown>; commit: string; repository: string;
+  gh(path: string): Promise<unknown>; ghText?(path: string): Promise<string>; commit: string; repository: string;
 }
 const { recoverApplicationReader, readerRecoveryCommandEnvironment } = await import(repositoryPath('infra/scripts/application-reader-recovery.mjs')) as {
   recoverApplicationReader(options: RecoveryOptions): Promise<void>;
@@ -31,7 +31,7 @@ const taskArn = `${cluster.replace(':cluster/', ':task/')}/a91d7da900aa401789560
 const digest = `sha256:${'a'.repeat(64)}`;
 const image = `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${digest}`;
 const registeredBy = 'arn:aws:sts::326255650484:assumed-role/fss-prod-ci-application/fss-prod-application-40522197864';
-const commit = 'b'.repeat(40);
+const commit = 'bced9eebcc4c3fef4ee51d7eefd0f92e66f318c7';
 const custody: Custody = { taskArn, readerDefinitionArn: definition(337), sourceOperationsDefinitionArn: definition(335), startedBy: 'fss-app-40522197864-off-3', failedRunId: '40522197864' };
 const network = { subnets: ['subnet-1', 'subnet-2'], securityGroups: ['sg-1'], assignPublicIp: 'ENABLED' };
 function fixture() {
@@ -45,15 +45,22 @@ function fixture() {
   const baseline = Object.fromEntries(['api', 'worker'].map(name => [name, { serviceName: `fss-prod-${name}`, status: 'ACTIVE', desiredCount: name === 'api' ? 2 : 1, runningCount: name === 'api' ? 2 : 1, pendingCount: 0, taskDefinition: `${cluster.split(':cluster/')[0]}:task-definition/fss-prod-${name}:16`, deployments: [{ taskDefinition: `${cluster.split(':cluster/')[0]}:task-definition/fss-prod-${name}:16`, rolloutState: 'COMPLETED' }] }]));
   return { source, reader, task, baseline };
 }
-function harness(fault = '') {
+function harness(fault = '', historical = false) {
   const f = fixture();
-  const state: Json & { readerRecovery?: unknown; off?: unknown; lastTaskExitCode?: number } = {}, calls: { action: string; args: string[]; write: boolean }[] = [];
+  const state: Json & { readerRecovery?: unknown; off?: unknown; lastTaskExitCode?: number } = historical ? { fromSchema: 142, targetSchema: 142, observedSchema: 142 } : {}, calls: { action: string; args: string[]; write: boolean }[] = [];
   const runtimeTasks = ['api', 'worker'].flatMap((name, index) => Array.from({ length: index === 0 ? 2 : 1 }, (_, n) => ({ taskArn: `${cluster.replace(':cluster/', ':task/')}/${String(index * 10 + n + 1).padStart(32, '0')}`, clusterArn: cluster, taskDefinitionArn: f.baseline[name]!.taskDefinition, group: `service:fss-prod-${name}`, lastStatus: 'RUNNING' })));
   let inactive = false, observations = 0, checks = 0;
-  const run = { id: 40522197864, path: '.github/workflows/greenfield-deploy.yml', event: 'workflow_dispatch', head_branch: 'main', head_repository: { full_name: 'david-cui-bruno/founding-sales' }, head_sha: commit, status: 'completed', conclusion: 'failure' };
+  const run = { id: 40522197864, run_attempt: 1, path: '.github/workflows/greenfield-deploy.yml', event: 'workflow_dispatch', head_branch: 'main', head_repository: { full_name: 'david-cui-bruno/founding-sales' }, head_sha: commit, status: 'completed', conclusion: 'failure' };
+  const job = { id: 122252105573, run_id: run.id, run_attempt: 1, head_sha: commit, name: 'Opt-in protected application release (legacy remains default)', status: 'completed', conclusion: 'failure', steps: [
+    { number: 6, name: 'Execute only this approved application release', status: 'completed', conclusion: 'failure', started_at: '2026-10-27T14:34:28Z', completed_at: '2026-10-27T14:51:22Z' },
+    { number: 7, name: 'Actual application phase and recovery boundary', status: 'completed', conclusion: 'success', started_at: '2026-10-27T14:51:22Z', completed_at: '2026-10-27T14:51:22Z' },
+  ] };
+  const priorStatus = { phase: 'smoke', outcome: 'repair-required', writesStarted: true, migrationStarted: false, fromSchema: 142, targetSchema: 142, observedSchema: 142, recoveryPoint: null, reason: 'task_failed_or_foreign', rollback: null, currentTaskArn: taskArn, currentTaskOwner: custody.startedBy, lastStoppedTaskArn: null, lastTaskExitCode: 0, temporaryReaderDefinition: definition(337), previousDefinitions: {}, candidateDefinitions: { operations: definition(335) } };
+  const log = ['##[group]Run if [ -f "$RUNNER_TEMP/application/status.json" ]; then', `  COMMIT: ${commit}`, '  RUN_ID: 40519161322', '  RUN_ATTEMPT: 1', '  GATE_RUN_ID: 40519161282', '##[endgroup]', ...JSON.stringify(priorStatus, null, 2).split('\n'), 'Post job cleanup.', 'Cleaning up orphan processes'].map((line, n) => `2026-10-27T14:51:22.${String(n).padStart(7, '0')}Z ${line}`).join('\n') + '\n';
   const options: RecoveryOptions = {
-    ...f, custody, cluster, state, network, commit, repository: 'david-cui-bruno/founding-sales', save() {},
-    async gh() { return run; },
+    ...f, custody: historical ? { ...custody, evidenceBasis: 'historical-readonly-retirement' } : custody, cluster, state, network, commit, repository: 'david-cui-bruno/founding-sales', save() {},
+    async gh(path) { if (path.endsWith('/jobs?per_page=100')) return { total_count: 1, jobs: [job] }; if (path.startsWith('actions/jobs/')) return job; return run; },
+    async ghText() { if (fault === 'history-log') throw new Error('command_gh_failed'); return log; },
     async beforeWrite() { checks++; if (fault === 'gate') throw new Error('provenance_changed'); },
     async aws(_service, action, args = [], write = false) {
       calls.push({ action, args, write });
@@ -70,9 +77,13 @@ function harness(fault = '') {
         if (stopped) observations++;
         if (fault === 'pagination') return { taskArns: [], nextToken: 'more' };
         if (fault === 'duplicates') return { taskArns: [taskArn, taskArn] };
-        return { taskArns: stopped ? [taskArn] : [...runtimeTasks.map(task => task.taskArn), ...(fault === 'active-reference' || fault === 'foreign-active' ? [`${cluster.replace(':cluster/', ':task/')}/${'f'.repeat(32)}`] : [])] };
+        return { taskArns: stopped ? (historical && fault !== 'listed-missing' ? [] : [taskArn]) : [...runtimeTasks.map(task => task.taskArn), ...(fault === 'active-reference' || fault === 'foreign-active' ? [`${cluster.replace(':cluster/', ':task/')}/${'f'.repeat(32)}`] : [])] };
       }
       if (action === 'describe-tasks') {
+        if (historical && args.at(-1) === taskArn && args[args.indexOf('--tasks') + 1] === taskArn) {
+          if (fault === 'available' || fault === 'missing-refresh' && observations > 0) return { tasks: [f.task], failures: [] };
+          return { tasks: [], failures: fault === 'empty-missing' ? [] : [{ arn: fault === 'foreign-missing' ? `${taskArn}0` : taskArn, reason: fault === 'wrong-missing' ? 'ACCESS_DENIED' : 'MISSING' }, ...(fault === 'extra-missing' ? [{ arn: taskArn, reason: 'MISSING' }] : [])] };
+        }
         if (fault === 'missing') return { tasks: [], failures: [] };
         if (fault === 'failed-read') return { tasks: [f.task], failures: [{}] };
         if (fault === 'refresh' && observations > 1) return { tasks: [{ ...f.task, lastStatus: 'RUNNING' }], failures: [] };
@@ -93,6 +104,11 @@ function harness(fault = '') {
 const cleanup = (h: ReturnType<typeof harness>) => h.calls.filter(call => call.write);
 
 describe('explicit application reader custody input', () => {
+  it('accepts only the explicit fifth-key retirement discriminator', () => {
+    const { failedRunId: _prior, ...input } = custody;
+    expect(parseFailedReaderCustody(JSON.stringify({ ...input, evidenceBasis: 'historical-readonly-retirement' }), '99')).toEqual({ ...custody, evidenceBasis: 'historical-readonly-retirement' });
+    for (const evidenceBasis of ['', 'known-prestart', 'historical', null]) expect(() => parseFailedReaderCustody(JSON.stringify({ ...input, evidenceBasis }), '99')).toThrow('failed_reader_custody_invalid');
+  });
   it('accepts only exact identity, derives prior run, and freezes the result', () => {
     const { failedRunId: _prior, ...input } = custody;
     const parsed = parseFailedReaderCustody(JSON.stringify(input), '99');
@@ -101,6 +117,36 @@ describe('explicit application reader custody input', () => {
   });
   it.each(['{}', 'null', '[]', '{', JSON.stringify({ ...custody }), JSON.stringify({ taskArn })])('refuses malformed/partial/extra keys %s', value => {
     expect(() => parseFailedReaderCustody(value, '99')).toThrow('failed_reader_custody_invalid');
+  });
+});
+
+describe('explicit historical read-only definition retirement, not task reconciliation', () => {
+  it('records authenticated basis/attempt/job and UNKNOWN execution/effects with a single write', async () => {
+    const h = harness('', true); await h.execute();
+    expect(h.state.readerRecovery).toMatchObject({ evidenceBasis: 'historical-readonly-retirement', failedRunAttempt: 1, applicationJobId: 122252105573, historicalExecution: 'UNKNOWN', historicalEffects: 'UNKNOWN', outcome: 'completed' });
+    expect(cleanup(h)).toHaveLength(1); expect(h.state.off).toBeUndefined(); expect(h.state.lastTaskExitCode).toBeUndefined();
+    expect(h.calls.filter(call => call.action === 'list-tasks')).toHaveLength(4);
+    expect(h.calls.some(call => ['run-task', 'stop-task', 'update-service'].includes(call.action))).toBe(false);
+  });
+  it.each(['available', 'empty-missing', 'foreign-missing', 'wrong-missing', 'extra-missing', 'missing-refresh', 'listed-missing', 'active-reference', 'foreign-active', 'pagination', 'duplicates', 'before-head', 'gate', 'history-log', 'failed-read', 'missing', 'refresh'])('refuses %s without retirement', async fault => {
+    const h = harness(fault, true); await expect(h.execute()).rejects.toThrow(); expect(cleanup(h)).toHaveLength(0);
+  });
+  it.each(['schema', 'registration', 'native-command', 'role', 'service-count'])('refuses changed %s authority before retirement', async fault => {
+    const h = harness('', true);
+    if (fault === 'schema') h.state['targetSchema'] = 143;
+    if (fault === 'registration') h.reader.definition.registeredBy = 'foreign';
+    if (fault === 'native-command') h.reader.definition.containerDefinitions[0]!.command = ['verify'];
+    if (fault === 'role') h.reader.definition.taskRoleArn = 'foreign';
+    if (fault === 'service-count') h.baseline['api']!['runningCount'] = 1;
+    await expect(h.execute()).rejects.toThrow(); expect(cleanup(h)).toHaveLength(0);
+  });
+  it.each(['lost-write', 'readback', 'after-head'])('retains unknown custody and never retries after %s', async fault => {
+    const h = harness(fault, true); await expect(h.execute()).rejects.toThrow(); expect(cleanup(h)).toHaveLength(1);
+    expect(h.state.readerRecovery).toMatchObject({ outcome: 'deregister-requested', evidenceBasis: 'historical-readonly-retirement', historicalExecution: 'UNKNOWN', historicalEffects: 'UNKNOWN' });
+  });
+  it('does not implicitly fall back when the original live branch loses its task', async () => {
+    const h = harness('missing'); await expect(h.execute()).rejects.toThrow('reader_recovery_tasks_unknown'); expect(cleanup(h)).toHaveLength(0);
+    expect(h.state.readerRecovery).not.toHaveProperty('evidenceBasis');
   });
 });
 
@@ -192,9 +238,9 @@ describe('protected workflow custody boundary', () => {
 });
 
 describe('exact recovery native command retry boundary', () => {
-  it('overrides ambient native retries only for the selected one-reader write', () => {
+  it.each([false, true])('overrides native retries only for selected reader write with historical=%s', historical => {
     const { failedRunId: _prior, ...input } = custody;
-    const env = { FSS_FAILED_READER_CUSTODY: JSON.stringify(input), GITHUB_RUN_ID: '99', AWS_MAX_ATTEMPTS: '9' };
+    const env = { FSS_FAILED_READER_CUSTODY: JSON.stringify({ ...input, ...(historical ? { evidenceBasis: 'historical-readonly-retirement' } : {}) }), GITHUB_RUN_ID: '99', AWS_MAX_ATTEMPTS: '9' };
     const args = ['ecs', 'deregister-task-definition', '--task-definition', definition(337), '--output', 'json'];
     expect(readerRecoveryCommandEnvironment(env, 'aws', args)).toEqual({ ...env, AWS_MAX_ATTEMPTS: '1' });
     expect(env.AWS_MAX_ATTEMPTS).toBe('9');
