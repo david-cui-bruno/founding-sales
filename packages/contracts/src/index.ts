@@ -114,5 +114,6 @@ export * from './manualLiteralPhone.ts';
 export * from './manualProspectActivity.ts';
 export * from './calling.ts';
 export * from './prospectPhoneDiscovery.ts';
+export * from './prospectPhoneObservation.ts';
 export * from './callingExecution.ts';
 export * from './campaignOpening.ts';
