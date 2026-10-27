@@ -1,5 +1,6 @@
 import {DIAGNOSTIC_UPGRADE_WORKFLOW,runDiagnosticUpgradeWorkflow} from './diagnosticWorkflow.ts';
 import {BUSINESS_GMAIL_UPGRADE_WORKFLOW,runBusinessGmailUpgradeWorkflow} from './businessGmailWorkflow.ts';
+import {PHONE_DISCOVERY_UPGRADE_WORKFLOW,runPhoneDiscoveryUpgradeWorkflow} from './phoneDiscoveryWorkflow.ts';
 import {createPerson} from '@fss/domain/crm/people.ts';
 import {previewSelectedAttachment,commitSelectedAttachment,readSelectedAttachment} from '@fss/domain/crm/selectedAttachments.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -38,7 +39,7 @@ import type { FixtureHandles } from './fixture.ts';
  *
  * These are domain calls as the runtime role. They construct the actor context
  * directly, so the API's sign-in, its command receipts and its HTTP routes are **not**
- * exercised. Exact-pricing and acquisition-diagnostic workflows additionally run their
+ * exercised. Exact-pricing, acquisition-diagnostic and phone workflows additionally run their
  * registered handlers through the real worker runner with fake providers. Synthetic
  * diagnostic authority is prepared separately as migration in this disposable database;
  * all actual workflow dispatch and reservations use app_runtime. Other workflows are
@@ -289,6 +290,7 @@ export async function runWorkflows(
   const steps: readonly Step[] = [
     {name:DIAGNOSTIC_UPGRADE_WORKFLOW,run:async()=>await runDiagnosticUpgradeWorkflow(admin)},
     { name: BUSINESS_GMAIL_UPGRADE_WORKFLOW, run: async () => await runBusinessGmailUpgradeWorkflow(admin,handles) },
+    { name: PHONE_DISCOVERY_UPGRADE_WORKFLOW, run: async () => await runPhoneDiscoveryUpgradeWorkflow(admin) },
     {
       name: 'crm.selectedFile (explicit import)',
       run: async () => {

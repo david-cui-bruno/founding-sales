@@ -1,15 +1,16 @@
 import {z} from 'zod';
 import {instant, uuid} from './foundationRows.ts';
+import {PROSPECT_PHONE_CAPTURE_LIMITS} from './prospectPhoneObservation.ts';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const url = z.string().min(1).max(2000);
 const revision = z.number().int().positive();
-const offset = z.number().int().min(0).max(4000);
+const offset = z.number().int().min(0).max(PROSPECT_PHONE_CAPTURE_LIMITS.maxBlockCharacters);
 export const manualLiteralPhoneCoverageSchema = z.strictObject({
   parser: z.literal('manual-literal-phone-v1'),
   state: z.enum(['complete', 'unavailable', 'changed', 'bounded']),
   observations: z.number().int().min(0).max(8),
-  blocks: z.number().int().min(0).max(800),
+  blocks: z.number().int().min(0).max(1024),
 });
 const authority = z.discriminatedUnion('kind', [
   z.strictObject({kind: z.literal('candidate_source'), sourceUrl: url}),
@@ -33,6 +34,8 @@ export const manualLiteralPhoneDiagnosticSchema = z.strictObject({
   label: z.string().min(1).max(200), labelStart: offset, labelEnd: offset,
   authority, lineage,
 }).superRefine((value, ctx) => {
+  if(value.authority.kind!=='phone_discovery' && Math.max(value.labelStart,value.labelEnd)>4000)
+    ctx.addIssue({code:'custom',message:'Non-discovery diagnostic offsets retain their original bounds.'});
   if(value.labelEnd <= value.labelStart || value.labelEnd-value.labelStart !== value.label.length)
     ctx.addIssue({code:'custom', message:'Diagnostic label offsets must preserve its exact UTF-16 length.'});
 });
@@ -55,6 +58,8 @@ export const manualLiteralPhoneSourceSchema = z.strictObject({
   normalizationBasis: z.enum(['explicit_country_code', 'default_us', 'unsupported']),
   authority, lineage,
 }).superRefine((value, ctx) => {
+  if(value.authority.kind!=='phone_discovery' && Math.max(value.start,value.end,value.labelStart,value.labelEnd)>4000)
+    ctx.addIssue({code:'custom',message:'Non-discovery literal offsets retain their original bounds.'});
   if(value.end <= value.start || value.end-value.start !== value.literal.length)
     ctx.addIssue({code:'custom', message:'Literal offsets must preserve its exact UTF-16 length.'});
   if(value.labelEnd <= value.labelStart || value.labelEnd-value.labelStart !== value.label.length)

@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {expect,it} from 'vitest';
-import {manualProspectPhoneEvidenceSchema,type ManualProspect} from '@fss/contracts';
+import {manualProspectPhoneEvidenceSchema,PROSPECT_PHONE_CAPTURE_LIMITS,type ManualProspect} from '@fss/contracts';
 import {captureProspectPhonePages} from '../../sourcing/prospectPhoneDiscovery.ts';
 import {projectProspectPhoneDiscovery,composeProspectPhoneDiscovery} from '../../sourcing/prospectPhoneDiscoveryProjection.ts';
 import type {PhoneDiscoveryRun} from '../../sourcing/prospectPhoneDiscoveryStore.ts';
@@ -35,7 +35,7 @@ it.each(['foreign','third_party','oversize','future','unreadable','truncated'] a
  if(mode==='oversize')bad={...bad,body:new Uint8Array(1000001)};
  if(mode==='future')bad={...bad,retrievedAt:new Date(now+1).toISOString()};
  if(mode==='unreadable')bad={...bad,contentType:'application/octet-stream'};
- if(mode==='truncated')bad={...bad,body:new TextEncoder().encode(Array.from({length:101},(_,i)=>`Phone ${i}`).join('\n'))};
+ if(mode==='truncated')bad={...bad,body:new TextEncoder().encode(Array.from({length:PROSPECT_PHONE_CAPTURE_LIMITS.maxBlocks+1},(_,i)=>`Phone ${i}`).join('\n'))};
  expect(captureProspectPhonePages([{...page(),url:'https://example.test/'},bad],'https://example.test/',4,1000000,now).ok).toBe(false);
 });
 it('duplicate page URLs, excessive pages and input bytes are not selected-prefix winners',()=>{

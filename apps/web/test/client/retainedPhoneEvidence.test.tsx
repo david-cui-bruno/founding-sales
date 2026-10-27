@@ -40,7 +40,12 @@ it.each([
 ])('retained phone preserves $state and never selects an alternate',input=>{
  const evidence=manualProspectPhoneEvidenceSchema.parse(input);
  const {container}=render(<RetainedPhoneEvidence evidence={evidence}/>);
- expect(container.textContent).not.toContain(value);
+ if(evidence.state==='conflicting'){
+  expect(screen.getByText(`Retained literal: ${literal.literal}`)).toBeTruthy();
+  expect(screen.getByText(`Supported normalized alternative: ${value}. Not selected or verified.`)).toBeTruthy();
+  expect(evidence).not.toHaveProperty('value');
+  expect(container.querySelector('a[href^="tel:"]')).toBeNull();expect(screen.queryByRole('button')).toBeNull();
+ }else expect(container.textContent).not.toContain(value);
  expect(screen.queryByText(/observed, not call-ready/u)).toBeNull();
  if(evidence.state==='conflicting'){expect(screen.getByText('Phone conflicting · no number selected')).toBeTruthy();expect(screen.getByRole('link',{name:source.url})).toBeTruthy();}
  else if(evidence.state==='absent')expect(screen.getByText(/Phone absent · retained source explicitly declares absent/u)).toBeTruthy();

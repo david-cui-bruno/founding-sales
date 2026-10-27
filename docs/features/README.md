@@ -7,7 +7,7 @@
 | Group | User journey / current surface | Coverage boundary |
 | --- | --- | --- |
 | Daily work and callbacks | [Today → exact prospect/context → next action](selling.md#today-and-next-action) | Browser source/retained local acceptance; hosted reads retained. Displayed callback intentions are not executed reminders. |
-| Supply, sourcing and research | [Prospects: prepared research, retained review, source inventory, qualification/recovery, phone discovery](selling.md#supply-and-prospects) | Partial continuous supply. Raw prospects remain usable with unknown phones/qualification; completed batch prepared0/10, cap exhausted, target unmet. |
+| Supply, sourcing and research | [Prospects: prepared research, retained review, source inventory, qualification/recovery, phone discovery](selling.md#supply-and-prospects) | Partial continuous supply. Raw prospects remain usable with unknown phones/qualification. Historical first batch0/10; expanded allowance and current correction owner are in PLAN. |
 | Calling and actual outcomes | [Calling: current evidence/device/verdict → actual outcome → private promised email](selling.md#calling-and-follow-through) | Controlled fake-device acceptance, not real audio/call usefulness. iPhone lane closed. |
 | Outbound and follow-ups | [Email: Automatic outreach / Follow-ups; desktop Sequences](selling.md#email-and-sequences) | Eligible automation target, approved-choice opening source, no live dispatch claim. Owner OFF preserved. |
 | Incoming conversations | [Email → Replies: original/context → manual reply review](selling.md#email-and-sequences) | Manual incoming retained. Controlled original fixtures do not prove real-original usefulness. Automatic incoming/booking/coaching deferred. |
@@ -24,7 +24,7 @@ Browser shell/navigation source: [BrowserApp](../../apps/web/src/client/BrowserA
 
 ## Drive and interpret
 
-[Verification guide](verification.md) owns setup/navigation/check selection and maps Root's retained observed bounded navigation/request/current-read path. No next acquisition or replay is authorized. Journey pages link source and existing checks. Other recipes not exercised by this documentation lane are explicitly **draft/unrun**. Retained observations stay labeled retained; a screenshot proves visible state, not a database/provider effect.
+[Verification guide](verification.md) owns setup/navigation/check selection and Root's retained observed navigation/request/read path. Later acquisition authority and its finite correction dependency are in [PLAN](../../apps/web/PLAN.md), not granted by this map. Journey pages link source and existing checks. Other recipes not exercised by this documentation lane are **draft/unrun**. A screenshot proves visible state, not a database/provider effect.
 
 ## Distinct authorities
 

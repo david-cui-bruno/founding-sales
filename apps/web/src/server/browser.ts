@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, socialGuidedRequestInputSchema } from '@fss/contracts';
+import { campaignOpeningApproveInputSchema, campaignOpeningRevokeInputSchema, campaignOpeningControlRequestSchema, campaignOpeningReceiptInputSchema } from '@fss/contracts';
 import { startSignIn, handleCallback, claimSignIn } from '../../../api/src/auth/signIn.ts';
 import { authenticate, endSession, type AuthenticatedPrincipal } from '../../../api/src/auth/sessions.ts';
 import { route } from '../../../api/src/server.ts';
@@ -11,6 +12,7 @@ import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestCon
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
 import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
 import { socialGenerationBrowserResult } from './socialGenerationBoundary.ts';
+import { campaignOpeningBrowserResult } from './campaignOpeningBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
 import { callingExecutionBrowserResult } from './callingExecutionBoundary.ts';
@@ -23,6 +25,13 @@ class Refusal extends Error {
 }
 
 const guidedSocialCommandSchema = socialGuidedRequestInputSchema.safeExtend({ commandId: commandIdSchema, clientVersion: semanticVersionSchema.optional() });
+const openingEnvelope = { commandId: commandIdSchema, clientVersion: semanticVersionSchema.optional() };
+const openingBrowserSchemas: Readonly<Record<string, z.ZodType>> = {
+  '/outreach/email-campaigns/opening/control': campaignOpeningControlRequestSchema,
+  '/outreach/email-campaigns/opening/receipt': campaignOpeningReceiptInputSchema,
+  '/outreach/email-campaigns/opening/approve': campaignOpeningApproveInputSchema.extend(openingEnvelope),
+  '/outreach/email-campaigns/opening/revoke': campaignOpeningRevokeInputSchema.extend(openingEnvelope),
+};
 
 const generationRefusalSchema = z.strictObject({
   status: z.literal('refused'), replayed: z.boolean(), reason: z.string().regex(/^[a-z_]{1,100}$/u),
@@ -162,6 +171,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
         if (apiPath !== null && QUALIFICATION_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if (apiPath !== null && PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS.has(apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if ((apiPath === '/social/drafts/request' || apiPath === '/social/drafts/request/receipt') && principal.role !== 'admin') throw new Refusal(403);
+        if (apiPath !== null && Object.hasOwn(openingBrowserSchemas, apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if (request.path === BROWSER_PATHS.signOut) {
           // Clear local custody on uncertainty, but never claim remote revocation succeeded.
           outgoing.push(...Object.values(COOKIE_NAMES).map(clearCookie));
@@ -179,6 +189,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
 async function product(request: ApiRequest, path: string, context: BrowserRequestContext, token: string, cookies: string[], clientVersion: string): Promise<BrowserResponse> {
   let body = request.body;
   if (path === '/social/drafts/request' && !guidedSocialCommandSchema.safeParse(body).success) throw new Refusal(400);
+  if (openingBrowserSchemas[path] && !openingBrowserSchemas[path].safeParse(body).success) throw new Refusal(400);
   if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
     for (const name of Object.keys(body)) {
       if (['authorization', 'cookie', 'headers', 'origin'].includes(name.toLowerCase())
@@ -201,6 +212,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (privateDraft !== null) return response(privateDraft.status, privateDraft.body, cookies);
   const socialGeneration = socialGenerationBrowserResult(path, result.status, result.body);
   if (socialGeneration !== null) return response(socialGeneration.status, socialGeneration.body, cookies);
+  const opening = campaignOpeningBrowserResult(path, result.status, result.body);
+  if (opening !== null) return response(opening.status, opening.body, cookies);
   const manual = manualProspectBrowserResult(path, result.status, result.body);
   if (manual !== null) return response(manual.status, manual.body, cookies);
   const calling = callingBrowserResult(path, result.status, result.body);

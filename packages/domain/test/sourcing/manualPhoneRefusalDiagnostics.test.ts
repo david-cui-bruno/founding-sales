@@ -96,7 +96,7 @@ it('omits over200 zero-literal labels without changing refusal or losing diagnos
 it('scan count overflow keeps earliest expiry even when its location is beyond the16-entry bound',()=>{
  const a=fixture(Array.from({length:16},()=> 'Phone: unavailable')),b=fixture();
  const later=new Date(now+5000).toISOString(),earlier=new Date(now+1000).toISOString();
- a.input.observations=[a.source,b.source];a.input.authorities={[a.source.id]:{kind:'phone_discovery',runId:a.input.runId,expiresAt:later},[b.source.id]:{kind:'phone_discovery',runId:b.input.runId,expiresAt:earlier}};
+ a.input.observations=[a.source,b.source];a.input.authorities={[a.source.id]:{kind:'phone_discovery',runId:a.input.runId,expiresAt:later},[b.source.id]:{kind:'phone_discovery',runId:a.input.runId,expiresAt:earlier}};
  const scan=scanManualLiteralPhones(a.input);expect(scan).toMatchObject({unresolved:true,sources:[],diagnostics:{truncated:true,expiresAt:earlier}});
  expect(scan.diagnostics?.entries).toHaveLength(16);expect(scan.diagnostics?.entries.every(entry=>entry.observationId===a.source.id)).toBe(true);
 });

@@ -21,6 +21,7 @@ import {SOCIAL_PATHS,routeSocial} from './social.ts';
 import {SOURCING_LEARNING_PATHS,routeSourcingLearning} from './sourcingLearning.ts';
 import {OUTREACH_PATHS,routeOutreach} from './outreach.ts';
 import {EMAIL_CAMPAIGN_PATHS,routeEmailCampaigns} from './emailCampaigns.ts';
+import {CAMPAIGN_OPENING_CONTROL_PATHS,routeCampaignOpeningControl} from './campaignOpeningControl.ts';
 import {MEETING_QUALIFICATION_PATHS,routeMeetingQualification} from './meetingQualification.ts';
 import { SOURCING_PATHS, routeSourcing } from './sourcing.ts';
 import {RETAINED_RECOVERY_PATHS} from './sourcingRetainedRecovery.ts';
@@ -252,6 +253,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('social',{paths:SOCIAL_PATHS},routeSocial,routing),
     moduleOf('outreach',{paths:OUTREACH_PATHS},routeOutreach,routing),
     moduleOf('email-campaigns',{paths:EMAIL_CAMPAIGN_PATHS},routeEmailCampaigns,routing),
+    moduleOf('campaign-opening-control',{paths:CAMPAIGN_OPENING_CONTROL_PATHS},routeCampaignOpeningControl,routing),
     moduleOf('notifications',{paths:NOTIFICATION_PATHS},routeNotifications,routing),
     moduleOf('meeting-qualification',{paths:MEETING_QUALIFICATION_PATHS},routeMeetingQualification,routing),
     moduleOf('meeting-outcomes', { paths: MEETING_OUTCOMES_PATHS }, routeMeetingOutcomes, routing),
