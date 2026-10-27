@@ -17,10 +17,11 @@ import {startSignIn,handleCallback,claimSignIn} from '../../../../apps/api/src/a
 import {authenticate} from '../../../../apps/api/src/auth/sessions.ts';
 import type {AuthDeps} from '../../../../apps/api/src/auth/config.ts';
 import {PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH} from '@fss/contracts';
+import {requirePhoneRefusalOriginalPgAuthority} from '../../vitest.phoneRefusalOriginal.pg.config.ts';
 let db:TestDatabase,runtime:SessionQueryable,seed:TwoWorkspaces,serial=7200;
 const ctx=(session=runtime)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),session);
 const text='🏡 PHONE: <b>Ask the office</b> for help. Whole retained tail.';
-beforeAll(async()=>{if(process.env['FSS_PHONE_REFUSAL_ORIGINAL_PG_GRANT']!=='retained-only')throw Error('Fresh Root exclusive PG grant required');db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();expect((await runtime.query('SELECT current_user AS role')).rows[0]?.['role']).toBe('app_runtime');});
+beforeAll(async()=>{requirePhoneRefusalOriginalPgAuthority();db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();expect((await runtime.query('SELECT current_user AS role')).rows[0]?.['role']).toBe('app_runtime');});
 afterAll(async()=>db?.drop());
 async function fixture({invalidHash=false}:{invalidHash?:boolean}={}){
  const candidate=manualOrdinaryFixture(++serial),saved=await withTransaction(runtime,()=>saveCandidate(ctx(),candidate));if(!saved.ok)throw Error(saved.reason);
