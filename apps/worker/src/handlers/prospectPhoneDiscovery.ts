@@ -4,15 +4,22 @@ import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts
 import type {PageFetchProvider} from '@fss/domain/research/providers.ts';
 import {runProspectPhoneDiscovery,expireProspectPhoneDiscoveryInTransaction} from '@fss/domain/sourcing/prospectPhoneDiscovery.ts';
 import type {DueWorkSource} from '../scheduler/schedulerPass.ts';
+import type {Logger} from '../bootstrap/log.ts';
 
 /** The domain owns claim, continuation fences and commits. No qualification,
  * evaluation, admission, publication or model dependency belongs on this path. */
-export function prospectPhoneDiscoveryHandler(deps:{pageFetch:PageFetchProvider}):JobHandler {
+export function prospectPhoneDiscoveryHandler(deps:{pageFetch:PageFetchProvider;log?:Logger}):JobHandler {
  return {kind:'sourcing.phone_discover',protection:'outbound_fence',maxAttempts:1,leaseSeconds:180,
   handle:async input=>{
    const runId=uuid.safeParse(input.job.payload['runId']);
    if(!runId.success)return;
-   await runProspectPhoneDiscovery(repositoryContext(input.scope,input.session),{runId:runId.data},{pageFetch:deps.pageFetch});
+   const diagnostic=await runProspectPhoneDiscovery(repositoryContext(input.scope,input.session),{runId:runId.data},{pageFetch:deps.pageFetch});
+   // Emitted only after domain finalization. Logging must not turn a completed
+   // one-attempt capture into a failed job, and never receives source/error text.
+   if(diagnostic&&deps.log)try{
+    deps.log.log('warn','phone_discovery_source_unavailable',{run_id:runId.data,branch:diagnostic.branch,stage:diagnostic.stage,page_count:diagnostic.pages,
+     ...Object.fromEntries(Object.entries(diagnostic.skipped).map(([key,count])=>[`skip_${key}`,count]))});
+   }catch{ /* Diagnostic sink failure cannot change capture custody. */ }
   }};
 }
 
