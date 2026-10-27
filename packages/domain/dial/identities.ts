@@ -4,14 +4,9 @@ import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
 
 /**
  * Calling identities: how a salesperson's own number comes to exist, to be verified,
- * and to be retired (specification 9.1; lane g60).
- *
- * 9.1: "A calling identity is a verified outbound number; in version one it must be
- * active and owned by the acting salesperson", and "each salesperson can verify a
- * personal calling number". Migration 0001 made the table and `authorizeDial` has read
- * it at 9.2's second step since G4, but until this file nothing inserted a row or set
- * one to `verified`. Production's only salesperson could not place a call from Today,
- * and the restore drill's dial probe had no subject.
+ * and to be retired (specification 9.1). The number must be active and owned by
+ * the acting salesperson. Attestation records ownership evidence, not provider-session
+ * verification or permission to call a recipient.
  *
  * ## Attested when added (wave 2, S4.3)
  *
@@ -28,17 +23,14 @@ import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
  * `authorizeDial` step 2), and `currentCallingIdentityId` offers it on the Today card. So
  * no stored row waits for an attestation it no longer needs.
  *
- * ## What "verified" means in version one
+ * ## What the stored attestation verifies
  *
- * There is no telephony provider in this stack: a call is a `tel:` handoff from the
- * Mac to whatever phone app the person has, and nothing FSS runs ever sees the line
- * the call leaves on. So there is nothing to measure, and the honest verification is
- * the person's own statement that this is the number they place calls from, recorded
- * with who made it and when — the same shape as 12.7's sending checklist, which is a
- * person saying they looked because FSS never queries DNS. An admin may make the
- * statement on a member's behalf, and that is recorded as a different method, because
- * it is different evidence. `docs/decisions/g60-calling-identities-are-attested-in-version-one.md`
- * has the reasoning and what a later call-back code would change.
+ * For the native `tel:` fallback, FSS cannot observe the originating line chosen by
+ * the phone app. The owner attests that this is their calling number, with who and
+ * when recorded; an admin's statement on a member's behalf is distinct evidence.
+ * Browser calling also has a Twilio provider-session path with its own identity and
+ * policy checks. These stored attestation methods do not prove provider verification,
+ * session execution or that the native phone app used this number.
  *
  * ## The rules, and where each is enforced
  *

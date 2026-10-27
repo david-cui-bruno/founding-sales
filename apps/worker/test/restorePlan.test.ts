@@ -265,7 +265,7 @@ describe('the retirement check', () => {
   });
 });
 
-describe('the command the runbook runs', () => {
+describe('the retained plan-validator CLI, not a hosted restore entrypoint', () => {
   const files = (contents: Record<string, unknown>) => (path: string): string => {
     if (!(path in contents)) throw new Error(`no ${path}`);
     return typeof contents[path] === 'string' ? (contents[path] as string) : JSON.stringify(contents[path]);
@@ -293,35 +293,44 @@ describe('the command the runbook runs', () => {
   });
 });
 
-describe('what the runbook tells a restore, against what the module configures', () => {
-  // (b) sets on the copy what a point-in-time restore does not carry over, so that (g)'s
-  // check finds only Terraform's own settings and tags to change. A module that moves a
-  // window or the CA without the runbook would turn every retirement into a NO-GO.
+describe('restore design and retained source configuration, not operational support', () => {
+  // The hosted copy writer is not implemented. Pin its source settings contract here
+  // without requiring the retired local CLI recipe or claiming a restore was checked.
   const read = (path: string): string => readFileSync(fileURLToPath(new URL(`../../../${path}`, import.meta.url)), 'utf8');
   const runbook = read('docs/greenfield/runbooks/restore.md');
   const module = read('infra/modules/database/main.tf');
   const production = read('infra/roots/production/main.tf');
+  const stack = read('infra/modules/stack/main.tf');
   const literal = (text: string, name: string): string => {
     const match = new RegExp(`^\\s*${name}\\s*=\\s*"?([^"\\s]+)"?\\s*$`, 'mu').exec(text);
     if (match?.[1] === undefined) throw new Error(`${name} is not a literal any more`);
     return match[1];
   };
 
-  it('restores with the module’s storage, CA and windows, and production’s ceiling and retention', () => {
+  it('retains the module’s storage, CA and windows, and production’s ceiling and retention bindings', () => {
     expect(literal(module, 'storage_type')).toBe('gp3');
-    expect(runbook).toContain(`--storage-type ${literal(module, 'storage_type')}`);
-    expect(runbook).toContain(`--ca-certificate-identifier ${literal(module, 'ca_cert_identifier')}`);
-    expect(runbook).toContain(`--preferred-backup-window ${literal(module, 'backup_window')}`);
-    expect(runbook).toContain(`--preferred-maintenance-window ${literal(module, 'maintenance_window')}`);
-    expect(runbook).toContain(`--max-allocated-storage ${literal(production, 'database_max_allocated_storage')}`);
-    expect(runbook).toContain(`--backup-retention-period ${literal(production, 'database_backup_retention_days')}`);
+    expect(literal(module, 'ca_cert_identifier')).toBe('rds-ca-rsa2048-g1');
+    expect(literal(module, 'backup_window')).toBe('07:30-08:00');
+    expect(literal(module, 'maintenance_window')).toBe('sun:08:30-sun:09:30');
+    expect(literal(production, 'database_max_allocated_storage')).toBe('200');
+    expect(literal(production, 'database_backup_retention_days')).toBe('35');
+    expect(literal(stack, 'max_allocated_storage')).toBe('var.database_max_allocated_storage');
+    expect(literal(stack, 'backup_retention_days')).toBe('var.database_backup_retention_days');
+    expect(module).toMatch(/^\s*max_allocated_storage\s*=\s*var\.max_allocated_storage > 0 \? var\.max_allocated_storage : null\s*$/mu);
+    expect(literal(module, 'backup_retention_period')).toBe('var.backup_retention_days');
+    expect(runbook).toContain('encryption and expected storage/master-secret KMS keys, retention/windows and deletion protection');
   });
 
-  it('runs both checks through restorePlan.ts, each over a plan and a reference that replace the task definitions', () => {
-    expect(runbook).toContain('check_plans repoint "$W/point.tfplan" "$W/point-reference.tfplan" "$NEW_HOST" "$OLD_HOST"');
-    // Retirement uses the renamed copy's own address, read after the rename (third review).
-    expect(runbook).toContain('check_plans retire "$W/retire.tfplan" "$W/retire-reference.tfplan" "$RETIRED_HOST" "$NEW_HOST"');
-    expect(runbook).toContain('fill_migration fss-prod-pg "$RETIRED_HOST"');
-    for (const name of ['api', 'worker', 'migration', 'operations']) expect(runbook).toContain(`-replace=$TD.${name}`);
+  it('requires paired plans for all four definitions and target readback while hosted recovery remains missing', () => {
+    expect(RESTORE_TASK_DEFINITIONS).toEqual(['api', 'worker', 'migration', 'operations'].map(
+      name => `module.stack.module.cluster.aws_ecs_task_definition.${name}`,
+    ));
+    expect(runbook).toContain('Hosted restore orchestration: NOT IMPLEMENTED');
+    expect(runbook).toContain('Restoration and hosted recovery rehearsal: UNTESTED');
+    expect(runbook).toContain('apps/worker/src/tools/restorePlan.ts');
+    expect(runbook).toContain('Prepare paired plans differing only in `active_database_host`, both explicitly replacing the four task definitions.');
+    expect(runbook).toContain('exactly API/worker/migration/operations definitions differ only by host, services differ only by their planned task definitions, and no other managed resource changes');
+    expect(runbook).toContain('Rename the copy to the managed identifier and re-read its unchanged resource ID and possibly changed endpoint.');
+    expect(runbook).toContain('Repoint the migration credential, restart and repeat exact readbacks.');
   });
 });

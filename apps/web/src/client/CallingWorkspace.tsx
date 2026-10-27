@@ -2,7 +2,7 @@ import {useCallback,useEffect,useRef,useState,type JSX} from 'react';
 import type {CallingSubject} from '@fss/contracts';
 import type {CallingWorkspaceProps} from './workspaceNavigation.ts';
 import {CallingQueue,type CallingQueueEntry} from './CallingQueue.tsx';
-import {CallingContext,type CallingContextData} from './CallingContext.tsx';
+import {CallingContext,type CallingContextData,type CallingContextEntry} from './CallingContext.tsx';
 import {CallingExecution} from './CallingExecution.tsx';
 import type {CallingExecutionLink} from './CallingExecutionDispatch.ts';
 import {CallingWrap} from './CallingWrap.tsx';
@@ -10,12 +10,18 @@ import {callingTarget} from './CallingPending.ts';
 import './workspaceCalling.css';
 /** Existing outcome workspace plus explicit browser calls, never automatic dialing. */
 export function CallingWorkspace({client,selection,onSelectionChange,onAdvance,onOpenEmailDraft,onNavigate}:CallingWorkspaceProps):JSX.Element{
- const [entry,setEntry]=useState<CallingQueueEntry|null>(null),[context,setContext]=useState<CallingContextData|null>(null),[paused,setPaused]=useState(false),[pending,setPending]=useState(false),[showList,setShowList]=useState(true),[generation,setGeneration]=useState(0),[signedIn,setSignedIn]=useState(client.current?.status==='signed_in');
+ const [entry,setEntry]=useState<CallingContextEntry|null>(null),[context,setContext]=useState<CallingContextData|null>(null),[paused,setPaused]=useState(false),[pending,setPending]=useState(false),[showList,setShowList]=useState(true),[generation,setGeneration]=useState(0),[signedIn,setSignedIn]=useState(client.current?.status==='signed_in');
  const [executionBlocked,setExecutionBlocked]=useState(false),[executionLink,setExecutionLink]=useState<CallingExecutionLink|null>(null);
  const executionRef=useRef(false);const holdExecution=useCallback((value:boolean):void=>{executionRef.current=value;setExecutionBlocked(value);},[]);
- const scope=useRef(0),title=useRef<HTMLHeadingElement>(null),entryRef=useRef<CallingQueueEntry|null>(null),pendingRef=useRef(false);entryRef.current=entry;
- const select=useCallback((next:CallingQueueEntry|null):void=>{scope.current++;entryRef.current=next;setContext(null);setExecutionLink(null);pendingRef.current=false;setPending(false);setEntry(next);setGeneration(v=>v+1);if(next)setShowList(false);},[]);
- useEffect(()=>{const old=entryRef.current?.subject;if(selection&&(!old||JSON.stringify(old)!==JSON.stringify(selection)))select({subject:selection,label:selection.kind==='firm'?'Selected Firm':'Selected retained observation'});else if(selection===null&&old)select(null);},[selection,select]);
+ const scope=useRef(0),title=useRef<HTMLHeadingElement>(null),entryRef=useRef<CallingContextEntry|null>(null),pendingRef=useRef(false);entryRef.current=entry;
+ const select=useCallback((next:CallingContextEntry|null):void=>{scope.current++;entryRef.current=next;setContext(null);setExecutionLink(null);pendingRef.current=false;setPending(false);setEntry(next);setGeneration(v=>v+1);if(next)setShowList(false);},[]);
+ useEffect(()=>{
+  const old=entryRef.current;
+  if(selection){
+   const {prospectPage,...subject}=selection;
+   if(!old||JSON.stringify(old.subject)!==JSON.stringify(subject)||JSON.stringify(old.prospectPage)!==JSON.stringify(prospectPage))select({subject,label:selection.kind==='firm'?'Selected Firm':'Selected retained observation',...(prospectPage?{prospectPage}:{})});
+  }else if(selection===null&&old)select(null);
+ },[selection,select]);
  useEffect(()=>{let epoch=client.epoch;return client.subscribe(()=>{const current=client.current?.status==='signed_in';setSignedIn(current);if(epoch!==client.epoch||!current){epoch=client.epoch;select(null);setPaused(false);}});},[client,select]);
  const ready=useCallback((data:CallingContextData|null):void=>{if(data===null||data.entry===entryRef.current)setContext(data);},[]);
  const held=useCallback((value:boolean):void=>{pendingRef.current=value;setPending(value);},[]);

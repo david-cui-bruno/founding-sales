@@ -9,6 +9,7 @@ interface Props {
  draft:FactDraft;
  blocked:boolean;
  refreshRequired:boolean;
+ loadPublicSources?:(()=>Promise<SourcingCandidate[]>)|null;
  onChange(draft:FactDraft):void;
  onBegin(draft:FactDraft):void;
  onAdopt(version:number):void;
@@ -16,9 +17,9 @@ interface Props {
 }
 const status=(block:AnswerBlock)=>block.retiredAt?'Retired':block.approvedAt?'Approved':'Draft';
 
-export function ApprovedFactsEditor({blocks,draft,blocked,refreshRequired,onChange,onBegin,onAdopt,onMutate}:Props){
+export function ApprovedFactsEditor({blocks,draft,blocked,refreshRequired,loadPublicSources,onChange,onBegin,onAdopt,onMutate}:Props){
  const [publicSources,setPublicSources]=useState<SourcingCandidate[]>([]),[sourceError,setSourceError]=useState<string|null>(null);
- const loadSources=async()=>{try{const api=operations();if(!api)throw new Error('unavailable');const results=await Promise.all(['needs_review','kept'].map(status=>api.read('sourcing.list',{status:status as 'needs_review'|'kept',offset:0})));setPublicSources(results.flatMap(r=>r.view?.candidates??[]).filter(c=>c.sourceCheck?.state==='checked'&&c.sourceCheck.lastSuccess?.firstParty&&c.sourceCheck.lastSuccess.quoteMatched&&!c.sourceCheck.lastSuccess.truncated));setSourceError(results.some(r=>!r.view)?'Public sources unavailable. Use the ordinary sourcing view to check a permitted source.':null);}catch{setSourceError('Public sources unavailable.');}};
+ const loadSources=async()=>{try{if(loadPublicSources===null)return;if(loadPublicSources){setPublicSources(await loadPublicSources());setSourceError(null);return;}const api=operations();if(!api)throw new Error('unavailable');const results=await Promise.all(['needs_review','kept'].map(status=>api.read('sourcing.list',{status:status as 'needs_review'|'kept',offset:0})));setPublicSources(results.flatMap(r=>r.view?.candidates??[]).filter(c=>c.sourceCheck?.state==='checked'&&c.sourceCheck.lastSuccess?.firstParty&&c.sourceCheck.lastSuccess.quoteMatched&&!c.sourceCheck.lastSuccess.truncated));setSourceError(results.some(r=>!r.view)?'Public sources unavailable. Use the ordinary sourcing view to check a permitted source.':null);}catch{setSourceError('Public sources unavailable.');}};
  const current=blocks.find(block=>block.id===draft.id);
  const changed=current!==undefined&&current.version!==draft.expectedVersion;
  return <fieldset className="space-y-3">
@@ -33,9 +34,11 @@ export function ApprovedFactsEditor({blocks,draft,blocked,refreshRequired,onChan
     <label className="grid text-sm">LinkedIn topic<select value={draft.socialInput.topic} disabled={blocked} onChange={e=>onChange({...draft,socialInput:{topic:e.target.value as NonNullable<SaveAnswerBlock['socialInput']>['topic'],status:e.target.value==='news'?'observation':draft.socialInput!.status,sanitized:true}})}>{['founder','build','technical','maintenance','news'].map(t=><option key={t}>{t}</option>)}</select></label>
     <label className="grid text-sm">Work status<select value={draft.socialInput.status} disabled={blocked} onChange={e=>onChange({...draft,socialInput:{...draft.socialInput!,status:e.target.value as NonNullable<SaveAnswerBlock['socialInput']>['status']}})}>{['planned','local','shipped','observation'].map(t=><option key={t}>{t}</option>)}</select></label>
     {draft.socialInput.topic==='news'&&<>
+     {loadPublicSources===null?<p role="status">News-source selection is unavailable in this browser. A current checked first-party original is required. Use a supported source workflow before preparing news facts. No source is fetched here.</p>:<>
      <Button size="sm" variant="quiet" disabled={blocked} onClick={()=>void loadSources()}>Load existing checked public sources</Button>
      <label className="grid text-sm">Original public news source<select value={draft.socialInput.sourceRef?.id??''} disabled={blocked} onChange={e=>{const c=publicSources.find(c=>c.id===e.target.value),check=c?.sourceCheck,s=check?.lastSuccess;if(c&&check?.checkedAt&&s)onChange({...draft,text:s.excerpt,socialInput:{topic:'news',status:'observation',sanitized:true,sourceRef:{kind:'public',id:c.id,revision:c.revision,url:s.url,checkedAt:check.checkedAt}}});}}><option value="">Select a previously checked first-party source</option>{publicSources.map(c=><option key={c.id} value={c.id}>{c.firmName} · {c.sourceUrl} · version {c.revision}</option>)}</select></label>
      <p className="text-xs">Reuse only a relevant original source checked today. Edit the excerpt down to the exact supported claim. No news feed or arbitrary ingestion is added.</p>
+     </>}
      {draft.socialInput.sourceRef&&<p className="text-xs">{draft.socialInput.sourceRef.url} · version {draft.socialInput.sourceRef.revision} · checked {draft.socialInput.sourceRef.checkedAt}</p>}
      {sourceError&&<p role="status">{sourceError}</p>}
     </>}

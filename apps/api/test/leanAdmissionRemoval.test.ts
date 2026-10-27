@@ -24,8 +24,8 @@ it('removes admission activation/configuration routes and the automatic worker w
   expect((await dispatch({method:'GET',path,body:undefined,query:new URLSearchParams(),headers:{authorization:`Bearer ${grant.accessToken}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false})).status,path).toBe(404);
  }
  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
- expect(registry.get('outreach.email_admit')).toBeUndefined();
- for(const kind of ['sequence.action','reply.human_send','outreach.reply','sequence.terminal_stop'])expect(registry.get(kind),kind).toBeDefined();
+ for(const kind of ['outreach.email_admit','outreach.reply'])expect(registry.get(kind),kind).toBeUndefined();
+ for(const kind of ['sequence.action','reply.human_send','sequence.terminal_stop'])expect(registry.get(kind),kind).toBeDefined();
 });
 
 it('keeps authenticated installed strict parsing inert while preserving current control and ignoring forged version headers',async()=>{

@@ -275,7 +275,6 @@ describe('what the API mounts', () => {
       '/outreach/reply/manual',
       '/outreach/senders/standing',
       '/outreach/senders/standing/v2',
-      '/outreach/settings/save',
       '/pauses',
       '/pauses/open',
       '/pauses/release',

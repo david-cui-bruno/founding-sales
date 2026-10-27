@@ -31,6 +31,8 @@ import { repositoryPath } from './support/repository.ts';
  * Inside the owner, the number of references must be exactly the expected number of
  * calls (all of them call expressions), so a second call or an alias inside the owner
  * fails too.
+ * Retired provider methods stay in the vocabulary and have no executable owner or
+ * allow-list exemption. Pure declarations and comments keep the same parser behavior.
  *
  * Not caught, by the nature of a syntactic check: a provider reached through a name this
  * table does not list (a new method), or built at run time (`x['send' + 'Message']`).
@@ -53,7 +55,6 @@ interface Boundary {
  */
 export const BOUNDARIES: readonly Boundary[] = [
   {name:'social draft generation',site:'packages/domain/social/draftRun.ts',owner:'runSocialDraft',methods:{countInputTokens:1,generate:1}},
-  {name:'routine reply interpretation',site:'packages/domain/outreach/replyRun.ts',owner:'runRoutineReply',methods:{countInputTokens:1,interpret:1}},
   {name:'human reply suggestion',site:'packages/domain/replies/composerGeneration.ts',owner:'generateReplyDraft',methods:{countInputTokens:1,prepareReplyDraft:1}},
   {name:'candidate qualification provider calls',site:'packages/domain/sourcing/qualificationRun.ts',owner:'runQualification',methods:{fetchPages:1,countInputTokens:1,extract:1}},
   {
@@ -106,6 +107,11 @@ export const BOUNDARIES: readonly Boundary[] = [
     methods: { transcribe: 1 },
   },
 ];
+
+// I01 removed automatic incoming inference, not the guard against reintroducing it.
+const RETIRED_METHODS: Readonly<Record<string, string>> = {
+  interpret: 'retired routine reply interpretation',
+};
 
 /**
  * A reference allowed somewhere else. Each entry needs a REASON that says why it cannot
@@ -316,13 +322,25 @@ export function findViolations(
   allowed: readonly Allowed[] = ALLOWED_ELSEWHERE,
 ): Violation[] {
   const violations: Violation[] = [];
-  const all = new Set(boundaries.flatMap(boundary => Object.keys(boundary.methods)));
+  const all = new Set([...boundaries.flatMap(boundary => Object.keys(boundary.methods)), ...Object.keys(RETIRED_METHODS)]);
   const ownerCalls = new Map<string, number>();
   const ownerReferences = new Map<string, number>();
   for (const top of ROOTS) {
     for (const path of sourceFiles(join(root, top))) {
       const file = relative(root, path).split('\\').join('/');
       for (const reference of referencesIn(readFileSync(path, 'utf8'), all, path)) {
+        const retired = RETIRED_METHODS[reference.method];
+        if (retired !== undefined) {
+          violations.push({
+            boundary: retired,
+            file,
+            line: reference.line,
+            method: reference.method,
+            kind: 'outside-owner',
+            detail: `${file}:${String(reference.line)} references .${reference.method}, the ${retired} boundary; automatic incoming inference is retired and has no executable owner or ALLOWED_ELSEWHERE exemption`,
+          });
+          continue;
+        }
         for (const boundary of boundaries) {
           if (!(reference.method in boundary.methods)) continue;
           const key = `${boundary.name}\0${reference.method}`;
@@ -387,7 +405,9 @@ export function findViolations(
 function describeViolations(violations: readonly Violation[]): string {
   return violations
     .map(violation =>
-      violation.kind === 'outside-owner'
+      violation.method in RETIRED_METHODS
+        ? violation.detail
+        : violation.kind === 'outside-owner'
         ? `${violation.detail}. Every call goes through that function, after every gate; new call sites must go through it. ` +
           'If this one truly cannot, add it to ALLOWED_ELSEWHERE in test/ops/providerCallBoundaries.check.ts with the reason and what gates it instead.'
         : `${violation.boundary}: ${violation.detail}. New call sites must go through the boundary; if the owner legitimately changed, update BOUNDARIES in test/ops/providerCallBoundaries.check.ts.`,
@@ -447,6 +467,55 @@ describe('the check itself', () => {
 
   it('passes the clean fixture', () => {
     expect(withSite('')).toEqual([]);
+  });
+
+  it('rejects retired interpretation calls and references in every owner and despite an allow-list attempt', () => {
+    expect(BOUNDARIES.some(boundary => 'interpret' in boundary.methods || boundary.owner === 'runRoutineReply')).toBe(false);
+    for (const code of [
+      'p.interpret(input);',
+      'p?.interpret?.(input);',
+      'p["interpret"]?.(input);',
+      'p[`interpret`](input);',
+      'const { interpret: detached } = p;',
+      'const { ["interpret"]: detached } = p;',
+      'let detached; ({ interpret: detached } = p);',
+      'const alias = p.interpret;',
+      'withRetry(p.interpret);',
+      'interpret(input);',
+    ]) {
+      for (const file of ['packages/domain/outreach/replyRun.ts', 'packages/domain/site.ts', 'apps/worker/src/elsewhere.ts']) {
+        const text = file === 'packages/domain/site.ts'
+          ? SITE.replace('  return await', `  ${code}\n  return await`)
+          : `function ${file.includes('replyRun') ? 'runRoutineReply' : 'otherOwner'}(p: P) { ${code} }`;
+        const root = scratch({ 'packages/domain/site.ts': SITE, [file]: text });
+        for (const allowed of [[], [{ file, method: 'interpret', reason: 'Attempted exemption must never revive retired automatic incoming inference.' }]]) {
+          const found = findViolations(root, TABLE, allowed);
+          expect(found.map(v => ({ file: v.file, method: v.method, kind: v.kind })), `${file}: ${code}`).toEqual([
+            { file, method: 'interpret', kind: 'outside-owner' },
+          ]);
+          expect(found[0]?.line).toBeGreaterThan(0);
+          expect(describeViolations(found)).toContain('retired routine reply interpretation');
+          expect(describeViolations(found)).toContain('no executable owner or ALLOWED_ELSEWHERE exemption');
+          expect(describeViolations(found)).not.toContain('add it to ALLOWED_ELSEWHERE');
+        }
+      }
+    }
+  });
+
+  it('keeps retired-method declarations and comments non-executable under the existing parser rules', () => {
+    const declarations = [
+      'interface Client { interpret(input: I): O; }',
+      'interface Property { readonly interpret: (input: I) => O; }',
+      'type Narrow = Pick<Client, "interpret">;',
+      'class Adapter { interpret(input: I) { return input; } }',
+      'const adapter = { interpret: (input: I) => input };',
+      'const shorthand = { interpret };',
+      '// p.interpret(input);',
+      '/* const alias = p.interpret; */',
+      'const note = "p.interpret(input)";',
+    ].join('\n');
+    expect(withSite(declarations)).toEqual([]);
+    expect(withSite('', { 'apps/worker/src/declarations.ts': declarations })).toEqual([]);
   });
 
   it('enforces the phone fetch owner without exempting its file or merging shared-owner counts', () => {

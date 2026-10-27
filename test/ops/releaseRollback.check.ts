@@ -490,7 +490,7 @@ function world(options: WorldOptions = {}): World {
       // Lane RS-2 (PR 310 third review): the apply names the revision it registered, and
       // `deploy.sh release` refuses a root that does not. The rolled-back checkout's
       // apply publishes it too — which is to say a rollback to a commit from before
-      // that output existed is refused, and has to be reconciled by hand.
+      // that output existed is refused and requires protected hosted repair.
       deployment_plan: {
         api: {
           service_name: 'fss-prod-api',
@@ -609,7 +609,7 @@ describe('rollback.sh plans the previous release and stops', () => {
     expect(run.output).toContain('Plan: 4 to add, 2 to change, 4 to destroy.');
     expect(run.output).toContain(`replace ${CLUSTER_ADDRESS}.aws_ecs_task_definition.api`);
     expect(run.output).toContain(`update ${CLUSTER_ADDRESS}.aws_ecs_service.worker`);
-    expect(run.output).toContain('Then run this again with --apply');
+    expect(run.output).toContain('Production repair uses protected greenfield-deploy.yml (docs/operations/lean-release-workflow.md), never standalone --apply. Only controlled offline rehearsal may repeat with --apply.');
     expect(writes(stub)).toEqual([]);
     expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(true);
   });
@@ -700,7 +700,7 @@ describe('rollback.sh refuses in one FAIL line, before anything is written', () 
     expectRefusal(older, run, [
       'does not publish deployment_plan.<service>.task_definition',
       'this target predates the applied-revision release',
-      'a rollback across it is a hand reconciliation (release.md: recovery is a forward fix or a restore)',
+      'reconcile and repair through the protected greenfield-deploy.yml workflow (docs/operations/lean-release-workflow.md), never a local apply',
     ]);
     expect(older.calls(), 'nothing is read from production').toEqual([]);
     // The positive control: a target that publishes it plans, and this is not a second
@@ -769,7 +769,7 @@ describe('rollback.sh refuses in one FAIL line, before anything is written', () 
     expect(operations(stub)).toContain('terraform plan');
   });
 
-  it('refuses a committed value that is not what production runs, naming each, with the manual recovery', () => {
+  it('refuses a committed value that is not what production runs, naming each, with protected hosted repair', () => {
     // Production runs sending off and the listener's certificate; the checkout commits
     // sending on and another certificate. Planning it would switch sending on.
     const other = `arn:aws:acm:us-east-1:${ACCOUNT}:certificate/99999999-2222-4333-8444-555555555555`;
@@ -782,8 +782,8 @@ describe('rollback.sh refuses in one FAIL line, before anything is written', () 
         `certificate_arn is ${CERTIFICATE} in production and ${other} in ${stub.commit}`,
         `sending_enabled is false in production and true in ${stub.commit}`,
         'nothing was planned',
-        'Manual recovery',
-        'release.md 4.0',
+        'Reconcile intended values in a pull request',
+        'docs/operations/lean-release-workflow.md',
       ],
       { planned: true },
     );

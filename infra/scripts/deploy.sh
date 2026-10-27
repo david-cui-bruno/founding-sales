@@ -17,15 +17,13 @@
 # record.sh put. Dry run (release, bootstrap): FSS_REHEARSAL_DRY_RUN=1 prints every
 # command and needs no credential.
 #
-# ## release: after the apply, by hand in production and by CI in the rehearsal
+# ## release: hosted production helper and controlled rehearsal
 #
-# One code path, two environments: the difference is the credentials in the shell and
-# the root in argument one, and lib.sh refuses a rehearsal command that names production
-# and a production command that names a rehearsal run. The order of a hand release is
-#
-#   record.sh put  ->  plan  ->  [stop.sh ->]  apply  ->  deploy.sh release [--schema-change]
-#
-# because the worker admits a send only while a stored record names its own digest.
+# Production writes use the serialized greenfield-deploy.yml workflow, not a local
+# plan/apply/release sequence. See docs/operations/lean-release-workflow.md for protected
+# application replacement and exact reviewed saved-plan execution. Local preparation,
+# reads and controlled rehearsal remain available; lib.sh preserves environment/write
+# guards. The worker admits a send only while a stored record names its own digest.
 #
 #   * Rolling (no flag). The apply has pointed both services at the task definitions it
 #     registered and ECS is rolling them. Left: the declared count on each (one
@@ -1228,7 +1226,7 @@ ci_output() {
 ci_decide() {
   ci_output decision "$1"
   ci_output reason "$2"
-  if [ "$1" = manual ]; then echo "::notice title=Not deployed by CI; the manual path applies::$2"; fi
+  if [ "$1" = manual ]; then echo "::notice title=Not deployed automatically; protected hosted review required::$2 (docs/operations/lean-release-workflow.md)"; fi
   exit 0
 }
 
@@ -1361,7 +1359,7 @@ for service in ("api", "worker"):
     bounds = [declared.get("minimum"), declared.get("maximum")]
     if not all(isinstance(bound, int) and not isinstance(bound, bool) and 0 <= bound <= 9999 for bound in bounds) or bounds[0] > bounds[1]:
         fail("the digests file names no schema range for the {} image ({}). An images run before 27 September 2026 "
-             "wrote no ranges; release that commit by hand (release.md 4), or let the next app merge publish again".format(service, declared or "none"))
+             "wrote no ranges; publish valid image ranges/provenance before protected hosted release (docs/operations/lean-release-workflow.md), never a local apply".format(service, declared or "none"))
     ranges.append("{}-{}".format(*bounds))
 if digests[0] == digests[1]:
     fail("the API and worker digests are identical; one image was pushed under both names")

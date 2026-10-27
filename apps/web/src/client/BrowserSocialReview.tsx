@@ -3,6 +3,7 @@ import {socialDraftWorkspaceSchema,socialDraftViewSchema,type SocialDraftWorkspa
 import {z} from 'zod';
 import {BrowserPrivateComposer,type PrivateAdoption} from './BrowserPrivateComposer.tsx';
 import {BrowserVoicePreferences} from './BrowserVoicePreferences.tsx';
+import {BrowserSocialFacts} from './BrowserSocialFacts.tsx';
 import {BrowserSocialGeneration} from './BrowserSocialGeneration.tsx';
 import type {BrowserClient} from './BrowserClient.ts';
 
@@ -16,10 +17,11 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
  const [signedIn,setSignedIn]=useState(client.current?.status==='signed_in');
  const [epoch,setEpoch]=useState(client.epoch),[workspace,setWorkspace]=useState<SocialDraftWorkspace|null>(null);
  const [adoption,setAdoption]=useState<PrivateAdoption|null>(null);
+ const [factsOpen,setFactsOpen]=useState(false),[factsRevision,setFactsRevision]=useState(0);
  const [busy,setBusy]=useState(false),[notice,setNotice]=useState('Read retained suggestions or write privately below.');
  const scope=useRef(client),owner=useRef(0),lock=useRef(false);scope.current=client;
  useEffect(()=>{
-  const clear=():void=>{owner.current++;lock.current=false;setBusy(false);setWorkspace(null);setAdoption(null);setEpoch(client.epoch);setNotice('Private social content cleared. Read retained suggestions or write privately below.');};
+  const clear=():void=>{owner.current++;lock.current=false;setBusy(false);setWorkspace(null);setAdoption(null);setFactsOpen(false);setEpoch(client.epoch);setNotice('Private social content cleared. Read retained suggestions or write privately below.');};
   clear();let observed=client.epoch;
   const requestOwner=owner;
   const unsubscribe=client.subscribe(()=>{setSignedIn(client.current?.status==='signed_in');if(observed!==client.epoch||client.current?.status!=='signed_in'){observed=client.epoch;clear();}});
@@ -60,7 +62,9 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
  if(!signedIn||client.current?.status!=='signed_in'||epoch!==client.epoch||scope.current!==client)return null;
  return <section aria-label="Private social review" className="social-review">
   <BrowserPrivateComposer client={client} adoption={adoption} reviewBusy={busy} reviewRevision={owner.current} onDiscard={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);}}/>
-  <BrowserSocialGeneration client={client} claimProjection={()=>{
+  <button type="button" aria-expanded={factsOpen} onClick={()=>setFactsOpen(value=>!value)}>Author shared facts</button>
+  {factsOpen?<BrowserSocialFacts client={client} onFactsChanged={()=>{owner.current++;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);setFactsRevision(value=>value+1);}}/>:null}
+  <BrowserSocialGeneration key={factsRevision} client={client} claimProjection={()=>{
    // One explicit interaction owner spans guided projection and retained review.
    // Superseding a projection never clears or replays its opaque command custody.
    const token=++owner.current,generation=client.epoch;lock.current=false;setBusy(false);setAdoption(null);setWorkspace(null);

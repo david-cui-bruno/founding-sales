@@ -3,35 +3,42 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
+/** API supplies the retained principal check. Internal callers retain existing scope semantics. */
+export type AnswerBlockAuthority=()=>Promise<void>;
+const noAuthorityWait:AnswerBlockAuthority=async()=>{};
 type Row = {block_id:string;version:number;kind:AnswerBlock['kind'];text:string;approved_at:Date|string|null;retired_at:Date|string|null;current_version:number;social_input:AnswerBlock['socialInput']|null}
 const view=(r:Row):AnswerBlock=>({id:r.block_id,version:r.version,kind:r.kind,text:r.text,approvedAt:r.approved_at===null?null:new Date(r.approved_at).toISOString(),retiredAt:r.retired_at===null?null:new Date(r.retired_at).toISOString(),...(r.social_input?{socialInput:r.social_input}:{})});
 const admin=(c:RepositoryContext)=>c.scope.actor.kind==='user'&&c.scope.actor.role==='admin';
 async function read(ctx:RepositoryContext,id:string,version:number):Promise<Row|null>{return (await ctx.db.query<Row>(`SELECT v.*,b.current_version FROM outreach_answer_block_versions v JOIN outreach_answer_blocks b ON b.workspace_id=v.workspace_id AND b.id=v.block_id WHERE v.workspace_id=$1 AND v.block_id=$2 AND v.version=$3`,[ctx.scope.workspaceId,id,version])).rows[0]??null;}
-export async function saveAnswerBlock(ctx:RepositoryContext,input:SaveAnswerBlock):Promise<Result<AnswerBlock>>{
+export async function saveAnswerBlock(ctx:RepositoryContext,input:SaveAnswerBlock,authority:AnswerBlockAuthority=noAuthorityWait):Promise<Result<AnswerBlock>>{
  if(!admin(ctx)||ctx.scope.actor.kind!=='user')return {ok:false,reason:'admin_required'};
  const parsed=saveAnswerBlockSchema.safeParse(input);if(!parsed.success)return {ok:false,reason:'invalid_input'};
  await lockSendGateForStopFact(ctx);
+ await authority();
  let id=input.id,version=1;
- if(id){const parent=(await ctx.db.query<{current_version:number}>('SELECT current_version FROM outreach_answer_blocks WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[ctx.scope.workspaceId,id])).rows[0];if(!parent)return {ok:false,reason:'not_found'};if(parent.current_version!==input.expectedVersion)return {ok:false,reason:'stale_version'};version=parent.current_version+1;await ctx.db.query('UPDATE outreach_answer_blocks SET current_version=$3 WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,id,version]);}
+ if(id){const parent=(await ctx.db.query<{current_version:number}>('SELECT current_version FROM outreach_answer_blocks WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[ctx.scope.workspaceId,id])).rows[0];if(!parent)return {ok:false,reason:'not_found'};if(parent.current_version!==input.expectedVersion)return {ok:false,reason:'stale_version'};await authority();version=parent.current_version+1;await ctx.db.query('UPDATE outreach_answer_blocks SET current_version=$3 WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,id,version]);}
  else{id=(await ctx.db.query<{id:string}>('INSERT INTO outreach_answer_blocks(workspace_id,current_version) VALUES($1,1) RETURNING id',[ctx.scope.workspaceId])).rows[0]!.id;}
  await ctx.db.query('INSERT INTO outreach_answer_block_versions(workspace_id,block_id,version,kind,text,created_by,social_input) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)',[ctx.scope.workspaceId,id,version,parsed.data.kind,parsed.data.text,ctx.scope.actor.userId,parsed.data.socialInput?JSON.stringify(parsed.data.socialInput):null]);
  await recordCrmAuditEvent(ctx,{action:'outreach.answer_block_saved',subjectKind:'answer_block',subjectId:id,detail:{version,kind:input.kind}});
- return {ok:true,value:view((await read(ctx,id,version))!)};
+ const saved=await read(ctx,id,version);await authority();
+ return {ok:true,value:view(saved!)};
 }
-async function changeApproval(ctx:RepositoryContext,input:{id:string;version:number},retire:boolean):Promise<Result<AnswerBlock>>{
+async function changeApproval(ctx:RepositoryContext,input:{id:string;version:number},retire:boolean,authority:AnswerBlockAuthority):Promise<Result<AnswerBlock>>{
  if(!admin(ctx)||ctx.scope.actor.kind!=='user')return {ok:false,reason:'admin_required'};
  await lockSendGateForStopFact(ctx);
+ await authority();
  const parent=(await ctx.db.query<{current_version:number}>('SELECT current_version FROM outreach_answer_blocks WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[ctx.scope.workspaceId,input.id])).rows[0];
  if(!parent)return {ok:false,reason:'not_found'};if(parent.current_version!==input.version)return {ok:false,reason:'stale_version'};
- const row=await read(ctx,input.id,input.version);if(!row)return {ok:false,reason:'not_found'};
+ const row=await read(ctx,input.id,input.version);await authority();if(!row)return {ok:false,reason:'not_found'};
  if(!retire&&row.retired_at)return {ok:false,reason:'block_retired'};
  if(retire)await ctx.db.query('UPDATE outreach_answer_block_versions SET retired_at=COALESCE(retired_at,now()) WHERE workspace_id=$1 AND block_id=$2 AND version=$3',[ctx.scope.workspaceId,input.id,input.version]);
  else await ctx.db.query('UPDATE outreach_answer_block_versions SET approved_at=COALESCE(approved_at,now()),approved_by=COALESCE(approved_by,$4) WHERE workspace_id=$1 AND block_id=$2 AND version=$3',[ctx.scope.workspaceId,input.id,input.version,ctx.scope.actor.userId]);
  await recordCrmAuditEvent(ctx,{action:retire?'outreach.answer_block_retired':'outreach.answer_block_approved',subjectKind:'answer_block',subjectId:input.id,detail:{version:input.version}});
- return {ok:true,value:view((await read(ctx,input.id,input.version))!)};
+ const saved=await read(ctx,input.id,input.version);await authority();
+ return {ok:true,value:view(saved!)};
 }
-export const approveAnswerBlock=(ctx:RepositoryContext,input:{id:string;version:number})=>changeApproval(ctx,input,false);
-export const retireAnswerBlock=(ctx:RepositoryContext,input:{id:string;version:number})=>changeApproval(ctx,input,true);
+export const approveAnswerBlock=(ctx:RepositoryContext,input:{id:string;version:number},authority:AnswerBlockAuthority=noAuthorityWait)=>changeApproval(ctx,input,false,authority);
+export const retireAnswerBlock=(ctx:RepositoryContext,input:{id:string;version:number},authority:AnswerBlockAuthority=noAuthorityWait)=>changeApproval(ctx,input,true,authority);
 export async function readApprovedAnswerBlocks(ctx:RepositoryContext,refs:readonly {id:string;version:number}[]):Promise<Result<AnswerBlock[]>>{
  if(!refs.length||refs.length>20)return {ok:false,reason:'invalid_input'};
  const blocks:AnswerBlock[]=[];

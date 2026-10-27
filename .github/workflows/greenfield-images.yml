@@ -40,7 +40,7 @@ name: Greenfield images
 #     digest (review of PR 278): each attempt uploads `fss-image-pushed-<attempt>`
 #     (`images.sh pushed`), whatever its end, and `images.sh attested` reads the earlier
 #     ones back. A first attempt that finds the tag, or a re-run with no attestation,
-#     fails: another session may have pushed it, and that commit is released by hand;
+#     fails: repair provenance before protected hosted release under the lean workflow;
 #   * it pulls what it pushed **by digest** and runs the same verification against
 #     that, so the digest it publishes is the digest that was verified;
 #   * it writes both digests, and the schema range each image declares and was just
@@ -282,7 +282,7 @@ jobs:
               # Only an earlier attempt of this run's own push may be reused (review of PR
               # 278): the CI deploy relies on this refusal, not on a push time (P6).
               infra/scripts/images.sh attested "$service" "$existing" \
-                || { echo "::error::$repository:$tag already exists as $existing and nothing from an earlier attempt of run $GITHUB_RUN_ID attests it. Release the commit by hand."; exit 1; }
+                || { echo "::error::$repository:$tag already exists as $existing and nothing from an earlier attempt of run $GITHUB_RUN_ID attests it. Repair image provenance first, then use protected greenfield-deploy.yml (docs/operations/lean-release-workflow.md), never a local apply."; exit 1; }
               digest="$existing"
             elif [[ "$existing" == *ImageNotFoundException* ]]; then
               docker buildx build \

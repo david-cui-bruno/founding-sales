@@ -50,7 +50,8 @@
 #     `fss-image-pushed-<attempt>` whatever the attempt's end. `attested` answers whether
 #     an EARLIER attempt of this run left such an artifact naming <digest>: the only case
 #     in which the job reuses an existing `ci-<commit>` tag. A first attempt, or an
-#     unattested tag, is refused, and that commit is released by hand. Both read
+#     unattested tag is refused. Repair provenance before protected hosted release
+#     (docs/operations/lean-release-workflow.md). Both read
 #     GITHUB_SHA, GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT; `attested` also GITHUB_REPOSITORY
 #     and gh (actions: read).
 #
@@ -652,13 +653,13 @@ images_attested() {
   [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || images_fail "GITHUB_REPOSITORY '${GITHUB_REPOSITORY:-}' is not owner/name"
   tag="fss-rh-$service:ci-$GITHUB_SHA"
   if [ "$GITHUB_RUN_ATTEMPT" = 1 ]; then
-    images_fail "$tag already exists as $digest and this is the first attempt of run $GITHUB_RUN_ID: another writer pushed it, so this run cannot vouch for it. Release the commit by hand (release.md 4)."
+    images_fail "$tag already exists as $digest and this is the first attempt of run $GITHUB_RUN_ID: another writer pushed it, so this run cannot vouch for it. Repair image provenance first, then use the protected greenfield-deploy.yml release (docs/operations/lean-release-workflow.md), never a local apply."
   fi
   work="$(mktemp -d "${TMPDIR:-/tmp}/fss-attested.XXXXXX")"
   # shellcheck disable=SC2064 # the path is fixed now
   trap "rm -rf '$work'" EXIT
   images_gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" >"$work/artifacts.json" \
-    || images_fail "gh could not list the artifacts of run $GITHUB_RUN_ID, so nothing attests $tag; release the commit by hand (release.md 4)"
+    || images_fail "gh could not list the artifacts of run $GITHUB_RUN_ID, so nothing attests $tag; repair image provenance first, then use the protected greenfield-deploy.yml release (docs/operations/lean-release-workflow.md), never a local apply"
   candidates="$(FSS_FILE="$work/artifacts.json" python3 - <<'PY'
 # images-attested-candidates: the fss-image-pushed-<attempt> artifacts of earlier attempts of this run.
 import json, os, re
@@ -673,7 +674,7 @@ for item in listed:
             and re.fullmatch(r"sha256:[0-9a-f]{64}", str(item.get("digest", "")))):
         print(item["id"], item["digest"], match.group(1))
 PY
-)" || images_fail "the artifacts of run $GITHUB_RUN_ID could not be read, so nothing attests $tag; release the commit by hand (release.md 4)"
+)" || images_fail "the artifacts of run $GITHUB_RUN_ID could not be read, so nothing attests $tag; repair image provenance first, then use the protected greenfield-deploy.yml release (docs/operations/lean-release-workflow.md), never a local apply"
   while read -r id expected attempt; do
     [ -n "$id" ] || continue
     if ! images_gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" >"$work/$id.zip"; then
@@ -706,7 +707,7 @@ PY
     fi
     rehearsal_log "artifact fss-image-pushed-$attempt does not attest $tag = $digest (above)" >&2
   done <<<"$candidates"
-  images_fail "$tag already exists as $digest, and no earlier attempt of run $GITHUB_RUN_ID attests pushing it (no fss-image-pushed-<attempt> artifact names it): another session may have pushed it, so this run cannot vouch for it. Release the commit by hand (release.md 4)."
+  images_fail "$tag already exists as $digest, and no earlier attempt of run $GITHUB_RUN_ID attests pushing it (no fss-image-pushed-<attempt> artifact names it): another session may have pushed it, so this run cannot vouch for it. Repair image provenance first, then use the protected greenfield-deploy.yml release (docs/operations/lean-release-workflow.md), never a local apply."
 }
 
 SUBCOMMAND=${1:-}

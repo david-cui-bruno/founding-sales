@@ -114,13 +114,12 @@ export type DialRefusalCode = z.infer<typeof dialRefusalCodeSchema>;
 /**
  * How a calling identity came to be verified.
  *
- * Version one has no telephony provider — a call is a `tel:` handoff from the Mac — so
- * the only verification there is is a person's statement that this is the number they
- * place calls from, recorded with who made it and when, the way 12.7's sending
- * checklist records a person saying they looked. The owner's own statement and an
- * admin's on a member's behalf are recorded as different methods, because they are
- * different evidence. A later call-back code would be a third value here and a third
- * branch in the CHECK. See `docs/decisions/g60-calling-identities-are-attested-in-version-one.md`.
+ * For the native `tel:` fallback, these methods record a person's statement that
+ * this is their calling number, not observation of the phone app's originating line.
+ * Owner and admin-on-member's-behalf attestations are distinct evidence, with who
+ * and when retained. Browser calling has a separate Twilio provider-session path:
+ * these values do not attest provider verification, execution or recipient eligibility.
+ * Keep the stored methods stable for existing records and installed clients.
  */
 const CALLING_IDENTITY_VERIFICATION_METHODS = ['owner_attestation', 'admin_attestation'] as const;
 const callingIdentityVerificationMethodSchema = z.enum(CALLING_IDENTITY_VERIFICATION_METHODS);

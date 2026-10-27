@@ -6,8 +6,6 @@ import {semanticVersionSchema} from './clientVersion.ts';
 import {answerBlockSchema,prospectingAuthorizationSaveSchema,saveAnswerBlockCommandSchema,answerBlockApprovalCommandSchema} from './outreach.ts';
 const envelope={commandId:commandIdSchema,clientVersion:semanticVersionSchema};
 export const routineSettingsSchema=z.strictObject({revision:z.number().int().nonnegative(),enabled:z.boolean(),sequenceVersionId:uuid.nullable(),bookingUrl:z.string().nullable()});
-export const routineSettingsSaveSchema=z.strictObject({expectedRevision:z.number().int().nonnegative(),enabled:z.boolean(),sequenceVersionId:uuid.nullable(),bookingUrl:z.string().trim().max(2000).nullable()});
-export const routineSettingsCommandSchema=routineSettingsSaveSchema.extend(envelope);
 export const outreachControlSchema=z.strictObject({
  settings:routineSettingsSchema,blocks:z.array(answerBlockSchema),
  senders:z.array(z.strictObject({id:uuid,address:z.string(),ownerUserId:uuid,connected:z.boolean(),authorized:z.boolean(),authorizationRevision:z.number().int().nonnegative(),sendingEnabled:z.boolean(),dailyCap:z.number().int().nullable()})),
@@ -26,7 +24,6 @@ export const routineManualCommandSchema=z.strictObject({id:uuid,expectedRevision
 
 export const outreachMutationSchema=z.discriminatedUnion('action',[
  prospectingAuthorizationSaveSchema.omit({clientVersion:true}).extend({action:z.literal('authorization')}),
- routineSettingsCommandSchema.omit({clientVersion:true}).extend({action:z.literal('policy')}),
  z.strictObject({...saveAnswerBlockCommandSchema.shape,clientVersion:z.undefined().optional(),action:z.literal('fact_save')}),
  answerBlockApprovalCommandSchema.omit({clientVersion:true}).extend({action:z.literal('fact_approve')}),
  answerBlockApprovalCommandSchema.omit({clientVersion:true}).extend({action:z.literal('fact_retire')}),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
-import { callingSubjectSchema, uuid, type CallingSubject } from '@fss/contracts';
+import { callingSubjectSchema, uuid } from '@fss/contracts';
 import { BrowserClient } from './BrowserClient.ts';
 import { BrowserProspectsWorkspace } from './BrowserProspectsWorkspace.tsx';
 import { BrowserEmailWorkspace } from './BrowserEmailWorkspace.tsx';
@@ -16,6 +16,7 @@ import { installCallingCustody } from './CallingPending.ts';
 import { installCallingFollowUpCustody } from './CallingFollowUpPending.ts';
 import { installCallingExecutionCustody } from './CallingExecutionPending.ts';
 import type { EmailWorkspaceProps, WorkspaceSection } from './workspaceNavigation.ts';
+import { callingSelectionSchema, type CallingSelection } from './workspaceNavigation.ts';
 
 export function createBrowserClient(): BrowserClient {
   return new BrowserClient({ fetch: globalThis.fetch.bind(globalThis), storage: globalThis.sessionStorage,
@@ -28,12 +29,12 @@ function AuthenticatedWorkspace({ client, section, onNavigate, settings }: {
   client: BrowserClient; section: WorkspaceSection; onNavigate: (section: WorkspaceSection) => void; settings: JSX.Element;
 }): JSX.Element {
   const epoch = useRef(client.epoch).current;
-  const [callingSelection, setCallingSelection] = useState<CallingSubject | null>(null);
+  const [callingSelection, setCallingSelection] = useState<CallingSelection | null>(null);
   const [selectedEmailDraftId, setSelectedEmailDraftId] = useState<string | null>(null);
   const current = (): boolean => client.current?.status === 'signed_in' && client.isCurrent(epoch);
-  const openCalling = (selection: CallingSubject): void => {
+  const openCalling = (selection: CallingSelection): void => {
     if (!current()) return;
-    const exact = callingSubjectSchema.safeParse(selection);
+    const exact = callingSelectionSchema.safeParse(selection);
     if (!exact.success || !current()) return;
     setCallingSelection(exact.data); onNavigate('calling');
   };

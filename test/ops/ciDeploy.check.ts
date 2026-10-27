@@ -733,7 +733,7 @@ describe('check decides, and writes nothing', () => {
   });
 
   it('reads the schema ranges from the digests file, and refuses one that names none, before anything is asked', () => {
-    // An images run before P6 (27 September 2026) recorded no ranges: that commit is released by hand.
+    // A pre-P6 images run has no ranges: repair metadata before protected hosted release.
     for (const ranges of [null, ['16', '16-16'], ['17-16', '16-16']] as const) {
       const stub = world();
       const run = runScript('check', stub, { digests: digestsFile({ ranges: ranges as readonly [string, string] | null }) });
@@ -1630,8 +1630,8 @@ describe('the protected-path guard reads every commit since production’s, befo
     expect(run.code, run.output).toBe(0);
     expect(run.outputs['decision']).toBe('manual');
     expect(run.outputs['reason']).toContain('infra/modules/cluster/main.tf (infrastructure');
-    expect(run.outputs['reason']).toContain('Release this one by hand');
-    expect(run.output).toContain('### Paths that keep this release on the manual path');
+    expect(run.outputs['reason']).toContain('Use protected review_prepare then reviewed execution in this workflow');
+    expect(run.output).toContain('### Paths requiring protected hosted review');
   });
 
   it('passes the next app commit once production runs images built past the change', () => {
@@ -2001,7 +2001,7 @@ describe('the deploy workflow: one gates job, reviewed maintenance identity, rea
       return readFileSync(file, 'utf8');
     };
     expect(line({ GATES_RESULT: 'success', GATES_DECISION: 'manual', GATES_REASON: 'the gate on x had not finished', DEPLOY_RESULT: 'skipped' })).toBe(
-      'Not deployed: the gate on x had not finished. The manual path applies (docs/greenfield/release.md 4).\n',
+      'Not deployed: the gate on x had not finished. Use protected hosted review (docs/operations/lean-release-workflow.md), never a local apply.\n',
     );
     expect(line({ GATES_RESULT: 'failure', DEPLOY_RESULT: 'skipped' })).toContain('FAILED (gates failure, deploy skipped');
     const passed = {
