@@ -380,6 +380,7 @@ describe('what the API mounts', () => {
       '/sourcing/candidates/list',
       '/sourcing/candidates/phone-discovery/read',
       '/sourcing/candidates/phone-discovery/receipt',
+      '/sourcing/candidates/phone-discovery/refusal-original/read',
       '/sourcing/candidates/phone-discovery/request',
       '/sourcing/candidates/prospects/activity/list',
       '/sourcing/candidates/prospects/activity/read',
