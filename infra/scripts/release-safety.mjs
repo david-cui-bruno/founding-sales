@@ -26,27 +26,34 @@ export function validateOff(read, expected, now, previous) {
   return read;
 }
 
+export function normalizeTaskDefinition(definition) {
+  const copy = structuredClone(definition);
+  for (const key of ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt', 'tags']) delete copy[key];
+  return copy;
+}
+
+export function readerTaskDocument(source) {
+  const document = normalizeTaskDefinition(source.definition);
+  document.tags = source.tags;
+  const container = document.containerDefinitions[0];
+  container.entryPoint = ['node', '--experimental-transform-types', '--input-type=module', '--eval', offRead];
+  container.command = [];
+  return document;
+}
+
 // Existing application's bounded native reader transport, shared rather than a new
 // command runner. Unknown starts/exits retain task identity and never replay/cleanup.
 export function createReleaseSafety({ aws, waitFor, now, state, save, cluster, network, owner }) {
   let sequence = 0;
   async function off(source, expected) {
-    const document = structuredClone(source.definition);
-    for (const key of ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt']) delete document[key];
-    document.tags = source.tags;
+    const document = readerTaskDocument(source);
     const c = document.containerDefinitions[0];
-    c.entryPoint = ['node', '--experimental-transform-types', '--input-type=module', '--eval', offRead]; c.command = [];
-    const normalize = d => {
-      const copy = structuredClone(d);
-      for (const key of ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt', 'tags']) delete copy[key];
-      return copy;
-    };
     const registered = await aws('ecs', 'register-task-definition', ['--cli-input-json', JSON.stringify(document)], true);
     const definition = registered.taskDefinition?.taskDefinitionArn;
     requireThat(typeof definition === 'string' && definition.startsWith(`${cluster.split(':cluster/')[0]}:task-definition/fss-prod-operations:`), 'registration_unknown');
     state.temporaryReaderDefinition = definition; save();
     const readback = await aws('ecs', 'describe-task-definition', ['--task-definition', definition, '--include', 'TAGS']);
-    requireThat(isDeepStrictEqual(normalize(readback.taskDefinition), normalize(document)) && isDeepStrictEqual(readback.tags, document.tags), 'registered_definition_changed');
+    requireThat(isDeepStrictEqual(normalizeTaskDefinition(readback.taskDefinition), normalizeTaskDefinition(document)) && isDeepStrictEqual(readback.tags, document.tags), 'registered_definition_changed');
     state.currentTaskOwner = `${owner}-off-${++sequence}`; state.lastStoppedTaskArn = null; save();
     let read;
     try {

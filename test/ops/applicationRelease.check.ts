@@ -21,6 +21,7 @@ interface Container {
 interface Definition {
   taskDefinitionArn: string; family: string; taskRoleArn: string; executionRoleArn: string;
   containerDefinitions: Container[]; tags?: { key: string; value: string }[];
+  status?: string; registeredBy?: string;
 }
 interface Service {
   serviceName: string; status: string; desiredCount: number; runningCount: number; pendingCount: number;
@@ -32,6 +33,7 @@ interface Status {
   phase: string; outcome: string; reason?: string; observedSchema: number | string; migrationStarted: boolean; writesStarted: boolean;
   recoveryPoint: { timestamp: string; restoreTested: boolean } | null; rollback?: string;
   currentTaskArn?: string | null; currentTaskOwner?: string; temporaryReaderDefinition?: string | null;
+  readerRecovery?: { outcome: string; taskArn: string; readerDefinitionArn: string; sourceOperationsDefinitionArn: string; startedBy: string };
 }
 interface IO {
   now(): number; equal(a: unknown, b: unknown): boolean; sleep(ms: number): Promise<void>;
@@ -76,12 +78,14 @@ function securityGroups() {
 }
 interface Options {
   from?: number; to?: number; fault?: string;
+  recovery?: boolean;
   migrate?: () => Promise<void>; verify?: () => Promise<unknown>; off?: () => Promise<unknown>;
   docker?: (args: string[]) => Promise<string>;
 }
 function harness(options: Options = {}) {
   const from = options.from ?? 118, to = options.to ?? 118;
-  let schema = from, clock = Date.parse('2026-10-18T18:00:00Z'), revision = 1, taskNumber = 0, recordStored = false, checks = 0;
+  let schema = from, clock = Date.parse('2026-10-18T18:00:00Z'), revision = options.recovery ? 337 : 1, taskNumber = 0, recordStored = options.recovery === true, checks = 0;
+  let recoveryRemoved = false, storedRecord: unknown;
   let promotionGateChanged = false;
   const productionTags: Partial<Record<'api' | 'worker', string>> = {};
   const calls: { program: string; args: string[]; phase: string }[] = [], states: Status[] = [];
@@ -91,6 +95,23 @@ function harness(options: Options = {}) {
   const groups = securityGroups(), env = environment();
   const tasks = new Map<string, { definition: Definition; answer: unknown; exitCode: number; owner: string }>();
   const artifacts = { schema: 'fss.image-digests.v1', commit: COMMIT, workflowRunId: '11', workflowRunAttempt: '1', images: Object.fromEntries(['api', 'worker'].map(name => [name, { repository: `fss-rh-${name}`, tag: `ci-${COMMIT}`, digest: NEW[side(name)], schemaRange: { minimum: to, maximum: to } }])) };
+  const failedTask = `${cluster.replace(':cluster/', ':task/')}/a91d7da900aa401789560498b29d7b12`;
+  const failedOwner = 'fss-app-40522197864-off-3';
+  if (options.recovery) {
+    env['FSS_FAILED_READER_CUSTODY'] = JSON.stringify({ taskArn: failedTask, readerDefinitionArn: arn('operations', 337), startedBy: failedOwner, sourceOperationsDefinitionArn: arn('operations', 335) });
+    for (const name of ['api', 'worker', 'operations', 'migration']) definitions[arn(name)]!.taskDefinition.containerDefinitions[0]!.image = `${registry}/fss-prod-${side(name)}@${NEW[side(name)]}`;
+    const source = structuredClone(definitions[arn('operations')]!);
+    source.taskDefinition.taskDefinitionArn = arn('operations', 335); source.taskDefinition.status = 'ACTIVE';
+    source.taskDefinition.registeredBy = `arn:aws:sts::${ACCOUNT}:assumed-role/fss-prod-ci-application/fss-prod-application-40522197864`;
+    definitions[arn('operations', 335)] = source;
+    const reader = structuredClone(source); reader.taskDefinition.taskDefinitionArn = arn('operations', 337);
+    reader.taskDefinition.containerDefinitions[0]!.entryPoint = ['node', '--experimental-transform-types', '--input-type=module', '--eval', release.offRead];
+    reader.taskDefinition.containerDefinitions[0]!.command = [];
+    definitions[arn('operations', 337)] = reader;
+    productionTags.api = NEW.api; productionTags.worker = NEW.worker;
+    storedRecord = ciGateReleaseRecordSchema.parse({ schema: 'fss.release-record.v1', source: 'ci-gate', releaseGateReference: `ci-gate-22-${COMMIT.slice(0, 12)}`, recordedAt: options.fault === 'record-conflict' ? '2026-10-18T17:49:00Z' : '2026-10-18T17:50:00Z', suite: 'pass', commit: COMMIT, gateRunId: '22', gateRunUrl: 'https://github.com/david-cui-bruno/founding-sales/actions/runs/22', imagesRunId: '11', artifacts: { api: NEW.api, worker: NEW.worker, desktopCommitStamp: COMMIT }, enablesSending: false });
+  }
+  const serviceTaskArn = (name: string, n: number) => `${cluster.replace(':cluster/', ':task/')}/${options.recovery ? `${name === 'api' ? 'a' : 'b'}${String(n).padStart(31, '0')}` : `${name}${String(n)}`}`;
   const run = (workflow: string, id: number) => ({ id, path: `.github/workflows/${workflow}.yml`, head_sha: COMMIT, event: 'push', head_branch: 'main', head_repository: { full_name: 'david-cui-bruno/founding-sales' }, status: 'completed', conclusion: 'success', run_attempt: 1, updated_at: '2026-10-18T17:50:00Z' });
   const arg = (args: string[], key: string) => args[args.indexOf(key) + 1] ?? '';
   const current = () => states.at(-1)?.phase ?? '';
@@ -106,6 +127,7 @@ function harness(options: Options = {}) {
       if (options.fault === 'cancel' && current() === 'migrate') throw new Error('cancelled');
       if (program === 'gh') {
         checks++;
+        if (args[1]?.endsWith('/actions/runs/40522197864')) return JSON.stringify({ ...run('greenfield-deploy', 40522197864), event: 'workflow_dispatch', conclusion: 'failure' });
         if (promotionGateChanged && args[1]?.includes('/actions/runs/22')) return JSON.stringify({ ...run('greenfield', 22), conclusion: 'failure' });
         if (options.fault === 'gate-later' && checks > 12) return JSON.stringify({ ...run('greenfield', 22), conclusion: 'failure' });
         if (args[1]?.includes('/actions/runs/22')) return JSON.stringify(run('greenfield', 22));
@@ -113,7 +135,7 @@ function harness(options: Options = {}) {
         if (args[1]?.includes('/git/ref/')) return JSON.stringify({ object: { sha: options.fault === 'main' ? BASE : DISPATCH } });
         return JSON.stringify({ workflow_runs: [run('greenfield', 22)] });
       }
-      if (program === 'curl') return JSON.stringify({ build: { commit: current() === 'runtime-verify' ? COMMIT : BASE }, schema: { databaseVersion: schema, accepted: true } });
+      if (program === 'curl') return JSON.stringify({ build: { commit: options.recovery || current() === 'runtime-verify' ? COMMIT : BASE }, schema: { databaseVersion: schema, accepted: true } });
       if (program === 'docker') {
         const result = await options.docker?.(args) ?? '';
         if (args[0] === 'buildx') {
@@ -142,11 +164,12 @@ function harness(options: Options = {}) {
           if (options.fault === 'promotion-gate-prewrite') promotionGateChanged = true;
           const imageId = { imageTag: arg(args, '--image-ids').slice('imageTag='.length) };
           if (options.fault === 'promotion-tag-unreadable') return JSON.stringify({ images: [], failures: [{ imageId, failureCode: 'Unknown' }] });
+          if (options.fault === 'recovery-tag-lost') return JSON.stringify({ images: [], failures: [{ imageId, failureCode: 'ImageNotFound' }] });
           return JSON.stringify(productionTags[which]
             ? { images: [{ imageId: { ...imageId, imageDigest: productionTags[which] } }], failures: [] }
             : { images: [], failures: [{ imageId, failureCode: 'ImageNotFound' }] });
         }
-        return JSON.stringify({ imageDetails: [{ imageDigest: arg(args, '--image-ids').startsWith('imageDigest=') || options.fault === 'promotion-digest-drift' ? OLD[which] : productionTags[which], imageTags: [`ci-${BASE}`] }] });
+        return JSON.stringify({ imageDetails: [{ imageDigest: arg(args, '--image-ids').startsWith('imageDigest=') || options.fault === 'promotion-digest-drift' ? (options.recovery ? NEW[which] : OLD[which]) : productionTags[which], imageTags: [`ci-${options.recovery ? COMMIT : BASE}`] }] });
       }
       if (kind === 'cloudwatch') return JSON.stringify({ Datapoints: [{ Maximum: 4, Timestamp: new Date(clock).toISOString() }] });
       if (kind === 'logs') {
@@ -159,7 +182,8 @@ function harness(options: Options = {}) {
         return JSON.stringify({ services: Object.values(copied), failures: [] });
       }
       if (action === 'describe-task-definition') {
-        const named = arg(args, '--task-definition');
+        let named = arg(args, '--task-definition');
+        if (options.recovery && named === 'fss-prod-operations') named = arn('operations', recoveryRemoved ? 335 : 337);
         const found = structuredClone(definitions[named] ?? definitions[arn(named.slice('fss-prod-'.length))]);
         if (options.fault?.startsWith('runtime-bedrock') && current() === 'runtime-verify' && found?.taskDefinition.family === `fss-prod-${options.fault.endsWith('worker') ? 'worker' : 'api'}`) found.taskDefinition.containerDefinitions[0]!.environment = found.taskDefinition.containerDefinitions[0]!.environment.filter(entry => entry.name !== 'FSS_MODEL_TRANSPORT');
         return JSON.stringify(found);
@@ -172,7 +196,13 @@ function harness(options: Options = {}) {
         definitions[registered] = { taskDefinition: definition, tags: document.tags ?? [] };
         return JSON.stringify({ taskDefinition: definition });
       }
-      if (action === 'deregister-task-definition') return '{}';
+      if (action === 'deregister-task-definition') {
+        if (options.recovery && arg(args, '--task-definition') === arn('operations', 337)) {
+          recoveryRemoved = true; definitions[arn('operations', 337)]!.taskDefinition.status = 'INACTIVE';
+          if (options.fault === 'recovery-lost-write') throw new Error('command_aws_failed');
+        }
+        return '{}';
+      }
       if (action === 'update-service') {
         const name = arg(args, '--service').endsWith('api') ? 'api' : 'worker';
         const s = services[name];
@@ -187,9 +217,9 @@ function harness(options: Options = {}) {
         return JSON.stringify({ service: s });
       }
       if (action === 'list-tasks') {
-        if (!args.includes('--service-name')) return JSON.stringify({ taskArns: [] });
+        if (!args.includes('--service-name')) return JSON.stringify({ taskArns: options.recovery && current() === 'reader-recovery' ? (args.includes('STOPPED') ? [failedTask] : ['api', 'worker'].flatMap(name => Array.from({ length: name === 'api' ? 2 : 1 }, (_, n) => serviceTaskArn(name, n)))) : [] });
         const name = arg(args, '--service-name').endsWith('api') ? 'api' : 'worker';
-        return JSON.stringify({ taskArns: Array.from({ length: services[name].desiredCount }, (_, n) => `${cluster.replace(':cluster/', ':task/')}/${name}${String(n)}`) });
+        return JSON.stringify({ taskArns: Array.from({ length: services[name].desiredCount }, (_, n) => serviceTaskArn(name, n)) });
       }
       if (action === 'run-task') {
         const registered = arg(args, '--task-definition');
@@ -200,7 +230,8 @@ function harness(options: Options = {}) {
         if (words.length === 0) answer = options.off ? await options.off() : { releaseOff: options.fault !== 'off', storedOff: true, effectiveOff: true, finishing: options.fault === 'finishing' ? 1 : 0, versions: [4], schema, observedAt: new Date(clock).toISOString() };
         else if (words.includes('put')) {
           const record = ciGateReleaseRecordSchema.parse(JSON.parse(Buffer.from(arg(words, '--json-base64'), 'base64').toString()));
-          answer = { outcome: recordStored ? 'existing' : 'created', reference: record.releaseGateReference }; recordStored = true;
+          if (recordStored && !isDeepStrictEqual(storedRecord, record)) { exitCode = 1; answer = { reason: 'release_record_conflict' }; }
+          else { answer = { outcome: recordStored ? 'existing' : 'created', reference: record.releaseGateReference }; recordStored = true; storedRecord = record; }
         } else if (words.includes('migration-auth-check')) answer = { ok: true, readOnly: true, migrationMember: true, identity: 'fss_admin', database: 'founder_sales', schemaVersion: schema };
         else if (words.includes('release-prepare')) {
           try { await options.migrate?.(); if (options.fault === 'migration') throw new Error('failed'); schema = to; answer = { migrate: { schemaVersionAfter: schema } }; } catch { exitCode = 21; }
@@ -216,10 +247,11 @@ function harness(options: Options = {}) {
       if (action === 'describe-tasks') {
         const ids = args.slice(args.indexOf('--tasks') + 1, args.indexOf('--output'));
         return JSON.stringify({ tasks: ids.map(named => {
+          if (options.recovery && named === failedTask) return { taskArn: named, clusterArn: cluster, startedBy: failedOwner, taskDefinitionArn: arn('operations', 337), lastStatus: 'STOPPED', stopCode: 'TaskFailedToStart', stoppedReason: 'CannotPullContainerError: unavailable', containers: [{ name: 'operations', image: `${registry}/fss-prod-worker@${NEW.worker}` }], overrides: { containerOverrides: [{ name: 'operations', command: [] }], inferenceAcceleratorOverrides: [] } };
           const taskId = named.split('/').at(-1) ?? '', task = tasks.get(taskId);
           if (task) return { taskArn: named, clusterArn: cluster, startedBy: options.fault === 'foreign-owner' ? 'foreign' : task.owner, taskDefinitionArn: task.definition.taskDefinitionArn, lastStatus: options.fault === 'exit-unknown' ? 'RUNNING' : 'STOPPED', containers: [{ name: task.definition.containerDefinitions[0]!.name, exitCode: task.exitCode, imageDigest: task.definition.containerDefinitions[0]!.image.split('@')[1] }] };
-          const name = taskId.startsWith('api') ? 'api' : 'worker', d = definitions[services[name].taskDefinition]!.taskDefinition;
-          return { taskArn: named, taskDefinitionArn: d.taskDefinitionArn, lastStatus: 'RUNNING', containers: [{ name, imageDigest: d.containerDefinitions[0]!.image.split('@')[1] }] };
+          const name = taskId.startsWith('api') || options.recovery && taskId.startsWith('a') ? 'api' : 'worker', d = definitions[services[name].taskDefinition]!.taskDefinition;
+          return { taskArn: named, clusterArn: cluster, group: `service:fss-prod-${name}`, taskDefinitionArn: d.taskDefinitionArn, lastStatus: 'RUNNING', containers: [{ name, imageDigest: d.containerDefinitions[0]!.image.split('@')[1] }] };
         }), failures: [] });
       }
       throw new Error('unexpected_cloud_action');
@@ -227,6 +259,59 @@ function harness(options: Options = {}) {
   };
   return { io, env, groups, calls, states, definitions, services, artifacts, productionTags, schema: () => schema, run: () => release.runRelease(io, env) };
 }
+
+describe('historical reader custody followed by the full normal release (transport model)', () => {
+  it('reconciles337 from335, preserves the original record and completes all same-candidate gates', async () => {
+    const h = harness({ recovery: true, from: 142, to: 142 }); const result = await h.run();
+    expect(result.outcome, result.reason).toBe('completed');
+    expect(result.readerRecovery).toMatchObject({ outcome: 'completed', readerDefinitionArn: arn('operations', 337), sourceOperationsDefinitionArn: arn('operations', 335) });
+    expect(result.migrationStarted).toBe(false);
+    const phases = h.states.map(state => state.phase);
+    for (const phase of ['reader-recovery', 'observe-stored-off', 'release-record', 'promote-images', 'recovery-pinned', 'schema-verify', 'deploy', 'runtime-verify', 'smoke', 'completed']) expect(phases).toContain(phase);
+    const cleanup = h.calls.filter(call => call.phase === 'reader-recovery' && call.args[1] === 'deregister-task-definition');
+    expect(cleanup).toHaveLength(1); expect(cleanup[0]!.args).toContain(arn('operations', 337));
+    expect(h.calls.filter(call => call.args[1] === 'update-service')).toHaveLength(2);
+    expect(h.calls.some(call => call.args[1] === 'stop-task' || call.program === 'docker' && call.args[0] === 'buildx')).toBe(false);
+    const commands = h.calls.filter(call => call.args[1] === 'run-task').map(call => JSON.parse(call.args[call.args.indexOf('--overrides') + 1]!) as { containerOverrides: { command: string[] }[] }).map(override => override.containerOverrides[0]!.command);
+    expect(commands.filter(command => command.length === 0)).toHaveLength(3);
+    const records = commands.filter(command => command.includes('put')).map(command => JSON.parse(Buffer.from(command[command.indexOf('--json-base64') + 1]!, 'base64').toString()) as { recordedAt: string; imagesRunId: string });
+    expect(records).toHaveLength(2); expect(records[0]).toEqual(records[1]);
+    expect(records[0]).toMatchObject({ recordedAt: '2026-10-18T17:50:00Z', imagesRunId: '11' });
+    const normalFamilyRead = h.calls.findIndex((call, index) => index > h.calls.indexOf(cleanup[0]!) && call.args[1] === 'describe-task-definition' && call.args.includes('fss-prod-operations'));
+    expect(normalFamilyRead).toBeGreaterThan(h.calls.indexOf(cleanup[0]!));
+  });
+  it('rejects invalid custody before any transport call', async () => {
+    const h = harness(); h.env['FSS_FAILED_READER_CUSTODY'] = '{}';
+    const result = await h.run(); expect(result.reason).toBe('failed_reader_custody_invalid'); expect(h.calls).toHaveLength(0);
+  });
+  it('retains exact custody and repair-required after a lost deregistration answer', async () => {
+    const h = harness({ recovery: true, fault: 'recovery-lost-write' }); const result = await h.run();
+    expect(result.outcome).toBe('repair-required'); expect(result.phase).toBe('reader-recovery');
+    expect(result.readerRecovery).toMatchObject({ outcome: 'deregister-requested', readerDefinitionArn: arn('operations', 337), sourceOperationsDefinitionArn: arn('operations', 335) });
+    expect(h.calls.filter(call => call.args[1] === 'deregister-task-definition')).toHaveLength(1);
+    expect(h.calls.some(call => ['run-task', 'update-service'].includes(call.args[1] ?? ''))).toBe(false);
+  });
+  it('does not replace a conflicting original record or roll out after it', async () => {
+    const h = harness({ recovery: true, fault: 'record-conflict' }); const result = await h.run();
+    expect(result.outcome).toBe('repair-required'); expect(result.reason).toBe('task_nonzero_exit');
+    expect(result.phase).toBe('release-record'); expect(result.readerRecovery?.outcome).toBe('completed');
+    expect(h.calls.some(call => call.args[1] === 'update-service')).toBe(false);
+  });
+  it('refuses a selected digest different from the already deployed candidate before cleanup', async () => {
+    const h = harness({ recovery: true }); h.artifacts.images['worker']!.digest = image('e');
+    const result = await h.run(); expect(result.reason).toBe('reader_recovery_candidate_changed');
+    expect(result.readerRecovery).toMatchObject({ outcome: 'observing', readerDefinitionArn: arn('operations', 337) });
+    expect(h.calls.some(call => call.args[1] === 'deregister-task-definition')).toBe(false);
+  });
+  it.each(['initially-missing', 'recovery-tag-lost'])('never republishes candidate image when %s', async fault => {
+    const h = harness({ recovery: true, fault });
+    if (fault === 'initially-missing') delete h.productionTags.api;
+    const result = await h.run(); expect(result.reason).toBe('reader_recovery_promotion_missing');
+    expect(h.calls.some(call => call.program === 'docker' && call.args[0] === 'buildx')).toBe(false);
+    if (fault === 'initially-missing') expect(h.calls.some(call => call.args[1] === 'deregister-task-definition')).toBe(false);
+    else expect(result.outcome).toBe('repair-required');
+  });
+});
 
 describe('application image promotion and child-process pull guard (not Fargate acceptance)', () => {
   it.each([

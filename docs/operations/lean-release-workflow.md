@@ -45,3 +45,19 @@ The shared hold controls automatic admission; it is not instantaneous revocation
 Fixed summaries show held/refused/started/completed or repair-required, the actual phase and last observed schema. An ambiguous migration attempt reports schema unknown until inspected. A failed smoke after rollout does not claim rollback or a successful release. Partial writes require observation of actual services/schema/state before forward repair; do not blindly retry a failed saved plan or migration. Workflow summary is not a backup-restoration test: PITR timestamps/retention are measured, restoration remains untested unless separately demonstrated.
 
 Sending caps, recipient eligibility, routine-reply controls, capability consent and evaluation gates remain independent and unchanged. Releasing these sources does not authorize outreach expansion or activate Ask/Gmail.
+
+### Explicit never-started reader reconciliation
+
+For an observed failed application release whose exact candidate is already running at the same schema, `application` accepts optional `failed_reader_custody` JSON. Blank leaves ordinary behavior unchanged. The protected environment and production queue remain mandatory. This is not a tail-resume or an automatic retry. Root retains the failed run's actual status and approves only the new exact run after current runtime, stored-OFF, holds and unknown-write observations.
+
+Supply exactly four string keys from the original failed-run custody and normal operations definition, never a guessed adjacent revision:
+
+```json
+{"taskArn":"<exact failed reader task ARN>","readerDefinitionArn":"<exact temporary operations definition ARN>","startedBy":"fss-app-<failed run ID>-off-<sequence>","sourceOperationsDefinitionArn":"<original normal operations definition ARN>"}
+```
+
+Input identity is not cleanup authority. Hosted execution refreshes the failed run's provenance, both definitions' prior application-role registration identity, exact native `offRead` transformation and generated task overrides, allowing only the optional extra `inferenceAcceleratorOverrides: []`. Null/populated collections, other keys and environment/role/command changes refuse. Only the exact actual STOPPED `TaskFailedToStart`/`CannotPullContainerError` task with no start/exit evidence qualifies. Its declared digest-pinned image must match the source. Any actual image digest present must also match; an absent digest is not pulled-image or successful-OFF proof. Unknown starts/outcomes, changed definitions/owners, foreign tasks and other failures remain held without cleanup.
+
+Reference proof covers API and worker service definitions/deployments plus complete bounded RUNNING and desired-STOPPED cluster task inventories. Incomplete/paginated/ambiguous observations and unexpected active tasks refuse. This deliberately relies on Root's supported two-service inventory and exclusive production ownership, not proof that no dormant third-party service exists. No IAM expansion, service update or task stop belongs to reconciliation.
+
+After refreshed gates and custody, execution requests deregistration of that one reader definition once, with native CLI retries disabled only for that exact command, verifies INACTIVE and exact normal-family resolution, then discards the explicit source override and repeats all normal definition, OFF, recovery, schema, rollout, runtime/canary/public-smoke and exact record-readback checks. Existing promoted image tags/digests are required; reconciliation cannot republish images. Preserve original image/gate identities and the full record payload, including `gate.updated_at`. A changed payload conflicts rather than replacing history. `readerRecovery` retains exact custody and observing/deregister-requested/completed state. An unknown deregistration outcome remains repair-required without another request. Current-run reader failure/cleanup semantics are unchanged.

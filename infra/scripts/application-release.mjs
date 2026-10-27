@@ -6,6 +6,8 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createReleaseSafety } from './release-safety.mjs';
+import { parseFailedReaderCustody } from './application-reader-custody.mjs';
+import { recoverApplicationReader, readerRecoveryCommandEnvironment } from './application-reader-recovery.mjs';
 export { offRead } from './release-safety.mjs';
 
 const execute = promisify(execFile);
@@ -152,7 +154,7 @@ export async function runRelease(io, environment) {
       requireThat(io.equal(read.taskDefinition, current[name].definition) && io.equal(read.tags, current[name].tags), 'candidate_definition_changed');
     }
   }
-  async function running(current) {
+  async function running(current, candidate = true) {
     const live = await services();
     for (const [name, count] of [['api', 2], ['worker', 1]]) {
       requireThat(stable(live[name], count, current[name].definition.taskDefinitionArn), 'deployment_not_complete');
@@ -161,7 +163,7 @@ export async function runRelease(io, environment) {
       const tasks = await aws('ecs', 'describe-tasks', ['--cluster', cluster, '--tasks', ...listed.taskArns]);
       requireThat(!tasks.failures?.length && tasks.tasks?.length === count && tasks.tasks.every(task => task.lastStatus === 'RUNNING' && task.taskDefinitionArn === current[name].definition.taskDefinitionArn && task.containers?.length === 1 && task.containers[0].name === name && task.containers[0].imageDigest === images.images[name].digest), 'running_digest_changed');
     }
-    await verifyDefinitions(current);
+    if (candidate) await verifyDefinitions(current);
   }
   const pinRecovery = after => safety.pinRecovery(database, after);
   async function credentialVersion() {
@@ -195,6 +197,8 @@ export async function runRelease(io, environment) {
   try {
     requireThat(e.GITHUB_ACTIONS === 'true' && e.GITHUB_REF === 'refs/heads/main' && e.FSS_RELEASE_HOLD === 'false' && sha.test(e.GITHUB_SHA || '') && sha.test(e.COMMIT || '') && id.test(e.RUN_ID || '') && id.test(e.GATE_RUN_ID || '') && id.test(e.GITHUB_RUN_ID || '') && e.GATE_RUN_ID !== e.RUN_ID && e.GITHUB_REPOSITORY === 'david-cui-bruno/founding-sales' && e.FSS_PRODUCTION_ORIGIN === 'https://api.usecallie.com', 'unapproved_execution');
     requireThat(!Object.keys(e).some(key => /^(FSS_RELEASE_OUTPUT_|FSS_REHEARSAL_|FSS_PROD_FORCE_IDLE|FSS_APPLICATION_RELEASE_TEST)/u.test(key)), 'ambient_override_forbidden');
+    const custody = parseFailedReaderCustody(e.FSS_FAILED_READER_CUSTODY, e.GITHUB_RUN_ID);
+    if (custody) { state.readerRecovery = { ...custody, outcome: 'observing' }; save(); }
     images = io.read('images');
     requireThat(images.schema === 'fss.image-digests.v1' && images.commit === e.COMMIT && String(images.workflowRunId) === e.RUN_ID, 'artifact_binding_changed');
     for (const name of ['api', 'worker']) {
@@ -242,26 +246,48 @@ export async function runRelease(io, environment) {
     requireThat(Array.isArray(rules) && rules.length === 1 && rule.IpProtocol === 'tcp' && rule.FromPort === 8080 && rule.ToPort === 8080 && rule.IpRanges?.length === 0 && rule.Ipv6Ranges?.length === 0 && rule.PrefixListIds?.length === 0 && rule.UserIdGroupPairs?.length === 1 && validId(source?.GroupId, 'sg') && source.UserId === identity.Account && !source.VpcPeeringConnectionId, 'api_network_ingress_changed');
     const alb = await aws('ec2', 'describe-security-groups', ['--group-ids', source.GroupId]);
     requireThat(alb.SecurityGroups?.length === 1 && alb.SecurityGroups[0].GroupId === source.GroupId && alb.SecurityGroups[0].GroupName === 'fss-prod-alb' && alb.SecurityGroups[0].VpcId === workerGroup.VpcId, 'api_network_source_changed');
-    definitions = {};
-    for (const name of names) {
-      const response = await aws('ecs', 'describe-task-definition', ['--task-definition', baseline[name]?.taskDefinition || `fss-prod-${name}`, '--include', 'TAGS']);
-      const d = response.taskDefinition, c = d?.containerDefinitions?.[0];
-      requireThat(d?.family === `fss-prod-${name}` && d.containerDefinitions?.length === 1 && c.name === name && response.tags?.some(tag => tag.key === 'NamePrefix' && tag.value === 'fss-prod') && d.taskRoleArn === `arn:aws:iam::326255650484:role/fss-prod-${name === 'migration' ? 'migration' : imageSide(name)}-task` && d.executionRoleArn === `arn:aws:iam::326255650484:role/fss-prod-${name === 'migration' ? 'migration' : imageSide(name)}-exec`, 'definition_identity_changed');
-      requireThat(c.image.startsWith(`${registry}/fss-prod-${imageSide(name)}@`) && digest.test(c.image.split('@')[1] || '') && envValue(d, 'FSS_DATABASE_HOST') === database.Endpoint.Address, 'definition_database_or_image_changed');
-      requireThat(!c.environment?.some(item => /SECRET|DATABASE_URL|PASSWORD/u.test(item.name)), 'literal_credential_forbidden');
-      const credentials = c.secrets?.filter(item => credentialNames.includes(item.name)) || [];
-      if (name !== 'migration') requireThat(credentials.length === 1 && secret(d, 'DATABASE_SECRET_ARN')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-'), 'runtime_credential_binding_changed');
-      else requireThat(credentials.length === 2 && secret(d, 'MIGRATION_DATABASE_SECRET')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/migration-database-') && secret(d, 'FSS_RUNTIME_DATABASE_SECRET_ARN')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-') && !secret(d, 'DATABASE_SECRET_ARN'), 'migration_credential_binding_changed');
-      if (['api', 'worker'].includes(name)) requireThat(explicitBedrock(d), 'bedrock_not_explicit');
-      if (['migration', 'operations'].includes(name)) requireThat(io.equal(c.entryPoint, ['node', 'apps/worker/src/tools/fss.ts']) && io.equal(c.command, [name === 'migration' ? 'migrate' : 'verify']), 'oneoff_cli_contract_changed');
-      if (['api', 'worker'].includes(name)) {
-        const sourceImage = await aws('ecr', 'describe-images', ['--repository-name', `fss-prod-${name}`, '--image-ids', `imageDigest=${c.image.split('@')[1]}`]);
-        requireThat(sourceImage.imageDetails?.length === 1 && sourceImage.imageDetails[0].imageTags?.some(tag => tag === `ci-${health.build.commit}` || tag === health.build.commit), 'baseline_image_source_changed');
+    const loadDefinitions = async operationsDefinition => {
+      definitions = {};
+      for (const name of names) {
+        const response = await aws('ecs', 'describe-task-definition', ['--task-definition', name === 'operations' && operationsDefinition ? operationsDefinition : baseline[name]?.taskDefinition || `fss-prod-${name}`, '--include', 'TAGS']);
+        const d = response.taskDefinition, c = d?.containerDefinitions?.[0];
+        requireThat(d?.family === `fss-prod-${name}` && d.containerDefinitions?.length === 1 && c.name === name && response.tags?.some(tag => tag.key === 'NamePrefix' && tag.value === 'fss-prod') && d.taskRoleArn === `arn:aws:iam::326255650484:role/fss-prod-${name === 'migration' ? 'migration' : imageSide(name)}-task` && d.executionRoleArn === `arn:aws:iam::326255650484:role/fss-prod-${name === 'migration' ? 'migration' : imageSide(name)}-exec`, 'definition_identity_changed');
+        requireThat(c.image.startsWith(`${registry}/fss-prod-${imageSide(name)}@`) && digest.test(c.image.split('@')[1] || '') && envValue(d, 'FSS_DATABASE_HOST') === database.Endpoint.Address, 'definition_database_or_image_changed');
+        requireThat(!c.environment?.some(item => /SECRET|DATABASE_URL|PASSWORD/u.test(item.name)), 'literal_credential_forbidden');
+        const credentials = c.secrets?.filter(item => credentialNames.includes(item.name)) || [];
+        if (name !== 'migration') requireThat(credentials.length === 1 && secret(d, 'DATABASE_SECRET_ARN')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-'), 'runtime_credential_binding_changed');
+        else requireThat(credentials.length === 2 && secret(d, 'MIGRATION_DATABASE_SECRET')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/migration-database-') && secret(d, 'FSS_RUNTIME_DATABASE_SECRET_ARN')?.startsWith('arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-') && !secret(d, 'DATABASE_SECRET_ARN'), 'migration_credential_binding_changed');
+        if (['api', 'worker'].includes(name)) requireThat(explicitBedrock(d), 'bedrock_not_explicit');
+        if (['migration', 'operations'].includes(name)) requireThat(io.equal(c.entryPoint, ['node', 'apps/worker/src/tools/fss.ts']) && io.equal(c.command, [name === 'migration' ? 'migrate' : 'verify']), 'oneoff_cli_contract_changed');
+        if (['api', 'worker'].includes(name)) {
+          const sourceImage = await aws('ecr', 'describe-images', ['--repository-name', `fss-prod-${name}`, '--image-ids', `imageDigest=${c.image.split('@')[1]}`]);
+          requireThat(sourceImage.imageDetails?.length === 1 && sourceImage.imageDetails[0].imageTags?.some(tag => tag === `ci-${health.build.commit}` || tag === health.build.commit), 'baseline_image_source_changed');
+        }
+        definitions[name] = { definition: d, tags: response.tags }; state.previousDefinitions[name] = d.taskDefinitionArn;
       }
-      definitions[name] = { definition: d, tags: response.tags }; state.previousDefinitions[name] = d.taskDefinitionArn;
+      requireThat(['api', 'worker'].every(name => accepted(definitions[name].definition, state.fromSchema)) && secret(definitions.api.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.operations.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.migration.definition, 'FSS_RUNTIME_DATABASE_SECRET_ARN') === secret(definitions.api.definition, 'DATABASE_SECRET_ARN'), 'baseline_binding_incompatible');
+      requireThat(['migration', 'operations'].every(name => definitions[name].definition.containerDefinitions[0].image === definitions.worker.definition.containerDefinitions[0].image), 'oneoff_baseline_image_changed');
+    };
+    await loadDefinitions(custody?.sourceOperationsDefinitionArn);
+    if (custody) {
+      phase('reader-recovery');
+      const verifyRecoveryRuntime = async () => {
+        requireThat(state.fromSchema === state.targetSchema && health.build.commit === e.COMMIT && ['api', 'worker'].every(name => definitions[name].definition.containerDefinitions[0].image === `${registry}/fss-prod-${name}@${images.images[name].digest}`), 'reader_recovery_candidate_changed');
+        const currentHealth = await json('curl', ['--fail', '--silent', '--show-error', '--max-time', '15', `${e.FSS_PRODUCTION_ORIGIN}/health`]);
+        requireThat(currentHealth.build?.commit === e.COMMIT && currentHealth.schema?.databaseVersion === state.targetSchema && currentHealth.schema?.accepted === true, 'reader_recovery_candidate_changed');
+        await running(definitions, false);
+        for (const name of ['api', 'worker']) {
+          const promoted = await aws('ecr', 'describe-images', ['--repository-name', `fss-prod-${name}`, '--image-ids', `imageTag=ci-${e.COMMIT}`]);
+          requireThat(promoted.imageDetails?.length === 1 && promoted.imageDetails[0].imageDigest === images.images[name].digest && promoted.imageDetails[0].imageTags?.includes(`ci-${e.COMMIT}`), 'reader_recovery_promotion_missing');
+        }
+        await gateCheck();
+      };
+      await verifyRecoveryRuntime();
+      await recoverApplicationReader({ custody, cluster, source: definitions.operations, baseline, state, save, beforeWrite: verifyRecoveryRuntime, aws, gh, commit: e.COMMIT, repository: e.GITHUB_REPOSITORY });
+      // Never keep the explicit source override for ordinary execution. Resolve
+      // normal family bindings again and apply every original definition guard.
+      await loadDefinitions();
     }
-    requireThat(['api', 'worker'].every(name => accepted(definitions[name].definition, state.fromSchema)) && secret(definitions.api.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.operations.definition, 'DATABASE_SECRET_ARN') === secret(definitions.worker.definition, 'DATABASE_SECRET_ARN') && secret(definitions.migration.definition, 'FSS_RUNTIME_DATABASE_SECRET_ARN') === secret(definitions.api.definition, 'DATABASE_SECRET_ARN'), 'baseline_binding_incompatible');
-    requireThat(['migration', 'operations'].every(name => definitions[name].definition.containerDefinitions[0].image === definitions.worker.definition.containerDefinitions[0].image), 'oneoff_baseline_image_changed');
     safety = createReleaseSafety({ aws, waitFor, now: io.now, state, save, cluster, network, owner: `fss-app-${e.GITHUB_RUN_ID}` });
     phase('observe-stored-off');
     await off(definitions.operations, state.fromSchema);
@@ -283,6 +309,7 @@ export async function runRelease(io, environment) {
         requireThat(existing.images[0].imageId?.imageTag === tag && existing.images[0].imageId.imageDigest === expected, 'promotion_tag_conflict');
       } else {
         requireThat(existing.images.length === 0 && existing.failures.length === 1 && existing.failures[0].failureCode === 'ImageNotFound' && existing.failures[0].imageId?.imageTag === tag, 'promotion_tag_unreadable');
+        requireThat(!custody, 'reader_recovery_promotion_missing');
         await gateCheck();
         await io.run('docker', ['buildx', 'imagetools', 'create', '--tag', `${registry}/fss-prod-${name}:${tag}`, '--prefer-index=false', `${registry}/fss-rh-${name}@${expected}`]);
       }
@@ -399,7 +426,7 @@ async function main() {
     read: key => key === 'upgradeEvidence' ? readFileSync(files[key], 'utf8') : JSON.parse(readFileSync(files[key], 'utf8')),
     async run(program, values, input) {
       try {
-        const child = execute(program, values, { timeout: 180000, maxBuffer: 8000000, env: process.env });
+        const child = execute(program, values, { timeout: 180000, maxBuffer: 8000000, env: readerRecoveryCommandEnvironment(process.env, program, values) });
         child.child.stdin?.end(input);
         return (await child).stdout;
       } catch { throw new Error(`command_${program.replaceAll(/[^a-z]/gu, '')}_failed`); }
