@@ -34,6 +34,7 @@ export const BROWSER_READ_PATHS = Object.freeze([
   '/calls/calling', '/calling-identities',
 ] as const);
 export const BROWSER_POST_READ_PATHS = Object.freeze([
+  '/dial/check',
   '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3', '/today/actions/open/v4',
   '/sourcing/research-firms/list', '/sourcing/research-firms/read',
   '/sourcing/candidates/list', '/sourcing/candidates/authority/read',
