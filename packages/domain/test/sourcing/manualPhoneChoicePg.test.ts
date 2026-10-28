@@ -34,7 +34,8 @@ it('saves only source metadata, opts into current enrichment and leaves legacy s
  const selected=await list(c.id);expect(selected).toMatchObject({ok:true,value:{prospects:[{candidateId:c.id,state:'kept',manualPhone:{value:'+19402620091',choice:c.choice},observedPhone:null,phoneBasis:'unknown',qualification:'unverified',contactAuthority:'not_granted'}]}});
  const legacy=await list(c.id,false);if(!legacy.ok)throw Error(legacy.reason);expect(legacy.value.prospects[0]).not.toHaveProperty('manualPhone');
  expect(await save(c.id)).toEqual({ok:true,value:{candidateId:c.id,revision:1,state:'kept'}});
- expect(JSON.stringify((await runtime.query('SELECT manual_phone_choice FROM sourcing_manual_prospect_states WHERE candidate_id=$1',[c.id])).rows)).not.toContain('940');
+ const stored=(await runtime.query('SELECT manual_phone_choice FROM sourcing_manual_prospect_states WHERE candidate_id=$1',[c.id])).rows;
+ expect(stored).toEqual([{manual_phone_choice:c.choice}]);expect(JSON.stringify(stored)).not.toMatch(/940\.262\.0091|\+19402620091/u);
  for(const table of ['firms','phone_routes','call_sessions','calling_follow_up_drafts','provider_reservations','outbound_messages'])expect((await runtime.query(`SELECT count(*)::int n FROM ${table}`)).rows[0]?.['n']).toBe(0);
 });
 it.each(['skipped','wrong_number','clear'] as const)('%s clears the annotation and legacy rekeep cannot revive it',async state=>{

@@ -25,6 +25,11 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
  const exact=input.candidateId&&input.expectedRevision?{candidateId:input.candidateId,expectedRevision:input.expectedRevision}:undefined;
  const rows=await manualProspectRows(ctx,input.state,input.offset,exact),page=rows.slice(0,50);
  if(page.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,page.map(row=>row.id)]);
+ // Choice metadata belongs only to this opted-in projection. Raw source authority
+ // remains independent of schema143 and reusable by historical migration checks.
+ const choices=input.includeManualPhone&&page.length?(await ctx.db.query<{candidate_id:string;candidate_revision:number;manual_phone_choice:unknown}>(
+  'SELECT candidate_id,candidate_revision,manual_phone_choice FROM sourcing_manual_prospect_states WHERE workspace_id=$1 AND candidate_id=ANY($2::uuid[]) ORDER BY candidate_id FOR SHARE',
+  [ctx.scope.workspaceId,page.map(row=>row.id)])).rows:[];
  const phones=await manualPhoneSnapshots(ctx,page);
  const discoveries=await phoneDiscoverySnapshots(ctx,page);
  if(ctx.scope.actor.kind==='user')await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,ctx.scope.actor.userId]);
@@ -48,7 +53,8 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
   const discoveryEvidence=!isDeepStrictEqual(discovered,currentDiscovery)?changedManualPhone():currentDiscovery?projectProspectPhoneDiscovery(currentDiscovery,wall):null;
   const p=projectManualProspect(row,composeProspectPhoneDiscovery(evidence,discoveryEvidence));
   if(!p)return [];
-  const manualPhone=input.includeManualPhone&&row.manual_state==='kept'&&isDeepStrictEqual(discovered,currentDiscovery)?projectManualPhoneChoice(currentDiscovery,row['manual_phone_choice'],wall):null;
+  const choice=choices.find(value=>value.candidate_id===row.id&&value.candidate_revision===row.revision);
+  const manualPhone=input.includeManualPhone&&row.manual_state==='kept'&&isDeepStrictEqual(discovered,currentDiscovery)?projectManualPhoneChoice(currentDiscovery,choice?.manual_phone_choice,wall):null;
   return [manualPhone?{...p,manualPhone}:p];
  });
  return {ok:true,value:manualProspectListSchema.parse({prospects,hasMore:rows.length>50})};
