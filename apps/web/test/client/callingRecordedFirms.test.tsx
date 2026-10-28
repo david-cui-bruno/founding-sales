@@ -9,12 +9,13 @@ import { CallingRecordedFirms } from '../../src/client/CallingRecordedFirms.tsx'
 const id = '00000000-0000-4000-8000-000000000001';
 const firm: FirmIdentityDto = { id, name: 'Fictional recorded company', website: 'https://fictional.example.test', locality: 'Providence', regionCode: 'RI', status: 'active', assignedUserId: id, stageKey: null, opportunityStatus: null, controlMode: null, openedAt: null, timeZone: 'America/New_York', timeZoneUnresolvedReason: null };
 const clients: BrowserClient[] = [];
-async function fixture() {
+async function fixture(role: 'admin' | 'salesperson' = 'admin') {
   let records: readonly FirmIdentityDto[] = [firm], pending: Promise<Response> | null = null, failed = false;
   const send = vi.fn<typeof fetch>(async url => {
-    if (url === '/browser/session') return Response.json({ status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 60000).toISOString() });
+    if (url === '/browser/session') return Response.json({ status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role, revision: 'one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 60000).toISOString() });
     if (url === '/browser/api/firms') return pending ?? Response.json(failed ? { invalid: 'not a company list' } : { firms: records });
     if (url === '/browser/api/sourcing/candidates/prospects/list') return Response.json({ prospects: [], hasMore: false });
+    if (url === '/browser/api/today/actions/v4') return Response.json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: new Date().toISOString(), actions: [], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     throw Error('Unexpected effect or acquisition');
   });
   const client = new BrowserClient({ fetch: send, storage: localStorage, navigate: vi.fn(), randomUUID: () => id });
@@ -48,6 +49,14 @@ it('filters the bounded returned identities locally without a new request or inf
   expect(screen.queryByRole('button', { name: /Fictional company 0 /u })).toBeNull();
   expect(f.send.mock.calls.filter(([url]) => url === '/browser/api/firms')).toHaveLength(1);
   expect(selected).not.toHaveBeenCalled();
+});
+it('keeps recorded company lookup available to a salesperson without raw-prospect administration', async () => {
+  const f = await fixture('salesperson');
+  render(<CallingQueue client={f.client} disabled={false} onSelect={vi.fn()} />);
+  await screen.findByText(/No prepared conversations/u);
+  expect(screen.getByRole('button', { name: 'Kept prospects' }).hasAttribute('disabled')).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Recorded companies' }));
+  expect(await screen.findByRole('button', { name: /Fictional recorded company/u })).toBeTruthy();
 });
 it('refreshes removed identities instead of keeping stale selectable rows', async () => {
   const f = await fixture(); render(<CallingRecordedFirms client={f.client} disabled={false} onSelect={vi.fn()} />);
