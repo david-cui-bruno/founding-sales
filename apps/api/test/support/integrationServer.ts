@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type pg from 'pg';
+import type {QueryResultRowLike,SessionQueryable} from '@fss/domain/db/queryable.ts';
+import {settingLockName} from '@fss/domain/settings/store.ts';
 import { poolConnections } from '../../src/bootstrap/connections.ts';
 import { recordingLogger } from '../../src/bootstrap/log.ts';
 
@@ -60,6 +62,8 @@ export async function startIntegrationServer(
      * (`readIntegrationSecrets`), so a test can leave a field out or plant sentinel values.
      */
     readonly secretBundles?: { readonly twilioVoice?: Record<string, unknown>; readonly calcom?: Record<string, unknown> };
+    /** Pause only after a real provider SHARE lock, inside its request transaction. */
+    readonly callingProviderReadBarrier?: (session:SessionQueryable)=>Promise<void>;
   } = {},
 ): Promise<IntegrationServer> {
   const authToken = hex(20);
@@ -69,6 +73,7 @@ export async function startIntegrationServer(
   const configured = options.configured ?? true;
   const pool: pg.Pool = testRequestPool(fixture.database);
   const log = recordingLogger();
+  const pooled=poolConnections(pool,log);
   const { db: _db, ...auth } = fixture.deps;
   const fromEnvironment =
     options.secretBundles === undefined
@@ -80,7 +85,14 @@ export async function startIntegrationServer(
           ...(options.secretBundles.calcom === undefined ? {} : { [CALCOM_SECRET_VARIABLE]: JSON.stringify(options.secretBundles.calcom) }),
         });
   const server = createApiServer({
-    connections: poolConnections(pool, log),
+    connections: {checkout:async()=>{
+      const owned=await pooled.checkout();
+      return {release:()=>owned.release(),session:{async query<Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[]){
+        const answer=await owned.session.query<Row>(sql,values);
+        if(sql.includes('pg_advisory_xact_lock_shared')&&values?.[0]===settingLockName(fixture.alpha.workspaceId,'calling_provider'))await options.callingProviderReadBarrier?.(owned.session);
+        return answer;
+      }}};
+    }},
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled: false,
     auth,

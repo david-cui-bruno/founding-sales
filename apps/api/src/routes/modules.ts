@@ -57,6 +57,7 @@ import {NOTIFICATION_PATHS,routeNotifications} from './notifications.ts';
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
 import { CALL_PATHS, routeCalls } from './calls.ts';
 import { CALLING_PATHS, routeCalling } from './calling.ts';
+import {CALLING_SETUP_PATHS,routeCallingSetup} from './callingSetup.ts';
 import { CALLING_EXECUTION_RECEIPT_PATHS, routeCallingExecutionReceipt } from './callingExecutionReceipt.ts';
 // The call-to-booking milestone: Twilio call sessions and the two provider webhooks.
 import { CALL_SESSION_PATHS, routeCallSessions } from './callSessions.ts';
@@ -230,6 +231,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('dial', { paths: DIAL_PATHS }, routeDial, routing),
     moduleOf('calling-identities', { paths: CALLING_IDENTITY_PATHS }, routeCallingIdentities, routing),
     moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
+    moduleOf('calling-setup', {paths:CALLING_SETUP_PATHS}, routeCallingSetup, routing),
     moduleOf('calling-workspace', { paths: CALLING_PATHS }, routeCalling, routing),
     moduleOf('calling-execution-receipt', { paths: CALLING_EXECUTION_RECEIPT_PATHS }, routeCallingExecutionReceipt, routing),
     moduleOf('callbacks', { paths: CALLBACK_PATHS }, routeCallbacks, routing),

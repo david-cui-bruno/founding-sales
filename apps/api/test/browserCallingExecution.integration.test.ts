@@ -3,6 +3,8 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { publishTestRegistrySnapshot } from '@fss/domain/test/support/nationalRegistry.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { settingLockName, updateSetting } from '@fss/domain/settings/store.ts';
+import {sendGateLockName} from '@fss/domain/policy/sendGate.ts';
+import type {SessionQueryable} from '@fss/domain/db/queryable.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm } from './support/crmSeed.ts';
@@ -10,6 +12,7 @@ import { PUBLIC_ORIGIN, startIntegrationServer, type IntegrationServer } from '.
 
 let fixture: AuthFixture, server: IntegrationServer;
 let salesperson: Awaited<ReturnType<typeof issueSessionFor>>, admin: string, firmId: string, routeId: string, identityId: string;
+let providerReadBarrier:((db:SessionQueryable)=>Promise<void>)|undefined;
 const phone = '+14015550187';
 const command = (input: Record<string, unknown>) => ({ commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, ...input });
 async function post(path: string, token: string, body: unknown) {
@@ -42,7 +45,7 @@ async function publish(freshMilliseconds = 31 * 86_400_000) {
   return new Date(download.getTime() + 31 * 86_400_000).toISOString();
 }
 beforeEach(async () => {
-  fixture = await createAuthFixture(); server = await startIntegrationServer(fixture);
+  fixture = await createAuthFixture(); providerReadBarrier=undefined;server = await startIntegrationServer(fixture,{callingProviderReadBarrier:async db=>{await providerReadBarrier?.(db);}});
   admin = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
   salesperson = await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson);
   for (const [settingKey, value] of [
@@ -132,4 +135,26 @@ it.each(['creation', 'handoff'] as const)('honors an owner OFF committed during 
   if (typeof answer === 'string') expect(answer).not.toContain('<Dial');
   else expect(answer.status).toBe(404);
   expect(await counts()).toEqual(before);
+});
+it.each(['creation','handoff'] as const)('owner OFF overlaps %s without a gate/provider deadlock or UNKNOWN',async stage=>{
+  await publish();const sessionId=stage==='handoff'?await issue():null;
+  let release!:()=>void;const paused=new Promise<void>(resolve=>{release=resolve;});let callPid:number|null=null;
+  providerReadBarrier=async db=>{providerReadBarrier=undefined;callPid=(await db.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0]!.pid;await paused;};
+  const call=stage==='handoff'?voice(sessionId!):post('/calls/session',salesperson.accessToken,sessionBody());
+  let off:ReturnType<typeof post>|undefined,observationError:unknown;
+  try{
+    await expect.poll(()=>callPid,{timeout:3000}).not.toBeNull();
+    off=post('/calling/setup/provider',admin,command({expectedVersion:1,provider:'tel'}));
+    // The owner command must queue on the gate held by execution, never acquire
+    // that gate while execution holds the provider and later queues behind it.
+    await expect.poll(async()=>(await fixture.db.query<{gate:boolean}>(`SELECT
+      classid::bigint=((hashtextextended($2,0)>>32)&4294967295) AND objid::bigint=(hashtextextended($2,0)&4294967295) AS gate
+      FROM pg_locks WHERE locktype='advisory' AND NOT granted AND $1=ANY(pg_blocking_pids(pid))`,
+      [callPid,sendGateLockName(fixture.alpha.workspaceId)])).rows,{timeout:3000}).toEqual([{gate:true}]);
+  }catch(error){observationError=error;}finally{release();}
+  const answers=await Promise.all([call,off]);if(observationError)throw observationError;
+  if(stage==='handoff')expect(answers[0]).toContain('<Dial');else expect(answers[0]).toMatchObject({status:200,body:{status:'accepted',replayed:false}});
+  expect(answers[1]).toMatchObject({status:200,body:{status:'accepted',result:{provider:'tel',version:2}}});
+  expect((await fixture.db.query("SELECT value FROM workspace_settings WHERE workspace_id=$1 AND setting_key='calling_provider' AND superseded_at IS NULL",[fixture.alpha.workspaceId])).rows).toEqual([{value:{provider:'tel'}}]);
+  const before=await counts();expect((await post('/calls/session',salesperson.accessToken,sessionBody())).status).toBe(404);if(sessionId)expect(await voice(sessionId)).not.toContain('<Dial');expect(await counts()).toEqual(before);
 });

@@ -1,4 +1,5 @@
 import { lockSettingForRead } from '@fss/domain/settings/store.ts';
+import {lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
 import { retainedPrincipalPublicationAuthority } from './retainedPrincipalAuthority.ts';
 import { requireCallingAuthority, CallingAuthorityChanged } from '@fss/domain/calling/followUpDraftAccess.ts';
 import { requireCurrentCallSessionRegistry } from '@fss/domain/calls/sessionClearance.ts';
@@ -243,6 +244,9 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
     if (publication.publicationNow(Date.parse(currentAt)) === null) throw new CallingAuthorityChanged();
   };
   return await runPolicyCommand(deps, createCallSessionCommandSchema, 'create_call_session', async (context, body) => {
+    // Owner OFF takes gate -> provider. Match that order before freezing the
+    // switch; createCallSession's same-transaction gate re-acquisition is idempotent.
+    await lockSendGateForStopFact(context);
     await lockSettingForRead(context, 'calling_provider');
     if (await readCallingProvider(context) !== 'twilio') throw new CallingProviderDisabled();
     const outcome = await createCallSession(context, {
