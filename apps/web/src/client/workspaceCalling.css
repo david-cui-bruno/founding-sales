@@ -40,6 +40,10 @@
 .calling-readiness { border-top:1px solid var(--calling-line); margin-top:20px; padding-top:20px; overflow-wrap:anywhere; }
 .calling-readiness p,.calling-readiness li { line-height:1.6; }
 .calling-readiness li+li { margin-top:8px; }
+.calling-recorded-firms { margin-top:20px; }
+.calling-recorded-firms p { font-size:13px; line-height:1.6; }
+.calling-recorded-firms label { display:grid; gap:8px; margin:16px 0; font-size:13px; font-weight:600; }
+.calling-recorded-firms input { box-sizing:border-box; width:100%; min-width:0; padding:11px 13px; border:1px solid var(--calling-line); border-radius:12px; background:var(--workspace-input); color:inherit; font:inherit; }
 @media (max-width:900px) { .calling-layout { grid-template-columns:1fr; }.calling-list-open .calling-focus { grid-row:1; }.calling-list-open .calling-detail { display:none; }.calling-queue,.calling-brief,.calling-wrap { padding:20px; border-radius:18px; }.workspace-calling .workspace-page-head { align-items:flex-start; gap:18px; }.calling-brief h2 { font-size:24px; } }
 @media (prefers-reduced-motion:reduce) { .workspace-calling * { scroll-behavior:auto; } }
 [data-theme=dark] .calling-wrap select,[data-theme=dark] .calling-wrap textarea,[data-theme=dark] .calling-wrap input:not([type=checkbox]) { background:rgba(22,31,46,.7); }

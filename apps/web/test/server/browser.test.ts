@@ -446,3 +446,58 @@ describe('browser request boundary', () => {
     expect(result?.headers['cache-control']).toBe('private, no-store');
   });
 });
+
+describe('recorded company reads publish only under current authority', () => {
+  const identity = { id, name: 'Private fictional company', website: null, locality: null, regionCode: null, status: 'active', assignedUserId: id,
+    stageKey: null, opportunityStatus: null, controlMode: null, openedAt: null, timeZone: null, timeZoneUnresolvedReason: null };
+  const full = { version: 3, visibility: 'assigned_or_admin', read: { visibility: 'assigned_or_admin', firm: { ...identity,
+    addressLine: null, postalCode: null, countryCode: 'US', timeZoneConfidence: null, timeZoneSource: null,
+    contacts: [], phoneRoutes: [], emailRoutes: [], aliases: [] } }, opportunities: [], holds: [], followUpPermissions: [] };
+  async function headers(): Promise<Record<string, string>> {
+    const session = await handler(request('/browser/session', { headers: { cookie: access() } }));
+    return { cookie: access(), 'x-callie-csrf': csrf, 'x-callie-session': (session?.body as { revision: string }).revision };
+  }
+  it('keeps company identities readable by an active salesperson without an admin requirement', async () => {
+    mocks.authenticate.mockResolvedValue({ authenticated: true, principal: { ...principal, role: 'salesperson' } });
+    const authHeaders = await headers();
+    mocks.route.mockResolvedValueOnce({ status: 200, body: { firms: [identity] } });
+    expect(await handler(request('/browser/api/firms', { headers: authHeaders }))).toMatchObject({ status: 200, body: { firms: [identity] } });
+    expect(mocks.authenticate).toHaveBeenCalledTimes(3);
+    expect(query).not.toHaveBeenCalled();
+  });
+  it.each(['revoked', 'role', 'device', 'session'] as const)('erases a list after a waiting read changes %s authority', async change => {
+    const authHeaders = await headers();
+    mocks.route.mockImplementationOnce(async () => {
+      mocks.authenticate.mockResolvedValueOnce(change === 'revoked' ? { authenticated: false } : { authenticated: true, principal: {
+        ...principal, ...(change === 'role' ? { role: 'salesperson' } : change === 'device' ? { deviceId: 'another-device' } : { sessionId: 'another-session' }),
+      } });
+      return { status: 200, body: { firms: [identity] } };
+    });
+    const result = await handler(request('/browser/api/firms', { headers: authHeaders }));
+    expect(result).toMatchObject({ status: 401, body: { error: 'browser_request_refused' } });
+    expect(JSON.stringify(result)).not.toContain(identity.name);
+  });
+  it.each(['reassigned', 'merged', 'revoked'] as const)('erases full company details if the Firm or principal becomes %s during its reads', async change => {
+    mocks.authenticate.mockResolvedValue({ authenticated: true, principal: { ...principal, role: 'salesperson' } });
+    const authHeaders = await headers();
+    mocks.route.mockImplementationOnce(async () => {
+      if (change === 'revoked') mocks.authenticate.mockResolvedValueOnce({ authenticated: false });
+      else firm = change === 'merged' ? { ...firm, status: 'merged' } : { ...firm, assigned_user_id: 'another-user' };
+      return { status: 200, body: full };
+    });
+    const result = await handler(post('/browser/api/crm/firm-page-v3', { firmId: id, pageVersion: 2 }, authHeaders));
+    expect(result).toMatchObject({ status: 401, body: { error: 'browser_request_refused' } });
+    expect(JSON.stringify(result)).not.toContain(identity.name);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes('FOR SHARE'))).toBe(true);
+  });
+  it('preserves an ordinary full read and an identity-only read without requiring assignment for identity', async () => {
+    const authHeaders = await headers();
+    mocks.route.mockResolvedValueOnce({ status: 200, body: full });
+    expect(await handler(post('/browser/api/crm/firm-page-v3', { firmId: id, pageVersion: 2 }, authHeaders))).toMatchObject({ status: 200, body: full });
+    query.mockClear();
+    const narrow = { version: 3, visibility: 'any_active_member', read: { visibility: 'any_active_member', firm: identity } };
+    mocks.route.mockResolvedValueOnce({ status: 200, body: narrow });
+    expect(await handler(post('/browser/api/crm/firm-page-v3', { firmId: id, pageVersion: 2 }, authHeaders))).toMatchObject({ status: 200, body: narrow });
+    expect(query).not.toHaveBeenCalled();
+  });
+});

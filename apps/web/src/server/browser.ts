@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { commandIdSchema, semanticVersionSchema, socialGuidedRequestInputSchema, dialCheckRequestSchema } from '@fss/contracts';
+import { commandIdSchema, semanticVersionSchema, socialGuidedRequestInputSchema, dialCheckRequestSchema, firmPageRequestSchema, pluralFirmPageResponseSchema } from '@fss/contracts';
 import { campaignOpeningApproveInputSchema, campaignOpeningRevokeInputSchema, campaignOpeningControlRequestSchema, campaignOpeningReceiptInputSchema } from '@fss/contracts';
 import { startSignIn, handleCallback, claimSignIn } from '../../../api/src/auth/signIn.ts';
 import { authenticate, endSession, type AuthenticatedPrincipal } from '../../../api/src/auth/sessions.ts';
@@ -216,6 +216,19 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (path === '/dial/check') {
     const input = dialCheckRequestSchema.parse(body);
     if (!await callingReadinessAccess(context.auth, token, principal, input.firmId)) throw new Refusal(401);
+  }
+  if ((path === '/firms' || path === '/crm/firm-page-v3') && result.status === 200) {
+    let detail = false;
+    if (path === '/crm/firm-page-v3') {
+      const input = firmPageRequestSchema.parse(body), page = pluralFirmPageResponseSchema.parse(result.body);
+      if (page.read.firm.id !== input.firmId) throw new Refusal(401);
+      detail = page.visibility === 'assigned_or_admin' || page.read.visibility === 'assigned_or_admin';
+      if (detail && !await callingReadinessAccess(context.auth, token, principal, input.firmId)) throw new Refusal(401);
+    }
+    if (!detail) {
+      const fresh = await authenticate(context.auth, `Bearer ${token}`);
+      if (!fresh.authenticated || revision(fresh.principal) !== revision(principal)) throw new Refusal(401);
+    }
   }
   if (isSocialFactsBrowserPath(path)) {
     const fresh = await authenticate(context.auth, `Bearer ${token}`);
