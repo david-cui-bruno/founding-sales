@@ -52,7 +52,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/social/private-drafts/list', '/social/private-drafts/read', '/social/private-drafts/receipt',
   '/social/voice-preferences/read', '/social/voice-preferences/receipt',
   '/calling/follow-ups/list', '/calling/follow-ups/read', '/calling/follow-ups/receipt',
-  '/calling/execution/receipt', '/calling/setup/receipt',
+  '/calling/execution/receipt', '/calling/setup/receipt','/calling/setup/budget-receipt','/calling/audio-test/receipt',
   '/calling/preparation/read','/calling/preparation/receipt',
 ] as const);
 /** Ephemeral outgoing-only Voice credential. Not a command, never persisted by the client. */
@@ -71,7 +71,7 @@ export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/social/private-drafts/save', '/social/voice-preferences/save',
   '/social/drafts/request',
   '/calling/wrap', '/calling/follow-ups/save',
-  '/calls/session', '/calling/setup/provider',
+  '/calls/session', '/calling/setup/provider','/calling/setup/budget','/calling/audio-test/session',
   '/calling/preparation/confirm',
 ] as const);
 

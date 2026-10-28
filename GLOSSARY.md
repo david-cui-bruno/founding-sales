@@ -28,6 +28,10 @@ _Avoid_: permission when referring only to a reachable endpoint
 An unqualified company record whose reviewed context and phone depend on a current retained source and explicit kept choice. It conveys no qualification or contact permission.
 _Avoid_: prepared prospect when referring only to this source-dependent context
 
+**Audio test**:
+An explicitly requested call with someone expecting it, used to check two-way audio outside a sales relationship.
+_Avoid_: prospect call when referring only to an audio check
+
 **Firm relationship**:
 A supported association between a person and a firm, with historical or current context and explicit unknown dates.
 _Avoid_: employment when the evidence establishes only an association

@@ -200,7 +200,8 @@ describe('BrowserApp real shared presentation', () => {
         expect(screen.queryByRole('heading', { name: 'Calling' })).toBeNull(); expect(send).toHaveBeenCalledTimes(before);
         fireEvent.click(screen.getByRole('button', { name: 'Exact candidate' }));
         await screen.findByRole('heading', { name: 'Selected retained observation' });
-        expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/list' || (url === '/browser/api/calling/setup' && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
+        await waitFor(() => expect(send.mock.calls.slice(before).filter(([url]) => url === '/browser/api/calling-identities')).toHaveLength(1));
+        expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/list' || ((url === '/browser/api/calling/setup' || url === '/browser/api/calling-identities') && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
         navigate('Email'); navigate('Calling');
         await screen.findByRole('heading', { name: 'Selected retained observation' });
         await act(async () => { client.invalidate(); await client.refresh(); });

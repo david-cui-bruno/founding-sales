@@ -774,10 +774,6 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       "Evidence waiting for a person, naming the firm; removed with the firm.",
     ),
     ...PHONE_RETENTION_COVERAGE,
-    call_sessions: coverage(
-      ["deletion_removes"],
-      "One Twilio call attempt and its recording reference; removed with the firm or the person.",
-    ),
     meetings: coverage(
       ["deletion_removes"],
       "A Cal.com booking and the attendee’s e-mail; removed with the firm or the person.",

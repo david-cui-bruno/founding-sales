@@ -10,7 +10,7 @@ import {seedPolicy,type SeededPolicy} from '../db/support/policyFixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {buildOutreachCadence} from '../../outreach/cadence.ts';
 import {outreachExecutionTiming} from '../../outreach/timing.ts';
-import {authorizeDialCommand} from '../../dial/tickets.ts';
+import {authorizeBrowserDialCommand} from '../../dial/tickets.ts';
 import {listStepWakes} from '../../sequences/wake.ts';
 import {enqueueJob} from '../../jobs/jobStore.ts';
 import {enrollContact} from '../../sequences/enrollments.ts';
@@ -46,7 +46,7 @@ async function plan(lane:'call_first'|'email_first'){
 it('expires a real unconsumed dial ticket before evaluating the next email',async()=>{
  const p=await plan('call_first');
  await db.session.query('UPDATE phone_routes SET contact_id=$2 WHERE id=$1',[policy.alpha.phoneRouteId,crm.alpha.contactId]);
- const ticket=await authorizeDialCommand(ctx(),{firmId:crm.alpha.firmId,routeId:policy.alpha.phoneRouteId,callingIdentityId:policy.alpha.callingIdentityId,routeVersion:policy.alpha.phoneRouteVersion,deviceId:seed.alpha.salesperson.deviceId,commandId:randomUUID(),at});
+ const ticket=await authorizeBrowserDialCommand(ctx(),{firmId:crm.alpha.firmId,routeId:policy.alpha.phoneRouteId,callingIdentityId:policy.alpha.callingIdentityId,routeVersion:policy.alpha.phoneRouteVersion,deviceId:seed.alpha.salesperson.deviceId,commandId:randomUUID(),at});
  expect(ticket.ok,JSON.stringify(ticket)).toBe(true);
  if(!ticket.ok)throw new Error(ticket.reason);
  // Issuance correctly uses the database clock in production. Align this fixture

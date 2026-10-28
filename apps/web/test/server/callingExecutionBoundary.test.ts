@@ -13,3 +13,9 @@ it('review excludes the removed browser history route from operational normaliza
  expect(callingExecutionBrowserResult('/calls/history',404,{error:'not_found'})).toBeNull();
  expect(callingExecutionBrowserResult('/calls/history',503,{error:'integration_unconfigured'})).toBeNull();
 });
+it('audio-test refusal is explicit, while auth loss and receipt absence retain uncertainty',()=>{
+ for(const reason of ['audio_test_admin_only','audio_test_today','audio_test_limit','audio_test_active','dnc_registry_match','handle_suppressed','telephony_budget_exhausted'])expect(callingExecutionBrowserResult('/calling/audio-test/session',409,{status:'refused',replayed:false,reason})).toMatchObject({status:200});
+ expect(callingExecutionBrowserResult('/calling/audio-test/session',503,{error:'integration_unconfigured'})).toMatchObject({status:200,body:{availability:'unavailable'}});
+ for(const status of [401,404,503])expect(callingExecutionBrowserResult('/calling/audio-test/receipt',status,{error:'not_found'})).toBeNull();
+ expect(callingExecutionBrowserResult('/calling/audio-test/session',409,{status:'refused',replayed:false,reason:'command_payload_mismatch'})).toBeNull();
+});

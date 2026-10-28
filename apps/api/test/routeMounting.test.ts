@@ -247,6 +247,7 @@ describe('what the API mounts', () => {
       'calling-preparation',
       'calling-workspace',
       'calling-execution-receipt',
+      'calling-audio-test',
       'callbacks',
       'call-sessions',
       'call-analysis',

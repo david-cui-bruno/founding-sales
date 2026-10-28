@@ -9,8 +9,8 @@ import { CALL_OUTCOMES } from './dial.ts';
 /**
  * The call-session wire contract (call-to-booking slice W, migration 0028).
  *
- * The Mac asks for a session with `POST /calls/session`, naming the firm and the route
- * the card showed; the server resolves the number, runs `authorizeDial` in full, holds a
+ * The browser asks for a session with `POST /calls/session`, naming the firm and route
+ * the card showed; the server resolves the number, runs the explicit browser policy, holds a
  * telephony reservation, and answers `{ sessionId, expiresAt }`. **The dialled number
  * never crosses to the renderer**: the Voice SDK connects with the session id as its only
  * parameter, and the TwiML route puts the server-resolved number into `<Dial>`.
@@ -62,6 +62,10 @@ export type CallSessionCreated = z.infer<typeof callSessionCreatedSchema>;
  *     configuration names, so Twilio would refuse or misrepresent the call.
  */
 export const CALL_SESSION_REFUSAL_CODES = [
+  'audio_test_admin_only',
+  'audio_test_today',
+  'audio_test_limit',
+  'audio_test_active',
   'call_attempts_exhausted',
   'call_attempt_today',
   'call_attempt_too_soon',

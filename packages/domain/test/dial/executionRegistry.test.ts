@@ -109,3 +109,17 @@ it('undoes consumption and accounting when a final audit write waits past the or
  expect(await pending).toEqual({ok:false,reason:'ticket_expired'});expect(waited).toBe(true);await unconsumed(sessionId);
  expect((await db.session.query("SELECT id FROM audit_events WHERE action='call.session_placed'")).rows).toHaveLength(0);
 });
+it.each(['unknown-state','unknown-zone','revoked-posture','outside-hours'] as const)('browser issuance/advice/consume do not require %s while the strict phone policy remains unchanged',async kind=>{
+ if(kind==='unknown-state')await db.session.query('UPDATE firms SET region_code=NULL WHERE id=$1',[crm.alpha.firmId]);
+ if(kind==='unknown-zone')await db.session.query('UPDATE firms SET time_zone=NULL,time_zone_confidence=NULL,time_zone_source=NULL,time_zone_rule_version=NULL WHERE id=$1',[crm.alpha.firmId]);
+ if(kind==='revoked-posture')await db.session.query('UPDATE state_postures SET revoked_at=clock_timestamp(),revoked_by_user_id=$2 WHERE workspace_id=$1',[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+ const at=kind==='outside-hours'?policy.outsideWindow:policy.insideWindow;
+ const input={firmId:crm.alpha.firmId,routeId:policy.alpha.phoneRouteId,routeVersion:1,callingIdentityId:policy.alpha.callingIdentityId,at};
+ const {authorizeDial}=await import('../../dial/authorize.ts');
+ const strict=await withTransaction(runtime,()=>authorizeDial(context(),input));expect(strict.allowed).toBe(false);
+ const {adviseBrowserDial}=await import('../../dial/advise.ts');expect(await adviseBrowserDial(context(),input)).toMatchObject({callable:true,reasons:[]});
+ const made=await withTransaction(runtime,()=>createCallSession(context(),{...input,deviceId:seed.alpha.salesperson.deviceId,commandId:randomUUID(),configuredCallerIdE164:'+14015550100'}));
+ expect(made).toMatchObject({ok:true});if(!made.ok)throw Error(made.reason);
+ const {consumeCallSession}=await import('../../calls/sessions.ts');
+ expect(await withTransaction(runtime,()=>consumeCallSession(runtime,{workspaceId:seed.alpha.workspaceId,sessionId:made.value.sessionId,callSid:`CA${randomUUID().replaceAll('-','')}`,identity:`client:${seed.alpha.salesperson.userId}`,at}))).toMatchObject({ok:true});
+});

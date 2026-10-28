@@ -270,6 +270,10 @@ export const MAIL_REFUSAL_SENTENCES: Readonly<Record<GrantRefusalCode | 'mailbox
 // ---------------------------------------------------------------------------
 
 export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalCode, string>> = Object.freeze({
+  audio_test_admin_only: 'Only a workspace admin can start an audio test.',
+  audio_test_today: 'An audio test was already placed today.',
+  audio_test_limit: 'Four audio tests were placed in the last 14 days.',
+  audio_test_active: 'An audio test is active or uncertain. Check that test before another call.',
   call_attempts_exhausted:
     'Four calls to this firm went unanswered in the last 14 days, so calling it is parked for review. Resume calling when you want to try again.',
   call_attempt_today: 'This firm was already called today. Try again on another business day.',

@@ -5,30 +5,19 @@ import type { DialRefusalCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
-import { authorizeDial, type AuthorizeDialInput, type DialEvidence } from './authorize.ts';
+import { authorizeBrowserDial, type AuthorizeDialInput, type DialEvidence } from './authorize.ts';
 import {lockPreparedCallingLifecycle,lockPreparedCallingCapability} from '../calling/preparationLifecycle.ts';
 import {readPreparationExecution} from '../calling/preparationExecution.ts';
 
 /**
- * One-use dial tickets (specification 9.2, 5.3).
+ * One-use browser dial tickets. The retired ticket HTTP pair stays absent; the
+ * strict legacy phone handoff owns its separate attempt records.
  *
- * "The command creates a one-use ticket recording database time, route and posture
- * versions, actor, device, assignment, and identity, valid for 60 seconds. Command
- * replay returns `already_consumed`, never another allow."
- *
- * Both halves of that last sentence are enforced twice, on purpose.
- *
- *  * The API's command receipt answers a replay that carries the same command id,
- *    and migration 0001 refuses a receipt of kind `authorize_dial` that carries a
- *    result at all, so a replayed receipt has nothing actionable in it.
- *  * `dial_tickets` has `UNIQUE (workspace_id, command_id)`, so a second ticket for
- *    the same command is refused by the database even if it reached this far — by a
- *    different device, say, or after a receipt was archived.
- *
- * Consumption locks the ticket row, re-runs `authorizeDial` (audit S10),
- * then marks it consumed with a conditional `UPDATE`. Two clients racing the same ticket
- * serialize on the row lock: the second reads it consumed and is told
- * `already_consumed`. The conditional update stays as the second guard.
+ * The existing route/version, actor/device/assignment/identity and original source
+ * deadline remain bound for at most60seconds. Browser state posture and local hours
+ * are no longer admission requirements; missing geographic evidence remains NULL.
+ * A command replay never creates a second ticket. Consumption checks current
+ * authority and known endpoint stops again before the number can leave the server.
  */
 
 export type DialResult<T> =
@@ -48,8 +37,8 @@ export interface IssuedDialTicket {
   readonly callingIdentityId: string;
   readonly issuedAt: string;
   readonly expiresAt: string;
-  readonly firmTimeZone: string;
-  readonly firmLocalTime: string;
+  readonly firmTimeZone: string|null;
+  readonly firmLocalTime: string|null;
 }
 
 export interface AuthorizeDialCommandInput extends Omit<AuthorizeDialInput, 'at'> {
@@ -62,7 +51,7 @@ export interface AuthorizeDialCommandInput extends Omit<AuthorizeDialInput, 'at'
 /** The ticket's life, from 9.2. Not configurable: it is the contract. */
 export const DIAL_TICKET_SECONDS = 60;
 
-export async function authorizeDialCommand(
+export async function authorizeBrowserDialCommand(
   context: RepositoryContext,
   input: AuthorizeDialCommandInput,
 ): Promise<DialResult<IssuedDialTicket>> {
@@ -81,7 +70,7 @@ export async function authorizeDialCommand(
   if (existing.rows.length > 0) return refuse('already_consumed');
 
   const at = input.at ?? (await databaseNow(context));
-  const decision = await authorizeDial(context, { ...input, at });
+  const decision = await authorizeBrowserDial(context, { ...input, at });
   if (!decision.allowed) return refuse(decision.reason);
 
   const clearance = await readBrowserExecutionClearance(context, decision.evidence.e164);
@@ -125,7 +114,7 @@ interface TicketRow {
   readonly calling_identity_id: string;
   readonly issued_at: Date;
   readonly expires_at: Date;
-  readonly firm_time_zone: string;
+  readonly firm_time_zone: string|null;
   readonly [column: string]: unknown;
 }
 
@@ -224,9 +213,9 @@ interface ConsumableTicketRow {
  * else — so a suppression, a retired or replaced route, a disabled calling identity,
  * a revoked posture, a pause or a restore hold that arrived in the ticket's sixty
  * seconds was not seen, and the `tel:` URI was issued anyway. 9.2 makes
- * `authorizeDial` "the only FSS source of an allow/refuse decision", and the last
+ * the browser authorization owner, and the last
  * moment before the URI leaves the server is the moment that decision has to be true.
- * So consumption locks the ticket, re-runs `authorizeDial` against exactly what the
+ * So consumption locks the ticket, re-runs `authorizeBrowserDial` against exactly what the
  * ticket recorded — the firm, the contact, the route *at the recorded version*, the
  * calling identity — at database time, and issues the URI only on an allow. A refusal
  * answers with the same code the authorization would have, and writes nothing: the
@@ -234,9 +223,9 @@ interface ConsumableTicketRow {
  * consume it is decided again.
  *
  * `at` is database time unless a test supplies the instant, exactly as
- * `authorizeDialCommand` takes it (docs/decisions/g4-database-time-is-a-parameter.md).
+ * `authorizeBrowserDialCommand` takes it (docs/decisions/g4-database-time-is-a-parameter.md).
  */
-export async function consumeDialTicket(
+export async function consumeBrowserDialTicket(
   context: RepositoryContext,
   input: { readonly ticketId: string; readonly deviceId: string; readonly at?: string | undefined },
 ): Promise<DialResult<ConsumedTicket>> {
@@ -261,7 +250,7 @@ export async function consumeDialTicket(
   if (ticket.expired) return refuse('ticket_expired');
 
   const at = input.at ?? (await databaseNow(context));
-  const decision = await authorizeDial(context, {
+  const decision = await authorizeBrowserDial(context, {
     firmId: ticket.firm_id,
     ...(ticket.contact_id === null ? {} : { contactId: ticket.contact_id }),
     routeId: ticket.phone_route_id,

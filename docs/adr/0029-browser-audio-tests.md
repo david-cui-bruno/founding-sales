@@ -1,0 +1,3 @@
+# Audio tests share call execution while keeping separate history
+
+An explicitly requested audio test uses the existing provider, reservation, callback and uncertain-call recovery engine with an immutable stored purpose, preserving old sessions as business calls. It has no Firm or business outcome, and its temporary destination is erased after termination or expiry while opaque execution, recording and billing history survives; this avoids creating a fictitious prospect or a second call engine. The [October28 browser policy](../sourcing/founder-actions/dnc-registration.md) also removes browser state, local-hours and recording-checkbox prerequisites while retaining automatic recording from answer, current owner controls and the closed strict phone lane.

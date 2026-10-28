@@ -1,6 +1,7 @@
 import { CALL_CADENCE, type CallCadence, type CallOutcome } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { localParts } from '../src/rules/localClock.ts';
+import { workspaceBusinessZone } from '../research/ledger.ts';
 
 export const CALL_CADENCE_PARKED_SOURCE = 'call_cadence_parked';
 export const UNANSWERED_OUTCOMES: ReadonlySet<CallOutcome> = new Set(['no_answer', 'busy', 'voicemail_left']);
@@ -46,13 +47,12 @@ export async function readCallCadence(
   let refusal: CallCadence['refusal'] = parked ? 'call_attempts_exhausted' : null;
   if (refusal === null && last !== null) {
     const firms = await context.db.query<{ time_zone: string | null }>('SELECT time_zone FROM firms WHERE workspace_id=$1 AND id=$2', [w, firmId]);
-    const zone = firms.rows[0]?.time_zone;
-    if (zone) {
-      const previous = localParts(last.consumed_at.toISOString(), zone);
-      const current = localParts(at, zone);
-      if (previous.date === current.date) refusal = 'call_attempt_today';
-      else if (Math.abs(current.minuteOfDay - previous.minuteOfDay) < CALL_CADENCE.spacingMinutes) refusal = 'call_attempt_too_soon';
-    }
+    // Missing geography does not remove cadence limits from an explicit browser call.
+    const zone = firms.rows[0]?.time_zone ?? await workspaceBusinessZone(context);
+    const previous = localParts(last.consumed_at.toISOString(), zone);
+    const current = localParts(at, zone);
+    if (previous.date === current.date) refusal = 'call_attempt_today';
+    else if (Math.abs(current.minuteOfDay - previous.minuteOfDay) < CALL_CADENCE.spacingMinutes) refusal = 'call_attempt_too_soon';
   }
   return { unansweredAttempts: attempts.length, nextAttempt: parked ? null : attempts.length + 1,
     limit: CALL_CADENCE.unansweredLimit, parked, refusal, lastAttemptSessionId: last?.id ?? null, parkingHoldId };

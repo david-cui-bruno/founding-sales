@@ -13,8 +13,8 @@ export async function lockPreparedCallingLifecycle(db:Queryable,workspaceId:stri
 }
 export async function lockPreparedCallingCapability(db:Queryable,workspaceId:string,kind:'ticket'|'session'|'handoff',id:string):Promise<void>{
  const table=kind==='ticket'?'dial_tickets':kind==='session'?'call_sessions':'phone_handoff_attempts';
- const row=(await db.query<{firm_id:string}>(`SELECT firm_id FROM ${table} WHERE workspace_id=$1 AND id=$2`,[workspaceId,id])).rows[0];
- if(row)await lockPreparedCallingLifecycle(db,workspaceId,row.firm_id);
+ const row=(await db.query<{firm_id:string|null}>(`SELECT firm_id FROM ${table} WHERE workspace_id=$1 AND id=$2`,[workspaceId,id])).rows[0];
+ if(row?.firm_id)await lockPreparedCallingLifecycle(db,workspaceId,row.firm_id);
 }
 /** Registered mutation owners take these before candidate/member/Firm rows. */
 export async function lockPreparationCleanup(ctx:RepositoryContext):Promise<void>{
