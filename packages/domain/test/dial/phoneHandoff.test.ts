@@ -64,16 +64,7 @@ describe('durable phone reservation, not merely logged outcomes', () => {
     expect(await readCallCadence(f.context, f.crm.alpha.firmId, '2026-09-30T14:00:00Z')).toMatchObject({ unansweredAttempts: 3 });
   });
   it('shares the unchanged four-in-fourteen allowance with real consumed Twilio history', async () => {
-    const observedAt = (await db.session.query<{ observed_at: Date }>('SELECT clock_timestamp() AS observed_at')).rows[0]!.observed_at;
-    const wednesday = new Date(observedAt);
-    wednesday.setUTCHours(14, 0, 0, 0);
-    wednesday.setUTCDate(wednesday.getUTCDate() - (wednesday.getUTCDay() - 3 + 7) % 7);
-    if (wednesday >= observedAt) wednesday.setUTCDate(wednesday.getUTCDate() - 7);
-    const day = (offset: number, hour = 14) => new Date(wednesday.getTime() + offset * 86_400_000 + (hour - 14) * 3_600_000).toISOString();
-    // Keep consumed history in the past, with real-clock freshness and local spacing across DST.
-    const publishedAt = new Date(wednesday);
-    publishedAt.setUTCHours(0);
-    await f.publish({ downloadedAt: publishedAt.toISOString(), publishedAt: publishedAt.toISOString() });
+    const day = await f.publishMixedProviderWeek();
     await db.session.query(`INSERT INTO workspace_settings(workspace_id,setting_key,version,value,changed_by_user_id)
       VALUES($1,'telephony_budget',1,'{"dailyCeilingCents":500,"maxMinutesPerCall":30,"unitPriceMicros":14000}',$2)`, [f.w, f.seeded.alpha.admin.userId]);
     const created = await createCallSession(f.context, { ...f.request(), at: day(0), callingIdentityId: f.policy.alpha.callingIdentityId, configuredCallerIdE164: '+14015550100' });
