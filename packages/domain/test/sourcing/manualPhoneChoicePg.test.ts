@@ -63,11 +63,10 @@ it('rechecks principal authority after the selected source read before saving',a
 });
 it.each([false,true])('final precommit fence checks exact source after a wait, expired=%s',async expired=>{
  const c=await source();
- if(expired)await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '150 milliseconds' WHERE id=$1",[c.choice.runId]);
  const transaction=withTransaction(runtime,async()=>{
   const input={candidateId:c.id,expectedRevision:1,phoneChoice:c.choice};
   expect((await recordManualProspectFeedback(ctx(),{...input,state:'kept'})).ok).toBe(true);
-  if(expired)await new Promise(resolve=>setTimeout(resolve,200));
+  if(expired){await runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '100 milliseconds' WHERE id=$1",[c.choice.runId]);await new Promise(resolve=>setTimeout(resolve,150));}
   await currentManualPhoneChoiceAuthority(ctx(),input,async()=>true);
  });
  if(expired){await expect(transaction).rejects.toBeInstanceOf(ManualPhoneChoiceChanged);expect((await runtime.query('SELECT 1 FROM sourcing_manual_prospect_states WHERE candidate_id=$1',[c.id])).rowCount).toBe(0);}
