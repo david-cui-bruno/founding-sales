@@ -24,6 +24,10 @@ _Avoid_: identity when referring only to an address or number
 A firm/contact-associated endpoint evaluated for use by an outreach channel under its current policy.
 _Avoid_: permission when referring only to a reachable endpoint
 
+**Calling preparation**:
+An unqualified company record whose reviewed context and phone depend on a current retained source and explicit kept choice. It conveys no qualification or contact permission.
+_Avoid_: prepared prospect when referring only to this source-dependent context
+
 **Firm relationship**:
 A supported association between a person and a firm, with historical or current context and explicit unknown dates.
 _Avoid_: employment when the evidence establishes only an association
