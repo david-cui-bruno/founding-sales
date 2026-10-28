@@ -1,3 +1,4 @@
+import {readBrowserExecutionClearance} from './executionClearance.ts';
 import { unknownNationalDncDisclosure, type DialRefusalCode, type NationalDncDisclosure } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {readPreparedProjections,preparedProjectionUnavailable} from '../calling/preparationProjection.ts';
@@ -13,8 +14,8 @@ import { readPhoneNationalDecision } from './phoneNationalPolicy.ts';
 /**
  * "Can I call this firm now?" as advice, not a ticket (wave 2, S4.5).
  *
- * The Mac shows the answer on the card. A separate durable handoff reservation must
- * recheck registry, policy and cadence before launching the phone app. This advice is a
+ * Calling shows the answer beside the selected number. Execution must recheck
+ * policy and cadence through its registered owner. This advice is a
  * read: it writes nothing, mints nothing, and answers every reason that applies rather
  * than the first, so a card can say "outside the calling window, and the state is not on
  * your list" in one go.
@@ -134,9 +135,8 @@ export async function adviseDial(
   });
   for (const hold of holds) add(hold.reasonCode as DialRefusalCode);
 
-  // No URI unless the answer is yes (wave 2 batch review, P1): the Mac opens `telUri`
-  // itself, so a suppressed, out-of-window or otherwise refused number must not carry
-  // one. A refused route has a reason of its own, so `callable` covers it too.
+  // Advisory responses never carry an execution URI, including for retained clients.
+  // A refused route has a reason of its own, so `callable` covers it too.
   const callable = reasons.length === 0;
   const national = route?.e164 && !input.omitNationalDnc ? await readPhoneNationalDecision(context,
     { firmId: firm.id, routeId: route.id, routeVersion: route.version, e164: route.e164, at }) : null;
@@ -154,4 +154,15 @@ export async function adviseDial(
     callingWindowOpensAt,
     at,
   };
+}
+
+/** Current Twilio advisory: retain known stops without requiring or presenting a
+ * registry acquisition/coverage/freshness result. Execution rechecks on use. */
+export async function adviseBrowserDial(context:RepositoryContext,input:{firmId:string;routeId?:string|undefined;at?:string|undefined}):Promise<DialAdvice|null>{
+ const snapshot=await adviseDial(context,{...input,omitNationalDnc:true});if(!snapshot)return null;
+ const {nationalDnc:_nationalDnc,...advice}=snapshot;
+ if(!advice.e164)return advice;
+ const clearance=await readBrowserExecutionClearance(context,advice.e164);
+ if(clearance.ok)return advice;
+ return {...advice,callable:false,reasons:advice.reasons.includes(clearance.reason)?advice.reasons:[...advice.reasons,clearance.reason]};
 }

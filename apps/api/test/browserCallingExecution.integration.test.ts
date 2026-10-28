@@ -36,11 +36,11 @@ async function voice(sessionId: string) {
   }, body: new URLSearchParams(params).toString() });
   return await response.text();
 }
-async function publish(freshMilliseconds = 31 * 86_400_000) {
+async function publish(freshMilliseconds = 31 * 86_400_000, result:'clear'|'match'='clear') {
   const at = (await fixture.db.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]!.at;
   const download = new Date(at.getTime() - 31 * 86_400_000 + freshMilliseconds);
   await publishTestRegistrySnapshot(fixture.db, fixture.alpha.workspaceId, {
-    downloadedAt: download.toISOString(), publishedAt: at.toISOString(), e164s: [{ e164: phone, result: 'clear' }],
+    downloadedAt: download.toISOString(), publishedAt: at.toISOString(), e164s: [{ e164: phone, result }],
   });
   return new Date(download.getTime() + 31 * 86_400_000).toISOString();
 }
@@ -93,39 +93,52 @@ async function receiptBarrier() {
     BEGIN IF NEW.command_kind='create_call_session' THEN PERFORM pg_advisory_xact_lock(820822); END IF; RETURN NEW; END $$`);
   await fixture.db.query('CREATE TRIGGER fixture_call_receipt_wait AFTER INSERT ON command_receipts FOR EACH ROW EXECUTE FUNCTION fixture_call_receipt_wait()');
 }
-it('refuses absent registry clearance through the actual HTTP route before any reservation', async () => {
-  const before = await counts();
-  const answer = await post('/calls/session', salesperson.accessToken, sessionBody());
-  expect(answer.status).toBe(409); expect(answer.body).toMatchObject({ reason: 'dnc_coverage_unknown' });
-  expect(await counts()).toEqual({ ...before, receipts: '1' });
+it('publishes browser advice and a signed single-use call without any registry acquisition or clearance disclosure', async () => {
+  const advice=await post('/dial/check',salesperson.accessToken,{firmId,routeId});
+  expect(advice.status).toBe(200);expect(advice.body['advice']).toMatchObject({callable:true,e164:phone,reasons:[]});expect(advice.body['advice']).not.toHaveProperty('nationalDnc');
+  const sessionId=await issue();expect(await voice(sessionId)).toContain(`>${phone}</Number>`);expect(await voice(sessionId)).not.toContain('<Dial');
+  expect(await counts()).toEqual({sessions:'1',tickets:'1',reservations:'1',receipts:'1'});
+  for(const table of ['national_registry_snapshots','national_registry_endpoint_scrubs'])expect((await fixture.db.query(`SELECT 1 FROM ${table}`)).rows).toHaveLength(0);
 });
-it('rolls back the new capability and receipt when receipt insertion waits past clearance expiry', async () => {
-  const deadline = await publish(2000); await receiptBarrier(); const before = await counts();
-  const answer = await blocked(() => post('/calls/session', salesperson.accessToken, sessionBody()), 820822,
-    () => fixture.db.query("SELECT pg_sleep(GREATEST(0,extract(epoch FROM $1::timestamptz-clock_timestamp()))+0.02)", [deadline]));
-  expect(answer.status).toBe(409); expect(answer.body).toMatchObject({ reason: 'dnc_coverage_unknown' });
+it.each(['creation','handoff'] as const)('rolls back %s effects when a known registry match arrives during the final write wait',async stage=>{
+  const sessionId=stage==='handoff'?await issue():null;
+  if(stage==='creation')await receiptBarrier();else{
+    await fixture.db.query(`CREATE FUNCTION fixture_call_receipt_wait() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.action='call.session_placed' THEN PERFORM pg_advisory_xact_lock(820822); END IF; RETURN NEW; END $$`);
+    await fixture.db.query('CREATE TRIGGER fixture_call_receipt_wait AFTER INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION fixture_call_receipt_wait()');
+  }
+  const before=await counts();const answer=await blocked<string|Awaited<ReturnType<typeof post>>>(()=>sessionId?voice(sessionId):post('/calls/session',salesperson.accessToken,sessionBody()),820822,()=>publish(31*86_400_000,'match'));
+  if(typeof answer==='string')expect(answer).not.toContain('<Dial');else{expect(answer.status).toBe(409);expect(answer.body).toMatchObject({reason:'dnc_registry_match'});}
   expect(await counts()).toEqual(before);
+  if(sessionId)expect((await fixture.db.query(`SELECT s.consumed_at,t.consumed_at ticket_consumed,r.state FROM call_sessions s JOIN dial_tickets t ON t.id=s.ticket_id JOIN provider_reservations r ON r.id=s.reservation_id WHERE s.id=$1`,[sessionId])).rows).toEqual([{consumed_at:null,ticket_consumed:null,state:'reserved'}]);
+});
+it('keeps legacy tel advice truthful and refuses the closed phone handoff with no registry coverage',async()=>{
+  expect((await post('/calling/setup/provider',admin,command({expectedVersion:1,provider:'tel'}))).status).toBe(200);
+  const advice=await post('/dial/check',salesperson.accessToken,{firmId,routeId});expect(advice.status).toBe(200);
+  expect(advice.body['advice']).toMatchObject({nationalDnc:{status:'unknown'}});
+  const handoff=await post('/dial/handoff',salesperson.accessToken,command({firmId,routeId,routeVersion:1}));expect(handoff.status).not.toBe(200);
+  expect((await fixture.db.query('SELECT id FROM phone_handoff_attempts')).rows).toHaveLength(0);
 });
 it('rolls back when the original device is revoked during the receipt wait', async () => {
-  await publish(); await receiptBarrier(); const before = await counts();
+  await receiptBarrier(); const before = await counts();
   const answer = await blocked(() => post('/calls/session', salesperson.accessToken, sessionBody()), 820822,
     () => fixture.db.query("UPDATE devices SET status='revoked',revoked_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2", [fixture.alpha.workspaceId, salesperson.deviceId]));
   expect(answer).toEqual({ status: 401, body: { error: 'session_changed' } }); expect(await counts()).toEqual(before);
 });
 it('accepted replay returns historical custody and creates no second reservation', async () => {
-  await publish(); const body = sessionBody(); const first = await post('/calls/session', salesperson.accessToken, body);
+  const body = sessionBody(); const first = await post('/calls/session', salesperson.accessToken, body);
   expect(first.status).toBe(200); const before = await counts();
   const replay = await post('/calls/session', salesperson.accessToken, body);
   expect(replay.body).toMatchObject({ replayed: true, result: result(first) }); expect(await counts()).toEqual(before);
 });
 it('refuses a revoked originating device at signed provider handoff', async () => {
-  await publish(); const sessionId = await issue();
+  const sessionId = await issue();
   await fixture.db.query("UPDATE devices SET status='revoked',revoked_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2", [fixture.alpha.workspaceId, salesperson.deviceId]);
   expect(await voice(sessionId)).not.toContain('<Dial');
   expect((await fixture.db.query('SELECT consumed_at FROM call_sessions WHERE id=$1', [sessionId])).rows[0]).toEqual({ consumed_at: null });
 });
 it.each(['creation', 'handoff'] as const)('honors an owner OFF committed during the %s setting-lock wait', async stage => {
-  await publish(); const sessionId = stage === 'handoff' ? await issue() : null; const before = await counts();
+  const sessionId = stage === 'handoff' ? await issue() : null; const before = await counts();
   const answer = await blocked<string | Awaited<ReturnType<typeof post>>>(() => sessionId ? voice(sessionId) : post('/calls/session', salesperson.accessToken, sessionBody()),
     settingLockName(fixture.alpha.workspaceId, 'calling_provider'), async () => {
       const context = repositoryContext(workspaceScope(fixture.alpha.workspaceId,
@@ -137,7 +150,7 @@ it.each(['creation', 'handoff'] as const)('honors an owner OFF committed during 
   expect(await counts()).toEqual(before);
 });
 it.each(['creation','handoff'] as const)('owner OFF overlaps %s without a gate/provider deadlock or UNKNOWN',async stage=>{
-  await publish();const sessionId=stage==='handoff'?await issue():null;
+  const sessionId=stage==='handoff'?await issue():null;
   let release!:()=>void;const paused=new Promise<void>(resolve=>{release=resolve;});let callPid:number|null=null;
   providerReadBarrier=async db=>{providerReadBarrier=undefined;callPid=(await db.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0]!.pid;await paused;};
   const call=stage==='handoff'?voice(sessionId!):post('/calls/session',salesperson.accessToken,sessionBody());

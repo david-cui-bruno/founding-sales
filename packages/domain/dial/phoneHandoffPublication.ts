@@ -8,7 +8,7 @@ import { readCallingProvider } from '../settings/integrations.ts';
 import { readPhoneOfficeProof } from './phoneOfficeProof.ts';
 import {lockPreparedCallingCapability} from '../calling/preparationLifecycle.ts';
 import {readPreparationExecution} from '../calling/preparationExecution.ts';
-import {readExecutionClearance} from './executionClearance.ts';
+import {readPhoneHandoffRegistryClearance} from './executionClearance.ts';
 
 interface Attempt {
   [key: string]: unknown; id: string; firm_id: string; phone_route_id: string | null; e164: string | null;
@@ -51,7 +51,7 @@ export async function readPublishedPhoneHandoff(context: RepositoryContext, atte
       const now = (await context.db.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]?.at;
       if (!now || now.getTime() >= row.expires_at.getTime()) return false;
       if(row.national_dnc_basis==='registry'){
-        const registry=await readExecutionClearance(context,row.e164);
+        const registry=await readPhoneHandoffRegistryClearance(context,row.e164);
         if(!registry.ok||!await authority(context,row.device_id,actor.userId,false))return false;
         if(await readCallingProvider(context)!=='tel'||!(await adviseDial(context,{firmId:row.firm_id,routeId:row.phone_route_id,at:now.toISOString(),omitNationalDnc:true}))?.callable
           ||!await authority(context,row.device_id,actor.userId,false))return false;

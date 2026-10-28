@@ -85,9 +85,6 @@ export function CallingReadiness({client,firmId,route,identityId,disabled,isScop
     <li>{result.ownIdentity?'Your selected calling identity is currently available.':'Choose a current calling number owned by your signed-in identity.'}</li>
     {result.advice.reasons.map(reason=><li key={reason}>{reasons[reason]}</li>)}
     {!result.advice.callable&&!result.advice.reasons.length?<li>Current calling policy blocks this Firm.</li>:null}
-    <li>{result.advice.nationalDnc?.status==='checked_clear'?'National DNC: checked clear in the retained registry evidence.'
-     :result.advice.nationalDnc?.status==='not_checked_owner_risk'?`${result.advice.nationalDnc.warning}. An existing owner-risk receipt is present; this is not registry clearance or browser calling permission.`
-     :'National DNC: current clearance is not established. Calling remains held.'}</li>
    </ul>
    <p>This snapshot grants no permission to call or record. Call setup rechecks current eligibility, budgets and authority.</p>
   </div>:null}

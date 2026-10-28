@@ -1,4 +1,4 @@
-import { readExecutionClearance, readTicketExecutionClearance } from './executionClearance.ts';
+import { readBrowserExecutionClearance, readTicketExecutionClearance } from './executionClearance.ts';
 import {reserveOutreachCall,settleOutreachAction} from '../outreach/touchReservations.ts';
 import {lockSendGateForDispatch} from '../policy/sendGate.ts';
 import type { DialRefusalCode } from '@fss/contracts';
@@ -84,15 +84,14 @@ export async function authorizeDialCommand(
   const decision = await authorizeDial(context, { ...input, at });
   if (!decision.allowed) return refuse(decision.reason);
 
-  const clearance = await readExecutionClearance(context, decision.evidence.e164);
+  const clearance = await readBrowserExecutionClearance(context, decision.evidence.e164);
   if (!clearance.ok) return refuse(clearance.reason);
   await context.db.query('SAVEPOINT authorize_dial_execution');
   const undo = async (reason: DialRefusalCode): Promise<DialResult<IssuedDialTicket>> => {
     await context.db.query('ROLLBACK TO SAVEPOINT authorize_dial_execution');
     return refuse(reason);
   };
-  const freshUntil=preparation.expiresAt&&Date.parse(preparation.expiresAt)<Date.parse(clearance.freshUntil)?preparation.expiresAt:clearance.freshUntil;
-  const issued = await insertTicket(context, decision.evidence, input, freshUntil);
+  const issued = await insertTicket(context, decision.evidence, input, preparation.expiresAt??null);
   if (issued === null) return refuse('already_consumed');
   const touch=await reserveOutreachCall(context,{firmId:issued.firmId,contactId:issued.contactId,ticketId:issued.ticketId,at});
   if(!touch.ok){
@@ -137,7 +136,7 @@ async function insertTicket(
   context: RepositoryContext,
   evidence: DialEvidence,
   input: AuthorizeDialCommandInput,
-  freshUntil: string,
+  sourceDeadline: string|null,
 ): Promise<IssuedDialTicket | null> {
   // `issued_at` and `expires_at` are the database's clock and the database's
   // arithmetic. A client that could send either could send itself an hour.
@@ -167,7 +166,7 @@ async function insertTicket(
       evidence.e164,
       evidence.firmTimeZone,
       DIAL_TICKET_SECONDS,
-      freshUntil,
+      sourceDeadline,
     ],
   );
   const row = rows[0];
@@ -272,7 +271,7 @@ export async function consumeDialTicket(
   });
   if (!decision.allowed) return refuse(decision.reason);
 
-  const clearance = await readExecutionClearance(context, decision.evidence.e164);
+  const clearance = await readBrowserExecutionClearance(context, decision.evidence.e164);
   if (!clearance.ok) return refuse(clearance.reason);
   await context.db.query('SAVEPOINT consume_dial_execution');
   const undo = async (reason: DialRefusalCode): Promise<DialResult<ConsumedTicket>> => {

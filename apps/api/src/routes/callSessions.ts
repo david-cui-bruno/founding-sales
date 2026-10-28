@@ -3,7 +3,7 @@ import {lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
 import {lockPreparedCallingLifecycle} from '@fss/domain/calling/preparationLifecycle.ts';
 import { retainedPrincipalPublicationAuthority } from './retainedPrincipalAuthority.ts';
 import { requireCallingAuthority, CallingAuthorityChanged } from '@fss/domain/calling/followUpDraftAccess.ts';
-import { requireCurrentCallSessionRegistry } from '@fss/domain/calls/sessionClearance.ts';
+import { requireCurrentCallSessionClearance } from '@fss/domain/calls/sessionClearance.ts';
 import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import {activeIdentityActor} from '@fss/domain/crm/identityAccess.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -241,7 +241,7 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
     if (createdSessionId === null) return;
     const publication = retainedPrincipalPublicationAuthority(deps, context);
     await requireCallingAuthority(context, publication.authority);
-    const currentAt = await requireCurrentCallSessionRegistry(context, createdSessionId);
+    const currentAt = await requireCurrentCallSessionClearance(context, createdSessionId);
     if (publication.publicationNow(Date.parse(currentAt)) === null) throw new CallingAuthorityChanged();
   };
   return await runPolicyCommand(deps, createCallSessionCommandSchema, 'create_call_session', async (context, body) => {

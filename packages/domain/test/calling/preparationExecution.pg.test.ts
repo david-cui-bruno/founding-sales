@@ -8,8 +8,8 @@ import {reservePhoneHandoff,readPhoneHandoffResult} from '../../dial/phoneHandof
 let f:Awaited<ReturnType<typeof preparedExecutionFixture>>;
 beforeEach(async()=>{f=await preparedExecutionFixture();});afterEach(async()=>f?.stop());
 async function erase(id:string){await f.tx(async()=>{await lockPreparationCleanup(f.ctx());await f.runtime.query("SELECT erase_calling_preparation($1,$2,'source_deleted')",[f.seed.alpha.workspaceId,id]);});}
-it('actual ticket/session issue retains exact source marker and clips original capability lifetime; erasure clears bytes without destroying opaque provider/accounting identities',async()=>{
- const p=await f.prepared(),session=await f.session(p);expect(session).toMatchObject({ok:true});if(!session.ok)throw Error(session.reason);
+it('without registry coverage actual ticket/session issue retains exact source marker and clips original capability lifetime; erasure clears bytes without destroying opaque provider/accounting identities',async()=>{
+ const p=await f.prepared(false,{registry:false});const session=await f.session(p);expect(session).toMatchObject({ok:true});if(!session.ok)throw Error(session.reason);
  const before=(await f.runtime.query<{ticket_id:string;reservation_id:string;expires_at:Date}>('SELECT ticket_id,reservation_id,expires_at FROM call_sessions WHERE id=$1',[session.value.sessionId])).rows[0]!;
  expect((await f.runtime.query('SELECT calling_preparation_id,e164 FROM dial_tickets WHERE id=$1',[before.ticket_id])).rows).toEqual([{calling_preparation_id:p.preparationId,e164:p.phone}]);
  await expect(f.tx(()=>f.runtime.query('UPDATE dial_tickets SET calling_preparation_erased_at=clock_timestamp() WHERE id=$1',[before.ticket_id]))).rejects.toMatchObject({code:'23514'});
@@ -22,8 +22,8 @@ it('actual ticket/session issue retains exact source marker and clips original c
  expect((await f.runtime.query('SELECT consumed_at,twilio_call_sid FROM call_sessions WHERE id=$1',[session.value.sessionId])).rows).toEqual([{consumed_at:null,twilio_call_sid:null}]);
  await expect(f.tx(()=>f.runtime.query('UPDATE dial_tickets SET e164=$2,firm_time_zone=$3 WHERE id=$1',[before.ticket_id,p.phone,'America/New_York']))).rejects.toMatchObject({code:'23514'});
 });
-it('consumed provider/UNKNOWN and cadence survive source erasure; signed status reconciliation still settles the original attempt',async()=>{
- const p=await f.prepared(),session=await f.session(p);if(!session.ok)throw Error(session.reason);
+it('without registry coverage consumed provider/UNKNOWN and cadence survive source erasure; signed status reconciliation still settles the original attempt',async()=>{
+ const p=await f.prepared(false,{registry:false});const session=await f.session(p);if(!session.ok)throw Error(session.reason);
  const sid='CA'+'2'.repeat(32),consumed=await f.tx(()=>consumeCallSession(f.runtime,{workspaceId:f.seed.alpha.workspaceId,sessionId:session.value.sessionId,callSid:sid,identity:`client:${f.seed.alpha.admin.userId}`,at:f.policy.insideWindow}));expect(consumed).toMatchObject({ok:true});
  const identity=(await f.runtime.query('SELECT ticket_id,reservation_id,twilio_call_sid,consumed_at FROM call_sessions WHERE id=$1',[session.value.sessionId])).rows;
  const cadence=await readCallCadence(f.ctx(),p.firmId,new Date().toISOString());
@@ -46,8 +46,8 @@ it('frozen phone handoff marker is exact, source loss clears every owned binding
  expect(await readPhoneHandoffResult(f.ctx(),id,false)).toMatchObject({actionable:false,telUri:null});
  await expect(f.tx(()=>f.runtime.query('UPDATE phone_handoff_attempts SET e164=$2 WHERE id=$1',[id,p.phone]))).rejects.toMatchObject({code:'23514'});
 });
-it('already-expired original source refuses ticket consumption and never mints replacement capabilities',async()=>{
- const p=await f.prepared();
+it('without registry coverage already-expired original source refuses ticket consumption and never mints replacement capabilities',async()=>{
+ const p=await f.prepared(false,{registry:false});
  await f.tx(async()=>{await lockPreparationCleanup(f.ctx());await f.runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '150 milliseconds' WHERE id=$1",[p.runId]);});
  const issued=await f.ticket(p);expect(issued).toMatchObject({ok:true});if(!issued.ok)throw Error(issued.reason);
  const deadline=(await f.runtime.query<{source_expires_at:Date}>('SELECT source_expires_at FROM calling_preparations WHERE id=$1',[p.preparationId])).rows[0]!.source_expires_at;
