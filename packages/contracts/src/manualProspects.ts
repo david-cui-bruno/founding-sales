@@ -6,10 +6,24 @@ import {manualLiteralPhoneCoverageSchema, manualLiteralPhoneSourceSchema, manual
 
 /** Private manual worklist only. Raw observations are never canonical Firms or contact authority. */
 export const manualProspectStateSchema = z.enum(['new', 'kept', 'skipped', 'wrong_number']);
+/** Exact retained-source selection only; no number or original prose in custody. */
+export const manualPhoneChoiceSchema = z.strictObject({
+  runId: uuid, observationId: uuid, blockId: z.string().min(1).max(80),
+  labelStart: z.number().int().min(0).max(16000), labelEnd: z.number().int().min(1).max(16000),
+  start: z.number().int().min(0).max(16000), end: z.number().int().min(1).max(16000),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/u), relevantTextHash: z.string().regex(/^[a-f0-9]{64}$/u),
+}).refine(v=>v.end>v.start&&v.end-v.start<=200&&v.labelEnd>v.labelStart&&v.labelEnd-v.labelStart<=200&&v.start>=v.labelEnd);
+export const manualPhoneSchema = z.strictObject({
+  value: z.string().regex(/^\+[1-9]\d{7,14}$/u), choice: manualPhoneChoiceSchema,
+  sourceUrl: z.string().min(1).max(2000), retrievedAt: instant, expiresAt: instant,
+});
+export type ManualPhoneChoice = z.infer<typeof manualPhoneChoiceSchema>;
 export const manualProspectListInputSchema = z.strictObject({
   state: z.enum(['all', 'new', 'kept', 'skipped', 'wrong_number']),
   offset: z.number().int().min(0).max(1000000),
-});
+  includeManualPhone: z.boolean().optional(),
+  candidateId: uuid.optional(), expectedRevision: z.number().int().positive().optional(),
+}).refine(v=>(v.candidateId===undefined&&v.expectedRevision===undefined)||(v.candidateId!==undefined&&v.expectedRevision!==undefined&&v.offset===0));
 /** A queue label is never a canonical identity decision. Original observedName survives. */
 export const manualProspectPresentationSchema = z.strictObject({
   label: z.string().trim().min(1).max(300),
@@ -57,6 +71,7 @@ export const manualProspectSchema = z.strictObject({
   phoneBasis: z.enum(['retained_observation', 'unknown']),
   presentation: manualProspectPresentationSchema.optional(),
   phoneEvidence: manualProspectPhoneEvidenceSchema.optional(),
+  manualPhone: manualPhoneSchema.optional(),
   sources: z.array(z.strictObject({
     label: z.string().min(1).max(300),
     url: z.string().max(2000).nullable(),
@@ -88,14 +103,18 @@ export const manualProspectFeedbackInputSchema = z.strictObject({
   candidateId: uuid,
   expectedRevision: z.number().int().positive(),
   state: z.enum(['kept', 'skipped', 'wrong_number']),
-});
-export const manualProspectFeedbackCommandSchema = manualProspectFeedbackInputSchema.safeExtend({
+  phoneChoice: manualPhoneChoiceSchema.nullable().optional(),
+}).refine(v=>v.state==='kept'||v.phoneChoice==null);
+export const manualProspectFeedbackPayloadSchema = manualProspectFeedbackInputSchema.safeExtend({
   commandId: commandIdSchema,
+});
+export const manualProspectFeedbackCommandSchema = manualProspectFeedbackPayloadSchema.safeExtend({
   clientVersion: semanticVersionSchema,
 });
 export const manualProspectFeedbackSavedSchema = z.strictObject({
   candidateId: uuid,
   revision: z.number().int().positive(),
   state: manualProspectStateSchema,
+  phoneChoice: manualPhoneChoiceSchema.nullable().optional(),
 });
 export type ManualProspect = z.infer<typeof manualProspectSchema>;

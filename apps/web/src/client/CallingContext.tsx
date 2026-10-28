@@ -1,4 +1,4 @@
-import {useEffect,useState,type JSX} from 'react';
+import {useCallback,useEffect,useState,type JSX} from 'react';
 import {pluralFirmPageResponseSchema,manualProspectListSchema,manualProspectListInputSchema,todayActionOpenV4ResponseSchema,type PluralFirmPageResponse,type QualifiedResearchFirm,type AutomaticResearchFirm,type ManualProspect} from '@fss/contracts';
 import type {CallingQueueEntry} from './CallingQueue.tsx';
 import type {CallingSelection} from './workspaceNavigation.ts';
@@ -6,6 +6,8 @@ import type {BrowserClient} from './BrowserClient.ts';
 import {manualProspectLabel} from './manualProspectPresentation.ts';
 import {RetainedPhoneEvidence} from './RetainedPhoneEvidence.tsx';
 import {BrowserPhoneDiscovery} from './BrowserPhoneDiscovery.tsx';
+import {ManualPhoneNumber} from './ManualPhoneNumber.tsx';
+import {useManualPhoneChoice} from './useManualPhoneChoice.ts';
 export type CallingContextEntry=CallingQueueEntry&Pick<CallingSelection,'prospectPage'>;
 export interface CallingContextData{entry:CallingContextEntry;prospect?:ManualProspect;firm?:PluralFirmPageResponse;proof?:QualifiedResearchFirm|AutomaticResearchFirm;}
 export function callingSafeWebsite(value:string|null):string|null{try{if(value){const url=new URL(value);if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)return url.href;}}catch{/* Observations are never executed. */}return null;}
@@ -13,6 +15,7 @@ export function callingWebsiteIdentitySupported(website:string|null,identityUrls
 /** Current source-backed compact brief. The link is deliberate, never fetched or embedded. */
 export function CallingContext({client,entry,onReady}:{client:BrowserClient;entry:CallingContextEntry;onReady:(data:CallingContextData|null)=>void}):JSX.Element{
  const [data,setData]=useState<CallingContextData|null>(null),[notice,setNotice]=useState('Loading current brief…');
+ const [reload,setReload]=useState(0),refresh=useCallback(()=>setReload(v=>v+1),[]);
  useEffect(()=>{let mounted=true,timer:ReturnType<typeof setTimeout>|undefined,loadedData:CallingContextData|null=null;const epoch=client.epoch,current=():boolean=>mounted&&client.isCurrent(epoch)&&client.current?.status==='signed_in';setData(null);onReady(null);setNotice('Loading current brief…');
   const project=():void=>{
    clearTimeout(timer);if(!current()||!loadedData)return;
@@ -26,8 +29,8 @@ export function CallingContext({client,entry,onReady}:{client:BrowserClient;entr
    if(entry.subject.kind==='candidate'){
     // Queue rows came from the current retained projection. Exact incoming links
     // use only a bounded page hint for a fresh read, never inferred Firms or a scan.
-    let prospect=entry.prospect;
-    if(!prospect){const input=manualProspectListInputSchema.parse(entry.prospectPage??{state:'all',offset:0});const page=await client.request('/sourcing/candidates/prospects/list',manualProspectListSchema,input,()=>{if(!current())throw Error('Brief changed');});const subject=entry.subject;prospect=page.prospects.find(p=>p.candidateId===subject.candidateId&&p.revision===subject.expectedCandidateRevision);}
+    let prospect=reload===0?entry.prospect:undefined;
+    if(!prospect){const input=manualProspectListInputSchema.parse(reload?{state:'all',offset:0,candidateId:entry.subject.candidateId,expectedRevision:entry.subject.expectedCandidateRevision,includeManualPhone:true}:{...(entry.prospectPage??{state:'all',offset:0}),includeManualPhone:true});const page=await client.request('/sourcing/candidates/prospects/list',manualProspectListSchema,input,()=>{if(!current())throw Error('Brief changed');});const subject=entry.subject;prospect=page.prospects.find(p=>p.candidateId===subject.candidateId&&p.revision===subject.expectedCandidateRevision);}
     if(!prospect||prospect.candidateId!==entry.subject.candidateId||prospect.revision!==entry.subject.expectedCandidateRevision)throw Error('Exact current observation unavailable');
     loaded={entry,prospect};
    }else{
@@ -39,12 +42,14 @@ export function CallingContext({client,entry,onReady}:{client:BrowserClient;entr
    if(current()){loadedData=loaded;project();}
   }catch{if(current()){setData(null);onReady(null);setNotice('Current brief unavailable or source changed. Select a current list row or refresh. No call has been started.');}}};void read();
   const unsub=client.subscribe(()=>{if(!current()){loadedData=null;clearTimeout(timer);setData(null);onReady(null);setNotice('Current session required.');}else project();});return()=>{mounted=false;clearTimeout(timer);loadedData=null;unsub();};
- },[client,entry,onReady]);
+ },[client,entry,onReady,reload]);
  const p=data?.prospect,f=data?.firm?.read.firm,proof=data?.proof&&Date.parse(data.proof.validUntil)>Date.now()?data.proof:undefined,name=p?manualProspectLabel(p):f?.name??entry.label;
  const site=callingSafeWebsite(proof?.website??p?.website??f?.website??null);
  const identitySite=!!proof&&callingWebsiteIdentitySupported(site,proof.citations.filter(c=>c.kind==='firm_identity').map(c=>c.url));
- return <section className="calling-brief workspace-glass" aria-label="Current calling brief">{notice?<p role="status">{notice}</p>:null}<p className="workspace-eyebrow">{entry.subject.kind==='candidate'?'Retained observation · unverified':'Explicit canonical Firm'}</p><h2>{name}</h2><p>{p?[p.locality,p.region].filter(Boolean).join(', ')||'Location unknown':f?[f.locality,f.regionCode].filter(Boolean).join(', ')||'Location unknown':'Current location unavailable'}</p>{p?<RetainedPhoneEvidence evidence={p.phoneEvidence}/>:data?.firm?.read.visibility==='assigned_or_admin'?<><p>{data.firm.read.firm.phoneRoutes.length?data.firm.read.firm.phoneRoutes.map(r=>`${r.value} · ${r.eligibility}`).join(' / '):'Phone unknown · no current recorded route'}</p><p>{data.firm.read.firm.contacts.filter(c=>c.status==='active').map(c=>[c.fullName,c.title].filter(Boolean).join(' · ')).join(' / ')||'Person unknown'}</p></>:null}
- {p&&entry.subject.kind==='candidate'&&p.candidateId===entry.subject.candidateId&&p.revision===entry.subject.expectedCandidateRevision?<BrowserPhoneDiscovery client={client} candidateId={p.candidateId} revision={p.revision}/>:null}
+ const choice=useManualPhoneChoice(client,entry.subject.kind==='candidate'?entry.subject.candidateId:undefined,entry.subject.kind==='candidate'?entry.subject.expectedCandidateRevision:undefined,refresh);
+ return <section className="calling-brief workspace-glass" aria-label="Current calling brief">{notice?<p role="status">{notice}</p>:null}<p className="workspace-eyebrow">{entry.subject.kind==='candidate'?'Retained observation · unverified':'Explicit canonical Firm'}</p><h2>{name}</h2><p>{p?[p.locality,p.region].filter(Boolean).join(', ')||'Location unknown':f?[f.locality,f.regionCode].filter(Boolean).join(', ')||'Location unknown':'Current location unavailable'}</p>{p?<RetainedPhoneEvidence evidence={p.phoneEvidence} onPhoneChoice={choice.save} phoneChoiceDisabled={choice.busy||choice.unknown}/>:data?.firm?.read.visibility==='assigned_or_admin'?<><p>{data.firm.read.firm.phoneRoutes.length?data.firm.read.firm.phoneRoutes.map(r=>`${r.value} · ${r.eligibility}`).join(' / '):'Phone unknown · no current recorded route'}</p><p>{data.firm.read.firm.contacts.filter(c=>c.status==='active').map(c=>[c.fullName,c.title].filter(Boolean).join(' · ')).join(' / ')||'Person unknown'}</p></>:null}
+ {p?<><ManualPhoneNumber phone={p.manualPhone}/>{p.manualPhone?<button disabled={choice.busy||choice.unknown} onClick={()=>choice.save(null)}>Clear chosen manual number</button>:null}{choice.notice?<p role="status">{choice.notice}</p>:null}{choice.unknown?<p>Manual feedback is unresolved. <button disabled={choice.busy} onClick={choice.recover}>Reconcile manual selection</button></p>:null}</>:null}
+ {p&&entry.subject.kind==='candidate'&&p.candidateId===entry.subject.candidateId&&p.revision===entry.subject.expectedCandidateRevision?<BrowserPhoneDiscovery client={client} candidateId={p.candidateId} revision={p.revision} onPhoneChoice={choice.save} phoneChoiceDisabled={choice.busy||choice.unknown}/>:null}
  {site?<a className="calling-site" href={site} target="_blank" rel="noopener noreferrer">Open {identitySite?'source-backed':'observed'} website ↗</a>:<p>Website unknown or unsafe.</p>}
  {proof?<><p className="calling-objective">{proof.question}</p><details><summary>Research and source details</summary><p>Current research fit is not call permission. Maintenance need is not established.</p><ul>{proof.citations.map((c,i)=><li key={`${c.observationId}:${c.blockId}:${i}`}><strong>{c.kind.replaceAll('_',' ')}</strong><p>{c.quote}</p><small>{c.retrievedAt}</small>{callingSafeWebsite(c.url)?<a href={callingSafeWebsite(c.url)!} target="_blank" rel="noopener noreferrer">Open original source</a>:null}</li>)}</ul></details></>:p?<details><summary>Source details and unknowns</summary><p>Raw observation only. Not a unique Firm or permission to contact.</p><ul>{p.sources.map((s,i)=><li key={i}>{s.label} · {s.observedAt??'Date unknown'}{callingSafeWebsite(s.url)?<> <a href={callingSafeWebsite(s.url)!} target="_blank" rel="noopener noreferrer">Open source</a></>:null}</li>)}</ul>{p.sourceNotices.map((s,i)=><p key={i}>{s.label}</p>)}<p>{p.unknowns.join(' · ')}</p></details>:<p>Recorded company context only. Website identity support has not been established in this view.</p>}
  <p className="calling-boundary">{entry.subject.kind==='candidate'?'Manual report only. Retained observations do not authorize or reserve calls.':'Context is not calling permission. Browser calls require a separate explicit action and current server checks.'}</p></section>;

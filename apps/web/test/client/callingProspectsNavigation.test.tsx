@@ -22,7 +22,7 @@ function setup(){
   if(path==='/browser/session')return json({status:'signed_in',workspaceId:id,userId:id,deviceId:id,role:'admin',revision:'one',csrfToken:'c'.repeat(40),expiresAt:new Date(Date.now()+120000).toISOString()});
   if(path.startsWith('/browser/api/today?'))return json({workspaceId:id,snapshotDate:'2026-10-27',businessTimeZone:'America/New_York',cards:[]});
   if(path.endsWith('/today/actions/v4'))return json({version:4,workspaceId:id,businessTimeZone:'America/New_York',asOf:'2026-10-27T00:00:00.000Z',actions:[],promiseCoverage:{scope:'current_authorized_work',truncated:false,nextAfterId:null}});
-  if(path.endsWith('/prospects/list')){const input=JSON.parse(String(init?.body)) as {state:string;offset:number};reads.push(input);if(input.offset===50&&++pageTwoReads>1)return await fresh();return json({prospects:input.offset===0?first:[selected],hasMore:true});}
+  if(path.endsWith('/prospects/list')){const input=JSON.parse(String(init?.body)) as {state:string;offset:number};reads.push({state:input.state,offset:input.offset});if(input.offset===50&&++pageTwoReads>1)return await fresh();return json({prospects:input.offset===0?first:[selected],hasMore:true});}
   throw Error('Unexpected request outside bounded read workflow');
  });
  const client=new BrowserClient({fetch:fetcher,storage:sessionStorage,manualActivityStorage:localStorage,navigate:vi.fn(),randomUUID:()=>id});clients.push(client);

@@ -16,6 +16,10 @@ const labels=/\b(?:office\s+phone|main\s+phone|mobile(?:\s+phone)?|personal(?:\s
 // Vanity and extension forms are retained as unsupported WHOLE literals. Never
 // accept their numeric prefix as a business endpoint. No cross-block stitching.
 const tokens=/\+?[\p{N}(][\p{N}(). \t-]*\p{N}(?:[ \t]*(?:ext(?:ension)?\.?|x|#)[ \t]*[\p{L}\p{N}]+|-?[\p{L}\p{N}-]+)?/giu;
+/** Human selection must still cover the whole token, including unsupported suffixes. */
+export function isWholeManualPhoneLiteral(text:string,start:number,end:number):boolean{
+ return [...text.matchAll(tokens)].some(token=>token.index===start&&token.index+token[0].trimEnd().length===end);
+}
 /** Consume only explicitly attached literals. Unmatched prose/fields/residue
  * makes the segment unresolved, never a license to search later identifiers.
  * Unicode/vanity tokens are retained but do NOT extend the supported grammar. */

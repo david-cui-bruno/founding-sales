@@ -1,7 +1,7 @@
 import {z} from 'zod';
-import {instant,manualProspectFeedbackCommandSchema,manualProspectFeedbackSavedSchema} from '@fss/contracts';
+import {instant,manualProspectFeedbackPayloadSchema,manualProspectFeedbackSavedSchema,type ManualPhoneChoice} from '@fss/contracts';
 export const MANUAL_PROSPECT_PENDING_KEY='callie.browser.pending-manual-prospect.v1';
-const command=manualProspectFeedbackCommandSchema.omit({clientVersion:true});
+const command=manualProspectFeedbackPayloadSchema;
 export const manualProspectPendingSchema=z.strictObject({identity:z.string(),expiresAt:instant,payload:command,
  receipt:z.union([z.strictObject({status:z.literal('accepted'),result:manualProspectFeedbackSavedSchema}),z.strictObject({status:z.literal('refused')})]).optional()});
 export type PendingManualProspect=z.infer<typeof manualProspectPendingSchema>;
@@ -25,7 +25,7 @@ export class ManualProspectCustody {
   const bytes=JSON.stringify(held);this.storage.setItem(MANUAL_PROSPECT_PENDING_KEY,bytes);
   if(this.storage.getItem(MANUAL_PROSPECT_PENDING_KEY)!==bytes)throw Error('Manual feedback storage unavailable');
  }
- prepare(input:{candidateId:string;expectedRevision:number;state:'kept'|'skipped'|'wrong_number'}):PendingManualProspect{
+ prepare(input:{candidateId:string;expectedRevision:number;state:'kept'|'skipped'|'wrong_number';phoneChoice?:ManualPhoneChoice|null}):PendingManualProspect{
   const binding=this.binding();if(!binding)throw Error('Manual prospect authority unavailable');
   const prior=this.read();if(prior&&!prior.receipt)throw Error('Reconcile pending manual feedback');
   const held=manualProspectPendingSchema.parse({...binding,payload:{...input,commandId:this.uuid()}});this.retain(held);return held;

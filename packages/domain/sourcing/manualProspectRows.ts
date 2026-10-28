@@ -41,7 +41,8 @@ export const MANUAL_PROSPECT_ROWS_SQL=`${permittedManualProspectsSql(false)}, ke
  (count(*) OVER(PARTITION BY duplicate_key)-1)::integer AS duplicate_count FROM keyed
 ) SELECT * FROM ranked WHERE duplicate_rank=1 AND ($2='all' OR manual_state=$2) ORDER BY created_at DESC,id DESC`;
 
-export async function manualProspectRows(ctx:RepositoryContext,state:string,offset:number):Promise<ManualProspectRow[]> {
+export async function manualProspectRows(ctx:RepositoryContext,state:string,offset:number,exact?:{candidateId:string;expectedRevision:number}):Promise<ManualProspectRow[]> {
+ if(exact)return (await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_ROWS_SQL}) current_rows WHERE id=$3 AND revision=$4`,[ctx.scope.workspaceId,state,exact.candidateId,exact.expectedRevision])).rows;
  return (await ctx.db.query<ManualProspectRow>(`${MANUAL_PROSPECT_ROWS_SQL} LIMIT 51 OFFSET $3`,[ctx.scope.workspaceId,state,offset])).rows;
 }
 

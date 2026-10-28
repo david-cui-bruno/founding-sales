@@ -10,3 +10,7 @@ export const MANUAL_PROSPECT_CONSTRAINT_CASES=[
  bad('sourcing_manual_prospect_candidate_fk',{candidate_id:'00000000-0000-4000-8000-000000000134'}),
  {constraint:'sourcing_manual_prospect_states_pkey',run:async(f:Fixture)=>{const r=await row(f);await insert(f,r);return insert(f,r);}},
 ];
+/** Schema143 only: keep historical migration134's constraint inventory intact. */
+export const MANUAL_PHONE_CHOICE_CONSTRAINT_CASES=[
+ bad('manual_prospect_phone_choice_shape',{manual_phone_choice:'{}'}),
+];

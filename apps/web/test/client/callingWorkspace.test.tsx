@@ -53,15 +53,16 @@ it('retained phone queue keeps unknown and conflicting rows, selects exact page-
  });
  const client=new BrowserClient({fetch:fetcher,storage:localStorage,navigate:vi.fn(),randomUUID:()=>other});clients.push(client);await client.refresh();const selected=vi.fn();
  render(<CallingQueue client={client} onSelect={selected} disabled={false}/>);
+ await waitFor(()=>expect(offsets).toEqual([0]));
  fireEvent.click(screen.getByRole('button',{name:'Retained list'}));
  await screen.findByRole('button',{name:/Synthetic unknown-phone candidate.*Phone unknown/u});
  expect(screen.getByRole('button',{name:/Synthetic ambiguous phone.*Phone conflicting/u})).toBeTruthy();
  fireEvent.click(screen.getByRole('button',{name:'Next page'}));
  const row=await screen.findByRole('button',{name:/Synthetic retained phone.*Phone \+12145550123/u});fireEvent.click(row);
- expect(selected).toHaveBeenCalledWith(phoneEntry(observed));expect(offsets).toEqual([0,50]);expect(screen.queryByRole('link')).toBeNull();
+ expect(selected).toHaveBeenCalledWith(phoneEntry(observed));expect(offsets).toEqual([0,0,50]);expect(screen.queryByRole('link')).toBeNull();
  changed=true;fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
  await screen.findByRole('button',{name:/Synthetic retained phone.*Phone unknown/u});expect(screen.queryByText(/Phone \+12145550123/u)).toBeNull();
- expect(offsets).toEqual([0,50,50]);expect(fetcher.mock.calls.every(([url])=>/session|today\/actions\/v4|prospects\/list/u.test(String(url)))).toBe(true);
+ expect(offsets).toEqual([0,0,50,50]);expect(fetcher.mock.calls.every(([url])=>/session|today\/actions\/v4|prospects\/list/u.test(String(url)))).toBe(true);
 });
 it('retained phone late candidate read cannot resurrect details after session loss',async()=>{
  let resolve:(value:Response)=>void=()=>{throw Error('Read not started');};
