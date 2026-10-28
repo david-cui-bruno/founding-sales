@@ -19,6 +19,7 @@ import { transcribedCall as placeTranscribedCall } from '@fss/domain/test/calls/
 import { seedCrm, type SeededCrm } from '@fss/domain/test/db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '@fss/domain/test/db/support/fixtures.ts';
 import { seedPolicy, type SeededPolicy } from '@fss/domain/test/db/support/policyFixtures.ts';
+import { publishTestRegistrySnapshot } from '@fss/domain/test/support/nationalRegistry.ts';
 import { callAnalysisSource, callAnalyzeHandlers } from '../src/handlers/callAnalyze.ts';
 import { callSummarizeHandlers, callSummarySource } from '../src/handlers/callSummarize.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
@@ -216,6 +217,11 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     // Through the head of the tree, whichever migration that is (lane M2: no pin to bump).
     const { REQUIRED_SCHEMA } = await import('@fss/domain/db/schemaRange.ts');
     await applyMigrations(session, { throughVersion: REQUIRED_SCHEMA });
+    // Only the post-upgrade control uses current execution gates; legacy rows stay schema-34 evidence.
+    const observedAt = (await session.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]!.at.toISOString();
+    await publishTestRegistrySnapshot(session, seeded.alpha.workspaceId, {
+      downloadedAt: observedAt, publishedAt: observedAt, e164s: [{ e164: policy.alpha.e164, result: 'clear' }],
+    });
     // After the release David writes notes on one held legacy call (S3A2, P1): they never
     // move it off the summary path.
     const salesperson = repositoryContext(
