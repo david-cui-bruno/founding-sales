@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
-import type { SessionQueryable } from '../../db/queryable.ts';
+import { withTransaction, type SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { readOpenOpportunity } from '../../crm/pipeline.ts';
 import { retireRoute } from '../../crm/routes.ts';
@@ -658,7 +658,7 @@ describe('C15: "just now" is the database’s clock', () => {
 describe('C16 and S15: the call is recorded with what authorized it, and nothing foreign', () => {
   it('records the ticket, its route and its calling identity from the ticket alone', async () => {
     const context = salesperson();
-    const issued = await authorizeDialCommand(context, {
+    const issued = await withTransaction(database.session, async () => authorizeDialCommand(context, {
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,
       routeId: policy.alpha.phoneRouteId,
@@ -667,13 +667,13 @@ describe('C16 and S15: the call is recorded with what authorized it, and nothing
       deviceId: seeded.alpha.salesperson.deviceId,
       commandId: 'g79-carried-ticket',
       at: policy.insideWindow,
-    });
+    }));
     if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
-    const consumed = await consumeDialTicket(context, {
+    const consumed = await withTransaction(database.session, async () => consumeDialTicket(context, {
       ticketId: issued.value.ticketId,
       deviceId: seeded.alpha.salesperson.deviceId,
       at: policy.insideWindow,
-    });
+    }));
     expect(consumed.ok).toBe(true);
 
     const logged = await inTransaction(async inner =>
@@ -845,7 +845,7 @@ describe('C18: a callback’s instant is the domain clock’s answer', () => {
 
 describe('S10: consuming a ticket re-runs the dial decision', () => {
   const issue = async (commandId: string): Promise<string> => {
-    const issued = await authorizeDialCommand(salesperson(), {
+    const issued = await withTransaction(database.session, async () => authorizeDialCommand(salesperson(), {
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,
       routeId: policy.alpha.phoneRouteId,
@@ -854,16 +854,16 @@ describe('S10: consuming a ticket re-runs the dial decision', () => {
       deviceId: seeded.alpha.salesperson.deviceId,
       commandId,
       at: policy.insideWindow,
-    });
+    }));
     if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
     return issued.value.ticketId;
   };
   const consume = async (ticketId: string) =>
-    await consumeDialTicket(salesperson(), {
+    await withTransaction(database.session, async () => consumeDialTicket(salesperson(), {
       ticketId,
       deviceId: seeded.alpha.salesperson.deviceId,
       at: policy.insideWindow,
-    });
+    }));
   const unconsumed = async (ticketId: string): Promise<boolean> =>
     (
       await one<{ consumed_at: Date | null }>('SELECT consumed_at FROM dial_tickets WHERE workspace_id = $1 AND id = $2', [
@@ -945,7 +945,7 @@ describe('S10: consuming a ticket re-runs the dial decision', () => {
   it('refuses after the route is retired, on the version the ticket recorded', async () => {
     // The beta workspace: alpha's number is suppressed for good by the case above.
     const context = contextFor(seeded.beta.workspaceId, seeded.beta.salesperson.userId, 'salesperson');
-    const issued = await authorizeDialCommand(context, {
+    const issued = await withTransaction(database.session, async () => authorizeDialCommand(context, {
       firmId: crm.beta.firmId,
       contactId: crm.beta.contactId,
       routeId: policy.beta.phoneRouteId,
@@ -954,18 +954,18 @@ describe('S10: consuming a ticket re-runs the dial decision', () => {
       deviceId: seeded.beta.salesperson.deviceId,
       commandId: 'g79-s10-route',
       at: policy.insideWindow,
-    });
+    }));
     if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
     expect((await retireRoute(context, { routeKind: 'phone', routeId: policy.beta.phoneRouteId, reason: 'test' })).ok).toBe(
       true,
     );
     // Retiring bumps the version, so the ticket's recorded version is stale first.
     expect(
-      await consumeDialTicket(context, {
+      await withTransaction(database.session, async () => consumeDialTicket(context, {
         ticketId: issued.value.ticketId,
         deviceId: seeded.beta.salesperson.deviceId,
         at: policy.insideWindow,
-      }),
+      })),
     ).toEqual({ ok: false, reason: 'route_version_stale' });
   });
 });
