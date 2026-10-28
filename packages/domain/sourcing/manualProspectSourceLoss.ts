@@ -9,8 +9,9 @@ export const MANUAL_SOURCE_LOSS_ACTION='sourcing.manual_source_retention_expired
  * is retained and no candidate/CRM data is changed. Absence grants no authority. */
 export async function rememberExpiredManualSources(ctx:RepositoryContext,urls:readonly string[]):Promise<void>{
  if(urls.length===0)return;
- await eraseCampaignOpeningsForSources(ctx,urls);
+ // Keep deletion's source lifecycle -> workspace send gate order.
  await lockDiscoveryReviewSources(ctx);
+ await eraseCampaignOpeningsForSources(ctx,urls);
  await eraseManualActivityForSources(ctx,urls);
  await eraseProspectPhoneDiscoveriesForSources(ctx,urls);
  await ctx.db.query(`INSERT INTO audit_events(workspace_id,actor_kind,actor_user_id,action,subject_kind,subject_id,detail)

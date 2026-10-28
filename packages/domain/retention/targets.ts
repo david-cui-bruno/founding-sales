@@ -216,8 +216,9 @@ const researchEvidence: RetentionTarget = {
   tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts','sourcing_prospect_phone_discoveries','outreach_campaign_opening_attempts'],
   note: 'Evidence whose provider terms have expired is deleted at its own expiry; evidence whose terms permit retention stays with the firm.',
   sweep: async (context, input) => {
-    const openingCleared=await sweepCampaignOpenings(context,input);
+    // Deletion takes source lifecycle before Ask and the workspace send gate.
     await lockDiscoveryReviewSources(context);
+    const openingCleared=await sweepCampaignOpenings(context,input);
     const discoveryDeleted=await sweepDiscoveryReviews(context,input);
     const activityCleared=await sweepManualActivity(context,input);
     const callingCleared=await sweepCallingDrafts(context,input);
