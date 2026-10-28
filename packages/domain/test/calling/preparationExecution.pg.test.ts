@@ -46,14 +46,18 @@ it('frozen phone handoff marker is exact, source loss clears every owned binding
  expect(await readPhoneHandoffResult(f.ctx(),id,false)).toMatchObject({actionable:false,telUri:null});
  await expect(f.tx(()=>f.runtime.query('UPDATE phone_handoff_attempts SET e164=$2 WHERE id=$1',[id,p.phone]))).rejects.toMatchObject({code:'23514'});
 });
-it('without registry coverage already-expired original source refuses ticket consumption and never mints replacement capabilities',async()=>{
+it('without registry coverage source expiry after issue refuses consumption before the original ticket deadline and never mints replacement capabilities',async()=>{
  const p=await f.prepared(false,{registry:false});
- await f.tx(async()=>{await lockPreparationCleanup(f.ctx());await f.runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '150 milliseconds' WHERE id=$1",[p.runId]);});
+ await f.tx(async()=>{await lockPreparationCleanup(f.ctx());await f.runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '30 seconds' WHERE id=$1",[p.runId]);});
  const issued=await f.ticket(p);expect(issued).toMatchObject({ok:true});if(!issued.ok)throw Error(issued.reason);
  const deadline=(await f.runtime.query<{source_expires_at:Date}>('SELECT source_expires_at FROM calling_preparations WHERE id=$1',[p.preparationId])).rows[0]!.source_expires_at;
- expect(Date.parse(issued.value.expiresAt)).toBeLessThanOrEqual(deadline.getTime());
- await expect.poll(()=>Date.now()>deadline.getTime()).toBe(true);
- expect(await f.tx(()=>consumeDialTicket(f.ctx(),{ticketId:issued.value.ticketId,deviceId:f.seed.alpha.admin.deviceId,at:f.policy.insideWindow}))).toMatchObject({ok:false});
- expect(await f.ticket(p)).toMatchObject({ok:false});
+ expect(Date.parse(issued.value.expiresAt)).toBe(deadline.getTime());
+ // Shorten the same source only after issuance; then observe its actual expiry.
+ await f.tx(async()=>{await lockPreparationCleanup(f.ctx());await f.runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '1 second' WHERE id=$1",[p.runId]);});
+ await expect.poll(async()=>Number((await f.runtime.query('SELECT count(*)::int n FROM calling_preparations WHERE id=$1 AND source_expires_at<=clock_timestamp()',[p.preparationId])).rows[0]?.['n']),{timeout:5000}).toBe(1);
+ expect((await f.runtime.query('SELECT expires_at,expires_at>clock_timestamp() AS unexpired,consumed_at FROM dial_tickets WHERE id=$1',[issued.value.ticketId])).rows).toEqual([{expires_at:new Date(issued.value.expiresAt),unexpired:true,consumed_at:null}]);
+ expect(await f.tx(()=>consumeDialTicket(f.ctx(),{ticketId:issued.value.ticketId,deviceId:f.seed.alpha.admin.deviceId,at:f.policy.insideWindow}))).toMatchObject({ok:false,reason:'route_invalid'});
+ expect(await f.ticket(p)).toMatchObject({ok:false,reason:'route_invalid'});
  expect((await f.runtime.query('SELECT count(*)::int n FROM dial_tickets WHERE firm_id=$1',[p.firmId])).rows).toEqual([{n:1}]);
+ expect((await f.runtime.query('SELECT consumed_at FROM dial_tickets WHERE id=$1',[issued.value.ticketId])).rows).toEqual([{consumed_at:null}]);
 });
