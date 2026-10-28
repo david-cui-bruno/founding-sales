@@ -173,7 +173,7 @@ async function prepare(context: RepositoryContext, sessionId: string): Promise<P
        JOIN call_sessions s ON s.workspace_id = t.workspace_id AND s.id = t.call_session_id
        JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
        LEFT JOIN contacts c ON c.workspace_id = s.workspace_id AND c.id = s.contact_id
-      WHERE t.workspace_id = $1 AND t.call_session_id = $2`,
+      WHERE t.workspace_id = $1 AND t.call_session_id = $2 AND s.purpose='business'`,
     [context.scope.workspaceId, sessionId],
   );
   const row = rows[0];

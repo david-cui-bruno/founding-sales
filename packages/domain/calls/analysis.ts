@@ -88,7 +88,7 @@ export interface Locked {
  */
 export async function lockCallAnalysisForSession(context: RepositoryContext, sessionId: string): Promise<Locked | null> {
   const { rows: located } = await context.db.query<{ firm_id: string }>(
-    'SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2',
+    "SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2 AND purpose='business'",
     [context.scope.workspaceId, sessionId],
   );
   const firmId = located[0]?.firm_id;
@@ -97,7 +97,7 @@ export async function lockCallAnalysisForSession(context: RepositoryContext, ses
   if (firm === null) return null;
   await lockCallAnalysis(context, sessionId);
   const { rows: live } = await context.db.query<{ firm_id: string }>(
-    'SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2 FOR KEY SHARE',
+    "SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2 AND purpose='business' FOR KEY SHARE",
     [context.scope.workspaceId, sessionId],
   );
   // A session moved to another firm between the unlocked read and the lock (a firm merge)

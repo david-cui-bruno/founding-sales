@@ -180,7 +180,7 @@ export async function computeCallTrial(
        FROM call_sessions s
        JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
        LEFT JOIN call_transcripts t ON t.workspace_id = s.workspace_id AND t.call_session_id = s.id
-      WHERE s.workspace_id = $1 AND s.consumed_at IS NOT NULL
+      WHERE s.workspace_id = $1 AND s.purpose='business' AND s.consumed_at IS NOT NULL
         AND coalesce(s.answered_at, s.started_at, s.created_at) >= $2::timestamptz
         AND ($3::uuid IS NULL OR f.assigned_user_id = $3::uuid)
       ORDER BY coalesce(s.answered_at, s.started_at, s.created_at) DESC, s.id`,

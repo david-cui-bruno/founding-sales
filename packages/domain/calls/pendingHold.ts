@@ -75,8 +75,8 @@ export { CALL_ANALYSIS_PENDING_SOURCE, PENDING_HOLD_REVIEW_AFTER_HOURS };
 export async function lockGateAndFirmForCallSid(
   db: Queryable,
   callSid: string,
-): Promise<{ readonly workspaceId: string; readonly firmId: string } | null> {
-  const { rows: located } = await db.query<{ workspace_id: string; firm_id: string }>(
+): Promise<{ readonly workspaceId: string; readonly firmId: string | null } | null> {
+  const { rows: located } = await db.query<{ workspace_id: string; firm_id: string | null }>(
     `SELECT workspace_id, firm_id FROM call_sessions WHERE twilio_call_sid = $1 OR dial_call_sid = $1
       ORDER BY (twilio_call_sid = $1) DESC LIMIT 1`,
     [callSid],
@@ -84,7 +84,7 @@ export async function lockGateAndFirmForCallSid(
   const at = located[0];
   if (at === undefined) return null;
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sendGateLockName(at.workspace_id)]);
-  await db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE', [at.workspace_id, at.firm_id]);
+  if (at.firm_id !== null) await db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE', [at.workspace_id, at.firm_id]);
   return { workspaceId: at.workspace_id, firmId: at.firm_id };
 }
 
@@ -114,7 +114,7 @@ export async function admitPendingHold(context: RepositoryContext, sessionId: st
                        AND h.source_event_id = s.id::text) AS ever_held,
             EXISTS (SELECT 1 FROM jobs j WHERE j.workspace_id = s.workspace_id AND j.kind = 'call.transcribe'
                      AND j.payload ->> 'callSessionId' = s.id::text) AS transcribe_queued
-       FROM call_sessions s WHERE s.workspace_id = $1 AND s.id = $2`,
+       FROM call_sessions s WHERE s.workspace_id = $1 AND s.id = $2 AND s.purpose='business'`,
     [context.scope.workspaceId, sessionId, CALL_ANALYSIS_PENDING_SOURCE],
   );
   const facts = rows[0];
@@ -164,6 +164,9 @@ export async function admitToAnalysisPath(
   db: Queryable,
   input: { readonly workspaceId: string; readonly sessionId: string },
 ): Promise<{ readonly transcription: EnqueueTranscriptionOutcome; readonly holdId: string | null }> {
+  const business = (await db.query("SELECT id FROM call_sessions WHERE workspace_id=$1 AND id=$2 AND purpose='business'",
+    [input.workspaceId, input.sessionId])).rows[0];
+  if (!business) return { transcription: { enqueued: false, reason: 'transcription_not_eligible' }, holdId: null };
   const transcription = await enqueueCallTranscription(db, {
     workspaceId: input.workspaceId,
     sessionId: input.sessionId,

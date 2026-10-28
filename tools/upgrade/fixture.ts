@@ -13,7 +13,7 @@ import { listRoutes, verifyRoute } from '@fss/domain/crm/routes.ts';
 import { createCallback, resolveConfirmedInstant } from '@fss/domain/dial/callbacks.ts';
 import { logCallOutcome } from '@fss/domain/dial/calls.ts';
 import { registerCallingIdentity } from '@fss/domain/dial/identities.ts';
-import { authorizeDialCommand } from '@fss/domain/dial/tickets.ts';
+import * as dialTicketCommands from '@fss/domain/dial/tickets.ts';
 import { completeCanaryRun, insertCanaryRun } from '@fss/domain/jobs/canary.ts';
 import { incrementDailyCounter } from '@fss/domain/jobs/counters.ts';
 import { raiseCriticalAlert } from '@fss/domain/jobs/criticalAlerts.ts';
@@ -1449,7 +1449,11 @@ function dialPart(asSalesperson: () => RepositoryContext, state: State,schemaVer
       // The adapter is explicitly native143; older base commands retain their
       // own fixture/missing-table behavior and never receive current columns.
       if(schemaVersion>=143){const {publishFixtureDialRegistry}=await import('./fixtureRegistry.ts');await publishFixtureDialRegistry(asSalesperson(),state.primaryPhoneRouteId);}
-      const ticket = await authorizeDialCommand(asSalesperson(), {
+      // The recognized schema143 fixture adapter resolves BASE business modules;
+      // only the current schema145 browser owner has the explicit new name.
+      const authorize = (Reflect.get(dialTicketCommands,'authorizeBrowserDialCommand')??Reflect.get(dialTicketCommands,'authorizeDialCommand')) as typeof dialTicketCommands.authorizeBrowserDialCommand;
+      if(typeof authorize!=='function')throw Error('Fixture dial owner unavailable');
+      const ticket = await authorize(asSalesperson(), {
         firmId: state.primaryFirmId,
         contactId: state.primaryContactId,
         routeId: state.primaryPhoneRouteId,

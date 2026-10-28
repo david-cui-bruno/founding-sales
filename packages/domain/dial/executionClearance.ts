@@ -1,4 +1,4 @@
-import type { DialRefusalCode } from '@fss/contracts';
+import type { DialRefusalCode,CallSessionRefusalCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { readPhoneRegistryDecision } from './registryCoverage.ts';
 import {lockPreparedCallingCapability} from '../calling/preparationLifecycle.ts';
@@ -65,5 +65,5 @@ export async function readTicketExecutionClearance(context: RepositoryContext, t
 
 /** A late refusal must roll back command effects and its just-inserted receipt. */
 export class DialExecutionRefused extends Error {
-  constructor(readonly reason: DialRefusalCode) { super('Dial execution refused'); }
+  constructor(readonly reason: DialRefusalCode|CallSessionRefusalCode) { super('Dial execution refused'); }
 }

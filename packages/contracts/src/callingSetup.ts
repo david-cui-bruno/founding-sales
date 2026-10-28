@@ -27,3 +27,20 @@ export type CallingSetup=z.infer<typeof callingSetupSchema>;
 export type CallingSetupInput=z.infer<typeof callingSetupInputSchema>;
 export type CallingSetupSaved=z.infer<typeof callingSetupSavedSchema>;
 export type CallingSetupReceipt=z.infer<typeof callingSetupReceiptSchema>;
+
+/** Editing the daily ceiling preserves the current rate and per-call duration. */
+export const callingBudgetInputSchema=z.strictObject({expectedVersion:version,dailyCeilingCents:telephonyBudgetSettingSchema.shape.dailyCeilingCents});
+export const callingBudgetCommandSchema=callingBudgetInputSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
+export const callingBudgetSavedSchema=z.strictObject({dailyCeilingCents:telephonyBudgetSettingSchema.shape.dailyCeilingCents,version});
+export const callingBudgetAnswerSchema=z.discriminatedUnion('status',[
+ z.strictObject({status:z.literal('accepted'),replayed:z.boolean(),result:callingBudgetSavedSchema}),
+ z.strictObject({status:z.literal('refused'),replayed:z.boolean(),reason:z.enum(CALLING_SETUP_REFUSALS)}),
+]);
+export const callingBudgetReceiptSchema=z.discriminatedUnion('state',[
+ z.strictObject({state:z.literal('unknown')}),
+ z.strictObject({state:z.literal('refused'),reason:z.enum(CALLING_SETUP_REFUSALS)}),
+ z.strictObject({state:z.literal('accepted'),result:callingBudgetSavedSchema}),
+]);
+export type CallingBudgetInput=z.infer<typeof callingBudgetInputSchema>;
+export type CallingBudgetSaved=z.infer<typeof callingBudgetSavedSchema>;
+export type CallingBudgetReceipt=z.infer<typeof callingBudgetReceiptSchema>;
