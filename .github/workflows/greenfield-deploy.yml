@@ -441,7 +441,7 @@ jobs:
           cat "$RUNNER_TEMP/production-plan/public/manifest.json" >> "$GITHUB_STEP_SUMMARY"
           cat "$RUNNER_TEMP/production-plan/public/manifest.sha256" >> "$GITHUB_STEP_SUMMARY"
       - name: Keep only public bindings and encrypted saved plan
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: reviewed-production-plan
           path: ${{ runner.temp }}/production-plan/public/
