@@ -470,7 +470,7 @@ export async function loadFixture(
     legacyFooterWithAddressPart(session, asSalesperson, state),
     preparedFencePart(session, asSalesperson, state),
     reconcilingFencePart(session, asSalesperson, state),
-    dialPart(asSalesperson, state),
+    dialPart(asSalesperson, state,options.schemaVersion),
     inboundMailPart(asSalesperson, state),
     classificationPart(asSalesperson, state),
     legacyTodayCardPart(session, asSalesperson, state),
@@ -1433,11 +1433,11 @@ function legacyTodayCardPart(
  * refusal code is reported as a skip rather than thrown, as the brief allows. `at` is
  * the fixture's fixed instant, which is 10:00 on a Wednesday in the firm's zone.
  */
-function dialPart(asSalesperson: () => RepositoryContext, state: State): Part {
+function dialPart(asSalesperson: () => RepositoryContext, state: State,schemaVersion:number): Part {
   return {
     name: 'dial',
     tables: ['calling_identities', 'dial_tickets', 'call_logs', 'callbacks'],
-    run: async () => {
+    run: async () => withTransaction(asSalesperson().db,async()=>{
 
       if (state.primaryFirmId === '') return 'the firms part did not run';
       const identity = value(
@@ -1446,6 +1446,9 @@ function dialPart(asSalesperson: () => RepositoryContext, state: State): Part {
       );
       state.callingIdentityId = identity.identity.id;
 
+      // The adapter is explicitly native143; older base commands retain their
+      // own fixture/missing-table behavior and never receive current columns.
+      if(schemaVersion>=143){const {publishFixtureDialRegistry}=await import('./fixtureRegistry.ts');await publishFixtureDialRegistry(asSalesperson(),state.primaryPhoneRouteId);}
       const ticket = await authorizeDialCommand(asSalesperson(), {
         firmId: state.primaryFirmId,
         contactId: state.primaryContactId,
@@ -1490,7 +1493,7 @@ function dialPart(asSalesperson: () => RepositoryContext, state: State): Part {
         );
       }
       return undefined;
-    },
+    }),
   };
 }
 

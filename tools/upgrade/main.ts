@@ -207,7 +207,7 @@ async function run(options: Options, report: Report): Promise<void> {
       `${String(loaded)}/${String(fixture.parts.length)} parts loaded`,
     );
     report.line(
-      `        loader: ${base.copiedLoader ? "head's, copied into the base checkout for this run and removed afterwards" : "the base checkout's own"}; modules: ${base.modules}`,
+      `        loader: ${base.fixtureOrigin??(base.copiedLoader ? "head's, copied into the base checkout for this run and removed afterwards" : "the base checkout's own")}; modules: ${base.modules}`,
     );
     // The manifest, so an older or shorter loader cannot quietly reduce coverage.
     const reported = new Set(fixture.parts.map(part => part.name));

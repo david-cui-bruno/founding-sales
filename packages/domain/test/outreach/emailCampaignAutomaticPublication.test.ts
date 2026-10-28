@@ -18,16 +18,20 @@ beforeEach(()=>{
  vi.clearAllMocks();mocks.events.length=0;
  mocks.gate.mockImplementation(async()=>{mocks.events.push('gate');});mocks.today.mockImplementation(async()=>{mocks.events.push('today');});mocks.campaign.mockImplementation(async()=>{mocks.events.push('campaign');return null;});
  mocks.proof.mockResolvedValue(proof);mocks.identity.mockResolvedValue({firmId});mocks.firm.mockImplementation(async()=>{mocks.events.push('firm');return {id:firmId};});mocks.audit.mockResolvedValue(undefined);mocks.hook.mockImplementation(async()=>{mocks.events.push('admit');});
- mocks.query.mockImplementation(async(sql:string)=>{
-  mocks.events.push(sql.includes('pg_advisory_xact_lock')?'identity':sql);
+ mocks.query.mockImplementation(async(sql:string,values?:readonly unknown[])=>{
+  const lock=sql.includes('pg_advisory_xact_lock')?values?.[0]:null;
+  mocks.events.push(typeof lock==='string'&&lock.startsWith('sourcing-discovery-review:')?'lifecycle':typeof lock==='string'&&lock.startsWith('sourcing-identity:')?'identity':sql);
   if(sql.startsWith('SELECT candidate_id FROM sourcing_qualification_runs'))return {rows:[{candidate_id:id}]};
   if(sql.startsWith('INSERT INTO sourcing_automatic_research_firms'))return {rows:[{id}]};
   return {rows:[]};
  });
 });
-it('takes gate -> Today -> identity -> campaign -> Firm -> candidate/run before the automatic admission hook',async()=>{
+it('takes lifecycle -> gate -> Today -> identity -> campaign -> Firm -> candidate/run before the automatic admission hook',async()=>{
  await advanceAutomaticResearchFirm(ctx,{runId:id});
- expect(mocks.events.slice(0,4)).toEqual(['gate','today','identity','campaign']);
+ expect(mocks.events.slice(0,5)).toEqual(['lifecycle','gate','today','identity','campaign']);
+ expect(mocks.query.mock.calls.filter(([sql])=>String(sql).includes('pg_advisory_xact_lock')).map(([,values])=>values)).toEqual([[`sourcing-discovery-review:${id}`],[`sourcing-identity:${id}`]]);
+ expect(mocks.events.indexOf('campaign')).toBeLessThan(mocks.events.indexOf('firm'));
+ expect(mocks.events.findIndex(sql=>sql.startsWith('SELECT id FROM sourcing_candidates'))).toBeLessThan(mocks.events.findIndex(sql=>sql.startsWith('SELECT id FROM sourcing_qualification_runs')));
  expect(mocks.events.indexOf('firm')).toBeLessThan(mocks.events.findIndex(sql=>sql.startsWith('SELECT id FROM sourcing_candidates')));
  expect(mocks.events.slice(-2)).toEqual(['RELEASE SAVEPOINT automatic_research_publication','admit']);
  expect(mocks.hook).toHaveBeenCalledWith(ctx,id);expect(ctx.scope.actor).toEqual({kind:'system',component:'worker'});

@@ -2,7 +2,7 @@
 
 ## October 28, 2026: web product and Calling
 
-**Main/production39ca16123; schema143.** PRs822/823 retire desktop source, packaging and publishing, give web actual ownership, and deliver strict registry/deadline/current-owner execution safeguards plus explicit recorded-company lookup. PR829 adds current provider/budget status, version-checked owner controls and original UNKNOWN recovery. Exact5466 PR CI and main gate40658455167/images40658455344 passed; ordinary and actual-risk reviews closed all findings.
+**Last accepted production39ca16123; schema143.** PRs822/823 retire desktop source, packaging and publishing, give web actual ownership, and deliver strict registry/deadline/current-owner execution safeguards plus explicit recorded-company lookup. PR829 adds current provider/budget status, version-checked owner controls and original UNKNOWN recovery. Exact5466 PR CI and main gate40658455167/images40658455344 passed; ordinary and actual-risk reviews closed all findings.
 
 **Protected application40661038840 COMPLETE.** Fresh OFFv4, runtime, unknown-write, protection and actual35-day backup checks preceded one exact09:04:35UTC approval; shared holds stayed unchanged. Native final summary verified runtime/canary/public smokes, exact record readback and final stored/effective/release OFFv4 at09:19:47.824Z, finishing0. Independent09:22:28Z read found exact39/schema143, stable API168/2worker169/1, exactly3 service tasks, all6 owned tasks STOPPED0, readers362/364/365 INACTIVE and normal363 ACTIVE. Same-schema PITR timestamp09:07:10.191Z is covered; no migration occurred, restore remains UNTESTED. Previous reviewed40649680541 is accepted history, never replayed.
 
