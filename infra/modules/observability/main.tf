@@ -91,7 +91,7 @@ locals {
 }
 
 resource "aws_kms_key" "logs" {
-  description             = "${var.name_prefix} CloudWatch log groups and alert topic."
+  description             = "${lookup(var.tags, "DisplayName", var.name_prefix)} CloudWatch log groups and alert topic."
   enable_key_rotation     = true
   deletion_window_in_days = 30
   policy                  = jsonencode(local.log_key_policy)

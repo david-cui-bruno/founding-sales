@@ -16,11 +16,11 @@ locals {
   diagnostic_environment = local.diagnostic_enabled ? { FSS_CRM_ACQUISITION_DIAGNOSTIC = jsonencode({ environmentId = var.crm_acquisition_diagnostic.environment_id, region = local.aws_region, databaseSecretArn = module.secrets.app_runtime_database_secret_arn, databaseInstanceArn = module.database.instance_arn }) } : {}
 
   tags = merge({
-    Project     = "callie-fss"
+    Project     = local.is_production && var.display_name != null ? var.display_name : "callie-fss"
     Environment = var.environment
     NamePrefix  = var.name_prefix
     ManagedBy   = "terraform"
-  }, local.diagnostic_enabled ? { CalliePurpose = "acquisition_acceptance", CallieDiagnosticEnvironment = var.crm_acquisition_diagnostic.environment_id } : {})
+  }, local.diagnostic_enabled ? { CalliePurpose = "acquisition_acceptance", CallieDiagnosticEnvironment = var.crm_acquisition_diagnostic.environment_id } : {}, var.display_name == null ? {} : { DisplayName = var.display_name })
 
   # What both environments share. The region is the one FSS runs in (the account
   # stays a root input: offline-gate.sh refuses an account id in a module). The
@@ -122,7 +122,7 @@ module "network" {
   public_subnet_cidrs  = local.public_subnet_cidrs
   private_subnet_cidrs = local.private_subnet_cidrs
   api_container_port   = local.container_port
-  tags                 = local.tags
+  tags                 = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-network" })
 }
 
 module "observability" {
@@ -134,7 +134,7 @@ module "observability" {
   retention_days = var.log_retention_days
   # The metric filters publish into this environment's namespace, never bare FSS.
   metric_namespace = local.metric_namespace
-  tags             = local.tags
+  tags             = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-observability" })
 }
 
 # The registry is the one part of the stack that outlives the stack.
@@ -149,7 +149,7 @@ module "registry" {
   count  = var.create_registry ? 1 : 0
 
   name_prefix = var.name_prefix
-  tags        = local.tags
+  tags        = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-registry" })
 }
 
 # Production state already holds this module at its un-counted address.
@@ -175,7 +175,7 @@ module "secrets" {
 
   name_prefix          = var.name_prefix
   recovery_window_days = var.destroyable ? 0 : 30
-  tags                 = local.tags
+  tags                 = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-secrets" })
 }
 
 module "journal" {
@@ -198,7 +198,7 @@ module "journal" {
   # concludes the bucket is gone.
   bucket_listing_principal_arns = var.journal_listing_principal_arns
 
-  tags = local.tags
+  tags = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-journal" })
 }
 
 # Slice C3a: the private bucket a call's recording waits in, for one Transcribe job,
@@ -210,7 +210,7 @@ module "recordings" {
   aws_account_id = var.aws_account_id
   force_destroy  = var.destroyable
 
-  tags = local.tags
+  tags = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-call-audio" })
 }
 
 module "social_assets" {
@@ -218,7 +218,7 @@ module "social_assets" {
   name_prefix    = var.name_prefix
   aws_account_id = var.aws_account_id
   force_destroy  = var.destroyable
-  tags           = local.tags
+  tags           = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-social-assets" })
 }
 
 module "database" {
@@ -242,7 +242,7 @@ module "database" {
   skip_final_snapshot = var.destroyable
   port                = 5432
 
-  tags = local.tags
+  tags = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-database" })
 }
 
 module "edge" {
@@ -261,7 +261,7 @@ module "edge" {
   enable_deletion_protection = !var.destroyable
   force_destroy_logs         = var.destroyable
 
-  tags = local.tags
+  tags = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-edge" })
 }
 
 module "cluster" {
@@ -370,7 +370,7 @@ module "cluster" {
     FSS_GOOGLE_HOSTED_DOMAIN       = local.google_hosted_domain
   }, var.crm_capability_adapters == null ? {} : { FSS_CRM_CAPABILITY_ADAPTERS = var.crm_capability_adapters }, local.diagnostic_environment)
 
-  tags = local.tags
+  tags = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-runtime" })
 }
 
 module "alerts" {
@@ -384,7 +384,7 @@ module "alerts" {
   # Logs and alerts share one key (David, 20 September 2026).
   kms_key_arn = module.observability.kms_key_arn
 
-  tags = local.tags
+  tags = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-alerts" })
 }
 
 # The desktop update channel: production only (wave 2, 26 September 2026). A
@@ -396,7 +396,7 @@ module "updates" {
 
   name_prefix    = var.name_prefix
   aws_account_id = var.aws_account_id
-  tags           = local.tags
+  tags           = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-updates" })
 }
 
 # Production state holds the module at its un-counted address. The move is a

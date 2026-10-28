@@ -15,7 +15,7 @@ locals {
 }
 
 resource "aws_kms_key" "database" {
-  description             = "${var.name_prefix} RDS PostgreSQL storage, snapshots, logs and master user secret."
+  description             = "${lookup(var.tags, "DisplayName", var.name_prefix)} RDS PostgreSQL storage, snapshots, logs and master user secret."
   enable_key_rotation     = true
   deletion_window_in_days = 30
 

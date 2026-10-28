@@ -45,7 +45,7 @@ locals {
 }
 
 resource "aws_kms_key" "secrets" {
-  description             = "${var.name_prefix} application secrets in Secrets Manager."
+  description             = "${lookup(var.tags, "DisplayName", var.name_prefix)} application secrets in Secrets Manager."
   enable_key_rotation     = true
   deletion_window_in_days = 30
 
@@ -58,7 +58,7 @@ resource "aws_kms_alias" "secrets" {
 }
 
 resource "aws_kms_key" "envelope" {
-  description             = "${var.name_prefix} envelope key for per-mailbox Gmail refresh tokens stored in PostgreSQL."
+  description             = "${lookup(var.tags, "DisplayName", var.name_prefix)} envelope key for per-mailbox Gmail refresh tokens stored in PostgreSQL."
   enable_key_rotation     = true
   deletion_window_in_days = 30
 
@@ -74,7 +74,7 @@ resource "aws_secretsmanager_secret" "this" {
   for_each = toset(local.secret_names)
 
   name                    = "${var.name_prefix}/${each.value}"
-  description             = "Created empty by Terraform. The value is entered by hand under the apply runbook."
+  description             = contains(keys(var.tags), "DisplayName") ? "${var.tags["DisplayName"]}/${each.value}. Created empty by Terraform. The value is entered by hand under the apply runbook." : "Created empty by Terraform. The value is entered by hand under the apply runbook."
   kms_key_id              = aws_kms_key.secrets.arn
   recovery_window_in_days = var.recovery_window_days
 

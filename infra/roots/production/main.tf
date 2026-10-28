@@ -25,6 +25,7 @@ locals {
   # name spaces are disjoint and no rehearsal apply can address a production
   # resource. Its deployment role is its own.
   name_prefix          = "fss-prod"
+  display_name         = "workspace-prod"
   deployment_role_name = "fss-prod-deploy"
 
   # What production runs, committed rather than passed as `-var` (26 September 2026):
@@ -94,6 +95,7 @@ module "stack" {
   destroyable = false
 
   name_prefix    = local.name_prefix
+  display_name   = local.display_name
   aws_account_id = local.aws_account_id
 
   vpc_cidr = "10.60.0.0/16"

@@ -129,7 +129,7 @@ resource "aws_iam_role_policy" "digest" {
 
 resource "aws_lambda_function" "digest" {
   function_name = local.digest_name
-  description   = "Once a day: every ${var.name_prefix} alarm not OK, and the day's state changes, as one e-mail."
+  description   = "Once a day: every ${lookup(var.tags, "DisplayName", var.name_prefix)} alarm not OK, and the day's state changes, as one e-mail."
   role          = aws_iam_role.digest.arn
 
   runtime       = local.digest_runtime
@@ -195,7 +195,7 @@ resource "aws_iam_role_policy" "digest_schedule" {
 resource "aws_scheduler_schedule" "digest" {
   name        = local.digest_name
   group_name  = "default"
-  description = "The daily alarm digest, 07:00 America/New_York."
+  description = contains(keys(var.tags), "DisplayName") ? "${var.tags["DisplayName"]} daily alarm digest, 07:00 America/New_York." : "The daily alarm digest, 07:00 America/New_York."
   state       = "ENABLED"
 
   schedule_expression          = local.digest_schedule_expression
