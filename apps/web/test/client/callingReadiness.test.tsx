@@ -42,7 +42,7 @@ it('reads only on explicit selection, before any microphone, token, session or o
 it.each(['calling_off','integration_unconfigured'] as const)('shows the exact %s provider blocker alongside unknown DNC evidence',async reason=>{
  const f=fixture();f.values.status={availability:'unavailable',reason};f.values.advice.nationalDnc={status:'unknown',basis:null,receiptId:null,warning:null};
  await f.client.refresh();render(<CallingReadiness {...f.props}/>);fireEvent.click(screen.getByRole('button',{name:'Check call readiness'}));
- await screen.findByText(reason==='calling_off'?/In-app calling is off/u:/provider is not configured/u);expect(screen.getByText(/current clearance is not established/u)).toBeTruthy();
+ await screen.findByText(reason==='calling_off'?/Browser calling is off/u:/provider is not configured/u);expect(screen.getByText(/current clearance is not established/u)).toBeTruthy();
  expect(screen.queryByText(/checked clear in/u)).toBeNull();
 });
 it('preserves owner-risk disclosure and all policy/cadence/identity blockers without a ready verdict',async()=>{

@@ -12,6 +12,7 @@ import { EmailCampaignClient } from './EmailCampaignClient.ts';
 import { PrivateDraftCustody } from './PrivateDraftCustody.ts';
 import { VoicePreferenceCustody } from './VoicePreferenceCustody.ts';
 import { CallingWorkspace } from './CallingWorkspace.tsx';
+import {installCallingSetupCustody} from './CallingSetupCustody.ts';
 import { installCallingCustody } from './CallingPending.ts';
 import { installCallingFollowUpCustody } from './CallingFollowUpPending.ts';
 import { installCallingExecutionCustody } from './CallingExecutionPending.ts';
@@ -85,7 +86,7 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     const replies = new ReplyAttempt(client), campaigns = new EmailCampaignClient(client);
     const privateDrafts = new PrivateDraftCustody(client), voice = new VoicePreferenceCustody(client);
     const removeCallingCustody = installCallingCustody(client), removeFollowUpCustody = installCallingFollowUpCustody(client);
-    const removeExecutionCustody = installCallingExecutionCustody(client);
+    const removeExecutionCustody = installCallingExecutionCustody(client), removeSetupCustody = installCallingSetupCustody(client);
     const unsubscribe = client.subscribe(() => {
       if (!live.current) return;
       setSession(client.current); setGeneration(client.epoch);
@@ -108,7 +109,7 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
       live.current = false; operation.current += 1; locked.current = false;
       unsubscribe(); replies.dispose(); campaigns.dispose();
       removeCallingCustody(); removeFollowUpCustody();
-      removeExecutionCustody();
+      removeExecutionCustody(); removeSetupCustody();
       if (suppliedClient === undefined) client.dispose();
     };
   }, [client, suppliedClient]);

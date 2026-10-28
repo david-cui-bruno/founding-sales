@@ -16,6 +16,7 @@ import { socialGenerationBrowserResult } from './socialGenerationBoundary.ts';
 import { campaignOpeningBrowserResult } from './campaignOpeningBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
+import {callingSetupBrowserResult} from './callingSetupBoundary.ts';
 import { callingExecutionBrowserResult } from './callingExecutionBoundary.ts';
 import { callingReadinessAccess } from './callingReadinessAccess.ts';
 import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
@@ -246,6 +247,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (manual !== null) return response(manual.status, manual.body, cookies);
   const calling = callingBrowserResult(path, result.status, result.body);
   if (calling !== null) return response(calling.status, calling.body, cookies);
+  const setup = callingSetupBrowserResult(path, result.status, result.body);
+  if (setup !== null) return response(setup.status, setup.body, cookies);
   const execution = callingExecutionBrowserResult(path, result.status, result.body);
   if (execution !== null) return response(execution.status, execution.body, cookies);
   const qualification = qualificationBrowserResult(path, result.status, result.body);

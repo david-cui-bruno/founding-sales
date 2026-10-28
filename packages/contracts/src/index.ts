@@ -118,3 +118,5 @@ export * from './prospectPhoneRefusalOriginal.ts';
 export * from './prospectPhoneObservation.ts';
 export * from './callingExecution.ts';
 export * from './campaignOpening.ts';
+
+export * from './callingSetup.ts';

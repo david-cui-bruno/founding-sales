@@ -23,7 +23,7 @@ const reasons:Record<DialRefusalCode,string>={
  ticket_unknown:'The call reservation is unknown.',ticket_expired:'The call reservation expired.',ticket_wrong_device:'The call reservation belongs to another device.',already_consumed:'The call reservation has already been used.',
 };
 const providerMessage=(status:Readiness['status']):string=>'availability'in status
- ?status.reason==='calling_off'?'In-app calling is off. Owner setup is required before browser calls can start; this web app does not yet offer that control.'
+ ?status.reason==='calling_off'?'Browser calling is off. Use Browser calling setup above to review the provider and existing cost cap.'
  :status.reason==='integration_unconfigured'?'The calling provider is not configured. Setup needs operator attention.'
  :'This Firm is unavailable to the calling provider.'
  :status.cadence.parked?'Calling cadence is parked. Review the existing call history before resuming.'
@@ -81,7 +81,7 @@ export function CallingReadiness({client,firmId,route,identityId,disabled,isScop
   {result?<div>
    <p>Policy snapshot: <time dateTime={result.advice.at}>{new Date(result.advice.at).toLocaleString()}</time>{result.advice.firmLocalTime?` · ${result.advice.firmLocalTime} at the Firm`:''}.</p>
    <ul>
-    <li>{providerMessage(result.status)}</li>
+    <li>{providerMessage(result.status)}{'availability'in result.status&&result.status.reason==='calling_off'?<> <a href="#calling-setup">Open browser calling setup</a></>:null}</li>
     <li>{result.ownIdentity?'Your selected calling identity is currently available.':'Choose a current calling number owned by your signed-in identity.'}</li>
     {result.advice.reasons.map(reason=><li key={reason}>{reasons[reason]}</li>)}
     {!result.advice.callable&&!result.advice.reasons.length?<li>Current calling policy blocks this Firm.</li>:null}

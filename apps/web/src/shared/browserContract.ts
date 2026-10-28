@@ -31,7 +31,7 @@ export const BROWSER_REVISION_HEADER = 'x-callie-session';
 export const BROWSER_READ_PATHS = Object.freeze([
   '/today', '/firms', '/meetings/outcomes', '/today/actions/v3', '/today/actions/v4',
   '/meetings/firm', '/meetings/brief',
-  '/calls/calling', '/calling-identities',
+  '/calls/calling', '/calling-identities', '/calling/setup',
 ] as const);
 export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/dial/check',
@@ -52,7 +52,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/social/private-drafts/list', '/social/private-drafts/read', '/social/private-drafts/receipt',
   '/social/voice-preferences/read', '/social/voice-preferences/receipt',
   '/calling/follow-ups/list', '/calling/follow-ups/read', '/calling/follow-ups/receipt',
-  '/calling/execution/receipt',
+  '/calling/execution/receipt', '/calling/setup/receipt',
 ] as const);
 /** Ephemeral outgoing-only Voice credential. Not a command, never persisted by the client. */
 export const BROWSER_VOICE_POST_PATHS = Object.freeze(['/calls/access-token'] as const);
@@ -70,7 +70,7 @@ export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/social/private-drafts/save', '/social/voice-preferences/save',
   '/social/drafts/request',
   '/calling/wrap', '/calling/follow-ups/save',
-  '/calls/session',
+  '/calls/session', '/calling/setup/provider',
 ] as const);
 
 export const browserSignInSchema = z.strictObject({

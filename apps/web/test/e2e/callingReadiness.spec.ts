@@ -34,7 +34,7 @@ test('signed read-only readiness exposes provider OFF before microphone setup at
  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/browser/api/dial/check');
  await button.click();const read=await response;expect(read.status()).toBe(200);
  const answer=dialCheckResponseSchema.parse(await read.json());expect(answer.advice.firmId).toBe(seed.preparedFirmId);expect(answer.advice.telUri).toBeNull();
- await expect(region).toContainText('In-app calling is off.');await expect(region).toContainText('Your selected calling identity is currently available.');await expect(region).toContainText('National DNC: checked clear');
+ await expect(region).toContainText('Browser calling is off.');await expect(region).toContainText('Your selected calling identity is currently available.');await expect(region).toContainText('National DNC: checked clear');
  const directory=process.env['FSS_GLASS_PRIVATE_ARTIFACTS']!;
  for(const [name,width,height] of [['desktop',1440,1000],['narrow',390,844]] as const){
   await page.setViewportSize({width,height});await region.scrollIntoViewIfNeeded();
