@@ -1,3 +1,4 @@
+import {readPreparedProjections,preparedProjectionUnavailable,SOURCE_UNAVAILABLE_COMPANY} from '../calling/preparationProjection.ts';
 import {createHash} from 'node:crypto';
 import type {CrmCommitmentRead,CrmCommitmentReview,CrmCommitmentComplete,TodayPromiseTarget,TodayCommitmentBlockerTarget} from '@fss/contracts';
 import {crmEvidenceClaimTargetSchema,crmCommitmentDueSchema} from '@fss/contracts';
@@ -228,7 +229,8 @@ export async function readCommitmentActionFirms(context:RepositoryContext,snapsh
  const ids=[...new Set(snapshot.firmIds as string[])];
  if(ids.length===0)return [];
  const rows=(await context.db.query<{id:string;name:string}>('SELECT id,name FROM firms WHERE workspace_id=$1 AND id::text=ANY($2::text[]) ORDER BY id',[context.scope.workspaceId,ids])).rows;
- return rows.length===ids.length?rows:null;
+ const prepared=await readPreparedProjections(context,rows.map(r=>r.id));
+ return rows.length===ids.length?rows.map(r=>preparedProjectionUnavailable(prepared,r.id)?{...r,name:SOURCE_UNAVAILABLE_COMPANY}:r):null;
 }
 async function reviewActionFirms(context:RepositoryContext,row:Review){
  const tasks=await reviewedOpenTasks(context,row.id);

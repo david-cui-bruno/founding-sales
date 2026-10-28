@@ -1,6 +1,7 @@
 import type {CandidateInput} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {lockTodayForFirmChange,refreshTodayForFirm} from '../today/build.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {readResearchSettings} from '../research/settings.ts';
@@ -16,6 +17,7 @@ import {retainedCandidateOnly} from './retainedAcquisition.ts';
 /** Caller owns the transaction. No providers, contacts, enrollment or send authority. */
 export async function advanceVerifiedFirm(ctx:RepositoryContext,input:{runId:string}):Promise<void> {
  if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))return;
+ await lockPreparationCleanup(ctx);
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
  if(!await verifiedFirmOwner(ctx)||!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return;
  const w=ctx.scope.workspaceId;

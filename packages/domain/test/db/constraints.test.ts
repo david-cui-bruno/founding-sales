@@ -1,3 +1,4 @@
+import {CALLING_PREPARATION_CONSTRAINT_CASES} from './support/callingPreparationCases.ts';
 import { campaignCompositionCases } from './support/campaignCompositionCases.ts'; import { AUTOMATIC_SUPPLY_CONSTRAINT_CASES } from './support/automaticSupplyCases.ts'; import { PHONE_HANDOFF_CONSTRAINT_CASES } from './support/phoneHandoffCases.ts'; import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {BOOKING_CHANGE_CONSTRAINT_CASES} from './support/bookingChangeConstraints.ts';
 import {CAMPAIGN_OPENING_CONSTRAINT_CASES} from './campaignOpeningConstraints.ts';
@@ -111,6 +112,7 @@ interface Fixture {
 
 interface Case {
   readonly constraint: string;
+  readonly error?: {readonly code:string;readonly message:string};
   readonly run: (fixture: Fixture) => Promise<unknown>;
 }
 
@@ -2118,6 +2120,7 @@ const cases: readonly Case[] = [
 
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
+  ...CALLING_PREPARATION_CONSTRAINT_CASES,
   ...selectedImportConstraintCases,
   ...SELECTED_FILE_CONSTRAINT_CASES,
   ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,
@@ -2280,6 +2283,7 @@ describe("foundation constraints", () => {
         );
         return;
       }
+      if(testCase.error){expect(thrown).toMatchObject(testCase.error);return;}
       expect(thrown).toMatchObject({
         constraint:
           name === "crm_mail_source_canonical_gate" ||

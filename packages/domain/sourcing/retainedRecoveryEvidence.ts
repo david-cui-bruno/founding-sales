@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {qualificationEvidenceSchema,type CandidateInput,type SourceObservation} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationVersions.ts';
@@ -17,6 +18,7 @@ export async function recoverySavepoint<T>(ctx:RepositoryContext,work:()=>Promis
 }
 export async function lockRecovery(ctx:RepositoryContext,input:{candidateId:string;expectedRevision:number;qualificationRunId:string},revisionChanged=false):Promise<SourcingResult<{candidate:RecoveryCandidate;run:QualificationRunRow;now:string}>>{
  if(ctx.scope.actor.kind!=='user'||ctx.scope.actor.role!=='admin')return fail('admin_only');
+ await lockPreparationCleanup(ctx);
  await lockSendGateForStopFact(ctx);
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${ctx.scope.workspaceId}`]);
  const candidate=(await ctx.db.query<RecoveryCandidate>('SELECT payload,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[ctx.scope.workspaceId,input.candidateId])).rows[0];

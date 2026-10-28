@@ -1,6 +1,7 @@
 import { routePhoneHandoff } from './phoneHandoff.ts';
 import { dialCheckRequestSchema } from '@fss/contracts';
-import { adviseDial } from '@fss/domain/dial/advise.ts';
+import {readCallingProvider} from '@fss/domain/settings/integrations.ts';
+import { adviseDial,adviseBrowserDial } from '@fss/domain/dial/advise.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
@@ -16,21 +17,9 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  */
 export const DIAL_PATHS: readonly string[] = ['/dial/check', '/dial/handoff'];
 
-/**
- * Dial advice (specification 9.2, 5.3).
- *
- * `POST /dial/check` is the advisory read, and since the 0021 release it is the only
- * path in this family: callable yes or no, with every reason, for a firm and optionally
- * the number the card would dial (`adviseDial`). It writes nothing; the Mac opens
- * `tel:` itself and logs the call afterwards with `POST /calls/log`. It answers only
- * about firms the caller may see — a colleague's is `not_found` — so it cannot be used
- * to learn which firms are suppressed.
- *
- * The ticket pair `/dial/authorize` and `/dial/consume` went with the 1.0.14 minimum
- * (lane W3-C2): nothing has asked for a ticket since 1.0.12, and an unreachable
- * command is a thing to explain rather than a thing to have. The replay rule they
- * enforced lives on in `command_receipts_dial_result_not_actionable` and
- * `dial_tickets_one_per_command`, both untouched by migration 0021.
+/** Current provider selects browser advice or retained legacy phone advice.
+ * Advice never authorizes execution; each execution owner repeats current gates.
+ * The retired ticket HTTP pair stays absent, preserving receipt replay denial.
  */
 export async function routeDial(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!request.path.startsWith('/dial')) return null;
@@ -49,7 +38,8 @@ export async function routeDial(request: ApiRequest, options: RoutingOptions): P
       if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
       const scoped = contextForPrincipal(deps.auth, deps.principal);
       if (!scoped.ok) return scoped.result;
-      const advice = await adviseDial(scoped.context, {
+      const advise=await readCallingProvider(scoped.context)==='twilio'?adviseBrowserDial:adviseDial;
+      const advice = await advise(scoped.context, {
         firmId: parsed.data.firmId,
         ...(parsed.data.routeId === undefined ? {} : { routeId: parsed.data.routeId }),
       });

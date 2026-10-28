@@ -1,3 +1,4 @@
+import {projectPreparedActionSubjects} from '../calling/preparationProjection.ts';
 import {isDeepStrictEqual} from 'node:util';
 import type {TodayActionV2,TodayActionsV2Response,TodayTargetV2} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -13,7 +14,7 @@ function rank(action:TodayActionV2){return action.kind==='reply'?0:action.kind==
 function dateKey(action:TodayActionV2){return action.kind==='promise'?action.due===null?'':action.due.kind==='date'?action.due.date:action.due.at:action.dueAt;}
 
 /** Additive current action projection; V1 and its notifications retain their wire shape. */
-export async function readTodayActionsV2(context:RepositoryContext,input:{now:string;includeFirmAssociations?:boolean}):Promise<TodayActionsV2Response|null>{
+export async function readTodayActionsV2(context:RepositoryContext,input:{now:string;includeFirmAssociations?:boolean;includeCallingPreparation?:boolean}):Promise<TodayActionsV2Response|null>{
  if(!await activeIdentityActor(context))return null;
  const legacy=await readTodayActions(context,input);
  const promises=await readCrmCommitmentActionProofs(context,input.includeFirmAssociations);
@@ -37,7 +38,7 @@ export async function readTodayActionsV2(context:RepositoryContext,input:{now:st
  }
  actions.sort((a,b)=>rank(a)-rank(b)||dateKey(a).localeCompare(dateKey(b))||a.actionId.localeCompare(b.actionId));
  if(!await activeIdentityActor(context))return null;
- return {version:2,workspaceId:context.scope.workspaceId,businessTimeZone:legacy.businessTimeZone,asOf:input.now,actions,promiseCoverage:promises.coverage};
+ return {version:2,workspaceId:context.scope.workspaceId,businessTimeZone:legacy.businessTimeZone,asOf:input.now,actions:await projectPreparedActionSubjects(context,actions,input.includeCallingPreparation),promiseCoverage:promises.coverage};
 }
 /** Opening verifies the current receipt; only the separate Complete command changes work. */
 export async function openTodayActionV2(context:RepositoryContext,input:{actionId:string;target:TodayTargetV2;now:string}){

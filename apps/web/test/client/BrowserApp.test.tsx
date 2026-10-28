@@ -257,11 +257,11 @@ describe('BrowserApp real shared presentation', () => {
     navigate('Today');
     fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
     await screen.findByText('Fixture Person · Owner');
-    expect(document.activeElement).toBe(screen.getByRole('heading', { name: firm.name }));
+    await waitFor(() => { expect(document.activeElement).toBe(screen.getByRole('heading', { name: firm.name })); });
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '← Back to Today' }));
     await screen.findByRole('button', { name: 'Open firm' });
-    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Today' }));
+    await waitFor(() => { expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Today' })); });
     await act(async () => { client.invalidate(false); });
     await screen.findByRole('heading', { name: 'Sign in' });
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();

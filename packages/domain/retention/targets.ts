@@ -5,7 +5,9 @@ import {sweepProspectPhoneDiscoveries} from '../sourcing/prospectPhoneDiscoveryL
 import {sweepCampaignOpenings} from '../outreach/campaignOpeningRetention.ts';
 import {rememberExpiredManualSources} from '../sourcing/manualProspectSourceLoss.ts';
 import {sweepOfficeSources} from './officeAssessments.ts';
-import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources,sweepDiscoveryReviews} from '../sourcing/discoveryReviewVisibility.ts';
+import {eraseDiscoveryReviewsForSources,sweepDiscoveryReviews} from '../sourcing/discoveryReviewVisibility.ts';
+import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
+import {sweepCallingPreparations} from '../calling/preparationMaintenance.ts';
 import {expireHistoryRecoveries} from '../mail/crmHistoryRecovery.ts';
 import {expireUnavailableBackfillMetadata} from '../mail/crmBackfillMetadata.ts';
 import { redactBusinessMetadata } from '../business/acquisition.ts';
@@ -213,11 +215,12 @@ const rawMime: RetentionTarget = {
 const researchEvidence: RetentionTarget = {
   dataKind: 'research_evidence',
   state: 'implemented',
-  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts','sourcing_prospect_phone_discoveries','outreach_campaign_opening_attempts'],
+  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts','sourcing_prospect_phone_discoveries','outreach_campaign_opening_attempts','calling_preparations'],
   note: 'Evidence whose provider terms have expired is deleted at its own expiry; evidence whose terms permit retention stays with the firm.',
   sweep: async (context, input) => {
     // Deletion takes source lifecycle before Ask and the workspace send gate.
-    await lockDiscoveryReviewSources(context);
+    await lockPreparationCleanup(context);
+    const preparationCleared=await sweepCallingPreparations(context,input);
     const openingCleared=await sweepCampaignOpenings(context,input);
     const discoveryDeleted=await sweepDiscoveryReviews(context,input);
     const activityCleared=await sweepManualActivity(context,input);
@@ -235,7 +238,7 @@ const researchEvidence: RetentionTarget = {
     await rememberExpiredManualSources(context,expiring.rows.map(row=>row.source_reference));
     const sourceDeleted=await eraseDiscoveryReviewsForSources(context,expiring.rows.map(row=>row.source_reference));
     const discoveryTotal=discoveryDeleted+sourceDeleted;
-    if (ids.length === 0) return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:activityCleared+callingCleared+phoneCleared+openingCleared,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared}};
+    if (ids.length === 0) return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared}};
 
     const deleted = await context.db.query(
       'DELETE FROM evidence_items WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
@@ -244,8 +247,8 @@ const researchEvidence: RetentionTarget = {
     return {
       boundaryAt: input.now,
       rowsDeleted: (deleted.rowCount ?? 0)+officeDeleted+discoveryTotal,
-      rowsRedacted: activityCleared+callingCleared+phoneCleared+openingCleared,
-      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared },
+      rowsRedacted: activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared,
+      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared },
     };
   },
 };

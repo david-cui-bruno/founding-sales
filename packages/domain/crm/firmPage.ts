@@ -11,14 +11,14 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { holdEnrollments, type HoldEnrollmentDto } from '../sequences/holdEnrollments.ts';
 import { followUpPermissionDto, listFollowUpPermissions } from '../sequences/followUpPermissions.ts';
 import type { FirmReadDto } from './dto.ts';
-import { readFirmForActor } from './dto.ts';
+import { readFirmForActor,refreshPreparedFirmRead } from './dto.ts';
 import { readPreparedBrief } from './preparedBriefs.ts';
 import { readFirmTasks, readFirmTimeline } from './firmActivity.ts';
 import { listFirmOpportunities } from './pipeline.ts';
 import { accept, refuse, type CrmResult } from './types.ts';
 
 /**
- * Everything the desktop Firm page shows, in one read (specification 7.2, 7.3, 8.1,
+ * The current web Firm page's typed visibility projection (specification 7.2, 7.3, 8.1,
  * 15 and Appendix F).
  *
  * The page needs four things the single-firm read does not carry: the open
@@ -131,6 +131,7 @@ async function readPage(
     readonly routeValidation?: boolean | undefined;
     /** `include: ['stops']` (migration 0037): add the stop badges' facts. */
     readonly includeStops?: boolean | undefined;
+    readonly includeCallingPreparation?:boolean|undefined;
     /** `include: ['preparedBrief']` (lane PB, migration 0038): add the prepared brief. */
     readonly includePreparedBrief?: boolean | undefined;
     /** `include: ['tasks']` (S4F): the firm's open work. */
@@ -144,7 +145,7 @@ async function readPage(
   selectedOpportunityId?: string,
   plural = false,
 ): Promise<CrmResult<FirmPageDto>> {
-  const read = await readFirmForActor(context, { firmId: input.firmId, routeValidation: input.routeValidation }, plural);
+  const read = await readFirmForActor(context, { firmId: input.firmId, routeValidation: input.routeValidation,includeCallingPreparation:input.includeCallingPreparation }, plural);
   if (!read.ok) return read;
   if (read.value.visibility === 'any_active_member') {
     return accept({ visibility: 'any_active_member', read: read.value });
@@ -203,7 +204,6 @@ async function readPage(
   const row = selectedOpportunity;
   return accept({
     visibility: 'assigned_or_admin',
-    read: read.value,
     opportunity:
       row === undefined
         ? null
@@ -243,6 +243,7 @@ async function readPage(
       ? { tasks: [...(await readFirmTasks(context, input.firmId, input.includeMeetingTasks === true))] }
       : {}),
     ...(input.includeTimeline === true ? { timeline: await readFirmTimeline(context, input.firmId, input.timelineBefore) } : {}),
+    read:await refreshPreparedFirmRead(context,read.value),
   });
 }
 
@@ -329,5 +330,5 @@ export async function readPluralFirmPage(context: RepositoryContext, input: Page
       });
   }
   const { opportunity: _opportunity, stageHistory: _history, ...page } = base.value;
-  return accept({ ...page, version: 3, opportunities: entries });
+  return accept({ ...page, read:await refreshPreparedFirmRead(context,page.read), version: 3, opportunities: entries });
 }

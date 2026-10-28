@@ -1,4 +1,6 @@
 import { readCallSessionClearance } from './sessionClearance.ts';
+import {lockPreparedCallingLifecycle} from '../calling/preparationLifecycle.ts';
+import {readPreparationExecution} from '../calling/preparationExecution.ts';
 import { CALL_CADENCE_PARKED_SOURCE, readCallCadence, isoMicroseconds } from './cadence.ts';
 import { randomUUID } from 'node:crypto';
 import {
@@ -109,7 +111,10 @@ export async function createCallSession(
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuse('identity_not_owned');
 
+  await lockPreparedCallingLifecycle(context.db,context.scope.workspaceId,input.firmId);
   await lockSendGateForStopFact(context);
+  const preparation=await readPreparationExecution(context,input.firmId);
+  if(!preparation.ok)return refuse(preparation.reason);
   await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.firmId]);
   const now = input.at ?? (await databaseNow(context));
 

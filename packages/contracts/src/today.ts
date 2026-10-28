@@ -44,6 +44,8 @@ export type TodayCardBlocker = (typeof TODAY_CARD_BLOCKERS)[number];
 export const todayCardDtoSchema = z.object({
   firmId: uuid,
   firmName,
+  /** Negotiated source-owned company deadline; never an execution grant. */
+  callingPreparationExpiresAt: instant.optional(),
   lane: z.enum(TODAY_LANES),
   dueAt: instant,
   counts: todayCountsSchema,
@@ -146,7 +148,7 @@ export const todayFirmRequestSchema = z.strictObject({
    * Lane PB (migration 0038): `['preparedBrief']` adds `preparedBrief` to the card, the
    * firm's prepared brief or null.
    */
-  include: z.array(z.enum(['tasks', 'preparedBrief', 'meeting_tasks'])).max(3).optional(),
+  include: z.array(z.enum(['tasks', 'preparedBrief', 'meeting_tasks', 'callingPreparation'])).max(4).optional(),
 });
 
 /**
@@ -166,6 +168,8 @@ export type TodayRouteDto = z.infer<typeof todayRouteDtoSchema>;
 export const todayFirmResponseSchema = z.object({
   firmId: uuid,
   firmName,
+  /** Present only for an explicitly requested current preparation. */
+  callingPreparationExpiresAt: instant.optional(),
   snapshotDate: businessDate,
   lane: z.enum(TODAY_LANES),
   counts: todayCountsSchema,
@@ -257,6 +261,9 @@ export const todayActionSchema = z.strictObject({
   actionId: z.string().min(1).max(200),
   kind: z.enum(['reply', 'call', 'problem']),
   subject: z.string().min(1).max(300),
+  /** Only a negotiated source-owned reply/meeting company subject expires here;
+   * independently authored action labels remain independent. */
+  callingPreparationExpiresAt: instant.optional(),
   reason: z.string().min(1).max(200),
   dueAt: instant,
   state: z.enum(['open', 'overdue']),

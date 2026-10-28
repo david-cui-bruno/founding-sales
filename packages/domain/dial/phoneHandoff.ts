@@ -9,6 +9,8 @@ import { readCallCadence } from '../calls/cadence.ts';
 import { adviseDial } from './advise.ts';
 import { readPhoneNationalDecision } from './phoneNationalPolicy.ts';
 import { readPublishedPhoneHandoff } from './phoneHandoffPublication.ts';
+import {lockPreparedCallingLifecycle} from '../calling/preparationLifecycle.ts';
+import {readPreparationExecution} from '../calling/preparationExecution.ts';
 
 type Reservation = { readonly ok: true; readonly value: { readonly attemptId: string } } | { readonly ok: false; readonly reason: string };
 const refused = (reason: string): Reservation => ({ ok: false, reason });
@@ -18,13 +20,17 @@ export async function reservePhoneHandoff(context: RepositoryContext, input: Res
   const w = context.scope.workspaceId;
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refused('not_assigned');
+  await lockPreparedCallingLifecycle(context.db,w,input.firmId);
   // Exclusive also matches logging/parking and avoids a shared-to-exclusive upgrade.
   await lockSendGateForStopFact(context);
-  const route = (await context.db.query<{ firm_id: string; contact_id: string | null; e164: string; version: number }>(
+  const preparation=await readPreparationExecution(context,input.firmId);
+  if(!preparation.ok)return preparation;
+  const route = (await context.db.query<{ firm_id: string; contact_id: string | null; e164: string|null; version: number }>(
     'SELECT firm_id,contact_id,e164,version FROM phone_routes WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [w, input.routeId])).rows[0];
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (!firm || firm.status !== 'active' || firm.assigned_user_id !== actor.userId) return refused('not_assigned');
   if (!route || route.firm_id !== firm.id) return refused('route_missing');
+  if(!route.e164)return refused('route_invalid');
   if (route.version !== input.routeVersion) return refused('route_version_stale');
   const device = await context.db.query(`SELECT 1 FROM devices d JOIN workspace_memberships m ON m.workspace_id=d.workspace_id AND m.user_id=d.user_id
     WHERE d.workspace_id=$1 AND d.id=$2 AND d.user_id=$3 AND d.status='active' AND m.status='active'`, [w, input.deviceId, actor.userId]);
@@ -44,9 +50,11 @@ export async function reservePhoneHandoff(context: RepositoryContext, input: Res
   const parts = localParts(at, firm.time_zone ?? '');
   const close = localInstant(parts.date, { hour: Math.floor(window.window.endMinute / 60), minute: window.window.endMinute % 60 }, firm.time_zone ?? '');
   // Millisecond truncation is conservative. Near a boundary, refuse rather than grant grace.
-  const expires = Math.min(Date.parse(at) + PHONE_HANDOFF_MAX_LIFETIME_MS, Date.parse(close), Date.parse(registry.freshUntil));
+  const expires = Math.min(Date.parse(at) + PHONE_HANDOFF_MAX_LIFETIME_MS, Date.parse(close), Date.parse(registry.freshUntil),preparation.expiresAt?Date.parse(preparation.expiresAt):Infinity);
   if (expires <= Date.parse(at)) return refused('outside_calling_window');
   if (!await lockHandoffAuthority(context, input.deviceId, actor.userId, registry.basis !== 'registry')) return refused('phone_handoff_unavailable');
+  const finalPreparation=await readPreparationExecution(context,input.firmId);
+  if(!finalPreparation.ok)return finalPreparation;
   // Authority locks can themselves wait. Never refresh the original evidence/window
   // bound to make a delayed reservation actionable. `at` remains the policy test clock.
   const clock = (await context.db.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]?.at;
@@ -54,8 +62,9 @@ export async function reservePhoneHandoff(context: RepositoryContext, input: Res
   const row = (await context.db.query<{ id: string }>(`INSERT INTO phone_handoff_attempts
     (workspace_id,firm_id,actor_user_id,device_id,command_id,contact_id,opportunity_id,phone_route_id,route_version,e164,item_id,
      registry_snapshot_id,registry_scrubbed_at,reserved_at,expires_at,national_dnc_basis,owner_risk_receipt_id,owner_risk_firm_id,
-     office_proof_kind,office_proof_id,office_proof_expires_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
+     office_proof_kind,office_proof_id,office_proof_expires_at,calling_preparation_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
+     (SELECT calling_preparation_id FROM firms WHERE workspace_id=$1 AND id=$2)) RETURNING id`,
     [w, firm.id, actor.userId, input.deviceId, input.commandId, route.contact_id, opportunity.value, input.routeId, route.version, route.e164,
       input.itemId ?? null, registry.basis === 'registry' ? registry.snapshotId : null, registry.basis === 'registry' ? registry.scrubbedAt : null,
       at, new Date(expires).toISOString(), registry.basis, registry.basis === 'registry' ? null : registry.receipt.id,

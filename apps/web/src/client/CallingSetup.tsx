@@ -1,3 +1,4 @@
+import {CallingMicrophoneCheck} from './CallingMicrophoneCheck.tsx';
 import {useEffect,useMemo,useRef,useState,type JSX} from 'react';
 import {callingSetupSchema,type CallingSetup as Setup,type CallingSetupReceipt} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
@@ -48,12 +49,13 @@ export function CallingSetup({client}: {client:BrowserClient}):JSX.Element{
  const enabled=snapshot?.callingProvider.provider==='twilio';
  return <section id="calling-setup" className="calling-setup" aria-label="Browser calling setup" aria-busy={busy}>
   <div className="calling-setup-heading"><h2>Browser calling setup</h2><button disabled={busy} onClick={()=>{void refresh();}}>Refresh calling status</button></div>
-  <p>Allow explicit browser calls using the existing provider and approved calling budget. This control does not place a call, use your microphone or start a recording.</p>
-  {snapshot?<><dl><div><dt>Browser calling</dt><dd>{enabled?'On · Twilio':'Off'}</dd></div><div><dt>Provider configuration</dt><dd>{snapshot.configured?'Configured':'Not configured'}</dd></div><div><dt>Daily cost cap</dt><dd>{money(snapshot.telephonyBudget.dailyCeilingCents)}</dd></div><div><dt>Used or reserved today</dt><dd>{money(snapshot.spentTodayCents)}</dd></div></dl><p>Calls reserve up to {snapshot.telephonyBudget.maxMinutesPerCall} minutes at {new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:6}).format(snapshot.telephonyBudget.unitPriceMicros/1000000)} per minute. This control keeps the existing budget. Eligibility, registry, calling hours and recording consent still apply.</p></>:null}
+  <p>Allow explicit browser calls using the existing provider and approved calling budget. Changing this setting does not place a call, use your microphone or start a recording.</p>
+  {snapshot?<><dl><div><dt>Browser calling</dt><dd>{enabled?'On · Twilio':'Off'}</dd></div><div><dt>Provider configuration</dt><dd>{snapshot.configured?'Configured':'Not configured'}</dd></div><div><dt>Daily cost cap</dt><dd>{money(snapshot.telephonyBudget.dailyCeilingCents)}</dd></div><div><dt>Used or reserved today</dt><dd>{money(snapshot.spentTodayCents)}</dd></div></dl><p>Calls reserve up to {snapshot.telephonyBudget.maxMinutesPerCall} minutes at {new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:6}).format(snapshot.telephonyBudget.unitPriceMicros/1000000)} per minute. This control keeps the existing budget. Eligibility, calling hours and recording consent still apply.</p></>:null}
   {notice?<p role="status">{notice}</p>:null}
   {storageError?<p role="alert">Setup storage unavailable. Changes are blocked to preserve the original command.</p>:null}
   {unknown?<div className="calling-setup-unknown"><p>A browser calling change is pending or UNKNOWN. No replacement change is allowed.</p><button disabled={busy||storageError||!admin} onClick={()=>{void recover();}}>Check original setup receipt</button></div>:null}
   {admin?<div className="calling-inline"><button disabled={busy||unknown||storageError||!snapshot||enabled||!snapshot.configured||snapshot.telephonyBudget.dailyCeilingCents<=0||snapshot.telephonyBudget.unitPriceMicros<=0} onClick={()=>{void change('twilio');}}>Enable browser calling</button><button disabled={busy||unknown||storageError||!snapshot||!enabled} onClick={()=>{void change('tel');}}>Turn off browser calling</button></div>:<p>A workspace admin can enable or turn off browser calling.</p>}
   {!snapshot&&!busy?<p>Refresh calling status to see the current provider and cost cap.</p>:null}
+  <CallingMicrophoneCheck client={client}/>
  </section>;
 }

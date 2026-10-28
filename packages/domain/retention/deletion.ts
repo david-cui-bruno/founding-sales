@@ -2,6 +2,7 @@ import {privateDraftDeletionRows} from './socialDraftDeletion.ts'; import {measu
 import { measurePhoneHandoffDeletion, erasePhoneHandoffs } from './phoneHandoffs.ts';
 import {lockAskLifecycle} from '../crm/askAnswerLifecycle.ts';
 import {lockDiscoveryReviewSources} from '../sourcing/discoveryReviewVisibility.ts';
+import {erasePreparationForFirm} from '../calling/preparationLifecycle.ts';
 import {deleteManualActivityEvidence} from './manualActivityEvidenceDeletion.ts';
 import {redactBackfillMetadataRows} from '../mail/crmBackfillMetadata.ts';
 import {
@@ -930,7 +931,7 @@ async function measure(
       WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
      UNION
      SELECT e164 AS handle FROM phone_routes
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate("contact_id", "$2")}
+      WHERE workspace_id = $1 AND firm_id = $3 AND e164 IS NOT NULL AND ${contactPredicate("contact_id", "$2")}
      UNION SELECT address AS handle FROM (${BUSINESS_TARGET_ADDRESSES}) business_addresses
      ORDER BY handle`,
     byContact,
@@ -1343,6 +1344,7 @@ export async function commitDeletion(
   const removed: Record<string, number> = await eraseOfficeAssessments(context,scope,closure.firms);
   const redacted: Record<string, number> = {social_private_drafts:measured.redacts['social_private_drafts']??0};
   const erasedHandoffs = await erasePhoneHandoffs(context, scope);
+  if(row.target_kind==='firm')await erasePreparationForFirm(context,scope.firmId);
   redacted['phone_handoff_attempts'] = erasedHandoffs.attempts; redacted['phone_owner_risk_receipts'] = erasedHandoffs.receipts;
   removed['national_registry_endpoint_scrubs'] = erasedHandoffs.scrubs;
   const indexIds=(await context.db.query<{id:string}>(CRM_ASK_INDEX_IDS,byContact)).rows.map(row=>row.id);

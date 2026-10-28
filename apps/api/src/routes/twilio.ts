@@ -1,6 +1,7 @@
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { lockSettingForRead } from '@fss/domain/settings/store.ts';
 import {lockSendGateForDispatch} from '@fss/domain/policy/sendGate.ts';
+import {lockPreparedCallingCapability} from '@fss/domain/calling/preparationLifecycle.ts';
 import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import {
@@ -137,6 +138,7 @@ export async function routeTwilio(request: ApiRequest, options: RoutingOptions):
       const context = repositoryContext(workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), session);
       // Match owner OFF's gate -> provider order. Consumption retains its own
       // idempotent SHARED gate acquisition and the exact switch recheck stays locked.
+      await lockPreparedCallingCapability(session,workspaceId,'session',sessionId);
       await lockSendGateForDispatch(context);
       await lockSettingForRead(context, 'calling_provider');
       if (await readCallingProvider(context) !== 'twilio') return { ok: false, reason: 'calling_provider_disabled' } as const;

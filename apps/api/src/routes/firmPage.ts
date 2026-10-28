@@ -45,6 +45,7 @@ export async function routeFirmPage(request: ApiRequest, options: RoutingOptions
     // Migration 0037: the stop badges, only when asked for, so the installed 1.0.29's
     // strict parse never meets the key.
     includeStops: parsed.data.include?.includes('stops') === true,
+    includeCallingPreparation:parsed.data.include?.includes('callingPreparation')===true,
     // Lane PB (migration 0038): the prepared brief, only when asked for, for the same reason.
     includePreparedBrief: parsed.data.include?.includes('preparedBrief') === true,
     // S4F: the firm's open work and one page of its activity, only when asked for, for the

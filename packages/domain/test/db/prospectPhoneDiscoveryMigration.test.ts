@@ -2,12 +2,10 @@ import {randomUUID,createHash} from 'node:crypto';
 import {afterAll,beforeAll,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {applyMigrations,readAppliedSchemaVersion} from '../../db/migrationRunner.ts';
-import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
-import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
+import {type SessionQueryable} from '../../db/queryable.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from './support/fixtures.ts';
-import {saveCandidate} from '../../sourcing/candidates.ts';
 import {manualOrdinaryFixture} from '../sourcing/support/manualProspectFixture.ts';
-import {captureProspectPhonePages,requestProspectPhoneDiscovery} from '../../sourcing/prospectPhoneDiscovery.ts';
+import {captureProspectPhonePages} from '../../sourcing/prospectPhoneDiscovery.ts';
 import {PROSPECT_PHONE_DISCOVERY_CONSTRAINT_CASES} from './prospectPhoneDiscoveryConstraints.ts';
 import {TABLE_RETENTION_COVERAGE} from '../../retention/coverage.ts';
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable,serial=1000;
@@ -21,12 +19,15 @@ it('new table exact constraint and retention catalogs cover every temporary orig
  expect(names).toEqual(PROSPECT_PHONE_DISCOVERY_CONSTRAINT_CASES.map(entry=>entry.constraint).sort());
  expect(TABLE_RETENTION_COVERAGE['sourcing_prospect_phone_discoveries']?.dispositions).toEqual(['deletion_removes','swept','departure_revokes']);
 });
+/** Native schema139 fixture: current request owners require the current schema.
+ * No trigger, privilege or source guard is disabled for these lifecycle cases. */
 async function fixture(){
- const ctx=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime),input=manualOrdinaryFixture(++serial);input.sourceUrl=`${input.website}about`;
- const saved=await withTransaction(runtime,()=>saveCandidate(ctx,input));if(!saved.ok)throw Error(saved.reason);
- const result=await withTransaction(runtime,()=>requestProspectPhoneDiscovery(ctx,{candidateId:saved.value.id,expectedRevision:1}));if(!result.ok)throw Error(result.reason);
- const row=(await runtime.query('SELECT * FROM sourcing_prospect_phone_discoveries WHERE id=$1',[result.value.runId])).rows[0]!;
- return {id:result.value.runId,candidateId:saved.value.id,website:input.website!,content:row['content'] as Record<string,unknown>};
+ const input=manualOrdinaryFixture(++serial);input.sourceUrl=`${input.website}about`;
+ const candidateId=randomUUID(),id=randomUUID(),content={website:input.website,sourceUrls:[input.sourceUrl],observations:[]};
+ await runtime.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload) VALUES($1,$2,$3,$4::jsonb)',[seed.alpha.workspaceId,candidateId,createHash('sha256').update(candidateId).digest('hex'),JSON.stringify(input)]);
+ await runtime.query(`WITH tick AS(SELECT date_trunc('milliseconds',clock_timestamp()) at) INSERT INTO sourcing_prospect_phone_discoveries(workspace_id,id,candidate_id,candidate_revision,creator_user_id,creator_ref,method,state,requested_at,deadline_at,expires_at,content)
+  SELECT $1,$2,$3,1,$4,$4,'company-public-phone-v1','pending',at,at+interval '30 minutes',at+interval '1 day',$5::jsonb FROM tick`,[seed.alpha.workspaceId,id,candidateId,seed.alpha.admin.userId,JSON.stringify(content)]);
+ return {id,candidateId,website:input.website!,content};
 }
 async function rejected(sql:string,params:unknown[],code='23514'){
  await runtime.query('BEGIN');try{await expect(runtime.query(sql,params)).rejects.toMatchObject({code});}finally{await runtime.query('ROLLBACK');}

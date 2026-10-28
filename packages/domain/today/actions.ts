@@ -1,3 +1,4 @@
+import {projectPreparedActionSubjects} from '../calling/preparationProjection.ts';
 import { isDeepStrictEqual } from 'node:util';
 import type { TodayAction, TodayActionsResponse, TodayActionTarget } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -6,7 +7,7 @@ import { currentHolidayCalendar } from '../sequences/calendars.ts';
 import { replyDeadline } from './replyDeadline.ts';
 
 /** Live metadata only. Daily snapshots are presentation, never the action authority. */
-export async function readTodayActions(context: RepositoryContext, input: { now: string }): Promise<TodayActionsResponse> {
+export async function readTodayActions(context: RepositoryContext, input: { now: string;includeCallingPreparation?:boolean }): Promise<TodayActionsResponse> {
   const businessTimeZone = await workspaceBusinessTimeZone(context);
   const calendar = await currentHolidayCalendar(context);
   const actor = context.scope.actor;
@@ -64,7 +65,7 @@ export async function readTodayActions(context: RepositoryContext, input: { now:
         AND $2::uuid IS NOT NULL AND owner_user_id=$2 ORDER BY disconnected_at,id`, [context.scope.workspaceId, actor.kind === 'user' && actor.role === 'admin' ? actor.userId : null]);
   for (const mailbox of mailboxes) actions.push({ actionId: `mailbox:${mailbox.id}:${String(mailbox.generation)}:${mailbox.status}`, kind: 'problem', subject: 'Mailbox needs reconnecting', reason: 'mailbox_disconnected', dueAt: mailbox.disconnected_at.toISOString(), state: 'open', target: { kind: 'settings', tab: 'administration', section: 'sending-admin', mailboxId: mailbox.id } });
   actions.sort((a,b) => priority(a)-priority(b) || a.dueAt.localeCompare(b.dueAt) || a.actionId.localeCompare(b.actionId));
-  return { version: 1, workspaceId: context.scope.workspaceId, businessTimeZone, asOf: input.now, actions };
+  return { version: 1, workspaceId: context.scope.workspaceId, businessTimeZone, asOf: input.now, actions:await projectPreparedActionSubjects(context,actions,input.includeCallingPreparation) };
 }
 
 /** Revalidate the exact current target. Opening never completes an unanswered action. */

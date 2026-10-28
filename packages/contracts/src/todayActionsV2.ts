@@ -3,7 +3,8 @@ import {todayActionSchema,todayActionTargetSchema} from './today.ts';
 import {crmCommitmentDueSchema} from './crmCommitments.ts';
 import {instant,ianaTimeZone,uuid} from './foundationRows.ts';
 const hash=z.string().regex(/^[a-f0-9]{64}$/u);
-const firms=z.array(z.strictObject({id:uuid,name:z.string().min(1)})).nullable().optional();
+// Optional source lease is emitted only with include=callingPreparation.
+const firms=z.array(z.strictObject({id:uuid,name:z.string().min(1),callingPreparationExpiresAt:instant.optional()})).nullable().optional();
 export const todayPromiseTargetSchema=z.strictObject({kind:z.literal('internal_task'),taskId:uuid,expectedVersion:z.number().int().positive(),
  review:z.strictObject({commitmentId:uuid,revision:z.number().int().positive(),projectionVersion:z.number().int().nonnegative()}),
  support:z.strictObject({sourceKind:z.enum(['selected_note','mail','call_transcript','meeting_transcript']),sourceId:uuid,sourceRevision:z.number().int().positive(),sourceHash:hash,contextHash:hash,decisionRevision:z.number().int().nonnegative()}),

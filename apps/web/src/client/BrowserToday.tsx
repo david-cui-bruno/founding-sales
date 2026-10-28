@@ -1,3 +1,4 @@
+import {callingPreparationDelay,expireCallingCard,expireCallingPage} from './CallingPreparationLease.ts';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { pluralFirmPageResponseSchema, todayListResponseSchema, type PluralFirmPageResponse, type TodayCardDto } from '@fss/contracts';
 import type { z } from 'zod';
@@ -52,16 +53,16 @@ export function BrowserToday({ client, onNavigate, onOpenCalling }: WorkspaceScr
     try {
       if (firmId) {
         const result = await client.request('/crm/firm-page-v3', pluralFirmPageResponseSchema,
-          { firmId, pageVersion: 2, include: ['stops', 'tasks', 'timeline', 'meeting_tasks'] }, () => { if (!current()) throw new Error('View changed'); });
+          { firmId, pageVersion: 2, include: ['stops', 'tasks', 'timeline', 'meeting_tasks','callingPreparation'] }, () => { if (!current()) throw new Error('View changed'); });
         if (!current()) return;
         if (result.read.firm.id !== firmId) throw new Error('Invalid firm response');
-        selectedFirm.current = { firm: result, epoch }; setFirm(result);
+        const currentPage=expireCallingPage(result); selectedFirm.current = { firm: currentPage, epoch }; setFirm(currentPage);
       } else {
-        const result = await client.request('/today?include=tasks&include=meeting_tasks', todayListResponseSchema, undefined,
+        const result = await client.request('/today?include=tasks&include=meeting_tasks&include=callingPreparation', todayListResponseSchema, undefined,
           () => { if (!current()) throw new Error('View changed'); });
         if (!current()) return;
         if (result.workspaceId !== (client.current?.status === 'signed_in' ? client.current.workspaceId : null)) throw new Error('Invalid workspace');
-        setToday(result);
+        setToday({...result,cards:result.cards.map(card=>expireCallingCard(card))});
       }
       setNotice('');
     } catch { if (current()) setNotice('Current view unavailable or refused. This is not an empty list. Refresh to try again.'); }
@@ -79,6 +80,9 @@ export function BrowserToday({ client, onNavigate, onOpenCalling }: WorkspaceScr
     void load();
     return () => { mounted.current = false; operation.current += 1; locked.current = false; selectedFirm.current = null; unsubscribe(); };
   }, [client, load]);
+  useEffect(()=>{const delay=callingPreparationDelay([...(today?.cards??[]),...(firm?[firm.read.firm]:[])]);if(delay===null)return;
+   const timer=setTimeout(()=>{setToday(value=>value?{...value,cards:value.cards.map(card=>expireCallingCard(card))}:null);setFirm(value=>{if(!value)return null;const next=expireCallingPage(value);if(selectedFirm.current?.firm===value)selectedFirm.current={...selectedFirm.current,firm:next};return next;});},Math.min(delay,2_147_483_647));return()=>clearTimeout(timer);
+  },[today,firm]);
   if (client.current?.status !== 'signed_in') return <></>;
   if (firm !== null) return <FirmContext key={firm.read.firm.id} client={client} firm={firm} onBack={() => { restoreFocus.current = true; void load(); }} {...(onOpenCalling ? { onOpenCalling: () => {
     const selected = selectedFirm.current;

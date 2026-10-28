@@ -1,0 +1,41 @@
+import type {SessionQueryable,QueryResultRowLike} from '../../db/queryable.ts';
+import {readAskRecords} from '../../crm/askRecords.ts';
+import {afterAll,beforeAll,expect,it} from 'vitest';
+import {callingPreparationFixture} from './preparationFixture.ts';
+import {lockPreparationCleanup} from '../../calling/preparationLifecycle.ts';
+import {readFirm} from '../../crm/firms.ts';
+import {readFirmForActor,listFirmsForActor} from '../../crm/dto.ts';
+import {listRoutes} from '../../crm/routes.ts';
+import {createCallback} from '../../dial/callbacks.ts';
+import {readTodayFirm,readTodayList} from '../../today/dto.ts';
+let f:Awaited<ReturnType<typeof callingPreparationFixture>>;
+beforeAll(async()=>{f=await callingPreparationFixture();});afterAll(async()=>f?.stop());
+it('generic Recorded/Firm/route/Today current projections hide expired source-owned bytes before maintenance without erasing independent work',async()=>{
+ const p=await f.prepared(),now=new Date().toISOString(),date=now.slice(0,10);
+ const callback=await f.tx(()=>createCallback(f.ctx(),{firmId:p.firmId,assignedUserId:f.seed.alpha.admin.userId,localDate:date,localTime:'12:00',sourceTimeZone:'Etc/UTC'}));expect(callback).toMatchObject({ok:true});
+ expect((await readFirmForActor(f.ctx(),{firmId:p.firmId}))).toMatchObject({ok:true,value:{firm:{name:p.input.reviewedProfile.companyName,phoneRoutes:[{value:expect.any(String)}]}}});
+ const opted=await readFirmForActor(f.ctx(),{firmId:p.firmId,includeCallingPreparation:true});expect(opted).toMatchObject({ok:true,value:{firm:{callingPreparationExpiresAt:expect.any(String)}}});
+ expect((await listFirmsForActor(f.ctx(),{includeCallingPreparation:true})).find(row=>row.id===p.firmId)).toHaveProperty('callingPreparationExpiresAt');
+ expect((await readTodayList(f.ctx(),{now,includeCallingPreparation:true})).cards.find(row=>row.firmId===p.firmId)).toHaveProperty('callingPreparationExpiresAt');
+ expect(await readTodayFirm(f.ctx(),{firmId:p.firmId,now,includeCallingPreparation:true})).toHaveProperty('callingPreparationExpiresAt');
+ await f.tx(async()=>{await lockPreparationCleanup(f.ctx());await f.runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '100 milliseconds' WHERE id=$1",[p.runId]);});
+ await expect.poll(async()=>Number((await f.runtime.query('SELECT count(*)::int n FROM calling_preparations WHERE id=$1 AND source_expires_at<=clock_timestamp()',[p.preparationId])).rows[0]?.['n'])).toBe(1);
+ expect(await readFirm(f.ctx(),p.firmId)).toMatchObject({name:'[source unavailable company]',website:null,address_line:null,locality:null,region_code:null,postal_code:null,country_code:'ZZ',time_zone:null});
+ expect(await readFirmForActor(f.ctx(),{firmId:p.firmId})).toMatchObject({ok:true,value:{firm:{name:'[source unavailable company]',website:null,locality:null,regionCode:null,phoneRoutes:[]}}});
+ expect((await listFirmsForActor(f.ctx())).find(row=>row.id===p.firmId)).toMatchObject({name:'[source unavailable company]',website:null,locality:null,regionCode:null});
+ expect(await listRoutes(f.ctx(),'phone',p.firmId)).toEqual([]);
+ expect(await f.tx(()=>readAskRecords(f.ctx(),{operation:'records',kind:'firms',query:p.input.reviewedProfile.companyName,limit:20}))).toMatchObject({records:[]});
+ expect(await f.tx(()=>readAskRecords(f.ctx(),{operation:'records',kind:'firms',scope:{firmId:p.firmId},limit:20}))).toMatchObject({records:[{name:'[source unavailable company]'}]});
+ const today=await readTodayFirm(f.ctx(),{firmId:p.firmId,now});expect(today).toMatchObject({firmName:'[source unavailable company]',routes:[],basics:{locality:null,regionCode:null,timeZone:null}});
+ expect((await readTodayList(f.ctx(),{now})).cards.find(card=>card.firmId===p.firmId)?.firmName).toBe('[source unavailable company]');
+ expect((await f.runtime.query('SELECT state FROM calling_preparations WHERE id=$1',[p.preparationId])).rows).toEqual([{state:'live'}]);
+ expect((await f.runtime.query('SELECT e164 FROM phone_routes WHERE id=$1',[p.routeId])).rows[0]?.['e164']).not.toBeNull();
+ expect((await f.runtime.query('SELECT id,status FROM callbacks WHERE firm_id=$1',[p.firmId])).rows).toHaveLength(1);
+});
+
+it('Ask matching and display recheck source after the actual identity-row read wait and never return the expired old name',async()=>{
+ const p=await f.prepared();await f.tx(async()=>{await lockPreparationCleanup(f.ctx());await f.runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '200 milliseconds' WHERE id=$1",[p.runId]);});
+ const worker=await f.database.appRuntimeSession();let delayed=false;
+ const wrapped:SessionQueryable={async query<Row extends QueryResultRowLike=QueryResultRowLike>(sql:string,values?:readonly unknown[]){const result=await worker.query<Row>(sql,values);if(!delayed&&sql.includes('FROM firms')&&sql.includes('FOR UPDATE')){delayed=true;await expect.poll(async()=>Number((await f.runtime.query('SELECT count(*)::int n FROM calling_preparations WHERE id=$1 AND source_expires_at<=clock_timestamp()',[p.preparationId])).rows[0]?.['n'])).toBe(1);}return result;}};
+ expect(await f.tx(()=>readAskRecords(f.ctx(wrapped),{operation:'records',kind:'firms',query:p.input.reviewedProfile.companyName,limit:20}),wrapped)).toMatchObject({records:[]});expect(delayed).toBe(true);
+});

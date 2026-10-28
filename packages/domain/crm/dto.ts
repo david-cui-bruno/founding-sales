@@ -6,6 +6,7 @@ import { readFirm } from './firms.ts';
 import { listFirmAliases } from './merges.ts';
 import { readOpenOpportunity, listPipelineStages, ambiguousFirmOpportunities } from './pipeline.ts';
 import { listRoutes } from './routes.ts';
+import {readPreparedProjections,projectPreparedFirm,preparedProjectionUnavailable,preparedCallingLease} from '../calling/preparationProjection.ts';
 import { accept, refuse, type CrmResult, type FirmRow } from './types.ts';
 
 /**
@@ -20,10 +21,9 @@ import { accept, refuse, type CrmResult, type FirmRow } from './types.ts';
  * admins'. So there are exactly two DTOs, and which one a caller gets is decided
  * from the scope and the firm's assignee, never from a flag in the request.
  *
- * The bodies, notes and callbacks of the second row do not exist yet; they belong to
- * later lanes. What exists now is the class that will carry them and the decision
- * that chooses it, so the lane that adds a note adds a field to `FirmDetailDto`
- * rather than deciding again who may see it.
+ * Notes, callbacks and conversation bodies remain behind the detail visibility
+ * decision. Current source-owned identity fields can become unavailable while
+ * independently authored history remains readable under that same decision.
  *
  * The redaction is by *construction*: `FirmIdentityDto` has no field a body could go
  * in, so a later change cannot leak one into the wide read by forgetting to delete
@@ -34,6 +34,7 @@ import { accept, refuse, type CrmResult, type FirmRow } from './types.ts';
 export interface FirmIdentityDto {
   readonly id: string;
   readonly name: string;
+  readonly callingPreparationExpiresAt?:string;
   readonly website: string | null;
   readonly locality: string | null;
   readonly regionCode: string | null;
@@ -132,10 +133,11 @@ export async function readFirmForActor(
     readonly firmId: string;
     /** Put each route's `technicalValidation` on it. Absent is the first shape exactly. */
     readonly routeValidation?: boolean | undefined;
+    readonly includeCallingPreparation?:boolean|undefined;
   },
 plural = false,
 ): Promise<CrmResult<FirmReadDto>> {
-  const firm = await readFirm(context, input.firmId);
+  let firm = await readFirm(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
 
   if (!plural && await ambiguousFirmOpportunities(context,firm.id)) return refuse('opportunity_ambiguous');
@@ -152,7 +154,8 @@ plural = false,
 
   const visibility: FirmReadVisibility = decideFirmRead(context, firm);
   if (visibility === 'any_active_member') {
-    return accept({ visibility, firm: firmIdentityDtoOf(firm, summary) });
+    const prepared=await readPreparedProjections(context,[firm.id]);firm=projectPreparedFirm(firm,prepared);
+    return accept({ visibility, firm: {...firmIdentityDtoOf(firm, summary),...preparedCallingLease(prepared,firm.id,input.includeCallingPreparation)} });
   }
 
   if (firmReadIsAudited(context, firm)) {
@@ -171,11 +174,14 @@ plural = false,
   const phoneRoutes = await listRoutes(context, 'phone', firm.id);
   const emailRoutes = await listRoutes(context, 'email', firm.id);
   const aliases = await listFirmAliases(context, firm.id);
+  const prepared=await readPreparedProjections(context,[firm.id]);
+  firm=projectPreparedFirm(firm,prepared);
 
   return accept({
     visibility,
     firm: {
       ...firmIdentityDtoOf(firm, summary),
+      ...preparedCallingLease(prepared,firm.id,input.includeCallingPreparation),
       addressLine: firm.address_line,
       postalCode: firm.postal_code,
       countryCode: firm.country_code,
@@ -188,7 +194,7 @@ plural = false,
         status: contact.status,
         isPrimary: contact.is_primary,
       })),
-      phoneRoutes: phoneRoutes.map(row => routeDto(row, input.routeValidation === true)),
+      phoneRoutes: preparedProjectionUnavailable(prepared,firm.id)?[]:phoneRoutes.map(row => routeDto(row, input.routeValidation === true)),
       emailRoutes: emailRoutes.map(row => routeDto(row, input.routeValidation === true)),
       aliases,
     },
@@ -209,7 +215,7 @@ function routeDto(row: Readonly<Record<string, unknown>>, withValidation = false
 /** Every firm a caller may see, at identity visibility. The wide read is per firm. */
 export async function listFirmsForActor(
   context: RepositoryContext,
-  options: { readonly limit?: number } = {},
+  options: { readonly limit?: number;readonly includeCallingPreparation?:boolean } = {},
 ): Promise<readonly FirmIdentityDto[]> {
   const { rows } = await context.db.query<
     FirmRow & { stage_key: string | null; opportunity_status: 'open' | 'won' | 'lost' | null; control_mode: 'automated' | 'manual' | null; opened_at: Date | null }
@@ -223,12 +229,26 @@ export async function listFirmsForActor(
       LIMIT $2`,
     [context.scope.workspaceId, Math.trunc(options.limit ?? 200)],
   );
+  const prepared=await readPreparedProjections(context,rows.map(row=>row.id));
   return rows.map(row =>
-    firmIdentityDtoOf(row, {
+    ({...firmIdentityDtoOf(projectPreparedFirm(row,prepared), {
       stageKey: row.stage_key,
       status: row.opportunity_status,
       controlMode: row.control_mode,
       openedAt: row.opened_at === null ? null : row.opened_at.toISOString(),
-    }),
+    }),...preparedCallingLease(prepared,row.id,options.includeCallingPreparation)}),
   );
+}
+
+/** Refresh only source-owned current fields after a page's independent history reads. */
+export async function refreshPreparedFirmRead(context:RepositoryContext,read:FirmReadDto):Promise<FirmReadDto>{
+ const states=await readPreparedProjections(context,[read.firm.id]);
+ if(!preparedProjectionUnavailable(states,read.firm.id)){
+  const lease=read.firm.callingPreparationExpiresAt?preparedCallingLease(states,read.firm.id,true):{};
+  return read.visibility==='assigned_or_admin'?{visibility:read.visibility,firm:{...read.firm,...lease}}:{visibility:read.visibility,firm:{...read.firm,...lease}};
+ }
+ const unavailable={name:read.firm.name==='[deleted]'?'[deleted]':'[source unavailable company]',website:null,locality:null,regionCode:null,timeZone:null,timeZoneUnresolvedReason:null};
+ if(read.visibility==='any_active_member'){const {callingPreparationExpiresAt:_expired,...firm}=read.firm;return {visibility:read.visibility,firm:{...firm,...unavailable}};}
+ const {callingPreparationExpiresAt:_expired,...firm}=read.firm;
+ return {visibility:read.visibility,firm:{...firm,...unavailable,addressLine:null,postalCode:null,countryCode:'ZZ',timeZoneConfidence:null,timeZoneSource:null,phoneRoutes:[]}};
 }

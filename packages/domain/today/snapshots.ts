@@ -7,6 +7,7 @@ import {
   type TodaySourceKind,
 } from './types.ts';
 import type { TodayItemKind, TodayLane } from '@fss/contracts';
+import {readPreparedProjections,preparedProjectionUnavailable,SOURCE_UNAVAILABLE_COMPANY} from '../calling/preparationProjection.ts';
 
 /**
  * Reading and writing the Today tables (specification 8.2).
@@ -229,7 +230,8 @@ export async function listTodayCards(
       ORDER BY s.lane_precedence, priority.rank, priority.sources DESC, priority.observed DESC NULLS LAST, s.sort_at, f.name COLLATE "C", s.firm_id`,
     [context.scope.workspaceId, input.snapshotDate, input.assignedUserId ?? null],
   );
-  return rows.map(toCard);
+  const prepared=await readPreparedProjections(context,rows.map(row=>row.firm_id));
+  return rows.map(row=>toCard(preparedProjectionUnavailable(prepared,row.firm_id)?{...row,firm_name:SOURCE_UNAVAILABLE_COMPANY}:row));
 }
 
 export interface ListTodayItemsInput {

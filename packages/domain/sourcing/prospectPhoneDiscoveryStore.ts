@@ -3,6 +3,7 @@ import type {SourceObservation,ProspectPhoneDiscoveryReason} from '@fss/contract
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
+import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {phoneDiscoveryAdmin,phoneDiscoveryContext,phoneDiscoveryNow,phoneDiscoveryResearchRefusal,phoneDiscoverySourceLimit,type PhoneDiscoveryContext} from './prospectPhoneDiscoveryAuthority.ts';
 
 export interface PhoneDiscoveryContent extends PhoneDiscoveryContext {observations:SourceObservation[]}
@@ -16,15 +17,16 @@ export async function lockPhoneDiscoveryCandidate(ctx:RepositoryContext,candidat
  await lockDiscoveryReviewSources(ctx);
  return (await ctx.db.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[ctx.scope.workspaceId,candidateId])).rows[0]??null;
 }
-export async function phoneDiscoveryRun(ctx:RepositoryContext,candidateId:string,revision:number):Promise<PhoneDiscoveryRun|null>{
+export async function phoneDiscoveryRun(ctx:RepositoryContext,candidateId:string,revision:number,snapshot=false):Promise<PhoneDiscoveryRun|null>{
  const owner=(await ctx.db.query<{creator_user_id:string}>('SELECT creator_user_id FROM sourcing_prospect_phone_discoveries WHERE workspace_id=$1 AND candidate_id=$2 AND candidate_revision=$3',[ctx.scope.workspaceId,candidateId,revision])).rows[0];
- if(owner)await phoneDiscoveryAdmin(ctx,owner.creator_user_id);
- return (await ctx.db.query<PhoneDiscoveryRun>('SELECT * FROM sourcing_prospect_phone_discoveries WHERE workspace_id=$1 AND candidate_id=$2 AND candidate_revision=$3 FOR UPDATE',[ctx.scope.workspaceId,candidateId,revision])).rows[0]??null;
+ if(owner)await phoneDiscoveryAdmin(ctx,owner.creator_user_id,!snapshot);
+ return (await ctx.db.query<PhoneDiscoveryRun>(`SELECT * FROM sourcing_prospect_phone_discoveries WHERE workspace_id=$1 AND candidate_id=$2 AND candidate_revision=$3${snapshot?'':' FOR UPDATE'}`,[ctx.scope.workspaceId,candidateId,revision])).rows[0]??null;
 }
 /** IDs-only initial read, then lifecycle -> candidate -> run locks. */
 export async function lockPhoneDiscoveryRun(ctx:RepositoryContext,runId:string):Promise<PhoneDiscoveryRun|null>{
  const ref=(await ctx.db.query<{candidate_id:string;creator_user_id:string}>('SELECT candidate_id,creator_user_id FROM sourcing_prospect_phone_discoveries WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,runId])).rows[0];
  if(!ref)return null;
+ await lockLivePreparationCleanup(ctx);
  await lockPhoneDiscoveryCandidate(ctx,ref.candidate_id);
  await phoneDiscoveryAdmin(ctx,ref.creator_user_id);
  return (await ctx.db.query<PhoneDiscoveryRun>('SELECT * FROM sourcing_prospect_phone_discoveries WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[ctx.scope.workspaceId,runId])).rows[0]??null;
@@ -35,8 +37,8 @@ export async function invalidatePhoneDiscovery(ctx:RepositoryContext,runId:strin
  WHERE workspace_id=$1 AND id=$2`,[ctx.scope.workspaceId,runId,reason,dispatchFinished]);
 }
 /** Always recheck after locks/waits. A shorter source lifetime can only shrink the grant. */
-export async function validatePhoneDiscoveryRun(ctx:RepositoryContext,run:PhoneDiscoveryRun,acquisition:boolean):Promise<ProspectPhoneDiscoveryReason|null>{
- if(!run.creator_ref||!await phoneDiscoveryAdmin(ctx,run.creator_user_id))return 'authority_changed';
+export async function validatePhoneDiscoveryRun(ctx:RepositoryContext,run:PhoneDiscoveryRun,acquisition:boolean,readOnly=false,lockOwner=true):Promise<ProspectPhoneDiscoveryReason|null>{
+ if(!run.creator_ref||!await phoneDiscoveryAdmin(ctx,run.creator_user_id,lockOwner))return 'authority_changed';
  const candidate=(await ctx.db.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,run.candidate_id])).rows[0];
  if(!candidate)return 'candidate_unavailable';
  if(candidate.revision!==run.candidate_revision)return 'candidate_changed';
@@ -51,7 +53,7 @@ export async function validatePhoneDiscoveryRun(ctx:RepositoryContext,run:PhoneD
  if(run.expires_at<=now||limits.expiresAt&&limits.expiresAt<=now)return 'source_expired';
  if(limits.expiresAt&&limits.expiresAt<run.expires_at){
   run.expires_at=limits.expiresAt;
-  await ctx.db.query('UPDATE sourcing_prospect_phone_discoveries SET expires_at=$3 WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,run.id,run.expires_at]);
+  if(!readOnly)await ctx.db.query('UPDATE sourcing_prospect_phone_discoveries SET expires_at=$3 WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,run.id,run.expires_at]);
  }
  if(['pending','running'].includes(run.state)&&run.deadline_at<=now)return 'discovery_expired';
  return null;

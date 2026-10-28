@@ -1,7 +1,9 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { DialExecutionRefused, readTicketExecutionClearance, type ExecutionClearance } from '../dial/executionClearance.ts';
+import { DialExecutionRefused, readTicketExecutionClearance, type BrowserExecutionClearance } from '../dial/executionClearance.ts';
+import {lockPreparedCallingCapability} from '../calling/preparationLifecycle.ts';
 
-export async function readCallSessionClearance(context: RepositoryContext, sessionId: string): Promise<ExecutionClearance> {
+export async function readCallSessionClearance(context: RepositoryContext, sessionId: string): Promise<BrowserExecutionClearance> {
+  await lockPreparedCallingCapability(context.db,context.scope.workspaceId,'session',sessionId);
   const session = (await context.db.query<{ ticket_id: string; expires_at: Date }>(
     'SELECT ticket_id,expires_at FROM call_sessions WHERE workspace_id=$1 AND id=$2 FOR SHARE',
     [context.scope.workspaceId, sessionId],
@@ -9,7 +11,7 @@ export async function readCallSessionClearance(context: RepositoryContext, sessi
   return session ? await readTicketExecutionClearance(context, session.ticket_id, session.expires_at) : { ok: false, reason: 'ticket_unknown' };
 }
 
-export async function requireCurrentCallSessionRegistry(context: RepositoryContext, sessionId: string): Promise<string> {
+export async function requireCurrentCallSessionClearance(context: RepositoryContext, sessionId: string): Promise<string> {
   const clearance = await readCallSessionClearance(context, sessionId);
   if (!clearance.ok) throw new DialExecutionRefused(clearance.reason);
   return clearance.at;

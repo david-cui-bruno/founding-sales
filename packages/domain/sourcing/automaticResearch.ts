@@ -7,6 +7,8 @@ import {createFirm,loadFirmForUpdate} from '../crm/firms.ts';
 import {canonicalWebsite} from '../crm/import.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
+import {preparedCallingFirm} from '../calling/preparationLifecycle.ts';
 import {lockTodayForFirmChange} from '../today/build.ts';
 import {listApplicableHolds} from '../policy/holds.ts';
 import {automaticResearchNow} from './automaticResearchAuthority.ts';
@@ -19,6 +21,7 @@ const sourceMatches=(row:Publication,proof:NonNullable<Awaited<ReturnType<typeof
 /** Caller owns the transaction. Atomic refusal rolls back even canonical Firm creation. */
 export async function advanceAutomaticResearchFirm(ctx:RepositoryContext,input:{runId:string},completion:'publish_and_admit'|'prepare_before_legacy'='publish_and_admit'):Promise<void>{
  if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))return;
+ await lockDiscoveryReviewSources(ctx);
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${ctx.scope.workspaceId}`]);
  // Approval/backlog takes campaign before Firm/candidate. Publication must do so too.
@@ -42,6 +45,7 @@ export async function advanceAutomaticResearchFirm(ctx:RepositoryContext,input:{
 async function publish(ctx:RepositoryContext,runId:string):Promise<boolean>{
  const w=ctx.scope.workspaceId;
  const run=(await ctx.db.query<{candidate_id:string}>('SELECT candidate_id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2',[w,runId])).rows[0];if(!run)return false;
+ if((await ctx.db.query('SELECT 1 FROM calling_preparations WHERE workspace_id=$1 AND candidate_ref=$2',[w,run.candidate_id])).rows.length)return false;
  const initial=await automaticResearchProof(ctx,run.candidate_id);if(!initial||initial.runId!==runId)return false;
  // A deleted current link is not an unfinished publication. Retain only the
  // ordinary IDs-only immutable audit identity, never recreate a privately deleted Firm.
@@ -49,6 +53,7 @@ async function publish(ctx:RepositoryContext,runId:string):Promise<boolean>{
  if(deleted)return false;
  const identity=await automaticResearchIdentity(ctx,initial.candidate,initial.owner);if(!identity||identity.firmId&&await researchHeld(ctx,initial.owner,identity.firmId))return false;
  let firm=identity.firmId?await loadFirmForUpdate(ctx,identity.firmId):null;if(identity.firmId&&!firm)return false;
+ if(firm&&await preparedCallingFirm(ctx,firm.id))return false;
  if(!firm){const made=await createFirm(ctx,{name:initial.candidate.firmName.trim().replaceAll(/\s+/gu,' '),website:canonicalWebsite(initial.candidate.website)??initial.candidate.website,locality:initial.candidate.locality,regionCode:initial.candidate.region,assignedUserId:initial.owner,researchAlreadyQualified:true});if(!made.ok)return false;firm=made.value;}
  await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,run.candidate_id]);
  await ctx.db.query('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,runId]);

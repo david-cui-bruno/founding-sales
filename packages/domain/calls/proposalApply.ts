@@ -23,6 +23,7 @@ import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { PolicyRefusalCode } from '../policy/types.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
 import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
+import {lockPreparedCallingHistory} from '../calling/preparationHistory.ts';
 import { lockCallAnalysis } from './analysis.ts';
 import { transcriptSha256 } from './analysisModel.ts';
 import { taskKey } from './analysisPolicy.ts';
@@ -185,6 +186,7 @@ export async function applyCallProposals(
   const touchesRoute = appliedOutcome !== null && ROUTE_OUTCOMES.has(appliedOutcome);
 
   // ---- 1. Locks -------------------------------------------------------------------------
+  await lockPreparedCallingHistory(context,where.firm_id);
   await lockTodayForFirmChange(context);
   await lockSendGateForStopFact(context);
   // Every outcome: the call log names the dialled route, so its insert takes the route's

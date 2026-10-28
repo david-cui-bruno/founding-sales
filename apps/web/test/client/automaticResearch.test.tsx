@@ -42,7 +42,7 @@ function setup() {
     }
     if (url === '/browser/api/sourcing/research-firms/create') { commands.push(JSON.parse(String(init?.body))); return json({ status: 'accepted', replayed: false, result: manual }); }
     if (url === '/browser/api/sourcing/research-firms/read') return json(manual);
-    if (url === '/browser/api/today/actions/v4') return queueWait === undefined ? json({ version: 4, workspaceId: id, businessTimeZone: 'America/Chicago', asOf: now, actions: [action, manualAction, legacy], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } }) : await queueWait.promise;
+    if (url === '/browser/api/today/actions/v4?include=callingPreparation') return queueWait === undefined ? json({ version: 4, workspaceId: id, businessTimeZone: 'America/Chicago', asOf: now, actions: [action, manualAction, legacy], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } }) : await queueWait.promise;
     if (url === '/browser/api/today/actions/open/v4') {
       const body = JSON.parse(String(init?.body)) as { actionId: string };
       opens.push(body);
@@ -86,7 +86,7 @@ describe('automatic research actual BrowserClient and queue', () => {
     expect(screen.queryByRole('region', { name: 'Current automatic research proof' })).toBeNull();
     openAutomatic(); await screen.findByRole('region', { name: 'Current automatic research proof' });
     expect(scope.randomUUID).not.toHaveBeenCalled(); expect(scope.values.size).toBe(0);
-    expect(scope.send.mock.calls.every(([url]) => ['/browser/session', '/browser/api/today/actions/v4', '/browser/api/today/actions/open/v4'].includes(String(url)))).toBe(true);
+    expect(scope.send.mock.calls.every(([url]) => ['/browser/session', '/browser/api/today/actions/v4?include=callingPreparation', '/browser/api/today/actions/open/v4'].includes(String(url)))).toBe(true);
     await act(async () => { scope.client.dispose(); });
   });
   it.each(['null', 'publication', 'revision', 'candidate', 'run', 'fingerprint', 'proof-target', 'mixed'] as const)('refuses %s current-proof mismatch with no fallback', async mismatch => {
@@ -108,7 +108,7 @@ describe('automatic research actual BrowserClient and queue', () => {
     await act(async () => { scope.client.invalidate(false); scope.change({ userId: other, revision: 'two' }); await scope.client.refresh(); });
     expect(screen.queryByText(proof.firmName)).toBeNull();
     const newer = scope.delayQueue(); fireEvent.click(screen.getByRole('button', { name: 'Refresh action queue' }));
-    await waitFor(() => { expect(scope.send.mock.calls.filter(([url]) => url === '/browser/api/today/actions/v4')).toHaveLength(2); });
+    await waitFor(() => { expect(scope.send.mock.calls.filter(([url]) => url === '/browser/api/today/actions/v4?include=callingPreparation')).toHaveLength(2); });
     await act(async () => { if (outcome === 'network') old.reject(new Error('Late failure')); else old.resolve(json({ version: 4, target, research: null, automaticResearch: proof }, Number(outcome))); });
     expect(screen.getByRole('button', { name: 'Refresh action queue' }).hasAttribute('disabled')).toBe(true);
     expect(screen.queryByRole('region', { name: 'Current automatic research proof' })).toBeNull();

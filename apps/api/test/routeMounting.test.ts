@@ -244,6 +244,7 @@ describe('what the API mounts', () => {
       'calling-identities',
       'calls',
       'calling-setup',
+      'calling-preparation',
       'calling-workspace',
       'calling-execution-receipt',
       'callbacks',

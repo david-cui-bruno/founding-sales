@@ -6,6 +6,8 @@ import {createFirm, loadFirmForUpdate, resolveZoneForFirm} from '../crm/firms.ts
 import {firmNameKey, websiteDomain} from '../crm/import.ts';
 import {addPhoneRoute} from '../crm/routes.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
+import {preparedCallingFirm} from '../calling/preparationLifecycle.ts';
 import {lockTodayForFirmChange, refreshTodayForFirm} from '../today/build.ts';
 import {firstSuppressed} from '../suppression/effective.ts';
 import {suppressionKeys} from '../dial/authorize.ts';
@@ -26,6 +28,7 @@ export type CallingAdmissionResult = CallingAssessmentResult & {createdFirm: boo
 export async function assessCallingOffice(ctx: RepositoryContext, input: CallingAssessmentInput): Promise<SourcingResult<CallingAssessmentResult>> {
   if (!decideAdminOnly(ctx).permitted || ctx.scope.actor.kind !== 'user') return refused('admin_only');
   if (!callingAssessmentInputSchema.safeParse(input).success) return refused('invalid_input');
+  if(await preparedCallingFirm(ctx,input.firmId))return refused('route_changed');
   await lockSendGateForStopFact(ctx);
   const row = (await ctx.db.query<{phone_route_id: string; route_version: number}>(`SELECT phone_route_id,route_version FROM firm_office_assessments WHERE workspace_id=$1 AND id=$2 AND firm_id=$3`, [ctx.scope.workspaceId, input.officeAssessmentId, input.firmId])).rows[0];
   if (!row) return refused('not_found');
@@ -53,8 +56,10 @@ export async function admitCallingCandidate(ctx: RepositoryContext, input: Calli
 }
 async function admit(ctx: RepositoryContext, input: CallingAdmissionInput, owner: string): Promise<SourcingResult<CallingAdmissionResult>> {
   const w = ctx.scope.workspaceId;
+  await lockDiscoveryReviewSources(ctx);
   await lockSendGateForStopFact(ctx);
   await lockTodayForFirmChange(ctx);
+  if((await ctx.db.query('SELECT 1 FROM calling_preparations WHERE workspace_id=$1 AND candidate_ref=$2',[w,input.candidateId])).rows.length)return refused('identity_review_required');
   await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`sourcing-identity:${w}`]);
   const peek = (await ctx.db.query<{payload: CandidateInput}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2', [w, input.candidateId])).rows[0];
   if (!peek) return refused('not_found');

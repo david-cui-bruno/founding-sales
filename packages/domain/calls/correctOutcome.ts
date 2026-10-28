@@ -23,7 +23,8 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate, readFirm } from '../crm/firms.ts';
 import { readOperationalOpportunity, setManualControlMode } from '../crm/pipeline.ts';
-import { retireRoute } from '../crm/routes.ts';
+import { retireRouteForCallOutcome } from '../crm/routes.ts';
+import {lockPreparedCallingHistory} from '../calling/preparationHistory.ts';
 import {
   CALLBACK_CANCELLED_BY_CORRECTION,
   cancelCallback,
@@ -649,6 +650,7 @@ export async function correctCallOutcome(
   const locatedSession = await sessionOfLog(context, located.id);
 
   // ---- Locks: Today (shared) → gate → route → firm → analysis → session → the log ----------
+  await lockPreparedCallingHistory(context,located.firm_id);
   await lockTodayForFirmChange(context);
   await lockSendGateForStopFact(context);
   if (ROUTE_OUTCOMES.has(input.outcome) && located.phone_route_id !== null) {
@@ -719,6 +721,7 @@ export async function correctCallOutcome(
 
   const clearAgreement = !REACHED_OUTCOMES.has(input.outcome) && log.agreed_follow_up !== null;
   const now = await databaseNow(context);
+  let missingHandle=false;
   const applied = {
     suppressionEventIds: [] as string[],
     retiredRouteId: null as string | null,
@@ -798,14 +801,14 @@ export async function correctCallOutcome(
       await applyManualModeStop(context, { firmId: log.firm_id, origin: 'engaged_call', cause: CALL_OUTCOME_CORRECTED_ACTION });
     }
     if (input.outcome === 'do_not_call' && input.journal !== undefined && log.phone_route_id !== null) {
-      const { rows: routes } = await context.db.query<{ e164: string }>(
+      const { rows: routes } = await context.db.query<{ e164: string|null }>(
         'SELECT e164 FROM phone_routes WHERE workspace_id = $1 AND id = $2',
         [context.scope.workspaceId, log.phone_route_id],
       );
       const e164 = routes[0]?.e164;
-      if (e164 === undefined) throw new Refused('route_unknown');
+      if(!e164)missingHandle=true;
       const stops = doNotCallStops({ doNotCall: input.doNotCall });
-      const handle = await recordSuppression(context, {
+      if(e164){const handle = await recordSuppression(context, {
         scope: 'handle',
         value: e164,
         firmId: log.firm_id,
@@ -815,7 +818,7 @@ export async function correctCallOutcome(
         journal: input.journal,
       });
       if (!handle.ok) throw new Refused(handle.reason);
-      applied.suppressionEventIds.push(handle.value.eventId);
+      applied.suppressionEventIds.push(handle.value.eventId);}
       if (stops.firm !== null) {
         const firmWide = await recordSuppression(context, {
           scope: 'firm',
@@ -830,7 +833,7 @@ export async function correctCallOutcome(
       }
     }
     if (effectsOf.retiresRoute && log.phone_route_id !== null) {
-      const retired = await retireRoute(context, { routeKind: 'phone', routeId: log.phone_route_id, reason: 'wrong number, recorded on a call correction' });
+      const retired = await retireRouteForCallOutcome(context,log.id,'correction');
       if (!retired.ok) throw new Refused('route_unknown');
       applied.retiredRouteId = log.phone_route_id;
     }
@@ -893,6 +896,7 @@ export async function correctCallOutcome(
       decisions: decided.map(entry => ({ kind: entry.effect.kind, id: entry.effect.id, decision: entry.echoed.decision })),
       applied,
       liftChosen,
+      ...(missingHandle?{attention:['route_not_named']}:{}),
     },
   });
 
@@ -944,6 +948,7 @@ export async function correctCallOutcome(
       outcome: input.outcome,
       revision,
       applied,
+      ...(missingHandle?{attention:['route_not_named' as const]}:{}),
       liftNext: lifts.map(entry => ({
         eventId: entry.effect.id,
         scope: entry.effect.facts.scope ?? 'handle',

@@ -1,3 +1,4 @@
+import {recognizedFixture143Adapter,prepareFixture143Adapter} from './fixture143Adapter.ts';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
@@ -101,6 +102,7 @@ export interface BaseCheckout {
   readonly checks: string;
   /** True when HEAD's `tools/upgrade` was copied in because the base had none. */
   readonly copiedLoader: boolean;
+  readonly fixtureOrigin?:string;
   /** Where the base checkout's third-party modules came from. */
   readonly modules: ModulesSource;
   cleanup(): Promise<void>;
@@ -257,14 +259,20 @@ export async function prepareCheckout(base: string, head: string): Promise<BaseC
     loader = join(base, 'tools', 'upgrade', 'fixtureMain.ts');
   }
 
+  let adapter:Awaited<ReturnType<typeof prepareFixture143Adapter>>|null=null;
+  try{if(await recognizedFixture143Adapter(base,schemaVersion))adapter=await prepareFixture143Adapter(base,head,schemaVersion);}
+  catch(error){for(const path of created.reverse())await rm(path,{recursive:true,force:true});throw error;}
+
   return {
     directory: base,
     schemaVersion,
-    loader,
+    loader:adapter?.loader??loader,
+    ...(adapter?{fixtureOrigin:adapter.origin}:{}),
     checks: join(base, 'tools', 'upgrade', 'checksMain.ts'),
     copiedLoader,
     modules,
     async cleanup() {
+      await adapter?.cleanup();
       for (const path of created.reverse()) await rm(path, { recursive: true, force: true });
     },
   };

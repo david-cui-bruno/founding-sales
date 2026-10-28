@@ -53,6 +53,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/social/voice-preferences/read', '/social/voice-preferences/receipt',
   '/calling/follow-ups/list', '/calling/follow-ups/read', '/calling/follow-ups/receipt',
   '/calling/execution/receipt', '/calling/setup/receipt',
+  '/calling/preparation/read','/calling/preparation/receipt',
 ] as const);
 /** Ephemeral outgoing-only Voice credential. Not a command, never persisted by the client. */
 export const BROWSER_VOICE_POST_PATHS = Object.freeze(['/calls/access-token'] as const);
@@ -71,6 +72,7 @@ export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/social/drafts/request',
   '/calling/wrap', '/calling/follow-ups/save',
   '/calls/session', '/calling/setup/provider',
+  '/calling/preparation/confirm',
 ] as const);
 
 export const browserSignInSchema = z.strictObject({

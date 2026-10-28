@@ -17,6 +17,7 @@ import type {PageFetchProvider} from '../research/providers.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
 import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
+import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
 
 interface Row {id:string;revision:number;status:string;payload:CandidateInput;source_check:unknown;check_job_state:string|null;[key:string]:unknown}
 const select=`SELECT id,revision,status,payload,source_check,(SELECT state FROM jobs j WHERE j.workspace_id=sourcing_candidates.workspace_id AND j.id::text=source_check->>'jobId') AS check_job_state FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2`;
@@ -35,6 +36,7 @@ async function blocked(context:RepositoryContext):Promise<'research_disabled'|'r
 export async function requestSourceCheck(context:RepositoryContext,input:{id:string;expectedRevision:number},options:{scheduled?:boolean|undefined}={}):Promise<{ok:true;value:{id:string}}|{ok:false;reason:string}> {
   if(!decideAdminOnly(context).permitted)return {ok:false,reason:'admin_only'};
   if(!candidateDeleteInputSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
+  await lockLivePreparationCleanup(context);
   const row=(await context.db.query<Row>(`${select} FOR UPDATE`,[context.scope.workspaceId,input.id])).rows[0];
   if(!row)return {ok:false,reason:'not_found'};
   if(!isLegacyCandidatePayload(row.payload))return {ok:false,reason:'candidate_format_not_supported'};
@@ -61,6 +63,7 @@ export async function runSourceCheck(context:RepositoryContext,input:{candidateI
   // workspace source lifecycle first, then candidate. Never hold a candidate while
   // waiting for the lifecycle lock, including across source processing awaits.
   await lockDiscoveryReviewSources(context);
+  await lockLivePreparationCleanup(context);
   const row=(await context.db.query<Row>(`${select} FOR UPDATE`,[context.scope.workspaceId,input.candidateId])).rows[0];if(!row)return;
   if(await retainedCandidateOnly(context,row.id))return;
   if(!isLegacyCandidatePayload(row.payload))return;
