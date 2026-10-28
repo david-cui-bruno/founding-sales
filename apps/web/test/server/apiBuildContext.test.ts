@@ -10,7 +10,7 @@ const allowed = rules.filter(line => line.startsWith('!')).map(line => line.slic
 const browserInputs = [
   'tsconfig.base.json', 'apps/web/package.json', 'apps/web/tsconfig.json',
   'apps/web/src/client', 'apps/web/src/shared', 'apps/web/src/server',
-  'apps/desktop/package.json', 'apps/desktop/src/renderer', 'scripts/buildBrowserAssets.mjs',
+  'scripts/buildBrowserAssets.mjs',
 ];
 
 test('every API Docker COPY input is explicitly admitted by its Dockerfile-specific context', () => {

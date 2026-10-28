@@ -1,3 +1,5 @@
+import { CallingAuthorityChanged } from '@fss/domain/calling/followUpDraftAccess.ts';
+import { DialExecutionRefused } from '@fss/domain/dial/executionClearance.ts';
 import type { z } from 'zod';
 import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
@@ -11,6 +13,8 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * route deps with the suppression journal, and the one branch `runRouteCommand` does not
  * take.
  */
+
+export class CallingProviderDisabled extends Error {}
 
 export interface PolicyRouteDeps extends RouteDeps {
   /** The journal every suppression write goes through before its row (10.2). */
@@ -54,10 +58,14 @@ export async function runPolicyCommand<Schema extends z.ZodType<{ commandId: str
   schema: Schema,
   kind: string,
   work: (context: RepositoryContext, body: z.infer<Schema>) => Promise<CommandResult<T>>,
+  beforeCommit?: (context: RepositoryContext) => Promise<void>,
 ): Promise<RouteResult> {
   try {
-    return await runRouteCommand(deps, schema, kind, work);
+    return await runRouteCommand(deps, schema, kind, work, beforeCommit);
   } catch (error) {
+    if (error instanceof CallingProviderDisabled) return { status: 404, body: { error: 'not_found' } };
+    if (error instanceof CallingAuthorityChanged) return { status: 401, body: { error: 'session_changed' } };
+    if (error instanceof DialExecutionRefused) return { status: 409, body: { status: 'refused', reason: error.reason, replayed: false } };
     if (error instanceof SuppressionJournalError) {
       // Written out rather than added to `REFUSAL_CODES`: that set is the shared
       // envelope vocabulary every route uses, and this is one endpoint family's

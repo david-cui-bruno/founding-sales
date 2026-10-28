@@ -26,8 +26,6 @@
 !apps/web/src/client
 !apps/web/src/shared
 !apps/web/src/server
-!apps/desktop/package.json
-!apps/desktop/src/renderer
 !scripts/buildBrowserAssets.mjs
 !packages/domain/package.json
 !packages/domain/crm

@@ -1,56 +1,18 @@
 # The greenfield workspace
 
-The greenfield tree is the whole repository: the previous-generation app was deleted
-in lane g95 (`docs/archive/greenfield/pre-lean-docs-20261018/legacy.md`; the tag `legacy-final` holds it). The root
-`package.json` is the npm workspace root.
+The root `package.json` owns the npm workspace. The web app is the product under [ADR0027](../adr/0027-web-product.md).
 
-```
-apps/api          the API: health, request limits, redacted errors, scope wiring,
-                  Google sign-in, sessions, commands, admin routes
-apps/worker       skeleton worker: connects, checks its schema range, exits non-zero
-apps/desktop      the Mac: Electron main, preload, renderer; sign-in, device,
-                  serialised renewal, version gate, expiring encrypted cache
-packages/domain   pure rules (src/rules) and database conventions (db/)
-packages/contracts zod schemas for the foundation rows, reason codes, client versions
-infra/            Terraform (G1 owns it)
-```
+- `apps/web`: browser selling journeys, signed session gateway and private command custody.
+- `apps/api`: authenticated requests, commands, webhooks and current domain authority.
+- `apps/worker`: registered research, mail and other bounded background jobs.
+- `packages/domain` / `packages/contracts`: business rules, PostgreSQL lifecycle and shared wire schemas.
+- `infra`: existing hosted release and Terraform resources.
 
-## Install
+## Install and checks
 
-```
-export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:$PATH"
-npm ci --no-audit --no-fund
-```
+Use Node24 and `npm ci --no-audit --no-fund`. Dependency install scripts hydrate the pinned embedded PostgreSQL native links locally. With `--ignore-scripts`, rebuild the local `@embedded-postgres/darwin-arm64` package before database checks; CI hydrates its pinned Linux equivalent for owned lifecycle checks and uses its service container for normal tests.
 
-Since lane g89 the root `postinstall` only fetches the Electron binary
-(`install-electron`, from the local cache when it is there), which
-`npm run test:desktop:host` needs, and nothing else. The dependencies' own install scripts still run, and one of them is needed
-locally: the PostgreSQL 16 binaries ship as real files but their version symlinks
-(`libzstd.1.dylib` and friends) are created by `@embedded-postgres/darwin-arm64`'s
-`postinstall`. Without it `postgres` fails with `Library not loaded`.
-
-`npm install --ignore-scripts` still works, and is what CI runs; after it, run
-`npm rebuild @embedded-postgres/darwin-arm64` for a local gate and
-`node node_modules/electron/install.js` for the host tests.
-
-CI does not need the rebuild: it uses a `postgres:16` service container instead.
-
-## The gate
-
-```
-npm run gate:greenfield     # typecheck + lint + tests + the ops suite, what CI runs
-npm run typecheck:greenfield
-npm run lint                # one ESLint flat config (eslint.config.mjs) over apps, packages, test/ops and scripts
-npm run test:greenfield
-npm run test:desktop:e2e    # the window, in chromium; not part of the gate
-```
-
-`test:desktop:e2e` is separate because it needs a chromium binary that
-`npx playwright install chromium` provides and no `npm` install fetches. See
-`docs/archive/decisions/g2-desktop-test-layers.md`.
-
-`npm run typecheck` is `typecheck:greenfield` and `npm test` is `test:greenfield` plus
-`test:ops`.
+The root typecheck/lint/test commands cover the remaining workspaces. CI selects actual API/web consumers and always retains operations controls; main runs broad regression. `npm run test:web:e2e` is the signed browser harness, separate from ordinary mounted tests. Use changed-path checks from the [verification guide](../features/verification.md), existing fictional fixtures and exact owned cleanup. Real provider/audio/usefulness remains separate.
 
 ## The database harness
 

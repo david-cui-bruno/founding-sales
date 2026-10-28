@@ -1,6 +1,6 @@
 # Identity, sessions and workspaces
 
-The API authenticates the person and derives their workspace membership, role and device/session context. The desktop does not choose its own authority. Current implementations live under `apps/api/src/auth/`, the identity/session routes and the domain workspace-scope modules. CRM authorization is separate from sign-in.
+The API authenticates the person and derives their workspace membership, role and device/session context. The web app does not choose its own authority. Current implementations live under `apps/api/src/auth/`, the identity/session routes and the domain workspace-scope modules. CRM authorization is separate from sign-in.
 
 ## Current authority
 
@@ -16,4 +16,4 @@ Google mailbox connection, LinkedIn account connection and a Callie session are 
 
 Use the ordinary sign-in and session APIs. Do not repurpose installed desktop credentials for diagnostic or operator work, fabricate an authenticated session, or reset a password. Current release, credential and approval rules remain in AGENTS and [current state](../operations/current-state.md).
 
-Existing API/session, cross-workspace and renderer identity-generation tests cover sign-out, changed membership, stale callbacks and private visibility. Fixtures do not establish a live OAuth grant or actual installed account connection. Source implementation and deployment metadata are also not owner consent.
+Existing API/session, cross-workspace and web identity-generation tests cover sign-out, changed membership, stale callbacks and private visibility. Fixtures do not establish a live OAuth grant or actual installed account connection. Source implementation and deployment metadata are also not owner consent.

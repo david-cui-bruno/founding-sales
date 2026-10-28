@@ -1,6 +1,6 @@
 # Calling eligibility, holds and outcomes
 
-The server decides whether a particular actor may call a particular current route. The desktop displays this decision and supported refusals; it does not reconstruct a weaker parallel policy. Main boundaries are `packages/domain/dial/`, `packages/domain/policy/` and the shared contracts.
+The server decides whether a particular actor may call a particular current route. The web app displays this decision and supported refusals; it does not reconstruct a weaker parallel policy. Main boundaries are `packages/domain/dial/`, `packages/domain/policy/` and the shared contracts.
 
 ## Dial authorization
 

@@ -1,6 +1,6 @@
 # Domain Docs
 
-This repo uses a single shared domain context across its API, worker, desktop app and packages. Domain terms belong in root `GLOSSARY.md`; architecture decisions belong in root `docs/adr/`.
+This repo uses a single shared domain context across its API, worker, web app and packages. Domain terms belong in root `GLOSSARY.md`; architecture decisions belong in root `docs/adr/`.
 
 ## Before exploring
 

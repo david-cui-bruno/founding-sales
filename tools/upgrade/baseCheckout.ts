@@ -72,7 +72,7 @@ const WORKSPACE_PACKAGES: readonly (readonly [string, string])[] = [
   ['domain', 'packages/domain'],
   ['api', 'apps/api'],
   ['worker', 'apps/worker'],
-  ['desktop', 'apps/desktop'],
+  ['web', 'apps/web'],
 ];
 
 export type ModulesSource =

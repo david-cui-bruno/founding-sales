@@ -1,6 +1,6 @@
 /** One fixed policy for handler and parser refusals. Bundled Voice SDK scripts stay
- * self-only. These exact default-edge media/signalling hosts follow the existing
- * desktop integration and official twilio-voice.js CSP documentation. No wildcard
+ * self-only. These exact default-edge media/signalling hosts follow the authenticated
+ * API and official twilio-voice.js CSP documentation. No wildcard
  * or provider SDK download is allowed. Microphone still needs a user gesture and
  * browser permission; this header does not enable a call or mint credentials. */
 export const BROWSER_SECURITY_HEADERS = Object.freeze({

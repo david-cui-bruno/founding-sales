@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { z } from 'zod';
 import { qualifiedResearchSelectionSchema, qualifiedResearchListSchema, qualifiedResearchFirmSchema, todayActionsV4ResponseSchema, todayActionOpenV4ResponseSchema,
   type QualifiedResearchCandidate, type QualifiedResearchFirm, type QualifiedResearchSelection, type TodayActionV4 } from '@fss/contracts';
-import { Button } from '../../../desktop/src/renderer/ui/button.tsx';
 import { BrowserBoundaryError, type BrowserClient } from './BrowserClient.ts';
 import { AutomaticResearchProof } from './AutomaticResearchProof.tsx';
 import type { AutomaticResearchFirm, CallingSubject } from '@fss/contracts';
@@ -162,15 +161,15 @@ export function BrowserResearchQueue({ client, onOpenCalling }: { client: Browse
   };
   const callingAction = onOpenCalling && openedProof !== null ? <button disabled={busy} onClick={openCalling}>Open calling brief</button> : null;
   const candidatesView = <section aria-label="Research candidates"><h3>Research candidates</h3><p>Only current ready, unambiguous retained candidates are listed. Creating a research Firm grants no channel authority.</p>
-    <Button disabled={busy} onClick={() => { void run(epoch => loadCandidates(epoch)); }}>Load research candidates</Button>
+    <button type="button" disabled={busy} onClick={() => { void run(epoch => loadCandidates(epoch)); }}>Load research candidates</button>
     {candidates.map(candidate => <article key={candidate.selection.discoveryCandidateId} className="prospects-candidate"><h4>{candidate.firmName}</h4><p>{candidate.locality}, {candidate.region} · <a href={citationHref(candidate.website)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{candidate.website}</a></p>
       <details><summary>Exact source context</summary><p>Source {candidate.source.provider} · Release {candidate.source.release} · Record {candidate.source.recordId}</p><p>Candidate {candidate.selection.candidateId} revision {candidate.selection.candidateRevision} · Run {candidate.selection.runId}</p>
         {candidate.citations.map(citation => <article key={`${citation.kind}:${citation.observationId}:${citation.blockId}`}><h4>{citation.kind.replaceAll('_', ' ')}</h4><blockquote>{citation.quote}</blockquote><a href={citationHref(citation.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{citation.url}</a><p>Retrieved {citation.retrievedAt}</p></article>)}
       </details>
-      <Button disabled={busy || pending !== null} onClick={() => { void run(epoch => create(epoch, candidate)); }}>Create research Firm</Button></article>)}
-    {afterId !== null ? <Button disabled={busy} onClick={() => { void run(epoch => loadCandidates(epoch, true)); }}>More research candidates</Button> : null}
+      <button type="button" disabled={busy || pending !== null} onClick={() => { void run(epoch => create(epoch, candidate)); }}>Create research Firm</button></article>)}
+    {afterId !== null ? <button type="button" disabled={busy} onClick={() => { void run(epoch => loadCandidates(epoch, true)); }}>More research candidates</button> : null}
     {pending !== null ? <div><p>{pending.createdFirmId === undefined ? 'Unresolved research request' : 'Confirmed research request'} {pending.commandId}. Candidate {pending.selection.candidateId}, revision {pending.selection.candidateRevision}.</p>
-      {pending.createdFirmId === undefined ? <Button disabled={busy} onClick={() => { void run(epoch => create(epoch)); }}>Retry exact research command</Button> : <div><p>Created Firm {pending.createdFirmId}. Review its current Today action. No new command was generated.</p><Button disabled={busy} onClick={() => { void run(readConfirmed); }}>Read current research Firm</Button></div>}</div> : null}
+      {pending.createdFirmId === undefined ? <button type="button" disabled={busy} onClick={() => { void run(epoch => create(epoch)); }}>Retry exact research command</button> : <div><p>Created Firm {pending.createdFirmId}. Review its current Today action. No new command was generated.</p><button type="button" disabled={busy} onClick={() => { void run(readConfirmed); }}>Read current research Firm</button></div>}</div> : null}
   </section>;
   return <div className="prospects-research">
     {hasDetail ? <div ref={detail} className="prospects-detail"><button onClick={() => { selectionLease.current++; setProof(null); setAutomaticProof(null); requestAnimationFrame(() => list.current?.focus()); }}>← Back to prepared research</button>
@@ -179,12 +178,12 @@ export function BrowserResearchQueue({ client, onOpenCalling }: { client: Browse
     </div> : <><section aria-label="Prepared source-backed supply" className="prospects-supply" ref={list} tabIndex={-1}>
     <div className="prospects-supply-heading"><div><h3>Prepared research</h3>
     <p>{prepared === undefined ? 'Current supply has not been read.' : `${prepared.length} source-backed research items in this read`} · Not a callable count.</p></div>
-    <Button disabled={busy} onClick={() => { void run(loadQueue); }}>Refresh action queue</Button>
+    <button type="button" disabled={busy} onClick={() => { void run(loadQueue); }}>Refresh action queue</button>
     </div>
     {prepared?.length === 0 ? <p>No prepared research returned. Retained review and source inventory are separate.</p> : null}
     {prepared?.map(action => <article key={action.actionId} className="prospects-supply-row"><div><h4>{action.subject}</h4>
       <p>{action.target.kind === 'automatic_research' ? 'Automatic source-backed publication' : 'Qualified retained research'} · Open for exact source context.</p></div>
-      <Button disabled={busy} onClick={() => { void run(epoch => open(epoch, action)); }}>Review current research</Button></article>)}
+      <button type="button" disabled={busy} onClick={() => { void run(epoch => open(epoch, action)); }}>Review current research</button></article>)}
     <p className="prospects-authority">Prepared context, not contact permission. Maintenance need and phone ownership are not established.</p>
   </section>
   <details className="prospects-secondary" open={pending !== null || undefined}><summary>Qualified selection and existing research requests</summary>{candidatesView}</details></>}

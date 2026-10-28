@@ -12,7 +12,8 @@ import {
 import { LIVENESS_PATH, NOT_READY_STATUS, READINESS_PATH } from '../../apps/api/src/bootstrap/readiness.ts';
 import { DEFAULT_UPGRADE_URL } from '../../apps/api/src/routes/types.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
-import { CHANNEL_MANIFEST_PATH } from '../../apps/desktop/src/main/updateChannel.ts';
+// Retained signed restore manifests still back existing client-version refusals; no publishing workflow remains.
+const CHANNEL_MANIFEST_PATH = 'releases/darwin-arm64/latest.json';
 import { readRepositoryFile, repositoryPath } from './support/repository.ts';
 
 /**

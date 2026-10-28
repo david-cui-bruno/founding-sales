@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '../../src/client/schemaRuntime.ts';
 import { StrictMode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { automaticResearchFirmSchema, manualProspectSchema, qualifiedResearchFirmSchema } from '@fss/contracts';
 import { BrowserClient } from '../../src/client/BrowserClient.ts';
@@ -63,7 +63,8 @@ function setup(kind: 'automatic' | 'qualified' = 'automatic') {
 async function ready(): Promise<void> {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh action queue' }).hasAttribute('disabled')).toBe(false));
 }
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(Date.parse(at)); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('prepared Prospects workspace, pure mounted composition', () => {
   it('reads prepared supply first without raw fetches, mutations, fake refill or callable claims', async () => {
@@ -228,7 +229,7 @@ describe('Prospects to Calling exact navigation composition', () => {
     const button = await screen.findByRole('button', { name: 'Open calling brief' });
     await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));
     const requests = s.requests.length; fireEvent.click(button);
-    expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: raw.candidateId, expectedCandidateRevision: raw.revision });
+    expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: raw.candidateId, expectedCandidateRevision: raw.revision, prospectPage: { state: 'all', offset: 0 } });
     expect(s.requests).toHaveLength(requests); expect(s.randomUUID).not.toHaveBeenCalled(); expect(s.storage.setItem).not.toHaveBeenCalled();
     await act(async () => { s.client.dispose(); });
   });
@@ -250,7 +251,7 @@ describe('Prospects to Calling exact navigation composition', () => {
     expect(open).not.toHaveBeenCalled();
     if (transition === 'selection') {
       fireEvent.click(screen.getByRole('button', { name: 'Open calling brief' }));
-      expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: other, expectedCandidateRevision: 7 });
+      expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: other, expectedCandidateRevision: 7, prospectPage: { state: 'all', offset: 0 } });
     }
     await act(async () => { s.client.dispose(); });
   });

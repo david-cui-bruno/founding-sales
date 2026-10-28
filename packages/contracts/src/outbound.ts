@@ -1,17 +1,9 @@
 import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
 
-/**
- * `POST /outbound/status`, the sending posture Administration shows (specification
- * 12.6, 12.7; lanes g69 and g78).
- *
- * The route builds its body inline in `apps/api/src/routes/outbound.ts`, and until lane
- * g78 this contract did not exist: the Mac declared the parts it read in
- * `apps/desktop/src/main/settingsBridge.ts`, `.loose()` all the way down so that an
- * unchecked field could ride along. That is the parser that read
- * `personalGmailRecipients` as a number for two releases (release.md 8.0ae). The whole
- * answer is declared here instead — the parts the desktop shows and the parts it does
- * not — and the route's test holds its real answer to it through `wireDrift`.
+/** Complete /outbound/status contract, shared with the domain and authenticated API.
+ * Route tests validate real responses against this shape so unchecked fields and
+ * incorrect recipient-count types cannot silently drift between consumers.
  */
 
 /** Appendix B's state machine; the domain's send path imports it from here. */

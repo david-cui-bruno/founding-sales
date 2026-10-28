@@ -6,22 +6,10 @@ import { blockedActionKindSchema } from './reasonCodes.ts';
 import { routeEligibilitySchema } from './crm.ts';
 import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
 
-/**
- * The wire contract of Today: the list, one expanded firm, the snooze answer and the
- * pause release (specification 8.2; lanes g78 and g79).
- *
- * The Mac declared these in `apps/desktop/src/renderer/todayContract.ts`, and the list
- * a second time in `apps/desktop/src/main/todayBridge.ts`. They matched the routes, but
- * three copies of one shape is three places for the next field to be missed, and two
- * details were narrower than the server: a firm name is up to 300 characters
- * (`firmNameSchema` in `./crm.ts`) where the copies said 200, and a route's number is
- * E.164, not any short string. The vocabularies are declared here and the domain
- * imports them.
- *
- * The encrypted 24-hour cache keeps its own strict schema in
- * `apps/desktop/src/shared/contract.ts`: what may be written to disk is a retention
- * rule of the Mac's (5.3), not a property of the wire, and the Mac checks that every
- * list it parses here is one the cache accepts.
+/** Shared Today wire contracts. Firm names retain the CRM300-character bound and
+ * routes use E.164. The expanded Firm is a separate authorized read; list projections
+ * exclude conversation bodies and private notes. Strict legacy responses remain
+ * covered by frozen parser fixtures, not a native product or offline-cache promise.
  */
 
 /** 8.2's four lanes, in precedence order. */

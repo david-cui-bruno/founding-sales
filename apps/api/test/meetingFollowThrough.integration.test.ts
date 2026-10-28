@@ -1,92 +1,123 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll,beforeAll,describe,expect,it } from 'vitest';
-import type { MeetingFollowThroughView, MeetingFollowThroughViewV2 } from '@fss/contracts';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { meetingFollowThroughViewV2Schema } from '@fss/contracts';
 import { meetingDispatchFixture } from '@fss/domain/test/meetings/support/meetingDispatchFixture.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { runMeetingFollowThrough } from '@fss/domain/meetings/followThroughJobs.ts';
 import { dispatchOutboundMessage } from '@fss/domain/outbound/send.ts';
 import { saveMeetingNotes } from '@fss/domain/meetings/notes.ts';
-import { dispatch } from '../src/server.ts';
-import { createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture } from './support/authFixture.ts';
+import { dispatch, type ApiOptions } from '../src/server.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
-import { createAuthedClient } from '../../desktop/src/main/authedClient.ts';
-import { operationHandlers,answerOperation,type OperationHostDeps } from '../../desktop/src/main/operationHost.ts';
-describe('desktop meeting operations through API, scheduler and dispatch',()=>{
-  let f:Awaited<ReturnType<typeof meetingDispatchFixture>>,auth:AuthFixture;
-  beforeAll(async()=>{f=await meetingDispatchFixture();auth=await createAuthFixture();},180_000);
-  afterAll(async()=>{await auth?.stop();await f?.world.stop();});
-  it('round-trips four unpublished drafts through the desktop host with replay and legacy compatibility',async()=>{
-    const account=f.world.alpha.workspace.salesperson;
-    const user=(await f.db.query<{google_sub:string;email:string}>('SELECT google_sub,email FROM users WHERE id=$1',[account.userId])).rows[0]!;
-    const joined={...auth,db:f.db,hostedDomain:'example.test',deps:{...auth.deps,db:f.db,config:{...auth.deps.config,oidc:{...auth.deps.config.oidc,hostedDomain:'example.test'}}}};
-    const grant=await issueSessionFor(joined,{...auth.alpha,workspaceId:f.workspace,slug:f.world.alpha.workspace.slug},{googleSub:user.google_sub,email:user.email});
-    const api=createAuthedClient({baseUrl:'https://example.test',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:grant.accessToken,generation:1}),send:async(url,init)=>{
-      const address=new URL(url);return await dispatch({method:init.method,path:address.pathname,query:address.searchParams,headers:init.headers,body:init.body===undefined?undefined:JSON.parse(init.body) as unknown},{session:f.db,auth:joined.deps,supportedClientVersions:joined.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update'});
-    }});
-    const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
-    const read=await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId}) as {view:MeetingFollowThroughViewV2};
-    const before=(await f.db.query(`SELECT (SELECT count(*) FROM sequence_enrollments) AS enrollments,(SELECT count(*) FROM outbound_messages) AS outbound,(SELECT count(*) FROM follow_up_permissions) AS permissions`)).rows[0];
-    const input={meetingId:f.meetingId,expectedSourceHash:read.view.sourceHash,expectedNotesRevision:read.view.notesRevision,expectedPlanVersion:read.view.version,expectedUnpublishedRevision:0,commandId:randomUUID(),
-      messages:[{subject:'Fixture recap',body:'Known controlled note. Date {day}.'},{subject:'',body:''},{subject:'Question',body:'{their question}'},{subject:'Final fixture draft',body:''}]};
-    const saved=await answerOperation(handlers,'command','meetings.saveUnpublishedPlan',input) as {view:MeetingFollowThroughViewV2;reason:string|null};
-    expect(saved.reason).toBeNull();expect(saved.view.unpublishedPlan!.messages.map(m=>m.elapsedDays)).toEqual([0,3,7,14]);
-    expect(saved.view.unpublishedPlan!.messages.every(m=>m.held)).toBe(true);
-    expect(await answerOperation(handlers,'command','meetings.saveUnpublishedPlan',input)).toEqual(saved);
-    expect(await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId})).toEqual(saved);
-    const conflict=await answerOperation(handlers,'command','meetings.saveUnpublishedPlan',{...input,commandId:randomUUID()});
-    expect(conflict).toMatchObject({view:null,reason:'draft_changed'});
-    const legacy=await api.read(`/meetings/follow-through?meetingId=${f.meetingId}`,value=>value);
-    expect(legacy.ok).toBe(true);if(legacy.ok)expect(legacy.value).not.toHaveProperty('unpublishedPlan');
-    expect((await f.db.query(`SELECT (SELECT count(*) FROM sequence_enrollments) AS enrollments,(SELECT count(*) FROM outbound_messages) AS outbound,(SELECT count(*) FROM follow_up_permissions) AS permissions`)).rows[0]).toEqual(before);
+
+describe('meeting follow-through through API, scheduler and dispatch', () => {
+  let f: Awaited<ReturnType<typeof meetingDispatchFixture>>, auth: AuthFixture;
+  let options: ApiOptions, token: string;
+  beforeAll(async () => {
+    f = await meetingDispatchFixture();
+    auth = await createAuthFixture();
+    const account = f.world.alpha.workspace.salesperson;
+    const user = (await f.db.query<{ google_sub: string; email: string }>(
+      'SELECT google_sub,email FROM users WHERE id=$1', [account.userId],
+    )).rows[0]!;
+    const joined = { ...auth, db: f.db, hostedDomain: 'example.test', deps: { ...auth.deps, db: f.db,
+      config: { ...auth.deps.config, oidc: { ...auth.deps.config.oidc, hostedDomain: 'example.test' } } } };
+    token = (await issueSessionFor(joined, { ...auth.alpha, workspaceId: f.workspace, slug: f.world.alpha.workspace.slug },
+      { googleSub: user.google_sub, email: user.email })).accessToken;
+    options = { session: f.db, auth: joined.deps, supportedClientVersions: joined.deps.config.supportedClientVersions,
+      sendingEnabled: false, upgradeUrl: 'https://example.test/update' };
+  }, 180_000);
+  afterAll(async () => { await auth?.stop(); await f?.world.stop(); });
+
+  async function request(method: 'GET' | 'POST', path: string, body?: Readonly<Record<string, unknown>>) {
+    const address = new URL(path, 'https://example.test');
+    return await dispatch({ method, path: address.pathname, query: address.searchParams,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : { ...body, clientVersion: CURRENT_CLIENT_VERSION },
+    }, options);
+  }
+  async function read() {
+    const answer = await request('GET', `/meetings/follow-through?meetingId=${f.meetingId}&version=2`);
+    expect(answer.status).toBe(200);
+    return meetingFollowThroughViewV2Schema.parse(answer.body);
+  }
+  async function save(path: string, input: Readonly<Record<string, unknown>>) {
+    const answer = await request('POST', `${path}?version=2`, input);
+    expect(answer.status).toBe(200);
+    const envelope = answer.body as { result: unknown; replayed: boolean };
+    return { view: meetingFollowThroughViewV2Schema.parse(envelope.result), replayed: envelope.replayed };
+  }
+
+  it('round-trips four held unpublished drafts with replay, conflicts and legacy compatibility', async () => {
+    const current = await read();
+    const counts = async () => (await f.db.query(`SELECT (SELECT count(*) FROM sequence_enrollments) AS enrollments,
+      (SELECT count(*) FROM outbound_messages) AS outbound,(SELECT count(*) FROM follow_up_permissions) AS permissions`)).rows[0];
+    const before = await counts();
+    const input = { meetingId: f.meetingId, expectedSourceHash: current.sourceHash,
+      expectedNotesRevision: current.notesRevision, expectedPlanVersion: current.version, expectedUnpublishedRevision: 0, commandId: randomUUID(),
+      messages: [{ subject: 'Fixture recap', body: 'Known controlled note. Date {day}.' }, { subject: '', body: '' },
+        { subject: 'Question', body: '{their question}' }, { subject: 'Final fixture draft', body: '' }] };
+    const saved = await save('/meetings/unpublished-plan', input);
+    expect(saved.view.unpublishedPlan!.messages.map(m => m.elapsedDays)).toEqual([0, 3, 7, 14]);
+    expect(saved.view.unpublishedPlan!.messages.every(m => m.held)).toBe(true);
+    expect(await save('/meetings/unpublished-plan', input)).toEqual({ ...saved, replayed: true });
+    expect(await read()).toEqual(saved.view);
+    const conflict = await request('POST', '/meetings/unpublished-plan?version=2', { ...input, commandId: randomUUID() });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body).toMatchObject({ reason: 'draft_changed' });
+    const legacy = await request('GET', `/meetings/follow-through?meetingId=${f.meetingId}`);
+    expect(legacy.status).toBe(200);
+    expect(legacy.body).not.toHaveProperty('unpublishedPlan');
+    expect(await counts()).toEqual(before);
   });
-  it('persists the edited draft but makes zero provider calls while paused',async()=>{
-    const account=f.world.alpha.workspace.salesperson;
-    const user=(await f.db.query<{google_sub:string;email:string}>('SELECT google_sub,email FROM users WHERE id=$1',[account.userId])).rows[0]!;
-    const joined={...auth,db:f.db,hostedDomain:'example.test',deps:{...auth.deps,db:f.db,config:{...auth.deps.config,oidc:{...auth.deps.config.oidc,hostedDomain:'example.test'}}}};
-    const grant=await issueSessionFor(joined,{...auth.alpha,workspaceId:f.workspace,slug:f.world.alpha.workspace.slug},{googleSub:user.google_sub,email:user.email});
-    const api=createAuthedClient({baseUrl:'https://example.test',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:grant.accessToken,generation:1}),send:async(url,init)=>{
-      const address=new URL(url);return await dispatch({method:init.method,path:address.pathname,query:address.searchParams,headers:init.headers,body:init.body===undefined?undefined:JSON.parse(init.body) as unknown},{session:f.db,auth:joined.deps,supportedClientVersions:joined.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update'});
-    }});
-    const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
-    const fence=await f.prepare();
-    await f.db.query('UPDATE sending_domains SET automated_sending_enabled=false,automated_sending_enabled_at=NULL WHERE workspace_id=$1',[f.workspace]);
-    const read=await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId}) as {view:MeetingFollowThroughView};
-    expect(read.view.sendingPaused).toBe(true);
-    const begun=await answerOperation(handlers,'command','meetings.editRecap',{planId:read.view.planId,expectedPlanVersion:read.view.version,expectedDraftVersion:read.view.currentDraft!.version,action:'begin_edit',commandId:randomUUID()}) as {view:MeetingFollowThroughView};
+
+  it('persists the edited recap and makes zero provider calls while paused', async () => {
+    const fence = await f.prepare();
+    await f.db.query('UPDATE sending_domains SET automated_sending_enabled=false,automated_sending_enabled_at=NULL WHERE workspace_id=$1', [f.workspace]);
+    const current = await read();
+    expect(current.sendingPaused).toBe(true);
+    const begun = await save('/meetings/recap/edit', { planId: current.planId, expectedPlanVersion: current.version,
+      expectedDraftVersion: current.currentDraft!.version, action: 'begin_edit', commandId: randomUUID() });
     expect(begun.view.currentDraft!.state).toBe('editing');
-    const body='Updated recap from the desktop.\n\nSigned off';
-    const saved=await answerOperation(handlers,'command','meetings.editRecap',{planId:begun.view.planId,expectedPlanVersion:begun.view.version,expectedDraftVersion:begun.view.currentDraft!.version,action:'save',subject:'Meeting follow-up',body,commandId:randomUUID()}) as {view:MeetingFollowThroughView};
+    const body = 'Updated controlled recap.\n\nSigned off';
+    const saved = await save('/meetings/recap/edit', { planId: begun.view.planId, expectedPlanVersion: begun.view.version,
+      expectedDraftVersion: begun.view.currentDraft!.version, action: 'save', subject: 'Meeting follow-up', body, commandId: randomUUID() });
     expect(saved.view.currentDraft!.body).toBe(body);
-    await withTransaction(f.db,()=>runMeetingFollowThrough(f.context,{meetingId:f.meetingId,at:f.at}));
-    const gmail=f.world.clientWith(f.world.alpha,{});
-    await dispatchOutboundMessage(f.context,f.world.sendDeps(f.world.alpha,{gmail,now:()=>new Date(f.at)}),{outboundMessageId:fence.id});
+    await withTransaction(f.db, () => runMeetingFollowThrough(f.context, { meetingId: f.meetingId, at: f.at }));
+    const gmail = f.world.clientWith(f.world.alpha, {});
+    await dispatchOutboundMessage(f.context, f.world.sendDeps(f.world.alpha, { gmail, now: () => new Date(f.at) }), { outboundMessageId: fence.id });
     expect(gmail.sends).toHaveLength(0);
-    expect(await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId})).toMatchObject({view:{sendingPaused:true,currentDraft:{body}}});
+    expect(await read()).toMatchObject({ sendingPaused: true, currentDraft: { body } });
   });
-  it('refuses old notes, accepts explicit current binding and erases readback after deletion',async()=>{
-    const account=f.world.alpha.workspace.salesperson;
-    const user=(await f.db.query<{google_sub:string;email:string}>('SELECT google_sub,email FROM users WHERE id=$1',[account.userId])).rows[0]!;
-    const joined={...auth,db:f.db,hostedDomain:'example.test',deps:{...auth.deps,db:f.db,config:{...auth.deps.config,oidc:{...auth.deps.config.oidc,hostedDomain:'example.test'}}}};
-    const grant=await issueSessionFor(joined,{...auth.alpha,workspaceId:f.workspace,slug:f.world.alpha.workspace.slug},{googleSub:user.google_sub,email:user.email});
-    const api=createAuthedClient({baseUrl:'https://example.test',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:grant.accessToken,generation:1}),send:async(url,init)=>{
-      const address=new URL(url);return await dispatch({method:init.method,path:address.pathname,query:address.searchParams,headers:init.headers,body:init.body===undefined?undefined:JSON.parse(init.body) as unknown},{session:f.db,auth:joined.deps,supportedClientVersions:joined.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update'});
-    }});
-    const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
-    const read=await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId}) as {view:MeetingFollowThroughViewV2};
-    const input={meetingId:f.meetingId,commandId:randomUUID(),expectedSourceHash:read.view.draftSource!.sourceHash,expectedNotesRevision:read.view.draftSource!.notesRevision,expectedPlanVersion:read.view.version,expectedUnpublishedRevision:read.view.unpublishedPlan!.revision,messages:[{subject:'Fixture correction',body:'Typed human fixture text {day}'},{subject:'',body:''},{subject:'',body:''},{subject:'',body:''}]};
-    const notes=await withTransaction(f.db,()=>saveMeetingNotes(f.admin,{meetingId:f.meetingId,expectedRevision:input.expectedNotesRevision,debrief:'Corrected controlled fixture notes',sufficient:true,speakerMappings:[],itemOverrides:[]}));
+
+  it('refuses stale notes, accepts an explicit current binding and prevents replay resurrection after deletion', async () => {
+    const current = await read();
+    const input = { meetingId: f.meetingId, commandId: randomUUID(), expectedSourceHash: current.draftSource!.sourceHash,
+      expectedNotesRevision: current.draftSource!.notesRevision, expectedPlanVersion: current.version,
+      expectedUnpublishedRevision: current.unpublishedPlan!.revision,
+      messages: [{ subject: 'Fixture correction', body: 'Typed human fixture text {day}' }, { subject: '', body: '' },
+        { subject: '', body: '' }, { subject: '', body: '' }] };
+    const notes = await withTransaction(f.db, () => saveMeetingNotes(f.admin, { meetingId: f.meetingId,
+      expectedRevision: input.expectedNotesRevision, debrief: 'Corrected controlled fixture notes', sufficient: true,
+      speakerMappings: [], itemOverrides: [] }));
     expect(notes.ok).toBe(true);
-    expect(await answerOperation(handlers,'command','meetings.saveUnpublishedPlan',input)).toMatchObject({view:null,reason:'source_changed'});
-    const fresh=await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId}) as {view:MeetingFollowThroughViewV2};
-    expect(fresh.view.sourceHash).toBe(read.view.sourceHash);
-    const rebased={...input,commandId:randomUUID(),expectedSourceHash:fresh.view.draftSource!.sourceHash,expectedNotesRevision:fresh.view.draftSource!.notesRevision};
-    const saved=await answerOperation(handlers,'command','meetings.saveUnpublishedPlan',rebased) as {view:MeetingFollowThroughViewV2};
+    const stale = await request('POST', '/meetings/unpublished-plan?version=2', input);
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ reason: 'source_changed' });
+    const fresh = await read();
+    expect(fresh.sourceHash).toBe(current.sourceHash);
+    const rebased = { ...input, commandId: randomUUID(), expectedSourceHash: fresh.draftSource!.sourceHash,
+      expectedNotesRevision: fresh.draftSource!.notesRevision };
+    const saved = await save('/meetings/unpublished-plan', rebased);
     expect(saved.view.unpublishedPlan!.messages[0].body).toBe(input.messages[0]!.body);
-    expect(saved.view.unpublishedPlan!.messages.every(message=>message.held)).toBe(true);
-    expect(await answerOperation(handlers,'command','meetings.saveUnpublishedPlan',rebased)).toEqual(saved);
-    await f.db.query('DELETE FROM meetings WHERE workspace_id=$1 AND id=$2',[f.workspace,f.meetingId]);
-    expect(await answerOperation(handlers,'command','meetings.saveUnpublishedPlan',rebased)).toMatchObject({view:null,reason:'not_found'});
-    expect(await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId})).toMatchObject({view:null,reason:'not_found'});
-    expect((await f.db.query('SELECT id FROM meeting_follow_through WHERE meeting_id=$1',[f.meetingId])).rows).toHaveLength(0);
+    expect(saved.view.unpublishedPlan!.messages.every(message => message.held)).toBe(true);
+    expect(await save('/meetings/unpublished-plan', rebased)).toEqual({ ...saved, replayed: true });
+    await f.db.query('DELETE FROM meetings WHERE workspace_id=$1 AND id=$2', [f.workspace, f.meetingId]);
+    for (const answer of [await request('POST', '/meetings/unpublished-plan?version=2', rebased),
+      await request('GET', `/meetings/follow-through?meetingId=${f.meetingId}&version=2`)]) {
+      expect(answer.status).toBe(404);
+      expect(answer.body).toEqual({ error: 'not_found' });
+    }
+    expect((await f.db.query('SELECT id FROM meeting_follow_through WHERE meeting_id=$1', [f.meetingId])).rows).toHaveLength(0);
   });
 });

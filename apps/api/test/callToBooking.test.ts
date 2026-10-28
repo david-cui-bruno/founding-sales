@@ -1,3 +1,4 @@
+import { publishTestRegistrySnapshot } from '@fss/domain/test/support/nationalRegistry.ts';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
@@ -122,6 +123,11 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
 
   beforeAll(async () => {
     fixture = await createAuthFixture();
+    const registryAt = (await fixture.db.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0]!.at.toISOString();
+    await publishTestRegistrySnapshot(fixture.db, fixture.alpha.workspaceId, {
+      downloadedAt: registryAt, publishedAt: registryAt,
+      e164s: [{"e164": "+14015550187", "result": "clear"}],
+    });
     server = await startIntegrationServer(fixture, { callerIdE164: CALLER_ID });
     adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
     salespersonToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;

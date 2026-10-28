@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Local-first browser adapter over the existing Callie API and shared React presentation.",
+  "description": "Callie web application over the shared domain and authenticated API.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --config vitest.config.ts",
@@ -17,5 +17,15 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "jsdom": "30.1.2",
+    "playwright": "1.64.0"
   }
 }

@@ -1,3 +1,4 @@
+import { readExecutionClearance, readTicketExecutionClearance } from './executionClearance.ts';
 import {reserveOutreachCall,settleOutreachAction} from '../outreach/touchReservations.ts';
 import {lockSendGateForDispatch} from '../policy/sendGate.ts';
 import type { DialRefusalCode } from '@fss/contracts';
@@ -23,7 +24,7 @@ import { authorizeDial, type AuthorizeDialInput, type DialEvidence } from './aut
  *    different device, say, or after a receipt was archived.
  *
  * Consumption locks the ticket row, re-runs `authorizeDial` (audit S10),
- * then marks it consumed with a conditional `UPDATE`. Two Macs racing the same ticket
+ * then marks it consumed with a conditional `UPDATE`. Two clients racing the same ticket
  * serialize on the row lock: the second reads it consumed and is told
  * `already_consumed`. The conditional update stays as the second guard.
  */
@@ -78,7 +79,14 @@ export async function authorizeDialCommand(
   const decision = await authorizeDial(context, { ...input, at });
   if (!decision.allowed) return refuse(decision.reason);
 
-  const issued = await insertTicket(context, decision.evidence, input);
+  const clearance = await readExecutionClearance(context, decision.evidence.e164);
+  if (!clearance.ok) return refuse(clearance.reason);
+  await context.db.query('SAVEPOINT authorize_dial_execution');
+  const undo = async (reason: DialRefusalCode): Promise<DialResult<IssuedDialTicket>> => {
+    await context.db.query('ROLLBACK TO SAVEPOINT authorize_dial_execution');
+    return refuse(reason);
+  };
+  const issued = await insertTicket(context, decision.evidence, input, clearance.freshUntil);
   if (issued === null) return refuse('already_consumed');
   const touch=await reserveOutreachCall(context,{firmId:issued.firmId,contactId:issued.contactId,ticketId:issued.ticketId,at});
   if(!touch.ok){
@@ -97,6 +105,8 @@ export async function authorizeDialCommand(
       postureId: decision.evidence.postureId,
     },
   });
+  const final = await readTicketExecutionClearance(context, issued.ticketId);
+  if (!final.ok) return await undo(final.reason);
   return accept(issued);
 }
 
@@ -121,6 +131,7 @@ async function insertTicket(
   context: RepositoryContext,
   evidence: DialEvidence,
   input: AuthorizeDialCommandInput,
+  freshUntil: string,
 ): Promise<IssuedDialTicket | null> {
   // `issued_at` and `expires_at` are the database's clock and the database's
   // arithmetic. A client that could send either could send itself an hour.
@@ -130,7 +141,7 @@ async function insertTicket(
         posture_id, posture_revision, calling_identity_id, actor_user_id, device_id,
         assigned_user_id, e164, firm_time_zone, issued_at, expires_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-             now(), now() + make_interval(secs => $15))
+             now(), LEAST(now() + make_interval(secs => $15), $16::timestamptz))
      ON CONFLICT ON CONSTRAINT dial_tickets_one_per_command DO NOTHING
      RETURNING ${TICKET_COLUMNS}`,
     [
@@ -149,6 +160,7 @@ async function insertTicket(
       evidence.e164,
       evidence.firmTimeZone,
       DIAL_TICKET_SECONDS,
+      freshUntil,
     ],
   );
   const row = rows[0];
@@ -196,7 +208,7 @@ interface ConsumableTicketRow {
  * application permits requesting a new authorization but never reusing the ticket."
  * So there is no un-consume and no retry.
  *
- * The device is checked because the ticket recorded one. A ticket minted for one Mac
+ * The device is checked because the ticket recorded one. A ticket minted for one device
  * and consumed by another is either a bug or a stolen session, and in both cases the
  * answer is no.
  *
@@ -225,11 +237,11 @@ export async function consumeDialTicket(
   await lockSendGateForDispatch(context);
   const scope=(await context.db.query<{firm_id:string}>('SELECT firm_id FROM dial_tickets WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.ticketId])).rows[0];
   if(scope)await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,scope.firm_id]);
-  // Locked, so two Macs racing the same ticket serialize here: the second waits,
+  // Locked, so two clients racing the same ticket serialize here: the second waits,
   // then reads it consumed.
   const { rows: found } = await context.db.query<ConsumableTicketRow>(
     `SELECT id, device_id, firm_id, contact_id, phone_route_id, route_version, calling_identity_id,
-            consumed_at, (expires_at <= now()) AS expired
+            consumed_at, (expires_at <= clock_timestamp()) AS expired
        FROM dial_tickets
       WHERE workspace_id = $1 AND id = $2
       FOR UPDATE`,
@@ -252,19 +264,28 @@ export async function consumeDialTicket(
   });
   if (!decision.allowed) return refuse(decision.reason);
 
+  const clearance = await readExecutionClearance(context, decision.evidence.e164);
+  if (!clearance.ok) return refuse(clearance.reason);
+  await context.db.query('SAVEPOINT consume_dial_execution');
+  const undo = async (reason: DialRefusalCode): Promise<DialResult<ConsumedTicket>> => {
+    await context.db.query('ROLLBACK TO SAVEPOINT consume_dial_execution');
+    return refuse(reason);
+  };
   const touch=await reserveOutreachCall(context,{firmId:ticket.firm_id,contactId:ticket.contact_id,ticketId:input.ticketId,at});
-  if(!touch.ok)return refuse('outreach_touch_unavailable');
+  if(!touch.ok)return await undo('outreach_touch_unavailable');
   const { rows } = await context.db.query<{ id: string; e164: string; consumed_at: Date }>(
     `UPDATE dial_tickets
         SET consumed_at = now()
       WHERE workspace_id = $1 AND id = $2 AND device_id = $3
-        AND consumed_at IS NULL AND expires_at > now()
+        AND consumed_at IS NULL AND expires_at > clock_timestamp()
       RETURNING id, e164, consumed_at`,
     [context.scope.workspaceId, input.ticketId, input.deviceId],
   );
   const row = rows[0];
-  if (row === undefined) return refuse('ticket_expired');
+  if (row === undefined) return await undo('ticket_expired');
   await settleOutreachAction(context,input.ticketId,'phone','accepted');
+  const final = await readTicketExecutionClearance(context, input.ticketId);
+  if (!final.ok) return await undo(final.reason);
   // The number dialed is the route's number now, which the version check has just
   // proved is the number the ticket recorded.
   return accept({

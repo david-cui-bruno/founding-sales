@@ -43,21 +43,19 @@ RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
       --workspace @fss/contracts \
  && npm cache clean --force
 
-# Locked build-only toolchain and desktop presentation imports, never runtime tools.
+# Locked browser build toolchain, never runtime tools.
 FROM --platform=linux/arm64 ${NODE_IMAGE} AS browser-build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/
-COPY apps/desktop/package.json apps/desktop/
 COPY packages/contracts/package.json packages/contracts/
 RUN npm ci --ignore-scripts --include=dev --no-audit --no-fund \
-      --include-workspace-root --workspace @fss/web --workspace @fss/desktop --workspace @fss/contracts
+      --include-workspace-root --workspace @fss/web --workspace @fss/contracts
 COPY tsconfig.base.json ./
 COPY apps/web/tsconfig.json apps/web/
 COPY apps/web/src/client apps/web/src/client
 COPY apps/web/src/shared apps/web/src/shared
 COPY apps/web/src/server/assets.ts apps/web/src/server/publicAssets.ts apps/web/src/server/
-COPY apps/desktop/src/renderer apps/desktop/src/renderer
 COPY packages/contracts/src packages/contracts/src
 COPY scripts/buildBrowserAssets.mjs scripts/
 RUN node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/buildBrowserAssets.mjs /app/browser-public

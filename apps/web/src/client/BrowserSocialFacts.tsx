@@ -1,7 +1,7 @@
 import {useCallback,useEffect,useMemo,useRef,useState,type JSX} from 'react';
 import {z} from 'zod';
 import {answerBlockSchema,saveAnswerBlockCommandSchema,answerBlockApprovalCommandSchema,uuid,type AnswerBlock,type OutreachMutation,type SaveAnswerBlock} from '@fss/contracts';
-import {ApprovedFactsEditor} from '../../../desktop/src/renderer/outreach/ApprovedFactsEditor.tsx';
+import {ApprovedFactsEditor} from './ApprovedFactsEditor.tsx';
 import type {BrowserClient} from './BrowserClient.ts';
 import {BrowserSocialFactsCustody,SOCIAL_FACTS_PENDING_PREFIX} from './BrowserSocialFactsCustody.ts';
 const listSchema=z.strictObject({blocks:z.array(answerBlockSchema).max(50)});
@@ -70,7 +70,7 @@ export function BrowserSocialFacts({client,onFactsChanged}:{client:BrowserClient
   {afterId?<button type="button" disabled={busy} onClick={()=>{void read(true);}}>Read more current facts</button>:null}
   <p role="status">{notice}</p>
   {held?<p role="alert">A fact write is pending or UNKNOWN, or its custody is unavailable. New fact writes are held. Reading facts does not clear custody or prove an ambiguous write absent. No resend control is available.</p>:null}
-  <ApprovedFactsEditor loadPublicSources={null} blocks={blocks} draft={draft} blocked={busy||held||!loaded} refreshRequired={refresh||!loaded}
+  <ApprovedFactsEditor blocks={blocks} draft={draft} blocked={busy||held||!loaded} refreshRequired={refresh||!loaded}
    onChange={setDraft} onBegin={value=>{setDraft(value);setRefresh(false);}}
    onAdopt={version=>{setDraft(value=>({...value,expectedVersion:version}));setRefresh(false);}}
    onMutate={input=>{void mutate(input);}}/>

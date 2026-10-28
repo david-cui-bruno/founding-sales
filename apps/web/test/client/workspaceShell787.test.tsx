@@ -9,7 +9,7 @@ import { CAMPAIGN_PENDING_KEY } from '../../src/client/CampaignPending.ts';
 import { REPLY_PENDING_KEY } from '../../src/client/ReplyAttempt.ts';
 import { PRIVATE_DRAFT_PENDING_KEY } from '../../src/client/PrivateDraftCustody.ts';
 import { VOICE_PENDING_KEY } from '../../src/client/VoicePreferenceCustody.ts';
-import { CALLING_PENDING_KEY } from '../../src/client/CallingPending.ts';
+import { CALLING_PENDING_KEY, CallingCustody } from '../../src/client/CallingPending.ts';
 import { CALLING_FOLLOW_UP_PENDING_KEY } from '../../src/client/CallingFollowUpPending.ts';
 import { CALLING_EXECUTION_KEY } from '../../src/client/CallingExecutionPending.ts';
 
@@ -187,7 +187,7 @@ describe('issue787 mounted real-client shell', () => {
     await screen.findByText(/Current view unavailable or refused/u);
     expect(screen.queryByText(card.firmName)).toBeNull();
   });
-  it.each([401, 403, 409])('clears all mounted private data on %s, including inactive feature custody', async code => {
+  it.each([401, 403, 409])('clears private views on %s and fences malformed inactive Calling custody', async code => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
     localStorage.setItem(PRIVATE_DRAFT_PENDING_KEY, 'inactive-ids-only'); localStorage.setItem(VOICE_PENDING_KEY, 'inactive-ids-only');
     sessionStorage.setItem(CAMPAIGN_PENDING_KEY, 'inactive-ids-only'); sessionStorage.setItem(REPLY_PENDING_KEY, 'inactive-ids-only');
@@ -197,7 +197,10 @@ describe('issue787 mounted real-client shell', () => {
     expect(screen.queryByText(card.firmName)).toBeNull();
     expect(localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY)).toBeNull(); expect(localStorage.getItem(VOICE_PENDING_KEY)).toBeNull();
     expect(sessionStorage.getItem(CAMPAIGN_PENDING_KEY)).toBeNull(); expect(sessionStorage.getItem(REPLY_PENDING_KEY)).toBeNull();
-    expect(localStorage.getItem(CALLING_PENDING_KEY)).toBeNull(); expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
+    // Malformed shared custody stays fail-closed instead of erasing uncertain writes.
+    expect(localStorage.getItem(CALLING_PENDING_KEY)).toBe('inactive-ids-only');
+    expect(new CallingCustody(s.client).all()).toEqual([]);
+    expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBeNull();
   });
   it.each([401, 403, 409])('clears valid offscreen execution custody on %s without dispatch or replay', async code => {
     const prior = Object.getOwnPropertyDescriptor(navigator, 'locks');

@@ -8,7 +8,7 @@
 - [Feature map](../../features/README.md) owns browser/desktop user journeys and verification navigation. [Processes](../processes.md) locates API/worker composition and registered work.
 - [Release invariants](../release.md) explains image/record binding, migration-auth/drain/stopped writers, PITR, unknown-write handling, smokes/readback and recovery constraints.
 - [Restore](restore.md) is the separately authorized data-recovery procedure, not an ordinary deploy/rollback shortcut. A restore potentially loses writes and requires owner approval.
-- [Install](../install.md) covers the retained signed desktop path. The browser is primary; the desktop is not another policy engine.
+- [Retained artifacts](../../operations/retained-client-artifacts.md) protects historical signed restore objects; the web app is the sole product.
 
 Production has API and worker services, private PostgreSQL and separately bound migration/operations tasks. Observe actual current task definitions, counts, images, schema and database host through the approved read path before planning. A remembered ARN or schema is not current evidence. One-off work must retain exact task identity and reconcile its outcome before retrying.
 

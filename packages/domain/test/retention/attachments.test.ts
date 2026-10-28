@@ -174,7 +174,7 @@ describe('no code path stores attachment bytes', () => {
     // this lane's own `POST /attachments/open` is a path in *this* API and matching it
     // would make the assertion about a string rather than about a request.
     const offenders: string[] = [];
-    for (const root of ['packages/domain', 'packages/contracts', 'apps/api/src', 'apps/worker/src', 'apps/desktop/src']) {
+    for (const root of ['packages/domain', 'packages/contracts', 'apps/api/src', 'apps/worker/src', 'apps/web/src']) {
       for (const file of typescriptFiles(join(REPOSITORY_ROOT, root))) {
         if (file.includes('/test/')) continue;
         const text = readFileSync(file, 'utf8');
