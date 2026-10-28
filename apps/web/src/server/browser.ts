@@ -17,7 +17,9 @@ import { campaignOpeningBrowserResult } from './campaignOpeningBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
 import {callingSetupBrowserResult} from './callingSetupBoundary.ts';
+import {callingPreparationBrowserResult} from './callingPreparationBoundary.ts';
 import { callingExecutionBrowserResult } from './callingExecutionBoundary.ts';
+import {preparedCallingPublication} from './preparedCallingPublication.ts';
 import { callingReadinessAccess } from './callingReadinessAccess.ts';
 import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
 import { PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS, prospectPhoneDiscoveryBrowserResult } from './prospectPhoneDiscoveryBoundary.ts';
@@ -231,6 +233,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
       if (!fresh.authenticated || revision(fresh.principal) !== revision(principal)) throw new Refusal(401);
     }
   }
+  const preparedPublication=result.status===200?await preparedCallingPublication(context,principal,path,result.body,token):()=>true;
+  if(!preparedPublication())throw new Refusal(409);
   if (isSocialFactsBrowserPath(path)) {
     const fresh = await authenticate(context.auth, `Bearer ${token}`);
     if (!fresh.authenticated || fresh.principal.role !== 'admin' || revision(fresh.principal) !== revision(principal)) throw new Refusal(401);
@@ -249,6 +253,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (calling !== null) return response(calling.status, calling.body, cookies);
   const setup = callingSetupBrowserResult(path, result.status, result.body);
   if (setup !== null) return response(setup.status, setup.body, cookies);
+  const preparation=callingPreparationBrowserResult(path,result.status,result.body);
+  if(preparation!==null)return response(preparation.status,preparation.body,cookies);
   const execution = callingExecutionBrowserResult(path, result.status, result.body);
   if (execution !== null) return response(execution.status, execution.body, cookies);
   const qualification = qualificationBrowserResult(path, result.status, result.body);

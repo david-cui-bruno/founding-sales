@@ -1,3 +1,4 @@
+import {callingPreparationDelay,expireCallingCompany} from './CallingPreparationLease.ts';
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { firmListResponseSchema, type FirmIdentityDto } from '@fss/contracts';
 import type { BrowserClient } from './BrowserClient.ts';
@@ -22,8 +23,8 @@ export function CallingRecordedFirms({ client, disabled, onSelect }: {
       setBusy(false); setNotice('Sign in to read recorded companies.');
       return () => { mounted = false; };
     }
-    void client.request('/firms', firmListResponseSchema, undefined, guard).then(answer => {
-      if (current()) { setFirms(answer.firms.filter(firm => firm.status === 'active')); setNotice(''); }
+    void client.request('/firms?include=callingPreparation', firmListResponseSchema, undefined, guard).then(answer => {
+      if (current()) { setFirms(answer.firms.filter(firm => firm.status === 'active').map(firm=>expireCallingCompany(firm))); setNotice(''); }
     }, () => {
       if (current()) setNotice('Recorded companies are unavailable. Refresh this list to try again.');
     }).finally(() => { if (current()) setBusy(false); });
@@ -33,6 +34,7 @@ export function CallingRecordedFirms({ client, disabled, onSelect }: {
     return () => { mounted = false; unsubscribe(); };
   }, [client, reload]);
 
+  useEffect(()=>{const delay=callingPreparationDelay(firms);if(delay===null)return;const timer=setTimeout(()=>setFirms(rows=>rows.map(f=>expireCallingCompany(f))),Math.min(delay,2_147_483_647));return()=>clearTimeout(timer);},[firms]);
   const query = filter.trim().toLocaleLowerCase();
   const matches = firms.filter(firm => [firm.name, firm.locality, firm.regionCode, firm.website].some(value => value?.toLocaleLowerCase().includes(query)));
   const select = (firm: FirmIdentityDto): void => {

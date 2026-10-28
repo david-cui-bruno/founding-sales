@@ -5,6 +5,7 @@ import {advanceVerifiedFirm} from '@fss/domain/sourcing/verifiedFirmPipeline.ts'
 import {advanceAutomaticResearchFirm} from '@fss/domain/sourcing/automaticResearch.ts';
 import {verifiedFirmOwner,VERIFIED_FIRM_POLICY_VERSION,IDENTITY_REVIEW_REASONS} from '@fss/domain/sourcing/verifiedFirmPolicy.ts';
 import {lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
+import {lockDiscoveryReviewSources} from '@fss/domain/sourcing/discoveryReviewVisibility.ts';
 import {lockTodayForFirmChange} from '@fss/domain/today/build.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import type {JobHandler} from '@fss/domain/jobs/handlerRegistry.ts';
@@ -22,6 +23,7 @@ export function sourcingQualificationHandler(deps:{pageFetch:PageFetchProvider;e
   const ctx=repositoryContext(input.scope,input.session);
   await runQualification(ctx,{runId},deps);
   await withTransaction(input.session,async()=>{
+   await lockDiscoveryReviewSources(ctx);
    await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
    // Acquire campaign -> canonical Firm -> candidate/run before the legacy
    // owners lock candidate rows. Their revision refresh is published before admission.
@@ -43,6 +45,7 @@ export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
   // batches from taking the same workspace gates in opposite orders.
   for(const workspace of [...workspaces].sort((a,b)=>a.id.localeCompare(b.id))){
    const ctx=repositoryContext(workspaceScope(workspace.id,{kind:'system',component:'scheduler'}),session);
+   await lockDiscoveryReviewSources(ctx);
    await lockEmailCampaignAdmission(ctx);
    await session.query('INSERT INTO sourcing_discovery_settings(workspace_id,qualification_last_pass_at) VALUES($1,$2) ON CONFLICT(workspace_id) DO UPDATE SET qualification_last_pass_at=$2',[workspace.id,now]);
    if(!enabled){await expireQualificationsInTransaction(ctx);continue;}

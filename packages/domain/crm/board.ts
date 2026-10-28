@@ -5,6 +5,7 @@ import { listPipelineStages, ambiguousFirmOpportunities } from './pipeline.ts';
 import type { FirmRow, PipelineStageRow } from './types.ts';
 import type { MeetingState, StageSuggestion } from '@fss/contracts';
 import { readDemoBookedSuggestions, readDemoBookedSuggestionsByOpportunity } from '../meetings/stageSuggestion.ts';
+import {readPreparedProjections,projectPreparedFirm} from '../calling/preparationProjection.ts';
 
 /**
  * The pipeline board, as one read (specification 8.1, Appendix F, Appendix G 7).
@@ -258,7 +259,9 @@ async function readBoard(
   const pluralCards: Record<string, PluralPipelineBoardDto['cards'][string]> = {};
   const unplacedFirms: FirmIdentityDto[] = [];
 
-  for (const row of rows) {
+  const prepared=await readPreparedProjections(context,rows.map(row=>row.id));
+  for (const original of rows) {
+    const row=projectPreparedFirm(original,prepared);
     const shown =
       row.stage_key !== null &&
       (row.opportunity_status === 'open' || row.opportunity_status === 'won' || (row.opportunity_status === 'lost' && includeLost));

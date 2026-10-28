@@ -1,7 +1,9 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { DialExecutionRefused, readTicketExecutionClearance, type ExecutionClearance } from '../dial/executionClearance.ts';
+import {lockPreparedCallingCapability} from '../calling/preparationLifecycle.ts';
 
 export async function readCallSessionClearance(context: RepositoryContext, sessionId: string): Promise<ExecutionClearance> {
+  await lockPreparedCallingCapability(context.db,context.scope.workspaceId,'session',sessionId);
   const session = (await context.db.query<{ ticket_id: string; expires_at: Date }>(
     'SELECT ticket_id,expires_at FROM call_sessions WHERE workspace_id=$1 AND id=$2 FOR SHARE',
     [context.scope.workspaceId, sessionId],

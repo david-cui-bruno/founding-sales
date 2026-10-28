@@ -1,5 +1,6 @@
 import {mergeSourcingAttribution} from '../sourcing/attribution.ts';
 import {retainedFirmOnly} from '../sourcing/retainedAcquisition.ts';
+import {preparedCallingFirm} from '../calling/preparationLifecycle.ts';
 import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
@@ -112,6 +113,7 @@ export async function mergeFirms(
   context: RepositoryContext,
   input: MergeFirmsInput,
 ): Promise<CrmResult<MergeOutcome>> {
+  if(await preparedCallingFirm(context,input.sourceFirmId)||await preparedCallingFirm(context,input.targetFirmId))return refuse('invalid_input');
   if (input.sourceFirmId === input.targetFirmId) return refuse('merge_same_record');
 
   // The send gate, EXCLUSIVE, before any firm row (`policy/sendGate.ts`: the gate first,

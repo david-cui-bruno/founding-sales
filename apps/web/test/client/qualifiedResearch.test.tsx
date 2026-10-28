@@ -29,7 +29,7 @@ function setup() {
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json(session);
     if (refuse) return json({}, 401);
-    if (url === '/browser/api/today/actions/v4') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-22T12:00:00.000Z', actions: [...(created ? [action] : []), { actionId: 'legacy', kind: 'reply', subject: 'Legacy action', reason: 'reply', dueAt: '2026-10-22T12:00:00.000Z', state: 'open', target: { kind: 'reply', firmId: id, messageId: id } }], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
+    if (url === '/browser/api/today/actions/v4?include=callingPreparation') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-22T12:00:00.000Z', actions: [...(created ? [action] : []), { actionId: 'legacy', kind: 'reply', subject: 'Legacy action', reason: 'reply', dueAt: '2026-10-22T12:00:00.000Z', state: 'open', target: { kind: 'reply', firmId: id, messageId: id } }], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     if (String(url).startsWith('/browser/api/today?')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [] });
     if (url === '/browser/api/sourcing/research-firms/list') {
       const { firmId: _firmId, ownerUserId: _owner, nextStep: _step, question: _question, ...candidate } = proof;

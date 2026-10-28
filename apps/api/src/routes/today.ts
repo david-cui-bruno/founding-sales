@@ -78,7 +78,7 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
 
   if(request.path==='/today/actions/v4'){
     if(request.method!=='GET')return {status:405,body:redactError('method_not_allowed')};
-    const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV4(context,{now:await databaseNow(context),includeFirmAssociations:includesTasks(request.query,'firmAssociations')}));
+    const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV4(context,{now:await databaseNow(context),includeFirmAssociations:includesTasks(request.query,'firmAssociations'),includeCallingPreparation:includesTasks(request.query,'callingPreparation')}));
     const current=await requirePrincipal(deps.auth,request);if(!current.ok)return current.result;
     if(!isDeepStrictEqual(current.principal,deps.principal))return {status:401,body:redactError('unauthenticated')};
     return result===null?{status:404,body:redactError('not_found')}:{status:200,body:todayActionsV4ResponseSchema.parse(result)};
@@ -93,7 +93,7 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
   }
   if(request.path==='/today/actions/v3'){
     if(request.method!=='GET')return {status:405,body:redactError('method_not_allowed')};
-    const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV3(context,{now:await databaseNow(context),includeFirmAssociations:includesTasks(request.query,'firmAssociations')}));
+    const result=await withTransaction(deps.auth.db,async()=>readTodayActionsV3(context,{now:await databaseNow(context),includeFirmAssociations:includesTasks(request.query,'firmAssociations'),includeCallingPreparation:includesTasks(request.query,'callingPreparation')}));
     const current=await requirePrincipal(deps.auth,request);if(!current.ok)return current.result;
     if(!isDeepStrictEqual(current.principal,deps.principal))return {status:401,body:redactError('unauthenticated')};
     return result===null?{status:404,body:redactError('not_found')}:{status:200,body:todayActionsV3ResponseSchema.parse(result)};
@@ -135,7 +135,7 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
     // built and not the one this task's clock believes in (Appendix D).
     return {
       status: 200,
-      body: await readTodayList(context, { now: await databaseNow(context), includeTasks: includesTasks(request.query), includeMeetingTasks: includesTasks(request.query, 'meeting_tasks'), ...(request.query?.get('paged')==='true'?{paged:true,cursor:request.query.get('cursor')??''}:{}) }),
+      body: await readTodayList(context, { now: await databaseNow(context), includeTasks: includesTasks(request.query), includeMeetingTasks: includesTasks(request.query, 'meeting_tasks'),includeCallingPreparation:includesTasks(request.query,'callingPreparation'), ...(request.query?.get('paged')==='true'?{paged:true,cursor:request.query.get('cursor')??''}:{}) }),
     };
   }
 
@@ -163,6 +163,7 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
     firmId: parsed.data.firmId,
     now: await databaseNow(context),
     includeTasks: parsed.data.include?.includes('tasks') === true,
+    includeCallingPreparation:parsed.data.include?.includes('callingPreparation')===true,
     includeMeetingTasks: parsed.data.cardVersion === 2 && parsed.data.include?.includes('meeting_tasks') === true,
     // Lane PB (migration 0038): the prepared brief, negotiated like the tasks.
     includePreparedBrief: parsed.data.include?.includes('preparedBrief') === true,

@@ -12,8 +12,8 @@ import {localDate} from '../src/rules/localClock.ts';
 
 export interface PhoneDiscoveryContext {website:string;sourceUrls:string[]}
 export type PhoneDiscoveryAuthority=()=>Promise<boolean>;
-export async function phoneDiscoveryAdmin(ctx:RepositoryContext,userId:string):Promise<boolean>{
- const member=await ctx.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,userId]);
+export async function phoneDiscoveryAdmin(ctx:RepositoryContext,userId:string,lock=true):Promise<boolean>{
+ const member=await ctx.db.query<{role:string;status:string}>(`SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2${lock?' FOR SHARE':''}`,[ctx.scope.workspaceId,userId]);
  return member.rows[0]?.role==='admin'&&member.rows[0]?.status==='active';
 }
 export async function phoneDiscoveryPrincipal(ctx:RepositoryContext,authority:PhoneDiscoveryAuthority):Promise<boolean>{

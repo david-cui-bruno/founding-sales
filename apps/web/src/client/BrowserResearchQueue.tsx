@@ -1,3 +1,4 @@
+import {callingPreparationDelay,expireCallingAction} from './CallingPreparationLease.ts';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { z } from 'zod';
 import { qualifiedResearchSelectionSchema, qualifiedResearchListSchema, qualifiedResearchFirmSchema, todayActionsV4ResponseSchema, todayActionOpenV4ResponseSchema,
@@ -95,10 +96,11 @@ export function BrowserResearchQueue({ client, onOpenCalling }: { client: Browse
   const loadQueue = useCallback(async (epoch: number): Promise<void> => {
     const active = operationGuard(epoch);
     setActions(null);
-    const answer = await client.request('/today/actions/v4', todayActionsV4ResponseSchema, undefined, () => { if (!active()) throw new BrowserBoundaryError('refused'); });
-    if (active()) setActions(answer.actions);
+    const answer = await client.request('/today/actions/v4?include=callingPreparation', todayActionsV4ResponseSchema, undefined, () => { if (!active()) throw new BrowserBoundaryError('refused'); });
+    if (active()) setActions(answer.actions.map(action=>expireCallingAction(action)));
   }, [client, operationGuard]);
-  useEffect(() => { void run(loadQueue); }, [loadQueue, run]); // One initial read, never a mutation replay.
+  useEffect(() => { void run(loadQueue); }, [loadQueue, run]);
+  useEffect(()=>{const delay=callingPreparationDelay((actions??[]).flatMap(a=>[...('callingPreparationExpiresAt'in a?[a]:[]),...('firms'in a?a.firms??[]:[])]));if(delay===null)return;const timer=setTimeout(()=>setActions(rows=>rows?.map(a=>expireCallingAction(a))??null),Math.min(delay,2_147_483_647));return()=>clearTimeout(timer);},[actions]); // One initial read, never a mutation replay.
   const loadCandidates = async (epoch: number, more = false): Promise<void> => {
     const active = operationGuard(epoch);
     if (!more) { setCandidates([]); setAfterId(null); }
@@ -120,8 +122,8 @@ export function BrowserResearchQueue({ client, onOpenCalling }: { client: Browse
     if (!active()) return;
     if (current.firmId !== confirmed.createdFirmId || !sameSelection(current, held)) throw new BrowserBoundaryError('invalid_response');
     setProof(current); setNotice('Research Firm confirmed. Open its Today action to revalidate current proof.');
-    const queue = await client.request('/today/actions/v4', todayActionsV4ResponseSchema, undefined, () => { if (!active()) throw new BrowserBoundaryError('refused'); });
-    if (active()) setActions(queue.actions);
+    const queue = await client.request('/today/actions/v4?include=callingPreparation', todayActionsV4ResponseSchema, undefined, () => { if (!active()) throw new BrowserBoundaryError('refused'); });
+    if (active()) setActions(queue.actions.map(action=>expireCallingAction(action)));
   };
   const readConfirmed = async (epoch: number): Promise<void> => {
     const active = operationGuard(epoch);

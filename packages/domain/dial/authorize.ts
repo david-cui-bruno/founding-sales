@@ -8,6 +8,8 @@ import { applicablePosture } from '../policy/postures.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
 import { USABLE_CALLING_IDENTITY_SQL } from './identities.ts';
 import type { EffectiveSuppression } from '../suppression/effective.ts';
+import {lockPreparedCallingLifecycle} from '../calling/preparationLifecycle.ts';
+import {readPreparationExecution} from '../calling/preparationExecution.ts';
 
 /**
  * `authorizeDial` (specification 9.2).
@@ -124,11 +126,11 @@ export async function suppressionKeys(
   const keys: { scope: 'firm' | 'handle'; canonicalKey: string }[] = [
     { scope: 'firm', canonicalKey: firm.id.toLowerCase() },
   ];
-  if (route !== null) keys.push({ scope: 'handle', canonicalKey: route.e164 });
+  if (route?.e164) keys.push({ scope: 'handle', canonicalKey: route.e164 });
   const contact = contactId ?? route?.contact_id ?? null;
   if (contact !== null) {
     const { rows } = await context.db.query<{ e164: string }>(
-      'SELECT e164 FROM phone_routes WHERE workspace_id = $1 AND firm_id = $2 AND contact_id = $3',
+      'SELECT e164 FROM phone_routes WHERE workspace_id = $1 AND firm_id = $2 AND contact_id = $3 AND e164 IS NOT NULL',
       [context.scope.workspaceId, firm.id, contact],
     );
     for (const row of rows) keys.push({ scope: 'handle', canonicalKey: row.e164 });
@@ -150,6 +152,9 @@ export async function authorizeDial(
   input: AuthorizeDialInput,
 ): Promise<DialDecision> {
   const actor = context.scope.actor;
+  await lockPreparedCallingLifecycle(context.db,context.scope.workspaceId,input.firmId);
+  const preparation=await readPreparationExecution(context,input.firmId);
+  if(!preparation.ok)return refused(preparation.reason);
 
   const firm = await readFirm(context, input.firmId);
   if (firm === null || firm.status === 'merged') return refused('firm_unknown');
@@ -192,6 +197,7 @@ export async function authorizeDial(
 
   // ---- 3. Route -----------------------------------------------------------
   if (route === null || route.firm_id !== firm.id) return refused('route_missing');
+  if(!route.e164)return refused('route_invalid');
   // The displayed version first: a card showing version 1 of a route now at version 2
   // is looking at a number that has since been replaced or retired, and the honest
   // answer is "your card is out of date", not the new route's state.

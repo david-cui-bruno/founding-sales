@@ -1,3 +1,4 @@
+import {readPreparedProjections,preparedProjectionUnavailable,SOURCE_UNAVAILABLE_COMPANY} from '../calling/preparationProjection.ts';
 import type { z } from "zod";
 import type { askReadSchema, askRecordMatchSchema } from "@fss/contracts";
 import type { RepositoryContext } from "../db/workspaceScope.ts";
@@ -59,7 +60,7 @@ export async function readAskRecords(
   if (input.kind === "firms") {
     const rows = (
       await context.db.query<{ id: string; name: string }>(
-        `SELECT f.id,f.name FROM firms f WHERE f.workspace_id=$1 AND f.status='active' AND ($3 OR f.assigned_user_id=$4) AND ($2::uuid IS NULL OR f.id>$2) AND strpos(lower(normalize(f.name,NFKC)),$5)>0 AND ($6::uuid[] IS NULL OR f.id=ANY($6)) AND ($7::uuid[] IS NULL OR EXISTS(SELECT 1 FROM crm_legacy_contact_people b JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id WHERE b.workspace_id=f.workspace_id AND b.person_id=ANY($7) AND c.firm_id=f.id) OR EXISTS(SELECT 1 FROM crm_relationships r JOIN crm_selected_sources s ON s.workspace_id=r.workspace_id AND s.id=r.source_id WHERE r.workspace_id=f.workspace_id AND r.person_id=ANY($7) AND r.firm_id=f.id AND ${sourceAccessPredicate("$3", "$4")})) AND ($9::uuid IS NULL OR f.id=$9) ORDER BY f.id LIMIT $8`,
+        `SELECT f.id,CASE WHEN f.calling_preparation_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM calling_preparations p WHERE p.workspace_id=f.workspace_id AND p.firm_ref=f.id AND p.state='live' AND p.source_expires_at>clock_timestamp()) THEN '[source unavailable company]' ELSE f.name END AS name FROM firms f WHERE f.workspace_id=$1 AND f.status='active' AND ($3 OR f.assigned_user_id=$4) AND ($2::uuid IS NULL OR f.id>$2) AND strpos(lower(normalize(CASE WHEN f.calling_preparation_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM calling_preparations p WHERE p.workspace_id=f.workspace_id AND p.firm_ref=f.id AND p.state='live' AND p.source_expires_at>clock_timestamp()) THEN '[source unavailable company]' ELSE f.name END,NFKC)),$5)>0 AND ($6::uuid[] IS NULL OR f.id=ANY($6)) AND ($7::uuid[] IS NULL OR EXISTS(SELECT 1 FROM crm_legacy_contact_people b JOIN contacts c ON c.workspace_id=b.workspace_id AND c.id=b.contact_id WHERE b.workspace_id=f.workspace_id AND b.person_id=ANY($7) AND c.firm_id=f.id) OR EXISTS(SELECT 1 FROM crm_relationships r JOIN crm_selected_sources s ON s.workspace_id=r.workspace_id AND s.id=r.source_id WHERE r.workspace_id=f.workspace_id AND r.person_id=ANY($7) AND r.firm_id=f.id AND ${sourceAccessPredicate("$3", "$4")})) AND ($9::uuid IS NULL OR f.id=$9) ORDER BY f.id LIMIT $8`,
         params,
       )
     ).rows;
@@ -69,8 +70,9 @@ export async function readAskRecords(
       }))
     )
       return null;
+    const prepared=await readPreparedProjections(context,rows.map(r=>r.id));
     records.push(
-      ...rows.slice(0, input.limit).map((row) => ({
+      ...rows.slice(0, input.limit).map(row=>({...row,name:preparedProjectionUnavailable(prepared,row.id)?SOURCE_UNAVAILABLE_COMPANY:row.name})).filter(row=>row.name.normalize('NFKC').toLocaleLowerCase('en-US').includes(String(params[4]))).map((row) => ({
         recordId: row.id,
         kind: "firm" as const,
         name: row.name,
@@ -133,6 +135,15 @@ export async function readAskRecords(
     nextAfterId = rows.length > input.limit ? rows[input.limit - 1]!.id : null;
   }
   if (!(await activeIdentityActor(context))) return null;
+  const prepared=await readPreparedProjections(context,records.filter(r=>r.kind==='firm').map(r=>r.recordId));
+  // Nothing awaits after this projection. A source deadline can cross during
+  // the final actor/source waits, and a same-choice review can change its name.
+  const publicationNow=Date.now();
+  for(let i=records.length-1;i>=0;i--){
+    const r=records[i]!;if(r.kind!=='firm')continue;
+    const state=prepared.get(r.recordId),name=preparedProjectionUnavailable(prepared,r.recordId,publicationNow)?SOURCE_UNAVAILABLE_COMPANY:typeof state?.profile?.['name']==='string'?state.profile['name']:r.name;
+    if(!name.normalize('NFKC').toLocaleLowerCase('en-US').includes(String(params[4])))records.splice(i,1);else records[i]={...r,name};
+  }
   return {
     operation: "records" as const,
     selection:

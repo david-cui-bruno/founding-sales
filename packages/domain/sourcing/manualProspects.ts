@@ -11,6 +11,7 @@ import {phoneDiscoverySnapshots} from './prospectPhoneDiscoveryStore.ts';
 import {composeProspectPhoneDiscovery,projectProspectPhoneDiscovery} from './prospectPhoneDiscoveryProjection.ts';
 import {readProspectPhoneDiscoverySnapshot} from './prospectPhoneDiscovery.ts';
 import {currentManualPhoneChoice,projectManualPhoneChoice} from './manualProspectPhoneChoice.ts';
+import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 const refuse=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
@@ -24,6 +25,7 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
  await lockDiscoveryReviewSources(ctx);
  const exact=input.candidateId&&input.expectedRevision?{candidateId:input.candidateId,expectedRevision:input.expectedRevision}:undefined;
  const rows=await manualProspectRows(ctx,input.state,input.offset,exact),page=rows.slice(0,50);
+ if(page.length)await lockLivePreparationCleanup(ctx);
  if(page.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,page.map(row=>row.id)]);
  // Choice metadata belongs only to this opted-in projection. Raw source authority
  // remains independent of schema143 and reusable by historical migration checks.
@@ -67,6 +69,7 @@ export async function recordManualProspectFeedback(ctx:RepositoryContext,input:z
  if(!manualProspectFeedbackInputSchema.safeParse(input).success)return refuse('invalid_input');
  const w=ctx.scope.workspaceId;
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-discovery-review:${w}`]);
+ await lockLivePreparationCleanup(ctx);
  const candidate=(await ctx.db.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
  if(!candidate)return refuse('candidate_unavailable');
  if(candidate.revision!==input.expectedRevision)return refuse('candidate_changed');

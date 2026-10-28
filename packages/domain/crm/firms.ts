@@ -7,6 +7,10 @@ import { recordCrmAuditEvent } from './audit.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import { FIRM_ZONE_SOURCES } from './zone.ts';
+import {FIRM_ZONE_RULE_VERSION} from '../src/rules/statePosture.ts';
+import {openHold} from '../policy/holds.ts';
+import {preparedCallingFirm} from '../calling/preparationLifecycle.ts';
+import {readPreparedProjections,projectPreparedFirm} from '../calling/preparationProjection.ts';
 import {
   accept,
   refuse,
@@ -58,7 +62,7 @@ export async function readFirm(context: RepositoryContext, firmId: string): Prom
     `SELECT ${FIRM_COLUMNS} FROM firms WHERE workspace_id = $1 AND id = $2`,
     [context.scope.workspaceId, firmId],
   );
-  return rows[0] ?? null;
+  return rows[0]?projectPreparedFirm(rows[0],await readPreparedProjections(context,[firmId])):null;
 }
 
 export interface CreateFirmInput {
@@ -78,6 +82,8 @@ export interface CreateFirmInput {
   readonly researchAlreadyQualified?: boolean | undefined;
   /** Internal retained admission lineage, never accepted by generic CRM wire input. */
   readonly retainedRecoveryDecisionId?: string | undefined;
+  /** Internal ADR0028 creation owner only. Never accepted by generic CRM wire input. */
+  readonly callingPreparation?: {readonly id:string;readonly firmId:string;readonly timeZone:string|null} | undefined;
 }
 
 /**
@@ -105,13 +111,21 @@ export async function createFirm(
   // because it ends in `refreshTodayForFirm` and the morning build holds that lock while
   // it takes firm locks (S2 review, finding 1).
   await lockTodayForFirmChange(context);
+  if(input.callingPreparation){
+    await context.db.query('SELECT require_calling_preparation_cleanup_locks($1)',[context.scope.workspaceId]);
+    if(actor.kind!=='user'||actor.role!=='admin'||!(await context.db.query(`SELECT 1 FROM calling_preparations
+      WHERE workspace_id=$1 AND id=$2 AND firm_ref=$3 AND prepared_by_ref=$4 AND state='live' AND research_hold_id IS NULL`,
+      [context.scope.workspaceId,input.callingPreparation.id,input.callingPreparation.firmId,actor.userId])).rows.length)return refuse('invalid_input');
+  }
 
   let created: FirmRow;
   try {
     const { rows } = await context.db.query<FirmRow>(
       `INSERT INTO firms (workspace_id, name, assigned_user_id, website, address_line, locality,
-                          region_code, postal_code, country_code)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'US'))
+                          region_code, postal_code, country_code,
+                          id,calling_preparation_id,time_zone,time_zone_confidence,time_zone_source,time_zone_rule_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'US'),COALESCE($10::uuid,gen_random_uuid()),$11,$12,
+               CASE WHEN $12::text IS NOT NULL THEN 'high' END,CASE WHEN $12::text IS NOT NULL THEN 'recorded' END,$13)
        RETURNING ${FIRM_COLUMNS}`,
       [
         context.scope.workspaceId,
@@ -123,6 +137,8 @@ export async function createFirm(
         input.regionCode ?? null,
         input.postalCode ?? null,
         input.countryCode ?? null,
+      input.callingPreparation?.firmId??null,input.callingPreparation?.id??null,input.callingPreparation?.timeZone??null,
+      input.callingPreparation?.timeZone?FIRM_ZONE_RULE_VERSION:null,
       ],
     );
     const row = rows[0];
@@ -135,6 +151,12 @@ export async function createFirm(
     throw error;
   }
 
+  if(input.callingPreparation){
+    const holdId=await openHold(context,{scopeKind:'firm',scopeKey:created.id,reasonCode:'scoped_pause',blockedActionKinds:['research'],
+      sourceEventKind:'calling_preparation',sourceEventId:input.callingPreparation.id});
+    await context.db.query('UPDATE calling_preparations SET research_hold_id=$3 WHERE workspace_id=$1 AND id=$2',
+      [context.scope.workspaceId,input.callingPreparation.id,holdId]);
+  }
   if (input.externalId !== undefined && input.externalId.trim().length > 0) {
     await context.db.query(
       `INSERT INTO record_aliases (workspace_id, record_kind, firm_id, alias_kind, alias_value)
@@ -215,6 +237,7 @@ export async function updateFirm(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly patch: FirmPatch },
 ): Promise<CrmResult<FirmRow>> {
+  if(await preparedCallingFirm(context,input.firmId))return refuse('invalid_input');
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
   const decision = decideFirmMutation(context, firm);
@@ -270,6 +293,7 @@ export async function resolveZoneForFirm(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly recordedZone?: string | undefined },
 ): Promise<CrmResult<FirmZoneOutcome>> {
+  if(await preparedCallingFirm(context,input.firmId))return refuse('invalid_input');
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
   const decision = decideFirmMutation(context, firm);

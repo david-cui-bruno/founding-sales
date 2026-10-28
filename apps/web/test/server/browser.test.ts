@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import {formatAccessToken} from '../../../api/src/auth/tokens.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthDeps } from '../../../api/src/auth/config.ts';
 import type { ApiOptions, ApiRequest } from '../../../api/src/server.ts';
@@ -15,7 +16,7 @@ const expiresAt = '2026-10-22T07:00:00Z';
 const key = randomBytes(32);
 const id = '11111111-1111-4111-8111-111111111111';
 const csrf = 'c'.repeat(43);
-const token = 't'.repeat(50);
+const token = formatAccessToken(id,'t'.repeat(43));
 const principal = { workspaceId: id, userId: id, deviceId: id, sessionId: 'session-one', role: 'admin', membershipStatus: 'active', deviceStatus: 'active' };
 const query = vi.fn();
 const db: AuthDeps['db'] = {query};
@@ -38,7 +39,7 @@ function sets(result: BrowserResponse | null): readonly string[] {
 beforeEach(() => {
   vi.clearAllMocks();
   firm = { id,workspace_id:id,status:'active',assigned_user_id:id };
-  query.mockImplementation(async (sql:string)=>({rows:sql.includes('FROM firms')?[firm]:[],rowCount:sql.includes('FROM firms')?1:0}));
+  query.mockImplementation(async (sql:string)=>{const rows=sql.includes('FROM firms')?[firm]:sql.includes('FROM devices')?[{id}]:sql.includes('FROM sessions')?[{id:principal.sessionId,expires_at:new Date(Date.now()+3600000),reauthenticate_after:new Date(Date.now()+3600000)}]:sql.includes('FROM workspace_memberships')?[{user_id:id,role:principal.role,status:'active'}]:[];return {rows,rowCount:rows.length};});
   mocks.authenticate.mockResolvedValue({ authenticated: true, principal });
   mocks.route.mockResolvedValue({ status: 200, body: { firms: [] } });
   mocks.end.mockResolvedValue(undefined);
@@ -77,7 +78,7 @@ describe('explicit calling readiness read', () => {
     const result=await handler(post(path,{firmId:id,routeId:id},authHeaders));
     expect(result).toMatchObject({status:401,body:{error:'browser_request_refused'}});
     expect(JSON.stringify(result)).not.toContain('private advisory response');
-    expect(query.mock.calls.map(([sql])=>sql)).toEqual(['BEGIN',expect.stringContaining('FOR SHARE'),expect.stringContaining('FROM firms'),'COMMIT']);
+    expect(query.mock.calls.map(([sql])=>sql)).toEqual(['BEGIN',expect.stringContaining('FOR SHARE'),expect.stringContaining('FROM firms'),expect.stringContaining('FROM calling_preparations'),'COMMIT']);
   });
   it('retains Origin, CSRF and revision gates and excludes dispatch relatives', async () => {
     const authHeaders = await headers();
@@ -459,11 +460,12 @@ describe('recorded company reads publish only under current authority', () => {
   }
   it('keeps company identities readable by an active salesperson without an admin requirement', async () => {
     mocks.authenticate.mockResolvedValue({ authenticated: true, principal: { ...principal, role: 'salesperson' } });
+    const base=query.getMockImplementation()!;query.mockImplementation(async(sql:string,...args:unknown[])=>sql.includes('FROM workspace_memberships')?{rows:[{user_id:id,role:'salesperson',status:'active'}],rowCount:1}:base(sql,...args));
     const authHeaders = await headers();
     mocks.route.mockResolvedValueOnce({ status: 200, body: { firms: [identity] } });
     expect(await handler(request('/browser/api/firms', { headers: authHeaders }))).toMatchObject({ status: 200, body: { firms: [identity] } });
-    expect(mocks.authenticate).toHaveBeenCalledTimes(3);
-    expect(query).not.toHaveBeenCalled();
+    expect(mocks.authenticate).toHaveBeenCalledTimes(4);
+    expect(query.mock.calls.map(([sql])=>sql)).toEqual(['BEGIN',expect.stringContaining('pg_advisory_xact_lock'),expect.stringContaining('workspace_memberships'),expect.stringContaining('FROM devices'),expect.stringContaining('FROM sessions'),expect.stringContaining('SELECT expires_at,reauthenticate_after'),expect.stringContaining('workspace_memberships'),expect.stringContaining('FROM calling_preparations'),'COMMIT']);
   });
   it.each(['revoked', 'role', 'device', 'session'] as const)('erases a list after a waiting read changes %s authority', async change => {
     const authHeaders = await headers();
@@ -498,6 +500,6 @@ describe('recorded company reads publish only under current authority', () => {
     const narrow = { version: 3, visibility: 'any_active_member', read: { visibility: 'any_active_member', firm: identity } };
     mocks.route.mockResolvedValueOnce({ status: 200, body: narrow });
     expect(await handler(post('/browser/api/crm/firm-page-v3', { firmId: id, pageVersion: 2 }, authHeaders))).toMatchObject({ status: 200, body: narrow });
-    expect(query).not.toHaveBeenCalled();
+    expect(query.mock.calls.map(([sql])=>sql)).toEqual(['BEGIN',expect.stringContaining('pg_advisory_xact_lock'),expect.stringContaining('workspace_memberships'),expect.stringContaining('FROM devices'),expect.stringContaining('FROM sessions'),expect.stringContaining('SELECT expires_at,reauthenticate_after'),expect.stringContaining('workspace_memberships'),expect.stringContaining('FROM calling_preparations'),'COMMIT']);
   });
 });

@@ -1,5 +1,5 @@
-/** Root-locked interface for ADR0028/#820. Registered implementation and migration
- * are still pending; these contracts grant no acquisition or contact authority. */
+/** Closed company-preparation interface for ADR0028/#820. Current retained
+ * evidence grants neither acquisition nor contact authority. */
 import {z} from 'zod';
 import {commandIdSchema} from './auth.ts';
 import {semanticVersionSchema} from './clientVersion.ts';

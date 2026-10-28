@@ -9,6 +9,8 @@ import { markCalling } from '../research/reservations.ts';
 import { attributeFirmInteraction } from '../sourcing/attribution.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import {lockPreparedCallingCapability} from '../calling/preparationLifecycle.ts';
+import {readPreparationExecution} from '../calling/preparationExecution.ts';
 
 export type ConsumeRefusal =
   | 'call_attempts_exhausted'
@@ -74,6 +76,7 @@ export async function consumeCallSession(
 ): Promise<{ readonly ok: true; readonly value: ConsumedCallSession } | { readonly ok: false; readonly reason: ConsumeRefusal }> {
   const refused = (reason: ConsumeRefusal): { readonly ok: false; readonly reason: ConsumeRefusal } => ({ ok: false, reason });
   if (!/^CA[0-9a-f]{32}$/u.test(input.callSid)) return refused('session_unknown');
+  await lockPreparedCallingCapability(db,input.workspaceId,'session',input.sessionId);
 
   // 1. The send gate, SHARED, before any row lock, held until the caller commits
   //    (`policy/sendGate.ts`). A suppression, a hold or a firm handover is written under
@@ -134,6 +137,8 @@ export async function consumeCallSession(
     workspaceScope(input.workspaceId, { kind: 'user', userId: session.actor_user_id, role: member.role }),
     db,
   );
+  const preparation=await readPreparationExecution(context,session.firm_id);
+  if(!preparation.ok)return refused(preparation.reason);
 
   // 6. The cadence (slice C1), under the firm lock: sessions created together cannot all
   //    be placed. Every placed call is an attempt from its consumption

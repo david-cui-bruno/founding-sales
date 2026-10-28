@@ -4,12 +4,14 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 import type {SourcingResult} from './qualificationStore.ts';
 /** Caller transaction. Feedback never changes a deal, suppression or call obligation. */
 export async function recordSourcingFeedback(ctx:RepositoryContext,input:z.infer<typeof sourcingFeedbackSchema>):Promise<SourcingResult<{id:string}>> {
  if(!decideAdminOnly(ctx).permitted||ctx.scope.actor.kind!=='user')return {ok:false,reason:'admin_only'};
  const parsed=sourcingFeedbackSchema.safeParse(input);if(!parsed.success)return {ok:false,reason:'invalid_input'};
  const w=ctx.scope.workspaceId;
+ await lockPreparationCleanup(ctx);
  // Admission holds this gate before candidate locks, so a correction cannot lose a race.
  await lockSendGateForStopFact(ctx);
  const candidate=(await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];

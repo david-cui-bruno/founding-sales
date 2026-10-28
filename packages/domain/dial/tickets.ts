@@ -6,6 +6,8 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { authorizeDial, type AuthorizeDialInput, type DialEvidence } from './authorize.ts';
+import {lockPreparedCallingLifecycle,lockPreparedCallingCapability} from '../calling/preparationLifecycle.ts';
+import {readPreparationExecution} from '../calling/preparationExecution.ts';
 
 /**
  * One-use dial tickets (specification 9.2, 5.3).
@@ -64,7 +66,10 @@ export async function authorizeDialCommand(
   context: RepositoryContext,
   input: AuthorizeDialCommandInput,
 ): Promise<DialResult<IssuedDialTicket>> {
+  await lockPreparedCallingLifecycle(context.db,context.scope.workspaceId,input.firmId);
   await lockSendGateForDispatch(context);
+  const preparation=await readPreparationExecution(context,input.firmId);
+  if(!preparation.ok)return refuse(preparation.reason);
   await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.firmId]);
   // The replay check precedes the decision. A replay must not re-evaluate policy:
   // the answer to "may I dial" the second time is not an allow and not a refusal
@@ -86,7 +91,8 @@ export async function authorizeDialCommand(
     await context.db.query('ROLLBACK TO SAVEPOINT authorize_dial_execution');
     return refuse(reason);
   };
-  const issued = await insertTicket(context, decision.evidence, input, clearance.freshUntil);
+  const freshUntil=preparation.expiresAt&&Date.parse(preparation.expiresAt)<Date.parse(clearance.freshUntil)?preparation.expiresAt:clearance.freshUntil;
+  const issued = await insertTicket(context, decision.evidence, input, freshUntil);
   if (issued === null) return refuse('already_consumed');
   const touch=await reserveOutreachCall(context,{firmId:issued.firmId,contactId:issued.contactId,ticketId:issued.ticketId,at});
   if(!touch.ok){
@@ -139,9 +145,10 @@ async function insertTicket(
     `INSERT INTO dial_tickets
        (workspace_id, command_id, firm_id, contact_id, phone_route_id, route_version,
         posture_id, posture_revision, calling_identity_id, actor_user_id, device_id,
-        assigned_user_id, e164, firm_time_zone, issued_at, expires_at)
+        assigned_user_id, e164, firm_time_zone, issued_at, expires_at,calling_preparation_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-             now(), LEAST(now() + make_interval(secs => $15), $16::timestamptz))
+             now(), LEAST(now() + make_interval(secs => $15), $16::timestamptz),
+             (SELECT calling_preparation_id FROM firms WHERE workspace_id=$1 AND id=$3))
      ON CONFLICT ON CONSTRAINT dial_tickets_one_per_command DO NOTHING
      RETURNING ${TICKET_COLUMNS}`,
     [
@@ -234,6 +241,7 @@ export async function consumeDialTicket(
   context: RepositoryContext,
   input: { readonly ticketId: string; readonly deviceId: string; readonly at?: string | undefined },
 ): Promise<DialResult<ConsumedTicket>> {
+  await lockPreparedCallingCapability(context.db,context.scope.workspaceId,'ticket',input.ticketId);
   await lockSendGateForDispatch(context);
   const scope=(await context.db.query<{firm_id:string}>('SELECT firm_id FROM dial_tickets WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.ticketId])).rows[0];
   if(scope)await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,scope.firm_id]);

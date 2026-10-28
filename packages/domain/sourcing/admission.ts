@@ -10,6 +10,7 @@ import {firmNameKey,websiteDomain} from '../crm/import.ts';
 import {addPhoneRoute} from '../crm/routes.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {preparedCallingFirm} from '../calling/preparationLifecycle.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {applicablePosture} from '../policy/postures.ts';
 import {listApplicableHolds} from '../policy/holds.ts';
@@ -57,6 +58,7 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput,authority?:Retai
  const w=ctx.scope.workspaceId;
  // Merge/stop paths use gate -> Today -> firms. Admission takes that same order.
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
+ if((await ctx.db.query('SELECT 1 FROM calling_preparations WHERE workspace_id=$1 AND candidate_ref=$2',[ctx.scope.workspaceId,input.candidateId])).rows.length)return refused('identity_review_required');
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${w}`]);
  const peek=(await ctx.db.query<{payload:CandidateInput}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,input.candidateId])).rows[0];
  if(!peek)return refused('not_found');
@@ -64,6 +66,7 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput,authority?:Retai
  const domain=websiteDomain(peek.payload.website),name=firmNameKey(peek.payload.firmName);
  const matches=(await ctx.db.query<{id:string;name:string;website:string|null;locality:string|null;region_code:string|null}>(
   `SELECT id,name,website,locality,region_code FROM firms WHERE workspace_id=$1 AND (lower(regexp_replace(trim(name),'\\s+',' ','g'))=$2 OR regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$3) ORDER BY id FOR UPDATE`,[w,name,domain])).rows;
+ for(const match of matches)if(await preparedCallingFirm(ctx,match.id))return refused('identity_review_required');
  const candidate=(await ctx.db.query<{revision:number;status:string;qualification_blocked:boolean;payload:CandidateInput}>('SELECT revision,status,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 AND candidate_id=$3 FOR UPDATE',[w,input.qualificationRunId,input.candidateId])).rows[0];
  if(!candidate||!run)return refused('not_found');

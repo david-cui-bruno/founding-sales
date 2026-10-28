@@ -1,6 +1,6 @@
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {actorKind,actorUserId} from '../crm/types.ts';
-import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
+import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {eraseManualActivityForSources} from './manualProspectActivitySourceErasure.ts';
 import {eraseProspectPhoneDiscoveriesForSources} from './prospectPhoneDiscoveryLifecycle.ts';
 import {eraseCampaignOpeningsForSources} from '../outreach/campaignOpeningRetention.ts';
@@ -10,7 +10,7 @@ export const MANUAL_SOURCE_LOSS_ACTION='sourcing.manual_source_retention_expired
 export async function rememberExpiredManualSources(ctx:RepositoryContext,urls:readonly string[]):Promise<void>{
  if(urls.length===0)return;
  // Keep deletion's source lifecycle -> workspace send gate order.
- await lockDiscoveryReviewSources(ctx);
+ await lockPreparationCleanup(ctx);
  await eraseCampaignOpeningsForSources(ctx,urls);
  await eraseManualActivityForSources(ctx,urls);
  await eraseProspectPhoneDiscoveriesForSources(ctx,urls);

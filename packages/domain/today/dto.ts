@@ -16,6 +16,7 @@ import {
 } from './types.ts';
 import type { PreparedBriefDto, TodayCardBlocker, TodayItemKind, TodayLane } from '@fss/contracts';
 import { readPreparedBrief } from '../crm/preparedBriefs.ts';
+import {readPreparedProjections,preparedProjectionUnavailable,SOURCE_UNAVAILABLE_COMPANY,preparedCallingLease} from '../calling/preparationProjection.ts';
 
 /** Authorized Today projections: admins see workspace entries; salespeople see their
  * assigned firms. Lists carry counts and blocker codes, without conversation bodies,
@@ -26,6 +27,7 @@ import { readPreparedBrief } from '../crm/preparedBriefs.ts';
 export interface TodayCardDto {
   readonly firmId: string;
   readonly firmName: string;
+  readonly callingPreparationExpiresAt?:string;
   readonly lane: TodayLane;
   readonly dueAt: string;
   readonly counts: TodayCounts;
@@ -117,6 +119,7 @@ export interface TodayRouteDto {
 export interface TodayFirmDto<Task extends TodayTaskDto = TodayTaskDtoV2> {
   readonly firmId: string;
   readonly firmName: string;
+  readonly callingPreparationExpiresAt?:string;
   readonly snapshotDate: string;
   readonly lane: TodayLane;
   readonly counts: TodayCounts;
@@ -375,6 +378,7 @@ export interface ReadTodayInput {
    */
   readonly includeTasks?: boolean | undefined;
   readonly includeMeetingTasks?: boolean | undefined;
+  readonly includeCallingPreparation?:boolean|undefined;
 }
 
 /**
@@ -447,13 +451,15 @@ export async function readTodayList(
     ? callFirstFirst(cards, await callFirstFirmIds(context))
     : cards;
   const blockers = await readFirmBasics(context, cards.map(card => card.firmId));
+  const currentPrepared=await readPreparedProjections(context,cards.map(card=>card.firmId));
   const result:TodayListDto = {
     workspaceId: context.scope.workspaceId,
     snapshotDate,
     businessTimeZone,
     cards: ordered.map(card => ({
       firmId: card.firmId,
-      firmName: card.firmName,
+      firmName: preparedProjectionUnavailable(currentPrepared,card.firmId)?SOURCE_UNAVAILABLE_COMPANY:card.firmName,
+      ...preparedCallingLease(currentPrepared,card.firmId,input.includeCallingPreparation),
       lane: card.lane,
       dueAt: card.sortAt,
       counts: card.counts,
@@ -478,6 +484,7 @@ export async function readTodayFirm(
     readonly now: string;
     readonly includeTasks?: boolean | undefined;
   readonly includeMeetingTasks?: boolean | undefined;
+  readonly includeCallingPreparation?:boolean|undefined;
     /** Lane PB: `include: ['preparedBrief']` adds the firm's prepared brief. */
     readonly includePreparedBrief?: boolean | undefined;
   },
@@ -514,7 +521,7 @@ export async function readTodayFirm(
   }>(
     `SELECT id, contact_id, e164, version, eligibility
        FROM phone_routes
-      WHERE workspace_id = $1 AND firm_id = $2 AND eligibility <> 'retired'
+      WHERE workspace_id = $1 AND firm_id = $2 AND eligibility <> 'retired' AND e164 IS NOT NULL AND calling_preparation_erased_at IS NULL
       ORDER BY eligibility, e164`,
     [context.scope.workspaceId, input.firmId],
   );
@@ -525,7 +532,7 @@ export async function readTodayFirm(
   const actor = context.scope.actor;
   const callingIdentityId = actor.kind === 'user' ? await currentCallingIdentityId(context, actor.userId) : null;
 
-  return {
+  const result:TodayFirmDto = {
     firmId: card.firmId,
     firmName: card.firmName,
     snapshotDate,
@@ -571,6 +578,8 @@ export async function readTodayFirm(
       blockers: ['no_phone', 'no_location'],
     },
   };
+  const prepared=await readPreparedProjections(context,[input.firmId]);
+  return preparedProjectionUnavailable(prepared,input.firmId)?{...result,firmName:SOURCE_UNAVAILABLE_COMPANY,routes:[],basics:{locality:null,regionCode:null,timeZone:null,blockers:['no_phone','no_location']}}:{...result,...preparedCallingLease(prepared,input.firmId,input.includeCallingPreparation)};
 }
 
 /**
@@ -601,8 +610,10 @@ export async function readFirmBasics(
       WHERE f.workspace_id = $1 AND f.id = ANY($2::uuid[])`,
     [context.scope.workspaceId, [...firmIds]],
   );
+  const prepared=await readPreparedProjections(context,rows.map(row=>row.id));
   return new Map(
     rows.map(row => {
+      if(preparedProjectionUnavailable(prepared,row.id))return [row.id,{locality:null,regionCode:null,timeZone:null,blockers:['no_phone','no_location'] as TodayCardBlocker[]} ] as const;
       const blockers: TodayCardBlocker[] = [];
       if (!row.has_phone) blockers.push('no_phone');
       if (row.region_code === null || row.time_zone === null) blockers.push('no_location');

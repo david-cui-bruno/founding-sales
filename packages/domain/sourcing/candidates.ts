@@ -13,6 +13,7 @@ import { databaseNow } from '../policy/clock.ts';
 import {verifiedFirmOwner,verifiedWebsiteKey,IDENTITY_REVIEW_REASONS} from './verifiedFirmPolicy.ts';
 import {discoveryQuotaRemaining} from './discoveryQuota.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
 
 type Result<T> = {ok:true;value:T} | {ok:false;reason:string};
 interface Row { id:string;payload:CandidateInput;status:SourcingCandidate['status'];revision:number;created_at:Date;source_check:unknown;next_source_check_at:Date|null;check_job_state:string|null;[key:string]:unknown }
@@ -63,6 +64,7 @@ export async function listCandidates(context:RepositoryContext,input:z.infer<typ
 async function change(context:RepositoryContext,input:z.infer<typeof candidateDeleteInputSchema>,status:SourcingCandidate['status']|null):Promise<Result<{id:string}>> {
   if(denied(context)) return {ok:false,reason:'admin_only'};
   if(!candidateDeleteInputSchema.safeParse({id:input.id,expectedRevision:input.expectedRevision}).success) return {ok:false,reason:'invalid_input'};
+  await lockLivePreparationCleanup(context);
   const {rows}=await context.db.query<Row>('SELECT id,revision,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.id]);
   if(rows[0]===undefined)return {ok:false,reason:'not_found'};
   if(rows[0].revision!==input.expectedRevision)return {ok:false,reason:'candidate_changed'};

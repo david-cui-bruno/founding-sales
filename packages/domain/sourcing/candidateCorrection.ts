@@ -5,6 +5,7 @@ import {decideAdminOnly} from '../crm/authorization.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {candidateIdentityKey} from './candidates.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
 import {isLegacyCandidatePayload} from './discoveryIntake.ts';
@@ -22,7 +23,7 @@ export async function replaceCandidateIdentity(ctx:RepositoryContext,id:string,p
 export async function correctCandidateName(ctx:RepositoryContext,input:z.infer<typeof candidateCorrectNameInputSchema>):Promise<SourcingResult<{id:string;revision:number}>> {
  if(!decideAdminOnly(ctx).permitted)return {ok:false,reason:'admin_only'};
  const parsed=candidateCorrectNameInputSchema.safeParse(input);if(!parsed.success)return {ok:false,reason:'invalid_input'};
- const v=parsed.data,w=ctx.scope.workspaceId;await lockSendGateForStopFact(ctx);
+ const v=parsed.data,w=ctx.scope.workspaceId;await lockPreparationCleanup(ctx);await lockSendGateForStopFact(ctx);
  const row=(await ctx.db.query<{payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>('SELECT payload,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,v.id])).rows[0];
  if(!row)return {ok:false,reason:'not_found'};
  if(!isLegacyCandidatePayload(row.payload))return {ok:false,reason:'candidate_format_not_supported'};

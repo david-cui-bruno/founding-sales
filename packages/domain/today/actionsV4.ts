@@ -1,3 +1,4 @@
+import {projectPreparedActionSubjects} from '../calling/preparationProjection.ts';
 import {isDeepStrictEqual} from 'node:util';
 import type {TodayActionsV4Response,TodayActionV4,TodayTargetV4} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -6,7 +7,7 @@ import {readAutomaticResearchFirm} from '../sourcing/automaticResearch.ts';
 import {automaticResearchNow} from '../sourcing/automaticResearchAuthority.ts';
 import {readTodayActionsV3,openTodayActionV3} from './actionsV3.ts';
 /** Additive current-proof projection. Reads never publish or enqueue anything. */
-export async function readTodayActionsV4(ctx:RepositoryContext,input:{now:string;includeFirmAssociations?:boolean}):Promise<TodayActionsV4Response|null>{
+export async function readTodayActionsV4(ctx:RepositoryContext,input:{now:string;includeFirmAssociations?:boolean;includeCallingPreparation?:boolean}):Promise<TodayActionsV4Response|null>{
  const prior=await readTodayActionsV3(ctx,input);if(!prior)return null;
  const actions:TodayActionV4[]=[...prior.actions];
  const rows=(await ctx.db.query<{id:string}>('SELECT id FROM sourcing_automatic_research_firms WHERE workspace_id=$1 ORDER BY id',[ctx.scope.workspaceId])).rows;
@@ -23,7 +24,7 @@ export async function readTodayActionsV4(ctx:RepositoryContext,input:{now:string
  }
  if(!await activeIdentityActor(ctx))return null;
  const now=await automaticResearchNow(ctx);
- return {...prior,version:4,actions:current.filter(action=>!expirations.has(action.actionId)||Date.parse(now)<Date.parse(expirations.get(action.actionId)!))};
+ return {...prior,version:4,actions:await projectPreparedActionSubjects(ctx,current.filter(action=>!expirations.has(action.actionId)||Date.parse(now)<Date.parse(expirations.get(action.actionId)!)),input.includeCallingPreparation)};
 }
 export async function openTodayActionV4(ctx:RepositoryContext,input:{actionId:string;target:TodayTargetV4;now:string}){
  const empty={version:4 as const,target:null,research:null,automaticResearch:null};

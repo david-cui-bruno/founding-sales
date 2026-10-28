@@ -6,6 +6,8 @@ import {createFirm,loadFirmForUpdate} from '../crm/firms.ts';
 import {canonicalWebsite} from '../crm/import.ts';
 import {identityFold} from './nativeFirmEligibility.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
+import {preparedCallingFirm} from '../calling/preparationLifecycle.ts';
 import {lockTodayForFirmChange} from '../today/build.ts';
 import {linkDiscoveryResearchFirm,readCurrentDiscoveryResearchFirm} from './discoveryResearchFirm.ts';
 import {canonicalResearchValue,readQualifiedResearchCandidate,researchActor,researchIdentity} from './qualifiedResearchProof.ts';
@@ -26,14 +28,17 @@ export async function createQualifiedResearchFirm(ctx:RepositoryContext,input:Qu
  catch(error){await ctx.db.query('ROLLBACK TO SAVEPOINT qualified_research_firm');await ctx.db.query('RELEASE SAVEPOINT qualified_research_firm');throw error;}
 }
 async function create(ctx:RepositoryContext,input:QualifiedResearchSelection,currentAuthority:()=>Promise<boolean>):Promise<Result>{
+ await lockDiscoveryReviewSources(ctx);
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${ctx.scope.workspaceId}`]);
  await lockCurrentEmailCampaign(ctx);
  if(!await currentAuthority())return {ok:false,reason:'authority_changed'};
  const initial=await readQualifiedResearchCandidate(ctx,input.discoveryCandidateId);
  if(!initial||canonicalResearchValue(initial.selection)!==canonicalResearchValue(input))return {ok:false,reason:'qualification_changed'};
+ if((await ctx.db.query('SELECT 1 FROM calling_preparations WHERE workspace_id=$1 AND candidate_ref=$2',[ctx.scope.workspaceId,input.discoveryCandidateId])).rows.length)return {ok:false,reason:'qualification_changed'};
  const identity=await researchIdentity(ctx,initial.firmName,initial.website);if(!identity)return {ok:false,reason:'firm_identity_ambiguous'};
  let firm=identity.firmId?await loadFirmForUpdate(ctx,identity.firmId):null;
+ if(firm&&await preparedCallingFirm(ctx,firm.id))return {ok:false,reason:'firm_identity_ambiguous'};
  if(identity.firmId&&!firm)return {ok:false,reason:'firm_changed'};
  // A new Firm is acquired before candidate/run locks, like ordinary admission.
  if(!firm){

@@ -5,6 +5,8 @@ import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
 import { loadFirmForUpdate } from './firms.ts';
+import {preparedCallingFirm,preparedCallingRoute} from '../calling/preparationLifecycle.ts';
+import {readPreparedProjections,preparedProjectionUnavailable} from '../calling/preparationProjection.ts';
 import { decidePhoneOnEntry, decideRouteEligibility } from './routePolicy.ts';
 import {
   accept,
@@ -76,6 +78,7 @@ export async function addPhoneRoute(
   context: RepositoryContext,
   input: PhoneRouteInput,
 ): Promise<CrmResult<RouteRow>> {
+  if(await preparedCallingFirm(context,input.firmId))return refuse('invalid_input');
   return await addRoute(context, 'phone', input.e164, input);
 }
 
@@ -344,6 +347,7 @@ export async function verifyRoute(
   context: RepositoryContext,
   input: VerifyRouteInput,
 ): Promise<CrmResult<RouteRow>> {
+  if(input.routeKind==='phone'&&await preparedCallingRoute(context,input.routeId))return refuse('invalid_input');
   const loaded = await loadRouteForUpdate(context, input.routeKind, input.routeId);
   if (loaded === null) return refuse('route_unknown');
   const firm = await loadFirmForUpdate(context, loaded.firm_id);
@@ -403,6 +407,7 @@ export async function retireRoute(
   context: RepositoryContext,
   input: { readonly routeKind: RouteKind; readonly routeId: string; readonly reason: string },
 ): Promise<CrmResult<RouteRow>> {
+  if(input.routeKind==='phone'&&await preparedCallingRoute(context,input.routeId))return refuse('invalid_input');
   const loaded = await loadRouteForUpdate(context, input.routeKind, input.routeId);
   if (loaded === null) return refuse('route_unknown');
   const firm = await loadFirmForUpdate(context, loaded.firm_id);
@@ -411,6 +416,30 @@ export async function retireRoute(
   if (!decision.permitted) return refuse(decision.reason);
   if (loaded.eligibility === 'retired') return accept(loaded);
   if (input.reason.trim().length === 0) return refuse('invalid_input');
+  return retireLoadedRoute(context,input.routeKind,loaded,input.reason.trim());
+}
+
+/** Only an existing actual wrong-number outcome can retire a prepared route.
+ * Caller holds upfront prepared lifecycle/gate/Today and the outcome savepoint.
+ * No ordinary CRM flag, endpoint input, source promotion or reactivation exists.
+ */
+export async function retireRouteForCallOutcome(context:RepositoryContext,callLogId:string,origin:'report'|'correction'='report'):Promise<CrmResult<RouteRow>>{
+ const log=(await context.db.query<{firm_id:string;phone_route_id:string|null;outcome:string}>(
+  'SELECT firm_id,phone_route_id,outcome FROM call_logs WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,callLogId])).rows[0];
+ if(!log||log.outcome!=='wrong_number'||!log.phone_route_id)return refuse('invalid_input');
+ const loaded=await loadRouteForUpdate(context,'phone',log.phone_route_id);
+ if(!loaded||loaded.firm_id!==log.firm_id)return refuse('route_unknown');
+ const firm=await loadFirmForUpdate(context,loaded.firm_id);if(!firm)return refuse('firm_unknown');
+ const decision=decideFirmMutation(context,firm);if(!decision.permitted)return refuse(decision.reason);
+ if(loaded.eligibility==='retired')return accept(loaded);
+ const result=await retireLoadedRoute(context,'phone',loaded,origin==='correction'?'wrong number, recorded on a call correction':'wrong number, recorded on a call');
+ if(result.ok)await context.db.query(`UPDATE calling_preparations SET route_version=$3,revision=revision+1,updated_at=clock_timestamp()
+  WHERE workspace_id=$1 AND route_ref=$2 AND firm_ref=$4 AND state='live'`,[context.scope.workspaceId,loaded.id,result.value.version,loaded.firm_id]);
+ return result;
+}
+
+async function retireLoadedRoute(context:RepositoryContext,kind:RouteKind,loaded:RouteRow,reason:string):Promise<CrmResult<RouteRow>>{
+  const input={routeKind:kind,routeId:loaded.id,reason};
 
   const table = TABLES[input.routeKind];
   const { rows } = await context.db.query<RouteRow>(
@@ -452,10 +481,11 @@ export async function listRoutes(
        FROM ${table.table}
       WHERE workspace_id = $1 AND firm_id = $2
         AND ($3::text IS NULL OR eligibility = $3::text)
+        ${kind==='phone'?'AND e164 IS NOT NULL AND calling_preparation_erased_at IS NULL':''}
       ORDER BY eligibility, version DESC`,
     [context.scope.workspaceId, firmId, options.eligibility ?? null],
   );
-  return rows;
+  return kind==='phone'&&preparedProjectionUnavailable(await readPreparedProjections(context,[firmId]),firmId)?[]:rows;
 }
 
 async function loadRouteForUpdate(

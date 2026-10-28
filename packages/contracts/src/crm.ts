@@ -114,6 +114,9 @@ export const firmIdentityDtoSchema = z.strictObject({
   openedAt: instant.nullable(),
   timeZone: ianaTimeZone.nullable(),
   timeZoneUnresolvedReason: zoneUnresolvedReasonSchema.nullable(),
+  /** Only for explicitly negotiated current calling preparations. Server-derived
+   * original source deadline; omit for independent and unavailable records. */
+  callingPreparationExpiresAt: instant.optional(),
 });
 export type FirmIdentityDto = z.infer<typeof firmIdentityDtoSchema>;
 

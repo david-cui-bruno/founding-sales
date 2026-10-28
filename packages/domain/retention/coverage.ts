@@ -58,6 +58,10 @@ const coverage = (
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   Object.freeze({
+  calling_preparations: coverage(
+    ['retained','swept','deletion_redacts','departure_revokes'],
+    'Permanent opaque candidate/Firm/route denial identity; source/creator/choice loss and bounded expiry erase the exact owned profile, endpoint and capability copies. Independent conversations/history remain. No qualification or acquisition authority.',
+  ),
   outreach_campaign_opening_policies: coverage(
     ['retained'],
     'Immutable owner-approved variant text and exact campaign/template binding are retained as approval history, not copied prospect evidence. Revocation and current owner, campaign, template and expiry checks prevent reuse. No recipient, private notes, model credentials or live activation are stored.',

@@ -58,4 +58,15 @@
 .calling-setup dd { font-size:14px; font-weight:600; margin:0; font-variant-numeric:tabular-nums; }
 .calling-setup button:focus-visible,.calling-readiness a:focus-visible { outline:2px solid var(--workspace-accent,#416ba9); outline-offset:3px; }
 .calling-setup-unknown { margin:16px 0; }
+.calling-preparation { border-top:1px solid var(--calling-line); margin-top:24px; padding-top:24px; min-width:0; overflow-wrap:anywhere; }
+.calling-preparation h3 { font-size:18px; margin:0 0 12px; }
+.calling-preparation p { max-width:75ch; font-size:13px; line-height:1.6; }
+.calling-preparation fieldset { border:0; min-width:0; padding:0; margin:24px 0 16px; display:grid; gap:16px; }
+.calling-preparation legend { font-size:14px; font-weight:600; padding:0; margin-bottom:16px; }
+.calling-preparation-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.calling-preparation label { display:grid; gap:8px; margin:0; font-size:13px; font-weight:600; }
+.calling-preparation input:not([type=checkbox]) { width:100%; min-width:0; box-sizing:border-box; margin:0; border:1px solid var(--calling-line); border-radius:12px; background:var(--workspace-input,#fff); color:inherit; padding:11px 13px; font:inherit; }
+.calling-preparation .calling-check { display:flex; gap:10px; align-items:flex-start; font-weight:400; line-height:1.6; }
+.calling-preparation :focus-visible { outline:2px solid var(--workspace-accent,#416ba9); outline-offset:3px; }
+@media(max-width:600px) { .calling-preparation-fields { grid-template-columns:minmax(0,1fr); } }
 @media (max-width:600px) { .calling-setup dl { display:grid; grid-template-columns:1fr 1fr; gap:18px; }.calling-setup .calling-inline { align-items:stretch; }.calling-setup .calling-inline button { flex:1 1 180px; } }

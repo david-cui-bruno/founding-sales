@@ -21,11 +21,13 @@ import {projectManualProspect,type ManualProspectRow} from './manualProspectProj
 import {manualPhoneSnapshots,recheckManualPhoneSnapshots,projectManualPhone,changedManualPhone} from './manualProspectPhone.ts';
 import {sweepProspectPhoneDiscoveries} from './prospectPhoneDiscoveryLifecycle.ts';
 import {phoneDiscoveryDiagnostic,type PhoneDiscoveryDiagnostic,type PhoneDiscoveryStage} from './phoneDiscoveryDiagnostic.ts';
+import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
 
 export class ProspectPhoneDiscoveryAuthorityChanged extends Error {constructor(){super('phone_discovery_authority_changed');this.name='ProspectPhoneDiscoveryAuthorityChanged';}}
 export class ProspectPhoneDiscoveryUnavailable extends Error {constructor(readonly reason:string){super(reason);this.name='ProspectPhoneDiscoveryUnavailable';}}
 /** Command adapter invokes after receipt/audit waits and before transaction commit. */
 export async function currentProspectPhoneDiscoveryAuthority(ctx:RepositoryContext,input:ProspectPhoneDiscoveryInput,runId:string,authority:PhoneDiscoveryAuthority=async()=>true):Promise<void>{
+ await lockLivePreparationCleanup(ctx);
  if(!await phoneDiscoveryPrincipal(ctx,authority))throw new ProspectPhoneDiscoveryAuthorityChanged();
  const candidate=await lockPhoneDiscoveryCandidate(ctx,input.candidateId);
  if(!candidate||candidate.revision!==input.expectedRevision)throw new ProspectPhoneDiscoveryUnavailable(candidate?'candidate_changed':'candidate_unavailable');
@@ -47,6 +49,7 @@ const refuse=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
 export async function requestProspectPhoneDiscovery(ctx:RepositoryContext,input:ProspectPhoneDiscoveryInput,authority:PhoneDiscoveryAuthority=async()=>true):Promise<Result<{runId:string}>>{
  if(ctx.scope.actor.kind!=='user'||ctx.scope.actor.role!=='admin')return refuse('admin_only');
  if(!prospectPhoneDiscoveryInputSchema.safeParse(input).success)return refuse('invalid_input');
+ await lockLivePreparationCleanup(ctx);
  const candidate=await lockPhoneDiscoveryCandidate(ctx,input.candidateId);
  if(!candidate)return refuse('candidate_unavailable');
  if(candidate.revision!==input.expectedRevision)return refuse('candidate_changed');
@@ -100,6 +103,7 @@ export async function readProspectPhoneDiscovery(ctx:RepositoryContext,input:Pro
 export async function readProspectPhoneDiscoverySnapshot(ctx:RepositoryContext,input:ProspectPhoneDiscoveryInput,authority:PhoneDiscoveryAuthority=async()=>true):Promise<Result<{view:ProspectPhoneDiscoveryView;run:PhoneDiscoveryRun;now:number}|null>>{
  if(ctx.scope.actor.kind!=='user'||ctx.scope.actor.role!=='admin')return refuse('admin_only');
  if(!prospectPhoneDiscoveryInputSchema.safeParse(input).success)return refuse('invalid_input');
+ await lockLivePreparationCleanup(ctx);
  const candidate=await lockPhoneDiscoveryCandidate(ctx,input.candidateId);
  if(!candidate)return refuse('candidate_unavailable');
  if(candidate.revision!==input.expectedRevision)return refuse('candidate_changed');

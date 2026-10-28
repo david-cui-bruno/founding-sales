@@ -2,6 +2,7 @@ import type {CandidateInput,QualificationFact,SourceObservation} from '@fss/cont
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {listApplicableHolds} from '../policy/holds.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {databaseNow} from '../policy/clock.ts';
@@ -72,6 +73,7 @@ export function withSupportedOfficeName(candidate:CandidateInput,facts:readonly 
 export async function recoverDiscoveredIdentity(ctx:RepositoryContext,runId:string):Promise<void> {
  if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')return;
  await withTransaction(ctx.db as SessionQueryable,async()=>{
+  await lockPreparationCleanup(ctx);
   await lockSendGateForStopFact(ctx);
   if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return;
   const w=ctx.scope.workspaceId;

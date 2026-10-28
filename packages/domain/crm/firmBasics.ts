@@ -8,6 +8,7 @@ import { decideFirmMutation } from './authorization.ts';
 import { loadFirmForUpdate, resolveZoneForFirm, updateFirm, type FirmPatch } from './firms.ts';
 import { canonicalE164 } from './import.ts';
 import { addPhoneRoute, retireRoute } from './routes.ts';
+import {preparedCallingFirm} from '../calling/preparationLifecycle.ts';
 import { FIRM_BASICS_FIELDS, type CrmRefusalCode, type FIRM_BASICS_ISSUE_CODES } from '@fss/contracts';
 
 /**
@@ -58,6 +59,7 @@ export type FirmBasicsResult =
 const LOCALITY_MAX = 120;
 
 export async function updateFirmBasics(context: RepositoryContext, input: UpdateFirmBasicsInput): Promise<FirmBasicsResult> {
+  if(await preparedCallingFirm(context,input.firmId))return {ok:false,reason:'invalid_input'};
   // Validation first, every field, before a row is locked or written.
   const issues: FirmBasicsIssue[] = [];
   const phone = input.phone === undefined ? undefined : canonicalE164(input.phone.number);

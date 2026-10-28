@@ -1,5 +1,6 @@
 import { unknownNationalDncDisclosure, type DialRefusalCode, type NationalDncDisclosure } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import {readPreparedProjections,preparedProjectionUnavailable} from '../calling/preparationProjection.ts';
 import { readFirm } from '../crm/firms.ts';
 import { currentCallingWindow, evaluateConfiguredCallingWindow, nextCallingWindowOpening } from '../policy/callingWindows.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -85,12 +86,14 @@ export async function adviseDial(
   let route: AdviceRouteRow | null = null;
   if (input.routeId !== undefined) {
     const { rows } = await context.db.query<AdviceRouteRow>(
-      'SELECT id, firm_id, contact_id, e164, eligibility, version FROM phone_routes WHERE workspace_id = $1 AND id = $2',
+      'SELECT id, firm_id, contact_id, e164, eligibility, version FROM phone_routes WHERE workspace_id = $1 AND id = $2 AND e164 IS NOT NULL',
       [context.scope.workspaceId, input.routeId],
     );
     const found = rows[0];
     route = found !== undefined && found.firm_id === firm.id ? found : null;
   }
+
+  if(route&&(!route.e164||preparedProjectionUnavailable(await readPreparedProjections(context,[firm.id]),firm.id)))route=null;
 
   // Suppression: the firm as a whole, then the number and the contact's other numbers.
   const keys = await suppressionKeys(context, firm, route, undefined);
@@ -135,7 +138,7 @@ export async function adviseDial(
   // itself, so a suppressed, out-of-window or otherwise refused number must not carry
   // one. A refused route has a reason of its own, so `callable` covers it too.
   const callable = reasons.length === 0;
-  const national = route && !input.omitNationalDnc ? await readPhoneNationalDecision(context,
+  const national = route?.e164 && !input.omitNationalDnc ? await readPhoneNationalDecision(context,
     { firmId: firm.id, routeId: route.id, routeVersion: route.version, e164: route.e164, at }) : null;
   return {
     nationalDnc: national?.ok ? national.disclosure : unknownNationalDncDisclosure(),

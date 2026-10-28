@@ -42,7 +42,7 @@ function setup(kind: 'automatic' | 'qualified' = 'automatic') {
     if (url === '/browser/session') return json(session);
     const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body));
     requests.push({ url: String(url), body });
-    if (url === '/browser/api/today/actions/v4') { if (failQueue) throw Error('Read failed'); return json(response); }
+    if (url === '/browser/api/today/actions/v4?include=callingPreparation') { if (failQueue) throw Error('Read failed'); return json(response); }
     if (url === '/browser/api/today/actions/open/v4') return delayed ? await delayed.promise : json(kind === 'automatic' ? { version: 4, target, research: null, automaticResearch: proof } : { version: 4, target: qualifiedTarget, research: qualified, automaticResearch: null });
     if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: rows, hasMore: body !== null && typeof body === 'object' && 'offset' in body && body.offset === 0 });
     if (url === '/browser/api/sourcing/candidates/prospects/feedback') {
@@ -74,7 +74,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     expect(screen.queryByText(legacy.subject)).toBeNull();
     expect(screen.queryByRole('button', { name: /pause|refill|start calling/iu })).toBeNull();
     expect(screen.getByText('Qualified selection and existing research requests').closest('details')?.open).toBe(false);
-    expect(s.requests).toEqual([{ url: '/browser/api/today/actions/v4', body: undefined }]);
+    expect(s.requests).toEqual([{ url: '/browser/api/today/actions/v4?include=callingPreparation', body: undefined }]);
     expect(s.randomUUID).not.toHaveBeenCalled(); expect(s.storage.setItem).not.toHaveBeenCalled();
     await act(async () => { s.client.dispose(); });
   });
@@ -170,7 +170,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
   it('StrictMode abandoned operation cannot unlock or publish a replacement operation', async () => {
     const s = setup(); await s.client.refresh(); render(<StrictMode><BrowserProspectsWorkspace client={s.client} /></StrictMode>);
     await screen.findByText(proof.firmName); await ready();
-    expect(s.requests).toEqual([{ url: '/browser/api/today/actions/v4', body: undefined }]);
+    expect(s.requests).toEqual([{ url: '/browser/api/today/actions/v4?include=callingPreparation', body: undefined }]);
     await act(async () => { s.client.dispose(); });
   });
   it.each(['javascript:alert(1)', 'https://user:password@example.test/', 'not a URL'])('does not turn unsafe retained reference %s into an executable link', url => {

@@ -4,6 +4,7 @@ import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
+import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 type Saved=z.infer<typeof discoveryIntakeSavedSchema>;
@@ -24,6 +25,7 @@ export async function saveDiscoveryCandidate(ctx:RepositoryContext,input:Discove
  if(!decideAdminOnly(ctx).permitted)return refused('admin_only');
  const parsed=discoveryIntakeSaveInputSchema.safeParse(input);if(!parsed.success)return refused('invalid_input');
  const value=parsed.data,w=ctx.scope.workspaceId;
+ await lockPreparationCleanup(ctx);
  // This bounded local serialization also protects secondary observation uniqueness
  // and opposite-direction attachments without relying on mutable JSON identity.
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-discovery-intake:${w}`]);

@@ -47,12 +47,12 @@ export async function routeFirms(request: ApiRequest, options: RoutingOptions): 
 
   if (request.method === 'GET' || request.method === 'HEAD') {
     if (request.path === '/firms') {
-      return { status: 200, body: { firms: await listFirmsForActor(context, { limit: 200 }) } };
+      return { status: 200, body: { firms: await listFirmsForActor(context, { limit: 200,includeCallingPreparation:request.query?.getAll('include').includes('callingPreparation')===true }) } };
     }
     const match = FIRM_PATH.exec(request.path);
     if (match !== null) {
       const firmId = match[1] ?? '';
-      const read = await readFirmForActor(context, { firmId });
+      const read = await readFirmForActor(context, { firmId,includeCallingPreparation:request.query?.getAll('include').includes('callingPreparation')===true });
       if (!read.ok) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
       return { status: 200, body: read.value };
     }

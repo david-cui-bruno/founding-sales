@@ -15,10 +15,10 @@ const RECEIPT_IN_SCOPE = `workspace_id=$1 AND self_test_erased_at IS NULL AND
 /** Include frozen old endpoints as well as current routes in the erasure closure. */
 export async function measurePhoneHandoffDeletion(context: RepositoryContext, scope: Scope): Promise<{ attempts: number; scrubs: number; receipts: number; handles: string[]; receiptBindings: ReceiptBinding[] }> {
   const values = [context.scope.workspaceId, scope.firmId, scope.contactId];
-  const handles = (await context.db.query<{ e164: string }>(`SELECT e164 FROM phone_handoff_attempts WHERE ${ATTEMPT_IN_SCOPE} AND erased_at IS NULL
-    UNION SELECT e164 FROM phone_routes WHERE ${IN_SCOPE}
-    UNION SELECT self_test_e164 AS e164 FROM phone_owner_risk_receipts WHERE ${RECEIPT_IN_SCOPE}`, values)).rows.map(row => row.e164);
-  const attempts = (await context.db.query<{ count: string }>(`SELECT count(*) AS count FROM phone_handoff_attempts WHERE ${ATTEMPT_IN_SCOPE} AND erased_at IS NULL`, values)).rows[0];
+  const handles = (await context.db.query<{ e164: string }>(`SELECT e164 FROM phone_handoff_attempts WHERE ${ATTEMPT_IN_SCOPE} AND erased_at IS NULL AND e164 IS NOT NULL
+    UNION SELECT e164 FROM phone_routes WHERE ${IN_SCOPE} AND e164 IS NOT NULL
+    UNION SELECT self_test_e164 AS e164 FROM phone_owner_risk_receipts WHERE ${RECEIPT_IN_SCOPE} AND self_test_e164 IS NOT NULL`, values)).rows.map(row => row.e164);
+  const attempts = (await context.db.query<{ count: string }>(`SELECT count(*) AS count FROM phone_handoff_attempts WHERE ${ATTEMPT_IN_SCOPE} AND (erased_at IS NULL OR(calling_preparation_id IS NOT NULL AND call_log_id IS NOT NULL))`, values)).rows[0];
   const scrubs = (await context.db.query<{ count: string }>('SELECT count(*) AS count FROM national_registry_endpoint_scrubs WHERE workspace_id=$1 AND e164=ANY($2::text[])',
     [context.scope.workspaceId, handles])).rows[0];
   const receiptBindings = (await context.db.query<ReceiptBinding>(`SELECT id,self_test_firm_id AS "selfTestFirmId",self_test_e164 AS "selfTestE164",
@@ -32,10 +32,10 @@ export async function erasePhoneHandoffs(context: RepositoryContext, scope: Scop
   const measured = await measurePhoneHandoffDeletion(context, scope);
   const receipts = await context.db.query(`UPDATE phone_owner_risk_receipts SET self_test_firm_id=NULL,self_test_e164=NULL,self_test_erased_at=clock_timestamp()
     WHERE ${RECEIPT_IN_SCOPE}`, [context.scope.workspaceId, scope.firmId, scope.contactId]);
-  const erased = await context.db.query(`UPDATE phone_handoff_attempts SET erased_at=clock_timestamp(), e164=NULL,phone_route_id=NULL,
+  const erased = await context.db.query(`UPDATE phone_handoff_attempts SET erased_at=COALESCE(erased_at,clock_timestamp()), e164=NULL,phone_route_id=NULL,
     route_version=NULL,contact_id=NULL,opportunity_id=NULL,item_id=NULL,registry_snapshot_id=NULL,registry_scrubbed_at=NULL,call_log_id=NULL,
     office_proof_kind=NULL,office_proof_id=NULL,office_proof_expires_at=NULL
-    WHERE ${ATTEMPT_IN_SCOPE} AND erased_at IS NULL`, [context.scope.workspaceId, scope.firmId, scope.contactId]);
+    WHERE ${ATTEMPT_IN_SCOPE} AND (erased_at IS NULL OR(calling_preparation_id IS NOT NULL AND call_log_id IS NOT NULL))`, [context.scope.workspaceId, scope.firmId, scope.contactId]);
   const scrubs = await context.db.query('DELETE FROM national_registry_endpoint_scrubs WHERE workspace_id=$1 AND e164=ANY($2::text[])',
     [context.scope.workspaceId, measured.handles]);
   return { attempts: erased.rowCount ?? 0, scrubs: scrubs.rowCount ?? 0, receipts: receipts.rowCount ?? 0 };

@@ -15,7 +15,8 @@ import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
 import { readOperationalOpportunity, setManualControlMode } from '../crm/pipeline.ts';
 import { grantFollowUpPermission } from '../sequences/followUpPermissions.ts';
-import { retireRoute } from '../crm/routes.ts';
+import { retireRouteForCallOutcome } from '../crm/routes.ts';
+import {lockPreparedCallingHistory} from '../calling/preparationHistory.ts';
 import { databaseNow } from '../policy/clock.ts';
 import {
   acceptPolicy,
@@ -255,6 +256,7 @@ export async function logCallOutcome(
   // ---- 1. Decide ----------------------------------------------------------
   //
   // Gate precedes every row lock and every engaged-call stop effect.
+  await lockPreparedCallingHistory(context,input.firmId);
   await lockSendGateForStopFact(context);
   const handoffBinding = await bindPhoneHandoffOutcome(context, input);
   if (!handoffBinding.ok) return handoffBinding;
@@ -480,7 +482,7 @@ export async function logCallOutcome(
       }
     }
   }
-  if ((effects.retiresRoute || effects.suppressesNumber) && route === null) {
+  if (effects.retiresRoute&&route===null||effects.suppressesNumber&&!route?.e164) {
     followUps.push({ kind: 'route_not_named', reason: input.outcome });
   }
 
@@ -590,7 +592,7 @@ export async function logCallOutcome(
       const stops = doNotCallStops(input);
       // "Suppress the number immediately" — the number that was dialed, with the channel
       // the salesperson chose (P1: calls only unless "don't contact me again").
-      if (route !== null) {
+      if (route?.e164) {
         const handle = await recordSuppression(context, {
           scope: 'handle',
           value: route.e164,
@@ -621,11 +623,7 @@ export async function logCallOutcome(
 
     let retiredRouteId: string | null = null;
     if (effects.retiresRoute && route !== null) {
-      const retired = await retireRoute(context, {
-        routeKind: 'phone',
-        routeId: route.id,
-        reason: 'wrong number, recorded on a call',
-      });
+      const retired = await retireRouteForCallOutcome(context,callLogId);
       if (!retired.ok) return refusePolicy('route_unknown');
       retiredRouteId = route.id;
     }

@@ -228,6 +228,9 @@ export const CALL_CORRECTION_REFUSAL_CODES = [
 export type CallCorrectionRefusalCode = (typeof CALL_CORRECTION_REFUSAL_CODES)[number];
 
 export const correctCallOutcomeResultSchema = z.object({
+  /** A source-erased endpoint cannot receive a new handle suppression. The actual
+   * correction and any explicitly requested independent Firm stop still apply. */
+  attention: z.array(z.literal('route_not_named')).max(1).optional(),
   callLogId: uuid,
   outcome: callOutcomeSchema,
   revision: z.number().int().min(1),

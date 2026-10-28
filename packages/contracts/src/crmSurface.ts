@@ -351,8 +351,8 @@ export const firmPageRequestSchema = z.strictObject({
    * brief or null. Negotiated for the same reason.
    */
   include: z
-    .array(z.enum(['stops', 'preparedBrief', 'tasks', 'timeline', 'meeting_tasks']))
-    .max(5)
+    .array(z.enum(['stops', 'preparedBrief', 'tasks', 'timeline', 'meeting_tasks', 'callingPreparation']))
+    .max(6)
     .optional(),
   /**
    * S4F: with `include: ['timeline']`, the page of the activity timeline older than this
