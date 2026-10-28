@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version-file: .node-version
       - name: Install
@@ -177,7 +177,7 @@ jobs:
           # are what build the deployed schema.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         # Before the guard, not after it: the guard runs the tool's own deployed-range
         # comparison, which is TypeScript. It needs no `npm ci` — that module imports
         # nothing but Node's own and a dependency-free file in this repository — but it
@@ -421,7 +421,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version-file: .node-version
       - name: Install integrity-pinned Gitleaks 8.30.1
