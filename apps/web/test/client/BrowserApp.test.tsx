@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { webcrypto } from 'node:crypto';
 import { TextEncoder } from 'node:util';
-import { callingWrapInputSchema } from '@fss/contracts';
+import { callingSetupSchema, callingWrapInputSchema } from '@fss/contracts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BrowserApp } from '../../src/client/BrowserApp.tsx';
 import { BrowserToday } from '../../src/client/BrowserToday.tsx';
@@ -36,6 +36,7 @@ function setup() {
     if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: [], hasMore: false });
     if (url === '/browser/api/crm/firm-page-v3') return json({ version: 3, visibility: 'assigned_or_admin', read: { visibility: 'assigned_or_admin', firm }, opportunities: [], holds: [], followUpPermissions: [] });
     if (url === '/browser/api/calling-identities') return json({ identities: [] });
+    if (url === '/browser/api/calling/setup') return json(callingSetupSchema.parse({ callingProvider: { provider: 'tel', version: 4 }, telephonyBudget: { dailyCeilingCents: 500, maxMinutesPerCall: 4, unitPriceMicros: 14000, version: 3 }, spentTodayCents: 0, configured: true }));
     if (url === '/browser/api/calling/wrap') {
       const { commandId, ...payload } = JSON.parse(String(init?.body)) as Record<string, unknown>;
       expect(commandId).toBeTruthy(); expect(localStorage.getItem(CALLING_PENDING_KEY)).toContain(commandId);
@@ -178,7 +179,7 @@ describe('BrowserApp real shared presentation', () => {
       await screen.findByRole('heading', { name: firm.name, level: 2 });
       expect(screen.getByRole('button', { name: 'Check call readiness' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'After your conversation' })).toBeTruthy();
-      expect(send.mock.calls.slice(before).every(([url]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/crm/firm-page-v3' || url === '/browser/api/calling-identities')).toBe(true);
+      expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/crm/firm-page-v3' || url === '/browser/api/calling-identities' || (url === '/browser/api/calling/setup' && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
       expect(storage.getItem(PENDING_KEY)).toBeNull();
       expect(sessionStorage.length + localStorage.length).toBe(0);
       navigate('Email'); navigate('Calling');
@@ -199,7 +200,7 @@ describe('BrowserApp real shared presentation', () => {
         expect(screen.queryByRole('heading', { name: 'Calling' })).toBeNull(); expect(send).toHaveBeenCalledTimes(before);
         fireEvent.click(screen.getByRole('button', { name: 'Exact candidate' }));
         await screen.findByRole('heading', { name: 'Selected retained observation' });
-        expect(send.mock.calls.slice(before).every(([url]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/list')).toBe(true);
+        expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/list' || (url === '/browser/api/calling/setup' && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
         navigate('Email'); navigate('Calling');
         await screen.findByRole('heading', { name: 'Selected retained observation' });
         await act(async () => { client.invalidate(); await client.refresh(); });
