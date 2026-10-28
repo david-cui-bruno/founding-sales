@@ -22,7 +22,12 @@ export function CallingContext({client,entry,onReady,onOpenPreparedFirm}:{client
   const project=():void=>{
    clearTimeout(timer);if(!current()||!loadedData)return;
    let delay:number|null=null;
-   if(loadedData.firm){loadedData={...loadedData,firm:expireCallingPage(loadedData.firm)};delay=callingPreparationDelay([loadedData.firm!.read.firm]);}
+   if(loadedData.firm){
+    const firm=expireCallingPage(loadedData.firm);
+    // An unchanged session refresh must not replace the execution context.
+    if(firm!==loadedData.firm)loadedData={...loadedData,firm};
+    delay=callingPreparationDelay([firm.read.firm]);
+   }
    if(loadedData.proof){const remaining=Date.parse(loadedData.proof.validUntil)-Date.now();
     if(remaining<=0){const {proof:_expired,...recorded}=loadedData;loadedData=recorded;}
     else delay=delay===null?remaining:Math.min(delay,remaining);
