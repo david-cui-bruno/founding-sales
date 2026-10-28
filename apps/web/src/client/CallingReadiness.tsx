@@ -23,7 +23,7 @@ const reasons:Record<DialRefusalCode,string>={
  ticket_unknown:'The call reservation is unknown.',ticket_expired:'The call reservation expired.',ticket_wrong_device:'The call reservation belongs to another device.',already_consumed:'The call reservation has already been used.',
 };
 const providerMessage=(status:Readiness['status']):string=>'availability'in status
- ?status.reason==='calling_off'?'In-app calling is off. Review Calling in owner Settings before enabling browser calls.'
+ ?status.reason==='calling_off'?'In-app calling is off. Owner setup is required before browser calls can start; this web app does not yet offer that control.'
  :status.reason==='integration_unconfigured'?'The calling provider is not configured. Setup needs operator attention.'
  :'This Firm is unavailable to the calling provider.'
  :status.cadence.parked?'Calling cadence is parked. Review the existing call history before resuming.'
