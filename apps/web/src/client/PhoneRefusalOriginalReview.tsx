@@ -1,27 +1,28 @@
 import {useCallback,useEffect,useMemo,useRef,useState,type JSX} from 'react';
-import {PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH,prospectPhoneRefusalOriginalSchema,type ProspectPhoneRefusalOriginal,type ProspectPhoneDiscoveryView} from '@fss/contracts';
+import {PROSPECT_PHONE_REFUSAL_ORIGINAL_PATH,prospectPhoneRefusalOriginalSchema,type ProspectPhoneRefusalOriginal,type ProspectPhoneDiscoveryView,type ManualPhoneChoice} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
 import {RetainedPhoneEvidence} from './RetainedPhoneEvidence.tsx';
 
 /** Memory-only, one selected block from an explicitly read discovery result.
  * Subscription/timer callbacks erase only. They never read or retry originals. */
-export function PhoneRefusalOriginalReview({client,view,expiresAt}:{client:BrowserClient;view:ProspectPhoneDiscoveryView;expiresAt:number}):JSX.Element{
+export function PhoneRefusalOriginalReview({client,view,expiresAt,onPhoneChoice,phoneChoiceDisabled=false}:{client:BrowserClient;view:ProspectPhoneDiscoveryView;expiresAt:number;onPhoneChoice?:(choice:ManualPhoneChoice)=>void;phoneChoiceDisabled?:boolean}):JSX.Element{
  const epoch=client.epoch,binding=useMemo(()=>({client,view,epoch}),[client,view,epoch]);
  const latest=useRef(binding),mounted=useRef<typeof binding|null>(null),operation=useRef<symbol|null>(null);
  latest.current=binding;
  const [selected,setSelected]=useState<{binding:typeof binding;value:ProspectPhoneRefusalOriginal}|null>(null);
  const [status,setStatus]=useState<{binding:typeof binding;text:string}|null>(null);
+ const [literal,setLiteral]=useState('');
  const current=useCallback(():boolean=>latest.current===binding&&mounted.current===binding&&client.isCurrent(epoch)&&client.current?.status==='signed_in'&&client.current.role==='admin'&&expiresAt>Date.now(),[binding,client,epoch,expiresAt]);
  const allowed=useCallback(():boolean=>{try{const held=client.qualification.read();return current()&&(held===null||held.receipt!==undefined);}catch{return false;}},[client,current]);
  useEffect(()=>{
   mounted.current=binding;operation.current=null;setSelected(null);setStatus(null);
-  const erase=():void=>{operation.current=null;setSelected(null);setStatus(null);};
+  const erase=():void=>{operation.current=null;setSelected(null);setStatus(null);setLiteral('');};
   const unsubscribe=client.subscribe(()=>{if(!allowed())erase();});
   const timer=setTimeout(erase,Math.max(0,Math.min(expiresAt-Date.now(),2_147_483_647)));
   return()=>{mounted.current=null;operation.current=null;unsubscribe();clearTimeout(timer);};
  },[binding,expiresAt,client,allowed]);
  const select=async(location:ProspectPhoneRefusalOriginal['location']):Promise<void>=>{
-  operation.current=null;setSelected(null);setStatus(null);
+  operation.current=null;setSelected(null);setStatus(null);setLiteral('');
   if(!allowed()||location.runId!==view.runId||location.authority.kind!=='phone_discovery'||location.authority.runId!==view.runId||location.lineage.kind!=='provider_original')return;
   const token=Symbol('selected-refusal');operation.current=token;
   const active=():boolean=>operation.current===token&&allowed()&&location.authority.kind==='phone_discovery'&&Date.parse(location.authority.expiresAt)>Date.now();
@@ -38,8 +39,10 @@ export function PhoneRefusalOriginalReview({client,view,expiresAt}:{client:Brows
   finally{if(operation.current===token)operation.current=null;}
  };
  const visible=selected?.binding===binding&&allowed()?selected.value:null;
+ const start=visible&&literal?visible.text.indexOf(literal):-1;
+ const unique=visible&&start>=0&&literal.length<=200&&visible.text.indexOf(literal,start+1)===-1;
  return <>
-  <RetainedPhoneEvidence evidence={view.phoneEvidence} review={{runId:view.runId,select:location=>{void select(location);}}}/>
+  <RetainedPhoneEvidence evidence={view.phoneEvidence} review={{runId:view.runId,select:location=>{void select(location);}}} {...(onPhoneChoice?{onPhoneChoice}:{})} phoneChoiceDisabled={phoneChoiceDisabled}/>
   {status?.binding===binding?<p role="status">{status.text}</p>:null}
   {visible?<section aria-label="Selected retained refusal original">
    <p>Whole retained original for manual refusal review only. No channel authority granted. Not a selected endpoint, verified identity or call permission.</p>
@@ -47,6 +50,7 @@ export function PhoneRefusalOriginalReview({client,view,expiresAt}:{client:Brows
    <p>Retained source {visible.location.url} · Retrieved {visible.location.retrievedAt} · Parser {visible.location.parser}</p>
    <p>Captured content hash {visible.location.contentHash} · Retained blocks hash {visible.location.relevantTextHash}. Provider original, not a fresh page check.</p>
    <pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{visible.text}</pre>
+   {onPhoneChoice?<div><label>Exact number from this original<input aria-label="Exact number from this original" value={literal} maxLength={200} disabled={phoneChoiceDisabled} onChange={event=>setLiteral(event.target.value)}/></label><button type="button" disabled={phoneChoiceDisabled||!unique} onClick={()=>{if(unique&&allowed()){const location=visible.location;onPhoneChoice({runId:location.runId,observationId:location.observationId,blockId:location.blockId,labelStart:location.labelStart,labelEnd:location.labelEnd,start,end:start+literal.length,contentHash:location.contentHash,relevantTextHash:location.relevantTextHash});}}}>Keep this number in Calling</button><p>The server checks the selected literal and source again. This saves a manual choice only.</p></div>:null}
    <button type="button" onClick={()=>{operation.current=null;setSelected(null);setStatus(null);}}>Close retained original</button>
   </section>:null}
  </>;

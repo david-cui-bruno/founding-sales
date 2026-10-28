@@ -20,6 +20,8 @@
 | Access, settings and diagnostics | [Normal sign-in, devices, owner setup, holds/caps, appearance](relationships-and-controls.md#access-and-owner-controls) | Browser Settings is account/access/appearance only. Desktop owner controls remain. No auth bypass or consent inferred from health. |
 | Release, recovery and installation | [Hosted execution](../operations/lean-release-workflow.md), [invariants](../greenfield/release.md), [desktop install](../greenfield/install.md) | Operational path, not a user feature proof or activation permission. Restore UNTESTED unless explicitly evidenced. |
 
+Calling includes the [Kept source-number worklist](selling.md#calling-and-follow-through); implementation/delivery status remains in current-state.
+
 Browser shell/navigation source: [BrowserApp](../../apps/web/src/client/BrowserApp.tsx), [sections](../../apps/web/src/client/workspaceNavigation.ts). Secondary destinations are linked where actually supported, not invented new routes. API/worker composition: [processes](../greenfield/processes.md). Desktop fallback composition: [App](../../apps/desktop/src/renderer/app/App.tsx).
 
 ## Drive and interpret

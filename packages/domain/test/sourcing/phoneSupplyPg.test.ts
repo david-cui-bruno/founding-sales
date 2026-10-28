@@ -11,11 +11,12 @@ import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceL
 import {manualOrdinaryFixture} from './support/manualProspectFixture.ts';
 import type {PageFetchProvider,PageFetchRequest} from '../../research/providers.ts';
 import {phoneSupplyObservation as observation,phoneSupplyHtml as html,PHONE_SUPPLY_SITE as website} from './phoneSupplyFixtures.ts';
+import {REQUIRED_SCHEMA} from '../../db/schemaRange.ts';
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 let serial=0;
 const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime);
 const worker=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'worker'}),runtime);
-beforeAll(async()=>{db=await createTestDatabase();expect((await db.session.query<{version:number}>('SELECT max(version) version FROM schema_versions')).rows[0]!.version).toBe(142);seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
+beforeAll(async()=>{db=await createTestDatabase();expect((await db.session.query<{version:number}>('SELECT max(version) version FROM schema_versions')).rows[0]!.version).toBe(REQUIRED_SCHEMA);seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
 beforeEach(async()=>{await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM jobs');await db.session.query('DELETE FROM research_settings');});
 afterAll(async()=>{await db.drop();});
 async function valid(texts:string[]){

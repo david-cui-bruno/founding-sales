@@ -1,5 +1,5 @@
 import type {JSX} from 'react';
-import type {ManualProspect} from '@fss/contracts';
+import type {ManualProspect,ManualPhoneChoice} from '@fss/contracts';
 import {useCurrentPhoneEvidence} from './useCurrentPhoneEvidence.ts';
 import {PhoneRefusalDiagnostics,type PhoneRefusalReview} from './PhoneRefusalDiagnostics.tsx';
 
@@ -15,7 +15,7 @@ function safeSource(value:string):string|null{
  return null;
 }
 /** Retained endpoint evidence only, never phone ownership, identity or permission. */
-export function RetainedPhoneEvidence({evidence:retained,compact=false,review}:{evidence:PhoneEvidence;compact?:boolean;review?:PhoneRefusalReview}):JSX.Element{
+export function RetainedPhoneEvidence({evidence:retained,compact=false,review,onPhoneChoice,phoneChoiceDisabled=false}:{evidence:PhoneEvidence;compact?:boolean;review?:PhoneRefusalReview;onPhoneChoice?:(choice:ManualPhoneChoice)=>void;phoneChoiceDisabled?:boolean}):JSX.Element{
  const evidence=useCurrentPhoneEvidence(retained);
  if(compact)return <span>{summary(evidence)}</span>;
  const sources=evidence?.state==='observed'||evidence?.state==='conflicting'?evidence.sources:[];
@@ -33,6 +33,7 @@ export function RetainedPhoneEvidence({evidence:retained,compact=false,review}:{
      {'method' in source?<p>Source label: {source.label}. A retained label is not verified phone type or Person identity.</p>:<p>Phone type unknown · retained business_phone fact, not literal extraction.</p>}
      {'method' in source?<>
       <p>Retained literal: {source.literal}</p>
+      {onPhoneChoice&&source.normalizedValue&&source.authority.kind==='phone_discovery'?<button disabled={phoneChoiceDisabled} onClick={()=>onPhoneChoice({runId:source.runId,observationId:source.observationId,blockId:source.blockId,labelStart:source.labelStart,labelEnd:source.labelEnd,start:source.start,end:source.end,contentHash:source.contentHash,relevantTextHash:source.relevantTextHash})}>Keep {source.normalizedValue} in Calling</button>:null}
       {source.normalizedValue?(evidence?.state==='conflicting'?<p>Supported normalized alternative: {source.normalizedValue}. Not selected or verified.</p>:<p>Normalized retained value: {source.normalizedValue}. Formatting, not verification.</p>):<p>Unsupported or ambiguous literal. No normalized alternative.</p>}
      </>:null}
      <p>{href?<a href={href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{source.url}</a>:<span>Source URL unavailable or unsafe.</span>}</p>

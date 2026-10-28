@@ -1,6 +1,6 @@
 # Current operating state
 
-## October27 2026,20:15ET: Calling readiness deployed and hosted read
+## October27 2026: Calling readiness deployed; kept worklist in progress
 
 **Main/production6d9555017; schema142.** PR817 merged with the exact reviewed tree; checkpointsd1f59264e/0000d6ec3 and source98f80ed62/testa3889b1a8 remain unchanged ancestors. Final PR gate40590854105/images40590854106 and natural exact-main gate40594005347/images40594005223 passed. No rerun; the superseded older PR gate was canceled, not accepted. Both ordinary/authentication reviews closed findings.
 
@@ -9,6 +9,8 @@
 **Read-only readiness #816:** explicit canonical Firm/route/identity check exposes provider/cadence/policy/DNC before microphone. Final route-version and post-wait Firm/authentication fences passed79 focused checks and3 distinct signed fictional cases across split runs; fixture failures retained, all resources independently absent. Types/lint/workflow/secrets passed, ratchets unchanged. Normal founder Firefox20:09/20:11ET reads on existing canonical3G and RentProv routes showed provider OFF, own identity available and DNC clearance not established; RentProv also outside calling hours. No call/microphone/recording authorization or outcome/draft/settings/source write. Website identity support remains unestablished in that view; these are not callable prospects.
 
 David confirmed no actual conversation/promise exists, then requested the five retained company numbers directly. No promised-email write is due. Existing Follow-ups had no drafts. Covered-area registry data remains open under #707; no paid scope expansion or iPhone-lane reopening. No further registry prompt is needed to provide numbers. Real audio/outcome→draft usefulness remains unproven. Private `~/.jcode/scratch/fss-candidate-authority-20261023/CODEX-CALLING-READINESS-20261027.md` owns exact receipts/todos. Status checkpoint64f2961ac is preserved unpushed; no completed capture/recovery/release/check was replayed.
+
+**Active #818:** David requests these five saved with their numbers in Calling. Kept worklist/source annotation and schema143 are in progress; production saves remain pending. Root owns delivery and exact UI writes, preserving unpushed64f2961ac/6d47b9f85.
 
 **Useful manual-review milestone5/5:** RPM Boston, J Butler, RoundRoom, RPM Lakeview and3G Properties Group/Denton retained. Lakeview/3G each had ONE Find, terminal COMPLETE and selected same-block originals; canonical/type/Person/ownership/reachability/fit/eligibility remain unknown. Chosen continuation stopped4/5 slots used, none pending. Exact sources/check times/phones and next actions remain in private CODEX-USEFUL-SUPPLY-20261027.md and [PLAN](../../apps/web/PLAN.md). Historical prepared0/10 remains; continuous prepared replenishment stays open under #797.
 

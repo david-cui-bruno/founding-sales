@@ -1,5 +1,8 @@
 # Browser delivery plan
 
+**Active #818:** save the existing five manual-review prospects and source-bound chosen numbers in Calling. Root owns implementation/schema143/integration/release and exact normal-UI writes. Kept admin worklist/source annotation is in progress; no production save yet. No new capture, canonical promotion, call or outcome. Preserve unpushed64f2961ac/6d47b9f85 unchanged through review/CI/delivery.
+
+
 ## Current parent783 direction, October27 2026 20:15ET: Calling readiness deployed
 
 **Protected bced recovery COMPLETE:** PR813 native-log transport and PR814 protected OFF observation merged with green applicable CI and closed ordinary/production-risk reviews. Then-main3b24c344a exactly matched reviewed PR814's green tree; natural main gate40559803789/images40559803784/infrastructure40559803706 passed without rerun. Original bced/images40519161322/gate40519161282 binding is unchanged. Protected observation40559971806 passed, then one full recovery40560503858 completed18:52:17: historical custody,337 retirement, PITR, schema/runtime/canary/public smoke, final OFF and exact original release-record readback passed. No migration/rollback; direct18:55 health bced/schema142/API163/2worker164/1 complete. Final OFF18:49:46.135 stored/effective true,finishing0,versions[4]; temporary readers338/339/341/342 INACTIVE and normal family340 ACTIVE. Historical execution/effects of old40522197864 remain UNKNOWN; the old run stays failed. Shared holds/protected controls unchanged, queued automatic40560952030 skipped writers. PITR18:33:39.898 covered18:38:15, restoration UNTESTED. Private CODEX-RECOVERY-20261027.md retains native receipts and active todos.

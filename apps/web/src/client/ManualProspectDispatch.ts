@@ -15,6 +15,7 @@ export async function dispatchManualProspect(client:BrowserClient,held:PendingMa
  });
  if(!current())return '';
  if(answer.status==='accepted'&&(answer.result.candidateId!==held.payload.candidateId||answer.result.revision!==held.payload.expectedRevision||answer.result.state!==held.payload.state))throw Error('Manual feedback receipt mismatch');
+ if(answer.status==='accepted'&&Object.hasOwn(held.payload,'phoneChoice')&&JSON.stringify(answer.result.phoneChoice)!==JSON.stringify(held.payload.phoneChoice))throw Error('Manual phone choice receipt mismatch');
  client.manualProspects.retain({...held,receipt:answer.status==='accepted'?{status:'accepted',result:answer.result}:{status:'refused'}});
  return answer.status==='accepted'?'Manual feedback saved. Canonical candidate and contact authority unchanged.':`Manual feedback refused: ${answer.reason}`;
 }

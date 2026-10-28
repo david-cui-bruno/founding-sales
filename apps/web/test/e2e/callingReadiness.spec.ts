@@ -26,6 +26,7 @@ test('signed read-only readiness exposes provider OFF before microphone setup at
  const effects:string[]=[];
  page.on('request',request=>{if(/\/calls\/(?:access-token|session)$|\/calling\/wrap$/u.test(new URL(request.url()).pathname))effects.push(request.url());});
  await signInGlass(page,owned.app);await navigateGlass(page,'Calling');
+ await page.getByRole('button',{name:'Prepared queue',exact:true}).click();
  await page.locator('.calling-queue li button').filter({hasText:seed.name}).click();
  await expect(page.getByRole('combobox',{name:'Browser calling identity'})).toHaveValue(seed.identityId);
  await page.getByRole('combobox',{name:'Browser call route'}).selectOption({index:1});
@@ -50,6 +51,7 @@ test('signed read-only readiness exposes provider OFF before microphone setup at
 test('remote version drift clears readiness even when the route ID and number stay unchanged',async({context,page})=>{
  await containSyntheticBrowser(context,owned.app);await installCallingFake(context,owned);
  await signInGlass(page,owned.app);await navigateGlass(page,'Calling');
+ await page.getByRole('button',{name:'Prepared queue',exact:true}).click();
  await page.locator('.calling-queue li button').filter({hasText:seed.name}).click();
  await expect(page.getByRole('combobox',{name:'Browser calling identity'})).toHaveValue(seed.identityId);
  await page.getByRole('combobox',{name:'Browser call route'}).selectOption({index:1});
@@ -71,6 +73,7 @@ test('Firm merge during an actual registry wait erases private advice before ret
  owned.app.chooseIdentity(f.alpha.admin);
  await containSyntheticBrowser(context,owned.app);await installCallingFake(context,owned);
  await signInGlass(page,owned.app);await navigateGlass(page,'Calling');
+ await page.getByRole('button',{name:'Prepared queue',exact:true}).click();
  await page.locator('.calling-queue li button').filter({hasText:seed.name}).click();
  await expect(page.getByRole('combobox',{name:'Browser calling identity'})).toHaveValue(seed.identityId);
  await page.getByRole('combobox',{name:'Browser call route'}).selectOption({index:1});

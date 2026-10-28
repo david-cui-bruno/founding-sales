@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useRef,useState,type JSX} from 'react';
-import {prospectPhoneDiscoveryViewSchema,type ProspectPhoneDiscoveryView} from '@fss/contracts';
+import {prospectPhoneDiscoveryViewSchema,type ProspectPhoneDiscoveryView,type ManualPhoneChoice} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
 import type {PendingQualification} from './QualificationPending.ts';
 import {dispatchQualification,reconcilePhoneDiscovery} from './QualificationDispatch.ts';
@@ -15,7 +15,7 @@ function evidenceExpiry(view:ProspectPhoneDiscoveryView):number{
   ...sources.flatMap(source=>'method' in source&&source.authority.kind==='phone_discovery'?[Date.parse(source.authority.expiresAt)]:[]));
 }
 /** Explicit phone-only acquisition. No mount/list IO, qualification, admission or retry. */
-export function BrowserPhoneDiscovery({client,candidateId,revision}:{client:BrowserClient;candidateId:string;revision:number}):JSX.Element{
+export function BrowserPhoneDiscovery({client,candidateId,revision,onPhoneChoice,phoneChoiceDisabled}:{client:BrowserClient;candidateId:string;revision:number;onPhoneChoice?:(choice:ManualPhoneChoice)=>void;phoneChoiceDisabled?:boolean}):JSX.Element{
  const epoch=client.epoch;
  const binding=useMemo(()=>({client,candidateId,revision,epoch}),[client,candidateId,revision,epoch]);
  const latest=useRef(binding),mounted=useRef<typeof binding|null>(null),operation=useRef<symbol|null>(null);
@@ -90,6 +90,6 @@ export function BrowserPhoneDiscovery({client,candidateId,revision}:{client:Brow
   {exact&&held?.receipt?.kind==='refused'?<p>Phone discovery request refused. Phone remains unverified.</p>:null}
   {custody?.binding===binding&&custody.failed?<p>Command custody unavailable. No request can be dispatched.</p>:null}
   {status?.binding===binding?<p role="status">{status.text}</p>:null}
-  {visible?<div aria-label="Current phone discovery result"><p>Phone discovery {visible.state}{visible.reason?` · ${visible.reason.replaceAll('_',' ')}`:''}. No channel authority granted.</p><p>Requested {visible.requestedAt} · Checked {visible.checkedAt??'unknown'} · Expires {visible.expiresAt}</p>{visible.state==='complete'?<PhoneRefusalOriginalReview client={client} view={visible} expiresAt={evidenceExpiry(visible)}/>:<p>Phone evidence unavailable while discovery is {visible.state}. Phone remains unknown.</p>}</div>:null}
+  {visible?<div aria-label="Current phone discovery result"><p>Phone discovery {visible.state}{visible.reason?` · ${visible.reason.replaceAll('_',' ')}`:''}. No channel authority granted.</p><p>Requested {visible.requestedAt} · Checked {visible.checkedAt??'unknown'} · Expires {visible.expiresAt}</p>{visible.state==='complete'?<PhoneRefusalOriginalReview client={client} view={visible} expiresAt={evidenceExpiry(visible)} {...(onPhoneChoice?{onPhoneChoice}:{})} {...(phoneChoiceDisabled!==undefined?{phoneChoiceDisabled}:{})}/>:<p>Phone evidence unavailable while discovery is {visible.state}. Phone remains unknown.</p>}</div>:null}
  </section>;
 }
