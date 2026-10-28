@@ -1,25 +1,9 @@
-# Owner Settings
+# Owner settings in the web product
 
-`apps/desktop/src/renderer/settings/SettingsView.tsx` composes the current compact page. It reuses existing bridge/contracts and server authority rather than adding a second configuration system. Actual installed version and deployed capability availability remain separate from source completion.
+[Web Settings](../../apps/web/src/client/BrowserSettings.tsx) currently exposes account, workspace/role/access expiry, explicit access refresh and page-local appearance. [ADR0027](../adr/0027-web-product.md) retires desktop. Missing owner controls are web product work, not a desktop setup prerequisite.
 
-## Ordinary page
+Calling setup #820 must expose the existing owner number, personal state confirmations, provider switch and unchanged budget around the calling journey. A genuine personal confirmation cannot be authored by an agent. Until that source is implemented and delivered, the current web Settings screen cannot enable Calling. Keep provider OFF and all server execution/registry/refusal/unknown gates.
 
-- **Account:** signed-in status, role when known, mailbox and app/update status. Connection does not imply capture or interpretation consent.
-- **Calling:** number, compact personal state confirmations, calling switch, daily budget and voicemail. Personal confirmation must be genuine. Server refusals and spending/credential gates remain authoritative.
-- **Email:** production sending switch, postal address, domain health and caps/ramp. A displayed deployment flag is not the stored workspace switch or effective sending. Technical release reference/history are under Advanced. A setting draft does not save itself.
-- **Research & discovery:** research switch and daily/monthly budgets, shared research steps/day, page bound and read-only discovery status/allowances. A fresh firm normally uses two steps. Research off pauses new discovery/check work; on bypasses neither holds nor allowances. Independent discovery configuration is not exposed in this client.
-- **LinkedIn:** account connection only, not authority for outreach or posting.
+Other owner capabilities retain their authenticated API/domain owners: [settings routes](../../apps/api/src/routes/settings.ts), [calling identities](../../packages/domain/dial/identities.ts), [sending safeguards](sending.md) and [CRM capability configuration](../operations/crm-capability-activation.md). Do not fabricate UI paths or infer consent from configured values. Gmail business-only new-originals/no-history, exact provider/model/data/spending bindings, suppression and owner OFF stay unchanged.
 
-## One collapsed Advanced section
-
-Keyboard-accessible Advanced retains configuration, Dashboard and Diagnostics views, time zone, stage editor, holidays, reply model, recording/calendar controls, raw history, CRM owner controls and operational status. Some deep links open the containing disclosure without writing a setting. Actual retained dashboard/diagnostic controls must not be confused with deleted orphaned diagnostics.
-
-Email release setup/history live inside Advanced while ordinary switch/address edits remain above. Technical edits remain drafts until the corresponding explicit Save, with unchanged server release-reference validation. See [release invariants](release.md). Cal.com capacity's Settings mount is absent, but its domain/API compatibility and live meeting synchronization remain. Generated Ask, automatic outreach-admission and recurring-posting policy sections are absent.
-
-## Save and refusal boundaries
-
-`useAdmin.ts`, `Administration.tsx`, `SettingRow.tsx`, `CallingCalendarSection.tsx` and specialized existing sections retain their authenticated command paths, stale-version checks, read-only/refusal state and attribution of errors. Waiting/offline/identity changes cannot create authority. Reload after uncertain outcomes rather than submitting a new conflicting command blindly.
-
-Settings → Advanced → CRM owner setup retains capture/extraction configuration with exact model/endpoint, token prices, budgets and access/data-handling versions. Saving extraction configuration is disabled-only and clears current authority; it queues no provider work and grants no capture/backfill/processing/outreach consent. See [owner setup](../operations/crm-capability-activation.md) for separate approval, Disable and deletion boundaries.
-
-Existing component and browser flows protect ordinary/advanced accessibility, private identity changes, refusal and save behavior. Fixture screenshots are fictional rendered source evidence, not production configuration or permission. Do not click a live Save/Enable, switch an account or perform provider work as part of UI verification.
+Every web owner mutation needs exact current principal/version, explicit action, durable metadata-only unknown custody and current readback. A draft or successful release grants no capture, contact, recording, sending or publication authority.

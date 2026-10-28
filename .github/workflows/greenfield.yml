@@ -45,9 +45,8 @@ jobs:
         with:
           node-version-file: .node-version
       - name: Install
-        # --ignore-scripts: the root postinstall fetches the Electron binary, which this
-        # job never runs. Most database tests use the service container; local diagnostic
-        # lifecycle acceptance deliberately starts its own embedded cluster.
+        # Dependency lifecycle scripts are held; only the pinned database native
+        # library is hydrated below for owned local lifecycle checks.
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Workflow documentation and code-size fast gate
         env:
@@ -62,7 +61,7 @@ jobs:
           fi
       - name: Hydrate only the pinned embedded PostgreSQL native library links
         # This exact dependency postinstall restores required .so symlinks omitted
-        # by ignore-scripts. It does not run the root Electron download or other scripts.
+        # by ignore-scripts. Other dependency scripts remain held.
         run: npm rebuild @embedded-postgres/linux-x64 --ignore-scripts=false --no-audit --no-fund
       - name: No durability for the throwaway database
         # The container lives for this job, so waiting on disk flushes buys nothing; a

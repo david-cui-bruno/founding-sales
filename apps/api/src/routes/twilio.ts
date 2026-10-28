@@ -1,3 +1,6 @@
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { lockSettingForRead } from '@fss/domain/settings/store.ts';
+import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import {
   consumeCallSession,
@@ -28,7 +31,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *   4. only then is the session looked up.
  *
  * **A refused voice request answers `<Say>` and `<Hangup/>`**, never `<Reject/>`: the
- * caller is David's own Mac, and a sentence tells him the call was not placed and why in
+ * caller is David's own client, and a sentence tells him the call was not placed and why in
  * general terms, without naming the firm, the number or the reason code. Replays, a
  * second use, an expired session, a mismatched identity and a suppression that landed
  * after authorization all answer this. The TwiML is 200 because Twilio executes only
@@ -128,9 +131,13 @@ export async function routeTwilio(request: ApiRequest, options: RoutingOptions):
     if (workspaceId === null) return refuse('session_unknown');
     if (!enabled.includes(workspaceId)) return notFound;
     const at = options.integrations?.decisionAt?.();
-    const consumed = await withTransaction(session, async () =>
-      await consumeCallSession(session, { workspaceId, sessionId, callSid, identity, ...(at === undefined ? {} : { at }) }),
-    );
+    const consumed = await withTransaction(session, async () => {
+      // The webhook acts for the server. Freeze the current owner switch through commit.
+      const context = repositoryContext(workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), session);
+      await lockSettingForRead(context, 'calling_provider');
+      if (await readCallingProvider(context) !== 'twilio') return { ok: false, reason: 'calling_provider_disabled' } as const;
+      return await consumeCallSession(session, { workspaceId, sessionId, callSid, identity, ...(at === undefined ? {} : { at }) });
+    });
     if (!consumed.ok) return refuse(consumed.reason);
     return {
       status: 200,

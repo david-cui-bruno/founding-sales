@@ -15,7 +15,7 @@ import { placeEmailSend } from '@fss/domain/src/rules/sendingWindow.ts';
 import { createAuthFixture, type AuthFixture, type SeededWorkspace } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm } from './support/crmSeed.ts';
-import { DESKTOP_VERSION_UNDER_TEST, routeAnswer, routeOptions } from './support/wireThrough.ts';
+import { CLIENT_VERSION_UNDER_TEST, routeAnswer, routeOptions } from './support/routeThrough.ts';
 import { databaseUrlOf, testRequestPool } from './support/poolFixture.ts';
 import { dispatch } from '../src/server.ts';
 import { sendGateLockName } from '@fss/domain/policy/sendGate.ts';
@@ -51,7 +51,7 @@ describe('an agreed sequence recorded on the call card', () => {
 
   const command = (extra: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
     commandId: randomUUID(),
-    clientVersion: DESKTOP_VERSION_UNDER_TEST,
+    clientVersion: CLIENT_VERSION_UNDER_TEST,
     ...extra,
   });
   const post = async (path: string, token: string, body: Readonly<Record<string, unknown>>) =>

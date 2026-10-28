@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
-import type { SessionQueryable } from '../../db/queryable.ts';
+import { withTransaction, type SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { retireRoute } from '../../crm/routes.ts';
 import { authorizeDial } from '../../dial/authorize.ts';
@@ -93,28 +93,28 @@ afterAll(async () => {
 describe('scenario 17: no replay ever yields a second allow', () => {
   it('allows the first authorization and refuses the replay of the same command id', async () => {
     const context = salespersonContext();
-    const first = await authorizeDialCommand(context, {
+    const first = await withTransaction(database.session, async () => authorizeDialCommand(context, {
       ...dialInput(),
       deviceId: seeded.alpha.salesperson.deviceId,
       commandId: 'cmd-dial-first',
-    });
+    }));
     expect(first.ok).toBe(true);
 
-    const replay = await authorizeDialCommand(context, {
+    const replay = await withTransaction(database.session, async () => authorizeDialCommand(context, {
       ...dialInput(),
       deviceId: seeded.alpha.salesperson.deviceId,
       commandId: 'cmd-dial-first',
-    });
+    }));
     expect(replay).toEqual({ ok: false, reason: 'already_consumed' });
   });
 
   it('refuses a second consumption of one ticket', async () => {
     const context = salespersonContext();
-    const issued = await authorizeDialCommand(context, {
+    const issued = await withTransaction(database.session, async () => authorizeDialCommand(context, {
       ...dialInput(),
       deviceId: seeded.alpha.salesperson.deviceId,
       commandId: 'cmd-dial-consume',
-    });
+    }));
     if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
 
     // Consumption re-runs `authorizeDial` (S10), calling window included, so
@@ -122,18 +122,18 @@ describe('scenario 17: no replay ever yields a second allow', () => {
     // passed only on weekdays 08:00-20:00 Providence time, and failed from 20:00 on
     // Friday 25 Sep 2026, 00:00Z. The replay is asked at the same
     // in-window instant, so its refusal cannot be the window's.
-    const consumed = await consumeDialTicket(context, {
+    const consumed = await withTransaction(database.session, async () => consumeDialTicket(context, {
       ticketId: issued.value.ticketId,
       deviceId: seeded.alpha.salesperson.deviceId,
       at: policy.insideWindow,
-    });
+    }));
     expect(consumed.ok).toBe(true);
 
-    const again = await consumeDialTicket(context, {
+    const again = await withTransaction(database.session, async () => consumeDialTicket(context, {
       ticketId: issued.value.ticketId,
       deviceId: seeded.alpha.salesperson.deviceId,
       at: policy.insideWindow,
-    });
+    }));
     expect(again).toEqual({ ok: false, reason: 'already_consumed' });
   });
 
@@ -142,23 +142,23 @@ describe('scenario 17: no replay ever yields a second allow', () => {
     // America/New_York: the window's end falls between issue and consumption. The
     // window is the firm's local clock, not a UTC date, so this refusal is the rule.
     const context = salespersonContext();
-    const issued = await authorizeDialCommand(context, {
+    const issued = await withTransaction(database.session, async () => authorizeDialCommand(context, {
       ...dialInput(),
       at: '2026-09-16T23:59:30.000Z',
       deviceId: seeded.alpha.salesperson.deviceId,
       commandId: 'cmd-dial-window-close',
-    });
+    }));
     if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
 
     const input = { ticketId: issued.value.ticketId, deviceId: seeded.alpha.salesperson.deviceId };
-    expect(await consumeDialTicket(context, { ...input, at: '2026-09-17T00:00:10.000Z' })).toEqual({
+    expect(await withTransaction(database.session, async () => consumeDialTicket(context, { ...input, at: '2026-09-17T00:00:10.000Z' }))).toEqual({
       ok: false,
       reason: 'outside_calling_window',
     });
     // The refusal wrote nothing, so the ticket is still decided on its merits once,
     // and then never again.
-    expect((await consumeDialTicket(context, { ...input, at: policy.insideWindow })).ok).toBe(true);
-    expect(await consumeDialTicket(context, { ...input, at: policy.insideWindow })).toEqual({
+    expect((await withTransaction(database.session, async () => consumeDialTicket(context, { ...input, at: policy.insideWindow }))).ok).toBe(true);
+    expect(await withTransaction(database.session, async () => consumeDialTicket(context, { ...input, at: policy.insideWindow }))).toEqual({
       ok: false,
       reason: 'already_consumed',
     });

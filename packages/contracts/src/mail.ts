@@ -1,22 +1,9 @@
 import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
 
-/**
- * The wire contract of the Gmail grant (specification 5.1, 12.1, 12.6).
- *
- * Four paths, served by `apps/api/src/routes/gmail.ts`: `POST /gmail/connect`,
- * `GET /gmail/status`, `POST /gmail/disconnect` and the browser's
- * `GET /oauth/gmail/callback`. The Mac calls the first two from the main process — the
- * "This Mac" card's Mailbox row, `apps/desktop/src/main/mailboxBridge.ts` — so the
- * shapes are here, where both sides import them, rather than in the route file.
- *
- * Until 24 September 2026 the command schemas lived in `apps/api/src/routes/mailSupport.ts`
- * with a note that they would move "in the pull request that adds the screen", because a
- * contract nobody on the other side reads is a contract that drifts. Nobody added the
- * screen: desktop 1.0.0 shipped with no way to connect a mailbox, and the first real
- * sign-in to production found the gap (docs/greenfield/release.md 8.0x). This file is
- * the move. The envelope is kept exactly as the route accepted it, so nothing a client
- * already sends changes meaning.
+/** Shared Gmail connection/status/disconnect and OAuth callback contracts.
+ * Connection is separate from capture consent, extraction approval and sending.
+ * Keep the established command envelope and privacy boundaries across clients.
  */
 
 /** The 5.3 envelope as the mail routes have always parsed it. */

@@ -1,3 +1,8 @@
+import { lockSettingForRead } from '@fss/domain/settings/store.ts';
+import { retainedPrincipalPublicationAuthority } from './retainedPrincipalAuthority.ts';
+import { requireCallingAuthority, CallingAuthorityChanged } from '@fss/domain/calling/followUpDraftAccess.ts';
+import { requireCurrentCallSessionRegistry } from '@fss/domain/calls/sessionClearance.ts';
+import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import {activeIdentityActor} from '@fss/domain/crm/identityAccess.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {nativeProcessingReference} from '@fss/domain/crm/sourceResolver.ts';
@@ -30,7 +35,7 @@ import { readCallTranscript } from '@fss/domain/calls/transcription.ts';
 import { readCallSummaries } from '@fss/domain/calls/summary.ts';
 import { readAnalysisSummaries } from '@fss/domain/calls/analysisPaid.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
-import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
+import { CallingProviderDisabled, policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
 import { privateAuthorityRefusal, privatePrincipalIsCurrent } from './privateReadAuthority.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -229,8 +234,18 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
   }
 
   const at = options.integrations?.decisionAt?.();
-  return await runPolicyCommand(deps, createCallSessionCommandSchema, 'create_call_session', async (context, body) =>
-    await createCallSession(context, {
+  let createdSessionId: string | null = null;
+  const beforeCommit = async (context: RepositoryContext) => {
+    if (createdSessionId === null) return;
+    const publication = retainedPrincipalPublicationAuthority(deps, context);
+    await requireCallingAuthority(context, publication.authority);
+    const currentAt = await requireCurrentCallSessionRegistry(context, createdSessionId);
+    if (publication.publicationNow(Date.parse(currentAt)) === null) throw new CallingAuthorityChanged();
+  };
+  return await runPolicyCommand(deps, createCallSessionCommandSchema, 'create_call_session', async (context, body) => {
+    await lockSettingForRead(context, 'calling_provider');
+    if (await readCallingProvider(context) !== 'twilio') throw new CallingProviderDisabled();
+    const outcome = await createCallSession(context, {
       firmId: body.firmId,
       ...(body.contactId === undefined ? {} : { contactId: body.contactId }),
       routeId: body.routeId,
@@ -240,6 +255,8 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
       commandId: body.commandId,
       configuredCallerIdE164: twilio.callerIdE164,
       ...(at === undefined ? {} : { at }),
-    }),
-  );
+    });
+    if (outcome.ok) createdSessionId = outcome.value.sessionId;
+    return outcome;
+  }, beforeCommit);
 }

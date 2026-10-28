@@ -1,5 +1,7 @@
 # Calling and recording outcomes
 
+The web app is the sole product under [ADR0027](../adr/0027-web-product.md). Browser execution requires strict current registry clearance at authorization and handoff, with original ticket/session deadlines, current principal/device and owner provider OFF preserved through waits. Readiness is advisory, never the execution authority. See [execution checks](../../apps/api/test/browserCallingExecution.integration.test.ts).
+
 Callie supports human-chosen calling from Today and a firm's record. A stored phone route is not permission or a guarantee that somebody will answer. Start with the [selling guide](../operations/how-to-sell.md), [calling policy](policy.md) and current server refusals. This document describes source behavior, not installed setup or a live call acceptance.
 
 ## Before calling

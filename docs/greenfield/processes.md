@@ -1,6 +1,6 @@
 # API and worker processes
 
-The API and worker share domain rules and schema declarations. Browser and desktop are authenticated clients, not replacement policy engines. This page locates source; the [feature map](../features/README.md) owns user journeys. The [lean release procedure](../operations/lean-release-workflow.md) is the sole production execution entrypoint; [release invariants](release.md) explain its constraints.
+The API and worker share domain rules and schema declarations. The web app is an authenticated client; the server owns policy. This page locates source; the [feature map](../features/README.md) owns user journeys. The [lean release procedure](../operations/lean-release-workflow.md) is the sole production execution entrypoint; [release invariants](release.md) explain its constraints.
 
 ## API composition
 

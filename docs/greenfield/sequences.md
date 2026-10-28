@@ -16,7 +16,7 @@ A human chooses the supported sequence and recipient. After a reached call outco
 
 Calendar/time-zone rules calculate due instants with their bound holiday/calendar version. The execution and outbound layers recheck current eligibility, permission, suppression, holds, mailbox coverage, recipient-local windows, sender caps/ramp and effective production sending before dispatch. A due card, schedule, approved template or preview does not mean a message was sent.
 
-Human review must include the supported full-body preview where available. Do not infer that a collapsed installed-client summary showed the full final message. Installing a new desktop is not permission to send, and an old compatible client does not bypass server authority.
+Human review must include the supported full-body preview where available. Do not infer that a collapsed installed-client summary showed the full final message. A client release grants no sending permission; the server retains current authority.
 
 Reply/refusal and other terminal stop facts cancel or hold follow-up through the existing terminal-stop boundary. Pausing, snoozing, resuming, migrating a sequence version and correcting a call outcome have different semantics. None may erase historical provider identity, clear an uncertain attempt or reopen a cancelled Shirley/other follow-up without authority. Cross-channel history remains conserved.
 

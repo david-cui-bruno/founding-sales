@@ -6,7 +6,7 @@
 
 CI builds immutable images, verifies their digests and binds release records to passing exact-main gate/images runs. The hosted shared production queue executes application, maintenance and reviewed infrastructure changes with the appropriate scoped identity/protected approval. Root owns release integration and actual-state observation. Owner configuration and capability consent are separate from deployment approval.
 
-The desktop build/signing/update path remains separately governed by [install](install.md). A signed client is not deployed API/schema acceptance or sending permission.
+Desktop publishing is retired under [ADR0027](../adr/0027-web-product.md); [historical signed artifacts](../operations/retained-client-artifacts.md) retain their operational controls. Web/API delivery is separate from activation.
 
 ## 1. Before the first release
 
@@ -25,7 +25,7 @@ First-release history is retained in [release-first](../archive/release-first.md
 
 The existing `greenfield-release.yml` rehearsal uses only its own `fss-rh-*` namespace and scoped role, with teardown and empty-prefix guard even after failure. [Restore](runbooks/restore.md) and [release history](../archive/release-history.md) retain recovery context. A rehearsal result is not production deployment, restoration proof or feature activation. Required release-class rehearsal/upgrade checks remain mandatory; an ordinary local documentation edit does not create a new rehearsal campaign.
 
-Infrastructure/release-script changes and migrations classified `touches-existing`, `privilege`, `destructive` or `unclassified` retain their required rehearsal. `additive`/`replaces-routine` migrations use actual deployed-baseline upgrade evidence instead, never an empty-database substitute. Every migration must qualify; replaced routines must actually be exercised. App-only/desktop-only changes do not create a schema rehearsal requirement. Retain the exact gate's upgrade artifact before hosted artifact expiry. The workflow's baseline bindings and live schema checks must agree, not merely copied repository variables.
+Infrastructure/release-script changes and migrations classified `touches-existing`, `privilege`, `destructive` or `unclassified` retain their required rehearsal. `additive`/`replaces-routine` migrations use actual deployed-baseline upgrade evidence instead, never an empty-database substitute. Every migration must qualify; replaced routines must actually be exercised. App-only changes do not create a schema rehearsal requirement. Retain the exact gate's upgrade artifact before hosted artifact expiry. The workflow's baseline bindings and live schema checks must agree, not merely copied repository variables.
 
 An empty Terraform state is not evidence that no cloud leftovers exist. The guard checks actual namespaced resources and locks. Unknown reads refuse absence. Reconcile the exact owned run/lock before cleanup, never unlock another active writer or broadly delete resources.
 
@@ -104,7 +104,7 @@ A data restore uses [restore](runbooks/restore.md) under separate authority for 
 
 ## 9. Dependency updates
 
-Dependabot updates remain normal reviewed PRs through required CI, never automatic merge authority. Desktop major changes also require the actual packaging/signing/update path when released, not merely ordinary source checks.
+Dependabot updates remain normal reviewed PRs through required CI, never automatic merge authority. All remaining workspace changes retain their relevant source, image and protected-release checks.
 
 ## Operations image retention and availability
 

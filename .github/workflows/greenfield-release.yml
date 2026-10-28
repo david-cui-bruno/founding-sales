@@ -56,7 +56,7 @@ on:
         required: true
         type: string
       desktop_commit_stamp:
-        description: 'The commit the signed desktop build was made from'
+        description: 'Historical client commit stamp retained by the release-record contract (ADR0027)'
         required: true
         type: string
       run_suffix:

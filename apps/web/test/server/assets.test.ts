@@ -16,7 +16,7 @@ describe('local public browser assets', () => {
     const script = decode('/renderer.js');
     expect(script.length).toBeGreaterThan(1000);
     expect(script).toContain('/browser/session');
-    expect(decode('/styles.css')).toContain('font-family:system-ui');
+    expect(decode('/styles.css')).toMatch(/:root\{font-family:[^;}]+/u);
     for (const asset of assets.values()) {
       expect(new TextDecoder().decode(asset.body)).not.toMatch(/FSS_BROWSER_|process\.env|import\.meta\.env|unsafe-inline|unsafe-eval|\beval\s*\(|new Function\s*\(|sourceMappingURL/u);
     }

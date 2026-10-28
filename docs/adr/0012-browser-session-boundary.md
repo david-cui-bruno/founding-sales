@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-Accepted for the local implementation slice authorized by David on October22 2026 at05:39UTC. This does not authorize hosted deployment, production data routing, provider configuration changes, new services or spending. The accepted desktop remains installed as fallback. Existing owner OFF, consent, channel, privacy and budget controls are unchanged.
+Accepted for the local implementation slice authorized by David on October22 2026 at05:39UTC. This does not authorize hosted deployment, production data routing, provider configuration changes, new services or spending. [ADR0027](0027-web-product.md) supersedes the desktop fallback assumption. Existing owner OFF, consent, channel, privacy and budget controls are unchanged.
 
 ## Decision
 

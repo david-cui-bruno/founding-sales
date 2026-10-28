@@ -7,8 +7,8 @@ function select(paths: string[], main = false) {
   return JSON.parse(result.stdout) as { broad: boolean; suites: string[]; upgrade: boolean; reasons: string[] };
 }
 describe('required CI selection', () => {
-  it('runs API changes with their desktop consumer and conserved domain/operations controls', () => {
-    expect(select(['apps/api/src/routes/gmail.ts']).suites).toEqual(['domain', 'api', 'desktop', 'ops']);
+  it('runs API changes with their web consumer and conserved domain/operations controls', () => {
+    expect(select(['apps/api/src/routes/gmail.ts']).suites).toEqual(['domain', 'api', 'web', 'ops']);
   });
   it('runs worker edits with API-owned configured extraction, Ask and booking journeys', () => {
     expect(select(['apps/worker/src/bootstrap/deployment.ts']).suites).toEqual(['domain', 'api', 'worker', 'ops']);
@@ -18,7 +18,7 @@ describe('required CI selection', () => {
   });
   it('requires real upgrade checks for schema paths and broad regression on main', () => {
     expect(select(['packages/domain/db/migrations/0100_example.sql']).upgrade).toBe(true);
-    expect(select(['apps/desktop/src/renderer/index.ts'], true).suites).toEqual(['contracts', 'domain', 'api', 'worker', 'desktop', 'ops']);
+    expect(select(['apps/web/src/client/BrowserApp.tsx'], true).suites).toEqual(['contracts', 'domain', 'api', 'worker', 'web', 'ops']);
   });
   it('keeps the required gate present for documentation with a recorded reason', () => {
     const result = select(['docs/adr/0011-lean-automatic-releases-with-maintenance.md']);

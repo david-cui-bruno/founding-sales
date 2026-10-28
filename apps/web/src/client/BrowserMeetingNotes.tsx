@@ -1,9 +1,7 @@
 import { useState, type JSX } from 'react';
 import { z } from 'zod';
 import { meetingNotesRevisionSchema, meetingOutcomesViewSchema, saveMeetingNotesSchema, uuid, type MeetingOutcomesView, type SaveMeetingNotes } from '@fss/contracts';
-import { MeetingDebrief } from '../../../desktop/src/renderer/meetings/MeetingDebrief.tsx';
-import { Button } from '../../../desktop/src/renderer/ui/button.tsx';
-import { Input } from '../../../desktop/src/renderer/ui/input.tsx';
+import { MeetingDebrief } from './MeetingDebrief.tsx';
 import { BrowserBoundaryError, type BrowserClient, type PendingNotes } from './BrowserClient.ts';
 
 const receiptSchema = z.strictObject({ status: z.literal('accepted'), replayed: z.boolean(), result: meetingNotesRevisionSchema });
@@ -12,7 +10,7 @@ const draftOf = (view: MeetingOutcomesView): SaveMeetingNotes => saveMeetingNote
   speakerMappings: view.notes.speakerMappings, itemOverrides: view.notes.itemOverrides, sufficient: view.notes.sufficient,
 });
 
-/** Thin editor reuses the real meeting debrief presentation, without its desktop global memory. */
+/** Meeting notes use the current private browser draft and exact command custody. */
 export function BrowserMeetingNotes({ client, firmId }: { client: BrowserClient; firmId: string }): JSX.Element {
   const restored = client.pending();
   const [meetingId, setMeetingId] = useState(restored?.draft.meetingId ?? '');
@@ -74,8 +72,8 @@ export function BrowserMeetingNotes({ client, firmId }: { client: BrowserClient;
   };
   return <section aria-label="Meeting notes" className="space-y-3 rounded-md border p-4">
     <h3>Meeting notes</h3>
-    <label>Meeting ID<Input aria-label="Meeting ID" value={meetingId} disabled={busy} onChange={event => { setMeetingId(event.target.value); }} /></label>
-    <Button disabled={busy} onClick={() => { void read(); }}>Read meeting notes</Button>
+    <label>Meeting ID<input aria-label="Meeting ID" value={meetingId} disabled={busy} onChange={event => { setMeetingId(event.target.value); }} /></label>
+    <button type="button" disabled={busy} onClick={() => { void read(); }}>Read meeting notes</button>
     <p role="status">{notice}</p>
     {view !== null ? <div><p>Current saved notes, revision {view.notes.revision}</p><blockquote className="whitespace-pre-wrap">{view.notes.debrief || 'No saved notes yet.'}</blockquote>{view.overview ? <p>{view.overview}</p> : null}</div> : null}
     {draft !== null ? <><MeetingDebrief draft={draft} busy={busy} pending={pending !== null} enabled={!busy} onChange={value => { if (pending === null) setDraft(value); }} onSave={() => { void save(); }} onDiscard={() => { if (view !== null && pending === null) setDraft(draftOf(view)); }} />

@@ -1,5 +1,5 @@
+import { readCallSessionClearance } from './sessionClearance.ts';
 import { CALL_CADENCE_PARKED_SOURCE, readCallCadence, isoMicroseconds } from './cadence.ts';
-import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import { randomUUID } from 'node:crypto';
 import {
   CALL_CADENCE,
@@ -16,7 +16,7 @@ import {
 import type { Queryable } from '../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
-import { authorizeDialCommand, consumeDialTicket } from '../dial/tickets.ts';
+import { authorizeDialCommand } from '../dial/tickets.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { readFirm } from '../crm/firms.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
@@ -24,13 +24,12 @@ import { openHold, releaseHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { authorizeDial } from '../dial/authorize.ts';
 import { workspaceBusinessZone } from '../research/ledger.ts';
-import { correctSettledCents, markCalling, settleAttempt, type SettleOutcome } from '../research/reservations.ts';
+import { correctSettledCents, settleAttempt, type SettleOutcome } from '../research/reservations.ts';
 import { readTelephonyBudget, readVoicemailScript } from '../settings/integrations.ts';
 import { clearMonthlyCash, lockMonthlyCash } from '../settings/cashCeiling.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { localDate } from '../src/rules/localClock.ts';
 import { databaseNow } from '../policy/clock.ts';
-import { sendGateLockName } from '../policy/sendGate.ts';
 import { admitToAnalysisPath, lockGateAndFirmForCallSid } from './pendingHold.ts';
 import type { EnqueueTranscriptionOutcome } from './transcription.ts';
 
@@ -162,6 +161,12 @@ export async function createCallSession(
   // checks were made against.
   if (!(await clearMonthlyCash(context, { at: now, zone, cents }))) return refuse('monthly_cash_ceiling');
 
+  await context.db.query('SAVEPOINT create_call_session');
+  const undo = async (reason: DialRefusalCode): Promise<CallSessionResult<{ sessionId: string; expiresAt: string }>> => {
+    await context.db.query('ROLLBACK TO SAVEPOINT create_call_session');
+    return refuse(reason);
+  };
+
   // The whole dial decision, and the ticket.
   const ticket = await authorizeDialCommand(context, {
     firmId: input.firmId,
@@ -216,6 +221,8 @@ export async function createCallSession(
     subjectId: sessionId,
     detail: { firmId: ticket.value.firmId, ticketId: ticket.value.ticketId, reservedCents: cents },
   });
+  const final = await readCallSessionClearance(context, sessionId);
+  if (!final.ok) return await undo(final.reason);
   return { ok: true, value: { sessionId, expiresAt: ticket.value.expiresAt } };
 }
 
@@ -226,13 +233,6 @@ export async function createCallSession(
 export { CALL_CADENCE_PARKED_SOURCE, UNANSWERED_OUTCOMES, readCallCadence, type CallCadenceState } from './cadence.ts';
 
 const UNANSWERED_PROVIDER_STATUSES: ReadonlySet<string> = new Set(['no-answer', 'busy']);
-async function clockInstant(db: Queryable): Promise<string> {
-  const result = await db.query<{ at: string }>(`SELECT ${isoMicroseconds('clock_timestamp()')} AS at`);
-  const at = result.rows[0]?.at;
-  if (at === undefined) throw new Error('the database did not answer with its clock');
-  return at;
-}
-
 /**
  * A placed session was just recorded as unanswered — an outcome of no answer, busy or a
  * voicemail left, or Twilio's final no-answer/busy with no outcome yet. If that brings
@@ -554,41 +554,7 @@ export async function recordingPathOfSession(context: RepositoryContext, session
 // The TwiML consumption
 // ---------------------------------------------------------------------------
 
-export type ConsumeRefusal =
-  | 'call_attempts_exhausted'
-  | 'call_attempt_today'
-  | 'call_attempt_too_soon'
-  | 'reservation_closed'
-  | 'session_unknown'
-  | 'already_consumed'
-  | 'session_expired'
-  | 'identity_mismatch'
-  | 'member_inactive'
-  | DialRefusalCode;
-
-export interface ConsumedCallSession {
-  readonly sessionId: string;
-  readonly workspaceId: string;
-  /** The server-resolved destination, for `<Number>`. Never leaves the TwiML answer. */
-  readonly e164: string;
-  /** The actor's verified identity, for `<Dial callerId>`. */
-  readonly callerIdE164: string;
-  /** `<Dial timeLimit>`: the minutes the reservation holds, so a call cannot outrun its money. */
-  readonly maxSeconds: number;
-}
-
-interface SessionRow {
-  readonly id: string;
-  readonly workspace_id: string;
-  readonly ticket_id: string;
-  readonly firm_id: string;
-  readonly contact_id: string | null;
-  readonly actor_user_id: string;
-  readonly reservation_id: string;
-  readonly consumed_at: Date | null;
-  readonly expired: boolean;
-  readonly [column: string]: unknown;
-}
+export { consumeCallSession, type ConsumeRefusal, type ConsumedCallSession } from './sessionConsumption.ts';
 
 /** The workspace a session belongs to, by id, with no scope: the webhook has none. */
 export async function workspaceOfCallSession(db: Queryable, sessionId: string): Promise<string | null> {
@@ -606,161 +572,6 @@ export async function workspaceOfCallSid(db: Queryable, callSid: string): Promis
     [callSid],
   );
   return rows.length === 1 ? (rows[0]?.workspace_id ?? null) : null;
-}
-
-/**
- * Consume a session for the TwiML route. The caller runs this inside one transaction
- * and has verified the Twilio signature.
- *
- * `identity` is the Voice SDK's `From`, `client:<user id>`: the identity the access
- * token was minted for. A session is consumed for its own actor only.
- */
-export async function consumeCallSession(
-  db: Queryable,
-  input: {
-    readonly workspaceId: string;
-    readonly sessionId: string;
-    readonly callSid: string;
-    readonly identity: string;
-    /** Database time for the repeated decision; absent is `now()`. */
-    readonly at?: string | undefined;
-  },
-): Promise<{ readonly ok: true; readonly value: ConsumedCallSession } | { readonly ok: false; readonly reason: ConsumeRefusal }> {
-  const refused = (reason: ConsumeRefusal): { readonly ok: false; readonly reason: ConsumeRefusal } => ({ ok: false, reason });
-  if (!/^CA[0-9a-f]{32}$/u.test(input.callSid)) return refused('session_unknown');
-
-  // 1. The send gate, SHARED, before any row lock, held until the caller commits
-  //    (`policy/sendGate.ts`). A suppression, a hold or a firm handover is written under
-  //    the gate EXCLUSIVE, so it is either visible to the re-check below or waits for
-  //    this authorization's commit.
-  //    `lockSendGateForDispatch`'s statement; that function takes a scoped context, and
-  //    the scope is built from the session row, which must not be read before the gate.
-  await db.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [sendGateLockName(input.workspaceId)]);
-
-  // 2. The firm row, FOR NO KEY UPDATE: two consumptions at one firm serialise here, so
-  //    the attempt count read after it includes every placed call that committed.
-  const { rows: located } = await db.query<{ firm_id: string }>(
-    'SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2',
-    [input.workspaceId, input.sessionId],
-  );
-  const locatedFirm = located[0]?.firm_id;
-  if (locatedFirm === undefined) return refused('session_unknown');
-  await db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE', [
-    input.workspaceId,
-    locatedFirm,
-  ]);
-
-  // 3. The session row. Its expiry is read against `clock_timestamp()`, the instant of
-  //    this statement, not `now()`: a transaction that began inside the minute and then
-  //    waited on the gate or the firm past it must see the minute as over (review fold
-  //    2) — the sweep may have released the reservation in that wait.
-  const { rows } = await db.query<SessionRow>(
-    `SELECT id, workspace_id, ticket_id, firm_id, contact_id, actor_user_id, reservation_id, consumed_at,
-            (expires_at <= clock_timestamp()) AS expired
-       FROM call_sessions WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
-    [input.workspaceId, input.sessionId],
-  );
-  const session = rows[0];
-  if (session === undefined) return refused('session_unknown');
-  // A merge moved the session between the two reads: the lock is on the wrong firm.
-  if (session.firm_id !== locatedFirm) return refused('session_unknown');
-  if (session.consumed_at !== null) return refused('already_consumed');
-  if (session.expired) return refused('session_expired');
-  if (input.identity !== `client:${session.actor_user_id}`) return refused('identity_mismatch');
-
-  // 5. The reservation, still `reserved`. The sweep locks the session before it settles
-  //    anything, and this transaction holds that lock now, so the state read here is the
-  //    state `markCalling` will find — unless something outside the sweep closed it,
-  //    which the savepoint below turns into a refusal rather than an unpaid call.
-  const { rows: reservations } = await db.query<{ state: string }>(
-    'SELECT state FROM provider_reservations WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
-    [input.workspaceId, session.reservation_id],
-  );
-  if (reservations[0]?.state !== 'reserved') return refused('reservation_closed');
-
-  const { rows: members } = await db.query<{ role: 'admin' | 'salesperson' }>(
-    `SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'`,
-    [input.workspaceId, session.actor_user_id],
-  );
-  const member = members[0];
-  if (member === undefined) return refused('member_inactive');
-  const context = repositoryContext(
-    workspaceScope(input.workspaceId, { kind: 'user', userId: session.actor_user_id, role: member.role }),
-    db,
-  );
-
-  // 6. The cadence (slice C1), under the firm lock: sessions created together cannot all
-  //    be placed. Every placed call is an attempt from its consumption
-  //    (`readCallCadence`), so the second of two sessions is refused as the same day's
-  //    attempt, or as the one past the limit. Nothing is parked from here: recording the
-  //    fourth unanswered attempt does that (`parkIfCadenceSpent`).
-  //    The bound is `clock_timestamp()`, read here after the locks (review of C1, fold 3):
-  //    a transaction's `now()` is its start, and a call another consumption placed and
-  //    committed while this one waited on the firm lock is later than that start.
-  const clock = await clockInstant(db);
-  const cadence = await readCallCadence(context, session.firm_id, input.at ?? clock, clock);
-  if (cadence.refusal !== null) return refused(cadence.refusal);
-
-  const { rows: tickets } = await db.query<{ device_id: string; calling_identity_id: string }>(
-    'SELECT device_id, calling_identity_id FROM dial_tickets WHERE workspace_id = $1 AND id = $2',
-    [input.workspaceId, session.ticket_id],
-  );
-  const ticket = tickets[0];
-  if (ticket === undefined) return refused('ticket_unknown');
-
-  // Every write from here on is undone together if the reservation cannot move to
-  // `calling`: a call is authorized only with its money marked as possibly spent.
-  await db.query('SAVEPOINT consume_call_session');
-  const undo = async (reason: ConsumeRefusal): Promise<{ readonly ok: false; readonly reason: ConsumeRefusal }> => {
-    await db.query('ROLLBACK TO SAVEPOINT consume_call_session');
-    return refused(reason);
-  };
-  // The whole decision again, at the last moment before the number leaves the server.
-  const consumed = await consumeDialTicket(context, {
-    ticketId: session.ticket_id,
-    deviceId: ticket.device_id,
-    ...(input.at === undefined ? {} : { at: input.at }),
-  });
-  if (!consumed.ok) return refused(consumed.reason);
-
-  const { rows: identities } = await db.query<{ e164: string }>(
-    'SELECT e164 FROM calling_identities WHERE workspace_id = $1 AND id = $2',
-    [input.workspaceId, ticket.calling_identity_id],
-  );
-  const callerIdE164 = identities[0]?.e164;
-  if (callerIdE164 === undefined) return await undo('identity_missing');
-
-  await db.query(
-    `UPDATE call_sessions SET consumed_at = now(), twilio_call_sid = $3, updated_at = now()
-      WHERE workspace_id = $1 AND id = $2 AND consumed_at IS NULL`,
-    [input.workspaceId, input.sessionId, input.callSid],
-  );
-  // From this commit on, a call may have happened: the reservation says so. Required:
-  // a reservation that did not move is a call nobody would pay for.
-  if (!(await markCalling(context, session.reservation_id))) return await undo('reservation_closed');
-  const { rows: limits } = await db.query<{ max_units: number | null }>(
-    'SELECT max_units FROM provider_reservations WHERE workspace_id = $1 AND id = $2',
-    [input.workspaceId, session.reservation_id],
-  );
-  const maxSeconds = Math.max(60, Number(limits[0]?.max_units ?? 1) * 60);
-  await attributeFirmInteraction(context,{firmId:session.firm_id,kind:'call',subjectId:session.id});
-  await recordFunnelFact(context, {
-    kind: 'call.placed',
-    source: 'telephony',
-    dedupeKey: session.id,
-    firmId: session.firm_id,
-    ...(session.contact_id === null ? {} : { contactId: session.contact_id }),
-  });
-  await recordCrmAuditEvent(context, {
-    action: 'call.session_placed',
-    subjectKind: 'call_session',
-    subjectId: session.id,
-    detail: { firmId: session.firm_id, ticketId: session.ticket_id },
-  });
-  return {
-    ok: true,
-    value: { sessionId: session.id, workspaceId: input.workspaceId, e164: consumed.value.e164, callerIdE164, maxSeconds },
-  };
 }
 
 // ---------------------------------------------------------------------------

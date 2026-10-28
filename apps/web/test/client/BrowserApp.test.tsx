@@ -35,6 +35,7 @@ function setup() {
     if (String(url).startsWith('/browser/api/today')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [{ firmId: id, firmName: firm.name, lane: 'new_firm', dueAt: '2026-10-22T00:00:00.000Z', counts: { replies: 0, emailsDue: 0, callsDue: 0 } }] });
     if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: [], hasMore: false });
     if (url === '/browser/api/crm/firm-page-v3') return json({ version: 3, visibility: 'assigned_or_admin', read: { visibility: 'assigned_or_admin', firm }, opportunities: [], holds: [], followUpPermissions: [] });
+    if (url === '/browser/api/calling-identities') return json({ identities: [] });
     if (url === '/browser/api/calling/wrap') {
       const { commandId, ...payload } = JSON.parse(String(init?.body)) as Record<string, unknown>;
       expect(commandId).toBeTruthy(); expect(localStorage.getItem(CALLING_PENDING_KEY)).toContain(commandId);
@@ -175,8 +176,9 @@ describe('BrowserApp real shared presentation', () => {
       const before = send.mock.calls.length;
       fireEvent.click(open);
       await screen.findByRole('heading', { name: firm.name, level: 2 });
-      expect(screen.getByText('Manual report only. This screen does not place or reserve a call.')).toBeTruthy();
-      expect(send.mock.calls.slice(before).every(([url]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/crm/firm-page-v3')).toBe(true);
+      expect(screen.getByRole('button', { name: 'Check call readiness' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'After your conversation' })).toBeTruthy();
+      expect(send.mock.calls.slice(before).every(([url]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/crm/firm-page-v3' || url === '/browser/api/calling-identities')).toBe(true);
       expect(storage.getItem(PENDING_KEY)).toBeNull();
       expect(sessionStorage.length + localStorage.length).toBe(0);
       navigate('Email'); navigate('Calling');

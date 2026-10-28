@@ -17,25 +17,10 @@ import {
 import type { PreparedBriefDto, TodayCardBlocker, TodayItemKind, TodayLane } from '@fss/contracts';
 import { readPreparedBrief } from '../crm/preparedBriefs.ts';
 
-/**
- * What the API returns and the Mac shows (specification 8.2, 14.1, Appendix F).
- *
- * `TodayListDto` is deliberately the exact shape of `cachedTodaySchema` in
- * `apps/desktop/src/shared/contract.ts`, which G2 wrote as a `strictObject` with no
- * field a message body, a note or an address could occupy. The Mac caches the list
- * for 24 hours (5.3), so the list is the one read whose shape is also a retention
- * decision: a field added here is a field that ends up encrypted on somebody's
- * laptop, and the strict schema on the other side is what makes that a parse failure
- * rather than a surprise. (Slice S2 added `blockers`, two codes and never a value, to
- * both sides at once.)
- *
- * The expanded card is a *second* read and is not cached. Its tasks name a contact,
- * which the cache has no room for, and 4.2 says an offline client shows "its
- * unexpired cached Today view marked stale" — the cards, not the conversations
- * underneath them.
- *
- * Visibility is 8.2's, decided here and not by a route: "Admins see all entries;
- * salespeople see their own."
+/** Authorized Today projections: admins see workspace entries; salespeople see their
+ * assigned firms. Lists carry counts and blocker codes, without conversation bodies,
+ * private notes or endpoint values. Expanded context is a separate current-authority
+ * read. Historical client parser compatibility grants no new caching permission.
  */
 
 export interface TodayCardDto {

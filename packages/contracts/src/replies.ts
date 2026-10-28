@@ -2,18 +2,9 @@ import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
 import { blockedActionKindSchema, holdEnrollmentDtoSchema, holdReasonCodeSchema, holdRecoveryActionSchema } from './reasonCodes.ts';
 
-/**
- * The wire contract of the reply cards and the classifier settings (specification 8.3,
- * 12.4).
- *
- * The Mac kept its own copies of these in `apps/desktop/src/renderer/replyContract.ts`
- * and `apps/desktop/src/main/replyBridge.ts`. They matched the routes except in the
- * place that bit: the classifier's effort stopped at `high`, while the server accepts
- * `xhigh` and `max`, so a workspace configured at either read back as "no classifier"
- * (D03). The vocabularies below are declared once, here, and the domain imports them.
- *
- * The objects strip rather than refuse an unknown key; `./wire.ts` says why, and
- * where the strictness went instead.
+/** Shared reply and classifier contracts. Keep all supported effort levels in one
+ * vocabulary, including xhigh/max. Wire objects strip unknown keys as ./wire.ts
+ * explains; current source/access and command policy remain server responsibilities.
  */
 
 /** The six dispositions a person may choose (12.4). */

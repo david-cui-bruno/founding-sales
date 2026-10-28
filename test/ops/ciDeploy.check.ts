@@ -1695,7 +1695,7 @@ describe('the protected-path guard reads every commit since production’s, befo
     const base = commitFiles(directory, 'base', ['README.md', '.github/workflows/release.yml']);
     // A pull request branch, off base: application code only.
     git(directory, 'checkout', '-q', '-b', 'kanban');
-    commitFiles(directory, 'k1', ['apps/desktop/src/renderer/board.tsx']);
+    commitFiles(directory, 'k1', ['apps/web/src/client/board.tsx']);
     // Main moves on: a workflow change merged through its own pull request. Production is then released at it.
     git(directory, 'checkout', '-q', '-b', 'skeleton', base);
     commitFiles(directory, 'w1', ['.github/workflows/release.yml', 'infra/roots/production/tests/isolation.tftest.hcl']);
@@ -1729,7 +1729,7 @@ describe('the protected-path guard reads every commit since production’s, befo
     git(directory, 'config', 'commit.gpgsign', 'false');
     const base = commitFiles(directory, 'base', ['README.md']);
     const app = commitFiles(directory, 'app', [
-      'apps/desktop/src/renderer/home.tsx',
+      'apps/web/src/client/home.tsx',
       'packages/domain/db/workspaceScope.ts',
       'scripts/lintTracked.mjs',
       'tests/e2e/x.spec.ts',

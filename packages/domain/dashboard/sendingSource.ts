@@ -9,22 +9,9 @@ import {
   type SendingFacts,
 } from './sources.ts';
 
-/**
- * 13.4's sending figures, read from G7-2's tables (migration 0010): the two the Mac
- * shows (`apps/desktop/src/renderer/homeView.ts`), each counted by the instant it
- * happened at rather than by the fence's creation:
- *
- *   * `sent` — `state = 'sent'`, by `sent_at`;
- *   * `held` — `state = 'held'`, by `held_at`.
- *
- * Wave 2 (S6) cut the rest — the unknown/skipped/delivered counts, provider deferrals,
- * reputation warnings, the domain and ramp posture, and the template, sequence,
- * weekday, hour and segment breakdowns. Nothing read them; the sending section reads
- * `/outbound/status` for the posture.
- *
- * Counts follow the dashboard's audience rule (`docs/decisions/g9-dashboard-visibility.md`):
- * an admin's figures are the workspace's, a salesperson's are their own assigned
- * firms'.
+/** Sending counts use sent_at and held_at, never fence creation. Dashboard audience
+ * is the workspace for an admin and assigned firms for a salesperson. Current sending
+ * posture comes from /outbound/status; these counts cannot enable or clear a hold.
  */
 
 type CountRow = {

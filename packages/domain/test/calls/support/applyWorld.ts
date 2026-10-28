@@ -135,6 +135,13 @@ export async function createApplyWorld(): Promise<ApplyWorld> {
        RETURNING id, version`,
       [workspaceId, firmId, contactId, e164],
     );
+    // Each generated endpoint needs its own synthetic clearance in the current fixture snapshot.
+    await session.query(
+      `INSERT INTO national_registry_endpoint_scrubs (workspace_id, snapshot_id, e164, scrubbed_at, result)
+       VALUES ($1, (SELECT id FROM national_registry_snapshots WHERE workspace_id = $1
+                    ORDER BY published_at DESC, id DESC LIMIT 1), $2, clock_timestamp(), 'clear')`,
+      [workspaceId, e164],
+    );
     const opportunity = options.opportunity ?? 'none';
     if (opportunity !== 'none') {
       const stageId = await firstStageId(session, workspaceId);

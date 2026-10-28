@@ -1,6 +1,6 @@
 # Callie founder sales
 
-Callie is a browser-first founder sales workspace with a retained Electron desktop fallback. It reuses the React presentation, authenticated API, domain rules, worker and PostgreSQL rather than introducing a second product engine.
+Callie is a web application for founder sales. Its selling journeys use the authenticated API, shared domain rules, worker and PostgreSQL. [ADR0027](docs/adr/0027-web-product.md) records the web product direction and desktop retirement.
 
 ## Start here
 
@@ -14,7 +14,7 @@ Callie is a browser-first founder sales workspace with a retained Electron deskt
 
 The approved direction is continuous prepared prospect/contact supply, browser-first calling and follow-through, eligible automatic outbound email with manual incoming replies, and founder-voice social generation with supported automatic publishing and public Conversations. Conversations are public threads, not DMs. Incremental releases do not narrow full-product acceptance or claim missing adapters are ready.
 
-The current browser shell has Today, Prospects, Calling, Email and Social, with secondary Settings. Existing CRM records, plain keyword Ask, retained human work, meetings, sequences and owner controls remain supported through their existing surfaces where available, including desktop fallback. The map labels browser gaps instead of inventing menu items.
+The current browser shell has Today, Prospects, Calling, Email and Social, with secondary Settings. Shared CRM, plain keyword Ask, tasks, meetings, sequences and owner controls remain backend capabilities. The feature map identifies the web journeys that exist and the gaps to build; desktop is not a product dependency.
 
 Historical removal of generated Ask answers/indexing, AI booking, older automatic-admission or recurring-posting modules is not a permanent ban on approved replacement email/social capability. Plain Ask does not generate answers. Automatic incoming replies, booking and coaching remain deferred. No implementation or documentation change grants outreach, capture, model, publishing or provider permission.
 

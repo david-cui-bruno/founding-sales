@@ -15,10 +15,11 @@ import { phoneFixture, type PhoneFixture } from './phoneHandoffFixtures.ts';
 
 let database: TestDatabase;
 let f: PhoneFixture;
+let day: Awaited<ReturnType<PhoneFixture['publishMixedProviderWeek']>>;
 beforeEach(async () => {
   database = await createTestDatabase();
   f = await phoneFixture(database);
-  await f.publish();
+  day = await f.publishMixedProviderWeek();
   await database.session.query('UPDATE phone_routes SET contact_id=NULL WHERE workspace_id=$1 AND id=$2', [f.w, f.policy.alpha.phoneRouteId]);
   await database.session.query(`INSERT INTO workspace_settings(workspace_id,setting_key,version,value,changed_by_user_id)
     VALUES($1,'telephony_budget',1,'{"dailyCeilingCents":500,"maxMinutesPerCall":30,"unitPriceMicros":14000}',$2)`, [f.w, f.seeded.alpha.admin.userId]);
@@ -64,7 +65,7 @@ describe('firm-only mixed-provider history survives merge without refunds', () =
   it('retains three consumed Twilio attempts plus a phone attempt, and corrects the original linked Twilio reset', async () => {
     await withTransaction(database.session, async () => {
       const logs: string[] = [];
-      for (const at of ['2026-09-16T14:00:00Z', '2026-09-17T16:00:00Z', '2026-09-18T14:00:00Z']) {
+      for (const at of [day(0), day(1, 17), day(2)]) {
         const sessionId = await providerSession(at, true);
         const logged = await logCallOutcome(f.context, { firmId: f.crm.alpha.firmId, callSessionId: sessionId,
           opportunityId: null, outcome: 'no_answer', commandId: randomUUID() });
@@ -77,46 +78,46 @@ describe('firm-only mixed-provider history survives merge without refunds', () =
       ]);
       expect((await database.session.query('SELECT contact_id,opportunity_id FROM call_logs WHERE workspace_id=$1', [f.w])).rows)
         .toEqual([{ contact_id: null, opportunity_id: null }, { contact_id: null, opportunity_id: null }, { contact_id: null, opportunity_id: null }]);
-      const handoff = await reservePhoneHandoff(f.context, { ...f.request(), at: '2026-09-21T16:00:00Z', opportunityId: null });
+      const handoff = await reservePhoneHandoff(f.context, { ...f.request(), at: day(5, 17), opportunityId: null });
       if (!handoff.ok) throw new Error(handoff.reason);
       const before = (await database.session.query(`SELECT id,ticket_id,reservation_id,twilio_call_sid,consumed_at,call_log_id,
         contact_id,created_at,expires_at FROM call_sessions WHERE workspace_id=$1 ORDER BY id`, [f.w])).rows;
       const originalLogs = (await database.session.query(`SELECT id,ticket_id,phone_route_id,calling_identity_id,occurred_at,recorded_at
         FROM call_logs WHERE workspace_id=$1 ORDER BY id`, [f.w])).rows;
-      expect(await readCallCadence(f.context, f.crm.alpha.firmId, '2026-09-22T14:00:00Z')).toMatchObject({ unansweredAttempts: 4, refusal: 'call_attempts_exhausted' });
+      expect(await readCallCadence(f.context, f.crm.alpha.firmId, day(6))).toMatchObject({ unansweredAttempts: 4, refusal: 'call_attempts_exhausted' });
       const targetId = await merge();
       expect((await database.session.query(`SELECT id,ticket_id,reservation_id,twilio_call_sid,consumed_at,call_log_id,
         contact_id,created_at,expires_at FROM call_sessions WHERE workspace_id=$1 AND firm_id=$2 ORDER BY id`, [f.w, targetId])).rows).toEqual(before);
       expect((await database.session.query(`SELECT id,ticket_id,phone_route_id,calling_identity_id,occurred_at,recorded_at
         FROM call_logs WHERE workspace_id=$1 AND firm_id=$2 ORDER BY id`, [f.w, targetId])).rows).toEqual(originalLogs);
-      expect(await readCallCadence(f.context, targetId, '2026-09-22T14:00:00Z')).toMatchObject({ unansweredAttempts: 4, refusal: 'call_attempts_exhausted' });
-      expect(await reservePhoneHandoff(f.context, { ...f.request(), firmId: targetId, at: '2026-09-22T14:00:00Z' }))
+      expect(await readCallCadence(f.context, targetId, day(6))).toMatchObject({ unansweredAttempts: 4, refusal: 'call_attempts_exhausted' });
+      expect(await reservePhoneHandoff(f.context, { ...f.request(), firmId: targetId, at: day(6) }))
         .toEqual({ ok: false, reason: 'call_attempts_exhausted' });
       expect((await database.session.query('SELECT id,firm_id FROM phone_handoff_attempts WHERE workspace_id=$1', [f.w])).rows)
         .toEqual([{ id: handoff.value.attemptId, firm_id: targetId }]);
       const lastLog = logs.at(-1);
       if (!lastLog) throw new Error('missing linked provider log');
       await correct(lastLog, 'interested');
-      expect(await readCallCadence(f.context, targetId, '2026-09-22T14:00:00Z')).toMatchObject({ unansweredAttempts: 1 });
+      expect(await readCallCadence(f.context, targetId, day(6))).toMatchObject({ unansweredAttempts: 1 });
       await correct(lastLog, 'no_answer');
-      expect(await readCallCadence(f.context, targetId, '2026-09-22T14:00:00Z')).toMatchObject({ unansweredAttempts: 4, refusal: 'call_attempts_exhausted' });
+      expect(await readCallCadence(f.context, targetId, day(6))).toMatchObject({ unansweredAttempts: 4, refusal: 'call_attempts_exhausted' });
     });
   });
 
   it('does not turn a moved unconsumed session into fresh authority through its original source-bound ticket', async () => {
     await withTransaction(database.session, async () => {
-      const sessionId = await providerSession(f.policy.insideWindow, false);
+      const sessionId = await providerSession(day(0), false);
       const targetId = await merge();
       const row = (await database.session.query<{ firm_id: string; ticket_firm: string }>(`SELECT s.firm_id,t.firm_id AS ticket_firm
         FROM call_sessions s JOIN dial_tickets t ON t.workspace_id=s.workspace_id AND t.id=s.ticket_id
         WHERE s.workspace_id=$1 AND s.id=$2`, [f.w, sessionId])).rows[0];
       expect(row).toEqual({ firm_id: targetId, ticket_firm: f.crm.alpha.firmId });
       const consumed = await consumeCallSession(database.session, { workspaceId: f.w, sessionId,
-        callSid: `CA${randomUUID().replaceAll('-', '')}`, identity: `client:${f.seeded.alpha.salesperson.userId}`, at: f.policy.insideWindow });
+        callSid: `CA${randomUUID().replaceAll('-', '')}`, identity: `client:${f.seeded.alpha.salesperson.userId}`, at: day(0) });
       expect(consumed.ok).toBe(false);
       expect((await database.session.query('SELECT consumed_at FROM call_sessions WHERE workspace_id=$1 AND id=$2', [f.w, sessionId])).rows)
         .toEqual([{ consumed_at: null }]);
-      expect(await readCallCadence(f.context, targetId, f.policy.insideWindow)).toMatchObject({ unansweredAttempts: 0 });
+      expect(await readCallCadence(f.context, targetId, day(0))).toMatchObject({ unansweredAttempts: 0 });
     });
   });
 });

@@ -518,11 +518,19 @@ describe('scenario 31, since wave 2 (S4.1): a hold longer than seven days resume
     const enrollmentId = await enrollAlpha();
     await nineDayPause(enrollmentId, { release: true });
 
+    const dueDates = async () => (await database.session.query<{ due_at: Date }>(
+      "SELECT due_at FROM step_executions WHERE enrollment_id=$1 AND state IN ('pending','held') ORDER BY ordinal", [enrollmentId],
+    )).rows.map(row => row.due_at.toISOString());
+    const before = await dueDates();
+    expect(before.length).toBeGreaterThan(0);
     const decided = await resumeEnrollment(contextFor('alpha', 'admin'), { enrollmentId });
     expect(decided.ok && decided.value.kind).toBe('resume');
     const days = decided.ok ? decided.value.shiftMilliseconds / DAY : 0;
     expect(days).toBeGreaterThan(8.9);
     expect(days).toBeLessThan(9.1);
+    if (!decided.ok || decided.value.kind !== 'resume') throw new Error('fixture did not resume');
+    expect(decided.value.executionsShifted).toBe(before.length);
+    expect(await dueDates()).toEqual(before.map(due => new Date(Date.parse(due) + decided.value.shiftMilliseconds).toISOString()));
     const enrollment = await readEnrollment(worker(), { enrollmentId });
     expect(enrollment?.state).toBe('active');
     expect(enrollment?.reviewUnionMilliseconds).toBeNull();

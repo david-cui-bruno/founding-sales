@@ -26,9 +26,21 @@ export async function phoneFixture(database: TestDatabase) {
       e164s: overrides.result === null ? [] : [{ e164: policy.alpha.e164, result: overrides.result ?? 'clear' }],
     });
   }
+  /** A completed fixture week: consumed sessions stay before expiry, registry evidence stays current. */
+  async function publishMixedProviderWeek() {
+    const observedAt = (await database.session.query<{ observed_at: Date }>('SELECT clock_timestamp() AS observed_at')).rows[0]!.observed_at;
+    const wednesday = new Date(observedAt);
+    wednesday.setUTCHours(14, 0, 0, 0);
+    wednesday.setUTCDate(wednesday.getUTCDate() - (wednesday.getUTCDay() - 3 + 7) % 7 - 7);
+    const day = (offset: number, hour = 14) => new Date(wednesday.getTime() + offset * 86_400_000 + (hour - 14) * 3_600_000).toISOString();
+    const publishedAt = new Date(wednesday);
+    publishedAt.setUTCHours(0);
+    await publish({ downloadedAt: publishedAt.toISOString(), publishedAt: publishedAt.toISOString() });
+    return day;
+  }
   async function reserve(overrides: Partial<ReturnType<typeof request>> = {}) {
     return await reservePhoneHandoff(context, { ...request(), ...overrides });
   }
-  return { database, seeded, crm, policy, w, context, request, publish, reserve };
+  return { database, seeded, crm, policy, w, context, request, publish, publishMixedProviderWeek, reserve };
 }
 export type PhoneFixture = Awaited<ReturnType<typeof phoneFixture>>;

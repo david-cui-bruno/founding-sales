@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { pluralFirmPageResponseSchema, todayListResponseSchema, type PluralFirmPageResponse, type TodayCardDto } from '@fss/contracts';
 import type { z } from 'zod';
-import { countsLabel } from '../../../desktop/src/renderer/todayView.ts';
 import { BrowserMeetingNotes } from './BrowserMeetingNotes.tsx';
 import { BrowserMeetingPreparation } from './BrowserMeetingPreparation.tsx';
 import type { WorkspaceScreenProps } from './workspaceNavigation.ts';
 
 type Today = z.infer<typeof todayListResponseSchema>;
 const lanes: Record<TodayCardDto['lane'], string> = { reply: 'Reply to review', callback: 'Callback', due_work: 'Follow-up', new_firm: 'New firm' };
+
+function countsLabel(counts: TodayCardDto['counts']): string {
+  const plural = (count: number, one: string, many: string): string | null => count === 0 ? null : `${String(count)} ${count === 1 ? one : many}`;
+  const parts = [plural(counts.replies, 'reply', 'replies'), plural(counts.emailsDue, 'email', 'emails'), plural(counts.callsDue, 'call', 'calls')].filter((part): part is string => part !== null);
+  return parts.length === 0 ? 'Nothing outstanding' : parts.join(', ');
+}
 
 function FirmContext({ firm, client, onBack, onOpenCalling }: WorkspaceScreenProps & { firm: PluralFirmPageResponse; onBack: () => void }): JSX.Element {
   const [tab, setTab] = useState<'context' | 'preparation' | 'notes'>('context');

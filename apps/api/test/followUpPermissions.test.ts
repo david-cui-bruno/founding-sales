@@ -4,7 +4,7 @@ import { SENDING_STOP_LINE, followUpPermissionsResponseSchema } from '@fss/contr
 import { createAuthFixture, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm, seedFollowUpPermission } from './support/crmSeed.ts';
-import { DESKTOP_VERSION_UNDER_TEST, routeAnswer } from './support/wireThrough.ts';
+import { CLIENT_VERSION_UNDER_TEST, routeAnswer } from './support/routeThrough.ts';
 
 /**
  * Who the follow-up permission endpoints answer, and who may write one
@@ -30,7 +30,7 @@ describe('the follow-up permission endpoints', () => {
 
   const command = (extra: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
     commandId: randomUUID(),
-    clientVersion: DESKTOP_VERSION_UNDER_TEST,
+    clientVersion: CLIENT_VERSION_UNDER_TEST,
     ...extra,
   });
 

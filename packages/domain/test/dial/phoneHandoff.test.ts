@@ -64,19 +64,20 @@ describe('durable phone reservation, not merely logged outcomes', () => {
     expect(await readCallCadence(f.context, f.crm.alpha.firmId, '2026-09-30T14:00:00Z')).toMatchObject({ unansweredAttempts: 3 });
   });
   it('shares the unchanged four-in-fourteen allowance with real consumed Twilio history', async () => {
+    const day = await f.publishMixedProviderWeek();
     await db.session.query(`INSERT INTO workspace_settings(workspace_id,setting_key,version,value,changed_by_user_id)
       VALUES($1,'telephony_budget',1,'{"dailyCeilingCents":500,"maxMinutesPerCall":30,"unitPriceMicros":14000}',$2)`, [f.w, f.seeded.alpha.admin.userId]);
-    const created = await createCallSession(f.context, { ...f.request(), callingIdentityId: f.policy.alpha.callingIdentityId, configuredCallerIdE164: '+14015550100' });
+    const created = await createCallSession(f.context, { ...f.request(), at: day(0), callingIdentityId: f.policy.alpha.callingIdentityId, configuredCallerIdE164: '+14015550100' });
     if (!created.ok) throw new Error(created.reason);
     expect((await consumeCallSession(db.session, { workspaceId: f.w, sessionId: created.value.sessionId, callSid: `CA${'a'.repeat(32)}`,
-      identity: `client:${f.seeded.alpha.salesperson.userId}`, at: f.policy.insideWindow })).ok).toBe(true);
+      identity: `client:${f.seeded.alpha.salesperson.userId}`, at: day(0) })).ok).toBe(true);
     // Consumption records database now(), independent of its injected policy-decision clock.
-    await db.session.query('UPDATE call_sessions SET consumed_at=$2 WHERE id=$1', [created.value.sessionId, f.policy.insideWindow]);
-    expect(await f.reserve()).toEqual({ ok: false, reason: 'call_attempt_today' });
-    await attempt('2026-09-17T16:00:00Z');
-    await attempt('2026-09-18T14:00:00Z');
-    await attempt('2026-09-21T16:00:00Z');
-    expect(await f.reserve({ at: '2026-09-22T14:00:00Z' })).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+    await db.session.query('UPDATE call_sessions SET consumed_at=$2 WHERE id=$1', [created.value.sessionId, day(0)]);
+    expect(await f.reserve({ at: day(0) })).toEqual({ ok: false, reason: 'call_attempt_today' });
+    await attempt(day(1, 17));
+    await attempt(day(2));
+    await attempt(day(5, 17));
+    expect(await f.reserve({ at: day(6) })).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
   });
   it('links a single outcome and refuses a duplicate under a different command, preserving phone-only history', async () => {
     const id = await attempt();

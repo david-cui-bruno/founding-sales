@@ -125,10 +125,6 @@ export interface Allowed {
   readonly reason: string;
 }
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
-  {
-    file: 'apps/desktop/src/main/social/imageNormalize.ts', method: 'extract',
-    reason: 'Sharp extract crops local image pixels after format, pixel-count and crop-bounds validation. It performs no network or AI provider call; paid-provider gates do not apply.',
-  },
   {file:'apps/worker/src/sourcing/evaluateDiscovery.ts',method:'discover',reason:'Local evaluation owns a durable single-host pre-request debit; independently checked as the evaluation boundary.'},
   {file:'packages/domain/sourcing/discovery.ts',method:'discover',reason:'Production discovery owns a committed shared PostgreSQL dispatch fence; independently checked as the continuous discovery boundary.'},
   {
@@ -143,11 +139,6 @@ export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
     file: 'packages/contracts/src/meetingTranscription.ts',
     method: 'transcribe',
     reason: "the Zod literal 'transcribe' identifies the service in audited credit-coverage metadata; it is not a provider reference or a paid call",
-  },
-  {
-    file: 'apps/desktop/src/main/updateInstall.ts',
-    method: 'extract',
-    reason: "the string 'extract' names a failed install step (`step: 'extract'`) after `ditto` unzips an update; it is not the research provider",
   },
   {
     file: 'apps/worker/src/tools/fss/readOnlyGmail.ts',
