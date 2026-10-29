@@ -1,6 +1,6 @@
 # Prospect priority: source and interface audit
 
-October29, issue [848](https://github.com/david-cui-bruno/founding-sales/issues/848). **Preimplementation source audit complete; implementation is now verified locally. Production delivery remains pending; current-state owns status.** This audit follows the [agreed requirements](prospect-prioritization.md). It is not a whole-codebase security audit, qualification attestation or evidence of conversion lift.
+October29, issue [848](https://github.com/david-cui-bruno/founding-sales/issues/848). **Preimplementation source audit complete; schema149 implementation and bounded query/selection follow-up delivered. Current-state owns dated acceptance.** This audit follows the [agreed requirements](prospect-prioritization.md). It is not a whole-codebase security audit, qualification attestation or evidence of conversion lift.
 
 ## Findings
 
