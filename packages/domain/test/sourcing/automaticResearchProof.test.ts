@@ -44,6 +44,27 @@ it('refuses retained-only candidates before consulting owner, evidence or acquis
 it('accepts completed exact source native + independent email without phone or promotion',async()=>{
  const proof=await automaticResearchProof(ctx,id);expect(proof).toMatchObject({owner:id,runId:id,candidateRevision:1,source:{source:{kind:'search_hit',attemptId:id}}});expect(proof?.citations).toHaveLength(3);expect(proof?.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
 });
+it('retains the exact pre-US legacy proof fingerprint and native interpretation',async()=>{
+ const proof=await automaticResearchProof(ctx,id);
+ expect(proof?.nativePolicyVersion).toBe('native-firm-eligibility-v1');
+ expect(proof?.fingerprint).toBe('498de84eaf596510b8043ee55cdaca0be3799bac41a57963f1f6c9735973df49');
+});
+it('accepts current CA preparation only from full-state native evidence and its exact already-approved query/source',async()=>{
+ const payload={...candidate,region:'CA' as const,locality:'Los Angeles',discoveryQuery:'Los Angeles California residential property management'};
+ f.row.payload=payload;
+ const currentQuery={id:'los-angeles',query:payload.discoveryQuery,locality:payload.locality,region:payload.region};
+ mocks.policy.mockResolvedValue({version:'targeting-us-fixture',queries:[currentQuery],rankOrder:[]});
+ f.hits=[{attempt_id:id,source_url:payload.website,native_result:{url:payload.website},query_id:currentQuery.id,query:currentQuery.query,policy_version:'targeting-us-fixture'}];
+ const native='Synthetic Harbor LLC provides residential property management in Los Angeles, California.';
+ const email='Contact Synthetic Harbor LLC office in Los Angeles, CA at info@harbor.example.test.';
+ for(const fact of f.run.facts)fact.value=fact.kind==='business_email'?email:native;
+ f.run.observations[0]!.blocks[0]!.text=native;f.run.observations[1]!.blocks[0]!.text=email;
+ const proof=await automaticResearchProof(ctx,id);
+ expect(proof).toMatchObject({nativePolicyVersion:'native-firm-eligibility-us-v1',route:{address:'info@harbor.example.test'}});
+ expect(proof?.fingerprint).not.toBe('498de84eaf596510b8043ee55cdaca0be3799bac41a57963f1f6c9735973df49');
+ mocks.policy.mockResolvedValue({version:'targeting-v1',queries:[query],rankOrder:[]});
+ expect(await automaticResearchProof(ctx,id)).toBeNull();
+});
 it.each(['native','email'] as const)('rechecks independent %s expiry against fresh wallclock, including exact boundary',async kind=>{
  const observation=f.run.observations[kind==='native'?0:1]!;
  observation.retrievedAt='2026-10-15T12:00:00.001Z';expect(await automaticResearchProof(ctx,id)).not.toBeNull();

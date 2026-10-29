@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
 import { qualifiedResearchCitationSchema, qualifiedResearchFirmSchema, todayActionV3Schema, todayActionsV3ResponseSchema, todayTargetV3Schema } from './qualifiedResearch.ts';
+import {nativeFirmPolicyVersionSchema,usBusinessRegionSchema} from './usBusinessGeography.ts';
 
 /** Automatic publication is worker-owned. This contract exposes current proof, not an activation command. */
 export const automaticResearchSourceSchema = z.strictObject({
@@ -26,9 +27,9 @@ export const automaticResearchFirmSchema = z.strictObject({
   firmName: z.string().min(1).max(300),
   website: z.string().url().max(2048),
   locality: z.string().min(1).max(120),
-  region: z.enum(['TX', 'RI', 'MA']),
+  region: usBusinessRegionSchema,
   policyVersion: z.literal('automatic-research-v1'),
-  nativePolicyVersion: z.literal('native-firm-eligibility-v1'),
+  nativePolicyVersion: nativeFirmPolicyVersionSchema,
   checkedAt: instant,
   validUntil: instant,
   citations: z.array(qualifiedResearchCitationSchema).min(3).max(30),

@@ -7,6 +7,7 @@ import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type Qualifica
 import {researchFingerprint} from './qualifiedResearchProof.ts';
 import {automaticResearchNow,automaticResearchOwner,automaticResearchSource} from './automaticResearchAuthority.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
+import {currentUSPreparedEmailFit} from './currentPreparedEmailFit.ts';
 
 /** Reuse the CRM alias index, but explicitly bind the sourcing owner, not a forged user scope. */
 export async function automaticResearchIdentity(ctx:RepositoryContext,candidate:CandidateInput,owner:string):Promise<{firmId:string|null}|null>{
@@ -28,11 +29,14 @@ export async function automaticResearchProof(ctx:RepositoryContext,candidateId:s
  if(!run||run.candidate_revision!==row.revision||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.reason!==null||!['review','eligible','admitted'].includes(run.state))return null;
  const now=await automaticResearchNow(ctx),native=nativeFirmCitations({candidate,facts:run.facts,observations:run.observations,now});if('status' in native)return null;
  const identity={status:'resolved' as const,name:candidate.firmName,website:candidate.website,locality:candidate.locality,region:candidate.region};
- const email=qualifyEmailCandidate({identity,facts:run.facts,observations:run.observations,now});if(email.decision!=='eligible'||!email.route)return null;
+ const email=native.policyVersion==='native-firm-eligibility-us-v1'
+  ?currentUSPreparedEmailFit({candidate,facts:run.facts,observations:run.observations,now},native)
+  :(()=>{const legacy=qualifyEmailCandidate({identity,facts:run.facts,observations:run.observations,now});return {eligible:legacy.decision==='eligible',route:legacy.route};})();
+ if(!email.eligible||!email.route)return null;
  const emailSource=run.observations.find(s=>s.id===email.route!.sourceObservationId);if(!emailSource)return null;
  const validUntil=new Date(Math.min(Date.parse(native.validUntil),Date.parse(emailSource.retrievedAt)+7*86400000)).toISOString();
  if(Date.parse(now)>=Date.parse(validUntil))return null;
  const citations=native.citations.map(c=>{const observation=run.observations.find(s=>s.id===c.observationId)!;return {...c,url:observation.url,contentHash:observation.contentHash,retrievedAt:observation.retrievedAt,quote:observation.blocks.find(b=>b.id===c.blockId)!.text};});
- const fingerprint=researchFingerprint({candidateId,candidateRevision:row.revision,runId:run.id,owner,candidate,source,policyVersion:run.policy_version,promptVersion:run.prompt_version,facts:run.facts,observations:run.observations,policy:'automatic-research-v1'});
- return {candidateId,candidateRevision:row.revision,candidate,runId:run.id,owner,source,fingerprint,citations,validUntil,route:email.route};
+ const fingerprint=researchFingerprint({candidateId,candidateRevision:row.revision,runId:run.id,owner,candidate,source,policyVersion:run.policy_version,promptVersion:run.prompt_version,facts:run.facts,observations:run.observations,policy:'automatic-research-v1',...(native.policyVersion==='native-firm-eligibility-us-v1'?{nativePolicyVersion:native.policyVersion}:{})});
+ return {candidateId,candidateRevision:row.revision,candidate,runId:run.id,owner,source,fingerprint,citations,validUntil,route:email.route,nativePolicyVersion:native.policyVersion};
 }

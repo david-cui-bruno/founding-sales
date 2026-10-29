@@ -8,7 +8,7 @@ import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {candidateIdentityKey} from './candidates.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
-import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
 const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 const host=(s:string)=>new URL(s).hostname.toLowerCase().replace(/^www\./u,'');
 /** Internal owner: caller holds candidate and identity locks and has validated its own evidence. */
@@ -26,7 +26,7 @@ export async function correctCandidateName(ctx:RepositoryContext,input:z.infer<t
  const v=parsed.data,w=ctx.scope.workspaceId;await lockPreparationCleanup(ctx);await lockSendGateForStopFact(ctx);
  const row=(await ctx.db.query<{payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>('SELECT payload,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,v.id])).rows[0];
  if(!row)return {ok:false,reason:'not_found'};
- if(!isLegacyCandidatePayload(row.payload))return {ok:false,reason:'candidate_format_not_supported'};
+ if(!isCurrentPreparedCandidatePayload(row.payload))return {ok:false,reason:'candidate_format_not_supported'};
  if(row.revision!==v.expectedRevision)return {ok:false,reason:'candidate_changed'};
  if(row.status==='dismissed'||row.qualification_blocked)return {ok:false,reason:'identity_review_required'};
  if((await ctx.db.query(`SELECT candidate_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2

@@ -18,9 +18,11 @@ import type {SocialDraftRow} from './drafts.ts';
 import {readSocialDraftSourcesForWorker} from './draftSources.ts';
 import {SOCIAL_DRAFT_MODEL,socialDraftPromptVersion,SOCIAL_DRAFT_LIMITS,validateSocialDrafts,type SocialDraftInput} from './draftPolicy.ts';
 import {socialVoicePortAllowed,readPrivateVoiceGuide,type PRIVATE_VOICE_GUIDE_VERSION} from './voiceGeneration.ts';
+import type {SocialVoiceGuideProcessingScope} from '@fss/contracts';
 export interface SocialDraftPort {
  readonly providerKey:'aws_bedrock.social_draft';
  readonly privateVoiceGuideVersion?:typeof PRIVATE_VOICE_GUIDE_VERSION;
+ readonly privateVoiceGuideProcessingScope?:SocialVoiceGuideProcessingScope;
  countInputTokens(input:SocialDraftInput):Promise<number>;
  generate(input:SocialDraftInput):Promise<{raw:string;costCents:number;costEstimated:boolean}>;
 }

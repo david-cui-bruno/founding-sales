@@ -4,6 +4,7 @@ import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
 import { discoveryPromotionSourceSchema } from './discoveryPromotion.ts';
 import { todayActionV2Schema, todayActionsV2ResponseSchema, todayTargetV2Schema } from './todayActionsV2.ts';
+import {nativeFirmPolicyVersionSchema} from './usBusinessGeography.ts';
 
 /** IDs only: callers cannot submit qualification facts or manufacture source authority. */
 export const qualifiedResearchSelectionSchema = z.strictObject({
@@ -33,7 +34,7 @@ export const qualifiedResearchCandidateSchema = z.strictObject({
   website: z.string().url().max(2048),
   locality: z.string().min(1).max(120),
   region: z.string().regex(/^[A-Z]{2}$/u),
-  policyVersion: z.literal('native-firm-eligibility-v1'),
+  policyVersion: nativeFirmPolicyVersionSchema,
   evidenceFingerprint: hash,
   validUntil: instant,
   citations: z.array(qualifiedResearchCitationSchema).min(3).max(30),

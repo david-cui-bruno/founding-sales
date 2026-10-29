@@ -1,4 +1,4 @@
-import {socialVoiceEntriesSchema,type SocialDraftRequest,type SocialVoicePreference} from '@fss/contracts';
+import {socialVoiceEntriesSchema,type SocialDraftRequest,type SocialVoicePreference,type SocialVoiceGuideProcessingScope} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {SocialResult} from './posts.ts';
 import {requirePrivateDraftAuthority,type PrivateDraftAuthority} from './privateDrafts.ts';
@@ -10,8 +10,9 @@ export interface PrivateVoiceGuide {
  entries:SocialVoicePreference[];
 }
 export const PRIVATE_VOICE_GUIDE_VERSION='owner_curated_v1' as const;
-export function socialVoicePortAllowed(selection:SocialDraftRequest,port:{readonly privateVoiceGuideVersion?:typeof PRIVATE_VOICE_GUIDE_VERSION}):boolean {
- return selection.voiceGuideRef===undefined||port.privateVoiceGuideVersion===PRIVATE_VOICE_GUIDE_VERSION;
+export function socialVoicePortAllowed(selection:SocialDraftRequest,port:{readonly privateVoiceGuideVersion?:typeof PRIVATE_VOICE_GUIDE_VERSION;readonly privateVoiceGuideProcessingScope?:SocialVoiceGuideProcessingScope}):boolean {
+ return selection.voiceGuideRef===undefined||(port.privateVoiceGuideVersion===PRIVATE_VOICE_GUIDE_VERSION
+  &&(port.privateVoiceGuideProcessingScope===undefined||selection.voiceGuideProcessingScope===port.privateVoiceGuideProcessingScope));
 }
 export function exactPrivateVoiceGuide(ref:NonNullable<SocialDraftRequest['voiceGuideRef']>,row:{id:string;revision:number;entries:unknown;removed_at:Date|null}|undefined):PrivateVoiceGuide|null {
  if(!row||row.id!==ref.guideId||row.revision!==ref.revision||row.removed_at!==null)return null;

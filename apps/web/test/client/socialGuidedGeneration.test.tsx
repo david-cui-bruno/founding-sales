@@ -3,7 +3,7 @@ import '../../src/client/schemaRuntime.ts';
 import {webcrypto} from 'node:crypto';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
-import {socialDraftRequestCommandSchema,type SocialDraftWorkspace,type SocialDraftView,type SocialVoiceGuide} from '@fss/contracts';
+import {socialDraftRequestCommandSchema,SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE,type SocialDraftWorkspace,type SocialDraftView,type SocialVoiceGuide} from '@fss/contracts';
 import {payloadHashOf} from '../../../api/src/auth/tokens.ts';
 import {BrowserClient} from '../../src/client/BrowserClient.ts';
 import {BrowserSocialGeneration} from '../../src/client/BrowserSocialGeneration.tsx';
@@ -42,11 +42,27 @@ async function select(){fireEvent.click(button('Read current generation inputs')
 beforeEach(()=>{localStorage.clear();vi.stubGlobal('crypto',webcrypto);Object.defineProperty(navigator,'locks',{value:lockManager(),configurable:true});});
 afterEach(()=>{cleanup();vi.unstubAllGlobals();localStorage.clear();});
 it('requires explicit exact guide and approved facts, sends no prose/clientVersion, and reads accepted ID before showing ready selection',async()=>{
- const s=setup(),v=await mount(s);expect(button('Request guided social suggestion')).toHaveProperty('disabled',true);await select();expect(screen.queryByRole('checkbox',{name:/Untagged/u})).toBeNull();fireEvent.click(button('Request guided social suggestion'));
+ const s=setup(),v=await mount(s);expect(button('Request guided social suggestion')).toHaveProperty('disabled',true);await select();expect(screen.queryByRole('checkbox',{name:/Untagged/u})).toBeNull();
+ expect(screen.getByText(/Clicking Request guided social suggestion sends the selected private voice guide and approved facts to Amazon Bedrock \/ Claude Haiku 4.5/u)).toBeTruthy();
+ expect(button('Request guided social suggestion').getAttribute('aria-describedby')).toBe('social-private-guide-processing');
+ expect(s.calls.some(call=>call.path.endsWith('/request'))).toBe(false);expect(guidedSocialSelection({guide,facts:[workspace.facts[0]!]})).not.toHaveProperty('voiceGuideProcessingScope');
+ fireEvent.click(button('Request guided social suggestion'));
  await waitFor(()=>expect(v.onCurrentRequest).toHaveBeenCalledWith(request));
- const commands=s.calls.filter(call=>call.path.endsWith('/request'));expect(commands).toHaveLength(1);expect(commands[0]!.body).toEqual({mode:'linkedin_grounded',voiceGuideRef:{guideId:id,revision:1},sourceRefs:[],factBlocks:[{id,version:1}],commandId:expect.any(String)});
+ const commands=s.calls.filter(call=>call.path.endsWith('/request'));expect(commands).toHaveLength(1);expect(commands[0]!.body).toEqual({mode:'linkedin_grounded',voiceGuideRef:{guideId:id,revision:1},voiceGuideProcessingScope:SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE,sourceRefs:[],factBlocks:[{id,version:1}],commandId:expect.any(String)});
  expect(s.calls.map(call=>call.path)).toEqual(['/browser/api/social/drafts','/browser/api/social/voice-preferences/read','/browser/api/social/drafts','/browser/api/social/voice-preferences/read','/browser/api/social/drafts/request','/browser/api/social/drafts/read']);
  expect(JSON.stringify({...localStorage})).not.toMatch(/Neutral private|workspace is planned|Controlled ready/u);expect(s.calls.some(call=>call.path.includes('save'))).toBe(false);s.client.dispose();
+});
+it('disclosed request scope is part of the exact command fingerprint and cannot be inferred by receipt recovery',async()=>{
+ const s=setup();await mount(s);await select();s.send(async()=>{throw Error('fictional lost response');});
+ fireEvent.click(button('Request guided social suggestion'));await screen.findByRole('button',{name:'Reconcile guided request receipt'});
+ const command=s.calls.find(call=>call.path.endsWith('/request'))!.body;
+ const {commandId:_command,clientVersion:_version,...payload}=socialDraftRequestCommandSchema.parse({...command,clientVersion:'1.4.0'});
+ const {voiceGuideProcessingScope:_scope,...oldPayload}=payload;
+ expect(payload.voiceGuideProcessingScope).toBe(SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE);expect(payloadHashOf(payload)).not.toBe(payloadHashOf(oldPayload));
+ fireEvent.click(button('Reconcile guided request receipt'));await screen.findByText(/Social request outcome UNKNOWN/u);
+ const recovery=s.calls.find(call=>call.path.endsWith('/receipt'))!.body;
+ expect(recovery).toEqual({commandId:command['commandId'],payloadSHA256:payloadHashOf(payload)});
+ expect(s.calls.filter(call=>call.path.endsWith('/request'))).toHaveLength(1);expect(recovery).not.toHaveProperty('voiceGuideProcessingScope');s.client.dispose();
 });
 it.each(['guide','fact','guideRemoved','factLost'] as const)('fresh %s change refuses without remint or silent upgrade',async mode=>{
  const s=setup();await mount(s);await select();
