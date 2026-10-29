@@ -110,6 +110,21 @@ describe('candidate source authority with actual BrowserClient', () => {
     expect(screen.queryByText(`Checked at ${date}`)).toBeNull(); expect(screen.queryByRole('alert')).toBeNull();
     expect(scope.requests).toHaveLength(1); await act(async () => { scope.client.dispose(); });
   });
+  it('accepts the first explicit authority action when an asynchronously loaded row becomes visible', async () => {
+    const scope = setup(); await scope.client.refresh(); render(<BrowserCandidateInventory client={scope.client} />);
+    let clicked = false;
+    const observer = new MutationObserver(() => {
+      const button = screen.queryByRole('button', { name: 'Read source authority' });
+      if (!clicked && button) { clicked = true; fireEvent.click(button); }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Load ordinary inventory' }));
+      await screen.findByText(`Checked at ${date}`);
+      expect(clicked).toBe(true); expect(scope.requests).toEqual([{ candidateId: id, expectedRevision: 7 }]);
+      expect(scope.storage.setItem).not.toHaveBeenCalled();
+    } finally { observer.disconnect(); await act(async () => { scope.client.dispose(); }); }
+  });
   it.each(['reload', 'filter', 'page'] as const)('ordinary inventory %s unmounts evidence without automatic authority reads', async change => {
     const scope = setup(); await scope.client.refresh(); render(<BrowserCandidateInventory client={scope.client} />);
     fireEvent.click(screen.getByRole('button', { name: 'Load ordinary inventory' })); await screen.findByText(candidate.firmName);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useLayoutEffect, useRef, useState, type JSX } from 'react';
 import { candidateAuthorityReadSchema, candidateAuthorityViewSchema, type CandidateAuthorityView } from '@fss/contracts';
 import type { BrowserClient } from './BrowserClient.ts';
 
@@ -13,7 +13,9 @@ export function BrowserCandidateAuthority({ client, candidateId, expectedRevisio
   const mounted = useRef(false);
   const binding = useRef({ client, candidateId, expectedRevision });
   binding.current = { client, candidateId, expectedRevision };
-  useEffect(() => {
+  // An asynchronously inserted row is already interactive before passive effects.
+  // Install its lifecycle fence before that first explicit authority read.
+  useLayoutEffect(() => {
     mounted.current = true;
     let epoch = client.epoch;
     const clear = (): void => {

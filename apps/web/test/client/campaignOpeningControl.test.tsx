@@ -56,13 +56,17 @@ function setup() {
 async function mount(s: ReturnType<typeof setup>) { await s.client.refresh(); return render(<BrowserCampaignOpening client={s.client} campaignId={id} />); }
 const button = (name: string) => screen.getByRole('button', { name });
 async function read() { fireEvent.click(button('Read current opening policy')); await screen.findByLabelText('Approved opening lines'); }
+async function readWithControlledClock() {
+  await act(async () => { fireEvent.click(button('Read current opening policy')); await vi.advanceTimersByTimeAsync(0); });
+  expect(screen.getByLabelText('Approved opening lines')).toBeTruthy();
+}
 function enter() {
   fireEvent.change(screen.getByLabelText('Approved opening lines'), { target: { value: phrase } });
   fireEvent.change(screen.getByLabelText('Opening policy expiry'), { target: { value: new Date(Date.now() + 600000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) } });
   fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed the exact baseline/u }));
 }
 beforeEach(() => { localStorage.clear(); vi.stubGlobal('crypto', webcrypto); Object.defineProperty(navigator, 'locks', { value: locks(), configurable: true }); });
-afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.dispose()); vi.unstubAllGlobals(); localStorage.clear(); });
+afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.dispose()); vi.useRealTimers(); vi.unstubAllGlobals(); localStorage.clear(); });
 it('requires informed exact baseline, explicit lines/expiry/confirmation, approves then separately reads and revokes', async () => {
   const s = setup(); await mount(s); expect(screen.queryByLabelText('Approved opening lines')).toBeNull(); await read();
   expect(screen.getByText('Exact baseline subject')).toBeTruthy(); expect(screen.getByText(/Exact baseline body/u).textContent).toBe('Exact baseline body\n\nSigned off');
@@ -169,12 +173,21 @@ it('refused recovery is receipt-only, while wrong-target acceptance retains UNKN
   expect(localStorage.length).toBe(0); expect(s.calls.every(x => x.path.endsWith('/receipt'))).toBe(true);
 });
 it('session lifetime clears in-memory copy and fences approval', async () => {
-  const s = setup(); s.change({ expiresAt: new Date(Date.now() + 500).toISOString() }); await mount(s); await read(); enter();
-  await waitFor(() => expect(screen.queryByLabelText('Approved opening lines')).toBeNull());
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
+  const s = setup(); s.change({ expiresAt: new Date(Date.now() + 500).toISOString() }); await mount(s); await readWithControlledClock(); enter();
+  await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+  expect(screen.getByLabelText('Approved opening lines')).toHaveProperty('value', phrase);
+  expect(s.client.current?.status).toBe('signed_in');
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(screen.queryByLabelText('Approved opening lines')).toBeNull();
   expect(screen.queryByRole('region', { name: 'First-email opening policy' })).toBeNull(); expect(s.calls.some(x => x.path.endsWith('/approve'))).toBe(false);
 });
 it('campaign lifetime clears copy while an otherwise current signed session remains usable', async () => {
-  const s = setup(); s.patch({ campaignExpiresAt: new Date(Date.now() + 350).toISOString() }); await mount(s); await read(); enter();
-  await screen.findByText(/Policy or session lifetime elapsed/u); expect(screen.queryByLabelText('Approved opening lines')).toBeNull();
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
+  const s = setup(); s.patch({ campaignExpiresAt: new Date(Date.now() + 350).toISOString() }); await mount(s); await readWithControlledClock(); enter();
+  await act(async () => { await vi.advanceTimersByTimeAsync(349); });
+  expect(screen.getByLabelText('Approved opening lines')).toHaveProperty('value', phrase);
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(screen.getByText(/Policy or session lifetime elapsed/u)).toBeTruthy(); expect(screen.queryByLabelText('Approved opening lines')).toBeNull();
   expect(s.client.current?.status).toBe('signed_in'); expect(s.calls.some(x => x.path.endsWith('/approve'))).toBe(false);
 });
