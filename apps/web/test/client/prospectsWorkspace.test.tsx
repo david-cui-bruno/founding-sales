@@ -82,7 +82,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     const s = setup(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />); await ready();
     fireEvent.click(await screen.findByRole('button', { name: 'Review current research' }));
     const detail = await screen.findByRole('region', { name: 'Current automatic research proof' });
-    expect(document.activeElement).toBe(within(detail).getByRole('heading', { name: proof.firmName }));
+    await waitFor(() => expect(document.activeElement).toBe(within(detail).getByRole('heading', { name: proof.firmName })));
     const disclosure = within(detail).getByText('Source passages and exact research lineage').closest('details')!;
     expect(disclosure.open).toBe(false); fireEvent.click(within(detail).getByText('Source passages and exact research lineage'));
     expect(within(detail).getByRole('link', { name: proof.citations[0]!.url }).getAttribute('referrerpolicy')).toBe('no-referrer');
