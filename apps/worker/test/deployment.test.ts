@@ -432,3 +432,11 @@ describe('the startup line', () => {
     });
   });
 });
+
+it.each(['bedrock','anthropic'] as const)('composes the real opening model only for the approved credit transport %s without calling it or changing sending',async kind=>{
+ const deployment=await readWorkerDeployment(liveEnvironment(),{loadKms:loadKms as never});
+ let calls=0;
+ const composition=await composeHandlers(deployment,{processEnabled:true,transport:{kind,countTokens:async()=>{calls++;return 100;},create:async()=>{calls++;throw Error('unexpected provider invocation');}}},{journal:{append:async()=>{}},region:'us-east-1'});
+ expect(composition.openingModel?.providerKey??null).toBe(kind==='bedrock'?'aws_bedrock.campaign_opening':null);
+ expect(calls).toBe(0);expect(composition.send?.deploymentSendingEnabled).toBe(false);
+});

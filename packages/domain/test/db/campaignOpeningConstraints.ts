@@ -93,4 +93,9 @@ export const CAMPAIGN_OPENING_CONSTRAINT_CASES: readonly Case[] = [
   invalidAttempt('campaign_opening_times', { claimed_at: '-infinity' }),
   invalidAttempt('campaign_opening_fence_hashes', { fence_id: randomUUID(), subject_hash: 'not-a-hash', body_hash: 'b'.repeat(64) }),
   invalidAttempt('campaign_opening_binding_shape', { binding: '{}' }),
+  {constraint:'campaign_opening_model_reservation_shape',run:async f=>insert(f,'provider_reservations',{
+    workspace_id:f.seeded.alpha.workspaceId,provider_key:'aws_bedrock.campaign_opening',subject_kind:'campaign_opening',
+    subject_id:randomUUID(),attempt:1,business_date:'2026-10-29',business_time_zone:'America/New_York',cents:1,
+    model_name:'claude-haiku-4-5',max_input_tokens:100,max_output_tokens:1024,
+  })},
 ];
