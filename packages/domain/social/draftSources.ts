@@ -37,6 +37,7 @@ async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftReq
   const blocks=await readApprovedAnswerBlocks(ctx,input.factBlocks);if(!blocks.ok)return blocks;
   const prepared=prepareGroundedSocialDraftInput(blocks.value);if(!prepared)return {ok:false,reason:'sanitized_facts_required'};
   if(voice.value)prepared.privateVoiceGuide=voice.value;
+  if(input.voiceGuideProcessingScope)prepared.voiceGuideProcessingScope=input.voiceGuideProcessingScope;
   if(!buildSocialDraftRequest(prepared))return {ok:false,reason:'input_too_large'};
   const publicHashes:string[]=[];
   for(const block of blocks.value){

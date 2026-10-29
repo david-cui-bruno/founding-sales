@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useMemo,useRef,useState,type JSX} from 'react';
 import {z} from 'zod';
-import {socialDraftWorkspaceSchema,socialDraftViewSchema,socialVoiceReadSchema,socialGuidedRequestSavedSchema,socialGuidedRequestReceiptSchema,type SocialDraftWorkspace,type SocialDraftView,type SocialVoiceGuide} from '@fss/contracts';
+import {socialDraftWorkspaceSchema,socialDraftViewSchema,socialVoiceReadSchema,socialGuidedRequestSavedSchema,socialGuidedRequestReceiptSchema,SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE,type SocialDraftWorkspace,type SocialDraftView,type SocialVoiceGuide} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
 import {SocialGenerationCustody,SOCIAL_GENERATION_PENDING_PREFIX,type SocialGenerationPending} from './SocialGenerationPending.ts';
 import {revalidateSocialSelection} from './SocialGenerationDispatch.ts';
@@ -54,7 +54,7 @@ export function BrowserSocialGeneration({client,onCurrentRequest,claimProjection
   if(!current()||custody.read()||!workspace||guide?.state!=='available'||!guideSelected)throw Error('Select inputs first');
   const selection={guide,facts:workspace.facts.filter(fact=>facts.includes(fact.id))};
   callback.current(null);setRequestId(null);
-  const next=await inputs(current),input=revalidateSocialSelection(selection,next.workspace,next.guide);
+  const next=await inputs(current),input={...revalidateSocialSelection(selection,next.workspace,next.guide),voiceGuideProcessingScope:SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE};
   const prepared=await custody.prepare(input,current);if(!current())return;setPending(prepared.held);
   const answer=await client.request('/social/drafts/request',answerSchema,{...prepared.payload,commandId:prepared.held.commandId},()=>{if(!current())throw Error('Scope changed');custody.assert(prepared.held);});
   await outcome(answer,prepared.held,current);
@@ -68,11 +68,12 @@ export function BrowserSocialGeneration({client,onCurrentRequest,claimProjection
  if(client.current?.status!=='signed_in')return null;
  const disabled=busy||blocked||pending!==null||client.current.role!=='admin';
  return <section aria-label="Guided social suggestion request" className="social-details">
-  <h3>Request a guided private suggestion</h3><p>Use your explicitly selected saved style guide and current approved social facts only. Guidance is untrusted style, not factual support or consent. Existing generation readiness and budgets still apply. No source acquisition, publishing or LinkedIn action.</p>
+  <h3>Request a guided private suggestion</h3><p>Use your explicitly selected saved style guide and current approved social facts only. Saved guidance controls style; it supplies no facts or publication permission. Existing generation readiness and budgets still apply. No source acquisition, publishing or LinkedIn action.</p>
   <p role="status">{notice}</p><button type="button" disabled={disabled} onClick={()=>{void read();}}>Read current generation inputs</button>
   {guide?.state==='available'?<div><label><input type="checkbox" checked={guideSelected} disabled={disabled} onChange={event=>setGuideSelected(event.target.checked)}/>Use saved voice guide {guide.guideId} revision {guide.revision}</label><ul>{guide.entries.map(entry=><li key={entry.entryId}>{entry.dimension}: {entry.guidance}</li>)}</ul></div>:guide?<p>No available saved guide. Curate and save a guide below, then read inputs again.</p>:null}
   {workspace?<fieldset disabled={disabled}><legend>Select approved factual inputs</legend>{workspace.facts.filter(fact=>fact.socialInput?.sanitized).map(fact=><label className="block" key={fact.id}><input type="checkbox" checked={facts.includes(fact.id)} onChange={event=>setFacts(value=>event.target.checked?[...value,fact.id]:value.filter(id=>id!==fact.id))}/>{fact.text} · Fact {fact.id} version {fact.version} · {fact.socialInput?.topic} · {fact.socialInput?.status}{fact.socialInput?.sourceRef?` · Public original ${fact.socialInput.sourceRef.id} revision ${fact.socialInput.sourceRef.revision}`:''}</label>)}{!workspace.facts.some(fact=>fact.socialInput?.sanitized)?<p>No current approved social facts. No freeform factual input is accepted here.</p>:null}</fieldset>:null}
-  <button type="button" disabled={disabled||!guideSelected||facts.length===0} onClick={()=>{void dispatch();}}>Request guided social suggestion</button>
+  <p id="social-private-guide-processing">Clicking Request guided social suggestion sends the selected private voice guide and approved facts to Amazon Bedrock / Claude Haiku 4.5 to create a private suggestion. It does not publish or schedule a post.</p>
+  <button type="button" aria-describedby="social-private-guide-processing" disabled={disabled||!guideSelected||facts.length===0} onClick={()=>{void dispatch();}}>Request guided social suggestion</button>
   {pending?<aside aria-label="Pending guided social request"><p>Pending request command {pending.commandId}. Navigation preserves UNKNOWN. No resend control.</p><button type="button" disabled={busy||blocked||client.current.role!=='admin'} onClick={()=>{void reconcile();}}>Reconcile guided request receipt</button></aside>:null}
   {requestId?<button type="button" disabled={disabled} onClick={()=>{void operation(current=>currentRequest(requestId,current));}}>Read current requested suggestion</button>:null}
  </section>;

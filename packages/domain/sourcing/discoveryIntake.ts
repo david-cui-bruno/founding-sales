@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {candidateInputSchema,discoveryCandidatePayloadSchema,discoveryIntakeSaveInputSchema,discoveryIntakeListInputSchema,discoveryIntakeListSchema,type discoveryIntakeSavedSchema,discoveryOriginSchema,discoverySourceKey,type CandidateInput,type DiscoveryIntakeSaveInput,type DiscoveryOrigin} from '@fss/contracts';
+import {legacyCandidateInputSchema,currentPreparedCandidateInputSchema,discoveryCandidatePayloadSchema,discoveryIntakeSaveInputSchema,discoveryIntakeListInputSchema,discoveryIntakeListSchema,type discoveryIntakeSavedSchema,discoveryOriginSchema,discoverySourceKey,type CandidateInput,type LegacyCandidateInput,type DiscoveryIntakeSaveInput,type DiscoveryOrigin} from '@fss/contracts';
 import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -13,7 +13,9 @@ interface CandidateRow {id:string;payload:unknown;status:'needs_review'|'kept'|'
 interface OriginRow {candidate_id:string;source:unknown;source_metadata:unknown;licenses:unknown;notices:unknown;[key:string]:unknown}
 const refused=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
 const canonical=(value:unknown):string=>JSON.stringify(value,(_key,item:unknown)=>item!==null&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
-export const isLegacyCandidatePayload=(value:unknown):value is CandidateInput=>candidateInputSchema.safeParse(value).success;
+/** Frozen admission/retained-phone payload guard. Current preparation must not widen it. */
+export const isLegacyCandidatePayload=(value:unknown):value is LegacyCandidateInput=>legacyCandidateInputSchema.safeParse(value).success;
+export const isCurrentPreparedCandidatePayload=(value:unknown):value is CandidateInput=>currentPreparedCandidateInputSchema.safeParse(value).success;
 export const DISCOVERY_LEGACY_EXCLUSION="payload->>'kind' IS DISTINCT FROM 'discovery-v1'";
 const originValue=(row:OriginRow):DiscoveryOrigin=>discoveryOriginSchema.parse({source:row.source,sourceMetadata:row.source_metadata,licenses:row.licenses,notices:row.notices});
 const rowIdentity=(row:Payload['row'])=>canonical({firmName:row.firmName,website:row.website,locality:row.locality,region:row.region,probableGroupKey:row.probableGroupKey});

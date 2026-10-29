@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { businessDate, instant, uuid } from './foundationRows.ts';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
+import {usBusinessRegionSchema} from './usBusinessGeography.ts';
 
 // These URLs are references, not permission to fetch. The bounded fetcher remains
 // responsible for DNS/redirect/robots checks when verification is added.
@@ -14,7 +15,7 @@ export const sourcingUrlSchema = z.string().trim().max(500).refine(value => {
   } catch { return false; }
 }, 'Use a public HTTPS website.');
 export const candidateStatusSchema = z.enum(['needs_review', 'kept', 'dismissed']);
-export const candidateInputSchema = z.strictObject({
+export const legacyCandidateInputSchema = z.strictObject({
   discoveryKnownDomain: z.boolean().optional(),
   discoveryQuery: z.string().trim().min(1).max(400).optional(),
   firmName: z.string().trim().min(1).max(300),
@@ -27,6 +28,10 @@ export const candidateInputSchema = z.strictObject({
   observedOn: businessDate,
   preparedBy: z.string().trim().min(1).max(200),
 });
+export type LegacyCandidateInput=z.infer<typeof legacyCandidateInputSchema>;
+/** Current ordinary preparation is distinct from strict retained calling admission. */
+export const currentPreparedCandidateInputSchema=legacyCandidateInputSchema.extend({region:usBusinessRegionSchema});
+export const candidateInputSchema=currentPreparedCandidateInputSchema;
 export type CandidateInput = z.infer<typeof candidateInputSchema>;
 export const candidateSourceCheckSchema = z.object({
   checkId:uuid,jobId:uuid,requestedAt:instant,

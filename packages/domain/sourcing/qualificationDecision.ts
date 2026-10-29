@@ -5,7 +5,7 @@ import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {qualifyCandidate,NEUTRAL_MAINTENANCE_QUESTION,type SourcingIdentity} from './qualificationPolicy.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
-import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
 import {retainedWallNow,lockRetainedAdmin} from './retainedAcquisition.ts';
 export function candidateIdentity(candidate:CandidateInput,facts:readonly QualificationFact[],sources:readonly SourceObservation[]):SourcingIdentity {
  const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
@@ -21,7 +21,7 @@ export async function evaluateQualification(ctx:RepositoryContext,input:{runId:s
  const candidate=(await ctx.db.query<{revision:number;status:string;payload:CandidateInput}>('SELECT revision,status,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,identity.candidate_id])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.runId])).rows[0];
  if(!candidate||!run)return {ok:false,reason:'not_found'};
- if(!isLegacyCandidatePayload(candidate.payload))return {ok:false,reason:'candidate_format_not_supported'};
+ if(!isCurrentPreparedCandidatePayload(candidate.payload))return {ok:false,reason:'candidate_format_not_supported'};
  if(candidate.status==='dismissed'||candidate.revision!==run.candidate_revision)return {ok:false,reason:'candidate_changed'};
  if(!['review','eligible'].includes(run.state)||run.reason!==null)return {ok:false,reason:'evidence_unavailable'};
  if(run['retained_identity_decision_id']&&!await lockRetainedAdmin(ctx))return {ok:false,reason:'admin_only'};

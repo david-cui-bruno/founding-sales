@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
+import {nativeFirmPolicyVersionSchema} from './usBusinessGeography.ts';
 
 // A current online read, never a stored grant, cached Today badge or channel permission.
 export const nativeFirmEligibilityReasonSchema = z.enum([
@@ -15,7 +16,7 @@ const citationSchema = z.strictObject({
 });
 const verifiedSchema = z.strictObject({
   status: z.literal('verified'),
-  policyVersion: z.literal('native-firm-eligibility-v1'),
+  policyVersion: nativeFirmPolicyVersionSchema,
   promotionId: uuid, discoveryCandidateId: uuid,
   discoveryRevision: z.number().int().positive(),
   candidateId: uuid, candidateRevision: z.number().int().positive(),

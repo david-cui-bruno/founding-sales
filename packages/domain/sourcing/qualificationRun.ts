@@ -17,7 +17,7 @@ import type {PageFetchProvider} from '../research/providers.ts';
 import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome} from './qualificationPrompt.ts';
 import {normalizeQualificationDiagnostic,type QualificationDiagnostic,type QualificationDiagnosticPhase} from './qualificationDiagnostics.ts';
-import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 interface Run extends QualificationRunRow {payload:CandidateInput;current_revision:number;candidate_status:string}
 const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS candidate_status FROM sourcing_qualification_runs r
@@ -25,7 +25,7 @@ const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS c
 async function allowed(ctx:RepositoryContext,runId:string):Promise<Run|null>{
  const row=(await ctx.db.query<Run>(readSql,[ctx.scope.workspaceId,runId])).rows[0];
  if(row&&(row['retained_identity_decision_id']||await retainedCandidateOnly(ctx,row.candidate_id)))return null;
- if(row&&!isLegacyCandidatePayload(row.payload))return null;
+ if(row&&!isCurrentPreparedCandidatePayload(row.payload))return null;
  if(!row||!['pending','running'].includes(row.state)||row.candidate_status==='dismissed'||row.current_revision!==row.candidate_revision||row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx)))return null;
  if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return null;
  return row;

@@ -7,6 +7,7 @@ import {databaseNow} from '../policy/clock.ts';
 import {qualifyEmailCandidate} from '../outreach/selection.ts';
 import {readDiscoveryPreparation} from './discoveryPromotion.ts';
 import {nativeFirmCitations} from './nativeFirmEligibility.ts';
+import {currentUSPreparedEmailFit} from './currentPreparedEmailFit.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 export const canonicalResearchValue=(value:unknown):string=>JSON.stringify(value,(_key,item:unknown)=>item!==null&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
@@ -41,9 +42,11 @@ export async function readQualifiedResearchCandidate(ctx:RepositoryContext,disco
  const selection={discoveryCandidateId,discoveryRevision:preparation.discoveryRevision,candidateId:row.legacy_candidate_id,candidateRevision:row.revision,runId:run.id};
  const source={provider:row.provider,release:row.release,recordId:row.record_id};
  const identity={status:'resolved' as const,name:candidate.data.firmName,website:candidate.data.website,locality:candidate.data.locality,region:candidate.data.region};
- const email=qualifyEmailCandidate({identity,facts:run.facts,observations:run.observations,now});
- const evidenceFingerprint=researchFingerprint({selection,promotionId:row.id,source,origin,candidate:candidate.data,nativePolicyVersion:'native-firm-eligibility-v1',policyVersion:run.policy_version,promptVersion:run.prompt_version,facts:run.facts,observations:run.observations});
- const value=qualifiedResearchCandidateSchema.parse({selection,promotionId:row.id,source,firmName:candidate.data.firmName,website:candidate.data.website,locality:candidate.data.locality,region:candidate.data.region,policyVersion:'native-firm-eligibility-v1',evidenceFingerprint,validUntil:proof.validUntil,citations,emailFit:email.decision==='eligible'?'eligible':'unresolved',channelAuthority:'not_granted',maintenanceNeed:'not_established'});
+ const emailFit=proof.policyVersion==='native-firm-eligibility-us-v1'
+  ?currentUSPreparedEmailFit({candidate:candidate.data,facts:run.facts,observations:run.observations,now},proof).eligible
+  :qualifyEmailCandidate({identity,facts:run.facts,observations:run.observations,now}).decision==='eligible';
+ const evidenceFingerprint=researchFingerprint({selection,promotionId:row.id,source,origin,candidate:candidate.data,nativePolicyVersion:proof.policyVersion,policyVersion:run.policy_version,promptVersion:run.prompt_version,facts:run.facts,observations:run.observations});
+ const value=qualifiedResearchCandidateSchema.parse({selection,promotionId:row.id,source,firmName:candidate.data.firmName,website:candidate.data.website,locality:candidate.data.locality,region:candidate.data.region,policyVersion:proof.policyVersion,evidenceFingerprint,validUntil:proof.validUntil,citations,emailFit:emailFit?'eligible':'unresolved',channelAuthority:'not_granted',maintenanceNeed:'not_established'});
  const latest=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1',[ctx.scope.workspaceId,row.legacy_candidate_id])).rows[0];
  const current=await readDiscoveryPreparation(ctx,row.id);
  const currentCandidate=(await ctx.db.query<{revision:number;qualification_blocked:boolean;payload:unknown}>('SELECT revision,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,row.legacy_candidate_id])).rows[0];

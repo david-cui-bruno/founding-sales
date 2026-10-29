@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {socialDraftRequestSchema,socialDraftRequestCommandSchema,socialDraftViewSchema} from '../src/social.ts';
+import {socialDraftRequestSchema,socialDraftRequestCommandSchema,socialDraftViewSchema,SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE} from '../src/social.ts';
 
 const guideId='10000000-0000-4000-8000-000000000001';
 const selection={mode:'linkedin_grounded' as const,sourceRefs:[],factBlocks:[],voiceGuideRef:{guideId,revision:2}};
@@ -13,6 +13,15 @@ describe('explicit owner-curated Social guide selection',()=>{
  });
  it('preserves requests with no guide rather than opting them in',()=>{
   expect(socialDraftRequestSchema.parse({sourceRefs:[],factBlocks:[]})).toEqual({sourceRefs:[],factBlocks:[]});
+ });
+ it('retains per-request Bedrock processing intent only with a grounded exact guide',()=>{
+  const scoped={...selection,voiceGuideProcessingScope:SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE};
+  expect(socialDraftRequestSchema.parse(scoped)).toEqual(scoped);
+  const command={...scoped,commandId:'10000000-0000-4000-8000-000000000002',clientVersion:'1.4.7'};
+  expect(socialDraftRequestCommandSchema.parse(command)).toEqual(command);
+  for(const invalid of [{...scoped,mode:undefined},{...scoped,voiceGuideRef:undefined},{...scoped,voiceGuideProcessingScope:'another_provider'},
+   {sourceRefs:[],factBlocks:[],voiceGuideProcessingScope:SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE}])expect(socialDraftRequestSchema.safeParse(invalid).success).toBe(false);
+  expect(socialDraftRequestSchema.parse(selection)).not.toHaveProperty('voiceGuideProcessingScope');
  });
  it('refuses a guide on the legacy non-grounded mode',()=>{
   expect(socialDraftRequestSchema.safeParse({sourceRefs:[],factBlocks:[],voiceGuideRef:selection.voiceGuideRef}).success).toBe(false);

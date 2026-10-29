@@ -1,3 +1,4 @@
+import {usBusinessRegionSchema} from './usBusinessGeography.ts';
 import {z} from 'zod';
 import {uuid} from './foundationRows.ts';
 import {commandIdSchema} from './auth.ts';
@@ -42,7 +43,7 @@ export interface LearningReport {
  search:{attempts:number;creditsReserved:number};
 }
 export const targetingRanks=['help_request','operational_burden','investigation','fit_only'] as const;
-export const targetingQuerySchema=z.strictObject({id:z.string().regex(/^[a-z0-9_.-]{1,100}$/u),query:z.string().trim().min(5).max(400),locality:z.string().trim().min(1).max(120),region:z.enum(['TX','RI','MA'])});
+export const targetingQuerySchema=z.strictObject({id:z.string().regex(/^[a-z0-9_.-]{1,100}$/u),query:z.string().trim().min(5).max(400),locality:z.string().trim().min(1).max(120),region:usBusinessRegionSchema});
 export type TargetingQuery=z.infer<typeof targetingQuerySchema>;
 export const targetingProposalSchema=z.strictObject({basePolicyVersion:z.string().min(1).max(80),queryChanges:z.array(targetingQuerySchema).max(30),rankOrder:z.array(z.enum(targetingRanks)).length(4),evidenceIds:z.array(uuid).max(30),rationale:z.string().trim().min(5).max(2000)}).refine(v=>new Set(v.rankOrder).size===4&&new Set(v.queryChanges.map(q=>q.id)).size===v.queryChanges.length&&new Set(v.evidenceIds).size===v.evidenceIds.length);
 export const targetingApplySchema=z.strictObject({id:uuid,expectedRevision:z.number().int().positive()});

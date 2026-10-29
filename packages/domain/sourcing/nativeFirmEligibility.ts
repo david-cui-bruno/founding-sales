@@ -2,11 +2,13 @@ import {qualificationEvidenceSchema,nativeFirmEligibilitySchema,type NativeFirmE
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {qualificationCitationRoles,type QualificationCandidateContext} from './qualificationCitationRoles.ts';
-import {deniesManagedResidences,supportsResidentialManagement,isTargetGeography,type SourcingIdentity} from './qualificationPolicy.ts';
+import {deniesManagedResidences,supportsResidentialManagement,type SourcingIdentity} from './qualificationPolicy.ts';
 import {isDiscoveryDirectory} from './discoveryIdentity.ts';
 import {readCurrentDiscoveryResearchFirm} from './discoveryResearchFirm.ts';
 import type {QualificationRunRow} from './qualificationStore.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationVersions.ts';
+import type {NativeFirmPolicyVersion} from '../../contracts/src/usBusinessGeography.ts';
+import {currentNativeFirmPolicy,supportsCurrentUSServiceLocation} from './currentUSBusinessGeography.ts';
 
 export const identityFold=(value:string):string=>value.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 /** Branch paths and only known non-identity tracking queries are supported. */
@@ -22,7 +24,7 @@ function deniesResidential(text:string):boolean {
 export type NativeEvidenceInput={candidate:QualificationCandidateContext;facts:readonly QualificationFact[];observations:readonly SourceObservation[];now:string};
 type Core={kind:'verified';identity:SourcingIdentity}|{kind:'pending'|'unclear';reason:string};
 /** Behavior-identical pre-phone portion of verified-firm-v3. No channel authority. */
-export function nativeFirmEvidence(input:NativeEvidenceInput):Core {
+function nativeFirmEvidenceCore(input:NativeEvidenceInput,currentUS:boolean):Core {
  const {candidate}=input,now=Date.parse(input.now),host=sourceHost(candidate.website);
  if(!Number.isFinite(now)||!host||!qualificationEvidenceSchema.safeParse({facts:input.facts,observations:input.observations}).success)return {kind:'pending',reason:'invalid_evidence'};
  if(isDiscoveryDirectory(candidate.website))return {kind:'unclear',reason:'identity_unresolved'};
@@ -34,11 +36,14 @@ export function nativeFirmEvidence(input:NativeEvidenceInput):Core {
  if(name.length<4||/^(?:property management|property manager|rentals|home|contact|about us)$/u.test(name)||identities.length===0)return {kind:'unclear',reason:'identity_unresolved'};
  if(identities.some(f=>!matches(f.value,name)||/\b(?:powered by|website by|web design|testimonial|customer review)\b/iu.test(f.value)))return {kind:'unclear',reason:'firm_identity_ambiguous'};
  const state=stateNames[candidate.region];
- const geography=facts.some(f=>f.kind==='service_area'&&matches(f.value,candidate.locality)&&(matches(f.value,candidate.region)||matches(f.value,state??'__unknown__')));
+ const geography=facts.some(f=>f.kind==='service_area'&&(currentUS?supportsCurrentUSServiceLocation(f.value,candidate.region,candidate.locality)
+  :matches(f.value,candidate.locality)&&(matches(f.value,candidate.region)||matches(f.value,state??'__unknown__'))));
  if(!geography)return {kind:'unclear',reason:'identity_unresolved'};
  if([...sources.values()].some(source=>source.blocks.some(block=>deniesResidential(block.text)))||!facts.some(f=>f.kind==='residential_management'&&supportsResidentialManagement(f.value)))return {kind:'pending',reason:'residential_fit_unknown'};
  return {kind:'verified',identity:{status:'resolved',name:candidate.firmName,website:candidate.website,locality:candidate.locality,region:candidate.region}};
 }
+/** Frozen default used by strict verified/calling wrappers. */
+export function nativeFirmEvidence(input:NativeEvidenceInput):Core {return nativeFirmEvidenceCore(input,false);}
 const literal=(value:string,part:string)=>` ${identityFold(value).replace(/[^\p{L}\p{N}]+/gu,' ')} `.includes(` ${identityFold(part).replace(/[^\p{L}\p{N}]+/gu,' ')} `);
 function contradictsServiceArea(value:string,candidate:QualificationCandidateContext):boolean {
  return value.split(/[.!?\n]+/u).some(sentence=>literal(sentence,candidate.locality)
@@ -48,20 +53,24 @@ function contradictsServiceArea(value:string,candidate:QualificationCandidateCon
    ||/\b(?:outside|excluded\s+from|not\s+(?:in|within|part\s+of))\b[^.!?\n]{0,80}\b(?:service|coverage|operating)\s+area\b/iu.test(sentence)
    ||/\b(?:withdrawn|discontinued|ended|ceased|stopped)\b[^.!?\n]{0,80}\b(?:service|operations|coverage)\b/iu.test(sentence)));
 }
-function serviceArea(value:string,candidate:QualificationCandidateContext):boolean {
- return literal(value,candidate.locality)&&(literal(value,candidate.region)||literal(value,stateNames[candidate.region]??'__unknown__'))
+function serviceArea(value:string,candidate:QualificationCandidateContext,currentUS=false):boolean {
+ return (currentUS?supportsCurrentUSServiceLocation(value,candidate.region,candidate.locality)
+  :literal(value,candidate.locality)&&(literal(value,candidate.region)||literal(value,stateNames[candidate.region]??'__unknown__')))
   &&! /\b(?:utility|vendor|testimonial|customer review|powered by|web design)\b/iu.test(value)
   &&(literal(value,candidate.firmName)||/\b(?:we (?:serve|manage|provide)|our service area)\b/iu.test(value))
   &&/\b(?:serve|service|manag|office)/iu.test(value);
 }
 const unavailable=(reason:Extract<NativeFirmEligibility,{status:'unavailable'}>['reason']):NativeFirmEligibility=>({status:'unavailable',reason,channelAuthority:'not_granted'});
 /** Extra read-adapter defenses are intentionally NOT injected into the calling wrapper. */
-export function nativeFirmCitations(input:NativeEvidenceInput):{citations:Extract<NativeFirmEligibility,{status:'verified'}>['citations'];validUntil:string}|NativeFirmEligibility {
+export function nativeFirmCitations(input:NativeEvidenceInput):{citations:Extract<NativeFirmEligibility,{status:'verified'}>['citations'];validUntil:string;policyVersion:NativeFirmPolicyVersion}|NativeFirmEligibility {
  if(!qualificationEvidenceSchema.safeParse({facts:input.facts,observations:input.observations}).success)return unavailable('evidence_invalid');
  const roles=qualificationCitationRoles(input.candidate,input.facts,input.observations);
  if(!roles.ok)return unavailable('evidence_invalid');
- if(!isTargetGeography(input.candidate.region,input.candidate.locality))return unavailable('geography_unsupported');
- const core=nativeFirmEvidence(input);
+ const policyVersion=currentNativeFirmPolicy(input.candidate.region,input.candidate.locality);
+ if(!policyVersion)return unavailable('geography_unsupported');
+ const currentUS=policyVersion==='native-firm-eligibility-us-v1';
+ if(currentUS&&!input.facts.some(f=>f.kind==='service_area'&&supportsCurrentUSServiceLocation(f.value,input.candidate.region,input.candidate.locality)))return unavailable('geography_unsupported');
+ const core=currentUS?nativeFirmEvidenceCore(input,true):nativeFirmEvidence(input);
  if(core.kind!=='verified')return unavailable(core.reason==='residential_fit_unknown'?'residential_fit_unresolved':core.reason==='firm_identity_ambiguous'?'identity_ambiguous':core.reason==='source_incomplete_or_unverified'?'evidence_expired':'identity_unresolved');
  const now=Date.parse(input.now),host=sourceHost(input.candidate.website);
  const usable=input.observations.filter(s=>s.firstParty&&!s.truncated&&sourceHost(s.url)===host&&now>=Date.parse(s.retrievedAt)&&now-Date.parse(s.retrievedAt)<7*86400000);
@@ -70,12 +79,12 @@ export function nativeFirmCitations(input:NativeEvidenceInput):{citations:Extrac
  const selected=input.facts.filter(f=>['firm_identity','service_area','residential_management'].includes(f.kind)&&usable.some(s=>s.id===f.observationId));
  const citations:Extract<NativeFirmEligibility,{status:'verified'}>['citations']=[];
  for(const kind of ['firm_identity','service_area','residential_management'] as const){
-  const fact=selected.find(f=>f.kind===kind&&(kind!=='residential_management'||supportsResidentialManagement(f.value))&&(kind!=='service_area'||serviceArea(f.value,input.candidate)));
+  const fact=selected.find(f=>f.kind===kind&&(kind!=='residential_management'||supportsResidentialManagement(f.value))&&(kind!=='service_area'||serviceArea(f.value,input.candidate,currentUS)));
   if(!fact)return unavailable(kind==='service_area'?'service_area_unresolved':kind==='firm_identity'?'identity_unresolved':'residential_fit_unresolved');
   citations.push({kind,observationId:fact.observationId,blockId:fact.blockId});
  }
  const validUntil=new Date(Math.min(...citations.map(c=>Date.parse(usable.find(s=>s.id===c.observationId)!.retrievedAt)+7*86400000))).toISOString();
- return {citations,validUntil};
+ return {citations,validUntil,policyVersion};
 }
 
 /** Current read only. Never enqueues, writes, selects by name, or grants a channel. */
@@ -97,5 +106,5 @@ export async function readNativeFirmEligibility(ctx:RepositoryContext,firmId:str
  const latest=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1',[ctx.scope.workspaceId,candidate.id])).rows[0];
  if(!current||JSON.stringify(current)!==JSON.stringify(lineage)||JSON.stringify(latest)!==JSON.stringify(run))return unavailable('lineage_changed');
  const checkedAt=await databaseNow(ctx);if(Date.parse(checkedAt)>=Date.parse(proof.validUntil))return unavailable('evidence_expired');
- return nativeFirmEligibilitySchema.parse({status:'verified',policyVersion:'native-firm-eligibility-v1',promotionId:lineage.promotionId,discoveryCandidateId:lineage.discoveryCandidateId,discoveryRevision:lineage.discoveryRevision,candidateId:candidate.id,candidateRevision:candidate.revision,runId:run.id,firmId,ownerUserId:firm.assigned_user_id,checkedAt,validUntil:proof.validUntil,citations:proof.citations,channelAuthority:'not_granted'});
+ return nativeFirmEligibilitySchema.parse({status:'verified',policyVersion:proof.policyVersion,promotionId:lineage.promotionId,discoveryCandidateId:lineage.discoveryCandidateId,discoveryRevision:lineage.discoveryRevision,candidateId:candidate.id,candidateRevision:candidate.revision,runId:run.id,firmId,ownerUserId:firm.assigned_user_id,checkedAt,validUntil:proof.validUntil,citations:proof.citations,channelAuthority:'not_granted'});
 }

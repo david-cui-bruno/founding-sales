@@ -12,7 +12,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 import {verifiedFirmOwner,verifiedWebsiteKey,IDENTITY_REVIEW_REASONS} from './verifiedFirmPolicy.ts';
 import {discoveryQuotaRemaining} from './discoveryQuota.ts';
-import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
 import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
 
 type Result<T> = {ok:true;value:T} | {ok:false;reason:string};
@@ -68,7 +68,7 @@ async function change(context:RepositoryContext,input:z.infer<typeof candidateDe
   const {rows}=await context.db.query<Row>('SELECT id,revision,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.id]);
   if(rows[0]===undefined)return {ok:false,reason:'not_found'};
   if(rows[0].revision!==input.expectedRevision)return {ok:false,reason:'candidate_changed'};
-  if(status==='kept'&&!isLegacyCandidatePayload(rows[0].payload))return {ok:false,reason:'candidate_format_not_supported'};
+  if(status==='kept'&&!isCurrentPreparedCandidatePayload(rows[0].payload))return {ok:false,reason:'candidate_format_not_supported'};
   // Revision in the mutation also guards callers that do not hold a transaction.
   const changed=status===null
     ? await context.db.query('DELETE FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 AND revision=$3 RETURNING id',[context.scope.workspaceId,input.id,input.expectedRevision])
