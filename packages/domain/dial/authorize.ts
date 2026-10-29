@@ -41,7 +41,8 @@ import {readPreparationExecution} from '../calling/preparationExecution.ts';
  * a decision that was never true.
  *
  * This function reads. It writes nothing, mints nothing, and is safe to call from a
- * card render; `authorizeDialCommand` is what turns an allow into a ticket.
+ * retained phone policy reads. `authorizeBrowserDial` shares the core endpoint,
+ * identity and owner checks, with the explicitly simplified browser-only policy.
  */
 
 export type DialDecision =
@@ -56,10 +57,10 @@ export interface DialEvidence {
   readonly routeVersion: number;
   readonly e164: string;
   readonly callingIdentityId: string;
-  readonly postureId: string;
-  readonly postureRevision: number;
-  readonly firmTimeZone: string;
-  readonly firmLocalTime: string;
+  readonly postureId: string | null;
+  readonly postureRevision: number | null;
+  readonly firmTimeZone: string | null;
+  readonly firmLocalTime: string | null;
   readonly at: string;
 }
 
@@ -151,6 +152,16 @@ export async function authorizeDial(
   context: RepositoryContext,
   input: AuthorizeDialInput,
 ): Promise<DialDecision> {
+  return await authorize(context,input,false);
+}
+
+/** Explicit browser calls have no state-approval, zone or local-hours prerequisite.
+ * The retained phone path above keeps its strict geographic policy. */
+export async function authorizeBrowserDial(context:RepositoryContext,input:AuthorizeDialInput):Promise<DialDecision>{
+  return await authorize(context,input,true);
+}
+
+async function authorize(context:RepositoryContext,input:AuthorizeDialInput,browser:boolean):Promise<DialDecision>{
   const actor = context.scope.actor;
   await lockPreparedCallingLifecycle(context.db,context.scope.workspaceId,input.firmId);
   const preparation=await readPreparationExecution(context,input.firmId);
@@ -215,23 +226,22 @@ export async function authorizeDial(
   // without the assignee knowing.
   if (firm.assigned_user_id === null || firm.assigned_user_id !== actor.userId) return refused('not_assigned');
 
-  // ---- 5. Firm zone -------------------------------------------------------
-  // "Inability to establish it blocks calling." A firm that has never been through
-  // the zone rule is refused for the same reason as one the rule could not resolve.
-  if (firm.time_zone === null || firm.time_zone_confidence === null) return refused('zone_unresolved');
-  if (firm.region_code === null) return refused('zone_unresolved');
-
-  // ---- 6. State posture ---------------------------------------------------
-  const posture = await applicablePosture(context, firm.region_code, input.at);
-  if (posture.decision.kind === 'refused') return refused(posture.decision.reason);
-  const chosen = 'posture' in posture ? posture.posture : null;
-  if (chosen === null) return refused('posture_missing');
-
-  // ---- 7. Calling window --------------------------------------------------
-  const window = await currentCallingWindow(context);
-  const evaluated = evaluateConfiguredCallingWindow(input.at, firm.time_zone, window);
-  if (!evaluated.allowed) {
-    return refused(evaluated.refusal === 'zone_unknown' ? 'zone_unresolved' : 'outside_calling_window');
+  let postureId:string|null=null,postureRevision:number|null=null;
+  let firmTimeZone:string|null=firm.time_zone,firmLocalTime:string|null=null;
+  if(browser){
+    // Optional display evidence is never a fake zone or an admission requirement.
+    try{firmLocalTime=firmTimeZone?new Intl.DateTimeFormat('en-GB',{timeZone:firmTimeZone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(input.at)):null;}
+    catch{firmTimeZone=null;}
+  }else{
+    if(firm.time_zone===null||firm.time_zone_confidence===null||firm.region_code===null)return refused('zone_unresolved');
+    const posture=await applicablePosture(context,firm.region_code,input.at);
+    if(posture.decision.kind==='refused')return refused(posture.decision.reason);
+    const chosen='posture'in posture?posture.posture:null;
+    if(chosen===null)return refused('posture_missing');
+    const window=await currentCallingWindow(context);
+    const evaluated=evaluateConfiguredCallingWindow(input.at,firm.time_zone,window);
+    if(!evaluated.allowed)return refused(evaluated.refusal==='zone_unknown'?'zone_unresolved':'outside_calling_window');
+    postureId=chosen.id;postureRevision=chosen.revision;firmLocalTime=evaluated.localTime;
   }
 
   // ---- 8. Pauses and other holds -----------------------------------------
@@ -259,10 +269,10 @@ export async function authorizeDial(
       routeVersion: route.version,
       e164: route.e164,
       callingIdentityId: identity.id,
-      postureId: chosen.id,
-      postureRevision: chosen.revision,
-      firmTimeZone: firm.time_zone,
-      firmLocalTime: evaluated.localTime,
+      postureId,
+      postureRevision,
+      firmTimeZone,
+      firmLocalTime,
       at: input.at,
     },
   };

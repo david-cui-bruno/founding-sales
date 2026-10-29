@@ -72,6 +72,10 @@ export async function adviseDial(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly routeId?: string | undefined; readonly at?: string | undefined; readonly omitNationalDnc?: boolean },
 ): Promise<DialAdvice | null> {
+  return await readAdvice(context,input,false);
+}
+
+async function readAdvice(context:RepositoryContext,input:{readonly firmId:string;readonly routeId?:string|undefined;readonly at?:string|undefined;readonly omitNationalDnc?:boolean},browser:boolean):Promise<DialAdvice|null>{
   const actor = context.scope.actor;
   const firm = await readFirm(context, input.firmId);
   if (firm === null || firm.status === 'merged') return null;
@@ -115,7 +119,10 @@ export async function adviseDial(
   const zoneKnown = firm.time_zone !== null && firm.time_zone_confidence !== null && firm.region_code !== null;
   let firmLocalTime: string | null = null;
   let callingWindowOpensAt: string | null = null;
-  if (!zoneKnown) {
+  if(browser){
+    try{firmLocalTime=firm.time_zone?new Intl.DateTimeFormat('en-GB',{timeZone:firm.time_zone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(at)):null;}
+    catch{/* An optional clock never becomes an execution prerequisite. */}
+  }else if (!zoneKnown) {
     add('zone_unresolved');
   } else {
     const posture = await applicablePosture(context, firm.region_code ?? '', at);
@@ -138,7 +145,7 @@ export async function adviseDial(
   // Advisory responses never carry an execution URI, including for retained clients.
   // A refused route has a reason of its own, so `callable` covers it too.
   const callable = reasons.length === 0;
-  const national = route?.e164 && !input.omitNationalDnc ? await readPhoneNationalDecision(context,
+  const national = route?.e164 && !browser && !input.omitNationalDnc ? await readPhoneNationalDecision(context,
     { firmId: firm.id, routeId: route.id, routeVersion: route.version, e164: route.e164, at }) : null;
   return {
     nationalDnc: national?.ok ? national.disclosure : unknownNationalDncDisclosure(),
@@ -159,7 +166,7 @@ export async function adviseDial(
 /** Current Twilio advisory: retain known stops without requiring or presenting a
  * registry acquisition/coverage/freshness result. Execution rechecks on use. */
 export async function adviseBrowserDial(context:RepositoryContext,input:{firmId:string;routeId?:string|undefined;at?:string|undefined}):Promise<DialAdvice|null>{
- const snapshot=await adviseDial(context,{...input,omitNationalDnc:true});if(!snapshot)return null;
+ const snapshot=await readAdvice(context,{...input,omitNationalDnc:true},true);if(!snapshot)return null;
  const {nationalDnc:_nationalDnc,...advice}=snapshot;
  if(!advice.e164)return advice;
  const clearance=await readBrowserExecutionClearance(context,advice.e164);

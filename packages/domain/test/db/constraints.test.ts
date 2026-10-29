@@ -1,4 +1,5 @@
 import {CALLING_PREPARATION_CONSTRAINT_CASES} from './support/callingPreparationCases.ts';
+import {AUDIO_TEST_CONSTRAINT_CASES} from './support/audioTestCases.ts';
 import { campaignCompositionCases } from './support/campaignCompositionCases.ts'; import { AUTOMATIC_SUPPLY_CONSTRAINT_CASES } from './support/automaticSupplyCases.ts'; import { PHONE_HANDOFF_CONSTRAINT_CASES } from './support/phoneHandoffCases.ts'; import {BOOKING_CREATE_CONSTRAINT_CASES} from './support/bookingCreateConstraints.ts';
 import {BOOKING_CHANGE_CONSTRAINT_CASES} from './support/bookingChangeConstraints.ts';
 import {CAMPAIGN_OPENING_CONSTRAINT_CASES} from './campaignOpeningConstraints.ts';
@@ -2121,6 +2122,7 @@ const cases: readonly Case[] = [
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
   ...CALLING_PREPARATION_CONSTRAINT_CASES,
+  ...AUDIO_TEST_CONSTRAINT_CASES,
   ...selectedImportConstraintCases,
   ...SELECTED_FILE_CONSTRAINT_CASES,
   ...BUSINESS_ACQUISITION_CONSTRAINT_CASES,

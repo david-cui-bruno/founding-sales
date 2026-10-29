@@ -205,7 +205,7 @@ export async function buildTrialExport(
          FROM call_sessions s
          JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
          LEFT JOIN contacts c ON c.workspace_id = s.workspace_id AND c.id = s.contact_id
-        WHERE s.workspace_id = $1 AND s.id = $2`,
+        WHERE s.workspace_id = $1 AND s.id = $2 AND s.purpose='business'`,
       [workspaceId, selected.callSessionId],
     );
     const session = sessions[0];

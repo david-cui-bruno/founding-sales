@@ -355,7 +355,7 @@ async function sessionFacts(context: RepositoryContext, sessionId: string): Prom
     recording_duration_seconds: number | null;
   }>(
     `SELECT answered_at, recording_path, recording_duration_seconds FROM call_sessions
-      WHERE workspace_id = $1 AND id = $2`,
+      WHERE workspace_id = $1 AND id = $2 AND purpose='business'`,
     [context.scope.workspaceId, sessionId],
   );
   const row = rows[0];
@@ -1383,7 +1383,7 @@ export async function listHeldTranscriptions(db: Queryable): Promise<readonly He
           WHERE workspace_id = cs.workspace_id AND kind = 'call.transcribe'
             AND payload ->> 'callSessionId' = cs.id::text
        ) j
-      WHERE cs.answered_at IS NOT NULL AND cs.recording_path IS NOT NULL
+      WHERE cs.purpose='business' AND cs.answered_at IS NOT NULL AND cs.recording_path IS NOT NULL
         AND cs.recording_duration_seconds >= $1
         AND cs.created_at > now() - make_interval(days => $2)
         AND (s.value ->> 'enabled')::boolean AND (s.value ->> 'dailyCeilingCents')::integer > 0

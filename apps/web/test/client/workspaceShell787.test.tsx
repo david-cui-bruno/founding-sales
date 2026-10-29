@@ -38,6 +38,7 @@ function setup() {
     if (url === '/browser/session') return sessionWait ? await sessionWait.promise : json(status === 'signed_out' ? { status, csrfToken: 'c'.repeat(40) } : { status, workspaceId: id, userId: id, deviceId: id, role, revision, csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() });
     if (url === '/browser/api/today/actions/v4?include=callingPreparation') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-25T12:00:00.000Z', actions: [], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     if (url === '/browser/api/calling/setup') return json({ callingProvider: { provider: 'tel', version: 0 }, telephonyBudget: { version: 0, dailyCeilingCents: 0, maxMinutesPerCall: 30, unitPriceMicros: 14000 }, configured: false, spentTodayCents: 0 });
+    if (url === '/browser/api/calling-identities') return json({identities:[]});
     if (url === '/browser/api/social/private-drafts/list') return json({ drafts: [], nextAfterId: null });
     if (String(url).startsWith('/browser/api/today?')) {
       const held = todayWait; todayWait = undefined;
@@ -93,12 +94,15 @@ describe('issue787 mounted real-client shell', () => {
     expect(screen.getByRole('heading', { name: 'Your next conversation starts with context.' })).toBeTruthy();
     expect(screen.queryByText('Unsaved private text')).toBeNull();
     await waitFor(() => expect(s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup')).toHaveLength(1));
+    await waitFor(()=>expect(s.send.mock.calls.filter(([url])=>url==='/browser/api/calling-identities')).toHaveLength(1));
     const routes = s.send.mock.calls.map(([url]) => String(url));
-    expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks&include=callingPreparation', '/browser/api/today/actions/v4?include=callingPreparation', '/browser/api/sourcing/candidates/prospects/list', '/browser/api/social/private-drafts/list', '/browser/api/calling/setup'].includes(url))).toBe(true);
+    expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks&include=callingPreparation', '/browser/api/today/actions/v4?include=callingPreparation', '/browser/api/sourcing/candidates/prospects/list', '/browser/api/social/private-drafts/list', '/browser/api/calling/setup','/browser/api/calling-identities'].includes(url))).toBe(true);
     expect(routes.filter(url => url === '/browser/api/social/private-drafts/list')).toHaveLength(1);
     const setupReads = s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup');
     expect(setupReads).toHaveLength(1);
     expect(setupReads.every(([, init]) => (init?.method ?? 'GET') === 'GET' && init?.body === undefined)).toBe(true);
+    const identityReads=s.send.mock.calls.filter(([url])=>url==='/browser/api/calling-identities');
+    expect(identityReads).toHaveLength(1);expect(identityReads.every(([,init])=>(init?.method??'GET')==='GET'&&init?.body===undefined)).toBe(true);
   });
   it('exposes six theme aliases and excludes feature structural panels from legacy card rules', () => {
     const style = document.createElement('style');

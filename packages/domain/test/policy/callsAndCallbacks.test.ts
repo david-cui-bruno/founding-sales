@@ -8,7 +8,7 @@ import { readOpenOpportunity } from '../../crm/pipeline.ts';
 import { retireRoute } from '../../crm/routes.ts';
 import { createCallback, scheduleCallbackForCall } from '../../dial/callbacks.ts';
 import { logCallOutcome } from '../../dial/calls.ts';
-import { authorizeDialCommand, consumeDialTicket } from '../../dial/tickets.ts';
+import { authorizeBrowserDialCommand, consumeBrowserDialTicket } from '../../dial/tickets.ts';
 import { databaseNow } from '../../policy/clock.ts';
 import { listApplicableHolds, openHold } from '../../policy/holds.ts';
 import { openPause, releasePause } from '../../policy/pauses.ts';
@@ -658,7 +658,7 @@ describe('C15: "just now" is the database’s clock', () => {
 describe('C16 and S15: the call is recorded with what authorized it, and nothing foreign', () => {
   it('records the ticket, its route and its calling identity from the ticket alone', async () => {
     const context = salesperson();
-    const issued = await withTransaction(database.session, async () => authorizeDialCommand(context, {
+    const issued = await withTransaction(database.session, async () => authorizeBrowserDialCommand(context, {
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,
       routeId: policy.alpha.phoneRouteId,
@@ -669,7 +669,7 @@ describe('C16 and S15: the call is recorded with what authorized it, and nothing
       at: policy.insideWindow,
     }));
     if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
-    const consumed = await withTransaction(database.session, async () => consumeDialTicket(context, {
+    const consumed = await withTransaction(database.session, async () => consumeBrowserDialTicket(context, {
       ticketId: issued.value.ticketId,
       deviceId: seeded.alpha.salesperson.deviceId,
       at: policy.insideWindow,
@@ -845,7 +845,7 @@ describe('C18: a callback’s instant is the domain clock’s answer', () => {
 
 describe('S10: consuming a ticket re-runs the dial decision', () => {
   const issue = async (commandId: string): Promise<string> => {
-    const issued = await withTransaction(database.session, async () => authorizeDialCommand(salesperson(), {
+    const issued = await withTransaction(database.session, async () => authorizeBrowserDialCommand(salesperson(), {
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,
       routeId: policy.alpha.phoneRouteId,
@@ -859,7 +859,7 @@ describe('S10: consuming a ticket re-runs the dial decision', () => {
     return issued.value.ticketId;
   };
   const consume = async (ticketId: string) =>
-    await withTransaction(database.session, async () => consumeDialTicket(salesperson(), {
+    await withTransaction(database.session, async () => consumeBrowserDialTicket(salesperson(), {
       ticketId,
       deviceId: seeded.alpha.salesperson.deviceId,
       at: policy.insideWindow,
@@ -917,10 +917,10 @@ describe('S10: consuming a ticket re-runs the dial decision', () => {
     ]);
   });
 
-  it('refuses after the posture is revoked', async () => {
+  it('browser tickets stay usable after state posture is revoked', async () => {
     const ticketId = await issue('g79-s10-posture');
     expect((await revokeStatePosture(admin(), { postureId: policy.alpha.postureId })).ok).toBe(true);
-    expect(await consume(ticketId)).toEqual({ ok: false, reason: 'posture_missing' });
+    expect(await consume(ticketId)).toMatchObject({ ok: true });
     await database.session.query(
       'UPDATE state_postures SET revoked_at = NULL, revoked_by_user_id = NULL WHERE workspace_id = $1 AND id = $2',
       [seeded.alpha.workspaceId, policy.alpha.postureId],
@@ -945,7 +945,7 @@ describe('S10: consuming a ticket re-runs the dial decision', () => {
   it('refuses after the route is retired, on the version the ticket recorded', async () => {
     // The beta workspace: alpha's number is suppressed for good by the case above.
     const context = contextFor(seeded.beta.workspaceId, seeded.beta.salesperson.userId, 'salesperson');
-    const issued = await withTransaction(database.session, async () => authorizeDialCommand(context, {
+    const issued = await withTransaction(database.session, async () => authorizeBrowserDialCommand(context, {
       firmId: crm.beta.firmId,
       contactId: crm.beta.contactId,
       routeId: policy.beta.phoneRouteId,
@@ -961,7 +961,7 @@ describe('S10: consuming a ticket re-runs the dial decision', () => {
     );
     // Retiring bumps the version, so the ticket's recorded version is stale first.
     expect(
-      await withTransaction(database.session, async () => consumeDialTicket(context, {
+      await withTransaction(database.session, async () => consumeBrowserDialTicket(context, {
         ticketId: issued.value.ticketId,
         deviceId: seeded.beta.salesperson.deviceId,
         at: policy.insideWindow,

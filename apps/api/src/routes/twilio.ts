@@ -142,7 +142,7 @@ export async function routeTwilio(request: ApiRequest, options: RoutingOptions):
       await lockSendGateForDispatch(context);
       await lockSettingForRead(context, 'calling_provider');
       if (await readCallingProvider(context) !== 'twilio') return { ok: false, reason: 'calling_provider_disabled' } as const;
-      return await consumeCallSession(session, { workspaceId, sessionId, callSid, identity, ...(at === undefined ? {} : { at }) });
+      return await consumeCallSession(session, { workspaceId, sessionId, callSid, identity, configuredCallerIdE164:twilio.callerIdE164,...(at === undefined ? {} : { at }) });
     });
     if (!consumed.ok) return refuse(consumed.reason);
     return {

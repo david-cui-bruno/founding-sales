@@ -309,14 +309,26 @@ describe('call-session consumption under concurrency', () => {
       // finds the unconsumed expired session and releases its reservation.
       await new Promise(resolve => setTimeout(resolve, 1_800));
       await sweeper.query('BEGIN');
-      const swept = await sweepCallSessionReservations(
+      const sweeperPid=(await sweeper.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+      let finished=false,blockedOnGate=false;
+      const sweeping = sweepCallSessionReservations(
         repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), sweeper),
       );
-      await sweeper.query('COMMIT');
-      expect(swept.released).toBe(1);
+      void sweeping.then(()=>{finished=true;},()=>{finished=true;});
+      for(let n=0;n<100&&!finished;n++){
+        blockedOnGate=(await other.query<{blocked:boolean}>('SELECT $2::int=ANY(pg_blocking_pids($1::int)) AS blocked',[sweeperPid,writerPid])).rows[0]!.blocked;
+        if(blockedOnGate)break;
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      // Release both actors before asserting, so a regression cannot leak the
+      // pending consumption into later cases or turn one failure into three.
       await other.query('ROLLBACK');
-
-      expect(await consuming).toEqual({ ok: false, reason: 'session_expired' });
+      const swept=await sweeping;
+      await sweeper.query('COMMIT');
+      const consumed=await consuming;
+      expect(swept.released).toBe(1);
+      expect(blockedOnGate,'expired business reservation sweep must not wait on the send gate').toBe(false);
+      expect(consumed).toEqual({ ok: false, reason: 'session_expired' });
       const { rows } = await database.session.query<{ state: string; consumed_at: Date | null }>(
         `SELECT r.state, s.consumed_at FROM call_sessions s
            JOIN provider_reservations r ON r.workspace_id = s.workspace_id AND r.id = s.reservation_id

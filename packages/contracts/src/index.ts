@@ -121,3 +121,4 @@ export * from './campaignOpening.ts';
 
 export * from './callingSetup.ts';
 export * from './callingPreparation.ts';
+export * from './callingAudioTest.ts';

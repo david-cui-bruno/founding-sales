@@ -52,7 +52,6 @@ async function fixture(){
 
 function chooseRoute(){
  fireEvent.change(screen.getByRole('combobox',{name:'Browser call route'}),{target:{value:routeId}});
- fireEvent.click(screen.getByRole('checkbox',{name:/authorized to place and record/u}));
 }
 
 function expectNoCall(f:Awaited<ReturnType<typeof fixture>>){
@@ -63,18 +62,18 @@ function expectNoCall(f:Awaited<ReturnType<typeof fixture>>){
 
 afterEach(()=>{cleanup();clients.splice(0).forEach(client=>client.dispose());localStorage.clear();vi.restoreAllMocks();});
 
-it('keeps the selected route and explicit attestation while real session refreshes read readiness',async()=>{
+it('keeps the selected route while real session refreshes read readiness without a consent checkbox',async()=>{
  const f=await fixture();f.hold();chooseRoute();
  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Check call readiness'}));});
  await waitFor(()=>expect(f.apiPaths).toContain('/browser/api/dial/check'));
  expect(screen.getByRole('combobox',{name:'Browser call route'})).toHaveProperty('value',routeId);
- expect(screen.getByRole('checkbox',{name:/authorized to place and record/u})).toHaveProperty('checked',true);
+ expect(screen.queryByRole('checkbox',{name:/authorized to place and record/u})).toBeNull();
  await act(async()=>{f.release();});
  await waitFor(()=>{
   expect(screen.getByRole('combobox',{name:'Browser call route'})).toHaveProperty('value',routeId);
   expect(screen.getByText(/Policy snapshot/u)).toBeTruthy();
  });
- expect(screen.getByRole('checkbox',{name:/authorized to place and record/u})).toHaveProperty('checked',true);
+ expect(screen.queryByRole('checkbox',{name:/authorized to place and record/u})).toBeNull();
  expect(f.apiPaths).toContain('/browser/api/dial/check');expectNoCall(f);
 });
 
@@ -85,7 +84,7 @@ it('still clears a selected route at source expiry and fences the held readiness
  vi.spyOn(Date,'now').mockReturnValue(Date.parse(f.expiresAt)+1);
  await act(async()=>{await f.client.refresh();f.release();});
  expect(screen.getByRole('combobox',{name:'Browser call route'})).toHaveProperty('value','');
- expect(screen.getByRole('checkbox',{name:/authorized to place and record/u})).toHaveProperty('checked',false);
+ expect(screen.queryByRole('checkbox',{name:/authorized to place and record/u})).toBeNull();
  expect(screen.getByRole('heading',{name:'[source unavailable company]'})).toBeTruthy();
  expect(screen.queryByText(/Policy snapshot/u)).toBeNull();expectNoCall(f);
 });

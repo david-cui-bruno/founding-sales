@@ -10,7 +10,7 @@ import {withTransaction} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {readFirm} from '../../crm/firms.ts';
 import {callingPreparationSources} from './preparationFixture.ts';
-it('upgrades populated schema143 to144 without binding or rewriting independent companies, and app_runtime can then use exact preparation owners',async()=>{
+it('upgrades populated schema143 to145 without binding or rewriting independent companies, and app_runtime can then use exact preparation owners',async()=>{
  const database=await createTestDatabase({throughVersion:143});
  try{
   const seed=await seedTwoWorkspaces(database.session),crm=await seedCrm(database.session,seed);
@@ -30,8 +30,8 @@ it('upgrades populated schema143 to144 without binding or rewriting independent 
   const firm=await database.session.query('SELECT * FROM firms WHERE id=$1',[crm.alpha.firmId]);
   const routes=await database.session.query('SELECT * FROM phone_routes WHERE firm_id=$1',[crm.alpha.firmId]);
   expect(await readAppliedSchemaVersion(database.session)).toBe(143);
-  expect((await applyMigrations(database.session)).map(m=>m.version)).toEqual([144]);
-  expect(await readAppliedSchemaVersion(database.session)).toBe(144);expect(await applyMigrations(database.session)).toEqual([]);
+  expect((await applyMigrations(database.session)).map(m=>m.version)).toEqual([144,145]);
+  expect(await readAppliedSchemaVersion(database.session)).toBe(145);expect(await applyMigrations(database.session)).toEqual([]);
   const runtime=await database.appRuntimeSession(),ctx=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime);
   const afterFirm=(await runtime.query('SELECT * FROM firms WHERE id=$1',[crm.alpha.firmId])).rows[0]!;
   expect(afterFirm).toEqual({...firm.rows[0],calling_preparation_id:null,calling_preparation_erased_at:null});
@@ -39,7 +39,7 @@ it('upgrades populated schema143 to144 without binding or rewriting independent 
   expect(afterRoutes).toEqual(routes.rows.map(r=>({...r,calling_preparation_id:null,calling_preparation_erased_at:null})));
   expect(await readFirm(ctx,crm.alpha.firmId)).toMatchObject({name:crm.collidingFirmName});
   for(const [table,id]of [['dial_tickets',ticket],['call_sessions',callId],['phone_handoff_attempts',handoff],['provider_reservations',reservation]]){
-   const added=table==='dial_tickets'?{calling_preparation_id:null,calling_preparation_erased_at:null}:table==='phone_handoff_attempts'?{calling_preparation_id:null,calling_preparation_outcome_recorded_at:null}:{};
+   const added=table==='dial_tickets'?{calling_preparation_id:null,calling_preparation_erased_at:null}:table==='phone_handoff_attempts'?{calling_preparation_id:null,calling_preparation_outcome_recorded_at:null}:table==='call_sessions'?{purpose:'business',audio_test_request_id:null}:{};
    expect((await runtime.query(`SELECT * FROM ${table} WHERE id=$1`,[id])).rows[0]).toEqual({...before.get(table!),...added});
   }
   await expect(withTransaction(runtime,()=>runtime.query('UPDATE dial_tickets SET e164=NULL,firm_time_zone=NULL WHERE id=$1',[ticket]))).rejects.toMatchObject({code:'23514'});

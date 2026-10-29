@@ -4,7 +4,7 @@ import {seedCrm} from '../db/support/crmFixtures.ts';
 import {seedPolicy} from '../db/support/policyFixtures.ts';
 import {publishTestRegistrySnapshot} from '../support/nationalRegistry.ts';
 import {confirmCallingPreparation} from '../../calling/preparation.ts';
-import {authorizeDialCommand} from '../../dial/tickets.ts';
+import {authorizeBrowserDialCommand} from '../../dial/tickets.ts';
 import {createCallSession} from '../../calls/sessions.ts';
 
 export async function preparedExecutionFixture(){
@@ -18,7 +18,7 @@ export async function preparedExecutionFixture(){
   return {...p,phone};
  }
  const input=(p:Awaited<ReturnType<typeof prepared>>)=>({firmId:p.firmId,routeId:p.routeId,routeVersion:1,callingIdentityId:policy.alpha.otherCallingIdentityId,deviceId:f.seed.alpha.admin.deviceId,commandId:randomUUID(),at:policy.insideWindow});
- const ticket=(p:Awaited<ReturnType<typeof prepared>>)=>f.tx(()=>authorizeDialCommand(f.ctx(),input(p)));
+ const ticket=(p:Awaited<ReturnType<typeof prepared>>)=>f.tx(()=>authorizeBrowserDialCommand(f.ctx(),input(p)));
  const session=(p:Awaited<ReturnType<typeof prepared>>)=>f.tx(()=>createCallSession(f.ctx(),{...input(p),configuredCallerIdE164:'+14015550101'}));
  return {...f,prepared,input,ticket,session,policy,crm};
 }

@@ -2,7 +2,7 @@ import {afterEach,beforeEach,expect,it} from 'vitest';
 import {preparedExecutionFixture} from './preparationExecutionFixture.ts';
 import {lockPreparationCleanup} from '../../calling/preparationLifecycle.ts';
 import {consumeCallSession,recordCallStatus,readCallCadence} from '../../calls/sessions.ts';
-import {consumeDialTicket} from '../../dial/tickets.ts';
+import {consumeBrowserDialTicket} from '../../dial/tickets.ts';
 import {readCallSessionClearance} from '../../calls/sessionClearance.ts';
 import {reservePhoneHandoff,readPhoneHandoffResult} from '../../dial/phoneHandoff.ts';
 let f:Awaited<ReturnType<typeof preparedExecutionFixture>>;
@@ -56,7 +56,7 @@ it('without registry coverage source expiry after issue refuses consumption befo
  await f.tx(async()=>{await lockPreparationCleanup(f.ctx());await f.runtime.query("UPDATE sourcing_prospect_phone_discoveries SET expires_at=clock_timestamp()+interval '1 second' WHERE id=$1",[p.runId]);});
  await expect.poll(async()=>Number((await f.runtime.query('SELECT count(*)::int n FROM calling_preparations WHERE id=$1 AND source_expires_at<=clock_timestamp()',[p.preparationId])).rows[0]?.['n']),{timeout:5000}).toBe(1);
  expect((await f.runtime.query('SELECT expires_at,expires_at>clock_timestamp() AS unexpired,consumed_at FROM dial_tickets WHERE id=$1',[issued.value.ticketId])).rows).toEqual([{expires_at:new Date(issued.value.expiresAt),unexpired:true,consumed_at:null}]);
- expect(await f.tx(()=>consumeDialTicket(f.ctx(),{ticketId:issued.value.ticketId,deviceId:f.seed.alpha.admin.deviceId,at:f.policy.insideWindow}))).toMatchObject({ok:false,reason:'route_invalid'});
+ expect(await f.tx(()=>consumeBrowserDialTicket(f.ctx(),{ticketId:issued.value.ticketId,deviceId:f.seed.alpha.admin.deviceId,at:f.policy.insideWindow}))).toMatchObject({ok:false,reason:'route_invalid'});
  expect(await f.ticket(p)).toMatchObject({ok:false,reason:'route_invalid'});
  expect((await f.runtime.query('SELECT count(*)::int n FROM dial_tickets WHERE firm_id=$1',[p.firmId])).rows).toEqual([{n:1}]);
  expect((await f.runtime.query('SELECT consumed_at FROM dial_tickets WHERE id=$1',[issued.value.ticketId])).rows).toEqual([{consumed_at:null}]);
