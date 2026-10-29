@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import {legacyCandidateInputSchema} from '../src/sourcing.ts';
 import { discoveryPromotionCommandSchema, discoveryPromotionInputSchema, discoveryPromotionSavedSchema,
   discoveryResearchFirmLinkCommandSchema, discoveryResearchFirmLinkSavedSchema } from '../src/discoveryPromotion.ts';
 const id = '243703e0-726f-453e-a5a8-eae645b43b2d';
@@ -30,9 +31,15 @@ describe('discovery preparation, not qualification authority', () => {
     const value = input();
     expect(discoveryPromotionInputSchema.safeParse({ ...value, candidate: { ...value.candidate, website } }).success).toBe(false);
   });
-  it('preserves legacy geography and refuses missing locality', () => {
+  it('accepts current US ordinary preparation while the strict legacy schema stays closed', () => {
+    const value=input(),current={...value,candidate:{...value.candidate,locality:'Sacramento',region:'CA'}};
+    expect(discoveryPromotionInputSchema.safeParse(current).success).toBe(true);
+    expect(legacyCandidateInputSchema.safeParse(current.candidate).success).toBe(false);
+    expect(legacyCandidateInputSchema.safeParse(value.candidate).success).toBe(true);
+  });
+  it('refuses unsupported geography and missing locality', () => {
     const value = input();
-    for (const replacement of [{ region: 'CA' }, { locality: null }]) {
+    for (const replacement of [{ region: 'ON' }, { locality: null }, {locality:''}]) {
       expect(discoveryPromotionInputSchema.safeParse({ ...value, candidate: { ...value.candidate, ...replacement } }).success).toBe(false);
     }
   });
