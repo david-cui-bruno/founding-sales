@@ -88,7 +88,8 @@ describe('issue787 mounted real-client shell', () => {
     await screen.findByText('No saved private drafts. Start a new manual draft.');
     fireEvent.change(screen.getByRole('textbox', { name: 'Private social text' }), { target: { value: 'Unsaved private text' } });
     fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
-    expect(screen.getByRole('region', { name: 'Public conversations' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Retained public conversations' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Read retained public threads' }).hasAttribute('disabled')).toBe(false);
     expect(screen.queryByRole('textbox', { name: 'Private social text' })).toBeNull();
     navigate('Calling');
     expect(screen.getByRole('heading', { name: 'Your next conversation starts with context.' })).toBeTruthy();

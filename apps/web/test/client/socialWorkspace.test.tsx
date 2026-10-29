@@ -95,11 +95,12 @@ it('holds UNKNOWN across view unmount and IDs-only reconciliation, never reminti
  expect(screen.getByRole('button',{name:'Save private draft'}).hasAttribute('disabled')).toBe(true);expect(screen.getByRole('button',{name:'Start new manual draft'}).hasAttribute('disabled')).toBe(true);
  expect(s.reads.at(-1)?.body).toEqual(expect.objectContaining({commandId:expect.any(String),payloadSHA256:expect.any(String)}));expect(Object.keys(s.reads.at(-1)!.body).sort()).toEqual(['commandId','payloadSHA256']);s.client.dispose();
 });
-it('offers honest public-discussion unavailability, no fictional DMs or connection/publishing actions',async()=>{
+it('offers explicit retained public-thread reads without passive acquisition or connection/publishing actions',async()=>{
  const s=await mount();fireEvent.change(text(),{target:{value:'Unsaved private bytes.'}});const before=s.reads.length;
- fireEvent.click(screen.getByRole('button',{name:'Conversations'}));expect(screen.getByText('Public posts and group discussions, not direct messages.')).toBeTruthy();
- expect(screen.getByRole('button',{name:'Open public discussion'}).hasAttribute('disabled')).toBe(true);expect(s.reads).toHaveLength(before);expect(screen.queryByLabelText('Private social text')).toBeNull();
- expect(screen.queryByRole('button',{name:/publish|connect|send|schedule/iu})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Posts'}));await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});expect(text()).toHaveProperty('value','');s.client.dispose();
+ fireEvent.click(screen.getByRole('button',{name:'Conversations'}));const conversations=screen.getByRole('region',{name:'Retained public conversations'});
+ expect(within(conversations).getByText('Retained LinkedIn public-web post/thread snapshots. Coverage is partial or unknown. These are not DMs or private/group discussions.')).toBeTruthy();
+ expect(within(conversations).getByRole('button',{name:'Read retained public threads'}).hasAttribute('disabled')).toBe(false);expect(s.reads).toHaveLength(before);expect(screen.queryByLabelText('Private social text')).toBeNull();
+ expect(screen.queryByRole('button',{name:/^(?:publish|connect|send|schedule)\b/iu})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Posts'}));await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});expect(text()).toHaveProperty('value','');s.client.dispose();
 });
 it('Back preserves mounted unsaved text and new composition clears identity',async()=>{
  const s=await mount();reopen();await waitFor(()=>expect(text()).toHaveProperty('value','First neutral owner draft.'));fireEvent.change(text(),{target:{value:'Mounted unsaved edit.'}});
