@@ -1,0 +1,13 @@
+# ADR0030: Retain public thread snapshots separately from correspondence
+
+## Decision
+
+Add a Social-owned original for bounded public thread snapshots, separate from candidate pages, outgoing posts and private CRM correspondence. The first supported representation is LinkedIn public-web text at a canonical activity URL. It records observed message order, explicit parent gaps, known/unknown authors and publication times, text truncation and partial/unknown thread coverage. A retained snapshot never establishes current platform state, complete history, verified person identity or action authority.
+
+The current slice exposes only authenticated owner metadata list and exact-ID/revision read. There is no acquisition, refresh, import, model, reply, posting or account operation. A normal internal retain owner enables controlled fictional verification; it does not create production acquisition authority or a browser write route. Until a genuine authorized route supplies originals, production remains honestly empty. Existing general LinkedIn browser permission is preserved; it does not supply current original/account/action scope. Facebook groups/private views and DMs are outside this representation.
+
+Captured content has a fixed maximum thirty-day lifetime from its original capture time, shortened by declared source expiry. This conservative software horizon stores no live original now and grants no future retention expansion. Exact identity, immutable snapshot and terminal opaque erasure prevent stale replacement or resurrection. Expiry, explicit source removal and normal owner/workspace lifecycle erase copied text, author/locator/message IDs and source hash. Only opaque internal identity/revision/timing/reason remain for denial; there is no prose history. Normal membership/principal authority is checked after waits, and browser memory clears on access/selection/expiry/unmount. Existing retention sweep owns cleanup; no extra daemon.
+
+## Tradeoff and consequences
+
+Reusing candidate references or outgoing delivery rows would avoid a new table but conflate prospect evidence, publication intent and observed discussions, losing coverage/access/retention ownership. A separate original makes those differences enforceable. A read-only retained surface can be implemented and tested before live acquisition; it must not be described as a connected social inbox. Actual use still requires an authorized selected public original, supported capture route and appropriate retention/account scope. Normal privacy/migration reviews, signed app-runtime checks and protected release remain required.

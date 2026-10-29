@@ -95,3 +95,7 @@ _Avoid_: representative reliability when evidence is limited
 **Representative quality**:
 Usefulness evaluated against varied business evidence appropriate to the claimed scope, with the categories and limitations disclosed.
 _Avoid_: synthetic pass when referring to observed real business performance
+
+**Public thread snapshot**:
+A bounded retained observation of a public discussion at a stated time and access context, with explicit coverage gaps and unknown attribution.
+_Avoid_: conversation history or current platform state when referring only to a captured excerpt

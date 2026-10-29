@@ -122,3 +122,6 @@ export * from './campaignOpening.ts';
 export * from './callingSetup.ts';
 export * from './callingPreparation.ts';
 export * from './callingAudioTest.ts';
+
+export * from './socialPublishingReadiness.ts';
+export * from './socialPublicThreads.ts';

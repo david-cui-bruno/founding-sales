@@ -48,6 +48,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/outreach/email-campaigns/control',
   '/outreach/email-campaigns/opening/control', '/outreach/email-campaigns/opening/receipt',
   '/replies', '/replies/card', '/replies/composer/context', '/replies/composer/preview',
+  '/social/publishing/readiness', '/social/threads/list', '/social/threads/read',
   '/social/drafts', '/social/drafts/read', '/social/drafts/request/receipt',
   '/social/private-drafts/list', '/social/private-drafts/read', '/social/private-drafts/receipt',
   '/social/voice-preferences/read', '/social/voice-preferences/receipt',
