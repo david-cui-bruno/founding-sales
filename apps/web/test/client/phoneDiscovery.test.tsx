@@ -145,7 +145,7 @@ it('phone discovery changed selection during session preflight prevents first di
 });
 it('phone discovery confirmed refusal remains honest and cannot be retried by this control',async()=>{
  const f=await mount();f.lose();await click('Find business phone');f.setReceipt('refused');await click('Check phone discovery receipt');
- expect(screen.getByText(/Phone discovery request refused/u)).toBeTruthy();expect(screen.getByRole('button',{name:'Find business phone'}).matches(':disabled')).toBe(true);expect(f.calls.filter(c=>c.path===`${root}request`)).toHaveLength(1);
+ await screen.findByText(/Phone discovery request refused/u);expect(screen.getByRole('button',{name:'Find business phone'}).matches(':disabled')).toBe(true);expect(f.calls.filter(c=>c.path===`${root}request`)).toHaveLength(1);expect(f.calls.filter(c=>c.path===`${root}receipt`)).toHaveLength(1);
 });
 it('phone discovery UNKNOWN created during a read preflight prevents content dispatch',async()=>{
  const f=await mount();let resolve:(value:Response)=>void=()=>{throw Error('No gate');};const gate=new Promise<Response>(done=>{resolve=done;});f.fetcher.mockImplementationOnce(async()=>gate);

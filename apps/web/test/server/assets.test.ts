@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import { buildBrowserAssets } from '../../src/server/assets.ts';
 
@@ -21,7 +22,12 @@ describe('local public browser assets', () => {
       expect(new TextDecoder().decode(asset.body)).not.toMatch(/FSS_BROWSER_|process\.env|import\.meta\.env|unsafe-inline|unsafe-eval|\beval\s*\(|new Function\s*\(|sourceMappingURL/u);
     }
     const again = await buildBrowserAssets();
-    for (const [path, asset] of assets) expect(again.get(path)?.body).toEqual(asset.body);
+    for (const [path, asset] of assets) {
+      const repeated = again.get(path);
+      expect(repeated).toBeDefined();
+      // Compare exact bytes without a generic matcher walking megabytes of array entries.
+      expect(Buffer.compare(Buffer.from(repeated!.body), Buffer.from(asset.body))).toBe(0);
+    }
   });
 
   it('keeps server settings and runtime credentials out of builder inputs', async () => {
