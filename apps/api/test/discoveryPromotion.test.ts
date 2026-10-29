@@ -162,13 +162,23 @@ it('prepares one normal draft, preserves raw and exact provenance, and replays w
  expect((await request('/sourcing/qualification/read',admin,{candidateId:legacy})).body).toMatchObject({status:'pending',observations:[],facts:[],admission:null});
  expect((await request('/sourcing/candidates/check',admin,envelope({id:r.id,expectedRevision:1}))).body).toMatchObject({reason:'candidate_format_not_supported'});
 });
-it('refuses changed revisions, unknown context, unsupported states and silent HTTPS/city/name inference',async()=>{
+it('refuses changed revisions, unknown context, unsupported regions and silent HTTPS/city/name inference',async()=>{
  const r=await raw({firmName:'Synthetic mismatch'});
  expect((await request(prepare,admin,{...r.command,expectedRevision:2})).body).toMatchObject({reason:'candidate_changed'});
  expect((await request(prepare,admin,{...r.command,commandId:randomUUID(),candidate:{...r.command.candidate,locality:'Dallas'}})).body).toMatchObject({reason:'discovery_context_mismatch'});
- for(const changes of [{website:null},{locality:null},{website:'preparation.example.test'},{region:'CA'}]){
+ for(const changes of [{website:null},{locality:null},{website:'preparation.example.test'},{region:'ON'}]){
   const invalid=await raw(changes);expect((await request(prepare,admin,invalid.command)).status).toBe(400);
  }
+});
+it('prepares a current US ordinary seed without qualification, admission, jobs or Firm creation',async()=>{
+ const r=await raw({firmName:'Synthetic current US preparation',locality:'Sacramento',region:'CA'});
+ const before=(await f.db.query('SELECT count(*)::int n FROM firms WHERE workspace_id=$1',[f.alpha.workspaceId])).rows;
+ const response=await request(prepare,admin,r.command);
+ expect(response.body).toMatchObject({status:'accepted',result:{discoveryCandidateId:r.id,qualificationRequested:false,admissionAuthorized:false,runtimeCallable:false}});
+ const id=(response.body as {result:{qualificationCandidateId:string}}).result.qualificationCandidateId;
+ expect((await f.db.query('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[f.alpha.workspaceId,id])).rows[0]?.['payload']).toMatchObject({locality:'Sacramento',region:'CA'});
+ expect((await f.db.query(`SELECT count(*)::int n FROM jobs WHERE workspace_id=$1 AND payload->>'candidateId'=$2`,[f.alpha.workspaceId,id])).rows[0]?.['n']).toBe(0);
+ expect((await f.db.query('SELECT count(*)::int n FROM firms WHERE workspace_id=$1',[f.alpha.workspaceId])).rows).toEqual(before);
 });
 it('refuses fresh conflicting seed and receipt payload conflicts without overwriting either draft',async()=>{
  const r=await raw({firmName:'Synthetic conflict'});expect((await request(prepare,admin,r.command)).body).toMatchObject({status:'accepted'});
