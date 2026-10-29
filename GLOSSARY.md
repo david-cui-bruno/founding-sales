@@ -28,6 +28,22 @@ _Avoid_: permission when referring only to a reachable endpoint
 An unqualified company record whose reviewed context and phone depend on a current retained source and explicit kept choice. It conveys no qualification or contact permission.
 _Avoid_: prepared prospect when referring only to this source-dependent context
 
+**Ideal customer profile (ICP)**:
+A testable description of the businesses and operating circumstances in which Callie can deliver value and be adopted successfully. It remains a hypothesis until supported by customer outcomes.
+_Avoid_: qualification or contact permission when referring only to commercial fit
+
+**Prospect priority**:
+The relative order in which a plausible prospect deserves attention, with its reasons and unknowns. Low priority does not itself mean rejection or ineligibility.
+_Avoid_: verified lead or buying probability when referring only to rank
+
+**Buying role**:
+A Person's supported or hypothesized responsibility in evaluating, approving, operating or advocating a purchase. A job title alone does not confirm purchasing authority.
+_Avoid_: decision-maker when the actual responsibility is unknown
+
+**Buying signal**:
+A dated observation that may suggest interest or a reason to consider change. Its relevance to a purchase remains an interpretation; service capability or missing online activity alone does not establish intent.
+_Avoid_: confirmed need when referring only to a possible timing clue
+
 **Audio test**:
 An explicitly requested call with someone expecting it, used to check two-way audio outside a sales relationship.
 _Avoid_: prospect call when referring only to an audio check

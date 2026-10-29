@@ -39,6 +39,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/sourcing/research-firms/list', '/sourcing/research-firms/read',
   '/sourcing/candidates/list', '/sourcing/candidates/authority/read',
   '/sourcing/candidates/prospects/list',
+  '/sourcing/candidates/prospects/priority/list', '/sourcing/candidates/prospects/priority/learning', '/sourcing/candidates/prospects/priority/receipt',
   '/sourcing/candidates/prospects/activity/list', '/sourcing/candidates/prospects/activity/read',
   '/sourcing/candidates/prospects/activity/receipt',
   '/sourcing/qualification/read',
@@ -61,6 +62,7 @@ export const BROWSER_VOICE_POST_PATHS = Object.freeze(['/calls/access-token'] as
 export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/meetings/notes', '/sourcing/research-firms/create',
   '/sourcing/candidates/prospects/feedback',
+  '/sourcing/candidates/prospects/priority/save', '/sourcing/candidates/prospects/priority/consider',
   '/sourcing/candidates/prospects/activity/save',
   '/sourcing/qualification/request', '/sourcing/qualification/admit',
   '/sourcing/candidates/phone-discovery/request',

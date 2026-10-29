@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import {priorityFixturePage} from './support/priorityFixture.ts';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {callingSubjectSchema,manualProspectSchema} from '@fss/contracts';
@@ -23,7 +24,8 @@ function setup(){
   if(path==='/browser/api/calling-identities'){expect(init?.method??'GET').toBe('GET');expect(init?.body).toBeUndefined();return json({identities:[]});}
   if(path.startsWith('/browser/api/today?'))return json({workspaceId:id,snapshotDate:'2026-10-27',businessTimeZone:'America/New_York',cards:[]});
   if(path.endsWith('/calling/setup'))return Response.json({callingProvider:{provider:'tel',version:0},telephonyBudget:{version:0,dailyCeilingCents:0,maxMinutesPerCall:30,unitPriceMicros:14000},configured:false,spentTodayCents:0});if(path.endsWith('/today/actions/v4'))return json({version:4,workspaceId:id,businessTimeZone:'America/New_York',asOf:'2026-10-27T00:00:00.000Z',actions:[],promiseCoverage:{scope:'current_authorized_work',truncated:false,nextAfterId:null}});
-  if(path.endsWith('/prospects/list')){const input=JSON.parse(String(init?.body)) as {state:string;offset:number};reads.push({state:input.state,offset:input.offset});if(input.offset===50&&++pageTwoReads>1)return await fresh();return json({prospects:input.offset===0?first:[selected],hasMore:true});}
+  if(path.endsWith('/prospects/priority/list')){const input=JSON.parse(String(init?.body)) as {state:string;offset:number};reads.push({state:input.state,offset:input.offset});return json(priorityFixturePage({prospects:input.offset===0?first:[selected],hasMore:true}));}
+  if(path.endsWith('/prospects/list')){const input=JSON.parse(String(init?.body)) as {state:string;offset:number;candidateId?:string};reads.push({state:input.state,offset:input.offset});if(input.candidateId===selected.candidateId||input.offset===50&&++pageTwoReads>1)return await fresh();return json({prospects:input.offset===0?first:[selected],hasMore:true});}
   throw Error('Unexpected request outside bounded read workflow');
  });
  const client=new BrowserClient({fetch:fetcher,storage:sessionStorage,manualActivityStorage:localStorage,navigate:vi.fn(),randomUUID:()=>id});clients.push(client);
@@ -48,22 +50,23 @@ it('client-only bounded hint preserves strict server subjects and accepts legacy
  expect(callingSelectionSchema.parse({kind:'firm',firmId:id})).toEqual({kind:'firm',firmId:id});
  expect(callingSelectionSchema.safeParse({kind:'firm',firmId:id,prospectPage:{state:'all',offset:50}}).success).toBe(false);
 });
-it.each(['all','kept'])('Prospects page two through actual shell freshly resolves only exact bounded %s page',async state=>{
+it.each(['all','kept'])('Prospects page two through actual shell freshly resolves the exact subject after ranked %s pagination',async state=>{
  const f=setup();await pageTwo(f,state);
  const brief=await screen.findByRole('region',{name:'Current calling brief'});
  await within(brief).findByRole('heading',{name:selected.observedName});
  expect(within(brief).getByText(/Fresh retained source/u)).toBeTruthy();expect(within(brief).queryByText(/Fictional retained source/u)).toBeNull();
- expect(f.reads).toEqual([...(state==='kept'?[{state:'all',offset:0}]:[]),{state,offset:0},{state,offset:50},{state,offset:50}]);
+ expect(f.reads).toEqual([...(state==='kept'?[{state:'all',offset:0}]:[]),{state,offset:0},{state,offset:50},{state:'all',offset:0}]);
  expect(screen.getByLabelText('Actual outcome').matches(':disabled')).toBe(false);
  expect(sessionStorage.length+localStorage.length).toBe(0);
+ const exact=f.fetcher.mock.calls.filter(([url])=>String(url).endsWith('/prospects/list')).at(-1);expect(JSON.parse(String(exact?.[1]?.body))).toEqual({state:'all',offset:0,candidateId:selected.candidateId,expectedRevision:selected.revision,includeManualPhone:true});
  await waitFor(()=>expect(f.fetcher.mock.calls.filter(([url])=>url==='/browser/api/calling-identities')).toHaveLength(1));
- expect(f.fetcher.mock.calls.every(([url,init])=>/\/browser\/session|\/today\?|\/today\/actions\/v4|\/prospects\/list|\/calling\/setup$/u.test(String(url))||(url==='/browser/api/calling-identities'&&(init?.method??'GET')==='GET'&&init?.body===undefined))).toBe(true);
+ expect(f.fetcher.mock.calls.every(([url,init])=>/\/browser\/session|\/today\?|\/today\/actions\/v4|\/prospects\/(?:priority\/)?list|\/calling\/setup$/u.test(String(url))||(url==='/browser/api/calling-identities'&&(init?.method??'GET')==='GET'&&init?.body===undefined))).toBe(true);
 });
 it.each(['revision','source','unavailable'] as const)('fresh %s change refuses exact brief without scanning another page',async kind=>{
  const f=setup();f.fresh(async()=>kind==='unavailable'?json({},500):json({prospects:kind==='source'?[]:[{...selected,revision:4}],hasMore:true}));await pageTwo(f);
  await screen.findByText(/Current brief unavailable or source changed/u);
  expect(screen.getByLabelText('Actual outcome').matches(':disabled')).toBe(true);
- expect(screen.queryByRole('link',{name:'Open source'})).toBeNull();expect(f.reads).toEqual([{state:'all',offset:0},{state:'all',offset:50},{state:'all',offset:50}]);
+ expect(screen.queryByRole('link',{name:'Open source'})).toBeNull();expect(f.reads).toEqual([{state:'all',offset:0},{state:'all',offset:50},{state:'all',offset:0}]);
 });
 it.each([401,403,409])('fresh page auth refusal %s clears exact brief and selection',async status=>{
  const f=setup();f.fresh(async()=>json({},status));await pageTwo(f);await screen.findByRole('heading',{name:'Sign in'});

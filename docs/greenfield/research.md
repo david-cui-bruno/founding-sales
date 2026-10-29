@@ -4,6 +4,8 @@ Research prepares sourced business facts, judgments and a call brief. Discovery 
 
 ## Existing source boundaries
 
+[Prospect prioritization and buying-role review](prospect-prioritization.md) records agreed, PLANNED requirements under848. Priority will order a broad plausible pool; missing intent/Person/phone is not commercial rejection. This is separate from the deployed source/qualification/admission and execution gates below. The ranking and coverage redesign is not yet implemented.
+
 `packages/domain/research/` owns enqueue, runs, page/source policy, extraction, facts, judgments, brief and spending. `packages/domain/sourcing/` owns candidate discovery, qualification, identity reconciliation and research-only verified-firm intake. Actual adapters and scheduler registration are assembled in `apps/worker/src/bootstrap/main.ts`.
 
 Candidate names, geography and selected website context are untrusted selectors, not evidence. Qualification facts must cite retained literal source blocks with the required semantic role. Preserve contrary identity and residential-service evidence. No fuzzy canonicalization, invented citation or model assertion can substitute for deterministic proof. Incomplete/truncated observations cannot be relabeled complete after discarding content.

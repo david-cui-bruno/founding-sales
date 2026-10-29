@@ -1,0 +1,37 @@
+# Prospect prioritization and buying-role review
+
+**Implementation verified locally; production delivery pending.** [Issue848](https://github.com/david-cui-bruno/founding-sales/issues/848) owns acceptance under supply797/parent783. [Research847](../sourcing/prospect-ranking-research-20261029.md) explains the alternatives; it is not measured Callie conversion evidence. [Current state](../operations/current-state.md) owns actual delivery and activation.
+
+## User outcome
+
+Work through a broad relevant prospect pool in a useful order, understand why a business and Person deserve attention, and learn which combinations lead to useful conversations and successful customers. Public buying-signal scarcity is a hypothesis to investigate, not a reason to reject quiet businesses or a claim that any volume will work.
+
+## Product requirements
+
+1. **Priority orders consideration.** Plausible residential managers remain available with missing intent, unit count, staff, software, Person or phone information. Known wrong-fit evidence has an explicit reason. Preserve correction and history; do not delete or hide prospects merely for a low score. Source/access limits still control what may be shown.
+2. **Keep independent decisions separate.** Commercial priority is distinct from source evidence, identity, qualification, CRM admission, current source rights and channel execution eligibility. This new capability does not reinterpret frozen qualification-v5, native policies, old fingerprints or human evaluation/attestation. Existing reply, callback and commitment precedence survives.
+3. **Explain the recommendation.** Show fit/potential value, relevant buying roles, timing evidence, uncertainty and next action separately. Positive reasons bind actual source/date or recorded human decisions. Existing teams/24-hour coverage can support an operating-value hypothesis; they establish neither a penalty nor buying intent. Missing evidence stays unknown. V1 needs an explainable ordering policy, not invented validated weights or win probabilities.
+4. **Review the Person and role.** Distinguish workflow responsibility, budget approval, internal advocacy and implementation participation. A title supplies a hypothesis; evidence or direct confirmation supports it. One Person can hold several roles. Reuse existing Firm, Person, Contact and relationship owners; unqualified candidates do not become canonical Firms just to enter this view.
+5. **Preserve coverage.** Define deterministic ordering/ties, supported pagination/reload, bounded consideration of ordinary/uncertain prospects and queue aging. Age can change which record receives attention; it cannot create intent or outrank urgent existing work. Repeated copies of one event count as one signal. Missing Person/Route evidence creates research work rather than a fabricated identity or execution action.
+6. **Learn from genuine outcomes.** Preserve the hypothesis/evidence as known when a prospect was selected. Compare observed appropriate-Person conversations, buyer involvement, paid adoption and continued use by cohort/role, with denominators, observation windows and effort. No answer, unknown and pending remain distinct from rejection. Reuse authorized existing outcomes; do not add a second CRM/event ledger, implicit training, tracking or provider export.
+
+## Source and delivery boundaries
+
+The existing [research owners](research.md), [current prepared proof](current-us-prepared-supply.md), [manual worklist](../adr/0019-unverified-manual-prospect-worklist.md) and [qualification workflow](../sourcing/qualification.md) remain separate. The legacy [ranking helper](../../packages/domain/sourcing/qualificationPolicy.ts) and boolean named-contact tie-breaker do not implement these requirements. The [completed interface audit](prospect-priority-interface-audit.md) places ordering in the shared retained-prospect domain owner; the helper has no production consumers.
+
+Use permitted existing evidence first. Expiry, erasure, changed candidate/Person association or principal must withhold stale derived detail through normal owners. Reading or ranking cannot acquire another source, call a model or contact anyone. No new service, budget, recipient group, Gmail/LinkedIn/account operation or activation follows. Email stays OFF; remaining calling/source/hold/UNKNOWN controls remain.
+
+## Finite acceptance and next work
+
+- Mixed controlled examples retain weak/no-intent and missing-Person/phone records while explaining actual exclusions. No priority result upgrades identity, qualification, admission or contact authority.
+- Verify ordering/ties, pagination/reload, regular lower-priority consideration, duplicate-event handling, urgent-work precedence and visible reasons. Sparse evidence and aging never become asserted intent.
+- Verify role/source/principal/revision/expiry changes and normal retention with the affected API/domain/browser owners. Signed controlled acceptance and independent state readback require no real prospect call, capture or paid model diagnostic.
+- Apply combined review, actual-risk specialists and relevant checks; eventual production delivery follows the existing paused-sending/PITR/smoke/readback procedure. Preserve all already accepted Step2/Step3 work.
+
+The source/interface audit and controlled local verification are complete. CI, deployed-baseline upgrade verification and normal protected release remain pending. An exploratory 20–30-Firm cohort review is optional learning work, not a new runtime gate or proof of model quality. Continuous useful yield and current source/qualification approval remain separate open outcomes; software completion does not require verifying every prospect or purchasing a new intent feed.
+
+## Current implementation
+
+The [domain owner](../../packages/domain/sourcing/prospectPriority.ts) serves both current retained lists through an opt-in interface, preserving historical manual-list contracts and exact subject reads. Four supported-evidence positions alternate with one ordinary position while both lanes have supply; deliberate consideration moves a supported record into the ordinary lane for seven days. Ordinary records use least-recent consideration, retained date and ID. This is a coverage policy, not a purchase probability or validated weighting model; individual coverage assumes a finite pool and deliberate consideration. Changed ordering requires an explicit first-page refresh.
+
+Human assessments bind current retained source identity and date. Buying roles distinguish hypotheses from explicitly source-supported or directly confirmed human reports. Minimal selection context expires within30days or earlier source rights; benign same-source name corrections preserve history. Learning exposes current-retained cohorts, known post-selection user-reported attempts and separate unknown-time reports. Appropriate-Person confirmation, paid adoption, continued use and elapsed effort remain unavailable. [Signed acceptance](../../apps/web/test/e2e/prospectPriority.spec.ts) verifies the changed journey without real contact.

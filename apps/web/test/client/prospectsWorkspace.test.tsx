@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import '../../src/client/schemaRuntime.ts';
+import {priorityFixturePage} from './support/priorityFixture.ts';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -44,7 +45,7 @@ function setup(kind: 'automatic' | 'qualified' = 'automatic') {
     requests.push({ url: String(url), body });
     if (url === '/browser/api/today/actions/v4?include=callingPreparation') { if (failQueue) throw Error('Read failed'); return json(response); }
     if (url === '/browser/api/today/actions/open/v4') return delayed ? await delayed.promise : json(kind === 'automatic' ? { version: 4, target, research: null, automaticResearch: proof } : { version: 4, target: qualifiedTarget, research: qualified, automaticResearch: null });
-    if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: rows, hasMore: body !== null && typeof body === 'object' && 'offset' in body && body.offset === 0 });
+    if (url === '/browser/api/sourcing/candidates/prospects/priority/list') return json(priorityFixturePage({ prospects: rows, hasMore: body !== null && typeof body === 'object' && 'offset' in body && body.offset === 0 }));
     if (url === '/browser/api/sourcing/candidates/prospects/feedback') {
       if (lost) throw Error('Lost feedback response');
       return json({ status: 'accepted', replayed: false, result: { candidateId: id, revision: raw.revision, state: 'kept' } });
@@ -126,7 +127,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     expect(screen.getAllByText('Phone unknown · not extracted').length).toBeGreaterThan(0);
     expect(screen.getByText(/These are observations, not unique or callable Firms/u)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Next prospect page' }));
-    await waitFor(() => expect(s.requests.at(-1)?.body).toEqual({ state: 'all', offset: 50 }));
+    await waitFor(() => expect(s.requests.at(-1)?.body).toEqual({ state: 'all', offset: 50, viewRevision: 'a'.repeat(64) }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Keep' }).hasAttribute('disabled')).toBe(false));
     s.lose(); fireEvent.click(screen.getByRole('button', { name: 'Keep' }));
     await screen.findByRole('button', { name: 'Reconcile same manual feedback' });
@@ -229,7 +230,7 @@ describe('Prospects to Calling exact navigation composition', () => {
     const button = await screen.findByRole('button', { name: 'Open calling brief' });
     await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));
     const requests = s.requests.length; fireEvent.click(button);
-    expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: raw.candidateId, expectedCandidateRevision: raw.revision, prospectPage: { state: 'all', offset: 0 } });
+    expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: raw.candidateId, expectedCandidateRevision: raw.revision, prospectPage: { state: 'all', offset: 0, candidateId: raw.candidateId, expectedRevision: raw.revision } });
     expect(s.requests).toHaveLength(requests); expect(s.randomUUID).not.toHaveBeenCalled(); expect(s.storage.setItem).not.toHaveBeenCalled();
     await act(async () => { s.client.dispose(); });
   });
@@ -251,7 +252,7 @@ describe('Prospects to Calling exact navigation composition', () => {
     expect(open).not.toHaveBeenCalled();
     if (transition === 'selection') {
       fireEvent.click(screen.getByRole('button', { name: 'Open calling brief' }));
-      expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: other, expectedCandidateRevision: 7, prospectPage: { state: 'all', offset: 0 } });
+      expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'candidate', candidateId: other, expectedCandidateRevision: 7, prospectPage: { state: 'all', offset: 0, candidateId: other, expectedRevision: 7 } });
     }
     await act(async () => { s.client.dispose(); });
   });

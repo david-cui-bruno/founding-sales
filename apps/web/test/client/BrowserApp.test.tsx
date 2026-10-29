@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import {priorityFixturePage} from './support/priorityFixture.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { webcrypto } from 'node:crypto';
 import { TextEncoder } from 'node:util';
@@ -33,7 +34,7 @@ function setup() {
     if (url === '/browser/sign-out') return json({ status: 'signed_out', csrfToken: 'a'.repeat(40) });
     if (url === '/browser/api/today/actions/v4') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-25T12:00:00.000Z', actions: [], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     if (String(url).startsWith('/browser/api/today')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [{ firmId: id, firmName: firm.name, lane: 'new_firm', dueAt: '2026-10-22T00:00:00.000Z', counts: { replies: 0, emailsDue: 0, callsDue: 0 } }] });
-    if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: [], hasMore: false });
+    if (url === '/browser/api/sourcing/candidates/prospects/priority/list') return json(priorityFixturePage({ prospects: [], hasMore: false }));
     if (url === '/browser/api/crm/firm-page-v3') return json({ version: 3, visibility: 'assigned_or_admin', read: { visibility: 'assigned_or_admin', firm }, opportunities: [], holds: [], followUpPermissions: [] });
     if (url === '/browser/api/calling-identities') return json({ identities: [] });
     if (url === '/browser/api/calling/setup') return json(callingSetupSchema.parse({ callingProvider: { provider: 'tel', version: 4 }, telephonyBudget: { dailyCeilingCents: 500, maxMinutesPerCall: 4, unitPriceMicros: 14000, version: 3 }, spentTodayCents: 0, configured: true }));
@@ -201,7 +202,7 @@ describe('BrowserApp real shared presentation', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Exact candidate' }));
         await screen.findByRole('heading', { name: 'Selected retained observation' });
         await waitFor(() => expect(send.mock.calls.slice(before).filter(([url]) => url === '/browser/api/calling-identities')).toHaveLength(1));
-        expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/list' || ((url === '/browser/api/calling/setup' || url === '/browser/api/calling-identities') && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
+        expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/priority/list' || url === '/browser/api/sourcing/candidates/prospects/list' || ((url === '/browser/api/calling/setup' || url === '/browser/api/calling-identities') && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
         navigate('Email'); navigate('Calling');
         await screen.findByRole('heading', { name: 'Selected retained observation' });
         await act(async () => { client.invalidate(); await client.refresh(); });
@@ -243,13 +244,13 @@ describe('BrowserApp real shared presentation', () => {
     render(<BrowserApp client={client} />);
     await screen.findByRole('button', { name: 'Open firm' });
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
-    expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(false);
+    expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/priority/list')).toBe(false);
     navigate('Prospects');
     await screen.findByRole('region', { name: 'Prepared source-backed supply' });
-    expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(false);
+    expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/priority/list')).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
     expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/list')).toBe(false);
-    await waitFor(() => { expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(true); });
+    await waitFor(() => { expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/priority/list')).toBe(true); });
     expect(send.mock.calls.some(([url]) => String(url).includes('/sourcing/qualification/'))).toBe(false);
     expect(commands).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Source inventory' }));
