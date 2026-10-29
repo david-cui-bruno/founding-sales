@@ -1,6 +1,6 @@
 # Prospect prioritization and buying-role review
 
-**Implementation verified locally; production delivery pending.** [Issue848](https://github.com/david-cui-bruno/founding-sales/issues/848) owns acceptance under supply797/parent783. [Research847](../sourcing/prospect-ranking-research-20261029.md) explains the alternatives; it is not measured Callie conversion evidence. [Current state](../operations/current-state.md) owns actual delivery and activation.
+**Implemented and deployed in schema149; bounded follow-up delivery accepted.** [Issue848](https://github.com/david-cui-bruno/founding-sales/issues/848) owns acceptance under supply797/parent783. [Research847](../sourcing/prospect-ranking-research-20261029.md) explains the alternatives; it is not measured Callie conversion evidence. [Current state](../operations/current-state.md) owns actual delivery and activation.
 
 ## User outcome
 
@@ -28,7 +28,7 @@ Use permitted existing evidence first. Expiry, erasure, changed candidate/Person
 - Verify role/source/principal/revision/expiry changes and normal retention with the affected API/domain/browser owners. Signed controlled acceptance and independent state readback require no real prospect call, capture or paid model diagnostic.
 - Apply combined review, actual-risk specialists and relevant checks; eventual production delivery follows the existing paused-sending/PITR/smoke/readback procedure. Preserve all already accepted Step2/Step3 work.
 
-The source/interface audit and controlled local verification are complete. CI, deployed-baseline upgrade verification and normal protected release remain pending. An exploratory 20–30-Firm cohort review is optional learning work, not a new runtime gate or proof of model quality. Continuous useful yield and current source/qualification approval remain separate open outcomes; software completion does not require verifying every prospect or purchasing a new intent feed.
+The source/interface audit, controlled verification, schema149 upgrade and protected delivery are complete. The bounded exact-subject/same-row application update is accepted in [current state](../operations/current-state.md); accepted checks are not replay instructions. Human fit-positive judgments for Alta, RPM Focus and Nexus were saved once/read back; value, timing, roles and supported phones remain unknown. An exploratory 20–30-Firm cohort review is optional learning work, not a new runtime gate or proof of model quality. Continuous useful yield and current source/qualification approval remain separate open outcomes; software completion does not require verifying every prospect or purchasing a new intent feed.
 
 ## Current implementation
 
