@@ -53,3 +53,11 @@ export async function readManualProspectSubject(ctx:RepositoryContext,input:{can
  const row=(await ctx.db.query<ManualProspectSubject>(`${permittedManualProspectsSql(true)} SELECT * FROM permitted`,[ctx.scope.workspaceId,input.candidateId,input.expectedRevision])).rows[0];
  return row&&manualProspectSubjectPermitted(row)?row:null;
 }
+
+/** Source identity keeps PostgreSQL JSONB canonical bytes and SQL NULL handling.
+ * Unlike presentation authority, this also fingerprints SQL-permitted malformed
+ * observations; command owners separately require a projectable subject. */
+export async function readManualProspectSubjectSourceKey(ctx:RepositoryContext,input:{candidateId:string;expectedRevision:number}):Promise<string|null> {
+ return (await ctx.db.query<{key:string}>(`${permittedManualProspectsSql(true)}
+ SELECT encode(sha256(convert_to(p.payload::text||COALESCE(p.origins::text,'')||COALESCE(p.source_check::text,''),'UTF8')),'hex') AS key FROM permitted p`,[ctx.scope.workspaceId,input.candidateId,input.expectedRevision])).rows[0]?.key??null;
+}
