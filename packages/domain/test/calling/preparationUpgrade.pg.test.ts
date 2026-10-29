@@ -1,3 +1,4 @@
+import {REQUIRED_SCHEMA} from '../../db/schemaRange.ts';
 import {randomUUID} from 'node:crypto';
 import {seedPolicy} from '../db/support/policyFixtures.ts';
 import {publishTestRegistrySnapshot} from '../support/nationalRegistry.ts';
@@ -10,7 +11,7 @@ import {withTransaction} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {readFirm} from '../../crm/firms.ts';
 import {callingPreparationSources} from './preparationFixture.ts';
-it('upgrades populated schema143 to145 without binding or rewriting independent companies, and app_runtime can then use exact preparation owners',async()=>{
+it('upgrades populated schema143 to the current schema without binding or rewriting independent companies, and app_runtime can then use exact preparation owners',async()=>{
  const database=await createTestDatabase({throughVersion:143});
  try{
   const seed=await seedTwoWorkspaces(database.session),crm=await seedCrm(database.session,seed);
@@ -30,8 +31,8 @@ it('upgrades populated schema143 to145 without binding or rewriting independent 
   const firm=await database.session.query('SELECT * FROM firms WHERE id=$1',[crm.alpha.firmId]);
   const routes=await database.session.query('SELECT * FROM phone_routes WHERE firm_id=$1',[crm.alpha.firmId]);
   expect(await readAppliedSchemaVersion(database.session)).toBe(143);
-  expect((await applyMigrations(database.session)).map(m=>m.version)).toEqual([144,145]);
-  expect(await readAppliedSchemaVersion(database.session)).toBe(145);expect(await applyMigrations(database.session)).toEqual([]);
+  expect((await applyMigrations(database.session)).map(m=>m.version)).toEqual(Array.from({length:REQUIRED_SCHEMA-143},(_,index)=>144+index));
+  expect(await readAppliedSchemaVersion(database.session)).toBe(REQUIRED_SCHEMA);expect(await applyMigrations(database.session)).toEqual([]);
   const runtime=await database.appRuntimeSession(),ctx=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime);
   const afterFirm=(await runtime.query('SELECT * FROM firms WHERE id=$1',[crm.alpha.firmId])).rows[0]!;
   expect(afterFirm).toEqual({...firm.rows[0],calling_preparation_id:null,calling_preparation_erased_at:null});
