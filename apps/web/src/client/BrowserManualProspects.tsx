@@ -73,7 +73,10 @@ export function BrowserManualProspects({client,onOpenCalling}:{client:BrowserCli
   if(page&&restoreFocus.current){restoreFocus.current=false;inspector.current?.querySelector('h3')?.focus();}
  },[page]);
  const select=(id:string):void=>{
-  clearScope();
+  const next=prospects.find(prospect=>prospect.candidateId===id);
+  if(!next)return;
+  // Reselecting the same exact row keeps its live command lease and draft.
+  if(chosen?.candidateId!==next.candidateId||chosen?.revision!==next.revision)clearScope();
   setSelected(id);
   // On a stacked viewport, selection should lead to the inspector, not leave it below 50 rows.
   if(globalThis.matchMedia?.('(max-width: 900px)').matches){

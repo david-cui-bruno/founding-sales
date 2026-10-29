@@ -1,11 +1,12 @@
 import {isDeepStrictEqual} from 'node:util';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
-import {currentManualActivityAuthority,MANUAL_ACTIVITY_RAW_SQL,type ManualActivityAuthority} from './manualProspectActivityAccess.ts';
+import {currentManualActivityAuthority,type ManualActivityAuthority} from './manualProspectActivityAccess.ts';
+import {readManualProspectSubjectSourceKey} from './manualProspectRows.ts';
 import {currentPriorityRoles} from './prospectPriorityRoles.ts';
 import {priorityAssessment} from './prospectPriorityStore.ts';
 export class ProspectPriorityChanged extends Error{constructor(readonly reason:string){super(reason);}}
 export async function prioritySourceKey(ctx:RepositoryContext,candidateId:string,revision:number):Promise<string|null>{
- return (await ctx.db.query<{key:string}>(`SELECT encode(sha256(convert_to(p.payload::text||COALESCE(p.origins::text,'')||COALESCE(p.source_check::text,''),'UTF8')),'hex') AS key FROM (${MANUAL_ACTIVITY_RAW_SQL}) p WHERE p.id=$3 AND p.revision=$4`,[ctx.scope.workspaceId,'all',candidateId,revision])).rows[0]?.key??null;
+ return await readManualProspectSubjectSourceKey(ctx,{candidateId,expectedRevision:revision});
 }
 /** Final command callback after command receipt/audit waits. Any loss rolls back. */
 export async function currentProspectPriorityAuthority(ctx:RepositoryContext,input:{candidateId:string;expectedCandidateRevision:number;considerationId?:string},authority:ManualActivityAuthority):Promise<void>{

@@ -1,8 +1,7 @@
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from '../crm/identityAccess.ts';
 import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
-import {MANUAL_PROSPECT_ROWS_SQL} from './manualProspectRows.ts';
-import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
+import {MANUAL_PROSPECT_ROWS_SQL,readManualProspectSubject} from './manualProspectRows.ts';
 /** Navigational dedup never changes a candidate's independent source rights. */
 export const MANUAL_ACTIVITY_RAW_SQL=MANUAL_PROSPECT_ROWS_SQL.replace('duplicate_rank=1 AND ','');
 export class ManualActivityAuthorityChanged extends Error{}
@@ -14,8 +13,7 @@ export async function requireManualActivityAuthority(ctx:RepositoryContext,autho
  if(ctx.scope.actor.kind!=='user'||ctx.scope.actor.role!=='admin'||!await authority()||!await activeIdentityActor(ctx))throw new ManualActivityAuthorityChanged();
 }
 export async function manualActivityRaw(ctx:RepositoryContext,candidateId:string,revision:number):Promise<boolean>{
- const row=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_ACTIVITY_RAW_SQL}) permitted WHERE id=$3 AND revision=$4`,[ctx.scope.workspaceId,'all',candidateId,revision])).rows[0];
- return !!row&&projectManualProspect(row)!==null;
+ return !!await readManualProspectSubject(ctx,{candidateId,expectedRevision:revision});
 }
 /** Caller owns transaction. Lock source, candidate, then activity before authority. */
 export async function lockManualActivityCandidate(ctx:RepositoryContext,candidateId:string,revision:number):Promise<void>{
