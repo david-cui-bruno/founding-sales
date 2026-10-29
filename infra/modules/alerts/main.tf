@@ -282,7 +282,7 @@ locals {
 
 resource "aws_sns_topic" "alerts" {
   name              = local.topic_name
-  display_name      = "FSS alerts"
+  display_name      = lookup(var.tags, "DisplayName", "FSS alerts")
   kms_master_key_id = var.kms_key_arn
 
   tags = merge(var.tags, { Name = local.topic_name })
@@ -388,7 +388,7 @@ resource "aws_cloudwatch_metric_alarm" "all_sequences_held" {
 # notifies anything (lane g99): the daily digest reads their state.
 resource "aws_cloudwatch_composite_alarm" "critical" {
   alarm_name        = "${var.name_prefix}-critical"
-  alarm_description = "Every immediately critical FSS condition. In ALARM while any of them is; reported by the daily alarm digest, never e-mailed on its own."
+  alarm_description = "Every immediately critical ${lookup(var.tags, "DisplayName", "FSS")} condition. In ALARM while any of them is; reported by the daily alarm digest, never e-mailed on its own."
 
   alarm_rule = join(" OR ", concat(
     [for name in local.critical_alarm_keys : "ALARM(\"${aws_cloudwatch_metric_alarm.this[name].alarm_name}\")"],
@@ -407,7 +407,7 @@ resource "aws_cloudwatch_composite_alarm" "critical" {
 
 resource "aws_cloudwatch_composite_alarm" "warning" {
   alarm_name        = "${var.name_prefix}-warning"
-  alarm_description = "Any FSS warning condition. Reported by the daily alarm digest, never e-mailed on its own."
+  alarm_description = "Any ${lookup(var.tags, "DisplayName", "FSS")} warning condition. Reported by the daily alarm digest, never e-mailed on its own."
 
   alarm_rule = join(" OR ", [for name in local.warning_alarm_keys : "ALARM(\"${aws_cloudwatch_metric_alarm.this[name].alarm_name}\")"])
 

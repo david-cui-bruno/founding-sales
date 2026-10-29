@@ -79,7 +79,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "updates" {
 
 resource "aws_cloudfront_origin_access_control" "updates" {
   name                              = "${var.name_prefix}-updates"
-  description                       = "Origin access control for the ${var.name_prefix} Electron package bucket."
+  description                       = contains(keys(var.tags), "DisplayName") ? "Origin access control for ${var.tags["DisplayName"]} retained signed client packages." : "Origin access control for the ${var.name_prefix} Electron package bucket."
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
@@ -88,7 +88,7 @@ resource "aws_cloudfront_origin_access_control" "updates" {
 resource "aws_cloudfront_distribution" "updates" {
   enabled         = true
   is_ipv6_enabled = true
-  comment         = "${var.name_prefix} Electron package distribution."
+  comment         = contains(keys(var.tags), "DisplayName") ? "${var.tags["DisplayName"]} retained signed client package distribution." : "${var.name_prefix} Electron package distribution."
   price_class     = "PriceClass_100" # one salesperson on one continent
 
   origin {

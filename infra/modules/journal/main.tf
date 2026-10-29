@@ -49,7 +49,7 @@ locals {
 }
 
 resource "aws_kms_key" "journal" {
-  description             = "${var.name_prefix} suppression journal objects."
+  description             = "${lookup(var.tags, "DisplayName", var.name_prefix)} suppression journal objects."
   enable_key_rotation     = true
   deletion_window_in_days = 30
 

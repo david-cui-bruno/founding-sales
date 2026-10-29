@@ -25,6 +25,17 @@ variable "name_prefix" {
   }
 }
 
+variable "display_name" {
+  description = "Optional neutral label for resource metadata. Never controls physical identifiers or authorization tags."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.display_name == null ? true : can(regex("^[a-z][a-z0-9-]{2,31}$", var.display_name))
+    error_message = "display_name must be null or 3-32 lowercase letters, digits or hyphens, starting with a letter."
+  }
+}
+
 variable "destroyable" {
   description = "Turn off deletion protection and allow teardown. production hard-codes false."
   type        = bool

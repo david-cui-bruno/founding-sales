@@ -31,8 +31,9 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project     = "callie-fss"
+      Project     = local.display_name
       Environment = "production"
+      DisplayName = local.display_name
       ManagedBy   = "terraform"
     }
   }
