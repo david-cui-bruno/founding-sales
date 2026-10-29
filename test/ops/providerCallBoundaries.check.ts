@@ -56,6 +56,17 @@ interface Boundary {
 export const BOUNDARIES: readonly Boundary[] = [
   {name:'social draft generation',site:'packages/domain/social/draftRun.ts',owner:'runSocialDraft',methods:{countInputTokens:1,generate:1}},
   {name:'human reply suggestion',site:'packages/domain/replies/composerGeneration.ts',owner:'generateReplyDraft',methods:{countInputTokens:1,prepareReplyDraft:1}},
+  {
+    name: 'approved campaign opening model',
+    site: 'packages/domain/outreach/campaignOpeningPaid.ts',
+    // The opening store commits its original UNKNOWN claim before this owner counts
+    // input, reserves existing research/model credit and commits calling. Selection
+    // follows current source/policy/owner checks and the final owner/clock snapshot;
+    // ambiguous results settle once without retry. The generic select method is
+    // shared with controlled local selectors; paid-boundary tests cover that call.
+    owner: 'budgetedCampaignOpeningSelector',
+    methods: { countInputTokens: 1 },
+  },
   {name:'candidate qualification provider calls',site:'packages/domain/sourcing/qualificationRun.ts',owner:'runQualification',methods:{fetchPages:1,countInputTokens:1,extract:1}},
   {
     name: 'explicit prospect phone discovery',
