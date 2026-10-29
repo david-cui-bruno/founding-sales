@@ -12,6 +12,9 @@ export async function rememberExpiredManualSources(ctx:RepositoryContext,urls:re
  // Keep deletion's source lifecycle -> workspace send gate order.
  await lockPreparationCleanup(ctx);
  await eraseCampaignOpeningsForSources(ctx,urls);
+ // Optional new owner: historical migration fixtures have no priority tables.
+ if((await ctx.db.query<{exists:boolean}>("SELECT to_regclass('sourcing_prospect_priorities') IS NOT NULL AS exists")).rows[0]?.exists)
+  await ctx.db.query('SELECT erase_prospect_priority_sources($1,$2::text[])',[ctx.scope.workspaceId,urls.map(url=>url.replace(/\/$/u,''))]);
  await eraseManualActivityForSources(ctx,urls);
  await eraseProspectPhoneDiscoveriesForSources(ctx,urls);
  await ctx.db.query(`INSERT INTO audit_events(workspace_id,actor_kind,actor_user_id,action,subject_kind,subject_id,detail)

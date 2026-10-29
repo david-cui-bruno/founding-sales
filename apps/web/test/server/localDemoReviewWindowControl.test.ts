@@ -3,6 +3,7 @@ import type * as ReviewCore from '../../scripts/localdemoReviewWindowCore.ts';
 import type { ReviewReceipt } from '../../scripts/localdemoReviewWindowCore.ts';
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -43,7 +44,8 @@ beforeEach(async () => {
 afterEach(async () => { vi.unstubAllEnvs(); await rm(parent, { recursive: true, force: true }); });
 
 function listing(receipt: ReviewReceipt): string {
-  return `path = ${join(receipt.directory, 'review.plist')}\nprogram = ${receipt.node}\n${receipt.script}\n${receipt.directory}`;
+  // launchctl reports a canonical plist path, including when macOS tmpdir is an alias.
+  return `path = ${realpathSync(join(receipt.directory, 'review.plist'))}\nprogram = ${receipt.node}\n${receipt.script}\n${receipt.directory}`;
 }
 
 function missing(receipt: ReviewReceipt): Error {

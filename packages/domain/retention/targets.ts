@@ -1,3 +1,4 @@
+import {sweepProspectPriorities} from '../sourcing/prospectPriorityRetention.ts';
 import {sweepSocialPublicThreads} from '../social/publicThreadRetention.ts';
 import {sweepPrivateDrafts} from './socialDrafts.ts';
 import {sweepManualActivity} from '../sourcing/manualProspectActivityLifecycle.ts';
@@ -216,7 +217,7 @@ const rawMime: RetentionTarget = {
 const researchEvidence: RetentionTarget = {
   dataKind: 'research_evidence',
   state: 'implemented',
-  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts','sourcing_prospect_phone_discoveries','outreach_campaign_opening_attempts','calling_preparations','social_public_threads'],
+  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts','sourcing_prospect_phone_discoveries','outreach_campaign_opening_attempts','calling_preparations','social_public_threads','sourcing_prospect_priorities','sourcing_prospect_considerations'],
   note: 'Evidence whose provider terms have expired is deleted at its own expiry; evidence whose terms permit retention stays with the firm.',
   sweep: async (context, input) => {
     // Deletion takes source lifecycle before Ask and the workspace send gate.
@@ -225,6 +226,7 @@ const researchEvidence: RetentionTarget = {
     const openingCleared=await sweepCampaignOpenings(context,input);
     const discoveryDeleted=await sweepDiscoveryReviews(context,input);
     const activityCleared=await sweepManualActivity(context,input);
+    const priorityDeleted=await sweepProspectPriorities(context,input);
     const callingCleared=await sweepCallingDrafts(context,input);
     const phoneCleared=await sweepProspectPhoneDiscoveries(context,input);
     const officeDeleted=await sweepOfficeSources(context,input);
@@ -243,7 +245,7 @@ const researchEvidence: RetentionTarget = {
       // Membership departure erases phone/source rows before public threads.
       // Take the independent thread locks last to preserve that order.
       const publicThreadCleared=await sweepSocialPublicThreads(context,input);
-      return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared+publicThreadCleared,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared,social_public_threads:publicThreadCleared}};
+      return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal+priorityDeleted,rowsRedacted:activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared+publicThreadCleared,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared,social_public_threads:publicThreadCleared,prospect_priority_rows:priorityDeleted}};
     }
 
     const deleted = await context.db.query(
@@ -254,9 +256,9 @@ const researchEvidence: RetentionTarget = {
     const publicThreadCleared=await sweepSocialPublicThreads(context,input);
     return {
       boundaryAt: input.now,
-      rowsDeleted: (deleted.rowCount ?? 0)+officeDeleted+discoveryTotal,
+      rowsDeleted: (deleted.rowCount ?? 0)+officeDeleted+discoveryTotal+priorityDeleted,
       rowsRedacted: activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared+publicThreadCleared,
-      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared,social_public_threads:publicThreadCleared },
+      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared,social_public_threads:publicThreadCleared,prospect_priority_rows:priorityDeleted },
     };
   },
 };

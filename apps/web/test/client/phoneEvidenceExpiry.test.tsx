@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import {priorityFixturePage} from './support/priorityFixture.ts';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,within} from '@testing-library/react';
 import {manualProspectPhoneEvidenceSchema,manualProspectSchema} from '@fss/contracts';
@@ -105,6 +106,7 @@ async function clientFixture(){
   const path=String(url);
   if(path==='/browser/session')return Response.json({status:'signed_in',workspaceId:id,userId:id,deviceId:id,role:'admin',revision:'one',csrfToken:'c'.repeat(40),expiresAt:new Date(now+60000).toISOString()});
   if(path.endsWith('/today/actions/v4'))return Response.json({version:4,workspaceId:id,businessTimeZone:'America/New_York',asOf:new Date(now).toISOString(),actions:[],promiseCoverage:{scope:'current_authorized_work',truncated:false,nextAfterId:null}});
+  if(path.endsWith('/prospects/priority/list'))return Response.json(priorityFixturePage({prospects:[prospect()],hasMore:false}));
   if(path.endsWith('/prospects/list'))return Response.json({prospects:[prospect()],hasMore:false});
   throw Error('Unexpected expiry-test IO');
  });

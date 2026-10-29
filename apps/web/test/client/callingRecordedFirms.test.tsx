@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import {priorityFixturePage} from './support/priorityFixture.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FirmIdentityDto } from '@fss/contracts';
@@ -14,7 +15,7 @@ async function fixture(role: 'admin' | 'salesperson' = 'admin') {
   const send = vi.fn<typeof fetch>(async url => {
     if (url === '/browser/session') return Response.json({ status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role, revision: 'one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 60000).toISOString() });
     if (url === '/browser/api/firms?include=callingPreparation') return pending ?? Response.json(failed ? { invalid: 'not a company list' } : { firms: records });
-    if (url === '/browser/api/sourcing/candidates/prospects/list') return Response.json({ prospects: [], hasMore: false });
+    if (url === '/browser/api/sourcing/candidates/prospects/priority/list') return Response.json(priorityFixturePage({ prospects: [], hasMore: false }));
     if (url === '/browser/api/today/actions/v4') return Response.json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: new Date().toISOString(), actions: [], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     throw Error('Unexpected effect or acquisition');
   });
@@ -36,7 +37,7 @@ it('offers recorded companies without Today cards and selects only the explicit 
   fireEvent.click(await screen.findByRole('button', { name: /Fictional recorded company/u }));
   expect(selected).toHaveBeenCalledExactlyOnceWith({ subject: { kind: 'firm', firmId: id }, label: firm.name });
   expect(f.send.mock.calls.filter(([url]) => url === '/browser/api/firms?include=callingPreparation')).toHaveLength(1);
-  expect(f.send.mock.calls.every(([url, init]) => String(url).includes('/session') || String(url)==='/browser/api/firms?include=callingPreparation' && init?.method === 'GET' || String(url).endsWith('/prospects/list'))).toBe(true);
+  expect(f.send.mock.calls.every(([url, init]) => String(url).includes('/session') || String(url)==='/browser/api/firms?include=callingPreparation' && init?.method === 'GET' || String(url).endsWith('/prospects/priority/list'))).toBe(true);
   expect(localStorage.length).toBe(0);
 });
 it('filters the bounded returned identities locally without a new request or inferred association', async () => {

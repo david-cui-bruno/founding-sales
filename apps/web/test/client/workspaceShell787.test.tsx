@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import {priorityFixturePage} from './support/priorityFixture.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { URL as NodeURL } from 'node:url';
@@ -45,7 +46,7 @@ function setup() {
       return held ? await held.promise : json(todayAnswer, todayStatus);
     }
     if (url === '/browser/api/crm/firm-page-v3' && firmWait) return await firmWait.promise;
-    if (url === '/browser/api/sourcing/candidates/prospects/list') return json({ prospects: [], hasMore: false });
+    if (url === '/browser/api/sourcing/candidates/prospects/priority/list') return json(priorityFixturePage({ prospects: [], hasMore: false }));
     if (url === '/browser/sign-in') return json({ authorizationUrl: 'https://login.example.test/authorize' });
     if (url === '/browser/sign-out') {
       if (signoutFails) throw Error('uncertain');
@@ -97,7 +98,7 @@ describe('issue787 mounted real-client shell', () => {
     await waitFor(() => expect(s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup')).toHaveLength(1));
     await waitFor(()=>expect(s.send.mock.calls.filter(([url])=>url==='/browser/api/calling-identities')).toHaveLength(1));
     const routes = s.send.mock.calls.map(([url]) => String(url));
-    expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks&include=callingPreparation', '/browser/api/today/actions/v4?include=callingPreparation', '/browser/api/sourcing/candidates/prospects/list', '/browser/api/social/private-drafts/list', '/browser/api/calling/setup','/browser/api/calling-identities'].includes(url))).toBe(true);
+    expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks&include=callingPreparation', '/browser/api/today/actions/v4?include=callingPreparation', '/browser/api/sourcing/candidates/prospects/priority/list', '/browser/api/social/private-drafts/list', '/browser/api/calling/setup','/browser/api/calling-identities'].includes(url))).toBe(true);
     expect(routes.filter(url => url === '/browser/api/social/private-drafts/list')).toHaveLength(1);
     const setupReads = s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup');
     expect(setupReads).toHaveLength(1);

@@ -23,6 +23,7 @@ it.each(["normal", "orphan", "restricted_storage", "failed_cleanup"] as const)(
     await rm(directory, { recursive: true });
     const configuration = directory + ".config";
     let started = false;
+    let runtimeFailureInjected = false;
     let restrictedStorage: string | undefined;
     const port = await new Promise<number>((done) => {
       const server = createServer();
@@ -171,6 +172,7 @@ it.each(["normal", "orphan", "restricted_storage", "failed_cleanup"] as const)(
         restrictedStorage = witness.storagePath;
         await chmod(witness.storagePath, 0o000);
         process.kill(before.workerPid, "SIGKILL");
+        runtimeFailureInjected = true;
         let failed: { state?: string; runFailure?: string } = {};
         for (let attempt = 0; attempt < 300; attempt++) {
           failed = JSON.parse(
@@ -185,42 +187,65 @@ it.each(["normal", "orphan", "restricted_storage", "failed_cleanup"] as const)(
         });
       }
     } finally {
-      if (restrictedStorage) await chmod(restrictedStorage, 0o700);
-      if (started) {
-        await execute(process.execPath, [
-          "--experimental-transform-types",
-          runner,
-          "cleanup",
-          directory,
-        ]);
-        for (let attempt = 0; attempt < 300; attempt++) {
-          try {
-            if (
-              JSON.parse(await readFile(join(directory, "status.json"), "utf8"))
-                .state === "cleaned"
-            )
-              break;
-          } catch {
-            /* pending or absent */
+      let cleanupVerified = false;
+      try {
+        if (restrictedStorage) await chmod(restrictedStorage, 0o700);
+        if (started) {
+          await execute(process.execPath, [
+            "--experimental-transform-types",
+            runner,
+            "cleanup",
+            directory,
+          ]);
+          for (let attempt = 0; attempt < 300; attempt++) {
+            try {
+              if (
+                JSON.parse(await readFile(join(directory, "status.json"), "utf8"))
+                  .state === "cleaned"
+              )
+                break;
+            } catch {
+              /* pending or absent */
+            }
+            await new Promise((done) => setTimeout(done, 100));
           }
-          await new Promise((done) => setTimeout(done, 100));
-        }
-        expect(
-          JSON.parse(await readFile(join(directory, "status.json"), "utf8"))
-            .state,
-        ).toBe("cleaned");
-        if (mode === "failed_cleanup")
-          expect(
-            JSON.parse(await readFile(join(directory, "status.json"), "utf8")),
-          ).toMatchObject({
+          const cleaned = JSON.parse(
+            await readFile(join(directory, "status.json"), "utf8"),
+          );
+          expect(cleaned).toMatchObject({
             state: "cleaned",
-            runFailure: "runtime_failed",
-            recoveryFailure: null,
+            processesAbsent: true,
+            databaseStorageAbsent: true,
+            localCopiesAndKeysRemoved: true,
           });
-        await expect(readFile(join(directory, "key"))).rejects.toThrow();
+          await expect(access(join(directory, "key"))).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(
+            access(join(directory, "cleanup-witness.json")),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          cleanupVerified = true;
+          // A startup assertion can fail before the worker fault is injected.
+          // Its cleanup must not invent a runtime failure or retain fake clients.
+          if (mode === "failed_cleanup" && runtimeFailureInjected)
+            expect(cleaned).toMatchObject({
+              runFailure: "runtime_failed",
+              recoveryFailure: null,
+            });
+        } else {
+          cleanupVerified = await access(directory).then(
+            () => false,
+            (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT",
+          );
+        }
+      } finally {
+        // Unknown cleanup retains its witness/configuration for exact recovery.
+        if (cleanupVerified) {
+          try {
+            await rm(directory, { recursive: true, force: true });
+          } finally {
+            await rm(configuration, { force: true });
+          }
+        }
       }
-      await rm(directory, { recursive: true, force: true });
-      await rm(configuration, { force: true });
     }
   },
   60000,

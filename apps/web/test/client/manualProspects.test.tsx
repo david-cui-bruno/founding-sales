@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import '../../src/client/schemaRuntime.ts';
+import {priorityFixturePage,priorityFixtureResponse} from './support/priorityFixture.ts';
 import {webcrypto} from 'node:crypto';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
@@ -24,7 +25,7 @@ function setup(){
   if(url==='/browser/session'){if(sessionUnavailable){sessionUnavailable=false;return json({},503);}return sessionDelay?(await sessionDelay.promise).clone():json(session);}
   const body=JSON.parse(String(init?.body)) as Record<string,unknown>;
   const custom=route?.(String(url),body);if(custom)return custom;
-  if(String(url).endsWith('/prospects/list')){reads.push(body);return delayed?await delayed.promise:json({prospects:rows.map(row=>({...row,state})),hasMore:reads.length===1});}
+  if(String(url).endsWith('/prospects/priority/list')){reads.push(body);return delayed?await priorityFixtureResponse(await delayed.promise):json(priorityFixturePage({prospects:rows.map(row=>({...row,state})),hasMore:reads.length===1}));}
   expect(url).toBe('/browser/api/sourcing/candidates/prospects/feedback');expect(storage.getItem(MANUAL_PROSPECT_PENDING_KEY)).not.toBeNull();commands.push(body);state=String(body['state']);
   if(lose)throw Error('Lost response');return json(malformed?{}:{status:'accepted',replayed:commands.length>1,result:{candidateId:id,revision:1,state}});
  });
@@ -87,7 +88,7 @@ it('initially reads bounded raw worklist, escapes text and unsafe links with no 
  const s=setup();await s.client.refresh();render(<BrowserManualProspects client={s.client}/>);await ready();
  expect(s.reads).toEqual([{state:'all',offset:0}]);expect(s.commands).toEqual([]);expect(s.storage.setItem).not.toHaveBeenCalled();expect(s.uuid).not.toHaveBeenCalled();
  expect(screen.queryByRole('img')).toBeNull();fireEvent.click(screen.getByText('Observed name, sources and details'));expect(screen.getAllByRole('link')).toHaveLength(1);expect(screen.getByRole('link').getAttribute('rel')).toBe('noopener noreferrer');expect(screen.getAllByText(/Phone unknown/u).length).toBeGreaterThan(0);
- fireEvent.click(screen.getByRole('button',{name:'Next prospect page'}));await waitFor(()=>{expect(s.reads).toHaveLength(2);});expect(s.reads[1]).toEqual({state:'all',offset:50});
+ fireEvent.click(screen.getByRole('button',{name:'Next prospect page'}));await waitFor(()=>{expect(s.reads).toHaveLength(2);});expect(s.reads[1]).toEqual({state:'all',offset:50,viewRevision:'a'.repeat(64)});
  await act(async()=>{s.client.dispose();});
 });
 it.each(['lost','malformed'])('retains %s feedback through reload and explicitly reconciles same UUID without automatic replay',async failure=>{

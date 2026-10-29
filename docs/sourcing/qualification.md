@@ -2,6 +2,8 @@
 
 Qualification adds evidence to a candidate. It never grants email permission, starts a call, creates a deal or changes a stop. Discovery and qualification share the existing research count and spending controls. Only the Bedrock route is admitted; there is no direct-API fallback.
 
+Commercial priority is a separate decision. The [agreed prioritization requirements](../greenfield/prospect-prioritization.md) under848 are locally verified, with production delivery pending: retain plausible raw prospects with unknown intent or contact details, explain their order and review buying-role evidence. They do not change the deployed qualification rules, frozen policy interpretations, positive-evaluation requirement, human attestation or source/channel controls described here. Keep/manual fit review and agreement on ranking are not a completed qualification evaluation.
+
 In Firms → Candidates, open **Evidence and call readiness**. The panel separates checked sources, unknowns and historical evidence. Refreshing the panel is a read; **Check qualification** requests research. A repeated request in the same revision/day reuses its recorded request rather than repeating a paid call. Candidate changes or failures leave previous evidence historical.
 
 **Add to call queue** is an explicit reviewed admission. It requires supported identity, geography, residential-management fit and a business phone, but can admit an unknown maintenance need after review. It assigns the existing seller, preserves stops and existing enrollment ownership, and creates a firm-level route without inventing a person. The existing dial authorization still decides whether a call may start.

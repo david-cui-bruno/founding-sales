@@ -109,3 +109,20 @@
   .workspace-prospects .manual-table { min-width: 540px; }
   .workspace-prospects .manual-inspector { padding: 16px; }
 }
+
+.prospect-priority-review { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--prospects-border, #d9deea); }
+.prospect-priority-review h4 { margin: 0 0 12px; font-size: 15px; }
+.prospect-priority-summary p, .prospect-priority-learning p, .prospect-priority-review p { font-size: 12px; line-height: 1.6; max-width: 72ch; overflow-wrap: anywhere; }
+.prospect-priority-summary ul { padding-left: 18px; font-size: 12px; line-height: 1.7; }
+.prospect-priority-dimensions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.prospect-priority-dimensions dt { font-size: 11px; color: var(--prospects-muted, #566073); }
+.prospect-priority-dimensions dd { margin: 4px 0 0; font-size: 12px; }
+.prospect-priority-actions, .prospect-priority-fields { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 14px 0; }
+.prospect-priority-fields label { display: flex; flex: 1 1 180px; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; }
+.prospect-priority-fields select, .prospect-priority-fields input { width: 100%; max-width: 100%; }
+.prospect-priority-review summary, .prospect-priority-learning summary { cursor: pointer; font-size: 13px; padding: 10px 0; }
+.prospect-priority-learning { margin: 16px 0; }
+.calling-queue .prospect-priority-summary.compact { margin-top: 8px; font-size: 11px; }
+.calling-queue .prospect-priority-summary.compact strong { font-size: 11px; }
+.calling-queue .prospect-priority-summary.compact p { margin: 4px 0 0; font-size: 11px; }
+@media (max-width: 600px) { .prospect-priority-dimensions { grid-template-columns: 1fr; gap: 8px; } }

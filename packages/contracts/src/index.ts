@@ -125,3 +125,5 @@ export * from './callingAudioTest.ts';
 
 export * from './socialPublishingReadiness.ts';
 export * from './socialPublicThreads.ts';
+
+export * from './prospectPriority.ts';

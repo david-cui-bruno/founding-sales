@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import '../../src/client/schemaRuntime.ts';
+import {priorityFixturePage} from './support/priorityFixture.ts';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,within,waitFor} from '@testing-library/react';
 import {manualProspectSchema,type ManualProspect} from '@fss/contracts';
@@ -42,7 +43,7 @@ it('same-site visible observations remain individual and batched feedback target
  const storage=new Map<string,string>();
  const client=new BrowserClient({storage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>{storage.set(key,value);},removeItem:key=>{storage.delete(key);}},fetch:vi.fn(async(url,init)=>{
   if(url==='/browser/session')return json(session);
-  if(String(url).endsWith('/prospects/list'))return json({prospects:[first,second],hasMore:false});
+  if(String(url).endsWith('/prospects/priority/list'))return json(priorityFixturePage({prospects:[first,second],hasMore:false}));
   const body=JSON.parse(String(init?.body)) as Record<string,unknown>;commands.push(body);return json({status:'accepted',replayed:false,result:{candidateId:other,revision:7,state:'kept'}});
  }),randomUUID:()=>crypto.randomUUID(),navigate:vi.fn()});
  await client.refresh();render(<BrowserManualProspects client={client}/>);

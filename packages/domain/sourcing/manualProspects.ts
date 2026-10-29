@@ -20,11 +20,23 @@ async function admin(ctx:RepositoryContext):Promise<boolean>{
 }
 /** Caller owns transaction and authenticated principal fence. No external IO. */
 export async function listManualProspects(ctx:RepositoryContext,input:z.infer<typeof manualProspectListInputSchema>,authority:()=>Promise<boolean>=async()=>true):Promise<Result<z.infer<typeof manualProspectListSchema>>>{
+ return projectManualProspectPage(ctx,input,authority,()=>manualProspectRows(ctx,input.state,input.offset,input.candidateId&&input.expectedRevision?{candidateId:input.candidateId,expectedRevision:input.expectedRevision}:undefined));
+}
+/** Current priority owner selects a bounded page globally, then uses this same
+ * batched phone/source projection and final-clock checks as the historical list. */
+export async function listManualProspectSelection(ctx:RepositoryContext,input:z.infer<typeof manualProspectListInputSchema>,selection:readonly {id:string;revision:number}[],authority:()=>Promise<boolean>,onFinalClock?:(now:number)=>void){
+ if(selection.length>50)return refuse('invalid_input');
+ const read=async():Promise<ManualProspectRow[]>=>{
+  const found=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_ROWS_SQL}) current_rows WHERE id=ANY($3::uuid[])`,[ctx.scope.workspaceId,input.state,selection.map(r=>r.id)])).rows;
+  return selection.flatMap(subject=>{const row=found.find(r=>r.id===subject.id&&r.revision===subject.revision);return row?[row]:[];});
+ };
+ return projectManualProspectPage(ctx,input,authority,read,onFinalClock);
+}
+async function projectManualProspectPage(ctx:RepositoryContext,input:z.infer<typeof manualProspectListInputSchema>,authority:()=>Promise<boolean>,readRows:()=>Promise<ManualProspectRow[]>,onFinalClock?:(now:number)=>void):Promise<Result<z.infer<typeof manualProspectListSchema>>>{
  if(!await admin(ctx))return refuse('admin_only');
  if(!manualProspectListInputSchema.safeParse(input).success)return refuse('invalid_input');
  await lockDiscoveryReviewSources(ctx);
- const exact=input.candidateId&&input.expectedRevision?{candidateId:input.candidateId,expectedRevision:input.expectedRevision}:undefined;
- const rows=await manualProspectRows(ctx,input.state,input.offset,exact),page=rows.slice(0,50);
+ const rows=await readRows(),page=rows.slice(0,50);
  if(page.length)await lockLivePreparationCleanup(ctx);
  if(page.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,page.map(row=>row.id)]);
  // Choice metadata belongs only to this opted-in projection. Raw source authority
@@ -38,12 +50,13 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
  const checked=await recheckManualPhoneSnapshots(ctx,page,phones);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
- const currentRows=await manualProspectRows(ctx,input.state,input.offset,exact),currentPhones=await recheckManualPhoneSnapshots(ctx,page,phones);
+ const currentRows=await readRows(),currentPhones=await recheckManualPhoneSnapshots(ctx,page,phones);
  const currentDiscoveries=await phoneDiscoverySnapshots(ctx,page);
  if(!isDeepStrictEqual(rows,currentRows))return refuse('authority_changed');
  // Authority owns session/device/membership SHARE locks through this transaction.
  // Read clock-based rights after that final authority wait, not before it.
  const wall=(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
+ onFinalClock?.(wall);
  // Optional evidence changing during waits drops enrichment, never the raw queue.
  const prospects=page.flatMap(row=>{
   const before=phones.find(phone=>phone.candidate_id===row.id&&phone.candidate_revision===row.revision);

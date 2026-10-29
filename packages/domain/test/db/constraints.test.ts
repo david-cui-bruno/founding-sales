@@ -34,7 +34,7 @@ import { LINKEDIN_MANUAL_CONSTRAINT_CASES } from "./support/linkedinManualCases.
 import { LINKEDIN_POSTING_POLICY_CONSTRAINT_CASES } from "./support/linkedinPostingPolicyCases.ts";
 import { SOCIAL_CONSTRAINT_CASES } from "./support/socialCases.ts"; import {CURRENT_SOCIAL_CONSTRAINT_CASES as SOCIAL_PRIVATE_CONSTRAINT_CASES} from './support/currentSocialCases.ts'; import { SOCIAL_VOICE_CONSTRAINT_CASES } from './support/socialVoiceCases.ts';
 import { OUTREACH_CONSTRAINT_CASES } from "./support/outreachCases.ts";
-import { SOURCING_CONSTRAINT_CASES } from "./support/sourcingCases.ts";
+import { CURRENT_SOURCING_CONSTRAINT_CASES as SOURCING_CONSTRAINT_CASES } from "./support/currentSourcingCases.ts";
 import { MEETING_AUTO_RECORDING_CONSTRAINT_CASES } from "./support/meetingAutoRecordingCases.ts";
 import { MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES } from "./support/meetingFollowThroughCases.ts";
 import { MEETING_OUTCOMES_CONSTRAINT_CASES } from "./support/meetingOutcomesCases.ts";

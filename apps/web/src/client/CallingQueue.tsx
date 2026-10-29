@@ -1,9 +1,11 @@
 import {useEffect,useRef,useState,type JSX} from 'react';
-import {todayActionsV4ResponseSchema,manualProspectListSchema,type CallingSubject,type ManualProspect,type TodayActionV4} from '@fss/contracts';
+import {todayActionsV4ResponseSchema,type CallingSubject,type ManualProspect,type TodayActionV4,type ProspectPriorityReview} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
 import {manualProspectLabel} from './manualProspectPresentation.ts';
 import {RetainedPhoneEvidence} from './RetainedPhoneEvidence.tsx';
 import {useCurrentManualPhone} from './ManualPhoneNumber.tsx';
+import {PrioritySummary} from './ProspectPriorityReview.tsx';
+import {prospectPriorityReadSchema,PRIORITY_VIEW_CHANGED} from './ProspectPriorityList.ts';
 import {CallingRecordedFirms} from './CallingRecordedFirms.tsx';
 export interface CallingQueueEntry{subject:CallingSubject;label:string;prospect?:ManualProspect;action?:TodayActionV4;}
 function QueuePhone({prospect}:{prospect:ManualProspect}):JSX.Element{
@@ -13,9 +15,10 @@ function QueuePhone({prospect}:{prospect:ManualProspect}):JSX.Element{
 /** Existing current prepared actions or raw observations, never a reservation queue. */
 export function CallingQueue({client,onSelect,disabled}:{client:BrowserClient;onSelect:(entry:CallingQueueEntry)=>void;disabled:boolean}):JSX.Element{
  const [mode,setMode]=useState<'prepared'|'kept'|'retained'|'recorded'>(client.current?.status==='signed_in'&&client.current.role==='admin'?'kept':'prepared'),[entries,setEntries]=useState<CallingQueueEntry[]>([]),[offset,setOffset]=useState(0),[more,setMore]=useState(false),[reload,setReload]=useState(0),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
- const scope=useRef(0);
- const changeMode=(next:typeof mode):void=>{if(next===mode)return;scope.current++;setOffset(0);setMode(next);};
- useEffect(()=>{const mine=++scope.current,epoch=client.epoch;let mounted=true;const current=():boolean=>mounted&&scope.current===mine&&client.isCurrent(epoch)&&client.current?.status==='signed_in';setEntries([]);setBusy(true);setNotice('Loading current supply…');
+ const scope=useRef(0),viewRevision=useRef<string|undefined>(undefined);
+ const [priorities,setPriorities]=useState<Record<string,ProspectPriorityReview>>({});
+ const changeMode=(next:typeof mode):void=>{if(next===mode)return;scope.current++;viewRevision.current=undefined;setOffset(0);setMode(next);};
+ useEffect(()=>{const mine=++scope.current,epoch=client.epoch;let mounted=true;const current=():boolean=>mounted&&scope.current===mine&&client.isCurrent(epoch)&&client.current?.status==='signed_in';setEntries([]);setPriorities({});setBusy(true);setNotice('Loading current supply…');
   if((mode==='kept'||mode==='retained')&&(client.current?.status!=='signed_in'||client.current.role!=='admin')){setOffset(0);setMode('prepared');setBusy(false);return;}
   if(mode==='recorded'){setBusy(false);setNotice('');setMore(false);return()=>{mounted=false;};}
   const read=async():Promise<void>=>{try{if(mode==='prepared'){
@@ -23,13 +26,14 @@ export function CallingQueue({client,onSelect,disabled}:{client:BrowserClient;on
    if(client.current?.status!=='signed_in'||answer.workspaceId!==client.current.workspaceId)throw Error('Workspace changed');
    setEntries(answer.actions.flatMap(action=>action.kind==='research'&&(action.target.kind==='qualified_research'||action.target.kind==='automatic_research')?[{subject:{kind:'firm' as const,firmId:action.target.firmId},label:action.subject,action}]:[]));setMore(false);
   }else{
-   const answer=await client.request('/sourcing/candidates/prospects/list',manualProspectListSchema,{state:mode==='kept'?'kept':'all',offset,includeManualPhone:true},()=>{if(!current())throw Error('Queue changed');});if(!current())return;
-   setEntries(answer.prospects.map(prospect=>({subject:{kind:'candidate' as const,candidateId:prospect.candidateId,expectedCandidateRevision:prospect.revision},label:manualProspectLabel(prospect),prospect})));setMore(answer.hasMore);
+   const answer=await client.request('/sourcing/candidates/prospects/priority/list',prospectPriorityReadSchema,{state:mode==='kept'?'kept':'all',offset,includeManualPhone:true,...(offset>0&&viewRevision.current?{viewRevision:viewRevision.current}:{})},()=>{if(!current())throw Error('Queue changed');});if(!current())return;
+   if('error' in answer){setNotice(PRIORITY_VIEW_CHANGED);setMore(false);return;}viewRevision.current=answer.viewRevision;setPriorities(Object.fromEntries(answer.prospects.map(row=>[row.prospect.candidateId,row.priority])));
+   setEntries(answer.prospects.map(({prospect})=>({subject:{kind:'candidate' as const,candidateId:prospect.candidateId,expectedCandidateRevision:prospect.revision},label:manualProspectLabel(prospect),prospect})));setMore(answer.hasMore);
   }setNotice('');}catch{if(current())setNotice('Current supply unavailable. This is not an empty queue.');}finally{if(current())setBusy(false);}};void read();
   const unsub=client.subscribe(()=>{if(!current()){scope.current++;setEntries([]);setBusy(false);setNotice('Current session required.');}});
   return()=>{mounted=false;unsub();};
  },[client,mode,offset,reload]);
- return <aside className="calling-queue workspace-glass" aria-label="Calling supply"><div className="calling-queue-heading"><h2>Your next conversations</h2>{mode!=='recorded'?<button disabled={busy||disabled} onClick={()=>{scope.current++;setReload(v=>v+1);}}>Refresh</button>:null}</div>
+ return <aside className="calling-queue workspace-glass" aria-label="Calling supply"><div className="calling-queue-heading"><h2>Your next conversations</h2>{mode!=='recorded'?<button disabled={busy||disabled} onClick={()=>{scope.current++;viewRevision.current=undefined;setOffset(0);setReload(v=>v+1);}}>Refresh</button>:null}</div>
  <div className="workspace-tabs" role="group" aria-label="Calling list"><button aria-pressed={mode==='kept'} disabled={disabled||client.current?.status!=='signed_in'||client.current.role!=='admin'} onClick={()=>changeMode('kept')}>Kept prospects</button><button aria-pressed={mode==='prepared'} disabled={disabled} onClick={()=>changeMode('prepared')}>Prepared queue</button><button aria-pressed={mode==='retained'} disabled={disabled||client.current?.status!=='signed_in'||client.current.role!=='admin'} onClick={()=>changeMode('retained')}>Retained list</button><button aria-pressed={mode==='recorded'} disabled={disabled} onClick={()=>changeMode('recorded')}>Recorded companies</button></div>
- {mode==='recorded'?<CallingRecordedFirms client={client} disabled={disabled} onSelect={onSelect}/>:<>{notice?<p role="status">{notice}</p>:null}{!busy&&!notice&&entries.length===0?<p>No {mode==='prepared'?'prepared conversations':mode==='kept'?'kept prospects':'retained observations'} on this page. Use Prospects to review current supply.</p>:null}<ul>{entries.map(entry=><li key={entry.subject.kind==='firm'?entry.subject.firmId:entry.subject.candidateId}><button disabled={disabled||busy} onClick={()=>onSelect(entry)}><strong>{entry.label}</strong><small>{entry.subject.kind==='firm'?'Prepared research · not call authority':mode==='kept'?'Kept prospect · unverified':'Raw observation · unverified'}</small>{entry.prospect?<small><QueuePhone prospect={entry.prospect}/></small>:null}</button></li>)}</ul>{mode!=='prepared'?<div className="calling-inline"><button disabled={disabled||busy||offset===0} onClick={()=>setOffset(v=>Math.max(0,v-50))}>Previous page</button><button disabled={disabled||busy||!more} onClick={()=>setOffset(v=>v+50)}>Next page</button></div>:null}</>}</aside>;
+ {mode==='recorded'?<CallingRecordedFirms client={client} disabled={disabled} onSelect={onSelect}/>:<>{notice?<p role="status">{notice}</p>:null}{!busy&&!notice&&entries.length===0?<p>No {mode==='prepared'?'prepared conversations':mode==='kept'?'kept prospects':'retained observations'} on this page. Use Prospects to review current supply.</p>:null}<ul>{entries.map(entry=><li key={entry.subject.kind==='firm'?entry.subject.firmId:entry.subject.candidateId}><button disabled={disabled||busy} onClick={()=>onSelect(entry)}><strong>{entry.label}</strong><small>{entry.subject.kind==='firm'?'Prepared research · not call authority':mode==='kept'?'Kept prospect · unverified':'Raw observation · unverified'}</small>{entry.prospect?<><small><QueuePhone prospect={entry.prospect}/></small>{priorities[entry.prospect.candidateId]?<PrioritySummary review={priorities[entry.prospect.candidateId]!} compact/>:null}</>:null}</button></li>)}</ul>{mode!=='prepared'?<div className="calling-inline"><button disabled={disabled||busy||offset===0} onClick={()=>setOffset(v=>Math.max(0,v-50))}>Previous page</button><button disabled={disabled||busy||!more} onClick={()=>setOffset(v=>v+50)}>Next page</button></div>:null}</>}</aside>;
 }

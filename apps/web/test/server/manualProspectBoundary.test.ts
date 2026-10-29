@@ -1,5 +1,17 @@
 import {expect,it} from 'vitest';
 import {manualProspectBrowserResult} from '../../src/server/manualProspectBoundary.ts';
+it('keeps priority pagination and review refusals recoverable without mapping authority or custody failures',()=>{
+ const prefix='/sourcing/candidates/prospects/priority';
+ expect(manualProspectBrowserResult(`${prefix}/list`,409,{error:'view_changed'})).toEqual({status:200,body:{error:'view_changed'}});
+ expect(manualProspectBrowserResult(`${prefix}/save`,409,{error:'source_unavailable'})).toEqual({status:200,body:{status:'refused',replayed:false,reason:'source_unavailable'}});
+ expect(manualProspectBrowserResult(`${prefix}/consider`,409,{status:'refused',replayed:false,reason:'assessment_changed'})).toMatchObject({status:200});
+ for(const action of ['list','save','consider','receipt']){
+  expect(manualProspectBrowserResult(`${prefix}/${action}`,401,{error:'view_changed'})).toBeNull();
+  for(const reason of ['authority_changed','command_payload_mismatch','command_device_mismatch','unknown'])expect(manualProspectBrowserResult(`${prefix}/${action}`,409,{status:'refused',replayed:false,reason})).toBeNull();
+ }
+ expect(manualProspectBrowserResult(`${prefix}/receipt`,409,{error:'candidate_unavailable'})).toBeNull();
+ expect(manualProspectBrowserResult(`${prefix}/list`,409,{error:'view_changed',private:'extra'})).toBeNull();
+});
 it('maps only bounded recording product refusals, never receipt/auth/UUID collisions',()=>{
  const prefix='/sourcing/candidates/prospects/activity';
  for(const action of ['list','read','save'])expect(manualProspectBrowserResult(`${prefix}/${action}`,409,{error:'candidate_unavailable'})).toMatchObject({status:200});

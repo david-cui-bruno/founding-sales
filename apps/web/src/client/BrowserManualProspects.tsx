@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useRef,useState,type JSX} from 'react';
-import {manualProspectListSchema,manualProspectListInputSchema,type ManualProspect} from '@fss/contracts';
+import {type prospectPriorityListSchema,manualProspectListInputSchema,type ManualProspect} from '@fss/contracts';
 import type {WorkspaceScreenProps} from './workspaceNavigation.ts';
 import type {z} from 'zod';
 import type {BrowserClient} from './BrowserClient.ts';
@@ -8,15 +8,18 @@ import type {PendingManualProspect} from './ManualProspectPending.ts';
 import {ManualProspectCard} from './ManualProspectCard.tsx';
 import {BrowserManualProspectActivity} from './BrowserManualProspectActivity.tsx';
 import {ManualProspectTable} from './ManualProspectTable.tsx';
+import {ProspectPriorityReview} from './ProspectPriorityReview.tsx';
+import {ProspectPriorityLearning} from './ProspectPriorityLearning.tsx';
+import {prospectPriorityReadSchema,PRIORITY_VIEW_CHANGED} from './ProspectPriorityList.ts';
 import {ManualProspectPreparation} from './ManualProspectPreparation.tsx';
 
 export function BrowserManualProspects({client,onOpenCalling}:{client:BrowserClient;onOpenCalling?:WorkspaceScreenProps['onOpenCalling']}):JSX.Element|null{
  const [state,setState]=useState('all'),[offset,setOffset]=useState(0),[reload,setReload]=useState(0);
- const [page,setPage]=useState<z.infer<typeof manualProspectListSchema>|null>(null),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
+ const [page,setPage]=useState<z.infer<typeof prospectPriorityListSchema>|null>(null),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
  const [pending,setPending]=useState<PendingManualProspect|null>(null),[custodyError,setCustodyError]=useState(false);
  const [activity,setActivity]=useState<ManualProspect|null>(null);
  const [preparing,setPreparing]=useState(false);
- const scope=useRef(0);
+ const scope=useRef(0),viewRevision=useRef<string|undefined>(undefined);
  const activityLease=useRef(0);
  // Revoke event/await continuations before React commits the replacement view.
  const clearScope=useCallback(():void=>{scope.current++;setPreparing(false);setActivity(null);},[]);
@@ -25,7 +28,7 @@ export function BrowserManualProspects({client,onOpenCalling}:{client:BrowserCli
  const operation=useRef<symbol|null>(null),mounted=useRef(false);
  useEffect(()=>{
   mounted.current=true;let epoch=client.epoch;
-  const clear=():void=>{clearScope();operation.current=null;restoreFocus.current=false;setPage(null);setSelected(null);setPending(null);setBusy(false);setNotice('');};
+  const clear=():void=>{clearScope();operation.current=null;restoreFocus.current=false;viewRevision.current=undefined;setPage(null);setSelected(null);setPending(null);setBusy(false);setNotice('');};
   clear();setCustodyError(false);
   const unsubscribe=client.subscribe(()=>{if(epoch!==client.epoch||client.current?.status!=='signed_in'){epoch=client.epoch;clear();}});
   try{setPending(client.manualProspects.read());}catch{setCustodyError(true);}
@@ -36,8 +39,8 @@ export function BrowserManualProspects({client,onOpenCalling}:{client:BrowserCli
   if(client.current?.status!=='signed_in'||client.current.role!=='admin')return;
   const token=Symbol('manual-list'),epoch=client.epoch;operation.current=token;setBusy(true);
   const current=():boolean=>mounted.current&&operation.current===token&&client.isCurrent(epoch);
-  void client.request('/sourcing/candidates/prospects/list',manualProspectListSchema,{state,offset},()=>{if(!current())throw Error('Superseded manual list');})
-   .then(answer=>{if(current())setPage(answer);})
+  void client.request('/sourcing/candidates/prospects/priority/list',prospectPriorityReadSchema,{state,offset,...(offset>0&&viewRevision.current?{viewRevision:viewRevision.current}:{})},()=>{if(!current())throw Error('Superseded manual list');})
+   .then(answer=>{if(!current())return;if('error' in answer){setNotice(PRIORITY_VIEW_CHANGED);return;}viewRevision.current=answer.viewRevision;setPage(answer);})
    .catch(()=>{if(current())setNotice('Manual worklist unavailable or refused. This is not an empty inventory.');})
    .finally(()=>{if(current()){operation.current=null;setBusy(false);}});
   return ()=>{if(operation.current===token)operation.current=null;};
@@ -53,11 +56,11 @@ export function BrowserManualProspects({client,onOpenCalling}:{client:BrowserCli
    const held=prospect&&nextState?client.manualProspects.prepare({candidateId:prospect.candidateId,expectedRevision:prospect.revision,state:nextState}):client.manualProspects.read();
    if(!held)throw Error('No pending feedback');setPending(held);
    const message=await dispatchManualProspect(client,held,current);
-   if(current()){setPending(client.manualProspects.read());setNotice(message);setReload(value=>value+1);}
+   if(current()){setPending(client.manualProspects.read());setNotice(message);viewRevision.current=undefined;setOffset(0);setReload(value=>value+1);}
   }catch{if(current()){setNotice('Feedback outcome unknown or dispatch refused. No automatic replay. Reconcile the exact pending command explicitly.');try{setPending(client.manualProspects.read());}catch{setCustodyError(true);}}}
   finally{if(current()){operation.current=null;setBusy(false);}}
  };
- const prospects=page?.prospects??[],chosen=prospects.find(p=>p.candidateId===selected)??prospects[0]??null;
+ const prospects=page?.prospects.map(row=>row.prospect)??[],chosen=prospects.find(p=>p.candidateId===selected)??prospects[0]??null;
  const index=chosen?prospects.indexOf(chosen):-1;
  const viewScope=scope.current,epoch=client.epoch;
  const currentScope=():boolean=>mounted.current&&scope.current===viewScope&&client.isCurrent(epoch)&&client.current?.status==='signed_in'&&client.current.role==='admin';
@@ -80,23 +83,25 @@ export function BrowserManualProspects({client,onOpenCalling}:{client:BrowserCli
  };
  if(client.current?.status!=='signed_in'||client.current.role!=='admin')return null;
  return <section id="prospects" aria-label="Manual prospect worklist" className="manual-worklist">
-  <div className="manual-page-top"><div><p className="manual-eyebrow">Retained observations</p><h2>Retained review</h2><p>Keep the observations worth another look.</p></div>
+  <div className="manual-page-top"><div><h2>Retained review</h2><p>Work through relevant businesses, with reasons and unknowns kept visible.</p></div>
    <div className="manual-view-switch" role="group" aria-label="Prospect view"><button aria-pressed={!focus} onClick={()=>setFocus(false)}>Worklist</button><button aria-pressed={focus} onClick={()=>setFocus(true)}>Focus</button></div>
   </div>
   <p className="manual-authority">UNVERIFIED · Contact authority not granted. These are observations, not unique or callable Firms. No source refresh or outreach runs here.</p>
-  <div className="manual-toolbar"><label>Manual state <select value={state} disabled={busy} onChange={event=>{clearScope();setPage(null);setSelected(null);setOffset(0);setState(event.target.value);}}>{['all','new','kept','skipped','wrong_number'].map(value=><option key={value} value={value}>{value.replaceAll('_',' ')}</option>)}</select></label>
-   <button disabled={busy} onClick={()=>{clearScope();setPage(null);setReload(value=>value+1);}}>Refresh retained worklist</button><p>At most 50 observations per page.<br/>Pages replace, not accumulate.</p>
+  <div className="manual-toolbar"><label>Manual state <select value={state} disabled={busy} onChange={event=>{clearScope();setPage(null);setSelected(null);viewRevision.current=undefined;setOffset(0);setState(event.target.value);}}>{['all','new','kept','skipped','wrong_number'].map(value=><option key={value} value={value}>{value.replaceAll('_',' ')}</option>)}</select></label>
+   <button disabled={busy} onClick={()=>{clearScope();setPage(null);viewRevision.current=undefined;setOffset(0);setReload(value=>value+1);}}>Refresh retained worklist</button><p>At most 50 observations per page.<br/>Pages replace, not accumulate.</p>
   </div>
   {busy?<p role="status">Loading manual worklist or recording feedback.</p>:null}
   {notice?<p role="status">{notice}</p>:null}{custodyError?<p role="alert">Pending feedback storage unavailable. Dispatch blocked. No replacement command created.</p>:null}
   {pending&&!pending.receipt?<div><p>Uncertain manual feedback for candidate {pending.payload.candidateId}, revision {pending.payload.expectedRevision}. Exact command {pending.payload.commandId}.</p><button disabled={busy||custodyError} onClick={()=>{void feedback(null);}}>Reconcile same manual feedback</button></div>:null}
-  {page?.prospects.length===0?<div className="manual-empty"><h3>No retained prospects in this view.</h3><p>No retained prospects returned for this state and page. This is not a global inventory count.</p>{state!=='all'||offset!==0?<button disabled={busy} onClick={()=>{setState('all');setOffset(0);}}>Return to first page, all states</button>:null}</div>:null}
+  <ProspectPriorityLearning client={client}/>
+  {page?.prospects.length===0?<div className="manual-empty"><h3>No retained prospects in this view.</h3><p>No retained prospects returned for this state and page. This is not a global inventory count.</p>{state!=='all'||offset!==0?<button disabled={busy} onClick={()=>{viewRevision.current=undefined;setState('all');setOffset(0);}}>Return to first page, all states</button>:null}</div>:null}
   {page&&chosen?<div className={`manual-workspace${focus?' manual-focus':''}`}>
    {!focus?<ManualProspectTable prospects={prospects} selected={chosen.candidateId} select={select}/>:null}
    <div ref={inspector} className="manual-inspector" aria-label="Selected prospect inspector" role="region">
    <div className="manual-inspector-nav">{focus?<button onClick={()=>{setFocus(false);requestAnimationFrame(()=>document.getElementById(`manual-row-${chosen.candidateId}`)?.focus());}}>← Back to retained review</button>:null}<span>{index+1} / {prospects.length} on this page</span><div><button aria-label="Previous prospect" disabled={index<=0} onClick={()=>select(prospects[index-1]!.candidateId)}>←</button><button aria-label="Next prospect" disabled={index>=prospects.length-1} onClick={()=>select(prospects[index+1]!.candidateId)}>→</button></div></div>
     <ManualProspectCard key={`${chosen.candidateId}:${chosen.revision}`} prospect={chosen} disabled={busy||custodyError||(pending!==null&&!pending.receipt)} feedback={(value)=>{if(currentScope())void feedback(chosen,value);}} activity={openActivity} prepare={()=>{if(currentScope()){setFocus(true);setPreparing(true);}}}/>
-    {onOpenCalling?<button disabled={busy} onClick={()=>{if(currentScope()&&operation.current===null)onOpenCalling({kind:'candidate',candidateId:chosen.candidateId,expectedCandidateRevision:chosen.revision,prospectPage:manualProspectListInputSchema.parse({state,offset})});}}>Open calling brief</button>:null}
+    <ProspectPriorityReview key={`priority:${viewScope}:${chosen.candidateId}:${chosen.revision}`} client={client} prospect={chosen} review={page.prospects.find(row=>row.prospect.candidateId===chosen.candidateId)!.priority} isScopeCurrent={currentScope} onChanged={()=>{if(currentScope()){clearScope();setPage(null);viewRevision.current=undefined;setOffset(0);setReload(value=>value+1);}}}/>
+    {onOpenCalling?<button disabled={busy} onClick={()=>{if(currentScope()&&operation.current===null)onOpenCalling({kind:'candidate',candidateId:chosen.candidateId,expectedCandidateRevision:chosen.revision,prospectPage:manualProspectListInputSchema.parse({state:'all',offset:0,candidateId:chosen.candidateId,expectedRevision:chosen.revision})});}}>Open calling brief</button>:null}
     {preparing?<ManualProspectPreparation key={`prepare:${viewScope}:${chosen.candidateId}:${chosen.revision}`} prospect={chosen} isScopeCurrent={currentScope} openActivity={openActivity}/>:null}
     {activity&&activity.candidateId===chosen.candidateId&&activity.revision===chosen.revision?<div><button onClick={closeActivity}>Close private manual activity</button><BrowserManualProspectActivity key={`activity:${viewScope}:${activityVersion}:${chosen.candidateId}:${chosen.revision}`} client={client} prospect={activity} isScopeCurrent={currentActivityScope} onUnavailable={activityUnavailable}/></div>:null}
    </div>

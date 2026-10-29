@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import {priorityFixturePage} from './support/priorityFixture.ts';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {manualProspectSchema,type ManualPhoneChoice} from '@fss/contracts';
@@ -27,6 +28,7 @@ it.each([false,true])('saves and current-reads chosen source metadata, with same
  const c=client(async(url,init)=>{
   const body=JSON.parse(String(init?.body));
   if(String(url).endsWith('/feedback')){writes.push(body);if(unknown&&++attempts===1)throw Error('Controlled unknown');return Response.json({status:'accepted',replayed:unknown,result:{candidateId:id,revision:1,state:'kept',phoneChoice:f.choice}});}
+  if(String(url).endsWith('/prospects/priority/list')){reads.push(body);return Response.json(priorityFixturePage({prospects:[{...f.p,state:'kept',manualPhone:f.phone}],hasMore:false}));}
   if(String(url).endsWith('/prospects/list')){reads.push(body);return Response.json({prospects:[{...f.p,state:'kept',manualPhone:f.phone}],hasMore:false});}
   throw Error('No other route allowed');
  });await c.refresh();
@@ -39,10 +41,10 @@ it.each([false,true])('saves and current-reads chosen source metadata, with same
  expect(JSON.stringify(writes)).not.toMatch(/214|Office phone|capacity\.example/u);expect(JSON.stringify({...sessionStorage,...localStorage})).not.toMatch(/214|Office phone|capacity\.example/u);
 });
 it('defaults admin to kept, resets paging for retained, and never requests retained for salesperson',async()=>{
- const reads:unknown[]=[],c=client(async(url,init)=>{if(!String(url).endsWith('/prospects/list'))throw Error('Unexpected');reads.push(JSON.parse(String(init?.body)));return Response.json({prospects:[],hasMore:true});});await c.refresh();
+ const reads:unknown[]=[],c=client(async(url,init)=>{if(!String(url).endsWith('/prospects/priority/list'))throw Error('Unexpected');reads.push(JSON.parse(String(init?.body)));return Response.json(priorityFixturePage({prospects:[],hasMore:true}));});await c.refresh();
  const view=render(<CallingQueue client={c} onSelect={()=>undefined} disabled={false}/>);
  await waitFor(()=>expect(reads).toHaveLength(1));fireEvent.click(screen.getByRole('button',{name:'Next page'}));await waitFor(()=>expect(reads).toHaveLength(2));fireEvent.click(screen.getByRole('button',{name:'Retained list'}));await waitFor(()=>expect(reads).toHaveLength(3));
- expect(reads).toEqual([{state:'kept',offset:0,includeManualPhone:true},{state:'kept',offset:50,includeManualPhone:true},{state:'all',offset:0,includeManualPhone:true}]);view.unmount();
+ expect(reads).toEqual([{state:'kept',offset:0,includeManualPhone:true},{state:'kept',offset:50,includeManualPhone:true,viewRevision:'a'.repeat(64)},{state:'all',offset:0,includeManualPhone:true}]);view.unmount();
  const paths:string[]=[],sales=client(async url=>{paths.push(String(url));return Response.json({version:4,workspaceId:id,businessTimeZone:'America/New_York',asOf:new Date().toISOString(),actions:[],promiseCoverage:{scope:'current_authorized_work',truncated:false,nextAfterId:null}});},'salesperson');await sales.refresh();render(<CallingQueue client={sales} onSelect={()=>undefined} disabled={false}/>);
  await waitFor(()=>expect(paths).toHaveLength(1));expect(paths[0]).toMatch(/\/today\/actions\/v4$/u);expect(screen.getByRole('button',{name:'Kept prospects'}).matches(':disabled')).toBe(true);
 });
