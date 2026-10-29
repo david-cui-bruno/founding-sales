@@ -1,3 +1,5 @@
+import {campaignOpeningInterpretation} from '@fss/domain/outreach/campaignOpeningModel.ts';
+import type {CampaignOpeningModelPort} from '@fss/domain/outreach/campaignOpeningModelPort.ts';
 import {businessSelectionHandler} from '../handlers/businessSelection.ts';
 import {createCrmAcquisitionDiagnosticStartup} from '@fss/domain/mail/crmAcquisitionDiagnosticStartup.ts';
 import {createCrmAcquisitionDiagnosticCapture} from '@fss/domain/mail/crmAcquisitionDiagnosticCapture.ts';
@@ -133,6 +135,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition extends CaptureReadComposition {
+  readonly openingModel?:CampaignOpeningModelPort|null;
   readonly crmMailBackfill?:Parameters<typeof crmMailBackfillJobHandler>[0];
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
@@ -242,6 +245,7 @@ export function registerHandlers(
   // `handlers/outboundSendHandoff.ts`.
   registry.register(
     sequenceActionJobHandler({
+      openingModel: composition.openingModel,
       sendHandoff: outboundSendHandoff(
         composition.send === undefined ? {} : { deps: composition.send },
       ),
@@ -382,8 +386,9 @@ export async function composeHandlers(
   } = {},
 ): Promise<HandlerComposition> {
   const research = composeResearch(classifier);
+  const openingModel = classifier ? campaignOpeningInterpretation(classifier.transport) : null;
   const gmail = deployment.gmail;
-  if (gmail === undefined) return { classifier, mail: undefined, send: undefined, research };
+  if (gmail === undefined) return { classifier, mail: undefined, send: undefined, research, openingModel };
 
   const journal =
     options.journal ??
@@ -397,12 +402,13 @@ export async function composeHandlers(
     // Only reachable with `FSS_DEPENDENCIES=recorded` and no bucket: `live` refuses in
     // `readWorkerDeployment`. A rehearsal without a bucket registers no mail handler
     // rather than one that could acknowledge an opt-out it cannot journal.
-    return { classifier, mail: undefined, send: undefined, research };
+    return { classifier, mail: undefined, send: undefined, research, openingModel };
   }
 
   return {
     classifier,
     research,
+    openingModel,
     mail: {
       gmail: gmail.gmail,
       oauth: gmail.oauth,
@@ -690,6 +696,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     ...describeWorkerConfig(config),
     ...describeClassifier(classifier),
     ...describeResearch(composition.research),
+    opening_selector_configured: composition.openingModel != null,
     ...describeDeployment(deployment),
     image_digest: identity.digest,
     image_digest_source: identity.source,

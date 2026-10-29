@@ -1,3 +1,4 @@
+import type {CampaignOpeningModelPort} from '@fss/domain/outreach/campaignOpeningModelPort.ts';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
@@ -64,8 +65,9 @@ export interface SequenceActionHandlerOptions {
   readonly sendHandoff?: SendHandoff | undefined;
   /** The composed eligibility read. Absent is the default eleven-question composition. */
   readonly eligibility?: StepEligibility | undefined;
-  /** Internal fake-port source slice only. Production installs no selector. */
+  /** Explicit selector seam for controlled interfaces; production uses the budgeted model. */
   readonly openingSelector?: CampaignOpeningSelector | undefined;
+  readonly openingModel?: CampaignOpeningModelPort | null | undefined;
 }
 
 export function sequenceActionJobHandler(options: SequenceActionHandlerOptions = {}): JobHandler {
@@ -91,7 +93,7 @@ export function sequenceActionJobHandler(options: SequenceActionHandlerOptions =
         input.session,
       );
       await selectCampaignOpeningBeforeTransaction(context, input.session, {
-        executionId: stepExecutionId, selector: options.openingSelector, eligibility,
+        executionId: stepExecutionId, selector: options.openingSelector, model: options.openingModel, eligibility,
       });
 
       // 11.2: eligibility is re-read "inside the claiming transaction", and the fence

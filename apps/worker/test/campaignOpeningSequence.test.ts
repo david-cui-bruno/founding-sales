@@ -26,7 +26,7 @@ it('awaits opening owner before normal preparation transaction, dispatch stays a
     expect.objectContaining({ executionId: id, selector }));
   expect(events).toEqual(['SELECT now() AS now', 'selection', 'BEGIN', 'prepare', 'COMMIT', 'dispatch']);
 });
-it('unavailable production selector is not silently installed or invoked', async () => {
+it('absent model transport leaves selector unavailable', async () => {
   await sequenceActionJobHandler().handle(input);
   expect(mocks.select.mock.calls[0]?.[2]).toMatchObject({ selector: undefined });
 });
@@ -34,4 +34,12 @@ it('unknown opening-owner database failure does not continue into preparation or
   const failure = new Error('synthetic unknown database commit'); mocks.select.mockRejectedValue(failure);
   await expect(sequenceActionJobHandler().handle(input)).rejects.toBe(failure);
   expect(mocks.run).not.toHaveBeenCalled(); expect(mocks.dispatch).not.toHaveBeenCalled(); expect(transaction).toBe(false);
+});
+
+it('passes the approved model port into the existing opening owner without selecting inside the prepare transaction',async()=>{
+ const model={providerKey:'aws_bedrock.campaign_opening' as const,countInputTokens:vi.fn(),select:vi.fn()};
+ await sequenceActionJobHandler({openingModel:model}).handle(input);
+ expect(mocks.select.mock.calls[0]?.[2]).toMatchObject({model});
+ expect(model.select).not.toHaveBeenCalled();
+ expect(events).toEqual(['SELECT now() AS now','selection','BEGIN','prepare','COMMIT','dispatch']);
 });

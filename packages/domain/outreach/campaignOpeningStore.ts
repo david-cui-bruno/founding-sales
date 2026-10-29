@@ -1,3 +1,8 @@
+import {readCampaignOpeningDispatchAuthority} from './campaignOpeningDispatchAuthority.ts';
+import {readSetting} from '../settings/store.ts';
+import {effectiveSendingEnabled} from '../settings/effective.ts';
+import {budgetedCampaignOpeningSelector} from './campaignOpeningPaid.ts';
+import type {CampaignOpeningModelPort} from './campaignOpeningModelPort.ts';
 import { randomUUID } from 'node:crypto';
 import { campaignOpeningChoiceSchema, type CampaignOpeningBinding } from '@fss/contracts';
 import { withTransaction, type SessionQueryable } from '../db/queryable.ts';
@@ -22,7 +27,8 @@ export async function readCampaignOpeningAttempt(ctx: RepositoryContext, executi
 export async function eraseCampaignOpening(ctx: RepositoryContext, executionId: string): Promise<void> {
   await ctx.db.query('SELECT erase_campaign_opening($1,$2)', [ctx.scope.workspaceId, executionId]);
 }
-async function executionEligible(ctx: RepositoryContext, executionId: string, eligibility: StepEligibility): Promise<boolean> {
+async function executionEligible(ctx: RepositoryContext, executionId: string, eligibility: StepEligibility, requireOwnerOn = false): Promise<boolean> {
+  if (requireOwnerOn && !effectiveSendingEnabled(true, (await readSetting(ctx, 'sending_enabled')).value)) return false;
   const execution = await readStepExecution(ctx, executionId);
   const enrollment = execution ? await readEnrollment(ctx, { enrollmentId: execution.enrollmentId }) : null;
   const now = await campaignDatabaseNow(ctx);
@@ -37,13 +43,14 @@ async function executionEligible(ctx: RepositoryContext, executionId: string, el
  * automatic retry or a new attempt ID, including after job lease loss. */
 export async function selectCampaignOpeningBeforeTransaction(
   ctx: RepositoryContext, session: SessionQueryable,
-  input: { executionId: string; selector?: CampaignOpeningSelector | undefined; eligibility: StepEligibility },
+  input: { executionId: string; selector?: CampaignOpeningSelector | undefined; model?: CampaignOpeningModelPort | null | undefined; eligibility: StepEligibility },
 ): Promise<void> {
-  if (!input.selector) return; // Production port unavailable. Preparation holds policy-enabled work.
+  if (!input.selector && !input.model) return; // Missing approved transport holds policy-enabled work.
+  const requireOwnerOn = !input.selector && input.model != null;
   const claims: { snapshot: CampaignOpeningSnapshot; attemptId: string }[] = [];
   await withTransaction(session, async () => {
     await lockSendGateForStopFact(ctx);
-    if (!await executionEligible(ctx, input.executionId, input.eligibility)) return;
+    if (!await executionEligible(ctx, input.executionId, input.eligibility, requireOwnerOn)) return;
     const current = await readCurrentCampaignOpening(ctx, input.executionId);
     if (current.kind !== 'current') {
       if (current.kind === 'held') await eraseCampaignOpening(ctx, input.executionId);
@@ -62,14 +69,24 @@ export async function selectCampaignOpeningBeforeTransaction(
   });
   const claim = claims[0];
   if (!claim) return;
+  const current = async (): Promise<boolean> => {
+    const row = await readCampaignOpeningAttempt(ctx, input.executionId);
+    if (!row || row.attempt_id !== claim.attemptId || row.state !== 'unknown' || row.invalidated_at
+      || !await executionEligible(ctx, input.executionId, input.eligibility, requireOwnerOn)) return false;
+    const latest = await readCurrentCampaignOpening(ctx, input.executionId);
+    return latest.kind === 'current' && openingSnapshotKey(latest.snapshot) === openingSnapshotKey(claim.snapshot)
+      && (!requireOwnerOn || effectiveSendingEnabled(true, (await readSetting(ctx, 'sending_enabled')).value));
+  };
+  const selector = input.selector ?? budgetedCampaignOpeningSelector(ctx, session, input.model!, current,
+    async () => await current() ? readCampaignOpeningDispatchAuthority(ctx) : null);
   let result: Awaited<ReturnType<CampaignOpeningSelector['select']>>;
-  try { result = await input.selector.select({ ...claim.snapshot, attemptId: claim.attemptId }); }
+  try { result = await selector.select({ ...claim.snapshot, attemptId: claim.attemptId }); }
   catch { return; } // No exception/prompt/output prose in logs. Unknown remains durable.
   await withTransaction(session, async () => {
     await lockSendGateForStopFact(ctx);
     const row = await readCampaignOpeningAttempt(ctx, input.executionId);
     if (!row || row.attempt_id !== claim.attemptId || row.state !== 'unknown' || row.invalidated_at) return;
-    if (!await executionEligible(ctx, input.executionId, input.eligibility)) { await eraseCampaignOpening(ctx, input.executionId); return; }
+    if (!await executionEligible(ctx, input.executionId, input.eligibility, requireOwnerOn)) { await eraseCampaignOpening(ctx, input.executionId); return; }
     const current = await readCurrentCampaignOpening(ctx, input.executionId);
     if (current.kind !== 'current' || row.snapshot_hash !== openingSnapshotKey(current.snapshot)) {
       await eraseCampaignOpening(ctx, input.executionId); return;

@@ -1,6 +1,12 @@
 # Current operating state
 
-## October 28, 2026: Step 2 complete
+## October 29, 2026: Step 3 in progress; sending OFF
+
+David requests completion of Step3 and a stop at Step4, with sending kept OFF. #838 owns the finite continuation. Fresh native aggregate read at04:21UTC confirmed schema145, stored emailOFFv4, finishing0, no campaigns, model credit spend0 cents today/452 this month, existing daily research ceiling4000 cents/month38750 unchanged. Its exact reader390 ended0 and is INACTIVE; normal operations387 remains ACTIVE. No sending/campaign/source setting was changed.
+
+Source now adds the missing approved-opening model adapter, conserved paid-attempt wrapper and worker composition; schema146 adds only its reservation subject/shape. Controlled adapter43 and paid-wrapper41 checks passed. Four changed model-PG cases, seven populated-upgrade checks and six worker wiring checks passed across focused runs. One bounded real-model evaluation passed6 fictional cases/6 cents modeled under a10-cent ceiling; original OFF and zero outbound persisted, exact local resources were removed. Combined source and consequential-risk reviews are CLEAN WITH LIMITS, including the paused-owner/clock regression. Required CI and protected release remain pending. Current manual incoming editing/preview software already has retained signed original/context/custody acceptance; no capture or real email is required as a software test. Production remains79d/schema145. No contact, private-business model input, Gmail/LinkedIn or budget increase occurred.
+
+## Step 2 complete
 
 **Browser Calling and private follow-through software acceptance is COMPLETE (#820).** The authorized friend Audio test connected once; David confirmed clear two-way audio with slight muffling heard by both participants. Original receipt recovery confirmed server termination, then **Finish audio test** succeeded and cleared the browser input/custody. Fresh setup showed provider On · Twilio/configured, daily ceiling500 cents/$5 and used/reserved2 cents; this is not a final provider invoice. No prospect was called or business outcome/promise invented. A real sales call is not an engineering acceptance gate; wait for a new explicit instruction before contacting a prospect.
 
@@ -12,7 +18,7 @@ Slight muffling has no established cause or demonstrated fix; David accepted mov
 
 ## Direction and controls
 
-Approved order: **SUPPLY → CALLING → EMAIL → SOCIAL** ([ADR0027](../adr/0027-web-product.md)); web is the sole product. Step2 is complete; the next unfinished roadmap item is Step3.1 email campaign/content/model acceptance. Continuous supply remains open under #797. [Roadmap](../sourcing/roadmap-20261007.md), [PLAN](../../apps/web/PLAN.md), [feature map](../features/README.md) and [release workflow](lean-release-workflow.md) own priorities, queue, journeys and execution. This requested Step2 checkpoint starts no email work.
+Approved order: **SUPPLY → CALLING → EMAIL → SOCIAL** ([ADR0027](../adr/0027-web-product.md)); web is the sole product. Step2 is complete; the next unfinished roadmap item is Step3.1 email campaign/content/model acceptance. Continuous supply remains open under #797. [Roadmap](../sourcing/roadmap-20261007.md), [PLAN](../../apps/web/PLAN.md), [feature map](../features/README.md) and [release workflow](lean-release-workflow.md) own priorities, queue, journeys and execution. Latest direction continues Step3 through its software acceptance, then stops at Step4; live sending remains separately disabled.
 
 Preserve browser providerON, $5/day ceiling, independent overall limits, emailOFFv4 and newer owner stops. The [browser policy](../sourcing/founder-actions/dnc-registration.md) requires no blanket registry acquisition/clearance, state/local-hours check or recording-consent checkbox. Keep known registry matches, internal DNC/refusal/suppression, ordinary business personal-cell restrictions, source/principal/device/assignment/route/version/identity/original deadlines, cadence, holds/budgets and UNKNOWN. Human handles verbal consent. Strict retired phone lane stays closed. Email retains cap5/lower ramps and recipient-local weekday mornings. Both overnight schedules remain PAUSED.
 
