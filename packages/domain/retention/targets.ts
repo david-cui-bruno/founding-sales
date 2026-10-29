@@ -1,3 +1,4 @@
+import {sweepSocialPublicThreads} from '../social/publicThreadRetention.ts';
 import {sweepPrivateDrafts} from './socialDrafts.ts';
 import {sweepManualActivity} from '../sourcing/manualProspectActivityLifecycle.ts';
 import {sweepCallingDrafts} from '../calling/followUpDraftLifecycle.ts';
@@ -215,7 +216,7 @@ const rawMime: RetentionTarget = {
 const researchEvidence: RetentionTarget = {
   dataKind: 'research_evidence',
   state: 'implemented',
-  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts','sourcing_prospect_phone_discoveries','outreach_campaign_opening_attempts','calling_preparations'],
+  tables: ['evidence_items','firm_office_assessment_sources','sourcing_candidate_discovery_reviews','sourcing_manual_prospect_attempts','calling_follow_up_drafts','sourcing_prospect_phone_discoveries','outreach_campaign_opening_attempts','calling_preparations','social_public_threads'],
   note: 'Evidence whose provider terms have expired is deleted at its own expiry; evidence whose terms permit retention stays with the firm.',
   sweep: async (context, input) => {
     // Deletion takes source lifecycle before Ask and the workspace send gate.
@@ -238,17 +239,24 @@ const researchEvidence: RetentionTarget = {
     await rememberExpiredManualSources(context,expiring.rows.map(row=>row.source_reference));
     const sourceDeleted=await eraseDiscoveryReviewsForSources(context,expiring.rows.map(row=>row.source_reference));
     const discoveryTotal=discoveryDeleted+sourceDeleted;
-    if (ids.length === 0) return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared}};
+    if (ids.length === 0) {
+      // Membership departure erases phone/source rows before public threads.
+      // Take the independent thread locks last to preserve that order.
+      const publicThreadCleared=await sweepSocialPublicThreads(context,input);
+      return {boundaryAt:input.now,rowsDeleted:officeDeleted+discoveryTotal,rowsRedacted:activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared+publicThreadCleared,detail:{firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared,social_public_threads:publicThreadCleared}};
+    }
 
     const deleted = await context.db.query(
       'DELETE FROM evidence_items WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
       [context.scope.workspaceId, ids],
     );
+    // All existing source/evidence mutations precede independent thread locks.
+    const publicThreadCleared=await sweepSocialPublicThreads(context,input);
     return {
       boundaryAt: input.now,
       rowsDeleted: (deleted.rowCount ?? 0)+officeDeleted+discoveryTotal,
-      rowsRedacted: activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared,
-      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared },
+      rowsRedacted: activityCleared+callingCleared+phoneCleared+openingCleared+preparationCleared+publicThreadCleared,
+      detail: { evidence_items: deleted.rowCount ?? 0,firm_office_assessment_sources:officeDeleted,sourcing_candidate_discovery_reviews:discoveryTotal,sourcing_manual_prospect_attempts:activityCleared,calling_follow_up_drafts:callingCleared,sourcing_prospect_phone_discoveries:phoneCleared,outreach_campaign_opening_attempts:openingCleared,calling_preparations:preparationCleared,social_public_threads:publicThreadCleared },
     };
   },
 };

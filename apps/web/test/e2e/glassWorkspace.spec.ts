@@ -168,8 +168,8 @@ test('Social metadata stays body-free and one selected private editor saves/reop
   await page.getByRole('button', { name: 'Back to drafts', exact: true }).click();
   await expect(page.getByRole('button', { name: 'List saved private drafts', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'Conversations', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Open public discussion', exact: true })).toBeDisabled();
-  await expect(page.getByText('No discussions have been fetched or invented.', { exact: false })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Retained public conversations', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Read retained public threads', exact: true })).toBeEnabled();
 });
 
 test('new Calling candidate contract persists exact IDs, excludes notes, and never mutates canonical state', async ({ page }) => {

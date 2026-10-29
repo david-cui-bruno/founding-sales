@@ -1,3 +1,4 @@
+import {SOCIAL_PUBLIC_THREAD_RETENTION_COVERAGE} from '../social/publicThreadRetention.ts';
 import {SOCIAL_DRAFT_RETENTION_COVERAGE} from './socialDrafts.ts';
 import {SOURCING_RETENTION_COVERAGE} from './sourcingCoverage.ts';
 import {PHONE_RETENTION_COVERAGE} from './phoneCoverage.ts';
@@ -239,6 +240,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
       "Native scheduling receipts and cancellation state; local deletion cannot recall an external schedule.",
     ),
     ...SOCIAL_DRAFT_RETENTION_COVERAGE,
+    ...SOCIAL_PUBLIC_THREAD_RETENTION_COVERAGE,
     outreach_reply_deliveries: coverage(
       ["retained"],
       "Immutable draft hashes and delivery bindings only; source and permission gates refuse deleted or changed prospects.",

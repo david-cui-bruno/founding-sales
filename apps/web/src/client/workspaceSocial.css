@@ -39,8 +39,6 @@
 .social-details summary {cursor:pointer;font-weight:550;width:fit-content}
 .social-details p {max-width:85ch;color:var(--workspace-muted,#58677c)}
 .social-retained-request {padding:12px 0;border-top:1px solid var(--workspace-border,#d3dce8)}
-.social-conversations-unavailable {margin-top:20px;padding:24px;border:1px solid var(--workspace-border,#d3dce8);border-radius:19px;background:var(--workspace-panel,#ffffffb8);line-height:1.7}
-.social-conversations-unavailable h2 {font-size:18px}
 .social-empty {padding:12px;font-size:12px;line-height:1.7;color:var(--workspace-muted,#58677c)}
 .social-composition .social-mobile-back {display:none}
 @media (max-width:900px) {
