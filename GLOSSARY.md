@@ -32,6 +32,10 @@ _Avoid_: verified company name when referring only to a search title
 A whole company-name passage bound to current first-party source evidence for automatic research preparation. The original discovery label remains unchanged; identity evidence grants no contact permission.
 _Avoid_: human confirmation or contact eligibility when referring only to source-backed preparation
 
+**Prepared prospect**:
+A company research brief supported by retained business evidence, with its sources, dates and unresolved details visible. It does not require a known buyer, buying intent or usable contact route, and grants no contact permission.
+_Avoid_: eligible lead when referring only to useful company research
+
 **Calling preparation**:
 An unqualified company record whose reviewed context and phone depend on a current retained source and explicit kept choice. It conveys no qualification or contact permission.
 _Avoid_: prepared prospect when referring only to this source-dependent context

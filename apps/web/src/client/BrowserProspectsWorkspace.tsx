@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type JSX } from 'react';
 import type { CallingSubject } from '@fss/contracts';
 import type { WorkspaceScreenProps } from './workspaceNavigation.ts';
 import { BrowserResearchQueue } from './BrowserResearchQueue.tsx';
+import { PreparedProspects } from './PreparedProspects.tsx';
 import { BrowserManualProspects } from './BrowserManualProspects.tsx';
 import { BrowserCandidateInventory } from './BrowserCandidateInventory.tsx';
 import './workspaceProspects.css';
 
 /** Destinations change presentation only. They never acquire or promote a prospect. */
 export function BrowserProspectsWorkspace({ client, onOpenCalling }: WorkspaceScreenProps): JSX.Element {
-  const [view, setView] = useState<'prepared' | 'retained' | 'inventory'>('prepared');
+  const [view, setView] = useState<'prepared' | 'qualified' | 'retained' | 'inventory'>('prepared');
   const scope = useRef(0);
   const mounted = useRef(false);
   const [, refreshSession] = useState(0);
@@ -37,11 +38,14 @@ export function BrowserProspectsWorkspace({ client, onOpenCalling }: WorkspaceSc
       <h1>Prospects</h1><p>Source-backed context for your next conversation.</p></div></header>
     <nav className="prospects-view-switch" aria-label="Prospect supply views">
       <button aria-pressed={view === 'prepared'} onClick={() => selectView('prepared')}>Prepared research</button>
+      <button aria-pressed={view === 'qualified'} onClick={() => selectView('qualified')}>Qualified publications</button>
       <button aria-pressed={view === 'retained'} onClick={() => selectView('retained')}>Retained review</button>
       <button aria-pressed={view === 'inventory'} onClick={() => selectView('inventory')}>Source inventory</button>
     </nav>
+    {view==='prepared'&&client.pendingResearch()!==null?<p role="status">A saved research request is available in Qualified publications.</p>:null}
     {client.current?.status !== 'signed_in' ? <p role="status">Sign in to read your current prospect supply.</p>
-      : view === 'prepared' ? <BrowserResearchQueue client={client} {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} />
+      : view === 'prepared' ? <PreparedProspects client={client} />
+      : view === 'qualified' ? <BrowserResearchQueue client={client} {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} />
       : view === 'retained' ? client.current.role === 'admin' ? <BrowserManualProspects client={client} {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} /> : <p role="status">Retained review requires current administrator access.</p>
       : <div className="prospects-secondary"><BrowserCandidateInventory client={client} /></div>}
   </section>;

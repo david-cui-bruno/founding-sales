@@ -37,6 +37,7 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/dial/check',
   '/today/firm', '/crm/firm-page-v3', '/today/actions/open/v3', '/today/actions/open/v4',
   '/sourcing/research-firms/list', '/sourcing/research-firms/read',
+  '/sourcing/prepared-prospects/list', '/sourcing/prepared-prospects/read',
   '/sourcing/candidates/list', '/sourcing/candidates/authority/read',
   '/sourcing/candidates/prospects/list',
   '/sourcing/candidates/prospects/priority/list', '/sourcing/candidates/prospects/priority/learning', '/sourcing/candidates/prospects/priority/receipt',

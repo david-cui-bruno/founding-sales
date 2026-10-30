@@ -1,9 +1,13 @@
 import {z} from 'zod';
+import {preparedProspectRefusalSchema} from '@fss/contracts';
 const refused=z.strictObject({status:z.literal('refused'),replayed:z.boolean(),reason:z.enum(['candidate_changed','candidate_unavailable','invalid_input','phone_source_changed'])});
 const activityRefused=z.strictObject({status:z.literal('refused'),replayed:z.boolean(),reason:z.enum(['invalid_input','already_exists','not_found','removed','stale_revision','invalid_time'])});
 const unavailable=z.strictObject({error:z.enum(['candidate_unavailable','candidate_changed'])});
 /** Product-state refusal only. Auth, membership, session and command collisions stay generic. */
 export function manualProspectBrowserResult(path:string,status:number,body:unknown):{status:number;body:unknown}|null{
+ if(status===409&&['/sourcing/prepared-prospects/list','/sourcing/prepared-prospects/read'].includes(path)){
+  const result=preparedProspectRefusalSchema.safeParse(body);return result.success?{status:200,body:result.data}:null;
+ }
  if(status===409&&path.startsWith('/sourcing/candidates/prospects/priority/')){
   const action=path.slice('/sourcing/candidates/prospects/priority/'.length);
   const reason=z.enum(['view_changed','assessment_changed','role_unavailable','source_unavailable','source_changed','source_expired','candidate_changed','candidate_unavailable','invalid_input']);

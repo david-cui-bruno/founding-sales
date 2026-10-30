@@ -30,3 +30,12 @@ it('only maps exact content-free product refusals, never authority or command cu
  expect(manualProspectBrowserResult('/sourcing/candidates/review',409,{status:'refused',replayed:false,reason:'candidate_changed'})).toBeNull();
  expect(manualProspectBrowserResult(path,409,{status:'refused',replayed:false,reason:'candidate_changed',source:'private'})).toBeNull();
 });
+it('keeps prepared prospect view changes separate from session or contact authority',()=>{
+ for(const path of ['/sourcing/prepared-prospects/list','/sourcing/prepared-prospects/read']){
+  for(const error of ['view_changed','candidate_changed','candidate_unavailable','source_changed','source_expired'])expect(manualProspectBrowserResult(path,409,{error})).toEqual({status:200,body:{error}});
+  expect(manualProspectBrowserResult(path,401,{error:'source_expired'})).toBeNull();
+  expect(manualProspectBrowserResult(path,409,{error:'authority_changed'})).toBeNull();
+  expect(manualProspectBrowserResult(path,409,{error:'source_expired',private:'extra'})).toBeNull();
+ }
+ expect(manualProspectBrowserResult('/sourcing/prepared-prospects/create',409,{error:'candidate_changed'})).toBeNull();
+});

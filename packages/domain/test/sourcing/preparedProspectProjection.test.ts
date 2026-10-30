@@ -1,0 +1,20 @@
+import {createHash} from 'node:crypto';
+import {expect,it} from 'vitest';
+import type {CandidateInput,SourceObservation} from '@fss/contracts';
+import {projectPreparedProspect} from '../../sourcing/preparedProspectProjection.ts';
+import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
+import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
+const id='10000000-0000-4000-8000-000000000001',other='10000000-0000-4000-8000-000000000002',run='10000000-0000-4000-8000-000000000003';
+it('binds a derived research gap to the earlier lifetime of an undisplayed contrary source',()=>{
+ const now=Date.parse('2026-10-30T20:00:00Z'),website='https://cedar.example.test/',aux=website+'scope';
+ const candidate:CandidateInput={firmName:'Home | Cedar',website,locality:'Boston',region:'MA',signal:'fit_only',evidence:'Retained discovery context',sourceUrl:website,observedOn:'2026-10-30',preparedBy:'Fictional retained acceptance'};
+ const page=(sourceId:string,url:string,text:string):SourceObservation=>{const blocks=[{id:'whole',text}];return {id:sourceId,url,blocks,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(now-1000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false};};
+ const positive=page(id,website,'Cedar Property Management manages residential homes for owners across Boston, Massachusetts.'),negative=page(other,aux,'We do not manage residential homes. '+ 'Retained scope explanation. '.repeat(90));
+ expect(negative.blocks[0]!.text.length).toBeGreaterThan(2000);expect(negative.blocks[0]!.text.length).toBeLessThanOrEqual(4000);
+ const row:ManualProspectRow={id,revision:1,payload:candidate,origins:[],created_at:new Date(now-2000),manual_state:'new',duplicate_count:0};
+ const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload:candidate,origins:[],observations:[positive,negative],facts:[],permitted_urls:[website,aux],evidence_authorities:[{id:other,url:aux,contentHash:negative.contentHash,retrievedAt:negative.retrievedAt}]};
+ const early=now+10000,late=now+60000;
+ const brief=projectPreparedProspect(row,snapshot,{id:run,candidate_revision:1},now,new Map([[website,late],[aux,early]]));
+ expect(brief).toMatchObject({state:'needs_research',validUntil:new Date(early).toISOString()});
+ expect(brief?.unknowns.join(' ')).toContain('Contrary wording exceeds');expect(brief?.passages.map(p=>p.quote)).toEqual([positive.blocks[0]!.text]);
+});

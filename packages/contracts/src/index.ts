@@ -127,3 +127,4 @@ export * from './socialPublishingReadiness.ts';
 export * from './socialPublicThreads.ts';
 
 export * from './prospectPriority.ts';
+export * from './preparedProspects.ts';
