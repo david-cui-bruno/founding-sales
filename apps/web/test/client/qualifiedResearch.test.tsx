@@ -31,6 +31,7 @@ function setup() {
     if (refuse) return json({}, 401);
     if (url === '/browser/api/today/actions/v4?include=callingPreparation') return json({ version: 4, workspaceId: id, businessTimeZone: 'America/New_York', asOf: '2026-10-22T12:00:00.000Z', actions: [...(created ? [action] : []), { actionId: 'legacy', kind: 'reply', subject: 'Legacy action', reason: 'reply', dueAt: '2026-10-22T12:00:00.000Z', state: 'open', target: { kind: 'reply', firmId: id, messageId: id } }], promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
     if (String(url).startsWith('/browser/api/today?')) return json({ workspaceId: id, snapshotDate: '2026-10-22', businessTimeZone: 'America/New_York', cards: [] });
+    if (url === '/browser/api/sourcing/prepared-prospects/list') return json({prospects:[],hasMore:false,viewRevision:'a'.repeat(64),checkedAt:new Date().toISOString()});
     if (url === '/browser/api/sourcing/research-firms/list') {
       const { firmId: _firmId, ownerUserId: _owner, nextStep: _step, question: _question, ...candidate } = proof;
       return json({ candidates: [candidate], nextAfterId: null });
@@ -67,6 +68,8 @@ describe('qualified research actual BrowserClient composition', () => {
     render(<BrowserApp client={scope.client} />);
     const navigation = await screen.findByRole('navigation', { name: 'Workspace sections' });
     fireEvent.click(within(navigation).getByRole('button', { name: 'Prospects' }));
+    await screen.findByText('0 prepared · 0 need research on this page. This is research supply, not a contact-ready count.');
+    fireEvent.click(screen.getByRole('button', {name:'Qualified publications'}));
     fireEvent.click(screen.getByText('Qualified selection and existing research requests'));
     await createFromList();
     await screen.findByText(/Research Firm confirmed/u);
