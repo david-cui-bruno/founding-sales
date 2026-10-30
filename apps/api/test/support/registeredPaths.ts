@@ -361,6 +361,8 @@ export const registeredPaths = [
   '/sourcing/experiments/stop',
   '/sourcing/learning',
   '/sourcing/learning/v2',
+  '/sourcing/prepared-prospects/list',
+  '/sourcing/prepared-prospects/read',
   '/sourcing/qualification/admit',
   '/sourcing/qualification/feedback',
   '/sourcing/qualification/firm',
